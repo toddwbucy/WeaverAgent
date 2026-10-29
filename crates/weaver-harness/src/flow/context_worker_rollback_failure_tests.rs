@@ -500,6 +500,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
         );
     }
     let mut guard = Guard(exit);
+    if mode != "rollback-failed-worker" {
+        assert_eq!(guard.0.process_exit(), None);
+    }
     let _panic_after_owner = PanicReader(reader.try_clone().unwrap());
     let until = Instant::now() + Duration::from_secs(8);
     let mut wait_failed = false;
@@ -559,6 +562,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
         assert!(wait_failed);
     }
     assert_eq!(guard.0.channel_fault(), Some(crate::ChannelFault::Closed));
+    assert_eq!(
+        guard.0.process_exit(),
+        Some(crate::FoundationProcessExit::Failure)
+    );
     assert!(packet(original).is_none(), "no new Enter answer");
     if let Some(peer) = peer {
         assert!(packet(&peer).is_none(), "failed exit cannot send Left");

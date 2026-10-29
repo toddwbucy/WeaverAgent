@@ -7,10 +7,13 @@ use crate::flow::context::worker_startup::input::management::tests::secondary;
 use crate::flow::pump::PumpDeadline;
 use std::os::fd::OwnedFd;
 use weaver_harness::{
-    FoundationForcedLeave, FoundationForcedLeaveHandoff, FoundationForcedLeaveProgress,
-    FoundationGracefulLeave, FoundationGracefulLeaveHandoff, FoundationGracefulLeaveProgress,
+    FoundationForcedLeave, FoundationForcedLeaveHandoff, FoundationGracefulLeave,
+    FoundationGracefulLeaveHandoff, FoundationGracefulLeaveProgress,
 };
 use weaver_types::state_flow::capture::*;
+
+#[path = "context_worker_resting_tests.rs"]
+mod resting;
 
 #[path = "context_worker_graceful_conversion_tests.rs"]
 mod conversion;
@@ -356,6 +359,13 @@ enum LeaveOwner {
     Forced(Box<FoundationForcedLeave>),
     Graceful(Box<FoundationGracefulLeave>),
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LeaveProgress {
+    Progress,
+    Pending,
+    CaptureRefused,
+    Closed,
+}
 impl LeaveOwner {
     fn test_inner(
         &mut self,
@@ -366,22 +376,22 @@ impl LeaveOwner {
             Self::Graceful(owner) => owner.test_inner(),
         }
     }
-    fn progress(&self) -> FoundationForcedLeaveProgress {
+    fn progress(&self) -> LeaveProgress {
         match self {
-            Self::Forced(owner) => owner.progress(),
+            Self::Forced(owner) => match owner.progress() {
+                crate::FoundationForcedLeaveProgress::Progress => LeaveProgress::Progress,
+                crate::FoundationForcedLeaveProgress::Pending => LeaveProgress::Pending,
+                crate::FoundationForcedLeaveProgress::Closed => LeaveProgress::Closed,
+            },
             Self::Graceful(owner) => match owner.progress() {
-                FoundationGracefulLeaveProgress::Progress => {
-                    FoundationForcedLeaveProgress::Progress
-                }
-                FoundationGracefulLeaveProgress::Pending => FoundationForcedLeaveProgress::Pending,
-                FoundationGracefulLeaveProgress::CaptureRefused => {
-                    FoundationForcedLeaveProgress::CaptureRefused
-                }
-                FoundationGracefulLeaveProgress::Closed => FoundationForcedLeaveProgress::Closed,
+                FoundationGracefulLeaveProgress::Progress => LeaveProgress::Progress,
+                FoundationGracefulLeaveProgress::Pending => LeaveProgress::Pending,
+                FoundationGracefulLeaveProgress::CaptureRefused => LeaveProgress::CaptureRefused,
+                FoundationGracefulLeaveProgress::Closed => LeaveProgress::Closed,
             },
         }
     }
-    fn advance(&mut self) -> FoundationForcedLeaveProgress {
+    fn advance(&mut self) -> LeaveProgress {
         match self {
             Self::Forced(owner) => {
                 owner.advance();
@@ -406,6 +416,12 @@ impl LeaveOwner {
         match self {
             Self::Forced(owner) => owner.detail(),
             Self::Graceful(owner) => owner.detail(),
+        }
+    }
+    fn process_exit(&self) -> Option<crate::FoundationProcessExit> {
+        match self {
+            Self::Forced(owner) => owner.process_exit(),
+            Self::Graceful(owner) => owner.process_exit(),
         }
     }
     fn unload_sequence(&self) -> Option<u64> {
@@ -546,6 +562,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
     };
     let mut owner = ForcedGuard(owner);
+    assert_eq!(owner.0.process_exit(), None);
     let mut capture_wait = capture_wait::Probe::new(mode, member);
     let Some(peer) = peer else {
         finish_joint(owner, member, reader, root, mode, before, leave);
@@ -562,6 +579,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
     let mut secondary = Vec::new();
     let mut held_image = None;
     let mut departed = false;
+    let orphaned_refusal = mode.contains("-resting-orphan-");
     let bytes = std::thread::scope(|scope| {
         let responder = scope.spawn(|| {
             let end = Instant::now() + Duration::from_secs(30);
@@ -601,6 +619,31 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 owner.0.detail()
             );
             let progress = owner.0.advance();
+            if orphaned_refusal && !departed {
+                let refused = owner
+                    .0
+                    .test_inner()
+                    .test_context()
+                    .barrier
+                    .recorder()
+                    .structure()
+                    .by_kind(weaver_trace::serving::Kind::SavePoint)
+                    .any(|record| {
+                        serde_json::from_str::<serde_json::Value>(&record.line).unwrap()["payload"]
+                            ["phase"]
+                            == "refused"
+                    });
+                if refused {
+                    assert!(!packets.iter().any(|packet| matches!(
+                        packet,
+                        CapturePayload::SavePointCaptureRefused(_) | CapturePayload::Refusal(_)
+                    )));
+                    assert!(owner.0.unload_sequence().is_none());
+                    nix::sys::socket::shutdown(peer.as_raw_fd(), nix::sys::socket::Shutdown::Both)
+                        .unwrap();
+                    departed = true;
+                }
+            }
             if mode.ends_with("tail-expired") && owner.0.test_inner().test_at_grants() {
                 // The actual capture is complete. Expiry must transfer that
                 // original account to failed cleanup, never silent disposal.
@@ -642,7 +685,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 assert!(report.is_none());
                 joins = join_pair(&socket);
             }
-            if let Some(bytes) = read_packet(&peer) {
+            if !(orphaned_refusal && departed)
+                && let Some(bytes) = read_packet(&peer)
+            {
                 let message = CaptureEnvelope::decode(&bytes, CaptureSender::Harness).unwrap();
                 assert_eq!(message.exchange.ordinal, 99);
                 match &message.payload {
@@ -790,6 +835,59 @@ pub(in crate::flow::context::worker_startup) fn finish(
                         );
                         assert!(report.is_none());
                     }
+                    CapturePayload::SavePointCaptureRefused(_) => {
+                        assert!(
+                            owner.0.unload_sequence().is_none(),
+                            "refusal ack precedes actual Unload"
+                        );
+                        assert!(
+                            owner
+                                .0
+                                .test_inner()
+                                .test_context()
+                                .capture_snapshot()
+                                .is_none()
+                        );
+                        assert!(report.is_none());
+                        assert!(
+                            owner
+                                .0
+                                .test_inner()
+                                .test_context()
+                                .barrier
+                                .recorder()
+                                .structure()
+                                .by_kind(weaver_trace::serving::Kind::SavePoint)
+                                .any(|record| serde_json::from_str::<serde_json::Value>(
+                                    &record.line
+                                )
+                                .unwrap()["payload"]["phase"]
+                                    == "refused")
+                        );
+                    }
+                    CapturePayload::Answer(CaptureAnswer::Left {
+                        save_point: None,
+                        forced: true,
+                        no_state: false,
+                    }) => {
+                        assert!(expected_forced(mode));
+                        assert!(matches!(
+                            packets.last(),
+                            Some(CapturePayload::SavePointCaptureRefused(_))
+                        ));
+                        assert!(owner.0.unload_sequence().is_some());
+                    }
+                    CapturePayload::Refusal(CaptureRefusal::Save(
+                        SaveRefusal::SavePointNotTaken { missed },
+                    )) => {
+                        assert!(!expected_forced(mode));
+                        assert!(
+                            matches!(packets.last(), Some(CapturePayload::SavePointCaptureRefused(ack))
+                            if ack.missed == *missed)
+                        );
+                        assert!(owner.0.unload_sequence().is_none());
+                        final_refusal = true;
+                    }
                     CapturePayload::Answer(CaptureAnswer::Left {
                         save_point: Some(value),
                         forced,
@@ -865,12 +963,11 @@ pub(in crate::flow::context::worker_startup) fn finish(
             }
             if matches!(
                 progress,
-                FoundationForcedLeaveProgress::Closed
-                    | FoundationForcedLeaveProgress::CaptureRefused
+                LeaveProgress::Closed | LeaveProgress::CaptureRefused
             ) {
                 break;
             }
-            if progress == FoundationForcedLeaveProgress::Pending {
+            if progress == LeaveProgress::Pending {
                 if let Some(probe) = &mut capture_wait {
                     probe.wait(&mut owner.0);
                 } else {
@@ -901,40 +998,48 @@ pub(in crate::flow::context::worker_startup) fn finish(
             std::fs::write(std::path::Path::new(&path).join("trace.jsonl"), &bytes).unwrap();
         }
     }
-    let rows: Vec<serde_json::Value> =
-        if owner.0.progress() == FoundationForcedLeaveProgress::CaptureRefused {
-            // CaptureRefused proves Recorded admission, not writer completion.
-            // Read through that actual sequence for explicit refusals and timeouts.
-            trace_through(
-                reader,
-                bytes,
-                owner
-                    .0
-                    .test_inner()
-                    .test_context()
-                    .last_author_sequence
-                    .expect("capture refusal has its Recorded sequence"),
-                Instant::now() + Duration::from_secs(3),
-            )
-            .expect("the capture refusal's Recorded trace must reach its reader")
-        } else {
-            bytes
-                .split(|byte| *byte == b'\n')
-                .filter(|line| !line.is_empty())
-                .map(|line| serde_json::from_slice(line).unwrap())
-                .collect()
-        };
+    let rows: Vec<serde_json::Value> = if owner.0.progress() == LeaveProgress::CaptureRefused {
+        // CaptureRefused proves Recorded admission, not writer completion.
+        // Read through that actual sequence for explicit refusals and timeouts.
+        trace_through(
+            reader,
+            bytes,
+            owner
+                .0
+                .test_inner()
+                .test_context()
+                .last_author_sequence
+                .expect("capture refusal has its Recorded sequence"),
+            Instant::now() + Duration::from_secs(3),
+        )
+        .expect("the capture refusal's Recorded trace must reach its reader")
+    } else {
+        bytes
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_slice(line).unwrap())
+            .collect()
+    };
     if let Some(probe) = &capture_wait {
         probe.assert_finished(&mut owner.0, member, &packets, &rows, report.as_ref());
         return;
     }
     if mode.ends_with("-refused") {
         assert_eq!(
+            owner.0.process_exit(),
+            expected_forced(mode).then_some(crate::FoundationProcessExit::Success),
+            "forced capture refusal completes shutdown; graceful refusal retains S9"
+        );
+        assert_eq!(
             owner.0.progress(),
-            FoundationForcedLeaveProgress::CaptureRefused
+            if expected_forced(mode) {
+                LeaveProgress::Closed
+            } else {
+                LeaveProgress::CaptureRefused
+            }
         );
         assert!(report.is_none());
-        assert!(owner.0.unload_sequence().is_none());
+        assert_eq!(owner.0.unload_sequence().is_some(), expected_forced(mode));
         assert!(owner.0.test_inner().test_context().failure().is_none());
         assert!(
             owner
@@ -944,17 +1049,41 @@ pub(in crate::flow::context::worker_startup) fn finish(
                 .capture_snapshot()
                 .is_none()
         );
+        let mut expected = vec!["snapshot".into(), "abort".into()];
+        if expected_forced(mode) {
+            expected.push("grants".into());
+        }
         assert!(
-            member
-                .requests
-                .ends_with(&["snapshot".into(), "abort".into()])
+            member.requests.ends_with(&expected),
+            "{:?}",
+            member.requests
         );
         assert!(
             rows.iter()
                 .any(|row| row["kind"] == "save_point" && row["payload"]["phase"] == "refused")
         );
+        if orphaned_refusal {
+            assert!(departed && !final_refusal);
+            assert!(packets.iter().all(|packet| !matches!(
+                packet,
+                CapturePayload::SavePointCaptureRefused(_) | CapturePayload::Refusal(_)
+            )));
+            assert!(
+                owner
+                    .0
+                    .test_inner()
+                    .test_context()
+                    .flow
+                    .standing_state()
+                    .is_some()
+            );
+        }
     } else if mode.ends_with("-wrong-published") || mode.ends_with("peer-after-capture") {
-        assert_eq!(owner.0.progress(), FoundationForcedLeaveProgress::Closed);
+        assert_eq!(
+            owner.0.process_exit(),
+            Some(crate::FoundationProcessExit::Failure)
+        );
+        assert_eq!(owner.0.progress(), LeaveProgress::Closed);
         assert!(report.is_none());
         assert!(owner.0.test_inner().test_context().failure().is_some());
         let halt = rows
@@ -1015,8 +1144,12 @@ pub(in crate::flow::context::worker_startup) fn finish(
             departed
         );
     } else if quiesce_bad_ack {
+        assert_eq!(
+            owner.0.process_exit(),
+            Some(crate::FoundationProcessExit::Failure)
+        );
         assert!(final_refusal && report.is_none() && artifact.is_some());
-        assert_eq!(owner.0.progress(), FoundationForcedLeaveProgress::Closed);
+        assert_eq!(owner.0.progress(), LeaveProgress::Closed);
         assert!(owner.0.detail().is_none(), "{:?}", owner.0.detail());
         assert!(!owner.0.abandoned());
         assert_eq!(rows.last().unwrap()["kind"], "unload");
@@ -1028,7 +1161,11 @@ pub(in crate::flow::context::worker_startup) fn finish(
         ]));
         quiesce_conversion::assert_tail(&mut owner, &rows, &joins, &member.filings, root, mode);
     } else {
-        assert_eq!(owner.0.progress(), FoundationForcedLeaveProgress::Closed);
+        assert_eq!(owner.0.progress(), LeaveProgress::Closed);
+        assert_eq!(
+            owner.0.process_exit(),
+            Some(crate::FoundationProcessExit::Success)
+        );
         assert!(owner.0.detail().is_none(), "{:?}", owner.0.detail());
         assert!(!owner.0.abandoned());
         let report = report.expect("actual final Left");
@@ -1147,8 +1284,15 @@ pub(in crate::flow::context::worker_startup) fn finish(
             .test_context()
             .deadlines
             .get(PumpDeadline::Leave),
-        Some(leave)
+        if !expected_forced(mode) && (final_refusal || orphaned_refusal) {
+            None // The refused Leave ended; S9 has no active Leave deadline.
+        } else {
+            Some(leave)
+        }
     );
+    if mode.contains("-resting-") {
+        resting::exercise(&mut owner, member, reader, &socket, root, mode, leave);
+    }
 }
 
 pub(in crate::flow::context::worker_startup) fn assert_wind_down_filings(
@@ -1177,6 +1321,10 @@ fn finish_joint(
     before: Vec<u8>,
     leave: crate::flow::clock::AbsoluteBound,
 ) {
+    let retry = mode.contains("-graceful-save")
+        && mode.ends_with("-capture-refusal")
+        && !mode.contains("-joined-capture-refusal")
+        && !mode.contains("-failed-cleanup-capture-refusal");
     let done = AtomicBool::new(false);
     reader.set_nonblocking(true).unwrap();
     let bytes = std::thread::scope(|scope| {
@@ -1205,43 +1353,97 @@ fn finish_joint(
                 "joint forced Leave exceeded watchdog: {:?}",
                 owner.0.detail()
             );
-            match owner.0.advance() {
-                FoundationForcedLeaveProgress::Closed => break,
-                FoundationForcedLeaveProgress::CaptureRefused => {
-                    panic!("unexpected capture refusal: {:?}", owner.0.detail())
-                }
-                FoundationForcedLeaveProgress::Pending => {
+            let progress = owner.0.advance();
+            if mode.contains("-joined-capture-refusal")
+                && owner.0.test_inner().test_join_count() == 1
+                && !root.join("capture-join-retained").exists()
+            {
+                std::fs::write(root.join("capture-join-retained"), b"actual joined Leave").unwrap();
+            }
+            match progress {
+                LeaveProgress::Closed => break,
+                LeaveProgress::CaptureRefused => {
+                    assert_eq!(owner.0.process_exit(), None);
+                    assert!(retry, "unexpected capture refusal: {:?}", owner.0.detail());
+                    assert!(owner.0.unload_sequence().is_none());
+                    assert!(
+                        owner
+                            .0
+                            .test_inner()
+                            .test_context()
+                            .deadlines
+                            .get(PumpDeadline::Leave)
+                            .is_none()
+                    );
+                    if !root.join("worker-s9.json").exists() {
+                        std::fs::write(root.join("worker-s9.json"), b"{}").unwrap();
+                    }
                     owner.0.wait_for_progress();
                 }
-                FoundationForcedLeaveProgress::Progress => (),
+                LeaveProgress::Pending => {
+                    owner.0.wait_for_progress();
+                }
+                LeaveProgress::Progress => (),
             }
         }
         done.store(true, Ordering::SeqCst);
         responder.join().unwrap();
         recorder.join().unwrap()
     });
-    if mode.ends_with("-bad-release") {
+    if mode.ends_with("-bad-release") || mode.contains("-failed-cleanup-capture-refusal") {
+        assert_eq!(
+            owner.0.process_exit(),
+            Some(crate::FoundationProcessExit::Failure)
+        );
         assert!(owner.0.test_inner().test_context().failure().is_some());
         assert!(owner.0.unload_sequence().is_some());
         member.finish_normal();
-        assert_eq!(member.requests.last().unwrap(), "release_capture");
+        assert_eq!(
+            member.requests.last().unwrap(),
+            if mode.ends_with("-bad-release") {
+                "release_capture"
+            } else {
+                "abort"
+            }
+        );
         std::fs::write(root.join("worker-trace.jsonl"), bytes).unwrap();
         return;
     }
     assert!(owner.0.detail().is_none(), "{:?}", owner.0.detail());
+    assert_eq!(
+        owner.0.process_exit(),
+        Some(crate::FoundationProcessExit::Success)
+    );
     assert!(!owner.0.abandoned());
     assert!(owner.0.unload_sequence().is_some());
-    assert_eq!(
-        owner
-            .0
-            .test_inner()
-            .test_context()
-            .deadlines
-            .get(PumpDeadline::Leave),
-        Some(leave)
-    );
+    let final_leave = owner
+        .0
+        .test_inner()
+        .test_context()
+        .deadlines
+        .get(PumpDeadline::Leave)
+        .unwrap();
+    if retry {
+        assert!(final_leave.began_ns() > leave.began_ns());
+    } else {
+        assert_eq!(final_leave, leave);
+    }
     assert!(owner.0.test_inner().test_context().member_capture.is_none());
     member.finish_normal();
+    if mode.ends_with("-capture-refusal") && !retry {
+        let expected = if mode.contains("-finished-timeout-capture-refusal") {
+            vec!["snapshot", "acknowledge", "abort", "grants"]
+        } else {
+            vec!["snapshot", "abort", "grants"]
+        };
+        assert!(
+            member
+                .requests
+                .ends_with(&expected.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        );
+        std::fs::write(root.join("worker-trace.jsonl"), bytes).unwrap();
+        return;
+    }
     assert!(member.requests.ends_with(&[
         "snapshot".into(),
         "acknowledge".into(),

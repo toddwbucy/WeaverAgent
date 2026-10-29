@@ -264,9 +264,8 @@ impl Failure {
                         .as_ref()
                         .or_else(|| evidence.received.last())
                     && let CapturePayload::Refusal(refusal) = &received.envelope.payload
-                    && !matches!(refusal, CaptureRefusal::Save(SaveRefusal::FailedRun { .. }))
                 {
-                    return refusal.clone();
+                    return super::project_worker_refusal(refusal);
                 }
                 LifecycleRefusal::Unanswered
             }

@@ -4,41 +4,48 @@
 
 use serde::{Deserialize, Serialize};
 
+#[path = "plan_document.rs"]
+mod document;
+
 use super::{
     CallId, DecimalU64, Digest, ReadRefusalCode, SourceBlockId, SourcePosition, SpanRef,
     StatementRef, StepQueryRef, TaskScopeRef,
 };
 
+super::codec::closed_object! {
 /// A stable plan identity in one seeded chain.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlanId {
     pub seed_id: String,
     pub local_id: DecimalU64,
 }
+}
 
+super::codec::closed_object! {
 /// A stable step identity, independent of its plan ordinal.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StepId {
     pub seed_id: String,
     pub local_id: DecimalU64,
 }
+}
 
+super::codec::closed_object! {
 /// One immutable plan revision address.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlanRef {
     pub plan_id: PlanId,
     pub revision: DecimalU64,
 }
+}
 
+super::codec::closed_object! {
 /// Identity of an operator-selected external review procedure.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewSetupRef {
     pub setup_id: String,
     pub sha256: Digest,
+}
 }
 
 /// Attribution of a held work preview. This value grants no closure authority.
@@ -101,6 +108,7 @@ pub enum PlanUpdateCase {
     PlanExists,
     CounterExhausted,
     TemplateRejected,
+    ReadRefused,
 }
 
 /// The review outcome reasons, without prescribing a review script.
@@ -120,26 +128,34 @@ pub enum ReviewFailure {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum PlanAct {
     Statement,
-    ExternalTool { name: String },
-    InwardRecall { verb: String },
+    #[serde(deserialize_with = "document::named_act")]
+    ExternalTool {
+        name: String,
+    },
+    #[serde(deserialize_with = "document::recall_act")]
+    InwardRecall {
+        verb: String,
+    },
 }
 
+super::codec::closed_object! {
 /// Operator categories require an explicit review election.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Category {
     pub id: String,
     pub verbs: Vec<String>,
     pub acts: Vec<PlanAct>,
     pub review_required: bool,
 }
+}
 
+super::codec::closed_object! {
 /// Operator group membership before stable steps are allocated.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GroupDraft {
     pub id: String,
     pub step_indices: Vec<DecimalU64>,
+}
 }
 
 /// Resolved logical group membership and its optional execution span.
@@ -152,18 +168,19 @@ pub struct PlanGroup {
     pub span: Option<SpanRef>,
 }
 
+super::codec::closed_object! {
 /// An operator step proposal, with null identity for a new step.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StepDraft {
     #[serde(deserialize_with = "super::required_option")]
     pub id: Option<StepId>,
     pub instruction: String,
 }
+}
 
+super::codec::closed_object! {
 /// The complete replacement body, also carried by answer_break.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlanReplacement {
     #[serde(deserialize_with = "super::required_option")]
     pub task: Option<String>,
@@ -173,11 +190,13 @@ pub struct PlanReplacement {
     pub review: ReviewSetupRef,
     pub preserved_closures: Vec<StepId>,
 }
+}
 
 /// The four root-authorized plan operations.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum PlanOperation {
+    #[serde(deserialize_with = "document::create")]
     Create {
         task: String,
         steps: Vec<StepDraft>,
@@ -185,6 +204,7 @@ pub enum PlanOperation {
         groups: Vec<GroupDraft>,
         review: ReviewSetupRef,
     },
+    #[serde(deserialize_with = "document::authorize")]
     Authorize {
         task: String,
         categories: Vec<Category>,
@@ -192,6 +212,7 @@ pub enum PlanOperation {
         review: ReviewSetupRef,
     },
     Replace(PlanReplacement),
+    #[serde(deserialize_with = "document::answer_break")]
     AnswerBreak {
         replacement: PlanReplacement,
     },
@@ -204,14 +225,16 @@ pub enum PlanUpdateFormat {
     V1,
 }
 
+super::codec::closed_object! {
 /// Exact root plan document. The original file bytes remain the digest input.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlanUpdateDocument {
+    #[serde(deserialize_with = "string_code")]
     pub format: PlanUpdateFormat,
     #[serde(deserialize_with = "super::required_option")]
     pub expected: Option<PlanRef>,
     pub operation: PlanOperation,
+}
 }
 
 /// Copied plan-input metadata names a Text block and carries no duplicate text.
@@ -418,6 +441,7 @@ super::codec::closed_object! {
     #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
     pub struct PlanSummary {
         pub plan: PlanRef,
+        #[serde(deserialize_with = "string_code")]
         pub status: PlanStatus,
         pub document_sha256: Digest,
         pub last_source: SourcePosition,
@@ -433,12 +457,87 @@ pub struct PlanOperationRefused {
 }
 
 /// A root plan-update refusal and its rejected source indices.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlanUpdateRefused {
     pub case: PlanUpdateCase,
     pub detail: String,
     pub rejected_blocks: Vec<DecimalU64>,
+    pub read_code: Option<ReadRefusalCode>,
+}
+
+impl<'de> Deserialize<'de> for PlanUpdateRefused {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Fields {
+            #[serde(deserialize_with = "string_code")]
+            case: PlanUpdateCase,
+            detail: String,
+            rejected_blocks: Vec<DecimalU64>,
+            #[serde(deserialize_with = "optional_string_code")]
+            read_code: Option<ReadRefusalCode>,
+        }
+        let fields: Fields = super::codec::deserialize_object(deserializer)?;
+        let refusal = Self {
+            case: fields.case,
+            detail: fields.detail,
+            rejected_blocks: fields.rejected_blocks,
+            read_code: fields.read_code,
+        };
+        refusal.validate().map_err(serde::de::Error::custom)?;
+        Ok(refusal)
+    }
+}
+
+impl PlanUpdateRefused {
+    /// The codec checks the code union; the owner must still prove the read leg.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.case == PlanUpdateCase::ReadRefused {
+            if !self.rejected_blocks.is_empty()
+                || !matches!(
+                    self.read_code,
+                    Some(
+                        ReadRefusalCode::NotFound
+                            | ReadRefusalCode::CounterExhausted
+                            | ReadRefusalCode::UnknownSnapshot
+                            | ReadRefusalCode::WrongOffset
+                            | ReadRefusalCode::ResultTooLarge
+                            | ReadRefusalCode::ResultUnavailable
+                            | ReadRefusalCode::AnswerTooLarge
+                    )
+                )
+            {
+                return Err("read_refused requires a preflight read code and no rejected blocks");
+            }
+        } else if self.read_code.is_some() {
+            return Err("only read_refused carries a read code");
+        }
+        if self.case != PlanUpdateCase::NonSte100 && !self.rejected_blocks.is_empty() {
+            return Err("only non_ste100 carries rejected source blocks");
+        }
+        Ok(())
+    }
+}
+
+fn string_code<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let code = String::deserialize(deserializer)?;
+    T::deserialize(serde::de::value::StringDeserializer::<D::Error>::new(code))
+}
+
+fn optional_string_code<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ReadRefusalCode>, D::Error> {
+    Option::<String>::deserialize(deserializer)?
+        .map(|code| {
+            ReadRefusalCode::deserialize(serde::de::value::StringDeserializer::<D::Error>::new(
+                code,
+            ))
+        })
+        .transpose()
 }
 
 /// Trusted caller assessment, distinct from persisted closure authority.

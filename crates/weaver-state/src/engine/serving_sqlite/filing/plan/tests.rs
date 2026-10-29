@@ -716,11 +716,52 @@ fn closure_refuses_any_new_content_after_unreviewed_work_and_keeps_active_marks(
 
 #[test]
 fn replacement_of_completed_plan_renews_task_and_preserves_terminal_evidence() {
+    completed_plan_renewal(false);
+}
+
+#[test]
+fn completed_plan_renewal_retires_an_intervening_task_and_keeps_the_old_prompt() {
+    completed_plan_renewal(true);
+}
+
+fn completed_plan_renewal(intervening: bool) {
     let mut store = store();
     create(&mut store, 1, false, false);
     activate(&mut store, 3, 1, 3, None);
     let work = work_ref(&store, 3);
     close(&mut store, 4, 4, work, None);
+    let (input_sequence, task_id) = if intervening {
+        let mut source = statement(5, "message.user");
+        source.text = "Read data and file.".into();
+        source.raw_block =
+            RawValue::from_string(r#"{"type":"text","text":"Read data and file."}"#.into())
+                .unwrap();
+        source.bindings[0].statement_span.end = (source.text.len() as u64).into();
+        source.bindings[0].nouns[0].value = "data".into();
+        store.file(&source).unwrap();
+        let mark = MarkEffect::BeginTask {
+            task: span(5),
+            prompt: span(6),
+            source: ContentRef::Event {
+                block_id: source.block_id,
+            },
+        };
+        let mut filing = statement(6, "state.mark");
+        filing.source.channel = "internal".into();
+        filing.source.origin = "loop".into();
+        filing
+            .source_path
+            .insert(0, SourcePathPart::Key("message".into()));
+        filing.context = Some(SourceContext {
+            source_path: vec![SourcePathPart::Key("context".into())],
+            raw: RawValue::from_string(serde_json::to_string(&mark).unwrap()).unwrap(),
+        });
+        filing.effect = Some(StatementEffect::Mark(mark));
+        store.file(&filing).unwrap();
+        (7, 7)
+    } else {
+        (5, 5)
+    };
     let ctx = context(
         PlanInputOperation::Replace(PlanInputReplacement {
             task: None,
@@ -735,17 +776,17 @@ fn replacement_of_completed_plan_renews_task_and_preserves_terminal_evidence() {
         }),
         Some(plan(1)),
     );
-    store.file(&input(5, 0, &ctx)).unwrap();
+    store.file(&input(input_sequence, 0, &ctx)).unwrap();
     store
         .file(&effect(
-            6,
+            input_sequence + 1,
             PlanEffect::Replace {
                 expected: plan(1),
                 next: plan(2),
-                source: block(5, 0),
+                source: block(input_sequence, 0),
                 task: TaskScopeRef {
-                    task: span(5),
-                    prompt: span(6),
+                    task: span(task_id),
+                    prompt: span(task_id + 1),
                 },
                 steps: vec![PlanStepInit {
                     step_id: step(1),
@@ -757,8 +798,29 @@ fn replacement_of_completed_plan_renews_task_and_preserves_terminal_evidence() {
         .unwrap();
     let current = snapshot(&store);
     assert_eq!(current.status, PlanStatus::Complete);
-    assert_eq!(current.task.task, span(5));
+    assert_eq!(current.task.task, span(task_id));
     assert_eq!(current.steps[0].span, Some(span(3)));
+    let prompt_source: (String, Vec<u8>, Vec<u8>) = store.connection.query_row(
+        "SELECT c.run,c.sequence,c.block FROM span_prefix p JOIN content_block c ON c.id=p.block_id WHERE p.local_id=?1 AND p.ordinal=?2",
+        params![blob(task_id + 1), blob(0)],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap();
+    assert_eq!(
+        prompt_source,
+        ("run".into(), blob(1).to_vec(), blob(0).to_vec())
+    );
+    if intervening {
+        let status: String = store
+            .connection
+            .query_row(
+                "SELECT status FROM span WHERE local_id=?1",
+                [blob(5)],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "retired");
+    }
+    marks::verify_image_marks(&store.connection, &store.context.seed_id).unwrap();
     verify_image_plan(
         &store.connection,
         &store.context.seed_id,

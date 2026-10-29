@@ -50,6 +50,8 @@ pub enum ObservationAnswer {
         state: AgentState,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         load: Option<Box<LoadFacts>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan: Option<super::super::PlanSummary>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         constituents: Vec<u32>,
     },
@@ -63,9 +65,18 @@ impl ObservationEnvelope {
         if self.exchange.opener != Opener::Admin || self.position != Position::Close {
             return Err(CodecError::WrongExchange);
         }
-        if let ObservationContent::Answer(ObservationAnswer::State { state, load, .. }) =
-            &self.payload
+        if let ObservationContent::Answer(ObservationAnswer::State {
+            state, load, plan, ..
+        }) = &self.payload
         {
+            if plan.is_some()
+                && !matches!(
+                    load.as_deref().map(|facts| &facts.state),
+                    Some(LoadedStateFacts::Serving { .. })
+                )
+            {
+                return Err(CodecError::InvalidLoadedState);
+            }
             // This is Observe, not the load verb's Idle/no-facts answer.
             if matches!(state, AgentState::Idle | AgentState::Active) != load.is_some() {
                 return Err(CodecError::InvalidLoadedState);

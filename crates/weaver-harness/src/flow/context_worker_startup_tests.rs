@@ -22,6 +22,9 @@ use weaver_types::state_flow as s;
 #[path = "../bin/worker/dev_loop/foundation.rs"]
 pub(super) mod worker;
 
+#[path = "context_worker_admission_process_tests.rs"]
+pub(super) mod admission_process;
+
 #[path = "context_worker_leave_joint_tests.rs"]
 mod leave_joint;
 #[path = "../../tests/state_flow/member.rs"]
@@ -184,6 +187,9 @@ fn worker_fixture_clock_waits_for_complete_request_receipt() {
 struct Files(PathBuf, bool);
 impl Files {
     fn new() -> Self {
+        if let Some(root) = std::env::var_os("WEAVER_FOUNDATION_DISPATCH_ROOT") {
+            return Self(root.into(), false);
+        }
         if let Some(root) = std::env::var_os("WEAVER_LEAVE_JOINT_ROOT") {
             return Self(root.into(), false);
         }
@@ -255,6 +261,8 @@ impl Files {
                         || mode == "expired-startup-summary-account-retained-classifier-held"
                     {
                         "rollback-held-exit"
+                    } else if mode.ends_with("-dispatch-startup-refusal") {
+                        "refuse"
                     } else if mode.starts_with("input-") {
                         mode
                     } else if mode == "classifier-refusal"
@@ -335,7 +343,9 @@ impl Files {
                 headroom_bytes: Some("123456".into()),
             },
             composer: LoopIdentity::compiled("worker"),
-            templates: if mode.contains("emission") {
+            templates: if mode.starts_with("input-worker-plan-") {
+                super::input::plan::tests::templates()
+            } else if mode.contains("emission") {
                 super::input::generation::emission::tests::templates(mode)
             } else if mode.contains("generation") {
                 super::input::generation::tests::templates()
@@ -481,6 +491,35 @@ pub(super) struct Member {
     pub(super) summary: Option<s::QueryResult>,
 }
 impl Member {
+    pub(super) fn dispatch_parts(self) -> (UnixStream, String) {
+        assert!(
+            self.normal.is_none(),
+            "dispatcher fixture uses an external declared member double"
+        );
+        assert!(self.requests.is_empty());
+        (self.peer, self.seed)
+    }
+
+    pub(super) fn dispatch_double(peer: UnixStream, seed: String, root: PathBuf) -> Self {
+        Self {
+            peer,
+            seed,
+            fixture_root: Some(root),
+            normal: None,
+            bytes: vec![],
+            ordinal: 0,
+            requests: vec![],
+            hold_mark: false,
+            hold_kind: None,
+            filings: vec![],
+            held_file: None,
+            hold_control: None,
+            held_control: None,
+            boot_pairs: vec![],
+            summary: None,
+        }
+    }
+
     pub(super) fn hold_next_normal_filing(&mut self) {
         self.normal
             .as_mut()
@@ -670,7 +709,9 @@ impl Member {
                         {
                             let root = self.fixture_root.as_ref().expect("snapshot fixture root");
                             assert!(
-                                root.join("ready-rollback-lower.json").exists(),
+                                root.join("ready-rollback-lower.json").exists()
+                                    || (mode.ends_with("-dispatch-demand-two")
+                                        && !root.join("dispatch-save-complete").exists()),
                                 "snapshot precedes actual Lower"
                             );
                             self.requests.push("snapshot".into());
@@ -997,6 +1038,46 @@ fn foreign_run(original: &[u8], root: &std::path::Path) -> ForeignRun {
     }
 }
 
+fn before_load_probe(
+    admission: &mut FoundationAdmission,
+    path: &std::path::Path,
+    clock: &mut FakePumpIo,
+) {
+    let peer = dial(path);
+    let request = weaver_types::OrganEnvelope {
+        exchange: weaver_types::ExchangeId {
+            opener: weaver_types::Opener::Admin,
+            ordinal: 50,
+        },
+        position: weaver_types::Position::Open,
+        payload: weaver_types::Payload::Directive(weaver_types::LifecycleDirective::Observe),
+    };
+    let bytes = serde_json::to_vec(&request).unwrap();
+    assert_eq!(
+        nix::sys::socket::send(peer.as_raw_fd(), &bytes, MsgFlags::MSG_NOSIGNAL),
+        Ok(bytes.len())
+    );
+    for _ in 0..8 {
+        assert_eq!(
+            admission.advance_with_io(clock),
+            FoundationAdmissionProgress::Pending
+        );
+        if let Some(answer) = packet(&peer) {
+            assert_eq!(answer.exchange, request.exchange);
+            assert_eq!(answer.position, weaver_types::Position::Close);
+            assert!(
+                matches!(answer.payload, weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::State {
+                plan: None,
+                state: weaver_types::AgentState::Unloaded, load: None, ref constituents
+            }) if constituents.is_empty())
+            );
+            assert!(admission.process_exit().is_none());
+            return;
+        }
+    }
+    panic!("before-load refusal did not preserve the listener");
+}
+
 fn circuit(mode: &str) {
     assert_eq!(
         nix::unistd::getuid().as_raw(),
@@ -1015,7 +1096,6 @@ fn circuit(mode: &str) {
     if mode == "unprivileged" {
         refuse_unprivileged(&mut admission, &path);
     }
-    let peer = dial(&path);
     let (sink, mut reader) = UnixStream::pair().unwrap();
     if mode == "expired-startup-activation-trace" {
         // A large actual Load blocks its writer on this small real socket.
@@ -1025,7 +1105,9 @@ fn circuit(mode: &str) {
     }
     let (state, member) = UnixStream::pair().unwrap();
     let (mut bootstrap, mut scheme, _) = classifier_fixture();
-    if mode.contains("emission") {
+    if mode.starts_with("input-worker-plan-") {
+        super::input::plan::tests::scheme(&mut bootstrap, &mut scheme);
+    } else if mode.contains("emission") {
         super::input::generation::emission::tests::scheme(&mut bootstrap, &mut scheme);
     }
     let mut config = super::super::tests::config();
@@ -1074,6 +1156,11 @@ fn circuit(mode: &str) {
         {
             load.state_flow.persistence.save_wait.elapsed_ns = 1_000_000_000.into();
         }
+        if mode.contains("-joint-expiry-") {
+            // The snapshot's per-leg allowance is capped by this same capture
+            // deadline. The real member result stays held until actual Abort.
+            load.state_flow.persistence.save_wait.elapsed_ns = 2_000_000_000.into();
+        }
         if mode.contains("-organ-loss-expiry-") {
             // The actual writer queue takes several seconds to fill in this
             // debug fixture. Leave time to retain the fault at trace admission
@@ -1086,6 +1173,11 @@ fn circuit(mode: &str) {
             load.state_flow.persistence.save_wait.elapsed_ns = 250_000_000.into();
             load.state_flow.persistence.snapshot_wait.elapsed_ns = 50_000_000.into();
         }
+    }
+    if mode.ends_with("-flags-queued-save") {
+        // This real process case retains a save while the flag member delays;
+        // its declared budget is not the fake-clock fixture's millisecond window.
+        load.state_flow.persistence.save_wait.elapsed_ns = 5_000_000_000.into();
     }
     if mode.starts_with("input-worker") {
         load.state_flow.ste100.decision_wait.elapsed_ns = 5_000_000_000.into();
@@ -1177,6 +1269,22 @@ fn circuit(mode: &str) {
     if mode.ends_with("-bad-release") {
         normal.as_mut().unwrap().corrupt_release = true;
     }
+    if mode.ends_with("-capture-refusal") {
+        let normal = normal.as_mut().unwrap();
+        let snapshot_timeout = mode.contains("-snapshot-timeout-capture-refusal");
+        let finished_timeout = mode.contains("-finished-timeout-capture-refusal");
+        normal.refuse_first_snapshot = !mode.contains("-preparation-capture-refusal")
+            && !snapshot_timeout
+            && !finished_timeout;
+        normal.damage_first_image = mode.contains("-preparation-capture-refusal");
+        normal.wait_for_capture_join = mode.contains("-joined-capture-refusal");
+        normal.corrupt_abort = mode.contains("-failed-cleanup-capture-refusal");
+        if snapshot_timeout {
+            normal.delay_first_capture_result(normal_member::CaptureDelay::Snapshot);
+        } else if finished_timeout {
+            normal.delay_first_capture_result(normal_member::CaptureDelay::Finished);
+        }
+    }
     let now = if mode == "worker"
         || mode.starts_with("input-worker")
         || mode == "failed-startup-worker"
@@ -1197,7 +1305,11 @@ fn circuit(mode: &str) {
     *enter_window = weaver_types::state_flow::EnterWindow {
         began_ns: now.into(),
         deadline_ns: (now
-            + if mode == "worker" || mode.starts_with("input-worker") {
+            + if mode.ends_with("-dispatch-enter-expired") {
+                // Boot reads have a fixed two-second allowance. This case
+                // expires the original Enter first, while retaining that read.
+                1_000_000_000
+            } else if mode == "worker" || mode.starts_with("input-worker") {
                 5_000_000_000
             } else {
                 1_000_000_000
@@ -1211,6 +1323,20 @@ fn circuit(mode: &str) {
         enter_window.deadline_ns = 100.into();
     }
     let bytes = envelope.encode().unwrap();
+    if admission_process::is_mode(mode) {
+        admission_process::run(
+            admission,
+            program,
+            sink,
+            reader,
+            state,
+            member,
+            &bytes,
+            &load.state_start.seed_id,
+            &files.0,
+        );
+    }
+    let peer = dial(&path);
     let wire = if mode == "malformed" {
         b"{bad".to_vec()
     } else {
@@ -1246,8 +1372,13 @@ fn circuit(mode: &str) {
         admission.advance_with_io(&mut clock)
     };
     if mode == "window-future" || mode == "window-expired" {
-        assert_eq!(received, FoundationAdmissionProgress::Stopped);
-        assert_eq!(admission.received.as_ref().unwrap().wire(), bytes);
+        assert_eq!(received, FoundationAdmissionProgress::Pending);
+        for _ in 0..4 {
+            assert_eq!(
+                admission.advance_with_io(&mut clock),
+                FoundationAdmissionProgress::Pending
+            );
+        }
         let response = packet(&peer);
         if mode == "window-future" {
             let response = response.expect("before-load Malformed on actual valid exchange");
@@ -1268,6 +1399,8 @@ fn circuit(mode: &str) {
             0,
             "actual unadmitted descriptors closed, no state Open"
         );
+        drop(peer);
+        before_load_probe(&mut admission, &path, &mut clock);
         assert!(admission.adopt_with_io(&mut clock).is_err());
         return;
     }
@@ -1289,15 +1422,23 @@ fn circuit(mode: &str) {
         admission.adopt_with_io(&mut clock)
     };
     if mode == "missing-state" {
-        let admission = adopted.err().expect("missing handle refused");
+        let mut admission = adopted.err().expect("missing handle refused");
         assert_eq!(admission.received.as_ref().unwrap().wire(), bytes);
-        assert!(
-            admission
-                .detail()
-                .unwrap()
-                .contains("requires trace and state")
+        for _ in 0..4 {
+            assert_eq!(
+                admission.advance_with_io(&mut clock),
+                FoundationAdmissionProgress::Pending
+            );
+        }
+        let answer = packet(&peer).expect("typed missing-descriptor refusal");
+        assert_eq!(answer.exchange, envelope.exchange);
+        assert_eq!(answer.position, weaver_types::Position::Close);
+        assert_eq!(
+            answer.payload,
+            weaver_types::Payload::Refusal(weaver_types::LifecycleRefusal::DescriptorsUnusable)
         );
-        assert!(packet(&peer).is_none());
+        drop(peer);
+        before_load_probe(&mut admission, &path, &mut clock);
         return;
     }
     let mut run = RunGuard(Some(adopted.map_err(|a| a.detail).ok().unwrap()));
@@ -1332,7 +1473,9 @@ fn circuit(mode: &str) {
         .unwrap();
     assert_eq!(
         bound.deadline_ns() - bound.began_ns(),
-        if mode == "worker" || mode.starts_with("input-worker") {
+        if mode.ends_with("-dispatch-enter-expired") {
+            1_000_000_000
+        } else if mode == "worker" || mode.starts_with("input-worker") {
             5_000_000_000
         } else {
             1_000_000_000
@@ -1356,6 +1499,19 @@ fn circuit(mode: &str) {
         boot_pairs: vec![],
         summary: None,
     };
+    if mode.contains("-dispatch-") && mode.starts_with("input-worker-") {
+        // The outer process owns the actual Enter caller, member double and
+        // trace reader. The child invokes the same non-returning worker driver
+        // whose process exit is under test; no fixture Drop finishes cleanup.
+        super::input::management::dispatch_tests::run(
+            run.take_boxed(),
+            program,
+            member,
+            peer,
+            reader,
+            &files.0,
+        );
+    }
     if mode == "worker" || mode.starts_with("input-worker") {
         let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let flag = done.clone();
@@ -1389,6 +1545,57 @@ fn circuit(mode: &str) {
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-worker") {
             drop(peer);
+            if mode == "input-worker-plan-failed-read" {
+                let handoff =
+                    super::input::halt::exit::plan_tests::handoff(serving, &mut member, &path);
+                let actual = run.take_boxed();
+                super::input::halt::exit::plan_tests::finish(actual, handoff, &mut reader);
+                return;
+            }
+            if mode == "input-worker-plan-leave-read" {
+                let handoff =
+                    super::input::plan::tests::cleanup::handoff(serving, &mut member, &path);
+                let actual = run.take_boxed();
+                super::input::plan::tests::cleanup::finish(
+                    actual,
+                    handoff,
+                    &mut member,
+                    &mut reader,
+                );
+                return;
+            }
+            if mode.starts_with("input-worker-plan-save-sqlite-flags-") {
+                assert!(
+                    member.normal.is_some(),
+                    "flag observations use normal SQLite"
+                );
+                if let Some(cleanup) = super::input::plan::tests::flags::exercise(
+                    serving,
+                    &mut member,
+                    &mut reader,
+                    &path,
+                    mode,
+                ) {
+                    super::input::plan::tests::flags::finish(
+                        run.take_boxed(),
+                        cleanup,
+                        &mut member,
+                        &mut reader,
+                    );
+                }
+                return;
+            }
+            if mode.starts_with("input-worker-plan-") {
+                if mode.contains("-save-sqlite-") {
+                    assert!(member.normal.is_some(), "root success uses normal SQLite");
+                }
+                super::input::plan::tests::exercise(serving, &mut member, &mut reader, &path, mode);
+                return;
+            }
+            if mode.starts_with("input-worker-management-wait-") {
+                super::input::management::wait_tests::exercise(serving, &mut member, &path, mode);
+                return;
+            }
             if mode.ends_with("-demand-receive-clock") {
                 super::input::generation::session_tests::demand_save::receive_clock::exercise(
                     serving,
@@ -1725,6 +1932,15 @@ fn circuit(mode: &str) {
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-") {
             drop(peer); // Normal admin departure does not revoke serving.
+            if mode == "input-dispatch-ordering" {
+                super::input::management::dispatch_tests::ordering(
+                    serving,
+                    &mut member,
+                    &mut clock,
+                    &path,
+                );
+                return;
+            }
             if mode.contains("-lower-organ-") {
                 let (handoff, rows, observed_at) = super::input::halt::exit::organ_tests::start(
                     serving,
@@ -1977,6 +2193,11 @@ fn assert_serving(
 
 fn scenario(name: &str, mode: &str) {
     if std::env::var("WEAVER_WORKER_STARTUP_CASE").ok().as_deref() == Some(mode) {
+        if mode.contains("-dispatch-") && mode.starts_with("input-worker-") {
+            // This is the fixture's first action, before adoption starts the
+            // recorder or any organ is forked; fd9 came from the parent exec.
+            assert!(crate::keep_start_step_descriptors().unwrap().0);
+        }
         let run = std::env::var("WEAVER_GATE_STARTUP_RUN").unwrap();
         std::fs::write(
             format!("/sys/fs/cgroup{run}/cgroup.procs"),
@@ -1990,6 +2211,10 @@ fn scenario(name: &str, mode: &str) {
         leave_joint::scenario(name, mode);
         return;
     }
+    if mode.contains("-dispatch-") && mode.starts_with("input-worker-") {
+        super::input::management::dispatch_tests::scenario(name, mode);
+        return;
+    }
     let layout = crate::tools_cgroup::tests::ScratchLayout::new(&format!("worker-{mode}"));
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command
@@ -1999,6 +2224,7 @@ fn scenario(name: &str, mode: &str) {
     let status = if super::input::generation::session_tests::serving_rollback::is_mode(mode)
         || super::input::generation::session_tests::forced_leave::is_mode(mode)
         || super::input::generation::session_tests::demand_save::is_mode(mode)
+        || mode.starts_with("input-worker-plan-")
         || mode.contains("-graceful-quiesce-")
         || mode.contains("-graceful-wind-down-")
     {
@@ -2037,6 +2263,168 @@ macro_rules! scenario {
     };
 }
 scenario!(worker_startup_composition_ready, "ready");
+scenario!(worker_plan_composition_stop, "input-worker-plan-stop");
+scenario!(
+    worker_plan_composition_open_turn,
+    "input-worker-plan-open-turn"
+);
+scenario!(
+    worker_plan_flags_queued_save,
+    "input-worker-plan-save-sqlite-flags-queued-save"
+);
+scenario!(
+    worker_plan_flags_failed,
+    "input-worker-plan-save-sqlite-flags-failed"
+);
+scenario!(
+    worker_plan_flags_recorded_failed,
+    "input-worker-plan-save-sqlite-flags-recorded-failed"
+);
+scenario!(
+    worker_plan_flags_success,
+    "input-worker-plan-save-sqlite-flags-success"
+);
+scenario!(
+    worker_plan_flags_unavailable,
+    "input-worker-plan-save-sqlite-flags-unavailable"
+);
+scenario!(
+    worker_plan_flags_stop,
+    "input-worker-plan-save-sqlite-flags-stop"
+);
+scenario!(
+    worker_plan_flags_leave,
+    "input-worker-plan-save-sqlite-flags-leave"
+);
+scenario!(
+    worker_plan_composition_cancel_input_filing,
+    "input-worker-plan-save-sqlite-cancel-input"
+);
+scenario!(
+    worker_plan_composition_cancel_committed_effect,
+    "input-worker-plan-save-sqlite-cancel-effect"
+);
+scenario!(
+    worker_plan_composition_answer_pressure,
+    "input-worker-plan-answer-pressure"
+);
+scenario!(
+    worker_plan_composition_answer_expiry,
+    "input-worker-plan-answer-expiry"
+);
+scenario!(
+    worker_plan_composition_failed_read,
+    "input-worker-plan-failed-read"
+);
+scenario!(
+    worker_plan_composition_leave_read,
+    "input-worker-plan-leave-read"
+);
+scenario!(
+    worker_plan_composition_sqlite_success,
+    "input-worker-plan-save-sqlite-success"
+);
+scenario!(
+    worker_plan_composition_sqlite_admin,
+    "input-worker-plan-save-sqlite-admin"
+);
+scenario!(
+    worker_plan_composition_sqlite_lost_answer,
+    "input-worker-plan-save-sqlite-lost-answer"
+);
+scenario!(
+    worker_plan_composition_malformed,
+    "input-worker-plan-malformed"
+);
+scenario!(
+    worker_plan_composition_disconnected,
+    "input-worker-plan-disconnected"
+);
+scenario!(
+    worker_plan_composition_read_refused,
+    "input-worker-plan-read-refused"
+);
+
+scenario!(
+    worker_admission_composition_diagnostic_retains_original,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-two"
+);
+scenario!(
+    worker_admission_composition_before_enter_two_turns,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-ordinary-two"
+);
+scenario!(
+    worker_admission_composition_future_refusal_then_serving,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-future-two"
+);
+scenario!(
+    worker_admission_composition_expired_then_serving,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-expired-two"
+);
+scenario!(
+    worker_admission_composition_missing_state_then_serving,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-missing-two"
+);
+scenario!(
+    worker_admission_composition_malformed_process_exit,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-malformed-two"
+);
+scenario!(
+    worker_admission_composition_truncated_process_exit,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-truncated-two"
+);
+scenario!(
+    worker_management_dispatch_ordering,
+    "input-dispatch-ordering"
+);
+scenario!(
+    worker_management_waits_for_silent_retained_peer,
+    "input-worker-management-wait-silent"
+);
+scenario!(
+    worker_management_waits_for_retained_answer_capacity,
+    "input-worker-management-wait-pressure"
+);
+scenario!(
+    worker_dispatch_composition_two_turns_graceful,
+    "input-worker-generation-emission-session-graceful-save-dispatch-two"
+);
+scenario!(
+    worker_dispatch_composition_forced_leave,
+    "input-worker-generation-emission-session-forced-save-dispatch-idle"
+);
+scenario!(
+    worker_dispatch_composition_ready_rollback,
+    "input-worker-generation-emission-session-ready-rollback-dispatch-idle"
+);
+scenario!(
+    worker_dispatch_composition_startup_refusal,
+    "input-worker-generation-emission-session-ready-rollback-dispatch-startup-refusal"
+);
+scenario!(
+    worker_dispatch_composition_startup_failed,
+    "input-worker-generation-emission-session-ready-rollback-dispatch-startup-failed"
+);
+scenario!(
+    worker_dispatch_composition_enter_expired,
+    "input-worker-generation-emission-session-ready-rollback-dispatch-enter-expired"
+);
+scenario!(
+    worker_dispatch_composition_serving_failed,
+    "input-worker-generation-emission-session-forced-save-dispatch-serving-failed"
+);
+scenario!(
+    worker_dispatch_composition_pending_filing_forced,
+    "input-worker-generation-emission-session-forced-save-dispatch-pending"
+);
+scenario!(
+    worker_dispatch_composition_s9_retry,
+    "input-worker-generation-emission-session-graceful-save-dispatch-s9"
+);
+scenario!(
+    worker_dispatch_composition_requested_save_then_turns,
+    "input-worker-generation-emission-session-graceful-save-dispatch-demand-two"
+);
 scenario!(
     worker_session_demand_save_receive_clock,
     "input-worker-generation-emission-session-demand-receive-clock"
@@ -2116,6 +2504,50 @@ scenario!(
 scenario!(
     worker_session_forced_leave_joint_sqlite_idle,
     "input-worker-generation-emission-session-forced-save-sqlite-joint"
+);
+scenario!(
+    worker_session_forced_leave_joint_sqlite_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-capture-refusal"
+);
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-capture-refusal"
+);
+scenario!(
+    worker_session_joined_leave_joint_sqlite_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-joined-capture-refusal"
+);
+scenario!(
+    worker_session_forced_leave_joint_sqlite_preparation_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-preparation-capture-refusal"
+);
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_preparation_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-preparation-capture-refusal"
+);
+scenario!(
+    worker_session_forced_leave_joint_sqlite_snapshot_timeout_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-snapshot-timeout-capture-refusal"
+);
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_snapshot_timeout_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-snapshot-timeout-capture-refusal"
+);
+scenario!(
+    worker_session_forced_leave_joint_sqlite_finished_timeout_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-finished-timeout-capture-refusal"
+);
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_finished_timeout_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-finished-timeout-capture-refusal"
+);
+scenario!(
+    worker_session_forced_leave_joint_sqlite_failed_cleanup_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-failed-cleanup-capture-refusal"
+);
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_failed_cleanup_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-failed-cleanup-capture-refusal"
 );
 scenario!(
     worker_session_forced_leave_joint_sqlite_held_filing,
@@ -2562,8 +2994,63 @@ scenario!(
     "input-generation-emission-pending-observe-sort-refusal"
 );
 scenario!(
-    worker_emission_composition_completed_observe_repair_refusal,
-    "input-generation-emission-completed-observe-repair-refusal"
+    worker_emission_composition_pending_observe_repair_refusal,
+    "input-generation-emission-pending-observe-repair-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_repair_account_deadline,
+    "input-generation-emission-refusal-budget-account-deadline-repair-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_repair_trace_pressure,
+    "input-generation-emission-refusal-budget-refusal-boundary-trace-pressure-repair-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_repair_gate_deadline,
+    "input-generation-emission-refusal-budget-refusal-boundary-gate-deadline-repair-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_repair_unelected_deadline,
+    "input-generation-emission-refusal-budget-unelected-deadline-repair-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_exhausted_trace_pressure,
+    "input-generation-emission-correction-refusal-budget-refusal-boundary-trace-pressure-cap"
+);
+
+scenario!(
+    worker_emission_refusal_budget_exhausted_trace_deadline,
+    "input-generation-emission-correction-refusal-budget-refusal-boundary-trace-deadline-cap"
+);
+
+scenario!(
+    worker_emission_refusal_budget_exhausted_gate_deadline,
+    "input-generation-emission-correction-refusal-budget-refusal-boundary-gate-deadline-cap"
+);
+
+scenario!(
+    worker_emission_refusal_budget_exhausted_unelected_deadline,
+    "input-generation-emission-correction-refusal-budget-unelected-deadline-cap"
+);
+
+scenario!(
+    worker_emission_refusal_budget_candidate_unelected_deadline,
+    "input-generation-emission-refusal-budget-unelected-deadline-foreign"
+);
+
+scenario!(
+    worker_emission_refusal_budget_classifier_unelected_deadline,
+    "input-generation-emission-refusal-budget-unelected-deadline-sort-refusal"
+);
+
+scenario!(
+    worker_emission_refusal_budget_template_unelected_deadline,
+    "input-generation-emission-refusal-budget-unelected-deadline-no-sort"
 );
 
 scenario!(
@@ -3036,6 +3523,10 @@ scenario!(
     "input-generation-emission-pairs-external-gate-death-crossed"
 );
 scenario!(
+    worker_external_composition_gate_death_held_crossed,
+    "input-generation-emission-pairs-external-gate-death-held-crossed"
+);
+scenario!(
     worker_external_composition_gate_death_unsent,
     "input-generation-emission-pairs-external-gate-death-unsent"
 );
@@ -3494,6 +3985,10 @@ scenario!(
 scenario!(
     worker_session_composition_ready_rollback_edge_drained_clock,
     "input-worker-generation-emission-session-ready-rollback-edge-drained-clock"
+);
+scenario!(
+    worker_session_composition_ready_rollback_edge_answer_lost,
+    "input-worker-generation-emission-session-ready-rollback-edge-answer-lost"
 );
 
 scenario!(
@@ -4636,6 +5131,50 @@ scenario!(
     "input-worker-generation-emission-session-forced-save-refused"
 );
 scenario!(
+    worker_session_composition_graceful_save_refused,
+    "input-worker-generation-emission-session-graceful-save-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_retry_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-retry-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_force_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-force-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_spu_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-spu-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_orphan_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-orphan-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_silent_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-silent-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_malformed_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-malformed-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_expired_save_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-expired-save-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_member_failure_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-member-failure-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_trace_failure_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-trace-failure-refused"
+);
+scenario!(
+    worker_session_composition_graceful_save_resting_paced_refused,
+    "input-worker-generation-emission-session-graceful-save-resting-paced-refused"
+);
+scenario!(
     worker_session_composition_forced_save_snapshot_timeout,
     "input-worker-generation-emission-session-forced-save-snapshot-timeout"
 );
@@ -5195,4 +5734,58 @@ scenario!(
 scenario!(
     worker_session_demand_save_sqlite_organ_loss_spu_queued_report,
     "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-report-queued-spu-release"
+);
+
+scenario!(
+    worker_session_demand_save_held_reply_progresses_during_spu_settlement,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-held-reply-spu"
+);
+
+scenario!(
+    worker_session_queued_save_waits_for_spu_settlement_before_capture,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-queued-boundary-spu"
+);
+scenario!(
+    worker_session_queued_requested_records_without_beginning_during_spu_settlement,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-queued-requested-spu"
+);
+scenario!(
+    worker_session_queued_requested_keeps_boundary_behind_earlier_author,
+    "input-worker-generation-emission-session-demand-save-sqlite-organ-loss-queued-author-spu"
+);
+scenario!(
+    worker_session_graceful_save_resting_held_reply_progresses_during_spu_settlement,
+    "input-worker-generation-emission-session-graceful-save-resting-held-reply-refused"
+);
+scenario!(
+    worker_session_graceful_save_resting_queued_requested_waits_for_spu_settlement,
+    "input-worker-generation-emission-session-graceful-save-resting-queued-requested-refused"
+);
+scenario!(
+    worker_session_graceful_save_resting_queued_requested_keeps_boundary_behind_earlier_author,
+    "input-worker-generation-emission-session-graceful-save-resting-queued-author-refused"
+);
+scenario!(
+    worker_session_graceful_save_resting_queued_boundary_waits_for_spu_settlement,
+    "input-worker-generation-emission-session-graceful-save-resting-queued-boundary-refused"
+);
+
+scenario!(
+    worker_session_forced_leave_joint_sqlite_expiry_snapshot_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-expiry-snapshot-timeout-capture-refusal"
+);
+
+scenario!(
+    worker_session_forced_leave_joint_sqlite_expiry_finished_capture_refusal,
+    "input-worker-generation-emission-session-forced-save-sqlite-joint-expiry-finished-timeout-capture-refusal"
+);
+
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_expiry_snapshot_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-expiry-snapshot-timeout-capture-refusal"
+);
+
+scenario!(
+    worker_session_graceful_leave_joint_sqlite_expiry_finished_capture_refusal,
+    "input-worker-generation-emission-session-graceful-save-sqlite-joint-expiry-finished-timeout-capture-refusal"
 );

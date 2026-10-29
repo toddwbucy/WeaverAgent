@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #349
+**Landing PR:** #373
 
-**Version:** 0.22 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
+**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -342,8 +342,10 @@ pre-capture exception. No save_wait timer covers S4 or S5. Await SavePointBeginn
 before accepting an image and validate its windows under foundation PERSIST-BEGIN.
 [PERSIST-1, PERSIST-4, CLASS-8, admin Spec 3.0]
 
-Once Beginning announces the bounded save stage, watch the earlier capture, shared-tail
-and existing outer leave deadlines. No frame restarts them. On leave,
+Once Beginning announces the bounded save stage, successful save work watches the
+earlier capture, shared-tail and existing outer leave deadlines. Pre-Commit Leave
+cancellation follows PERSIST-LEAVE-REFUSAL's refusal-only timing below. No frame
+restarts a deadline. On leave,
 SavePointCaptureComplete ends the capture window only. Await the real Left under the
 remaining shared/outer tail before applying the normal conclusion. On demand,
 CaptureComplete is out of order. A queued-save timeout is CaptureNotReady only when the
@@ -372,16 +374,37 @@ both fail. A closed, absent or different-run marker retains the existing idempot
 no-publication rule. A joiner remains a verifier, never a second publisher.
 [PERSIST-2, PERSIST-3, FLOW-5, operator 2026-10-27]
 
-For pre-Commit leave refusal, follow foundation PERSIST-LEAVE-REFUSAL. A local
-preparation refusal sends SavePointAborted and retains the exchange until the worker's
-matching SavePointCaptureRefused. That frame acknowledges a refused capture only after
-member cleanup and trace accounting. Cancel unconfirmed publication, remove unlisted
-root parts and, on a timely acknowledgement, disarm only the capture wait. Then await
+For pre-Commit leave refusal, follow foundation PERSIST-LEAVE-REFUSAL. After a validated
+Beginning, a local preparation refusal or capture expiry ends save-success processing,
+cancels unconfirmed publication and sends one SavePointAborted where the exchange
+permits. Retain the exchange until the worker's matching SavePointCaptureRefused under
+the earlier of the original shared-tail and outer leave deadlines. The expired capture
+window remains evidence but no longer caps this refusal-only wait. That frame
+acknowledges a refused capture only after member cleanup and trace accounting. Remove
+unlisted root parts and, on a timely acknowledgement, disarm the capture wait if still
+armed. Then await
 Left with forced true, no_state false and no save report, or SavePointNotTaken with the
-same missed leg for a leave that stayed graceful. Neither continuation is a final
-command result. Preserve the outer and shared leave windows and all normal conclusion
-duties. Capture expiry still gives the existing unanswered-command outcome, never a
-new wait for a late success. A worker Aborted after a latched failure instead follows
+same missed leg for a leave that stayed graceful. These are the normal continuations;
+neither alone is a final command result. A terminal Malformed, DescriptorsUnusable or
+OrganRefused with organ Gate instead follows the existing failed-unwind conclusion:
+retain the refusal, end remaining run processes, preserve Open and report no successful
+save or Unloaded. OrganRefused keeps its nested reason attributed to the gate; it is
+not admin's own publication account. FailedRun is admin's projection shape; the
+current harness does not emit it. If received from a worker, a matching FailedRun is
+retained only as defensive evidence, never authority for root-owned artifacts or a
+published identity; its pre-Commit public result is Unanswered. Once Beginning has supplied a capture ID, FailedRun must name
+that exact ID as well as the run, at receives and local-work checkpoints. Other
+terminal refusal codes are protocol failures, including a direct StatePersistenceInvalid
+or a code asking the caller to retry a standing run. This same terminal-code rule
+applies to every capture receive, local-work checkpoint and joined Leave exchange,
+including before CaptureRefused and after admin Aborted. A join compares any FailedRun
+with its observed run and rejects it when that run is unavailable or different; it
+has no Beginning and cannot assert a capture ID it never learned. Initial admission
+retains its named standing-refusal cases, and demand or graceful capture cleanup
+retains its specified SavePointNotTaken outcome. Public projection applies the same
+terminal set and never promotes a worker's publication claim. Preserve the outer and shared
+leave windows and all normal conclusion duties. No late save success or renewed
+publication is permitted. A worker Aborted after a latched failure instead follows
 failed-run recovery and proves no cleanup. [PERSIST-4, FLOW-5, admin Spec 3.0]
 
 Send at most one admin Aborted for this capture and preserve it through partial carry.
@@ -392,18 +415,23 @@ Published merely because admin also sent Aborted. A crossed Commit follows faile
 recovery, never a healthy refusal. Foundation's admin rows govern these cases.
 [PERSIST-4, SEAM-2]
 
-If cleanup finishes after admin's capture deadline, the result remains Unanswered with
-the Open marker. No late CaptureRefused or Left changes it. The worker may finish a
-forced unwind, but without a later normal admin conclusion the next load observes
-NoCleanUnload. A still-graceful worker with no admin remains at S9. [PERSIST-4, FLOW-5]
+Cleanup and CaptureRefused may finish after the capture deadline while both remaining
+Leave deadlines are live. The final forced Left still needs normal run-end and marker
+duties; a still-graceful refusal leaves S9 available. If either remaining deadline
+expires first, report Unanswered with the Open marker and accept no later
+CaptureRefused or Left as a conclusion. The worker may finish a forced unwind, but
+without a later normal admin conclusion the next load observes NoCleanUnload. A
+still-graceful worker with no admin remains at S9. Before a validated Beginning, on
+demand and after Commit, retain the existing expiry rules. [PERSIST-4, FLOW-5]
 
 These clauses amend admin Spec 3.0 and section 3's leave/save wait routines. The
 protocol fixture checks both graceful bound omissions, finite and forced windows, stale
 Beginning, reordered Image and early or duplicate CaptureComplete. It must fail when a
 later frame resets an earlier deadline or when a save bound forces an otherwise
 unbounded S4/S5. It also exercises every PERSIST-LEAVE-REFUSAL admin row, including
-Aborted crossed by an image or worker refusal, expired capture before CaptureRefused,
-and a save report or CaptureComplete after that acknowledgement. This is a protocol
+Aborted crossed by an image or worker refusal, capture expiry followed by cleanup and
+CaptureRefused within the original Leave tail, either remaining deadline expiring,
+and a save report or CaptureComplete after cancellation or acknowledgement. This is a protocol
 pass, not a wall-time guarantee for an uninterruptible filesystem call.
 [PERSIST-4, COST-4, FLOW-5]
 

@@ -413,27 +413,65 @@ impl RecordingContext {
             }
             _ => return Ok(false),
         };
-        self.serving_organs.first_gate.get_or_insert(gate_loss);
-        if gate_loss {
-            if self.serving_organs.gate_matches(gate) {
-                return Ok(true);
-            }
-            self.serving_organs.gate = Some(ObservedGate {
-                port: gate.port_identity(),
-                observation: Some(Observation::new("gate", failure.clone(), leaving)),
-            });
-        } else {
-            if self.serving_organs.decode_matches(decode)
-                && self.serving_organs.residency_matches(residency)
-            {
-                return Ok(true);
-            }
-            self.serving_organs.spu = Some(ObservedSpu {
-                decode: decode.port_identity(),
-                residency: residency.port_identity(),
-                observation: Some(Observation::new("spu", failure.clone(), leaving)),
-            });
+        if !gate_loss {
+            return self.observe_idle_spu_end(source, failure, decode, residency, leaving, io);
         }
+        self.serving_organs.first_gate.get_or_insert(true);
+        if self.serving_organs.gate_matches(gate) {
+            return Ok(true);
+        }
+        self.serving_organs.gate = Some(ObservedGate {
+            port: gate.port_identity(),
+            observation: Some(Observation::new("gate", failure.clone(), leaving)),
+        });
+        self.anchor_organ_end(true, Some(tools), io)
+    }
+
+    /// The admitted idle SPU remains observable after Lower, without requiring
+    /// a live gate or inventing another gate ownership token.
+    pub(super) fn observe_idle_spu_end(
+        &mut self,
+        source: PumpSource,
+        failure: &Failure,
+        decode: &DecodePort,
+        residency: &OrganPort,
+        leaving: bool,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
+        if failure.fault != crate::failure::ChannelFault::Closed
+            || self.phase != RecordingPhase::Entered
+            || self.failure().is_some()
+            || self.flow.halt().is_some()
+            || !decode.has_no_exchange()
+            || !match source {
+                PumpSource::Residency => residency.failure(),
+                PumpSource::Decode => decode.failure(),
+                _ => return Ok(false),
+            }
+            .is_some_and(|end| end.fault == crate::failure::ChannelFault::Closed)
+        {
+            return Ok(false);
+        }
+        if self.serving_organs.decode_matches(decode)
+            && self.serving_organs.residency_matches(residency)
+        {
+            return Ok(true);
+        }
+        self.serving_organs.first_gate.get_or_insert(false);
+        self.serving_organs.spu = Some(ObservedSpu {
+            decode: decode.port_identity(),
+            residency: residency.port_identity(),
+            observation: Some(Observation::new("spu", failure.clone(), leaving)),
+        });
+        self.anchor_organ_end(false, None, io)
+    }
+
+    fn anchor_organ_end(
+        &mut self,
+        gate_loss: bool,
+        tools: Option<&ToolsCgroup>,
+        io: &mut impl PumpIo,
+    ) -> Result<bool, RunFailure> {
         // Retain evidence before sampling the clock. A fatal error leaves the exact
         // unanchored observation in this context's failed-run owner.
         let interrupted = match self.live(io) {
@@ -479,7 +517,7 @@ impl RecordingContext {
                 .as_mut()
                 .unwrap()
         };
-        observation.anchor(now, gate_loss.then_some(tools));
+        observation.anchor(now, tools);
         match interrupted {
             Some(wait) => Err(wait),
             None => Ok(true),

@@ -237,6 +237,7 @@ pub(in crate::flow::context) fn exercise(
     } else {
         1
     };
+    let mut refusal_bound = None;
     for attempt in 1..=count {
         let input = guard.input.as_mut().unwrap();
         input
@@ -372,6 +373,11 @@ pub(in crate::flow::context) fn exercise(
         }
         input.generate_correction().unwrap();
         assert!(input.generate_correction().is_err());
+        if attempt == count && mode.contains("refusal-budget") {
+            refusal_bound = Some(super::super::tests::await_decision_bound(
+                input, member, clock, mode,
+            ));
+        }
         if mode.contains("decode-refusal-proof") {
             until(
                 input,
@@ -489,6 +495,14 @@ pub(in crate::flow::context) fn exercise(
         assert_eq!(work.exhausted.as_ref().unwrap().failed_corrections().0, 2);
         assert!(input.effective_emission().is_none());
         assert!(!root.join("correction-appended-3.json").exists());
+        if let Some(bound) = refusal_bound {
+            if super::super::tests::refusal_election(
+                &mut guard, clock, socket, reader, root, bound, mode,
+            ) {
+                return;
+            }
+            return refusal_boundary(guard, member, reader, clock, socket, root, mode);
+        }
         stop(&mut guard, member, clock, mode, socket, root);
         return;
     }
@@ -703,7 +717,8 @@ pub(in crate::flow::context::worker_startup) fn refusal_boundary(
     });
     let mut bound = original;
     let mut held_seen = false;
-    if original.is_some() {
+    let hold_receipt = original.is_some() && !mode.ends_with("cap");
+    if hold_receipt {
         member.hold_kind = Some("tool.call.completed");
     }
     for _ in 0..2000 {
@@ -798,7 +813,7 @@ pub(in crate::flow::context::worker_startup) fn refusal_boundary(
             FoundationInputProgress::Pending
         );
     }
-    assert_eq!(held_seen, original.is_some());
+    assert_eq!(held_seen, hold_receipt);
     assert_eq!(
         input
             .engine
@@ -835,7 +850,11 @@ pub(in crate::flow::context::worker_startup) fn refusal_boundary(
         rows.iter()
             .filter(|r| r["kind"] == "tool.call.completed")
             .count(),
-        if original.is_some() { 2 } else { 1 }
+        if original.is_some() && !mode.contains("repair-refusal") && !mode.ends_with("cap") {
+            2
+        } else {
+            1
+        }
     );
     if mode.contains("ready-stop") {
         stop(&mut guard, member, clock, mode, socket, root);

@@ -22,6 +22,8 @@
 
 use serde::{Deserialize, Serialize};
 
+mod plan;
+
 use crate::config::{FieldName, GateInstruction, SpuInstruction, ToolName};
 
 /// The receiver's buffer bound: a message exceeding it sets the truncation flag
@@ -242,6 +244,13 @@ pub enum RefusingOrgan {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LifecycleDirective {
+    /// Root's exact fixed-file proposal; interpretation belongs to the worker.
+    #[serde(deserialize_with = "plan::directive")]
+    PlanUpdate {
+        cause: crate::Cause,
+        document_sha256: crate::state_flow::Digest,
+        document: String,
+    },
     /// Boxed, per `weaver-types-Spec` section 4.2 as of 2026-09-06 and issue
     /// #475: the payload carried the enum's whole size onto every unit
     /// variant, and a boxed field crosses the seam as the field does.
@@ -388,6 +397,12 @@ pub enum SavePointLeg {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LifecycleAnswer {
+    /// A committed root plan update, including its exact content position.
+    #[serde(deserialize_with = "plan::answer")]
+    PlanUpdated {
+        plan: crate::state_flow::PlanRef,
+        source: crate::state_flow::SourcePosition,
+    },
     Ready,
     /// **`Left` names the leave's save point**, as of A3.2, so admin publishes
     /// it with its trace position; none where the leave was forced, the
@@ -448,6 +463,8 @@ pub enum LifecycleAnswer {
         /// section and issue.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         load: Option<Box<LoadFacts>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan: Option<crate::state_flow::PlanSummary>,
         /// **The run's constituent processes**, every pid holding the run
         /// lock's description, the worker, the state member and the relay,
         /// which `show` adds from the holder scan the escalation already runs,
@@ -517,6 +534,13 @@ pub struct Composer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LifecycleRefusal {
+    #[serde(deserialize_with = "plan::refusal")]
+    PlanUpdateRefused {
+        case: crate::state_flow::PlanUpdateCase,
+        detail: String,
+        rejected_blocks: Vec<crate::state_flow::DecimalU64>,
+        read_code: Option<crate::state_flow::ReadRefusalCode>,
+    },
     #[serde(deserialize_with = "deserialize_state_management_refusal")]
     StateManagementInvalid {
         stage: crate::state_flow::StateManagementStage,
@@ -566,7 +590,8 @@ pub enum LifecycleRefusal {
     WorkerWouldNotExit,
     /// A stop's or an observation's answer did not arrive within its bound,
     /// at `stop`, at `show`, or at a `load` meeting a silent run, which never
-    /// ends it: the run was left as it stands.
+    /// ends it: the run was left as it stands. At `plan-update` this is not a
+    /// negative commit receipt; a lost answer never authorizes a replay.
     Unanswered,
     OrganRefused {
         organ: RefusingOrgan,
@@ -1547,6 +1572,8 @@ pub enum TokenAsk {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "ask", rename_all = "snake_case")]
 pub enum LifecycleAsk {
+    #[serde(deserialize_with = "plan::ask")]
+    PlanUpdate,
     Enter,
     Leave,
     Stop,
