@@ -2372,6 +2372,18 @@ scenario!(
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-new-peer"
 );
 scenario!(
+    worker_admission_composition_diagnostic_refused_admit,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-refused-admit"
+);
+scenario!(
+    worker_admission_composition_diagnostic_refused_open,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-refused-open"
+);
+scenario!(
+    worker_admission_composition_diagnostic_invalid_open,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-invalid-open"
+);
+scenario!(
     worker_admission_composition_diagnostic_opener_pressure,
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-opener-pressure"
 );

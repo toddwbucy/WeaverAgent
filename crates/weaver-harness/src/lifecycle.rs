@@ -468,11 +468,12 @@ impl Run {
 }
 
 /// The Gateless seat's standing, per `weaver-harness-Spec` section 6.2: the
-/// run itself is the work, so what is held is what the one grant needs and
-/// a flag that it happened.
+/// run itself is the work. Partial Enter custody does not grant replay: the
+/// aggregate must succeed, and the resulting seat can run only once.
 struct DiagnosticSeat {
     reader_elected: bool,
     artifact: String,
+    admitted: bool,
     replayed: bool,
 }
 
@@ -892,7 +893,7 @@ impl Harness {
         let Some(seat) = run.diagnostic.as_mut() else {
             return Ok(());
         };
-        if seat.replayed {
+        if !seat.admitted || seat.replayed {
             return Ok(());
         }
         seat.replayed = true;
@@ -1845,7 +1846,10 @@ impl Harness {
         match (&mut self.state, directive) {
             (ChannelState::BeforeEnter, LifecycleDirective::Enter { payload }) => {
                 match self.enter(*payload, sink, state_end) {
-                    Ok(run) => {
+                    Ok(mut run) => {
+                        if let Some(seat) = run.diagnostic.as_mut() {
+                            seat.admitted = true;
+                        }
                         self.state = ChannelState::Entered(Box::new(run));
                         self.answer(connection, &exchange, LifecycleAnswer::Ready)?;
                     }
@@ -1855,19 +1859,13 @@ impl Harness {
                         self.refuse(connection, &exchange, refusal)?;
                     }
                     Err(EnterFailure::AfterLoad(mut run, refusal)) => {
-                        // **The refusal is clerked before the answer goes
-                        // out**, per `weaver-harness-Spec` section 6 and the
-                        // admin contract's clause of 2026-08-22: a bracket
-                        // that stands is a run whose record can say why its
-                        // enter was refused, and the answer alone leaves
-                        // nothing behind. This is the one site for every
-                        // after-load path that raises a lifecycle refusal,
-                        // a refusal being one kind of event whatever raised
-                        // it.
+                        // Serving records the refusal before answering.
+                        // Diagnostic Enter records nothing (Diagnostic Spec
+                        // 3.2); its retained children are rollback custody,
+                        // with no admitted replay seat or open bracket.
                         author_lifecycle_refusal(&mut run, &refusal);
-                        // The bracket stands, so the run stays in place for
-                        // the leave that unwinds it. Dropping it here would
-                        // orphan what forked and leave the bracket unclosed.
+                        // Retain what stood for Leave to unwind. Dropping the
+                        // partial run here would orphan its children.
                         self.state = ChannelState::Entered(run);
                         self.refuse(connection, &exchange, refusal)?;
                     }
@@ -2413,6 +2411,7 @@ impl Harness {
                     .0
                     .clone(),
                 replayed: false,
+                admitted: false,
             }),
         };
 

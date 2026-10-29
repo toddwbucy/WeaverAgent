@@ -453,6 +453,7 @@ fn position_walks_three_point_zero_for_every_kind_of_leave() {
     run.diagnostic = Some(DiagnosticSeat {
         reader_elected: false,
         artifact: String::new(),
+        admitted: true,
         replayed: false,
     });
     assert_eq!(
@@ -3242,6 +3243,7 @@ fn a_graceful_leave_with_a_dead_spu_or_gate_starts_forced() {
             run.diagnostic = Some(DiagnosticSeat {
                 reader_elected: false,
                 artifact: String::new(),
+                admitted: true,
                 replayed: true,
             });
         }
@@ -5422,6 +5424,7 @@ fn a_diagnostic_leave_never_steps_into_the_wind_down() {
             run.diagnostic = Some(DiagnosticSeat {
                 reader_elected: false,
                 artifact: String::new(),
+                admitted: true,
                 replayed: true,
             });
         }
