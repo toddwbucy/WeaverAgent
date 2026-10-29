@@ -9,11 +9,16 @@ use weaver_types::{LifecycleAnswer, LifecycleDirective, Payload};
 
 pub(crate) enum DiagnosticRequest {
     Ordinary(OrganEnvelope),
-    Enter(Box<EnterEnvelope>),
     Refused {
         exchange: weaver_types::ExchangeId,
         reason: weaver_types::LifecycleRefusal,
     },
+}
+
+impl DiagnosticRequest {
+    fn refused(exchange: weaver_types::ExchangeId, reason: weaver_types::LifecycleRefusal) -> Self {
+        Self::Refused { exchange, reason }
+    }
 }
 
 impl CoordinationListener {
@@ -37,7 +42,10 @@ impl OrganChannel {
     pub(crate) fn recv_diagnostic(&self) -> Result<DiagnosticRequest, ChannelFault> {
         let (request, sink, state) = self.recv_with_decoder(|bytes| {
             if let Ok(enter) = EnterEnvelope::decode(bytes) {
-                return Ok(DiagnosticRequest::Enter(Box::new(enter)));
+                return Ok(DiagnosticRequest::refused(
+                    enter.exchange,
+                    weaver_types::LifecycleRefusal::OutOfOrder,
+                ));
             }
             let envelope: OrganEnvelope = weaver_types::state_flow::decode_strict(
                 std::str::from_utf8(bytes).map_err(|_| ChannelFault::Undecodable)?,
@@ -47,10 +55,10 @@ impl OrganChannel {
                 || envelope.position != weaver_types::Position::Open
                 || !matches!(envelope.payload, Payload::Directive(_))
             {
-                return Ok(DiagnosticRequest::Refused {
-                    exchange: envelope.exchange,
-                    reason: weaver_types::LifecycleRefusal::Malformed,
-                });
+                return Ok(DiagnosticRequest::refused(
+                    envelope.exchange,
+                    weaver_types::LifecycleRefusal::Malformed,
+                ));
             }
             if matches!(
                 envelope.payload,
@@ -58,10 +66,10 @@ impl OrganChannel {
             ) {
                 // A decoded legacy Enter cannot re-enter an admitted run or
                 // select a legacy wire. Its original exchange can be refused.
-                return Ok(DiagnosticRequest::Refused {
-                    exchange: envelope.exchange,
-                    reason: weaver_types::LifecycleRefusal::OutOfOrder,
-                });
+                return Ok(DiagnosticRequest::refused(
+                    envelope.exchange,
+                    weaver_types::LifecycleRefusal::OutOfOrder,
+                ));
             }
             Ok(DiagnosticRequest::Ordinary(envelope))
         })?;
@@ -70,10 +78,10 @@ impl OrganChannel {
         if (sink.is_some() || state.is_some())
             && let DiagnosticRequest::Ordinary(envelope) = request
         {
-            return Ok(DiagnosticRequest::Refused {
-                exchange: envelope.exchange,
-                reason: weaver_types::LifecycleRefusal::Malformed,
-            });
+            return Ok(DiagnosticRequest::refused(
+                envelope.exchange,
+                weaver_types::LifecycleRefusal::Malformed,
+            ));
         }
         Ok(request)
     }

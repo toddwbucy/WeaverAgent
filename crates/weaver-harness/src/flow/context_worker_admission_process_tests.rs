@@ -521,12 +521,27 @@ pub(in crate::flow::context::worker_startup) fn before_enter(
         closed_empty(&mut bad_member, end);
         if mode.contains("-admission-expired-") {
             let mut bytes = [0; 512];
-            match recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
-                // The original peer may remain retained until the next root
-                // dial. Only its sink/state handles must already be closed.
-                Ok(0) | Err(nix::errno::Errno::ECONNRESET | nix::errno::Errno::EAGAIN) => (),
-                other => panic!("expired Enter grants no substitute answer: {other:?}"),
-            }
+            assert_eq!(
+                recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
+                Err(nix::errno::Errno::EAGAIN),
+                "expired Enter keeps the peer without a substitute answer"
+            );
+            send(&peer, 913, LifecycleDirective::Observe);
+            let answer = ObservationEnvelope::decode(&receive(&peer, end)).unwrap();
+            assert_eq!(
+                answer.exchange,
+                ExchangeId {
+                    opener: Opener::Admin,
+                    ordinal: 913
+                }
+            );
+            assert_eq!(answer.position, Position::Close);
+            assert!(
+                matches!(answer.payload, ObservationContent::Answer(ObservationAnswer::State {
+                plan: None, state: AgentState::Unloaded, load: None, ref constituents
+            }) if constituents.is_empty()),
+                "same-peer Observe must follow the expired Enter"
+            );
         }
         drop(peer);
         ordinary(root, 911, LifecycleDirective::Observe, true, end);

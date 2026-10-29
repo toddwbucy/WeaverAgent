@@ -44,6 +44,9 @@ mod member_tests;
 mod recording_fixture;
 
 #[cfg(test)]
+mod fixture_eof;
+
+#[cfg(test)]
 mod outbound_port_visibility {
     use super::clock::testing::FakePumpIo;
     use super::context::{

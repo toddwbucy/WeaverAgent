@@ -6,7 +6,7 @@ Date: 2026-10-29. Author evidence for issue #146. Base: draft #392 at
 ## Scope and authority
 
 Implements: weaver-harness Spec sections 2.3, 3 and 7, admin-harness contract
-sections 2 and 4, and weaver-types Spec section 3.1. Conforms on the exercised
+sections 2 and 4, and weaver-types Spec section 4.2. Conforms on the exercised
 Diagnostic refusal, connection and custody paths. FOUNDATION-TRANSITION remains
 conforming: worker main selects dev_loop::drive. The inherited ReFeed Stop/Leave
 behavior remains drifted under #390. Proposal #393 is not implementation authority.
