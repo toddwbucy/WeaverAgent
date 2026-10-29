@@ -3,11 +3,20 @@ use super::*;
 use crate::flow::context::worker_startup::input::halt::exit::flags_tests as failed;
 use crate::{FoundationFlagObservation, FoundationFlagsRefusal};
 
+pub(in crate::flow::context::worker_startup) struct CheckedTurn {
+    root: std::path::PathBuf,
+    wire: Vec<u8>,
+    turn: TurnKey,
+    run: String,
+    source: s::SourceBlockId,
+}
+
 pub(in crate::flow::context::worker_startup) enum Cleanup {
     Leave {
         handoff: Box<crate::FoundationEnteredRollbackHandoff>,
         peer: OwnedFd,
         sequence: weaver_trace::Sequence,
+        checked: Option<CheckedTurn>,
     },
     Failed(failed::Failure),
 }
@@ -20,6 +29,10 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     mode: &str,
 ) -> Option<Cleanup> {
     let mut guard = sqlite_update(serving, member, reader, socket, false);
+    let turn_boundary = mode.contains("-flags-turn-boundary");
+    if turn_boundary {
+        prepare_checked_turn(&mut guard, member, socket);
+    }
     let summary = guard
         .input
         .as_mut()
@@ -40,6 +53,20 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     assert!(input.take_observed_flags().is_none());
     input.observe_flags(plan.clone(), after.clone()).unwrap();
     assert!(input.flags_pending());
+    let original_input = turn_boundary.then(|| {
+        assert_eq!(input.progress(), FoundationInputProgress::Pending);
+        assert_eq!(
+            input.serving.owner.context.open_turn,
+            Some(weaver_trace::TurnRef("flags-boundary-turn".into()))
+        );
+        CheckedTurn {
+            root: socket.parent().unwrap().to_path_buf(),
+            wire: input.received.as_ref().unwrap().raw_bytes().to_vec(),
+            turn: input.turn.clone().unwrap(),
+            run: input.serving.owner.context.flow.run().to_owned(),
+            source: input.seated.as_ref().unwrap().source.clone(),
+        }
+    });
     assert!(input.take_observed_flags().is_none());
     let refused = input
         .observe_flags(plan.clone(), after.clone())
@@ -54,6 +81,12 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         .deadlines
         .get(PumpDeadline::StateControl)
         .unwrap();
+    if turn_boundary {
+        guard.input = Some(match guard.input.take().unwrap().finish() {
+            Err(input) => input,
+            Ok(_) => panic!("a pending flag sample must retain the checked turn"),
+        });
+    }
     // A read does not mutate the plan or invalidate the last committed summary.
     assert!(
         matches!(observe(&mut guard, socket), s::enter::ObservationContent::Answer(
@@ -235,6 +268,33 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         request_id.0.to_string()
     );
     assert!(input.serving.owner.context.last_ns < bound.deadline_ns());
+    if let Some(original) = &original_input {
+        assert_eq!(input.received.as_ref().unwrap().raw_bytes(), original.wire);
+        assert_eq!(input.turn.as_ref(), Some(&original.turn));
+        assert_eq!(input.seated.as_ref().unwrap().source, original.source);
+        let started: Vec<_> = rows
+            .iter()
+            .filter(|row| row["kind"] == "turn.started")
+            .collect();
+        assert_eq!(started.len(), 1);
+        assert!(trace_sequence(started[0]) < sequence.0);
+        if stop {
+            assert_turn_closed(&rows, sequence, &original.turn);
+            assert!(input.serving.owner.context.open_turn.is_none());
+        } else {
+            assert_eq!(
+                input
+                    .serving
+                    .owner
+                    .context
+                    .open_turn
+                    .as_ref()
+                    .map(|turn| &turn.0),
+                Some(&original.turn.0)
+            );
+            assert!(rows.iter().all(|row| row["kind"] != "turn.closed"));
+        }
+    }
     if let Some((peer, window)) = &queued_save {
         let saved = input
             .serving
@@ -272,10 +332,21 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             handoff._flags.as_ref().unwrap().observation(),
             FoundationFlagObservation::Cancelled
         );
+        if let Some(original) = &original_input {
+            assert_eq!(
+                handoff.input.original_input().unwrap().raw_bytes(),
+                original.wire
+            );
+            assert_eq!(
+                handoff.input.test_checked_source(),
+                Some((&original.turn, &original.source))
+            );
+        }
         return Some(Cleanup::Leave {
             handoff,
             peer: peer.unwrap(),
             sequence,
+            checked: original_input,
         });
     } else {
         if stop {
@@ -283,7 +354,13 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 serde_json::from_slice(&read_packet(peer.as_ref().unwrap()).unwrap()).unwrap();
             assert_eq!(
                 answer.payload,
-                Payload::Answer(weaver_types::LifecycleAnswer::AtRest)
+                Payload::Answer(if turn_boundary {
+                    weaver_types::LifecycleAnswer::TurnAborted {
+                        turn: original_input.as_ref().unwrap().turn.clone(),
+                    }
+                } else {
+                    weaver_types::LifecycleAnswer::AtRest
+                })
             );
             guard.input = Some(guard.management.take().unwrap().finish().ok().unwrap());
         }
@@ -294,6 +371,35 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         let taken = input.take_observed_flags().unwrap();
         assert_eq!(taken.sequence(), sequence);
         assert!(input.take_observed_flags().is_none());
+        if let Some(original) = original_input {
+            assert_eq!(input.received.as_ref().unwrap().raw_bytes(), original.wire);
+            if stop {
+                assert_eq!(input.progress(), FoundationInputProgress::Aborted);
+                assert_world_close(&original, "the operator stopped the turn");
+                assert_stop_keeps_gate(input, &original.root);
+                return None;
+            }
+            assert_eq!(input.progress(), FoundationInputProgress::Turn);
+            // The same checked turn becomes available only after the sample's
+            // exact measurement above has crossed the recorder.
+            assert_eq!(
+                input.serving.owner.context.open_turn,
+                Some(weaver_trace::TurnRef("flags-boundary-turn".into()))
+            );
+            let returned = guard
+                .input
+                .take()
+                .unwrap()
+                .finish()
+                .ok()
+                .expect("Recorded flags release the exact turn");
+            let super::super::FoundationInputResult::Turn(turn) = returned else {
+                panic!("the original checked turn must return")
+            };
+            assert_eq!(turn.turn(), original.turn);
+            assert_eq!(turn.source(), &original.source);
+            guard.input = Some(turn.into_service());
+        }
     }
     None
 }
@@ -308,6 +414,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         handoff,
         peer,
         sequence,
+        checked,
     } = cleanup
     else {
         let Cleanup::Failed(failure) = cleanup else {
@@ -372,7 +479,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
     );
     assert_eq!(
         owner.process_exit(),
-        Some(crate::FoundationProcessExit::Success)
+        Some(crate::FoundationProcessExit::Success),
+        "{}",
+        owner.test_exit_detail()
     );
     let (run, retained) = owner.test_account();
     assert!(run.context.failure().is_none());
@@ -380,6 +489,25 @@ pub(in crate::flow::context::worker_startup) fn finish(
     let sample = retained._flags.as_ref().unwrap();
     assert_eq!(sample.sequence(), sequence);
     assert_eq!(sample.observation(), FoundationFlagObservation::Cancelled);
+    if let Some(original) = &checked {
+        assert_eq!(
+            retained.input.original_input().unwrap().raw_bytes(),
+            original.wire
+        );
+        assert_eq!(
+            retained.input.test_checked_source(),
+            Some((&original.turn, &original.source))
+        );
+        assert!(run.context.open_turn.is_none());
+        assert!(
+            original.root.join("flags-turn-lowered").exists(),
+            "actual gate must confirm Lower"
+        );
+        assert!(
+            !original.root.join("flags-turn-close.json").exists(),
+            "rollback leaves the retained world's disposition to Lower"
+        );
+    }
     member.assert_closed_without_request();
     let answer: OrganEnvelope = serde_json::from_slice(&read_packet(&peer).unwrap()).unwrap();
     assert!(matches!(
@@ -395,10 +523,150 @@ pub(in crate::flow::context::worker_startup) fn finish(
         .map(|b| serde_json::from_slice(b).unwrap())
         .collect();
     assert_eq!(rows.iter().filter(|r| r["kind"] == "unload").count(), 1);
+    if let Some(original) = &checked {
+        assert_turn_closed(&rows, sequence, &original.turn);
+    }
     assert!(
         rows.iter().all(|r| r["kind"] != "state.plan.measurement"),
         "cleanup must not sample again"
     );
+}
+
+fn prepare_checked_turn(guard: &mut Guard<'_>, member: &mut Member, socket: &Path) {
+    std::fs::write(
+        socket.parent().unwrap().join("flags-turn-request"),
+        b"offer\n",
+    )
+    .unwrap();
+    let input = guard.input.as_mut().unwrap();
+    advance_input_with_member(input, member, FoundationInputProgress::Accepted);
+    assert!(input.token.is_some());
+    assert!(input.serving.owner.context.open_turn.is_none());
+    input
+        .start_turn(TurnKey("flags-boundary-turn".into()))
+        .unwrap();
+    advance_input_with_member(input, member, FoundationInputProgress::Turn);
+}
+
+fn advance_input_with_member(
+    input: &mut FoundationInput<'_>,
+    member: &mut Member,
+    wanted: FoundationInputProgress,
+) {
+    let done = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let responder = scope.spawn(|| {
+            let end = Instant::now() + Duration::from_secs(10);
+            while !done.load(Ordering::SeqCst) && Instant::now() < end {
+                member.step_live("ready");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        struct Done<'a>(&'a AtomicBool);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let _done = Done(&done);
+        let end = Instant::now() + Duration::from_secs(5);
+        while input.progress() != wanted {
+            let progress = input.advance();
+            assert!(
+                progress == FoundationInputProgress::Pending || progress == wanted,
+                "input reached {progress:?} while waiting for {wanted:?}: {:?}",
+                input.detail()
+            );
+            assert!(
+                Instant::now() < end,
+                "input did not reach {wanted:?}: {progress:?}, {:?}",
+                input.detail()
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        done.store(true, Ordering::SeqCst);
+        responder.join().unwrap();
+    });
+}
+
+fn assert_turn_closed(rows: &[serde_json::Value], sample: weaver_trace::Sequence, turn: &TurnKey) {
+    let closes: Vec<_> = rows
+        .iter()
+        .filter(|row| row["kind"] == "turn.closed")
+        .collect();
+    assert_eq!(
+        closes.len(),
+        1,
+        "cancelled sample must close the original turn once"
+    );
+    assert_eq!(closes[0]["turn"], turn.0);
+    assert!(trace_sequence(closes[0]) > sample.0);
+}
+
+fn trace_sequence(row: &serde_json::Value) -> u64 {
+    row["sequence"].as_str().unwrap().parse().unwrap()
+}
+
+fn assert_world_close(original: &CheckedTurn, text: &str) {
+    let path = original.root.join("flags-turn-close.json");
+    let end = Instant::now() + Duration::from_secs(2);
+    while !path.exists() {
+        assert!(Instant::now() < end, "gate did not receive the turn close");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let raw = std::fs::read(path).unwrap();
+    let envelope: OrganEnvelope = serde_json::from_slice(&raw).unwrap();
+    let Payload::Frame(frame) = envelope.payload else {
+        panic!("world frame required")
+    };
+    let world: serde_json::Value = serde_json::from_slice(&frame.octets().unwrap()).unwrap();
+    assert_eq!(world["kind"], "stopped");
+    assert_eq!(world["reason"], text);
+    assert_eq!(world["turn"], original.turn.0);
+    assert_eq!(world["run"], original.run);
+}
+
+fn assert_stop_keeps_gate(input: &FoundationInput<'_>, root: &Path) {
+    let lower = root.join("flags-turn-lowered");
+    assert!(!lower.exists(), "Stop must not lower the gate");
+    let fence = OrganEnvelope {
+        exchange: weaver_types::ExchangeId {
+            opener: weaver_types::Opener::Harness,
+            ordinal: u64::MAX,
+        },
+        position: Position::Open,
+        payload: Payload::Directive(LifecycleDirective::Observe),
+    };
+    let bytes = serde_json::to_vec(&fence).unwrap();
+    let end = Instant::now() + Duration::from_secs(2);
+    loop {
+        assert!(!lower.exists(), "Stop must not lower the gate");
+        match send(
+            input.serving.owner.gate.fd().as_raw_fd(),
+            &bytes,
+            MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL,
+        ) {
+            Ok(n) => {
+                assert_eq!(n, bytes.len());
+                break;
+            }
+            Err(nix::errno::Errno::EAGAIN | nix::errno::Errno::EINTR) => {}
+            other => panic!("gate fixture fence: {other:?}"),
+        }
+        assert!(Instant::now() < end, "gate fixture fence did not send");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let checked = root.join("flags-turn-stop-checked");
+    while !checked.exists() {
+        assert!(!lower.exists(), "Stop must not lower the gate");
+        assert!(
+            Instant::now() < end,
+            "gate did not acknowledge the Stop boundary"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(std::fs::read(checked).unwrap(), b"checked\n");
+    assert!(!lower.exists(), "Stop must not lower the gate");
 }
 
 fn queue_save(guard: &mut Guard<'_>, socket: &Path) -> (OwnedFd, s::SaveWindow) {

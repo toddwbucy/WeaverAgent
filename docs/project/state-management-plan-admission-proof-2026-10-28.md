@@ -1,6 +1,6 @@
 # Plan-update admission and identity evidence
 
-**Version:** 0.1, 2026-10-28.
+**Version:** 0.2, 2026-10-29.
 **Parent:** Issue 146, state management implementation.
 
 This act addresses the X1/X2 test gaps in Planner review 5692337515 of #381.
@@ -44,33 +44,27 @@ plan_at_rest admission guard makes the fixture fail its bounded answer assertion
 This pins the public management boundary. It does not separately isolate the inner
 begin_root_plan_update open_turn check, which remains a defensive review carry.
 
-## New activation finding: admission refusal is not traced
+## Admission refusal wording question
 
-The worker case exposed an existing PLAN-EXCHANGE drift. Both OutOfOrder answers
-reach their peers, but zero refusal records reach trace. The failed development probe
-expected two and reported zero. The final admission fixture reports that count without
-asserting that absence is correct. This act does not claim to fix this trace defect.
+The worker case records two OutOfOrder answers and zero refusal records, with the
+original turn/cache preserved and no root operation. The failed development probe
+expected two records. The final fixture reports zero without asserting that absence
+as correct behavior.
 
-Spec 07 PLAN-EXCHANGE says the worker traces the outcome before answering. The ordinary
-OutOfOrder branch in context_worker_management.rs sets ManagementAnswer directly and
-sends it without an author owner. The accepted root transaction's later refusal path
-already has trace accounting, but a busy-worker request never enters that transaction.
-The two paths must not be confused in a conformance claim.
+The author initially read PLAN-EXCHANGE's trace-before-answer sentence as including
+pre-admission refusals. Planner review 5692982046 of #385 instead reads it as the
+admitted exchange's duty and notes that the general lifecycle OutOfOrder branch has
+no trace account. The disagreement is filed as #386 for the operator. It is a Spec
+wording question, not an established implementation defect or activation blocker.
 
-The next implementation act must retain the refused management request and exact
-RefusalRecord::Lifecycle with ask plan_update, finish its Recorded boundary before
-sending the answer, and preserve the suspended turn. It must also handle recorder
-pressure, any earlier held author, requester EOF, existing bounds and failed-run
-custody. It must neither acquire a competing root mutation grant nor cancel or advance
-the suspended turn merely to answer the refusal. The tests must show one exact record
-per refused request, no answer before Recorded and no lost prior author. Read the other
-pre-admission refusal branches as part of that act. They were not exercised by this
-busy-worker case, so no broader runtime finding is claimed here.
-
-This is an activation blocker under existing merged authority, separate from draft
-#384's proposed non-root plan-operation outcomes. No new operator election is inferred
-or requested for correcting this existing root trace obligation. Issue #146 remains
-open and existing serving remains selected.
+Draft #387 proposes PlanUpdate-only pre-admission refusal accounting, with retained
+request/author custody, original bounds, EOF accounting and failed-run handoff.
+It names the alternative of tracing only admitted exchanges and the broader option
+of lifecycle-wide accounting. Implementation waits for election, review and merge.
+The local experiment on code/state-plan-admission-refusal at 994412c compiled but
+has not run its new tests or completed gates and remains unpublished. None of that
+experiment's results is evidence for this proof slice. Existing serving remains
+selected and issue #146 stays open.
 
 ## Validation
 

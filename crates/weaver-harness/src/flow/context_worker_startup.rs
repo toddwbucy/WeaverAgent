@@ -38,7 +38,7 @@ pub struct FoundationProgram {
 
 #[path = "context_worker_pre_enter.rs"]
 mod pre_enter;
-pub use pre_enter::{FoundationAdmission, FoundationAdmissionProgress};
+pub use pre_enter::{FoundationAdmission, FoundationAdmissionProgress, FoundationDiagnosticResult};
 
 /// The outer worker frame owns one context and its real child resources. The
 /// startup and serving seats borrow these fields, so neither needs a cloned

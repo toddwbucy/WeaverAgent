@@ -378,6 +378,20 @@ impl EnteredRollbackDisposal {
 
 impl FoundationEnteredRollback {
     #[cfg(test)]
+    pub(in crate::flow::context::worker_startup) fn test_exit_detail(&self) -> String {
+        format!(
+            "detail={:?}, abandoned={}, terminal={:?}, failure={:?}, halt={:?}",
+            self.detail(),
+            self.abandoned(),
+            self.terminal
+                .as_ref()
+                .map(EnteredRollbackTerminal::test_detail),
+            self.run.as_ref().and_then(|run| run.context.failure()),
+            self.run.as_ref().and_then(|run| run.context.flow.halt()),
+        )
+    }
+
+    #[cfg(test)]
     pub(in crate::flow::context::worker_startup) fn test_account(
         &self,
     ) -> (&FoundationRun, &FoundationEnteredRollbackHandoff) {

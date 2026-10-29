@@ -165,8 +165,9 @@ pub use flow::context::worker_startup::input::{
 };
 pub use flow::context::worker_startup::rollback::{FoundationRollback, FoundationRollbackProgress};
 pub use flow::context::worker_startup::{
-    FoundationAdmission, FoundationAdmissionProgress, FoundationEnter, FoundationEnterProgress,
-    FoundationProcessExit, FoundationProgram, FoundationRun, FoundationServing,
+    FoundationAdmission, FoundationAdmissionProgress, FoundationDiagnosticResult, FoundationEnter,
+    FoundationEnterProgress, FoundationProcessExit, FoundationProgram, FoundationRun,
+    FoundationServing,
 };
 pub use lifecycle::{Harness, OrganBinaries, OrganParameters};
 pub use record::{Record, RecordFailure};
@@ -181,6 +182,9 @@ pub use weaver_trace::LoopIdentity;
 /// a directory behind (#690 item C2.9).
 #[cfg(test)]
 mod scratch;
+
+#[cfg(test)]
+mod test_child;
 
 pub use flow::context::worker_startup::rollback::failed::{
     FoundationRollbackExit, FoundationRollbackExitProgress, FoundationRollbackHandoff,

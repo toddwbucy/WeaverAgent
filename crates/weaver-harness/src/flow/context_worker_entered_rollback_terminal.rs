@@ -68,6 +68,14 @@ pub(super) struct EnteredRollbackTerminal {
 }
 
 impl EnteredRollbackTerminal {
+    #[cfg(test)]
+    pub(super) fn test_detail(&self) -> String {
+        format!(
+            "refusal={:?}, stopped={:?}, sequence={:?}",
+            self.refusal, self.stopped, self.sequence
+        )
+    }
+
     pub(super) fn new(
         cause: Cause,
         surface: GrantSurface,
