@@ -21,6 +21,9 @@ pub(in crate::flow::context::worker_startup) mod cleanup;
 #[path = "context_worker_flags_tests.rs"]
 pub(in crate::flow::context::worker_startup) mod flags;
 
+#[path = "context_worker_plan_admission_tests.rs"]
+mod admission;
+
 #[path = "context_worker_plan_pressure_tests.rs"]
 mod pressure;
 
@@ -633,6 +636,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     socket: &Path,
     mode: &str,
 ) {
+    if mode.ends_with("-open-turn") {
+        return admission::open_turn(serving, member, reader, socket);
+    }
     if mode.ends_with("-answer-pressure") || mode.ends_with("-answer-expiry") {
         return pressure::exercise(serving, reader, socket, mode.ends_with("-answer-expiry"));
     }
