@@ -4,7 +4,7 @@
 
 **Landing PR:** #387
 
-**Version:** 0.41 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.42 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -1702,10 +1702,13 @@ The boot summary must reflect any boot-repair receipts before loaded is reported
 
 The management owner implements Spec 07 PLAN-ADMISSION-REFUSAL before sending a
 pre-admission PlanUpdate refusal. It retains the original opener, exact refusal and
-private trace claim beside the suspended input owner. Use the loaded decision wait
-from the complete opener's receive reading for accounting and delivery, independently
-of the active operation's unchanged bounds. A competing author finishes only through
-its original continuation. Never borrow that author's ticket or admit the rejected
+private trace claim beside the suspended input owner. Its RefusalRecord::Lifecycle
+uses TYPES-PLAN-CONTROL's LifecycleAsk::PlanUpdate. The implementing act completes
+that floor variant, its codec and typed consumers with this author path. Use the
+loaded decision wait from the complete opener's receive reading for accounting and
+delivery, independently of the active operation's unchanged bounds. A competing
+author finishes only through its original continuation. Never borrow that author's
+ticket or admit the rejected
 plan after it becomes idle. EOF keeps the accounting duty. Failed accounting retains
 the complete management owner through teardown. After Recorded, lost or expired
 delivery creates no retry and no new foundation failure. [PLAN-6, FLOW-1, FLOW-4]

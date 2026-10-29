@@ -4,7 +4,7 @@
 
 **Landing PR:** #387
 
-**Version:** 0.16 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
+**Version:** 0.17 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -139,10 +139,13 @@ operation and leaves the agent running. Component failure follows the foundation
 well-formed PlanUpdate opener is judged and refused before plan-operation admission.
 This includes out_of_order and the existing root-cause refusal. The lifecycle owner
 retains the exact received packet and the selected refusal. Before it sends the
-refusal answer, it records RefusalRecord::Lifecycle with asked plan_update and that
-unchanged refusal under the existing refusal event. The event is harness/runtime
-metadata, with turn null and causal_parent null. It is not a plan input or effect and
-grants no allocator, read, placement or generation. [PLAN-6, FLOW-3, FLOW-4]
+refusal answer, it records RefusalRecord::Lifecycle with asked LifecycleAsk::PlanUpdate
+from TYPES-PLAN-CONTROL, encoded as {"ask":"plan_update"}, and that unchanged refusal
+under the existing refusal event. This requires the floor ask variant, its codec and
+typed refusal consumers to be implemented with the author path before this accounting
+is enabled. The event is harness/runtime metadata, with turn null and causal_parent
+null. It is not a plan input or effect and grants no allocator, read, placement or
+generation. [PLAN-6, FLOW-3, FLOW-4]
 
 The refusal belongs to the rejected management opener, which has no accepted plan
 operation or turn. An already open turn remains the original caller's work. The

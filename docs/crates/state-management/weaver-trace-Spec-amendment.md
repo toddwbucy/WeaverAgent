@@ -4,7 +4,7 @@
 
 **Landing PR:** #387
 
-**Version:** 0.31 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
+**Version:** 0.32 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
 
 ## 0. What this document is
 
@@ -143,12 +143,14 @@ require one. The close effect is never a plan.event payload. Reason: the two aut
 share one event kind without sharing update authority. [PLAN-1, PLAN-2, PLAN-6, FLOW-3,
 FLOW-8]
 
-Spec 07 PLAN-ADMISSION-REFUSAL uses the existing refusal payload and event, with the
-floor's unchanged RefusalRecord::Lifecycle encoding, asked plan_update and the exact
-refusal. The harness authors it as runtime metadata with no turn or causal parent.
-The recorder keeps the payload opaque and applies its existing envelope validation.
-No new event kind, selectable content or floor dependency is introduced. [PLAN-6,
-FLOW-3, FLOW-8]
+Spec 07 PLAN-ADMISSION-REFUSAL uses the existing refusal payload and event, carrying
+RefusalRecord::Lifecycle with TYPES-PLAN-CONTROL's LifecycleAsk::PlanUpdate, encoded
+as {"ask":"plan_update"}, and the exact refusal. This depends on implementing that
+floor ask variant and its typed consumers together with the harness author path.
+The harness authors it as runtime metadata with no turn or causal parent. The recorder
+keeps the payload opaque and applies its existing envelope validation. Trace gains no
+new Cargo dependency on the floor, event kind or selectable content. [PLAN-6, FLOW-3,
+FLOW-8]
 
 Payload::StepOutcome carries Spec 07's exact StepOutcomeRecord and licenses only
 Kind::StepOutcome on internal/loop with a turn. A closed outcome requires its matching

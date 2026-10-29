@@ -1,18 +1,18 @@
 # PlanUpdate admission-refusal account proposal
 
-**Version:** 0.2, 2026-10-29.
+**Version:** 0.3, 2026-10-29.
 **Parent:** Issue 146, state management implementation.
 
 This proposes an explicit trace obligation for rejected PlanUpdate openers. It awaits
 the operator's election, Planner review and merge. It changes no runtime code and
-claims no implementation or production qualification. Draft PR #387 uses
+claims no implementation or production qualification. PR #387 uses
 `docs/state-plan-admission-account`, stacked on #384 at `cb17343e` to keep the shared
 Spec headers ordered. Its election is separate from #384's non-root plan-port result
 and trace representation.
 
 ## Evidence and disagreement
 
-Draft #385 at `4d8f4a14` exercises two root PlanUpdate openers during an open turn.
+#385 at `4d8f4a14` exercises two root PlanUpdate openers during an open turn.
 Both return OutOfOrder, retain the original turn and cache, and start no plan
 operation. The trace contains zero refusal records. The author read PLAN-EXCHANGE's
 "The worker traces the outcome before the answer" as covering this path.
@@ -33,10 +33,18 @@ It cannot be cited as implementation evidence or selected for serving.
 
 Elect trace-before-answer for a fully received, well-formed PlanUpdate that the
 lifecycle owner judges and refuses before admitting a plan operation. Record the
-existing lifecycle refusal with asked plan_update, exact refusal, runtime attribution,
-turn null and causal_parent null. Busy-state and invalid-root-cause refusals both owe
-this account. Invalid framing, descriptors and incomplete openers retain the current
-transport treatment.
+existing lifecycle refusal with asked LifecycleAsk::PlanUpdate, exact refusal,
+runtime attribution, turn null and causal_parent null. Busy-state and invalid-root-cause
+refusals both owe this account. Invalid framing, descriptors and incomplete openers
+retain the current transport treatment.
+
+The ask carrier is specified by TYPES-PLAN-CONTROL: LifecycleAsk::PlanUpdate has no
+body and encodes as {"ask":"plan_update"}. That clause is already in the merged types
+amendment, but the current Rust LifecycleAsk and the base types Spec's enum listing
+still lack the variant. The encoding is therefore an implementation dependency, not
+an unchanged capability of the current floor. TYPES-PLAN-PORT-REFUSAL in #384 governs
+the distinct RefusalRecord::PlanOperation for accepted internal work. It does not
+define this lifecycle ask. The two operator elections remain separate.
 
 The null turn names the rejected root opener's lack of an accepted operation, even
 when another caller has an open turn. Its run still comes from the trace envelope.
@@ -52,9 +60,9 @@ not infer a new lifecycle-wide audit policy from the plan clause.
 
 | Choice | Consequence |
 | --- | --- |
-| Proposed: trace pre-admission PlanUpdate refusals | One existing metadata record per judged refusal. A valid busy refusal can wait for earlier author custody and recorder capacity. Its own bounded accounting can fail the run if the trace cannot record. |
+| Proposed: trace pre-admission PlanUpdate refusals | One record under the existing refusal event per judged refusal, using the required PlanUpdate ask variant. A valid busy refusal can wait for earlier author custody and recorder capacity. Its own bounded accounting can fail the run if the trace cannot record. |
 | Clarify that only admitted exchanges owe the trace | Preserve the current general management branch. The admin answer is the only record of a busy or invalid-cause rejection. Retire the unpublished experiment. |
-| Trace every lifecycle refusal | Broader audit policy requiring each directive's admission, attribution, deadline, failure and teardown contract to be specified together. This draft does not propose or implement that change. |
+| Trace every lifecycle refusal | Broader audit policy requiring each directive's admission, attribution, deadline, failure and teardown contract to be specified together. This proposal leaves that broader change out. |
 
 The proposed rule does not reclassify a busy request as admitted work. It preserves
 the original input, turn and cache, and never parses or files the rejected document
@@ -87,16 +95,19 @@ qualification still has to measure.
 
 | Act | Owning clauses | Grade and duty |
 | --- | --- | --- |
-| This draft | Spec 07 PLAN-EXCHANGE and new PLAN-ADMISSION-REFUSAL | Spec gap proposed. Set scope, attribution, custody, EOF and accounting/delivery outcomes. |
-| This draft | Harness amendment HARNESS-PLAN | Spec gap proposed. Retain a management-owned trace claim without taking another operation's ticket or changing its bounds. |
-| This draft | Trace amendment TRACE-PLAN | Spec gap proposed. Reuse the exact existing floor refusal encoding and runtime metadata envelope. |
-| After election, Planner review and merge | Issue #146 root plan management composition, after #385 | Complete and gate the refusal owner and worker adapter across outer busy, cause-refusal and inner clean-refusal branches. Reconsider the unpublished experiment against the elected text. |
+| This proposal | Spec 07 PLAN-EXCHANGE and new PLAN-ADMISSION-REFUSAL | Spec gap proposed. Set scope, attribution, custody, EOF and accounting/delivery outcomes. |
+| This proposal | Harness amendment HARNESS-PLAN | Spec gap proposed. Retain a management-owned trace claim without taking another operation's ticket or changing its bounds. |
+| This proposal | Trace amendment TRACE-PLAN | Spec gap proposed. Use the existing refusal event and runtime metadata envelope with TYPES-PLAN-CONTROL's required ask variant. The recorder remains opaque. |
+| After election, Planner review and merge | TYPES-PLAN-CONTROL and Issue #146 root plan management composition, after #385 | In one implementing act, add LifecycleAsk::PlanUpdate to the floor, align the base types Spec enum listing, gate its codec and typed consumers, and complete the refusal owner and worker adapter across outer busy, cause-refusal and inner clean-refusal branches. Reconsider the unpublished experiment against the elected text. |
 | Before coupled cutover | Issue #146 production qualification | Measure the added accounting and retained memory with the approved artifacts and trace reader. |
 
 Do not deploy from this Spec change. The implementation stack still omits these
 records. The named implementation act must land the code and tests before foundation
-serving is selected. No schema, admin answer shape, member protocol or cross-repository
-contract changes in this draft. It does not claim an external reader has been tested.
+serving is selected. The floor ask vocabulary gains the already specified plan_update
+variant. Its consumers must be updated and tested with the author path. The refusal
+event/envelope, admin answer shape, member protocol and cross-repository contract
+remain unchanged. The recorder acquires no Cargo link to weaver-types. This proposal
+does not claim an external reader has been tested.
 
 ## Verification owed by the implementing act
 
@@ -105,15 +116,21 @@ one unchanged answer and one exact record for each, with no new plan operation o
 turn close. Pin record-before-send directly. Exercise the invalid-root-cause and inner
 clean-admission refusal branches independently.
 
+Pin the exact {"ask":"plan_update"} codec inside RefusalRecord::Lifecycle, including
+both out_of_order and the existing root-cause refusal. Exercise every typed refusal
+consumer with that carrier under the existing codec rules. Trace's opaque payload must
+retain the exact encoded record without a new floor link.
+
 Hold a previous author's original and its admitted ticket in separate cases. Show
 that its exact owner finishes it, that no competing ticket consumes its completion,
 and that the rejected plan never starts when the original turn finishes. Cover an
 earlier accepted root update, flag read and save as well as a turn author.
 
-Apply recorder pressure and root socket pressure separately. Deliver EOF before
-recording, after admission and after Recorded. Pin the original receive reading and
-unchanged interval, accounting expiry, delivery expiry without a halt, an earlier
-operation deadline, and a clock failure after send. Carry all unconsumed originals,
+Apply recorder pressure and root socket pressure separately. Deliver EOF before the
+trace claim is admitted, after the trace claim is admitted but before Recorded, and
+after Recorded. Pin the original receive reading and unchanged interval, accounting
+expiry, delivery expiry without a halt, an earlier operation deadline, and a clock
+failure after send. Carry all unconsumed originals,
 tickets and first failures into failed-run teardown. Remove each claimed ordering,
 custody and deadline property with a compiled protective control and require its
 corresponding case to fail.
