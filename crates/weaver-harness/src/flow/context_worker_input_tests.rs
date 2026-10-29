@@ -91,7 +91,8 @@ fn worker_input_gate_child() {
         },
     );
     if mode.starts_with("input-worker-plan-") && !mode.ends_with("-open-turn") {
-        if mode.ends_with("-flags-turn-boundary") {
+        let flags_turn = mode.contains("-flags-turn-boundary");
+        if flags_turn {
             let end = Instant::now() + Duration::from_secs(15);
             while !root.join("flags-turn-request").exists() {
                 assert!(
@@ -107,6 +108,50 @@ fn worker_input_gate_child() {
         loop {
             match recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()) {
                 Ok(0) => return,
+                Ok(n) if flags_turn && (mode.ends_with("-stop") || mode.ends_with("-leave")) => {
+                    let answer: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
+                    if mode.ends_with("-stop")
+                        && answer.exchange.ordinal == u64::MAX
+                        && answer.payload == Payload::Directive(LifecycleDirective::Observe)
+                    {
+                        // A private fixture fence on the same ordered socket.
+                        // The parent sends it after Stop settles, so every
+                        // earlier worker packet has reached this observer.
+                        let temporary = root.join("flags-turn-stop-checked.pending");
+                        std::fs::write(&temporary, b"checked\n").unwrap();
+                        std::fs::rename(temporary, root.join("flags-turn-stop-checked")).unwrap();
+                        continue;
+                    }
+                    if answer.payload == Payload::Directive(LifecycleDirective::Lower) {
+                        // Rollback lowers the gate before it closes the retained
+                        // turn in the trace. The gate owns the world's unload
+                        // disposition. Record even an erroneous Stop Lower so
+                        // the parent, rather than this child alone, rejects it.
+                        std::fs::write(root.join("flags-turn-lowered"), b"lower\n").unwrap();
+                        packet(
+                            port.as_raw_fd(),
+                            &OrganEnvelope {
+                                exchange: answer.exchange,
+                                position: Position::Close,
+                                payload: Payload::Answer(LifecycleAnswer::GateStopped),
+                            },
+                        );
+                        return;
+                    }
+                    assert!(
+                        !root.join("flags-turn-close.json").exists(),
+                        "duplicate world close"
+                    );
+                    assert_eq!(answer.exchange, frame("input-plan-flags", 101).exchange);
+                    assert_eq!(answer.position, Position::Close);
+                    assert!(
+                        matches!(answer.payload, Payload::Frame(_)),
+                        "world close: {answer:?}"
+                    );
+                    let temporary = root.join("flags-turn-close.pending");
+                    std::fs::write(&temporary, &bytes[..n]).unwrap();
+                    std::fs::rename(temporary, root.join("flags-turn-close.json")).unwrap();
+                }
                 Ok(n)
                     if mode.ends_with("-leave-read")
                         || mode.ends_with("-failed-read")
@@ -126,7 +171,10 @@ fn worker_input_gate_child() {
                     );
                     return;
                 }
-                Ok(_) => panic!("root update emitted an unexpected gate directive"),
+                Ok(n) => panic!(
+                    "unexpected gate packet in {mode}: {}",
+                    String::from_utf8_lossy(&bytes[..n])
+                ),
                 Err(nix::errno::Errno::EINTR) => continue,
                 Err(error) => panic!("idle root fixture gate: {error}"),
             }

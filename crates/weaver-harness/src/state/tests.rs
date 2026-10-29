@@ -1,5 +1,7 @@
 use super::*;
 
+mod diagnostic_writes;
+
 /// **The answer bound is the contract's one number**, per
 /// `weaver-harness-state-contract` section 3: one mebibyte, which the
 /// member's `ANSWER_BOUND` in `weaver-state` holds as the same number

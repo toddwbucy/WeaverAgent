@@ -405,7 +405,7 @@ pub(in crate::flow::context) fn release_peer(mode: &str, residency: i32, decode:
                     }
                 );
                 assert_eq!(request.position, Position::Open);
-                assert_eq!(recv(decode, &mut bytes, MsgFlags::MSG_DONTWAIT), Ok(0));
+                crate::flow::fixture_eof::await_eof_until(decode, end, || {});
                 assert!(!root.join("halt-release.json").exists());
                 std::fs::write(
                     root.join("halt-release.json"),

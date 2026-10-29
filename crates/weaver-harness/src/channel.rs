@@ -156,6 +156,7 @@ pub fn keep_close_on_exec(fd: RawFd) -> std::io::Result<bool> {
 #[derive(Debug)]
 pub struct OrganChannel {
     end: OwnedFd,
+    canonical_diagnostic: bool,
 }
 
 /// The decode end takes its own type rather than `OrganChannel`, because
@@ -180,6 +181,7 @@ pub struct ChildEnd {
 #[derive(Debug)]
 pub struct CoordinationListener {
     fd: OwnedFd,
+    canonical_diagnostic: bool,
     /// The path this listener bound, retained so the gate's socket can be
     /// named beside it, per `weaver-harness-Spec` section 3.
     ///
@@ -375,6 +377,7 @@ pub fn bind_coordination(
         .map_err(|e| ChannelFault::SocketPathUnusable { errno: e as i32 })?;
     Ok(CoordinationListener {
         fd,
+        canonical_diagnostic: false,
         path: socket_path.to_path_buf(),
     })
 }
@@ -419,7 +422,10 @@ impl CoordinationListener {
             drop(connection);
             return Err(ChannelFault::WrongPeer { uid: peer.uid() });
         }
-        Ok(OrganChannel { end: connection })
+        Ok(OrganChannel {
+            end: connection,
+            canonical_diagnostic: self.canonical_diagnostic,
+        })
     }
 
     /// **An accept that does not wait**, for the leave's sweeps of the
@@ -452,7 +458,10 @@ impl OrganChannel {
     pub fn try_clone(&self) -> Result<OrganChannel, ChannelFault> {
         self.end
             .try_clone()
-            .map(|end| OrganChannel { end })
+            .map(|end| OrganChannel {
+                end,
+                canonical_diagnostic: self.canonical_diagnostic,
+            })
             .map_err(|_| ChannelFault::Closed)
     }
 
@@ -474,14 +483,24 @@ impl OrganChannel {
             SockFlag::SOCK_CLOEXEC,
         )
         .map_err(|_| ChannelFault::Closed)?;
-        Ok((OrganChannel { end: near }, ChildEnd { end: far }))
+        Ok((
+            OrganChannel {
+                end: near,
+                canonical_diagnostic: false,
+            },
+            ChildEnd { end: far },
+        ))
     }
 
     /// Writes one envelope as one message. The bound the receiver holds is
     /// asserted at the write site too, because a bound only the receiver holds
     /// is a bound the sender discovers in production.
     pub fn send(&self, envelope: &OrganEnvelope) -> Result<(), ChannelFault> {
-        let body = serde_json::to_vec(envelope).map_err(|_| ChannelFault::Undecodable)?;
+        let body = if self.canonical_diagnostic {
+            diagnostic::encode_answer(envelope)?
+        } else {
+            serde_json::to_vec(envelope).map_err(|_| ChannelFault::Undecodable)?
+        };
         if body.len() > MAX_ENVELOPE_BYTES {
             return Err(ChannelFault::Truncated {
                 bound: MAX_ENVELOPE_BYTES,
@@ -514,6 +533,23 @@ impl OrganChannel {
     pub fn recv_with_descriptor(
         &self,
     ) -> Result<(OrganEnvelope, Option<OwnedFd>, Option<OwnedFd>), ChannelFault> {
+        self.recv_with_decoder(|bytes| {
+            serde_json::from_slice(bytes).map_err(|error| {
+                use std::io::Write as _;
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "{}",
+                    undecodable_detail("coordination", &error)
+                );
+                ChannelFault::Undecodable
+            })
+        })
+    }
+
+    fn recv_with_decoder<T>(
+        &self,
+        decode: impl FnOnce(&[u8]) -> Result<T, ChannelFault>,
+    ) -> Result<(T, Option<OwnedFd>, Option<OwnedFd>), ChannelFault> {
         let mut buffer = vec![0u8; MAX_ENVELOPE_BYTES];
         let mut control = [0u8; CONTROL_BYTES];
 
@@ -622,15 +658,7 @@ impl OrganChannel {
         if read == 0 {
             return Err(ChannelFault::Closed);
         }
-        let envelope = serde_json::from_slice(&buffer[..read]).map_err(|error| {
-            use std::io::Write as _;
-            let _ = writeln!(
-                std::io::stderr(),
-                "{}",
-                undecodable_detail("coordination", &error)
-            );
-            ChannelFault::Undecodable
-        })?;
+        let envelope = decode(&buffer[..read])?;
         Ok((envelope, sink, state_end))
     }
 
@@ -958,7 +986,10 @@ impl ChildEnd {
     /// What an organ does with the end it was handed: adopt it as its channel.
     /// The organ crates reach this after finding their end at descriptor 3.
     pub fn into_channel(self) -> OrganChannel {
-        OrganChannel { end: self.end }
+        OrganChannel {
+            end: self.end,
+            canonical_diagnostic: false,
+        }
     }
 }
 
@@ -1129,3 +1160,6 @@ mod classify_bound_tests;
 
 #[cfg(test)]
 mod start_step_descriptor_tests;
+
+#[path = "channel_diagnostic.rs"]
+pub(crate) mod diagnostic;

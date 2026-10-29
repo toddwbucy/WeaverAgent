@@ -8,6 +8,9 @@ use weaver_types::{
     Payload, Position,
 };
 
+#[path = "context_worker_diagnostic_tests.rs"]
+mod diagnostic;
+
 pub(in crate::flow::context::worker_startup) fn is_mode(mode: &str) -> bool {
     mode.contains("-admission-") && mode.contains("-dispatch-")
 }
@@ -15,7 +18,7 @@ pub(in crate::flow::context::worker_startup) fn is_mode(mode: &str) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub(in crate::flow::context::worker_startup) fn run(
     admission: FoundationAdmission,
-    program: FoundationProgram,
+    mut program: FoundationProgram,
     sink: UnixStream,
     reader: UnixStream,
     state: UnixStream,
@@ -23,7 +26,11 @@ pub(in crate::flow::context::worker_startup) fn run(
     wire: &[u8],
     seed: &str,
     root: &std::path::Path,
+    mode: &str,
 ) -> ! {
+    if mode.contains("-admission-diagnostic-run-") {
+        diagnostic::prepare(&mut program, root);
+    }
     // Before any real Enter descriptor is accepted, the same entry hygiene as
     // the selected worker must already protect this process and its fd8/fd9.
     assert_eq!(unsafe { nix::libc::prctl(nix::libc::PR_GET_DUMPABLE) }, 0);
@@ -88,6 +95,10 @@ pub(in crate::flow::context::worker_startup) fn run(
     };
     // SAFETY: the isolated reexec retains the start-step descriptors for its
     // entire lifetime. The supplied policy never blocks or unwinds.
+    if mode.contains("-admission-diagnostic-run-") || mode.contains("-admission-unified-") {
+        // SAFETY: the same isolated worker and custody as the Serving-only entry.
+        unsafe { worker::admission::drive(admission, program, policy) }
+    }
     let diagnostic = unsafe { worker::admission::drive_serving(admission, program, policy) };
     assert_eq!(
         diagnostic.binding_kind(),
@@ -397,6 +408,12 @@ pub(in crate::flow::context::worker_startup) fn before_enter(
     ordinary(root, 907, LifecycleDirective::Observe, true, end);
     no_bytes(reader);
     no_bytes(member);
+    if mode.contains("-admission-diagnostic-run-") {
+        diagnostic::control(
+            root, mode, child, envelope, sink, state, reader, member, end,
+        );
+        return None;
+    }
     if mode.contains("-admission-diagnostic-") {
         let EnterContent::Directive(EnterDirective::Enter { payload }) = &mut envelope.payload;
         payload.binding = EnterBinding::Diagnostic {
@@ -466,7 +483,7 @@ pub(in crate::flow::context::worker_startup) fn before_enter(
         closed_empty(member, end);
         return None;
     }
-    if !mode.contains("-admission-ordinary-") {
+    if !mode.contains("-admission-ordinary-") && !mode.contains("-admission-unified-") {
         let mut invalid = envelope.clone();
         invalid.exchange.ordinal = 910;
         let now = crate::flow::clock::monotonic_ns().unwrap();
@@ -504,12 +521,27 @@ pub(in crate::flow::context::worker_startup) fn before_enter(
         closed_empty(&mut bad_member, end);
         if mode.contains("-admission-expired-") {
             let mut bytes = [0; 512];
-            match recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
-                // The original peer may remain retained until the next root
-                // dial. Only its sink/state handles must already be closed.
-                Ok(0) | Err(nix::errno::Errno::ECONNRESET | nix::errno::Errno::EAGAIN) => (),
-                other => panic!("expired Enter grants no substitute answer: {other:?}"),
-            }
+            assert_eq!(
+                recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
+                Err(nix::errno::Errno::EAGAIN),
+                "expired Enter keeps the peer without a substitute answer"
+            );
+            send(&peer, 913, LifecycleDirective::Observe);
+            let answer = ObservationEnvelope::decode(&receive(&peer, end)).unwrap();
+            assert_eq!(
+                answer.exchange,
+                ExchangeId {
+                    opener: Opener::Admin,
+                    ordinal: 913
+                }
+            );
+            assert_eq!(answer.position, Position::Close);
+            assert!(
+                matches!(answer.payload, ObservationContent::Answer(ObservationAnswer::State {
+                plan: None, state: AgentState::Unloaded, load: None, ref constituents
+            }) if constituents.is_empty()),
+                "same-peer Observe must follow the expired Enter"
+            );
         }
         drop(peer);
         ordinary(root, 911, LifecycleDirective::Observe, true, end);
