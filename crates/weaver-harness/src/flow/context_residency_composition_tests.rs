@@ -6,7 +6,7 @@ use crate::flow::pump::LifecyclePeer;
 use nix::errno::Errno;
 use nix::poll::PollFlags;
 use nix::sys::socket::{MsgFlags, recv, send};
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 use weaver_types::{ExchangeId, Opener, OrganEnvelope, TokenAnswer, TokenDirective};
@@ -52,16 +52,30 @@ fn residency_composition_child() {
     // SAFETY: these are the two ends mapped by this child's actual fork producer.
     let lifecycle = unsafe { std::os::fd::OwnedFd::from_raw_fd(3) };
     let decode = unsafe { std::os::fd::OwnedFd::from_raw_fd(4) };
-    residency_peer(&mode, lifecycle, decode, || {});
+    residency_peer(&mode, lifecycle, decode, |_| {});
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PeerBoundary {
+    DecodeEof,
+    ReleaseWaitingForDecode,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum FixtureResidency {
+    BeforeAdmit,
+    Refused,
+    Admitted,
 }
 
 fn residency_peer(
     mode: &str,
     lifecycle: std::os::fd::OwnedFd,
     decode: std::os::fd::OwnedFd,
-    mut on_decode_eof: impl FnMut(),
+    boundary: impl FnOnce(PeerBoundary),
 ) {
-    let mut admitted = false;
+    let mut residency = FixtureResidency::BeforeAdmit;
+    let mut boundary = Some(boundary);
     let mut opened = false;
     let mut decode_eof = false;
     let mut bytes = [0u8; 65536];
@@ -95,15 +109,26 @@ fn residency_peer(
                     request.payload,
                     weaver_types::Payload::Directive(LifecycleDirective::Release)
                 ) {
-                    assert!(admitted || mode == "failed-startup" || mode == "cleanup-ready");
-                    assert_eq!(
-                        recv(decode.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
-                        Ok(0)
+                    assert!(
+                        residency != FixtureResidency::BeforeAdmit
+                            || mode == "failed-startup"
+                            || mode == "cleanup-ready"
                     );
+                    if !decode_eof {
+                        crate::flow::fixture_eof::await_eof_until(
+                            decode.as_raw_fd(),
+                            deadline,
+                            || {
+                                if let Some(boundary) = boundary.take() {
+                                    boundary(PeerBoundary::ReleaseWaitingForDecode);
+                                }
+                            },
+                        );
+                    }
                     let mut answer = OrganEnvelope {
                         exchange: request.exchange,
                         position: Position::Close,
-                        payload: if admitted {
+                        payload: if residency == FixtureResidency::Admitted {
                             weaver_types::Payload::Answer(LifecycleAnswer::Released)
                         } else {
                             weaver_types::Payload::Refusal(
@@ -167,7 +192,7 @@ fn residency_peer(
                 else {
                     panic!("unexpected residency request")
                 };
-                assert!(!admitted);
+                assert_eq!(residency, FixtureResidency::BeforeAdmit);
                 assert_eq!(instruction, instruction_fixture());
                 assert_eq!(request.position, Position::Open);
                 assert_eq!(request.exchange.opener, Opener::Harness);
@@ -231,7 +256,14 @@ fn residency_peer(
                     );
                     std::fs::write(root.join("release-early"), b"sent").unwrap();
                 }
-                admitted = mode != "refuse";
+                residency = if matches!(
+                    mode,
+                    "refuse" | "cleanup-refuse" | "cleanup-release-refusal"
+                ) {
+                    FixtureResidency::Refused
+                } else {
+                    FixtureResidency::Admitted
+                };
             }
             Err(Errno::EAGAIN) => {}
             other => panic!("residency child receive {other:?}"),
@@ -246,14 +278,16 @@ fn residency_peer(
                 // loop. Decode EOF is not process exit: Release can arrive
                 // on the next scheduling turn, on its independent socket.
                 decode_eof = true;
-                on_decode_eof();
+                if let Some(boundary) = boundary.take() {
+                    boundary(PeerBoundary::DecodeEof);
+                }
             }
             Ok(n) => {
                 assert_ne!(
                     mode, "expired-open-unsent",
                     "expired Open sent its first byte"
                 );
-                assert!(admitted);
+                assert_eq!(residency, FixtureResidency::Admitted);
                 assert!(!opened);
                 let request: TokenDirective = serde_json::from_slice(&bytes[..n]).unwrap();
                 let TokenDirective::Open {
@@ -308,29 +342,48 @@ fn residency_peer(
 
 #[test]
 fn residency_fixture_decode_eof_keeps_release_channel() {
-    residency_fixture_after_decode_eof(true);
+    residency_fixture_ending(FixtureEnding::ReleaseAfterEof, "full");
 }
 
 #[test]
 fn residency_fixture_lifecycle_eof_ends_after_decode_eof() {
-    residency_fixture_after_decode_eof(false);
+    residency_fixture_ending(FixtureEnding::CloseLifecycle, "full");
 }
 
-fn residency_fixture_after_decode_eof(release: bool) {
+#[test]
+fn residency_fixture_release_waits_for_last_decode_descriptor() {
+    residency_fixture_ending(FixtureEnding::ReleaseBeforeEof, "full");
+}
+
+#[test]
+fn residency_fixture_refused_admission_never_confirms_release() {
+    for mode in ["refuse", "cleanup-refuse", "cleanup-release-refusal"] {
+        residency_fixture_ending(FixtureEnding::ReleaseAfterEof, mode);
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum FixtureEnding {
+    ReleaseAfterEof,
+    ReleaseBeforeEof,
+    CloseLifecycle,
+}
+
+fn residency_fixture_ending(ending: FixtureEnding, mode: &str) {
     use nix::sys::socket::{setsockopt, sockopt};
     use nix::sys::time::{TimeVal, TimeValLike};
 
     let (lifecycle, lifecycle_peer) = OrganChannel::pair().unwrap();
-    let (decode, decode_peer) = OrganChannel::pair().unwrap();
+    let (decode, decode_peer) = crate::channel::DecodeChannel::pair().unwrap();
     setsockopt(&lifecycle, sockopt::ReceiveTimeout, &TimeVal::seconds(3)).unwrap();
     let (closed, observed) = std::sync::mpsc::channel();
     std::thread::scope(|scope| {
         let child = scope.spawn(move || {
             residency_peer(
-                "full",
+                mode,
                 lifecycle_peer.into_channel().into_fd(),
                 decode_peer.into_channel().into_fd(),
-                || closed.send(()).unwrap(),
+                |boundary| closed.send(boundary).unwrap(),
             );
         });
         let mut request = OrganEnvelope {
@@ -347,18 +400,50 @@ fn residency_fixture_after_decode_eof(release: bool) {
         let answer = lifecycle.recv().unwrap();
         assert_eq!(answer.exchange, request.exchange);
         assert_eq!(answer.position, Position::Close);
+        let refusal = match mode {
+            "refuse" | "cleanup-refuse" => Some(weaver_types::LifecycleRefusal::DeviceCannotAdmit),
+            "cleanup-release-refusal" => Some(weaver_types::LifecycleRefusal::NoResidency),
+            "full" => None,
+            _ => panic!("unknown fixture admission case"),
+        };
         assert_eq!(
             answer.payload,
-            weaver_types::Payload::Answer(LifecycleAnswer::Admitted)
+            refusal.clone().map_or(
+                weaver_types::Payload::Answer(LifecycleAnswer::Admitted),
+                weaver_types::Payload::Refusal,
+            )
         );
+        let inherited = (ending == FixtureEnding::ReleaseBeforeEof)
+            .then(|| decode.as_fd().try_clone_to_owned().unwrap());
         drop(decode);
-        // The same peer loop used by the forked fixture has observed actual
-        // EOF before the parent can send Release. No sleep selects the order.
-        observed.recv_timeout(Duration::from_secs(3)).unwrap();
-        if release {
+        if ending != FixtureEnding::ReleaseBeforeEof {
+            // No scheduling sleep selects EOF before Release: the same peer
+            // loop used by the forked fixture has observed actual closure.
+            assert_eq!(
+                observed.recv_timeout(Duration::from_secs(3)).unwrap(),
+                PeerBoundary::DecodeEof
+            );
+        }
+        if ending != FixtureEnding::CloseLifecycle {
             request.exchange.ordinal = 2;
             request.payload = weaver_types::Payload::Directive(LifecycleDirective::Release);
             lifecycle.send(&request).unwrap();
+            if ending == FixtureEnding::ReleaseBeforeEof {
+                assert_eq!(
+                    observed.recv_timeout(Duration::from_secs(3)).unwrap(),
+                    PeerBoundary::ReleaseWaitingForDecode
+                );
+                assert_eq!(
+                    recv(
+                        lifecycle.as_fd().as_raw_fd(),
+                        &mut [0; 1],
+                        MsgFlags::MSG_DONTWAIT
+                    ),
+                    Err(Errno::EAGAIN),
+                    "Release cannot be confirmed while a decode owner remains"
+                );
+                drop(inherited);
+            }
             let answer = lifecycle
                 .recv()
                 .expect("decode EOF must retain Release custody");
@@ -366,7 +451,11 @@ fn residency_fixture_after_decode_eof(release: bool) {
             assert_eq!(answer.position, Position::Close);
             assert_eq!(
                 answer.payload,
-                weaver_types::Payload::Answer(LifecycleAnswer::Released)
+                if refusal.is_some() {
+                    weaver_types::Payload::Refusal(weaver_types::LifecycleRefusal::NoResidency)
+                } else {
+                    weaver_types::Payload::Answer(LifecycleAnswer::Released)
+                }
             );
         }
         drop(lifecycle);

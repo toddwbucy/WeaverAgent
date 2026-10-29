@@ -162,12 +162,10 @@ fn finish_refused_enter(root: &std::path::Path, lifecycle: &OwnedFd, decode: &Ow
         release.payload,
         Payload::Directive(LifecycleDirective::Release)
     );
-    assert!(
-        matches!(
-            recv(decode.as_raw_fd(), &mut [0; 4096], MsgFlags::MSG_DONTWAIT),
-            Ok(0) | Err(nix::errno::Errno::EAGAIN)
-        ),
-        "failed Enter grants no decode work"
+    crate::flow::fixture_eof::await_eof_until(
+        decode.as_raw_fd(),
+        Instant::now() + Duration::from_secs(3),
+        || {},
     );
     packet!(
         lifecycle.as_raw_fd(),
