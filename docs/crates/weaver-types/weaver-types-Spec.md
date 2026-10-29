@@ -8,7 +8,7 @@ one's Spec pass. Code is written against it under the gates of Working Process s
 **Document ID:** `weaver-types-Spec`
 **Parent:** `weaver-types-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #393
+**Landing PR:** #398
 
 ---
 
@@ -1429,7 +1429,7 @@ no store, or the leave is a load's rollback, which takes none (`weaver-admin-Spe
 section 3, S1 x Leave), a forced leave otherwise taking its save point as any leave does
 (the forced unload).
 
-**The lifecycle act (2026-10-09) adds six cases and three members**, `Left.forced`, `Left.no_state` and `Leave.rollback`,, on the lifecycle
+**The lifecycle act (2026-10-09) adds six cases and three members**, `Left.forced`, `Left.no_state` and `Leave.rollback`, on the lifecycle
 state table approved by the operator on 2026-10-09, recorded on #1, which
 `weaver-admin-Spec` section 3 holds; each cites the row it carries and none restates
 it. **`Left`'s `forced`** is the leave's state at its end, per `weaver-admin-Spec` section
@@ -1456,6 +1456,14 @@ agent is unloading": the harness answers each frame the gate flushes to it with 
 through the gate, the connection standing, and records it as a refusal of the leave
 (`weaver-admin-Spec` section 3, S4 and S5 x dialer request, and I5). One fact, the
 agent leaving, and no claim about the request.
+
+**Diagnostic setup rollback also uses NoResidency for the original Enter**
+(harness Spec 6.1.1 DIAGNOSTIC-SETUP-ROLLBACK). In that one aggregate outcome it
+means rollback withdrew admission before Ready. It does not assert that a device
+was already emptied; the rollback's successful Left remains the cleanup outcome.
+An already established Enter refusal retains its exact code. This adds no enum
+case or wire member and does not change NoResidency on an SPU request.
+
 **`Quiesce`** is the harness's to the gate, the graceful unload's first act at the gate
 but for a `ToolInterrupt` that precedes it where a tool call is out,
 and **`GateQuiesced`** the gate's answer once it has closed its listener, stopped
@@ -1708,7 +1716,12 @@ holds an ended run's processes, `Unloaded` meaning nothing resident and printed 
 the run lock is free and that cgroup holds nothing, per `weaver-admin-Spec` sections 3
 and 6.1. It claims no `AgentState`, apex section 6's
 four states being the harness's to know and the harness being busy with that very
-invocation, so the caller polls again. **It may name the run's constituents** (on the
+invocation, so the caller polls again. The harness also answers `InTransition` to
+`Observe` during pending Diagnostic setup or while a refused partial Diagnostic run
+is retained for rollback (harness Spec 6.1.1 DIAGNOSTIC-SETUP-ROLLBACK). A before-load
+refusal retaining no run still answers `State` with `Unloaded`. These are uses of the
+existing answer, with no new state, enum case or wire member.
+**It may name the run's constituents** (on the
 Planner's ruling of 2026-10-12, B3): `InTransition { constituents }`, the field optional
 and left off the wire where empty, so the empty answer is the unit answer's bytes. Admin
 fills it from the run lock's holders where `show` prints it on its rungs (i) and (iii), a
@@ -1820,7 +1833,9 @@ run stands. Fifteen of the eighteen have a single answering case. `Stop` has two
 closes rather than a refusal, per `weaver-admin-harness-contract` section 3; `Show` has
 two, `InTransition` where another invocation holds the invocation lock, per
 `weaver-admin-Spec` section 3; and `Observe` has two, `InTransition` while a leave is
-pending, per `weaver-harness-Spec` section 6. Any directive may answer
+pending, during pending Diagnostic setup, or while a refused partial Diagnostic run
+is retained for rollback, per `weaver-harness-Spec` sections 6 and 6.1.1. A before-load
+refusal retaining no run keeps `State` with `Unloaded`. Any directive may answer
 a `LifecycleRefusal` instead, which is the second half of what one answer per request
 means. `Validated` exists because validation reports an outcome without transitioning
 anything, per `weaver-admin-PRD` section 4.3, and answering it with a state would report
@@ -1855,7 +1870,11 @@ state is the harness and no exchange asked it, and it was minted as a marker wit
 scheduled death, leaving exactly one thing to delete when the observation exchange
 landed. The exchange landed with issue #435: `weaver-admin-harness-contract` section 3
 charters `Observe`, the harness answers `State` from whichever position it holds with
-`LoadFacts` beside it where a run stands, or `InTransition` while a leave is pending, and `show` answers rather than refuses. The case is deleted rather than kept, per the apex's rule that a case nothing
+`LoadFacts` beside it where a run stands, or `InTransition` while a leave or Diagnostic
+setup is pending or a refused partial Diagnostic run is retained for rollback
+(harness Spec 6.1.1). A before-load refusal retaining no run keeps `State` with
+`Unloaded`. `show` answers rather than refuses. The case is deleted rather than kept,
+per the apex's rule that a case nothing
 produces is a reserved slot.
 
 **`LoadFacts` is what the observation carries beside the state, and it overlaps what the

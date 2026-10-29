@@ -7,7 +7,7 @@ floor. Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-harness-Spec`
 **Parent:** `weaver-harness-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #393
+**Landing PR:** #398
 
 ---
 
@@ -1183,7 +1183,8 @@ mirrors, so the descriptor arrives the same way, and the kind set carries no
 `load`, a replay's bracket being its own pair and its clock originating at the
 opening event that pair names. So this paragraph's citation of the serving surface
 reaches the receive under either kind and the event kind under one. What holds under
-either is the count, the descriptor, and that a run opens with an authored event.
+either is the count and the descriptor. A serving run opens with load; Diagnostic
+setup stays unrecorded until replay opens its own bracket (section 6.1.1).
 
 **Which recorder it is follows the kind, and nothing else in the walk does.**
 Both kinds receive a descriptor and author a record into it, per
@@ -1369,7 +1370,10 @@ deferred with the decode seam, per section 8, and the trace semantics are settle
 way, which is what `basic-inference-loop` section 7 already records.
 
 **Observe answers from any position and authors nothing**, per
-`weaver-admin-harness-contract` section 3 as of 2026-09-04. Before an enter the answer
+`weaver-admin-harness-contract` section 3 as of 2026-09-04. During pending Diagnostic
+setup or while a refused partial Diagnostic run is retained for rollback, it answers
+`InTransition` under section 6.1.1. A before-load refusal retaining no run keeps
+`Unloaded`. Outside those setup positions, before an enter the answer
 is `Unloaded` with no load. Entered, it is `Idle` where no turn key stands in flight and
 `Active` where one does, with `LoadFacts` beside it read from the run: the session and
 run, the declaration's digest the enter carried, the artifact, the elections, the store
@@ -2789,6 +2793,78 @@ edge: asserts
 from: weaver-harness
 to: harness-stop-polled-during-the-stream
 ```
+
+### 6.1.1 Diagnostic setup rollback (DIAGNOSTIC-SETUP-ROLLBACK)
+
+This rule covers a Diagnostic Enter after the worker has adopted its sink and
+state end, before it commits the Ready aggregate. Serving uses its own Enter
+window. Ready commits when all elected arms have confirmed and the worker
+selects the Ready outcome; delayed delivery does not undo that already established
+outcome. The admin invocation lock still permits only the load's own rollback
+in S1; this rule adds no operator verb or pre-Ready Stop.
+
+Every wait in this setup hears the original lifecycle peer and the authenticated
+listener: the state identity answer, SPU Admit, decode Open and elected classifier
+readiness. Partial messages, pending answers and the exact Enter exchange remain
+owned. Peer loss retires delivery alone. A silent new peer or a blocked answer
+cannot prevent the setup owner from hearing rollback or its current deadline.
+An Observe that reaches the worker during setup answers InTransition. This also
+holds after an Enter refusal while partial Diagnostic resources remain held for
+rollback: refusal custody is not a ready Idle run. SavePoint, Stop and other
+directives refuse OutOfOrder, except a forced Leave with rollback true. The
+before-load refusal that retained no run still returns to BeforeEnter and its
+existing Unloaded observation. Recorder failure still bars a successful answer.
+
+Accepting that rollback before Ready commits ends setup continuation. No further
+child is forked, no new identity/Open/classifier work starts and no replay grant
+is issued. The original Enter closes with NoResidency on its original exchange:
+here that code means the Diagnostic aggregate was withdrawn by rollback, not
+that a partially loaded device was observed empty. An earlier established Enter
+refusal retains its exact code instead. An Enter reply already committed is not
+replaced; a rollback after Ready follows the existing entered-run rule.
+
+The worker retains the rollback's peer, exchange and cause and starts the
+existing LEAVE_BOUND_MS interval at its acceptance. The interval includes setup
+settlement, release, reap, record drain and reply delivery; entering another
+phase or receiving traffic never renews it. It changes neither admin's bounds
+nor escalation and run-end duties (admin Spec section 3, S1 rollback).
+
+| State | Event | Required continuation |
+| --- | --- | --- |
+| Setup, no rollback accepted | An arm confirms or refuses | Continue setup or retain the exact Enter refusal under the existing aggregate rule; Ready requires every elected arm. |
+| Refused setup, partial run held | Observe, SavePoint or Stop | Answer InTransition to Observe and OutOfOrder to SavePoint/Stop; retain the exact established Enter refusal and await rollback, never replay. |
+| Setup, before Ready commits | Forced rollback Leave accepted | Retain both exchanges, retire setup continuation and admit the original Enter refusal above. Enter reply backpressure cannot delay cleanup. |
+| Rollback, identity ask pending | Any partial or late identity answer | Close the state ask end and retain no new identity work; no SPU fork follows. |
+| Rollback, Admit not completely sent | Its child exists | Close the child's ends and reap under the retained deadline; send neither a partial retry nor Release before a completed Admit. |
+| Rollback, Admit completely sent and unanswered | Matching Admit terminal arrives | Drain it without Open or Ready. Only its own opener, ordinal, Close position and Admitted/refusal payload settle Admit. Then close decode and release a confirmed residency. A refused or lost Admit closes its ends and reaps the child without inventing a confirmation or sending Release. |
+| Rollback, Admit still pending | Original rollback deadline expires | Close its ends, end and reap the owned child through existing failure cleanup. Never send Release ahead of Admit or report a release confirmation. |
+| Rollback, Open or classifier readiness pending | Rollback owns the work | Close the corresponding work channel, retain the child and release/reap under the same deadline. Open receives no turn-scoped Cancel and no replacement Open. |
+| Rollback, settlement complete | All owned resources released and record drain succeeds within the deadline | Answer the retained rollback Left with forced true, no_state true and no save point, then finish the worker. |
+| Any rollback phase | Deadline or cleanup failure prevents that completion | Preserve the failure and use existing failed-run termination; answer no successful Left. Admin still owns escalation and containment. |
+
+A late source terminal never reopens setup. Same-peer Enter and rollback replies
+retain their order; on different peers each keeps its own exchange, and a blocked
+or lost Enter reply cannot block the rollback. Pending delivery is retained within
+the same rollback interval, never retried as another request. Later management
+follows admin-harness contract section 4's pending-rollback rules; JoinLeave is
+OutOfOrder and Observe remains InTransition.
+
+Diagnostic setup authors no diagnostic event, including on a failed arm or
+rollback. The record starts only when an admitted replay authors ReplayOpened.
+Before that point operator diagnostics and the lifecycle outcome report setup
+failure; they do not manufacture a Fault or a replay bracket. A failed recorder
+still bars lifecycle success. This rule does not change a replay already begun,
+its interruption policy or the recorder's general wait limitation.
+
+The implementing act must exercise actual worker processes with identity,
+Admit, Open and elected classifier readiness held in turn; original-peer loss,
+same/new-peer rollback, pending reply pressure, partial state input, late
+terminals, exact Admit attribution, the original deadline and cleanup failure.
+It must prove no new fork/Open/Ready/replay after accepted rollback, no premature
+Release, no pre-bracket diagnostic event, and no successful Left on failed
+cleanup. Both entry consumers must use the same setup owner or receive separate
+process evidence. Removing the wait integration and deadline inheritance must
+break the instruments.
 
 ### 6.2 The invocation, chartered
 
