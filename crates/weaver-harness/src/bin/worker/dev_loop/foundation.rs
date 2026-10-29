@@ -18,6 +18,9 @@ pub mod session;
 #[path = "foundation_dispatch.rs"]
 pub mod dispatch;
 
+#[path = "foundation_admission.rs"]
+pub mod admission;
+
 pub type FailedOwner<'a> =
     Result<Box<FoundationInput<'a>>, Box<weaver_harness::FoundationManagement<'a>>>;
 

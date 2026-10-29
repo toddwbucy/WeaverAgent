@@ -170,13 +170,20 @@ impl RollbackDials {
                     }));
                 }
                 Payload::Directive(LifecycleDirective::Observe) => {
+                    let plan = context.committed_plan_summary().map(|value| value.cloned());
                     dial.observation = Some(ObservationEnvelope {
                         exchange: message.envelope.exchange.clone(),
                         position: Position::Close,
-                        payload: ObservationContent::Answer(ObservationAnswer::State {
-                            state: weaver_types::AgentState::Idle,
-                            load: Some(Box::new(load.clone())),
-                            constituents: Vec::new(),
+                        payload: ObservationContent::Answer(match plan {
+                            Ok(plan) => ObservationAnswer::State {
+                                plan,
+                                state: weaver_types::AgentState::Idle,
+                                load: Some(Box::new(load.clone())),
+                                constituents: Vec::new(),
+                            },
+                            Err(_) => ObservationAnswer::InTransition {
+                                constituents: Vec::new(),
+                            },
                         }),
                     });
                 }

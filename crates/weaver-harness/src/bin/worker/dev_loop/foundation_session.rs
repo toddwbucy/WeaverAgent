@@ -121,6 +121,29 @@ impl<'a> Session<'a> {
         self.route_graceful_leave(false)
     }
 
+    pub fn queue_plan_update(&mut self) -> bool {
+        if let Some(State::Turn(flow)) = self.state.as_mut() {
+            return flow.queue_plan_update();
+        }
+        if !matches!(self.state.as_ref(), Some(State::Management(owner)) if owner.progress() == FoundationManagementProgress::DirectivePending)
+        {
+            return false;
+        }
+        let State::Management(owner) = self.state.take().unwrap() else {
+            unreachable!()
+        };
+        match owner.queue_plan_update() {
+            Ok(input) => {
+                self.state = Some(State::Input(input));
+                true
+            }
+            Err(owner) => {
+                self.state = Some(State::Management(owner));
+                false
+            }
+        }
+    }
+
     pub fn queue_save(&mut self) -> bool {
         if let Some(State::Turn(flow)) = self.state.as_mut() {
             return flow.queue_save();

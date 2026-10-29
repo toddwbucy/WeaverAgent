@@ -68,6 +68,86 @@ pub(super) fn event(kind: Kind, payload: Option<Payload>) -> AuthoredEvent {
     }
 }
 
+#[test]
+fn admission_constructor_preserves_failure_origin_and_closes_unadmitted_handles() {
+    use std::io::Read;
+
+    struct ConstructorClock {
+        now: Option<u64>,
+        calls: usize,
+    }
+    impl PumpIo for ConstructorClock {
+        fn now(&mut self) -> std::io::Result<u64> {
+            self.calls += 1;
+            self.now.ok_or_else(|| {
+                // Error wording cannot change a clock failure into expiry.
+                std::io::Error::other("original Enter window expired before context construction")
+            })
+        }
+        fn wait(
+            &mut self,
+            _: &[crate::flow::clock::WaitInterest<'_>],
+            _: Option<u64>,
+        ) -> std::io::Result<crate::flow::clock::WaitOutcome> {
+            panic!("pre-load context construction performs no wait");
+        }
+    }
+
+    for case in ["clock", "expired", "identity"] {
+        let (sink, mut reader) = UnixStream::pair().unwrap();
+        let (state, mut peer) = UnixStream::pair().unwrap();
+        reader.set_nonblocking(true).unwrap();
+        peer.set_nonblocking(true).unwrap();
+        let mut clock = ConstructorClock {
+            now: (case != "clock").then_some(112),
+            calls: 0,
+        };
+        let result = RecordingContext::admit(
+            sink.into(),
+            StateChannel::new(
+                state,
+                if case == "identity" {
+                    "other"
+                } else {
+                    "session"
+                }
+                .into(),
+                "run".into(),
+            )
+            .unwrap(),
+            "session".into(),
+            "run".into(),
+            42,
+            config(),
+            AbsoluteBound::after(100, 5).unwrap(),
+            &mut clock,
+        );
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("{case}: invalid constructor admitted a context"),
+        };
+        match (case, error) {
+            ("clock", ContextAdmissionError::Clock(detail)) => {
+                assert_eq!(
+                    detail,
+                    "original Enter window expired before context construction"
+                );
+                assert_eq!(clock.calls, 1);
+            }
+            ("expired", ContextAdmissionError::Expired { observed_ns }) => {
+                assert_eq!(observed_ns, 112, "retain the actual sampled time");
+                assert_eq!(clock.calls, 1);
+            }
+            ("identity", ContextAdmissionError::Invalid(_)) => {
+                assert_eq!(clock.calls, 0);
+            }
+            (_, error) => panic!("{case}: incorrect constructor disposition {error:?}"),
+        }
+        assert_eq!(reader.read(&mut [0]).unwrap(), 0, "no trace before load");
+        assert_eq!(peer.read(&mut [0]).unwrap(), 0, "no state Open before load");
+    }
+}
+
 impl Fixture {
     pub(super) fn new(declaration: FlowConfig) -> Self {
         Self::with_enter(declaration, 1_000_000_000)
@@ -80,7 +160,7 @@ impl Fixture {
         peer.set_write_timeout(Some(Duration::from_secs(3)))
             .unwrap();
         let mut clock = FakePumpIo::new(100);
-        let context = RecordingContext::new(
+        let context = RecordingContext::admit(
             sink.into(),
             StateChannel::new(state, "session".into(), "run".into()).unwrap(),
             "session".into(),

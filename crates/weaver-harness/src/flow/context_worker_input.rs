@@ -24,6 +24,12 @@ pub(crate) mod wind_down;
 #[path = "context_worker_graceful_leave.rs"]
 pub(in crate::flow::context::worker_startup) mod graceful;
 
+#[path = "context_worker_flags.rs"]
+pub(crate) mod flags;
+
+#[path = "context_worker_plan.rs"]
+pub(in crate::flow::context::worker_startup) mod plan;
+
 #[path = "context_worker_save.rs"]
 pub(in crate::flow::context::worker_startup) mod save;
 
@@ -182,7 +188,7 @@ impl<'a> FoundationInput<'a> {
         if self.serving.owner.listener.held().is_some() {
             return FoundationInputProgress::ManagementPending;
         }
-        if self.save_blocks_turn() {
+        if self.save_blocks_turn() || self.plan_pending() || self.flags_pending() {
             return FoundationInputProgress::Pending;
         }
         if let Some(progress) = self.wind_down_input_progress() {
@@ -273,6 +279,18 @@ impl<'a> FoundationInput<'a> {
                 // still lets its original owner run, without granting a boundary
                 // when that owner finishes in this same call.
                 let settled = matches!(observation, ObservationProgress::Complete);
+                if self.flags_pending() {
+                    self.advance_flags(None, io)?;
+                    // Yield the completed sample before any unrelated idle wait.
+                    return Ok(());
+                }
+                let plan_was_pending = self.plan_pending();
+                self.advance_plan(None, io)?;
+                if plan_was_pending {
+                    // This reduction may just have carried the answer. Yield
+                    // before an unrelated idle wait can hide that completion.
+                    return Ok(());
+                }
                 let save_progress = self.advance_save(io, settled)?;
                 if matches!(observation, ObservationProgress::EarlierAuthor)
                     && author_was_blocked
@@ -334,7 +352,8 @@ impl<'a> FoundationInput<'a> {
                 Ok(false) => (),
                 Err(error) => failure = error,
             }
-            if self.retain_save_interrupt(&failure)
+            if self.retain_plan_interrupt(&failure)
+                || self.retain_save_interrupt(&failure)
                 || self.retain_graceful_expiry(&failure)
                 || self.retain_quiesce_gate_end(&failure)
             {
@@ -446,7 +465,7 @@ impl<'a> FoundationInput<'a> {
                 listener: Some(&mut owner.listener),
                 dial: peer,
                 residency: Some(owner.resident.residency),
-                leave_peer: self.serving.save.as_mut().and_then(|save| save.port()),
+                leave_peer: plan::retained_port(&mut self.serving.plan, &mut self.serving.save),
                 ..Default::default()
             },
             gate: Some(&mut owner.gate),
@@ -496,7 +515,7 @@ impl<'a> FoundationInput<'a> {
                 lifecycle: LifecyclePorts {
                     listener: Some(&mut owner.listener),
                     residency: Some(owner.resident.residency),
-                    leave_peer: self.serving.save.as_mut().and_then(|save| save.port()),
+                    leave_peer: plan::retained_port(&mut self.serving.plan, &mut self.serving.save),
                     ..Default::default()
                 },
                 gate: (!retained_gate_end).then_some(&mut owner.gate),
@@ -571,7 +590,7 @@ impl<'a> FoundationInput<'a> {
             lifecycle: LifecyclePorts {
                 listener: Some(&mut owner.listener),
                 residency: Some(owner.resident.residency),
-                leave_peer: self.serving.save.as_mut().and_then(|save| save.port()),
+                leave_peer: plan::retained_port(&mut self.serving.plan, &mut self.serving.save),
                 ..Default::default()
             },
             gate: Some(&mut owner.gate),

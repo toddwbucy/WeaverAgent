@@ -42,7 +42,7 @@ fn all_registered_kinds_have_only_their_declared_sources() {
     use AuthoredSource as S;
     let source_values = [
         S::BoundaryInput(1000),
-        S::ManagementInput(Cause { uid: 1000 }),
+        S::ManagementInput(crate::flow::plan::ManagementInput::for_test_root()),
         S::Model,
         S::Tool,
         S::Loop,

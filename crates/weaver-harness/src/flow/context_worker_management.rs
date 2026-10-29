@@ -22,6 +22,9 @@ mod graceful_handoff;
 #[path = "context_worker_save_handoff.rs"]
 mod save_handoff;
 
+#[path = "context_worker_plan_handoff.rs"]
+mod plan_handoff;
+
 enum ManagementAnswer {
     Observation(ObservationEnvelope),
     Lifecycle(OrganEnvelope),
@@ -51,6 +54,7 @@ pub struct FoundationManagement<'a> {
     pub(super) input: Box<FoundationInput<'a>>,
     peer: LifecyclePeer,
     message: Option<LifecycleMessage>,
+    declined_plan: Option<crate::flow::pump::plan::RootPlanPacket>,
     save_message: Option<ReceivedCapture>,
     answer: Option<ManagementAnswer>,
     stop: Option<StopWork>,
@@ -69,6 +73,7 @@ pub struct FoundationManagement<'a> {
 pub(super) struct FailedManagement {
     _peer: crate::flow::pump::RetiredLifecyclePeer,
     _message: Option<crate::flow::pump::RetiredLifecycleMessage>,
+    _declined_plan: Option<crate::flow::pump::plan::RootPlanPacket>,
     _save_message: Option<RetiredReceivedCapture>,
     _answer: Option<ManagementAnswer>,
     _stop: Option<StopWork>,
@@ -94,7 +99,11 @@ impl<'a> FoundationInput<'a> {
         if self.progress() != FoundationInputProgress::ManagementPending {
             return Err(self);
         }
-        let read = if self.has_graceful_leave() || self.serving.save.is_some() {
+        let read = if self.has_graceful_leave()
+            || self.serving.save.is_some()
+            || self.plan_pending()
+            || self.flags_pending()
+        {
             let Some(accepted) = self.serving.owner.listener.accepted_ns() else {
                 return Err(self);
             };
@@ -119,6 +128,7 @@ impl<'a> FoundationInput<'a> {
             input: self,
             peer,
             message: None,
+            declined_plan: None,
             save_message: None,
             answer: None,
             stop: None,
@@ -139,6 +149,7 @@ impl<'a> FoundationManagement<'a> {
             input,
             peer,
             message,
+            declined_plan,
             save_message,
             answer,
             stop,
@@ -156,6 +167,7 @@ impl<'a> FoundationManagement<'a> {
             FailedManagement {
                 _peer: peer.retire_failed(),
                 _message: message.map(LifecycleMessage::retire_failed),
+                _declined_plan: declined_plan,
                 _save_message: save_message.map(ReceivedCapture::retire_failed),
                 _answer: answer,
                 _stop: stop,
@@ -254,7 +266,8 @@ impl<'a> FoundationManagement<'a> {
                 Ok(false) => (),
                 Err(error) => failure = error,
             }
-            if self.input.retain_save_interrupt(&failure)
+            if self.input.retain_plan_interrupt(&failure)
+                || self.input.retain_save_interrupt(&failure)
                 || self.input.retain_graceful_expiry(&failure)
                 || self.input.retain_quiesce_gate_end(&failure)
             {
@@ -344,6 +357,11 @@ impl<'a> FoundationManagement<'a> {
             .as_ref()
             .map(|message| &message.envelope.exchange)
             .or_else(|| {
+                self.declined_plan
+                    .as_ref()
+                    .map(|packet| &packet.envelope().exchange)
+            })
+            .or_else(|| {
                 self.save_message
                     .as_ref()
                     .map(|message| &message.message.envelope.exchange)
@@ -390,6 +408,7 @@ impl<'a> FoundationManagement<'a> {
             self.heard_ns = Some(now);
         }
         if self.message.is_none()
+            && self.declined_plan.is_none()
             && self.save_message.is_none()
             && let Some(message) = self.peer.capture_held()
         {
@@ -414,7 +433,10 @@ impl<'a> FoundationManagement<'a> {
                     .complete_wait(PumpDeadline::AdminRead);
                 self.read_armed = false;
             }
-            if !self.input.has_graceful_leave() && self.input.serving.save.is_none() {
+            if !self.input.has_graceful_leave()
+                && self.input.serving.save.is_none()
+                && !self.input.plan_pending()
+            {
                 self.progress = FoundationManagementProgress::DirectivePending;
                 return Ok(());
             }
@@ -446,7 +468,7 @@ impl<'a> FoundationManagement<'a> {
                 )),
             }));
         }
-        if self.message.is_none() && self.save_message.is_none() {
+        if self.message.is_none() && self.declined_plan.is_none() && self.save_message.is_none() {
             let Some(message) = self.peer.held() else {
                 if self.peer_unavailable {
                     self.progress = FoundationManagementProgress::Dropped;
@@ -467,6 +489,72 @@ impl<'a> FoundationManagement<'a> {
             {
                 self.detail = Some("invalid management opener or descriptors".into());
                 self.progress = FoundationManagementProgress::Dropped;
+                return Ok(());
+            }
+            if self.read_armed {
+                // This complete judged packet has fulfilled the secondary
+                // receive duty. Its existing operation bounds own any drain.
+                self.input
+                    .serving
+                    .owner
+                    .context
+                    .complete_wait(PumpDeadline::AdminRead);
+                self.read_armed = false;
+            }
+            if self.input.flags_pending()
+                && matches!(
+                    envelope.payload,
+                    Payload::Directive(
+                        LifecycleDirective::Stop { .. } | LifecycleDirective::Leave { .. }
+                    )
+                )
+            {
+                self.input.serving.owner.context.cancel_read(io)?;
+                self.input
+                    .advance_flags((!self.peer_unavailable).then_some(&mut self.peer), io)?;
+                if self.input.flags_pending() {
+                    return Ok(());
+                }
+            }
+            let envelope = &self
+                .peer
+                .held()
+                .expect("held directive survives flag settlement")
+                .envelope;
+            if self.input.plan_pending()
+                && matches!(
+                    envelope.payload,
+                    Payload::Directive(
+                        LifecycleDirective::Stop { .. } | LifecycleDirective::Leave { .. }
+                    )
+                )
+            {
+                self.input.serving.owner.context.cancel_root_plan_update();
+                self.input
+                    .advance_plan((!self.peer_unavailable).then_some(&mut self.peer), io)?;
+                if self.input.plan_pending() {
+                    return Ok(());
+                }
+            }
+            let message = self
+                .peer
+                .held()
+                .expect("held management directive survives root settlement");
+            let envelope = &message.envelope;
+            if matches!(
+                envelope.payload,
+                Payload::Directive(LifecycleDirective::PlanUpdate { .. })
+            ) && self.input.plan_at_rest()
+            {
+                if self.read_armed {
+                    self.input
+                        .serving
+                        .owner
+                        .context
+                        .complete_wait(PumpDeadline::AdminRead);
+                    self.read_armed = false;
+                }
+                self.progress = FoundationManagementProgress::DirectivePending;
                 return Ok(());
             }
             let leaving = self.input.has_graceful_leave() || self.input.serving.save.is_some();
@@ -536,15 +624,16 @@ impl<'a> FoundationManagement<'a> {
                             "entered worker lacks its original recorded load facts",
                         ));
                     };
+                    let plan = owner
+                        .context
+                        .committed_plan_summary()
+                        .map(|value| value.cloned());
                     self.answer = Some(ManagementAnswer::Observation(ObservationEnvelope {
                         exchange: message.envelope.exchange.clone(),
                         position: Position::Close,
-                        payload: ObservationContent::Answer(if leaving {
-                            ObservationAnswer::InTransition {
-                                constituents: Vec::new(),
-                            }
-                        } else {
-                            ObservationAnswer::State {
+                        payload: ObservationContent::Answer(match (leaving, plan) {
+                            (false, Ok(plan)) => ObservationAnswer::State {
+                                plan,
                                 state: if owner.context.open_turn.is_some() {
                                     AgentState::Active
                                 } else {
@@ -552,7 +641,10 @@ impl<'a> FoundationManagement<'a> {
                                 },
                                 load: Some(load.clone()),
                                 constituents: Vec::new(),
-                            }
+                            },
+                            _ => ObservationAnswer::InTransition {
+                                constituents: Vec::new(),
+                            },
                         }),
                     }));
                 }
@@ -660,12 +752,10 @@ impl<'a> FoundationManagement<'a> {
                     listener: Some(&mut owner.listener),
                     dial: (!self.peer_unavailable).then_some(&mut self.peer),
                     residency: Some(owner.resident.residency),
-                    leave_peer: self
-                        .input
-                        .serving
-                        .save
-                        .as_mut()
-                        .and_then(|save| save.port()),
+                    leave_peer: super::plan::retained_port(
+                        &mut self.input.serving.plan,
+                        &mut self.input.serving.save,
+                    ),
                     ..Default::default()
                 },
                 gate: (!retained_gate_end).then_some(&mut owner.gate),

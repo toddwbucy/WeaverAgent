@@ -193,10 +193,16 @@ pub(super) enum HeldInput {
     Both,
 }
 
-/// Creation errors happen before a usable recording context exists. They go to
-/// the existing enter diagnostic path, never to a fabricated trace head.
+/// Preserve constructor provenance before any load or usable context exists.
+/// Only the admission owner maps an actual trace-handle failure to a refusal;
+/// clock and invariant failures grant no replacement lifecycle answer.
 #[derive(Debug)]
-pub(super) struct ContextError(pub String);
+pub(super) enum ContextAdmissionError {
+    Clock(String),
+    Expired { observed_ns: u64 },
+    Trace(String),
+    Invalid(String),
+}
 
 #[derive(Debug)]
 pub(super) enum ActivationFailure {
@@ -229,6 +235,7 @@ enum AuthorClaim {
     Measurement(std::sync::Arc<()>),
     ServingObservation(std::sync::Arc<serving_observation::ServingObservationAuthor>),
     EnterRefusal(std::sync::Arc<()>),
+    RootPlan(std::sync::Arc<()>),
     PairRejection(std::sync::Arc<()>),
     RollbackGate(std::sync::Arc<worker_startup::expired::gate::RollbackGateAuthor>),
 }
@@ -239,6 +246,7 @@ impl AuthorClaim {
             (Self::Placement(a), Self::Placement(b))
             | (Self::Measurement(a), Self::Measurement(b))
             | (Self::EnterRefusal(a), Self::EnterRefusal(b))
+            | (Self::RootPlan(a), Self::RootPlan(b))
             | (Self::PairRejection(a), Self::PairRejection(b)) => std::sync::Arc::ptr_eq(a, b),
             (Self::ServingObservation(a), Self::ServingObservation(b)) => {
                 std::sync::Arc::ptr_eq(a, b)
@@ -383,7 +391,7 @@ pub(crate) struct RecordingContext {
     plan_summary: Option<plan_summary_driver::PlanSummaryTransaction>,
     retired_enter: Option<AbsoluteBound>,
     inspection: Option<inspection_driver::InspectionTransaction>,
-    marks: Option<marks_driver::MarksTransaction>,
+    marks: Option<marks_driver::MarkOperation>,
     // Pointer identity survives moves and is never recreated from trace IDs.
     read_origin: std::sync::Arc<()>,
     content_read_started: bool,
@@ -449,8 +457,10 @@ pub(crate) struct RecordingContext {
 }
 
 impl RecordingContext {
+    /// The exact pre-load constructor, with typed failures for the admission
+    /// owner. Consumed descriptors close on error; no state Open is sent here.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn new(
+    pub(super) fn admit(
         sink: OwnedFd,
         state: StateChannel,
         session: String,
@@ -459,45 +469,49 @@ impl RecordingContext {
         declaration: FlowConfig,
         enter: AbsoluteBound,
         io: &mut impl PumpIo,
-    ) -> Result<Self, ContextError> {
+    ) -> Result<Self, ContextAdmissionError> {
         declaration
             .validate()
-            .map_err(|e| ContextError(e.to_string()))?;
+            .map_err(|e| ContextAdmissionError::Invalid(e.to_string()))?;
         if state.identity().0 != session || state.identity().1 != run {
-            return Err(ContextError("state and recording identities differ".into()));
-        }
-        // Capture before any state open or classifier bootstrap bytes can be sent.
-        let origin = ClockOrigin::capture(io).map_err(|e| ContextError(e.to_string()))?;
-        if enter.expired(origin.raw()) {
-            return Err(ContextError(
-                "original Enter window expired before context construction".into(),
+            return Err(ContextAdmissionError::Invalid(
+                "state and recording identities differ".into(),
             ));
         }
+        // Capture before any state open or classifier bootstrap bytes can be sent.
+        let origin =
+            ClockOrigin::capture(io).map_err(|e| ContextAdmissionError::Clock(e.to_string()))?;
+        if enter.expired(origin.raw()) {
+            return Err(ContextAdmissionError::Expired {
+                observed_ns: origin.raw(),
+            });
+        }
         let author = ServingAuthor::new(session.clone(), run.clone(), operator, origin.raw())
-            .map_err(|e| ContextError(format!("author identity: {e:?}")))?;
-        let recorder = PreflightRecorder::receive(sink, RunRef(run.clone()), SessionRef(session))
-            .map_err(|e| ContextError(format!("trace receive: {e:?}")))?;
+            .map_err(|e| ContextAdmissionError::Invalid(format!("author identity: {e:?}")))?;
+        let recorder =
+            PreflightRecorder::receive(sink, RunRef(run.clone()), SessionRef(session))
+                .map_err(|e| ContextAdmissionError::Trace(format!("trace receive: {e:?}")))?;
         let budget = RetentionBudget::new(declaration.backlog.clone())
-            .map_err(|e| ContextError(e.to_string()))?;
+            .map_err(|e| ContextAdmissionError::Invalid(e.to_string()))?;
         let flow = FlowCoordinator::preflight(
             state,
             declaration.scheme.clone(),
             declaration.observation_interval.clone(),
             declaration.backlog.lag_alarm_turns.0,
         )
-        .map_err(|e| ContextError(e.detail))?;
+        .map_err(|e| ContextAdmissionError::Invalid(e.detail))?;
         let mut deadlines = DeadlineRegistry::new();
         deadlines
             .arm(PumpDeadline::Enter, enter)
-            .map_err(|e| ContextError(e.to_string()))?;
+            .map_err(|e| ContextAdmissionError::Invalid(e.to_string()))?;
         let input = super::input::InputSlot::new(run.clone(), declaration.scheme.scheme_id.clone())
-            .map_err(|error| ContextError(error.to_string()))?;
+            .map_err(|error| ContextAdmissionError::Invalid(error.to_string()))?;
         let pairs = pairs::PairLedger::new(
             flow.state().identity().0.to_owned(),
             run.clone(),
             declaration.scheme.clone(),
         )
-        .map_err(|error| ContextError(format!("pair identity: {error:?}")))?;
+        .map_err(|error| ContextAdmissionError::Invalid(format!("pair identity: {error:?}")))?;
         Ok(Self {
             phase: RecordingPhase::Preflight,
             origin,
@@ -1396,6 +1410,12 @@ impl RecordingContext {
         if let Some(failure) = self.failure.clone() {
             return Err(failure.into());
         }
+        if self
+            .root_plan_author_claim()
+            .is_some_and(|actual| !claim.as_ref().is_some_and(|claim| actual.matches(claim)))
+        {
+            return Err(RunFailure::MarksOwned.into());
+        }
         if self.rollback_gate_author.as_ref().is_some_and(|actual| {
             !matches!(&claim, Some(AuthorClaim::RollbackGate(owner)) if std::sync::Arc::ptr_eq(actual, owner))
         }) {
@@ -1416,6 +1436,7 @@ impl RecordingContext {
         if claim.is_some() && !claim_phase {
             return Err((match claim {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
+                Some(AuthorClaim::RootPlan(_)) => RunFailure::MarksOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 Some(AuthorClaim::PairRejection(_)) => RunFailure::PairOwned,
                 Some(AuthorClaim::RollbackGate(_) | AuthorClaim::ServingObservation(_)) => {
@@ -1442,6 +1463,7 @@ impl RecordingContext {
         if claim.is_some() && std::mem::take(&mut self.pause_claim_queue_for_test) {
             return Err((match claim {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
+                Some(AuthorClaim::RootPlan(_)) => RunFailure::MarksOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 Some(AuthorClaim::PairRejection(_)) => RunFailure::PairOwned,
                 Some(AuthorClaim::RollbackGate(_) | AuthorClaim::ServingObservation(_)) => {
@@ -1543,6 +1565,9 @@ impl RecordingContext {
                             .is_some_and(|owner| owner.claim(&identity, ticket)),
                         AuthorClaim::Measurement(identity) => {
                             self.claim_measure_author_ticket(&identity, ticket)
+                        }
+                        AuthorClaim::RootPlan(identity) => {
+                            self.claim_root_plan_author_ticket(&identity, ticket)
                         }
                         AuthorClaim::ServingObservation(owner) => self
                             .serving_observation_author
@@ -1663,6 +1688,12 @@ impl RecordingContext {
         if let Some(failure) = self.failure.clone() {
             return Err(failure.into());
         }
+        if self
+            .root_plan_author_claim()
+            .is_some_and(|actual| !claim.as_ref().is_some_and(|claim| actual.matches(claim)))
+        {
+            return Err(RunFailure::MarksOwned.into());
+        }
         if self.rollback_gate_author.as_ref().is_some_and(|actual| {
             !matches!(&claim, Some(AuthorClaim::RollbackGate(owner)) if std::sync::Arc::ptr_eq(actual, owner))
         }) {
@@ -1753,6 +1784,7 @@ impl RecordingContext {
             self.bind_place_measure_author(sequence);
             self.bind_place_author(sequence);
             self.bind_enter_refusal_author(sequence);
+            self.bind_root_plan_author(sequence);
             self.bind_rejected_author(sequence);
             self.bind_rollback_gate_author(sequence);
             self.bind_serving_observation_author(sequence);
@@ -1785,6 +1817,7 @@ impl RecordingContext {
                 self.bind_place_measure_author(sequence);
                 self.bind_place_author(sequence);
                 self.bind_enter_refusal_author(sequence);
+                self.bind_root_plan_author(sequence);
                 self.bind_rejected_author(sequence);
                 self.bind_rollback_gate_author(sequence);
                 self.bind_serving_observation_author(sequence);
@@ -1801,6 +1834,7 @@ impl RecordingContext {
                 self.bind_place_measure_author(*sequence);
                 self.bind_place_author(*sequence);
                 self.bind_enter_refusal_author(*sequence);
+                self.bind_root_plan_author(*sequence);
                 self.bind_rejected_author(*sequence);
                 self.bind_rollback_gate_author(*sequence);
                 self.bind_serving_observation_author(*sequence);
@@ -2410,6 +2444,7 @@ impl RecordingContext {
             | PumpDeadline::Lower
             | PumpDeadline::Label
             | PumpDeadline::AdminRead
+            | PumpDeadline::PlanAnswer
             | PumpDeadline::CaptureResult
             | PumpDeadline::SaveQueued
             | PumpDeadline::CaptureWindow => {
@@ -2896,11 +2931,14 @@ pub(in crate::flow) use plan_summary_driver::{
 pub(super) mod expired_read_driver;
 #[path = "context_read.rs"]
 mod read_driver;
+
+#[path = "context_plan_update.rs"]
+pub(super) mod plan_update_driver;
 #[allow(unused_imports)] // Composed by dependent boot, recall and placement primitives.
 pub(super) use read_driver::{
     BootHead, BootReadBeginError, BootReadBeginRefusal, BootReadCompletion, CancelledRead,
     ReadBeginError, ReadBeginRefusal, ReadCompletion, ReadProgress, ReadRollbackPermit,
-    RecordedRead,
+    RecordedRead, RecordedReadRefusal,
 };
 
 #[path = "context_freshness.rs"]

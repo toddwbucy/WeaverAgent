@@ -200,6 +200,20 @@ pub(in crate::flow::context::worker_startup) fn scenario(name: &str, mode: &str)
     // SAFETY: fcntl returned one fresh owned descriptor.
     let high = unsafe { OwnedFd::from_raw_fd(high) };
     let inherited = high.as_raw_fd();
+    let admission_mode =
+        crate::flow::context::worker_startup::tests::admission_process::is_mode(mode);
+    let relay = admission_mode.then(|| {
+        let (read, write) =
+            nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC | nix::fcntl::OFlag::O_NONBLOCK)
+                .unwrap();
+        // Keep its source above fixed descriptors installed in pre_exec.
+        let high = unsafe { nix::libc::fcntl(write.as_raw_fd(), nix::libc::F_DUPFD_CLOEXEC, 101) };
+        assert!(high >= 101);
+        (std::fs::File::from(read), unsafe {
+            OwnedFd::from_raw_fd(high)
+        })
+    });
+    let relay_fd = relay.as_ref().map(|(_, write)| write.as_raw_fd());
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     command
         .args(["--exact", name, "--ignored", "--nocapture"])
@@ -212,11 +226,20 @@ pub(in crate::flow::context::worker_startup) fn scenario(name: &str, mode: &str)
             if nix::libc::dup2(inherited, crate::RUN_LOCK_DESCRIPTOR) < 0 {
                 return Err(std::io::Error::last_os_error());
             }
+            if let Some(relay) = relay_fd
+                && nix::libc::dup2(relay, crate::RELAY_LIFETIME_DESCRIPTOR) < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
             Ok(())
         });
     }
     let mut child = ChildGuard(command.spawn().unwrap());
     drop((original_lock, high));
+    let mut relay = relay.map(|(read, write)| {
+        drop(write);
+        read
+    });
     let end = Instant::now() + Duration::from_secs(35);
     let control = loop {
         assert!(
@@ -237,7 +260,7 @@ pub(in crate::flow::context::worker_startup) fn scenario(name: &str, mode: &str)
     control
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
-    let mut ancillary = nix::cmsg_space!([i32; 3]);
+    let mut ancillary = nix::cmsg_space!([i32; 4]);
     let mut byte = [0];
     let mut slice = [std::io::IoSliceMut::new(&mut byte)];
     let packet = recvmsg::<()>(
@@ -258,12 +281,52 @@ pub(in crate::flow::context::worker_startup) fn scenario(name: &str, mode: &str)
             descriptors.push(unsafe { OwnedFd::from_raw_fd(fd) });
         }
     }
-    assert_eq!(descriptors.len(), 3);
-    let member_peer = UnixStream::from(descriptors.pop().unwrap());
+    assert_eq!(descriptors.len(), if admission_mode { 4 } else { 3 });
+    let before_enter = admission_mode.then(|| {
+        let state = descriptors.pop().unwrap();
+        let sink = descriptors.pop().unwrap();
+        (sink, state)
+    });
+    let mut member_peer = UnixStream::from(descriptors.pop().unwrap());
     member_peer.set_nonblocking(true).unwrap();
     let mut reader = UnixStream::from(descriptors.pop().unwrap());
     reader.set_nonblocking(true).unwrap();
-    let mut enter_peer = Some(descriptors.pop().unwrap());
+    if let Some(relay) = relay.as_mut() {
+        assert_eq!(
+            relay.read(&mut [0]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "original fd8 remains held before admission"
+        );
+    }
+    let mut enter_peer = if let Some((sink, state)) = before_enter {
+        let result = crate::flow::context::worker_startup::tests::admission_process::before_enter(
+            &root.0,
+            mode,
+            &mut child.0,
+            sink,
+            state,
+            &mut reader,
+            &mut member_peer,
+            end,
+        );
+        if result.is_none() {
+            assert_eq!(
+                relay.as_mut().unwrap().read(&mut [0]).unwrap(),
+                0,
+                "actual failed worker exit releases original fd8"
+            );
+            let lock = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(root.0.join("dispatch-run.lock"))
+                .unwrap();
+            ofd_lock(&lock).expect("actual failed worker exit releases original fd9");
+            return;
+        }
+        result
+    } else {
+        Some(descriptors.pop().unwrap())
+    };
     let seed = std::fs::read_to_string(root.0.join("dispatch-member-seed")).unwrap();
     let mut member = Member::dispatch_double(member_peer, seed, root.0.clone());
     let lock = std::fs::OpenOptions::new()
@@ -711,6 +774,13 @@ pub(in crate::flow::context::worker_startup) fn scenario(name: &str, mode: &str)
     reader.read_to_end(&mut bytes).unwrap();
     member.assert_closed_without_request();
     ofd_lock(&lock).expect("actual driver death released the original inherited fd9 description");
+    if let Some(relay) = relay.as_mut() {
+        assert_eq!(
+            relay.read(&mut [0]).unwrap(),
+            0,
+            "actual driver death releases original inherited fd8 and organ execs retain no copy"
+        );
+    }
     let rows: Vec<serde_json::Value> = bytes
         .split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
