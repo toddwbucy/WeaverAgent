@@ -595,6 +595,7 @@ struct ObserveDuringWait<'a> {
     peer: Option<std::os::fd::OwnedFd>,
     last_wait: Option<(u64, Option<u64>)>,
     sent_ns: Option<u64>,
+    plan_refusal: bool,
 }
 impl crate::flow::clock::PumpIo for ObserveDuringWait<'_> {
     fn now(&mut self) -> std::io::Result<u64> {
@@ -610,7 +611,14 @@ impl crate::flow::clock::PumpIo for ObserveDuringWait<'_> {
         let now = self.now()?;
         self.last_wait = Some((now, deadline));
         if self.peer.is_none() && deadline.is_none_or(|end| end > now) {
-            self.peer = Some(management(self.socket, LifecycleDirective::Observe));
+            self.peer = Some(if self.plan_refusal {
+                crate::flow::context::worker_startup::input::plan::tests::request(
+                    self.socket,
+                    "{ unparsed busy wind-down plan }",
+                )
+            } else {
+                management(self.socket, LifecycleDirective::Observe)
+            });
             self.sent_ns = Some(self.now()?);
         }
         MonotonicIo.wait(interests, deadline)
@@ -715,6 +723,7 @@ fn author_wait(
             peer: None,
             last_wait: None,
             sent_ns: None,
+            plan_refusal: mode.contains("-plan-refusal-"),
         };
         eprintln!(
             "author wait filled: {}",
@@ -734,6 +743,9 @@ fn author_wait(
         let original =
             serde_json::to_value(input.serving.owner.context.barrier.pending().unwrap()).unwrap();
         retained.management = Some(retained.input.take().unwrap().management().ok().unwrap());
+        if io.plan_refusal {
+            pause.store(false, Ordering::SeqCst);
+        }
         let until = Instant::now() + Duration::from_secs(2);
         while retained.management.as_ref().unwrap().progress()
             != super::super::super::management::FoundationManagementProgress::Answered
@@ -743,21 +755,37 @@ fn author_wait(
                 "Observe did not answer during author pressure"
             );
             retained.management.as_mut().unwrap().advance();
+            std::thread::sleep(Duration::from_millis(1));
         }
-        let answer: s::enter::ObservationEnvelope =
-            serde_json::from_slice(&read_packet(&peer).unwrap()).unwrap();
-        assert!(matches!(
-            answer.payload,
-            s::enter::ObservationContent::Answer(s::enter::ObservationAnswer::InTransition { .. })
-        ));
+        let bytes = read_packet(&peer).unwrap();
+        if io.plan_refusal {
+            let answer: OrganEnvelope = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                answer.payload,
+                Payload::Refusal(weaver_types::LifecycleRefusal::OutOfOrder)
+            );
+        } else {
+            let answer: s::enter::ObservationEnvelope = serde_json::from_slice(&bytes).unwrap();
+            assert!(matches!(
+                answer.payload,
+                s::enter::ObservationContent::Answer(
+                    s::enter::ObservationAnswer::InTransition { .. }
+                )
+            ));
+        }
         retained.input = Some(retained.management.take().unwrap().finish().ok().unwrap());
         let input = retained.input.as_mut().unwrap();
         let context = &input.serving.owner.context;
-        assert_eq!(context.pending_author().unwrap().ticket, ticket);
-        assert_eq!(
-            serde_json::to_value(context.barrier.pending().unwrap()).unwrap(),
-            original
-        );
+        if io.plan_refusal {
+            assert!(context.pending_author().is_none());
+            assert!(context.completed_author.is_none());
+        } else {
+            assert_eq!(context.pending_author().unwrap().ticket, ticket);
+            assert_eq!(
+                serde_json::to_value(context.barrier.pending().unwrap()).unwrap(),
+                original
+            );
+        }
         assert_eq!(context.deadlines.get(PumpDeadline::WindDown), Some(bound));
         eprintln!(
             "author wait observed: {}",
@@ -819,5 +847,12 @@ fn author_wait(
         );
     }
     assert!(!rows.iter().any(|row| row["kind"] == "message.user"));
+    if mode.contains("-plan-refusal-") {
+        let refusals: Vec<_> = rows.iter().filter(|row| row["kind"] == "refusal").collect();
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(refusals[0]["payload"]["asked"]["ask"], "plan_update");
+        assert!(refusals[0].get("turn").is_none());
+        assert!(refusals[0].get("causal_parent").is_none());
+    }
     assert!(read_packet(&primary).is_none(), "wind-down is not Left");
 }

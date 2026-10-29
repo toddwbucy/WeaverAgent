@@ -1,6 +1,7 @@
 use super::*;
 use crate::flow::context::input_tests::InputFixture;
 use crate::flow::context::output_tests::{OutputFixture, original, text};
+use weaver_types::{LifecycleAsk, RefusalRecord};
 
 fn ports<I: PumpIo>(io: &mut I) -> PumpPorts<'_, I> {
     PumpPorts {

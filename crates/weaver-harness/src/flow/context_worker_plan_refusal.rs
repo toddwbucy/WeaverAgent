@@ -4,7 +4,7 @@ use super::*;
 use crate::flow::context::RecordingContext;
 use crate::flow::context::serving_observation::ServingObservationAuthor;
 use std::sync::Arc;
-use weaver_types::{ExchangeId, LifecycleAsk, LifecycleRefusal, RefusalRecord};
+use weaver_types::{ExchangeId, LifecycleRefusal};
 
 #[cfg(test)]
 #[path = "context_worker_plan_refusal_tests.rs"]
@@ -47,21 +47,16 @@ impl PlanRefusal {
                 error.to_string(),
             )
         })?;
+        let (author, payload) = ServingObservationAuthor::plan_refusal(context, refusal);
         Ok(Self {
-            author: Arc::new(ServingObservationAuthor::plan_refusal(context, refusal)),
+            author: Arc::new(author),
             original: Some(AuthoredEvent {
                 kind: serving::Kind::Refusal,
                 subsystem: Subsystem::Harness,
                 turn: None,
                 source: AuthoredSource::Runtime,
                 causal_parent: None,
-                payload: Some(serving::Payload::Refusal(
-                    serde_json::value::to_raw_value(&RefusalRecord::Lifecycle {
-                        asked: LifecycleAsk::PlanUpdate,
-                        refusal: refusal.clone(),
-                    })
-                    .expect("typed plan refusal serializes"),
-                )),
+                payload: Some(serving::Payload::Refusal(payload)),
             }),
             returned: StoppedAuthor::default(),
             started: false,
@@ -203,13 +198,34 @@ impl FoundationManagement<'_> {
                     self.input.advance_flags(peer, io)?;
                 } else if self.input.plan_pending() {
                     self.input.advance_plan(peer, io)?;
-                } else if self.input.serving.save.is_some() {
+                } else {
                     self.input.advance_save(io, false)?;
-                } else if matches!(
-                    self.input.stage,
-                    Stage::Checking | Stage::Source | Stage::Engine
-                ) {
-                    self.input.step_with_peer(peer, io)?;
+                    // A queued save can itself be waiting on the turn's
+                    // earlier author. Its mere presence does not own that
+                    // slot or replace the suspended turn's continuation.
+                    if !self.input.save_blocks_turn()
+                        && !self
+                            .input
+                            .serving
+                            .owner
+                            .context
+                            .serving_observation_author_available()
+                    {
+                        if self.input.wind_down_input_progress()
+                            == Some(FoundationInputProgress::WindDown)
+                        {
+                            self.input.advance_wind_down(io)?;
+                        } else if self.input.quiesce_progress()
+                            == Some(FoundationInputProgress::Pending)
+                        {
+                            self.input.advance_quiesce(io)?;
+                        } else if matches!(
+                            self.input.stage,
+                            Stage::Checking | Stage::Source | Stage::Engine
+                        ) {
+                            self.input.step_with_peer(peer, io)?;
+                        }
+                    }
                 }
                 Ok(false)
             }

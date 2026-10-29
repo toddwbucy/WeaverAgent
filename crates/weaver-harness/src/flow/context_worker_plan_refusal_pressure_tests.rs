@@ -22,7 +22,7 @@ impl PumpIo for RecordedExpiry {
     }
 }
 
-fn fill(context: &mut RecordingContext) {
+pub(super) fn fill(context: &mut RecordingContext) {
     let payload =
         serde_json::value::to_raw_value(&serde_json::json!({"fixture":"x".repeat(32_768)}))
             .unwrap();
@@ -53,7 +53,7 @@ fn fill(context: &mut RecordingContext) {
     panic!("trace writer never reached capacity");
 }
 
-fn drain(context: &RecordingContext, reader: &mut UnixStream) -> Vec<u8> {
+pub(super) fn drain(context: &RecordingContext, reader: &mut UnixStream) -> Vec<u8> {
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut bytes = vec![];
     loop {

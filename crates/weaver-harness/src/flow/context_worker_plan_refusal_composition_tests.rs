@@ -9,10 +9,13 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use weaver_types::state_flow::Digest;
-use weaver_types::{Cause, Opener};
+use weaver_types::{Cause, LifecycleAsk, Opener, RefusalRecord};
 
 #[path = "context_worker_plan_refusal_pressure_tests.rs"]
 mod pressure;
+
+#[path = "context_worker_plan_refusal_prior_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod prior;
 
 fn failed_handoff(
     guard: &mut Guard<'_>,
@@ -113,6 +116,28 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     socket: &Path,
     mode: &str,
 ) {
+    if mode.ends_with("-root-author") || mode.ends_with("-queued-save-author") {
+        return prior::management_author(
+            serving,
+            member,
+            reader,
+            socket,
+            mode.ends_with("-queued-save-author"),
+        );
+    }
+    if mode.ends_with("-quiesce-author") {
+        return prior::quiesce(serving, member, reader, socket);
+    }
+    if mode.ends_with("-source-author") || mode.ends_with("-task-author") {
+        return prior::turn(
+            serving,
+            member,
+            reader,
+            socket,
+            mode.ends_with("-task-author"),
+            mode.contains("-queued-"),
+        );
+    }
     reader.set_nonblocking(true).unwrap();
     let earlier_expiry = mode.ends_with("-earlier-expiry");
     let inner = mode.ends_with("-inner") || earlier_expiry;

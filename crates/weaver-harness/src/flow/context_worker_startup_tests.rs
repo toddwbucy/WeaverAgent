@@ -343,7 +343,9 @@ impl Files {
                 headroom_bytes: Some("123456".into()),
             },
             composer: LoopIdentity::compiled("worker"),
-            templates: if mode.starts_with("input-worker-plan-") {
+            templates: if mode.ends_with("-task-author") {
+                super::input::generation::tests::templates()
+            } else if mode.starts_with("input-worker-plan-") {
                 super::input::plan::tests::templates()
             } else if mode.contains("emission") {
                 super::input::generation::emission::tests::templates(mode)
@@ -1174,7 +1176,7 @@ fn circuit(mode: &str) {
             load.state_flow.persistence.snapshot_wait.elapsed_ns = 50_000_000.into();
         }
     }
-    if mode.contains("-flags-queued-save") {
+    if mode.contains("-flags-queued-save") || mode.contains("-plan-refusal-queued-") {
         // This real process case retains a save while the flag member delays;
         // its declared budget is not the fake-clock fixture's millisecond window.
         load.state_flow.persistence.save_wait.elapsed_ns = 5_000_000_000.into();
@@ -1241,7 +1243,7 @@ fn circuit(mode: &str) {
             .then_some(
                 if mode.ends_with("expiry") || mode.ends_with("join-delayed") {
                     1
-                } else if mode.ends_with("-wind-down-author-wait") {
+                } else if mode.contains("-wind-down-") && mode.ends_with("-author-wait") {
                     // Filling the real trace queue consumes this allowance too.
                     // Leave time for Observe and the retained author to finish.
                     15
@@ -2286,6 +2288,34 @@ scenario!(
 scenario!(
     worker_plan_refusal_invalid_cause,
     "input-worker-plan-refusal-cause"
+);
+scenario!(
+    worker_plan_refusal_prior_source_author,
+    "input-worker-plan-refusal-source-author"
+);
+scenario!(
+    worker_plan_refusal_prior_task_author,
+    "input-worker-plan-refusal-task-author"
+);
+scenario!(
+    worker_plan_refusal_queued_save_prior_source_author,
+    "input-worker-plan-refusal-queued-source-author"
+);
+scenario!(
+    worker_plan_refusal_prior_quiesce_author,
+    "input-worker-plan-refusal-quiesce-author"
+);
+scenario!(
+    worker_plan_refusal_prior_root_author,
+    "input-worker-plan-refusal-root-author"
+);
+scenario!(
+    worker_plan_refusal_prior_save_author,
+    "input-worker-plan-refusal-queued-save-author"
+);
+scenario!(
+    worker_plan_refusal_prior_flags_author,
+    "input-worker-plan-save-sqlite-flags-prior-author"
 );
 scenario!(
     worker_plan_refusal_inner_admission,
@@ -5528,6 +5558,10 @@ scenario!(
 scenario!(
     worker_graceful_wind_down_author_wait,
     "input-worker-generation-emission-session-graceful-wind-down-author-wait"
+);
+scenario!(
+    worker_plan_refusal_prior_wind_down_author,
+    "input-worker-generation-emission-session-graceful-wind-down-plan-refusal-author-wait"
 );
 
 scenario!(

@@ -1,6 +1,6 @@
 # Root PlanUpdate admission-refusal account
 
-**Version:** 0.1, 2026-10-29.
+**Version:** 0.2, 2026-10-29.
 **Parent:** Issue 146, state management implementation.
 
 Implements: state-management-spec-07-plan-forward-flags section 2,
@@ -40,7 +40,7 @@ different claim cannot substitute for that receipt.
 
 | Boundary | Owner action |
 | --- | --- |
-| Earlier original or author ticket blocks admission | Run only its original input, flag, root-plan or save continuation as needed to free the slot. Keep the refusal original and interval. |
+| Earlier original or author ticket blocks admission | Run only its original input, flag, root-plan, save, wind-down or Quiesce continuation as needed to free the slot. Keep the refusal original and interval. |
 | Preflight returns the unaccepted event on an owned interrupt | Retain that original for retry after the interrupt's owner settles. A ticket or fatal failure cannot take this route. |
 | Recorder pressure | Resume the same claim and ticket. Stage no answer before its Recorded completion is consumed. |
 | Requester EOF before Recorded | End delivery, retain the accounting duty and its original interval. |
@@ -73,10 +73,110 @@ both existing PlanUpdate and WorldRequest. It introduces no wire variant.
 | step_with_peer | Ordinary input step passes no secondary peer, refusal accounting supplies its live peer while the previous input owner finishes its own author. |
 | Typed lifecycle refusal | Existing PlanUpdate ask, strict RefusalRecord codec, management OrganEnvelope answer and opaque trace payload. No other lifecycle directive gains this trace duty. |
 
-## Evidence and limits
+## Planner review correction
 
-The final source passes 2,239 ordinary harness tests/doctests and 199 types
-tests/doctests. These counts exclude nested child summaries. The harness
+Planner review 5702693036 at 60b37c5e grades one required fix, AP1. The
+repair retains the earlier owner's event, ticket and operation interval while
+its continuation frees the author slot for the rejected root request.
+
+The specific Stage::Turn scenario in the review was not reproduced. In the
+actual API, start_turn enters Source. Source enters Turn only after consuming
+its completed input author. FoundationTurn has no raw author access, and
+into_service returns that already seated input. The task path enters Engine,
+whose original continuation already runs in the blocked-refusal branch. The
+new Source and Engine process cases pass before this runtime correction and
+fail when that common input continuation is removed.
+
+The wider audit reproduced two omitted joins. A queued save may itself wait
+on the source input author. Advancing only the save leaves that input author
+stranded. Wind-down has its own author continuation while the input stage is
+Waiting. The repair advances the save without granting a boundary, checks
+whether the author slot is still held and the save blocks input, then resumes
+the original input, wind-down or Quiesce continuation as applicable. It checks
+the actual retained operation rather than the externally masked progress.
+No generic author resume, new workflow election or deadline renewal is added.
+
+| Earlier owner | Continuation and focused process case |
+| --- | --- |
+| Checked source input | step_with_peer, worker_plan_refusal_prior_source_author |
+| Task input | step_with_peer and Engine, worker_plan_refusal_prior_task_author |
+| Explicit flags read | advance_flags, worker_plan_refusal_prior_flags_author |
+| Earlier root update | advance_plan, worker_plan_refusal_prior_root_author |
+| Save author | advance_save, worker_plan_refusal_prior_save_author |
+| Source author with a queued save | advance_save without a boundary, then step_with_peer, worker_plan_refusal_queued_save_prior_source_author |
+| Wind-down author | advance_wind_down, worker_plan_refusal_prior_wind_down_author |
+| Quiesce author | advance_quiesce, worker_plan_refusal_prior_quiesce_author |
+
+Report and organ-loss observations continue through the existing
+advance_organ_faults call before refusal processing. They are not new
+continuations in this repair. The Checking stage shares step_with_peer, but
+this correction does not claim a separate new Checking-stage instrument.
+
+All eight new cases use the entered worker and actual recorder and management
+sockets. They retain a real earlier author under recorder pressure, then issue
+the rejected root request. The controls remove flags, root, save, input,
+queued-save fallthrough, wind-down and Quiesce continuations separately. All
+seven compile and fail their intended assertions. The input control fails
+both Source and Engine cases. All eight positive cases pass again after
+restoration, with matching hashes for all 820 Rust/configuration files.
+
+AP7 is corrected in the same act. The private observation claim constructs
+one typed refusal payload and returns that RawValue for the event. Its exact
+byte identity check remains, without a second independent serialization.
+
+| Finding | Disposition |
+| --- | --- |
+| AP1 | Corrected joins and protective process evidence above. Planner regrade remains owed. The exact Stage::Turn allegation is not claimed as reproduced. |
+| AP2 | Carry in #405. Measure sustained eager polling with a non-ready transport before changing waits, which must not sleep over a buffered completion. |
+| AP3 | Carry in #405. Nested save cleanup errors still need the common expiry/transport reducer and a joined capture-timeout process case. |
+| AP4 | Carry in #405. Consolidate returned-unaccepted-original recovery across refusal, report and organ-loss authors without retrying admitted or fatal work. |
+| AP5 | Declined on the current source path. management enables ServingOpener on its pristine private peer. step rejects descriptors and invalid opener/position before granting DirectivePending. The alleged non-serving/descriptor handoff cannot reach queue_plan_update through that API. No new runtime case or changed transport policy is claimed. |
+| AP6 | Filed in #405. The strict sent_at comparison agrees with AbsoluteBound::expired using now >= deadline. An explicit send-at-equality instrument remains owed, without a silent global boundary change. |
+| AP7 | One typed serialization supplies both the claim and event. |
+| AP8 | Carry in #405. The reducer's AdminDial guard needs its own protective case. The earlier EOF mutation bought a different guard. |
+| AP9 | Review skills remain unavailable. Manual author reading is not a skill pass. |
+
+The review development record retains failed attempts. The task fixture first
+lacked its required mark template. The flag fixture first started its short
+read interval before filling the recorder, then expected the whole read to
+complete when only its blocking author had finished. The queued save first
+inherited the one-millisecond fixture budget. Corrected fixtures use their
+existing template and measured-wait families. The queued-save and wind-down
+failures against the old runtime are separate from these fixture errors. The
+Quiesce control establishes the need for its continuation after the repair.
+These are correctness instruments, not throughput or retained-memory results.
+
+### Correction gates and evidence
+
+The correction passes 2,239 ordinary harness tests/doctests and 199 types
+tests/doctests, excluding nested child summaries. The harness reports 949
+ignored cases and the same explicit #331 skip. All 47 named worker-plan
+process cases pass, as do the existing wind-down author-wait and graceful
+save/Quiesce pending-author regression cases, 49 process cases total. Both
+affected all-target strict lint gates, lock, formatting, diff and three
+DocsMirror checks pass. The seven review controls and these gates share
+identical hashes for all 820 Rust/configuration files. The eight original
+controls below remain evidence at their initial published source revision.
+
+The correction uses the same private target, pinned toolchain and locked
+Cargo commands as the initial act. Each privileged process case runs in a
+temporary delegated cgroup with actual admin-fixture paths where required.
+No deployed agent is selected, restarted or changed.
+
+The correction evidence deposit is:
+
+`/bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/root-plan-admission-review-20261029`
+
+The PR body supplies the archived commit and verified manifest. The deposit
+retains the source, review patch, source hashes, all gate/process logs, all
+seven mutation diffs and failures, restored checks, failed development
+attempts and their runners. #405 retains the nonblocking review carries.
+This repair awaits Planner regrade, with no production qualification claim.
+
+## Initial published evidence and limits
+
+The initial published head 60b37c5e passes 2,239 ordinary harness tests/doctests
+and 199 types tests/doctests. These counts exclude nested child summaries. The harness
 package run reports 941 ignored cases and explicitly skips known #331. The
 separate worker-plan process run passes all 39 named cases, with both required
 admin-fixture environment variables set. This does not claim all ignored

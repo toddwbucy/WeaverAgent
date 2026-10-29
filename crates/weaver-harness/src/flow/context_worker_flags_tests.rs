@@ -49,6 +49,12 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     if mode.ends_with("unavailable") {
         after.sequence.0 += 1;
     }
+    if mode.ends_with("-prior-author") {
+        crate::flow::context::worker_startup::input::management::plan_refusal::composition_tests::prior::flags(
+            &mut guard, member, reader, socket, plan, after,
+        );
+        return None;
+    }
     let input = guard.input.as_mut().unwrap();
     assert!(input.take_observed_flags().is_none());
     input.observe_flags(plan.clone(), after.clone()).unwrap();

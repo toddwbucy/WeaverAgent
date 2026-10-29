@@ -39,19 +39,21 @@ impl ServingObservationAuthor {
     pub(super) fn plan_refusal(
         context: &RecordingContext,
         refusal: &weaver_types::LifecycleRefusal,
-    ) -> Self {
-        Self {
+    ) -> (Self, Box<serde_json::value::RawValue>) {
+        let payload = serde_json::value::to_raw_value(&weaver_types::RefusalRecord::Lifecycle {
+            asked: weaver_types::LifecycleAsk::PlanUpdate,
+            refusal: refusal.clone(),
+        })
+        .expect("typed plan refusal serializes");
+        let author = Self {
             origin: Arc::clone(&context.read_origin),
             observation: Observation::PlanRefusal {
-                payload: serde_json::to_string(&weaver_types::RefusalRecord::Lifecycle {
-                    asked: weaver_types::LifecycleAsk::PlanUpdate,
-                    refusal: refusal.clone(),
-                })
-                .expect("typed plan refusal serializes"),
+                payload: payload.get().into(),
             },
             ticket: OnceLock::new(),
             sequence: OnceLock::new(),
-        }
+        };
+        (author, payload)
     }
 
     pub(super) fn new(context: &RecordingContext, payload: &trace::SavePointRecord) -> Self {
