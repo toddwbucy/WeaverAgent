@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use weaver_types::{ExchangeId, LifecycleAnswer, LifecycleDirective, TurnFrame};
 
 use super::super::tests::worker;
+#[path = "context_worker_input_close_tests.rs"]
+mod close_tests;
 
 fn packet(fd: i32, value: &OrganEnvelope) {
     let bytes = serde_json::to_vec(value).unwrap();
@@ -26,9 +28,12 @@ fn frame(mode: &str, ordinal: u64) -> OrganEnvelope {
         mode
     };
     let bytes = match mode {
-        "input-malformed" | "input-pressure" | "input-duplicate" | "input-worker" => {
-            b"not JSON".as_slice()
-        }
+        "input-malformed"
+        | "input-pressure"
+        | "input-pressure-deadline"
+        | "input-pressure-send-clock"
+        | "input-duplicate"
+        | "input-worker" => b"not JSON".as_slice(),
         "input-role" => br#"{"text":"Read file.","role":"system"}"#,
         _ => br#"{"text":"Read caf\u00e9."}"#,
     };
@@ -85,6 +90,96 @@ fn worker_input_gate_child() {
             payload: Payload::Answer(LifecycleAnswer::GateReady),
         },
     );
+    if mode.starts_with("input-worker-plan-") && !mode.ends_with("-open-turn") {
+        let flags_turn = mode.contains("-flags-turn-boundary");
+        if flags_turn {
+            let end = Instant::now() + Duration::from_secs(15);
+            while !root.join("flags-turn-request").exists() {
+                assert!(
+                    Instant::now() < end,
+                    "flag fixture never requested gate input"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            packet(port.as_raw_fd(), &frame("input-plan-flags", 101));
+        }
+        // Keep the actual gate idle while root management owns the circuit.
+        // The guard reaps this real fixture child after the assertions.
+        loop {
+            match recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()) {
+                Ok(0) => return,
+                Ok(n) if flags_turn && (mode.ends_with("-stop") || mode.ends_with("-leave")) => {
+                    let answer: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
+                    if mode.ends_with("-stop")
+                        && answer.exchange.ordinal == u64::MAX
+                        && answer.payload == Payload::Directive(LifecycleDirective::Observe)
+                    {
+                        // A private fixture fence on the same ordered socket.
+                        // The parent sends it after Stop settles, so every
+                        // earlier worker packet has reached this observer.
+                        let temporary = root.join("flags-turn-stop-checked.pending");
+                        std::fs::write(&temporary, b"checked\n").unwrap();
+                        std::fs::rename(temporary, root.join("flags-turn-stop-checked")).unwrap();
+                        continue;
+                    }
+                    if answer.payload == Payload::Directive(LifecycleDirective::Lower) {
+                        // Rollback lowers the gate before it closes the retained
+                        // turn in the trace. The gate owns the world's unload
+                        // disposition. Record even an erroneous Stop Lower so
+                        // the parent, rather than this child alone, rejects it.
+                        std::fs::write(root.join("flags-turn-lowered"), b"lower\n").unwrap();
+                        packet(
+                            port.as_raw_fd(),
+                            &OrganEnvelope {
+                                exchange: answer.exchange,
+                                position: Position::Close,
+                                payload: Payload::Answer(LifecycleAnswer::GateStopped),
+                            },
+                        );
+                        return;
+                    }
+                    assert!(
+                        !root.join("flags-turn-close.json").exists(),
+                        "duplicate world close"
+                    );
+                    assert_eq!(answer.exchange, frame("input-plan-flags", 101).exchange);
+                    assert_eq!(answer.position, Position::Close);
+                    assert!(
+                        matches!(answer.payload, Payload::Frame(_)),
+                        "world close: {answer:?}"
+                    );
+                    let temporary = root.join("flags-turn-close.pending");
+                    std::fs::write(&temporary, &bytes[..n]).unwrap();
+                    std::fs::rename(temporary, root.join("flags-turn-close.json")).unwrap();
+                }
+                Ok(n)
+                    if mode.ends_with("-leave-read")
+                        || mode.ends_with("-failed-read")
+                        || mode.ends_with("-flags-leave")
+                        || mode.ends_with("-flags-failed")
+                        || mode.ends_with("-flags-recorded-failed") =>
+                {
+                    let lower: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
+                    assert_eq!(lower.payload, Payload::Directive(LifecycleDirective::Lower));
+                    packet(
+                        port.as_raw_fd(),
+                        &OrganEnvelope {
+                            exchange: lower.exchange,
+                            position: Position::Close,
+                            payload: Payload::Answer(LifecycleAnswer::GateStopped),
+                        },
+                    );
+                    return;
+                }
+                Ok(n) => panic!(
+                    "unexpected gate packet in {mode}: {}",
+                    String::from_utf8_lossy(&bytes[..n])
+                ),
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(error) => panic!("idle root fixture gate: {error}"),
+            }
+        }
+    }
     if mode == "input-fault" {
         packet(
             3,
@@ -195,7 +290,7 @@ fn worker_input_gate_child() {
         std::fs::write(root.join("election-queued.json"), &raw).unwrap();
         assert_eq!(send(3, &raw, MsgFlags::MSG_NOSIGNAL), Ok(raw.len()));
     }
-    if mode == "input-pressure"
+    if mode.starts_with("input-pressure")
         || mode == "input-stop-gate-pressure"
         || mode.contains("final-manual-gate-pressure")
         || mode.contains("final-manual-stop-after")
@@ -514,7 +609,7 @@ pub(in super::super) fn exercise(
         return;
     }
     let mut pressure = false;
-    if mode == "input-pressure" {
+    if mode.starts_with("input-pressure") {
         let fd = guard.input().serving.owner.gate.fd().as_raw_fd();
         let mut count = 0;
         loop {
@@ -535,7 +630,7 @@ pub(in super::super) fn exercise(
     for _ in 0..5000 {
         let owner = guard.input();
         let progress = owner.advance_with_io(&mut CircuitIo(clock));
-        if mode == "input-pressure" && owner.send.as_ref().is_some_and(|s| !s.sent()) {
+        if mode.starts_with("input-pressure") && owner.send.as_ref().is_some_and(|s| !s.sent()) {
             assert_eq!(progress, FoundationInputProgress::Pending);
             assert!(
                 !owner
@@ -557,6 +652,19 @@ pub(in super::super) fn exercise(
                     .is_none()
             );
             pressure = true;
+            if mode != "input-pressure" {
+                close_tests::failed_send(owner, clock, root, mode);
+                return;
+            }
+            assert!(
+                owner
+                    .serving
+                    .owner
+                    .context
+                    .deadlines
+                    .get(super::super::super::PumpDeadline::Decision)
+                    .is_some()
+            );
             std::fs::write(root.join("drain"), b"yes").unwrap();
         }
         if mode == "input-silent"

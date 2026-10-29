@@ -432,14 +432,36 @@ fn halt_gate_matching_result_before_interrupt_and_later_eof_keeps_its_outcome() 
             );
         }
         start(&mut fx, &port);
+        assert!(port.failure().is_none());
         drop(peer);
-        let _ = port.try_receive();
-        let _ = port.try_receive();
-        assert!(port.failure().is_some());
+        // CLOEXEC closes any concurrent fork's inherited copy only at exec,
+        // and an interrupted status probe is not EOF. Wait for the actual
+        // terminal observation under a fixture watchdog, without advancing the
+        // run's fake clock or accepting a missing EOF as a successful test.
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while port.failure().is_none() {
+            let _ = port.try_receive();
+            assert!(
+                std::time::Instant::now() < end,
+                "closed gate peer did not produce EOF"
+            );
+            if port.failure().is_none() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        }
+        let failure = port.failure().unwrap();
+        assert_eq!(failure.fault, crate::ChannelFault::Closed);
+        assert_eq!(failure.detail, "packet peer closed");
+        assert_eq!(failure.errno, None);
         assert_eq!(advance(&mut fx, &mut port), Progress::Terminal);
         let context = &fx.output.input.run.context;
         let (terminal, _) = context.halt_gate_terminal().unwrap();
-        assert!(matches!(terminal.outcome, Some(ToolOutcome::Result { .. })));
+        assert_eq!(
+            terminal.outcome,
+            Some(ToolOutcome::Result {
+                content: "whole result".into()
+            })
+        );
         assert!(terminal.reason.is_none());
         assert!(context.halt_gate().unwrap().interrupt().is_none());
     }

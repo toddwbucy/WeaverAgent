@@ -112,6 +112,11 @@ impl FoundationRollback<'_> {
     pub fn unload_sequence(&self) -> Option<u64> {
         self.unload_sequence
     }
+    /// Only the retained completed rollback receipt permits ordinary exit.
+    pub fn process_exit(&self) -> Option<crate::FoundationProcessExit> {
+        (self.progress() == FoundationRollbackProgress::Closed)
+            .then_some(crate::FoundationProcessExit::Success)
+    }
     pub(super) fn enter_window(&self) -> AbsoluteBound {
         self.enter
     }

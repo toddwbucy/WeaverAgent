@@ -72,6 +72,14 @@ impl FailedEnterResources {
         self.decode_present()
     }
     #[cfg(test)]
+    pub(in crate::flow::context) fn end_spu_for_test(&mut self) {
+        self.spu
+            .as_mut()
+            .expect("actual admitted test SPU")
+            .child
+            .stop_at_cap();
+    }
+    #[cfg(test)]
     pub(super) fn poll_startup_test_children(&mut self) -> bool {
         self.poll_children()
     }
@@ -374,6 +382,19 @@ impl FailedEnterResources {
     }
     pub(in crate::flow) fn spu_child(&self) -> Option<ChildState> {
         self.spu.as_ref().map(|spu| spu.child.state())
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn children_ended_or_signalled_for_test(&self) -> bool {
+        [
+            self.classifier.as_ref(),
+            self.spu.as_ref().map(|spu| &spu.child),
+        ]
+        .into_iter()
+        .flatten()
+        .all(|child| {
+            matches!(child.state(), ChildState::Reaped(_))
+                || matches!(child.kill_attempt(), Some(Ok(())))
+        })
     }
     pub(in crate::flow::context) fn child_failures(&self) -> [Option<String>; 2] {
         [
@@ -746,6 +767,20 @@ impl FailedRunCleanup {
 
     pub(in crate::flow::context) fn serving_rollback(&self) -> bool {
         self.rollback_scope.is_some()
+    }
+
+    /// S9 already settled Lower and the prior Leave. A new organ failure uses
+    /// its existing halt bound, never that ended Leave's deadline.
+    pub(in crate::flow::context) fn after_resting(
+        context: RecordingContext,
+        resources: FailedEnterResources,
+        admit_reply: Option<ReceivedOrgan>,
+    ) -> Self {
+        let mut owner =
+            Self::after_expired_rollback(context, resources, None, None, None, admit_reply);
+        owner.serving = true;
+        owner.rollback_scope = Some(RollbackServingScope::default());
+        owner
     }
 
     fn new(context: RecordingContext, mut resources: FailedEnterResources, serving: bool) -> Self {

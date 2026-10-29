@@ -33,6 +33,9 @@ use super::ste100_socket::{AdmissionPoll, SocketPort};
 const SOURCE_COUNT: usize = 11;
 const CONTROL_BYTES: usize = 256;
 
+#[path = "pump_plan.rs"]
+pub(super) mod plan;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PumpDeadline {
     Enter,
@@ -50,6 +53,8 @@ pub(super) enum PumpDeadline {
     StateControl,
     /// A silent secondary admin dial, owned by the accepted Leave.
     AdminRead,
+    /// Delivery uses only the remainder of the accepted root update window.
+    PlanAnswer,
     /// Snapshot/finished missing results require cleanup, not immediate halt.
     CaptureResult,
     /// The unchanged publication window, retained separately from leg waits.
@@ -113,6 +118,8 @@ pub(super) enum PumpStep {
     Deadline {
         key: PumpDeadline,
         bound: AbsoluteBound,
+        /// Actual validated clock sample which observed this expiry.
+        observed_ns: u64,
     },
     Idle,
 }
@@ -177,6 +184,35 @@ enum ListenProgress {
 }
 
 impl LifecycleListener {
+    fn require_diagnostic(&self) -> Result<(), Failure> {
+        if self.held.is_some() || self.failure.is_some() {
+            return Err(invalid_failure(
+                "Diagnostic handoff requires an idle listener",
+            ));
+        }
+        Ok(())
+    }
+
+    fn prepare_diagnostic(&mut self) -> Result<(), Failure> {
+        self.require_diagnostic()?;
+        let flags = fcntl(self.listener.as_fd(), FcntlArg::F_GETFL).map_err(io_failure)?;
+        fcntl(
+            self.listener.as_fd(),
+            FcntlArg::F_SETFL(OFlag::from_bits_retain(flags) & !OFlag::O_NONBLOCK),
+        )
+        .map_err(io_failure)?;
+        Ok(())
+    }
+
+    pub(super) fn into_diagnostic(mut self) -> CoordinationListener {
+        assert!(
+            self.held.is_none() && self.failure.is_none(),
+            "prepared Diagnostic listener"
+        );
+        self.listener.diagnostic_wire(true);
+        self.listener
+    }
+
     pub(super) fn new(listener: CoordinationListener) -> Result<Self, Failure> {
         let flags = fcntl(listener.as_fd(), FcntlArg::F_GETFL).map_err(io_failure)?;
         fcntl(
@@ -350,10 +386,53 @@ pub(super) struct LifecyclePeer {
 }
 
 impl LifecyclePeer {
+    fn require_diagnostic(&self) -> Result<(), Failure> {
+        if self.held.is_some()
+            || self.capture_held.is_some()
+            || self.wire.is_some()
+            || self.failure.is_some()
+            || self.zero_received
+            || self.projection != LifecycleProjection::Legacy
+            || !self.sender.idle_for_diagnostic()
+        {
+            return Err(invalid_failure(
+                "Diagnostic handoff requires the idle original peer",
+            ));
+        }
+        Ok(())
+    }
+
+    fn prepare_diagnostic(&mut self) -> Result<(), Failure> {
+        self.require_diagnostic()?;
+        let flags = fcntl(self.fd(), FcntlArg::F_GETFL).map_err(io_failure)?;
+        fcntl(
+            self.fd(),
+            FcntlArg::F_SETFL(OFlag::from_bits_retain(flags) & !OFlag::O_NONBLOCK),
+        )
+        .map_err(io_failure)?;
+        Ok(())
+    }
+
+    pub(super) fn into_diagnostic(self) -> OrganChannel {
+        OrganChannel::diagnostic_from_owned(self.sender.into_diagnostic_fd())
+    }
+
+    /// Transfer the sole retained handle to this socket end, as for from_owned.
     pub(super) fn from_channel(channel: OrganChannel) -> Result<Self, Failure> {
         Self::from_owned(channel.into_fd())
     }
+    /// The caller must retain no duplicate of this socket end. O_NONBLOCK belongs
+    /// to the open file description, so acquiring or changing mode also affects
+    /// any duplicate, including one inherited by another process.
     pub(super) fn from_owned(end: OwnedFd) -> Result<Self, Failure> {
+        // Every admission path acquires nonblocking mode here, including the
+        // original peer returned by Diagnostic after a pre-load refusal.
+        let flags = fcntl(end.as_fd(), FcntlArg::F_GETFL).map_err(io_failure)?;
+        fcntl(
+            end.as_fd(),
+            FcntlArg::F_SETFL(OFlag::from_bits_retain(flags) | OFlag::O_NONBLOCK),
+        )
+        .map_err(io_failure)?;
         Ok(Self {
             sender: OrganPort::from_owned(end)?,
             held: None,
@@ -562,6 +641,18 @@ impl LifecyclePeer {
     }
     pub(super) fn owns_send(&self, send: &super::pump_transport::OrganSend) -> bool {
         send.belongs_to(&self.sender)
+    }
+
+    pub(super) fn withdraw_pending(
+        &mut self,
+        send: &super::pump_transport::OrganSend,
+    ) -> Result<Option<OrganEnvelope>, Failure> {
+        self.live()?;
+        let answer = self.sender.withdraw_tracked_pending(send)?;
+        if answer.is_some() {
+            self.enter_ready_guard = false;
+        }
+        Ok(answer)
     }
 
     pub(super) fn withdraw_capture_pending(
@@ -881,7 +972,11 @@ impl CommonPump {
         Ok(deadlines
             .expired(now)
             .min_by_key(|(_, bound)| bound.deadline_ns())
-            .map(|(key, bound)| PumpStep::Deadline { key, bound }))
+            .map(|(key, bound)| PumpStep::Deadline {
+                key,
+                bound,
+                observed_ns: now,
+            }))
     }
 
     /// No completion is consumed here, including a complete result that arrives

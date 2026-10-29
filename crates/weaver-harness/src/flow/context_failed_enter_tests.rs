@@ -13,7 +13,7 @@ pub(in crate::flow::context) fn take_context(fx: &mut Fixture) -> RecordingConte
     // never move an owner out through unsafe code or erase its original fields.
     let (sink, _reader) = UnixStream::pair().unwrap();
     let (state, _peer) = UnixStream::pair().unwrap();
-    let replacement = RecordingContext::new(
+    let replacement = RecordingContext::admit(
         sink.into(),
         StateChannel::new(
             state,

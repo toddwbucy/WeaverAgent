@@ -30,6 +30,84 @@ const _: fn() = || {
 const TEXT: &str = "Read caf\u{e9}.";
 const SCHEME: &str = "fixture-read/1";
 
+fn input_refusal(slot: &InputSlot) -> InputRefusal {
+    let Some(Refusal::Input(refusal)) = slot.refusal() else {
+        panic!("expected a shape or language refusal");
+    };
+    refusal
+}
+
+#[test]
+fn no_residency_precedes_parsing_and_waits_for_its_record_before_each_close() {
+    let mut slot = input_slot();
+    for (index, octets) in [b"\xffnot JSON".as_slice(), br#"{"text":"Read file."}"#]
+        .into_iter()
+        .enumerate()
+    {
+        let frame = TurnFrame::carry_from(octets, 42);
+        let offered = Sequence(10 + index as u64 * 2);
+        slot.begin(frame.clone(), bound()).unwrap();
+        assert!(slot.refusal().is_none());
+        slot.offered_recorded(offered, true).unwrap();
+        assert_eq!(slot.frame(), Some(&frame));
+        assert!(slot.current.as_ref().unwrap().text.is_none());
+        assert_eq!(slot.refusal(), Some(Refusal::NoResidency));
+        assert_eq!(
+            slot.refusal().unwrap().record(),
+            RefusalRecord::Lifecycle {
+                asked: LifecycleAsk::WorldRequest,
+                refusal: LifecycleRefusal::NoResidency
+            }
+        );
+        assert!(slot.check_operation().is_none());
+        assert!(slot.take_accepted().is_none());
+        assert!(slot.close_frame().is_none());
+        assert!(!slot.gate_may_disarm());
+        slot.refusal_recorded(Sequence(offered.0 + 1)).unwrap();
+        assert!(slot.gate_may_disarm());
+        assert_eq!(
+            slot.close_frame().unwrap(),
+            TurnFrame::carry(br#"{"kind":"refused","reason":"no model is resident"}"#)
+        );
+        assert!(slot.finish().is_err());
+        slot.response_sent().unwrap();
+        slot.finish().unwrap();
+    }
+}
+
+#[test]
+fn no_residency_can_replace_only_an_unsubmitted_uncancelled_input() {
+    let mut slot = input_slot();
+    offered(&mut slot);
+    slot.refuse_no_residency();
+    assert_eq!(slot.refusal(), Some(Refusal::NoResidency));
+    assert!(slot.check_operation().is_none());
+    slot.cancel().unwrap();
+    slot.refuse_no_residency();
+    assert_eq!(slot.snapshot().unwrap().state, InputState::Cancelled);
+    slot.refusal_recorded(Sequence(2)).unwrap();
+    assert_eq!(
+        slot.close_frame().unwrap(),
+        TurnFrame::carry(br#"{"kind":"stopped","reason":"The agent is leaving."}"#)
+    );
+
+    let mut slot = input_slot();
+    let _operation = checking(&mut slot);
+    let before = slot.snapshot();
+    slot.refuse_no_residency();
+    assert_eq!(slot.snapshot(), before);
+    assert!(slot.refusal().is_none());
+    assert!(slot.close_frame().is_none());
+    assert!(!slot.gate_may_disarm());
+
+    let mut slot = input_slot();
+    slot.begin(frame(), bound()).unwrap();
+    slot.cancel().unwrap();
+    slot.offered_recorded(Sequence(1), true).unwrap();
+    assert_eq!(slot.snapshot().unwrap().state, InputState::Cancelled);
+    assert!(slot.refusal().is_none());
+}
+
 fn input_slot() -> InputSlot {
     InputSlot::new("run".into(), SCHEME.into()).unwrap()
 }
@@ -47,7 +125,7 @@ fn frame() -> TurnFrame {
 
 fn offered(slot: &mut InputSlot) {
     slot.begin(frame(), bound()).unwrap();
-    slot.offered_recorded(Sequence(1)).unwrap();
+    slot.offered_recorded(Sequence(1), false).unwrap();
 }
 
 fn checking(slot: &mut InputSlot) -> CheckOperation {
@@ -276,10 +354,10 @@ fn original_frame_is_offered_before_any_decode_or_shape_refusal() {
     };
     assert_eq!(payload.input_id.0, 1);
     assert_eq!(payload.octets, frame.octets);
-    slot.offered_recorded(Sequence(8)).unwrap();
+    slot.offered_recorded(Sequence(8), false).unwrap();
     assert!(slot.offered_event().is_none());
     assert_eq!(
-        slot.refusal().unwrap().case,
+        input_refusal(&slot).case,
         InputRefusalCase::InvalidInputShape
     );
     assert!(!slot.gate_may_disarm());
@@ -321,9 +399,9 @@ fn every_role_and_malformed_shape_is_refused_without_a_check() {
         let mut slot = input_slot();
         slot.begin(TurnFrame::carry_from(bytes, 1001), bound())
             .unwrap();
-        slot.offered_recorded(Sequence(1)).unwrap();
+        slot.offered_recorded(Sequence(1), false).unwrap();
         assert_eq!(
-            slot.refusal().unwrap().case,
+            input_refusal(&slot).case,
             InputRefusalCase::InvalidInputShape,
             "{bytes:?}"
         );
@@ -464,7 +542,7 @@ fn correct_rejection_waits_for_its_refusal_record_and_never_mints_a_token() {
     slot.accept_completion(operation.clone(), reply.clone(), None)
         .unwrap();
     assert_eq!(slot.current.as_ref().unwrap().reply.as_ref(), Some(&reply));
-    let refusal = slot.refusal().unwrap();
+    let refusal = input_refusal(&slot);
     assert_eq!(refusal.detail, "the exact classified defect");
     assert_eq!(refusal.case, InputRefusalCase::NonSte100);
     assert_eq!(
@@ -487,7 +565,7 @@ fn cancellation_before_submit_keeps_the_original_offer_and_deadline() {
         let mut slot = input_slot();
         slot.begin(frame(), bound()).unwrap();
         if !before_offer_record {
-            slot.offered_recorded(Sequence(1)).unwrap();
+            slot.offered_recorded(Sequence(1), false).unwrap();
         }
         slot.cancel().unwrap();
         assert!(slot.check_operation().is_none());
@@ -496,7 +574,7 @@ fn cancellation_before_submit_keeps_the_original_offer_and_deadline() {
         if before_offer_record {
             assert!(slot.offered_event().is_some());
             assert!(slot.close_frame().is_none());
-            slot.offered_recorded(Sequence(1)).unwrap();
+            slot.offered_recorded(Sequence(1), false).unwrap();
         }
         assert_eq!(
             slot.close_frame().unwrap().octets().unwrap(),
@@ -616,7 +694,7 @@ fn input_counter_stops_at_its_checked_limit_without_wrapping() {
     slot.next_id = Some(u64::MAX);
     slot.begin(frame(), bound()).unwrap();
     assert_eq!(slot.snapshot().unwrap().input_id.0, u64::MAX);
-    slot.offered_recorded(Sequence(1)).unwrap();
+    slot.offered_recorded(Sequence(1), false).unwrap();
     slot.cancel().unwrap();
     slot.response_sent().unwrap();
     slot.finish().unwrap();
@@ -693,7 +771,7 @@ fn lost_response_keeps_checks_owed_and_never_claims_a_send() {
 fn a_recorded_grant_for_another_offer_cannot_authorize_this_input() {
     let mut slot = input_slot();
     slot.begin(frame(), bound()).unwrap();
-    slot.offered_recorded(Sequence(2)).unwrap();
+    slot.offered_recorded(Sequence(2), false).unwrap();
     let operation = slot.check_operation().unwrap();
     slot.submitted(1.into()).unwrap();
     let mut other_offer = operation.clone();
@@ -728,7 +806,7 @@ fn cancellation_keeps_a_pending_refusal_author_and_its_cancelled_disposition() {
         } else {
             slot.begin(TurnFrame::carry_from(b"{}", 1001), bound())
                 .unwrap();
-            slot.offered_recorded(Sequence(1)).unwrap();
+            slot.offered_recorded(Sequence(1), false).unwrap();
         }
         let retained_refusal = slot.refusal().unwrap();
         slot.cancel().unwrap();

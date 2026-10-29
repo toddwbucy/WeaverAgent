@@ -60,6 +60,8 @@ mod serving_leave;
 mod serving_load;
 #[allow(dead_code)]
 mod serving_observe;
+#[allow(dead_code)]
+mod serving_plan;
 mod stop_exchange;
 // Complete replacement component, inactive until FOUNDATION-TRANSITION cutover.
 #[allow(dead_code)]
@@ -78,6 +80,8 @@ mod verbs;
 /// item C2.9).
 #[cfg(test)]
 mod scratch;
+#[cfg(test)]
+mod test_isolation;
 
 use std::path::PathBuf;
 
@@ -248,6 +252,10 @@ fn main() {
     // which sudo relays, cannot end a verb part way.
     start::ignore_terminating_signals();
     let outcome = run();
+    finish_command(outcome)
+}
+
+fn finish_command(outcome: Result<LifecycleAnswer, LifecycleRefusal>) -> ! {
     // **The answer is one JSON object on standard output and the exit status
     // agrees with it.** Zero exits an answer and a non-zero status exits a
     // refusal, so a shell reads the status and a tool reads the object and the
@@ -299,6 +307,20 @@ fn cause_from(sudo_uid: Option<&std::ffi::OsStr>) -> Result<weaver_types::Cause,
 }
 
 fn run() -> Result<LifecycleAnswer, LifecycleRefusal> {
+    run_arguments(std::env::args().skip(1).collect(), false)
+}
+
+/// Replacement command entry, held with the paired serving dispatcher. The
+/// active binary calls run above; this is not an alternate runtime switch.
+#[allow(dead_code)]
+fn run_foundation_arguments(arguments: Vec<String>) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    run_arguments(arguments, true)
+}
+
+fn run_arguments(
+    arguments: Vec<String>,
+    foundation: bool,
+) -> Result<LifecycleAnswer, LifecycleRefusal> {
     // **Authorization is the kernel's, and what this crate checks is the
     // name.** The invocation runs as root or performs nothing: no predicate,
     // no allow set, and no deny set, the operator being the party the kernel
@@ -309,8 +331,17 @@ fn run() -> Result<LifecycleAnswer, LifecycleRefusal> {
     }
     // The cause is judged before any verb, so a malformed one refuses having
     // touched nothing.
-    cause_from(std::env::var_os("SUDO_UID").as_deref())?;
-    let request = surface::parse_arguments(std::env::args().skip(1))?;
+    let cause = cause_from(std::env::var_os("SUDO_UID").as_deref())?;
+    let request = if foundation {
+        surface::parse_foundation_arguments(arguments).inspect_err(|_| {
+            diag!("{}", surface::FOUNDATION_HELP);
+        })?
+    } else {
+        surface::parse_arguments(arguments)?
+    };
+    if matches!(request, surface::Request::PlanUpdate(_)) && cause.uid != 0 {
+        return Err(LifecycleRefusal::Unauthorized);
+    }
     // **A refusal before the agent's root is admitted has no admin.log to
     // reach**, per Spec section 8: it goes to standard error alone.
     let forced = matches!(request, surface::Request::ForceUnload(_));
@@ -327,11 +358,21 @@ fn dispatch(
     config: &ServiceConfig,
     request: surface::Request,
 ) -> Result<LifecycleAnswer, LifecycleRefusal> {
+    dispatch_with_plan(config, request, serving_plan::update)
+}
+
+fn dispatch_with_plan(
+    config: &ServiceConfig,
+    request: surface::Request,
+    plan: impl FnOnce(&ServiceConfig, &AgentName) -> Result<LifecycleAnswer, LifecycleRefusal>,
+) -> Result<LifecycleAnswer, LifecycleRefusal> {
     admissible(config, request.agent())?;
     // **The run directory is made before either lock is taken**, every verb's
     // first act after the root's admission, per Spec section 3, under a
     // coordination root judged closed first.
-    prepare_run_directory(config, 0)?;
+    if !matches!(request, surface::Request::PlanUpdate(_)) {
+        prepare_run_directory(config, 0)?;
+    }
     let (verb, outcome) = match request {
         surface::Request::Validate(agent) => ("validate", validate(config, &agent)),
         surface::Request::Load(agent) => ("load", load(config, &agent)),
@@ -341,6 +382,7 @@ fn dispatch(
         surface::Request::SavePoint(agent) => ("save-point", save_point(config, &agent)),
         surface::Request::Restore(agent) => ("restore", restore(config, &agent)),
         surface::Request::ForceUnload(_) => ("force-unload", force_unload(config)),
+        surface::Request::PlanUpdate(agent) => ("plan-update", plan(config, &agent)),
     };
     record(
         config,
@@ -1294,6 +1336,7 @@ fn load(config: &ServiceConfig, agent: &AgentName) -> Result<LifecycleAnswer, Li
     let mut standing = Standing::default();
     match run_load(config, agent, &mut standing) {
         Ok(()) => Ok(LifecycleAnswer::State {
+            plan: None,
             state: weaver_types::AgentState::Idle,
             load: None,
             constituents: Vec::new(),
@@ -2254,11 +2297,13 @@ fn show(config: &ServiceConfig) -> Result<LifecycleAnswer, LifecycleRefusal> {
             VerbAction::ShowUnloaded => unloaded_by_ladder(config)?,
             VerbAction::ShowWorkersWord => match seen {
                 Seen::RunLockHeld(WorkerSeen::Idle) => LifecycleAnswer::State {
+                    plan: None,
                     state: weaver_types::AgentState::Idle,
                     load,
                     constituents: constituents(&run_directory),
                 },
                 Seen::RunLockHeld(WorkerSeen::Active) => LifecycleAnswer::State {
+                    plan: None,
                     state: weaver_types::AgentState::Active,
                     load,
                     constituents: constituents(&run_directory),
@@ -2410,6 +2455,7 @@ fn unload_within(
         | verb_table::VerbAction::RefuseUnanswered
         | verb_table::VerbAction::Start
         | verb_table::VerbAction::DirectSavePoint
+        | verb_table::VerbAction::DirectPlanUpdate
         | verb_table::VerbAction::NameForNextLoad
         | verb_table::VerbAction::ShowUnloaded
         | verb_table::VerbAction::ShowWorkersWord
@@ -2809,6 +2855,7 @@ fn verb_of(forced: bool) -> &'static str {
 /// The answer an unload gives where the run has ended.
 fn unloaded_answer() -> LifecycleAnswer {
     LifecycleAnswer::State {
+        plan: None,
         state: weaver_types::AgentState::Unloaded,
         load: None,
         constituents: Vec::new(),
@@ -2860,12 +2907,34 @@ impl LeaveAnswer {
 /// pending), `SavePointNotTaken` (S9), `ActivityNotAtRest` and
 /// `Unauthorized`; any other follows the unwind.
 fn follows_the_unwind(refusal: &LifecycleRefusal) -> bool {
-    !matches!(
+    !standing_leave_refusal(refusal)
+}
+
+fn standing_leave_refusal(refusal: &LifecycleRefusal) -> bool {
+    matches!(
         refusal,
         LifecycleRefusal::OutOfOrder
             | LifecycleRefusal::SavePointNotTaken { .. }
             | LifecycleRefusal::ActivityNotAtRest
             | LifecycleRefusal::Unauthorized
+    )
+}
+
+/// Paired serving capture accepts only the failed-unwind outcomes in ADMIN-SAVE.
+/// FailedRun has no current worker producer; retain it as defensive evidence,
+/// never as authority for the publisher's artifact identities or locations.
+fn terminal_unwind_refusal(refusal: &weaver_types::state_flow::capture::CaptureRefusal) -> bool {
+    use weaver_types::state_flow::capture::{CaptureRefusal, SaveRefusal};
+    matches!(
+        refusal,
+        CaptureRefusal::Lifecycle(
+            LifecycleRefusal::Malformed
+                | LifecycleRefusal::DescriptorsUnusable
+                | LifecycleRefusal::OrganRefused {
+                    organ: weaver_types::RefusingOrgan::Gate,
+                    ..
+                }
+        ) | CaptureRefusal::Save(SaveRefusal::FailedRun { .. })
     )
 }
 
