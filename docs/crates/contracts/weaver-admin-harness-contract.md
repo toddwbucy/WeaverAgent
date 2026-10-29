@@ -409,7 +409,10 @@ placed, the promise above carrying no invocation exception.
 
 **Observe the run.** Opened by admin, added 2026-09-04 per issue #435 as the observation
 exchange this contract's parties named as owed on 2026-08-06. Admin asks what stands and
-carries nothing. The harness answers `State` from whichever position it holds: before
+carries nothing. During pending Diagnostic setup or while a refused partial Diagnostic
+run is retained for rollback, the harness answers `InTransition` under the setup rule
+above and harness Spec 6.1.1. A before-load refusal retaining no run keeps `Unloaded`.
+Outside those setup positions, the harness answers `State` from its position: before
 any enter, `Unloaded` and no load. Entered, `Idle` where no turn is in flight and
 `Active` where one is, with the load's facts beside the state, the session, the run, the
 declaration's digest as admin read it at the enter, the artifact, the elections the load

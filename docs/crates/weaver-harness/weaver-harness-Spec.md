@@ -1370,7 +1370,10 @@ deferred with the decode seam, per section 8, and the trace semantics are settle
 way, which is what `basic-inference-loop` section 7 already records.
 
 **Observe answers from any position and authors nothing**, per
-`weaver-admin-harness-contract` section 3 as of 2026-09-04. Before an enter the answer
+`weaver-admin-harness-contract` section 3 as of 2026-09-04. During pending Diagnostic
+setup or while a refused partial Diagnostic run is retained for rollback, it answers
+`InTransition` under section 6.1.1. A before-load refusal retaining no run keeps
+`Unloaded`. Outside those setup positions, before an enter the answer
 is `Unloaded` with no load. Entered, it is `Idle` where no turn key stands in flight and
 `Active` where one does, with `LoadFacts` beside it read from the run: the session and
 run, the declaration's digest the enter carried, the artifact, the elections, the store
