@@ -34,7 +34,13 @@ use weaver_types::{MAX_ENVELOPE_BYTES, OrganEnvelope};
 #[allow(dead_code)]
 #[path = "channel_capture.rs"]
 mod capture;
-pub(crate) use capture::ReceivedCapture;
+pub(crate) use capture::{CaptureSendFailure, ReceivedCapture};
+#[path = "channel_plan.rs"]
+mod plan;
+#[cfg(test)]
+pub(crate) use capture::{TestCaptureSend, with_before_capture_send};
+#[cfg(test)]
+pub(crate) use plan::with_plan_deadlines;
 
 /// A fault below the exchange layer on the coordination channel.
 #[derive(Debug, Clone, PartialEq, Eq)]

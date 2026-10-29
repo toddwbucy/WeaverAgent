@@ -152,6 +152,13 @@ pub(super) struct MarksTransaction {
     cancelled_event: Option<AuthoredEvent>,
 }
 
+/// One allocator slot excludes every competing turn, plan, cut and capture.
+/// The task and root update cannot each hold an allocator at the same time.
+pub(super) enum MarkOperation {
+    Task(Box<MarksTransaction>),
+    Plan(Box<super::plan_update_driver::RootPlanTransaction>),
+}
+
 impl MarksTransaction {
     pub(super) fn has_original_wait(&self, current: Option<AbsoluteBound>) -> bool {
         current == Some(self.bound)
@@ -200,18 +207,34 @@ fn mark_content_matches(
 }
 
 impl RecordingContext {
+    pub(super) fn task_work(&self) -> Option<&MarksTransaction> {
+        match self.marks.as_ref()? {
+            MarkOperation::Task(work) => Some(work),
+            MarkOperation::Plan(_) => None,
+        }
+    }
+    fn task_work_mut(&mut self) -> Option<&mut MarksTransaction> {
+        match self.marks.as_mut()? {
+            MarkOperation::Task(work) => Some(work),
+            MarkOperation::Plan(_) => None,
+        }
+    }
     pub(super) fn marks_blocks_external(&self) -> bool {
-        self.marks.as_ref().is_some_and(|work| !work.driving)
+        match self.marks.as_ref() {
+            Some(MarkOperation::Task(work)) => !work.driving,
+            Some(MarkOperation::Plan(work)) => !work.driving,
+            None => false,
+        }
     }
 
     pub(super) fn marks_read_allowed(&self, turn: Option<&TurnRef>) -> bool {
-        self.marks.as_ref().is_some_and(|work| {
+        self.task_work().is_some_and(|work| {
             work.driving && work.stage == Stage::Read && turn == Some(&work.turn)
         })
     }
 
     pub(super) fn marks_filing_allowed(&self, key: PumpDeadline) -> bool {
-        self.marks.as_ref().is_some_and(|work| {
+        self.task_work().is_some_and(|work| {
             work.driving
                 && work.stage == Stage::Mark
                 && key == PumpDeadline::Decision
@@ -315,7 +338,7 @@ impl RecordingContext {
             let failure = self.flow_failed(io, failure);
             return Err(error(input, BeginTaskRefusal::WrongPhase, Some(failure)));
         }
-        self.marks = Some(MarksTransaction {
+        self.marks = Some(MarkOperation::Task(Box::new(MarksTransaction {
             driving: false,
             bound,
             settled: false,
@@ -336,7 +359,7 @@ impl RecordingContext {
             refusal: None,
             cancelled: false,
             cancelled_event: None,
-        });
+        })));
         Ok(())
     }
 
@@ -347,11 +370,11 @@ impl RecordingContext {
         sequence: Sequence,
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
-        let Some(work) = &self.marks else {
+        let Some(work) = self.task_work() else {
             return Ok(());
         };
         if work.stage == Stage::Fault && work.fault_started && work.fault_sequence.is_none() {
-            self.marks.as_mut().unwrap().fault_sequence = Some(sequence);
+            self.task_work_mut().unwrap().fault_sequence = Some(sequence);
             return Ok(());
         }
         if work.stage != Stage::Input
@@ -360,7 +383,7 @@ impl RecordingContext {
         {
             return Ok(());
         }
-        self.marks.as_mut().unwrap().input_sequence = Some(sequence);
+        self.task_work_mut().unwrap().input_sequence = Some(sequence);
         let recorded_ns = io
             .now()
             .map_err(|error| self.marks_fault(io, error.to_string()))?;
@@ -382,7 +405,7 @@ impl RecordingContext {
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<TaskProgress, RunFailure> {
         self.live(ports.io)?;
-        let Some(work) = &self.marks else {
+        let Some(work) = self.task_work() else {
             return Err(RunFailure::MarksOwned);
         };
         if work.settled {
@@ -391,15 +414,15 @@ impl RecordingContext {
         if !work.has_original_wait(self.deadlines.get(PumpDeadline::Decision)) {
             return Err(self.marks_fault(ports.io, "begin_task lost its original Decision bound"));
         }
-        self.marks.as_mut().unwrap().driving = true;
+        self.task_work_mut().unwrap().driving = true;
         let result = self.advance_task_owned(ports);
-        self.marks.as_mut().unwrap().driving = false;
-        if result.is_ok() && self.marks.as_ref().unwrap().stage == Stage::Complete {
+        self.task_work_mut().unwrap().driving = false;
+        if result.is_ok() && self.task_work().unwrap().stage == Stage::Complete {
             // All required work completed under the last checked live boundary.
             // Retire the operation's wait atomically with its terminal custody.
             // A later caller retrieval must not restart or expire finished work.
             self.deadlines.disarm(PumpDeadline::Decision);
-            self.marks.as_mut().unwrap().settled = true;
+            self.task_work_mut().unwrap().settled = true;
         }
         result
     }
@@ -408,14 +431,14 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<TaskProgress, RunFailure> {
-        match self.marks.as_ref().unwrap().stage {
+        match self.task_work().unwrap().stage {
             Stage::Input => self.advance_task_input(ports)?,
             Stage::Read => self.advance_task_read(ports)?,
             Stage::Mark => self.advance_task_mark(ports)?,
             Stage::Fault => self.advance_task_fault(ports)?,
             Stage::Complete => return Ok(TaskProgress::Complete),
         }
-        Ok(if self.marks.as_ref().unwrap().stage == Stage::Complete {
+        Ok(if self.task_work().unwrap().stage == Stage::Complete {
             TaskProgress::Complete
         } else {
             TaskProgress::Pending
@@ -426,12 +449,15 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
-        let work = self.marks.as_mut().unwrap();
-        if work.cancelled && work.token.is_some() {
+        if self
+            .task_work()
+            .is_some_and(|work| work.cancelled && work.token.is_some())
+        {
             self.flow.cancel_filing_receipts();
-            work.stage = Stage::Complete;
+            self.task_work_mut().unwrap().stage = Stage::Complete;
             return Ok(());
         }
+        let work = self.task_work_mut().unwrap();
         if work.seated.is_none() {
             let turn = work.turn.clone();
             let seated = if let Some(token) = work.token.take() {
@@ -439,7 +465,7 @@ impl RecordingContext {
                     Ok(seated) => seated,
                     Err(error) => {
                         if let Some(token) = error.token {
-                            let work = self.marks.as_mut().unwrap();
+                            let work = self.task_work_mut().unwrap();
                             work.token = Some(token);
                         }
                         return Err(error.failure);
@@ -448,10 +474,10 @@ impl RecordingContext {
             } else {
                 self.resume_input_turn(ports)?
             };
-            self.marks.as_mut().unwrap().seated = seated;
+            self.task_work_mut().unwrap().seated = seated;
             return Ok(());
         }
-        if self.marks.as_ref().unwrap().input_receipt.is_none() {
+        if self.task_work().unwrap().input_receipt.is_none() {
             self.reduce_flow(ports.io)?;
             if !self
                 .flow
@@ -467,12 +493,12 @@ impl RecordingContext {
                 author: &self.author,
             });
             let receipt = result.map_err(|failure| self.flow_failed(ports.io, failure))?;
-            self.marks.as_mut().unwrap().input_receipt = receipt;
-            if self.marks.as_ref().unwrap().input_receipt.is_none() {
+            self.task_work_mut().unwrap().input_receipt = receipt;
+            if self.task_work().unwrap().input_receipt.is_none() {
                 return Ok(());
             }
         }
-        let work = self.marks.as_ref().unwrap();
+        let work = self.task_work().unwrap();
         let seated = work.seated.as_ref().unwrap();
         let valid = {
             let mut outcomes = work.input_receipt.as_ref().unwrap().dispositions();
@@ -486,7 +512,7 @@ impl RecordingContext {
                 "begin_task requires its exact selected, committed input Text",
             ));
         }
-        let work = self.marks.as_mut().unwrap();
+        let work = self.task_work_mut().unwrap();
         work.stage = if work.cancelled {
             Stage::Complete
         } else {
@@ -499,13 +525,13 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
-        if self.marks.as_ref().unwrap().cancelled && self.read.is_none() {
-            self.marks.as_mut().unwrap().stage = Stage::Complete;
+        if self.task_work().unwrap().cancelled && self.read.is_none() {
+            self.task_work_mut().unwrap().stage = Stage::Complete;
             return Ok(());
         }
-        if self.marks.as_ref().unwrap().read.is_none() {
+        if self.task_work().unwrap().read.is_none() {
             if self.read.is_none() {
-                let turn = self.marks.as_ref().unwrap().turn.clone();
+                let turn = self.task_work().unwrap().turn.clone();
                 match self.begin_marks_read(turn, ports.io) {
                     Ok(()) => {}
                     Err(error) => {
@@ -520,19 +546,19 @@ impl RecordingContext {
                     }
                 }
             }
-            if self.marks.as_ref().unwrap().cancelled {
+            if self.task_work().unwrap().cancelled {
                 self.cancel_read(ports.io)?;
             }
             self.advance_read(ports)?;
             let read = self.take_read(ports.io)?;
-            self.marks.as_mut().unwrap().read = read;
-            if self.marks.as_ref().unwrap().read.is_none() {
+            self.task_work_mut().unwrap().read = read;
+            if self.task_work().unwrap().read.is_none() {
                 return Ok(());
             }
         }
-        let work = self.marks.as_ref().unwrap();
+        let work = self.task_work().unwrap();
         if work.cancelled {
-            self.marks.as_mut().unwrap().stage = Stage::Complete;
+            self.task_work_mut().unwrap().stage = Stage::Complete;
             return Ok(());
         }
         let read = match work.read.as_ref().unwrap() {
@@ -540,7 +566,7 @@ impl RecordingContext {
             ReadCompletion::Refused(_) => {
                 // The exact member refusal and its operation record remain in
                 // this account. Transfer it only when the caller takes it.
-                self.marks.as_mut().unwrap().stage = Stage::Complete;
+                self.task_work_mut().unwrap().stage = Stage::Complete;
                 return Ok(());
             }
             ReadCompletion::Cancelled(_) => {
@@ -554,12 +580,12 @@ impl RecordingContext {
         let selected = crate::flow::marks::catalog(read.result(), seed);
         match selected {
             Ok(TaskCatalog::Existing(scope)) => {
-                let work = self.marks.as_mut().unwrap();
+                let work = self.task_work_mut().unwrap();
                 work.scope = Some(scope);
                 work.stage = Stage::Complete;
             }
             Ok(TaskCatalog::Proposed(scope)) => {
-                let work = self.marks.as_mut().unwrap();
+                let work = self.task_work_mut().unwrap();
                 work.effect = Some(MarkEffect::BeginTask {
                     task: scope.task.clone(),
                     prompt: scope.prompt.clone(),
@@ -571,7 +597,7 @@ impl RecordingContext {
                 work.stage = Stage::Mark;
             }
             Err(CatalogError::CounterExhausted) => {
-                let work = self.marks.as_mut().unwrap();
+                let work = self.task_work_mut().unwrap();
                 work.refusal = Some(TaskRefusal::CounterExhausted);
                 work.stage = Stage::Complete;
             }
@@ -586,18 +612,18 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
-        if self.marks.as_ref().unwrap().cancelled
+        if self.task_work().unwrap().cancelled
             && let Some(event) = self.withdraw_unstarted_mark()
         {
-            let work = self.marks.as_mut().unwrap();
+            let work = self.task_work_mut().unwrap();
             work.cancelled_event = Some(event);
             work.stage = Stage::Complete;
             return Ok(());
         }
-        if self.filing.is_none() && self.marks.as_ref().unwrap().filing.is_none() {
-            let work = self.marks.as_ref().unwrap();
+        if self.filing.is_none() && self.task_work().unwrap().filing.is_none() {
+            let work = self.task_work().unwrap();
             if work.cancelled {
-                self.marks.as_mut().unwrap().stage = Stage::Complete;
+                self.task_work_mut().unwrap().stage = Stage::Complete;
                 return Ok(());
             }
             let MarkEffect::BeginTask {
@@ -646,15 +672,15 @@ impl RecordingContext {
                 }
             }
         }
-        if self.marks.as_ref().unwrap().filing.is_none() {
+        if self.task_work().unwrap().filing.is_none() {
             self.advance_owned_filing(FilingOwner::Marks, ports)?;
             let filing = self.take_owned_filing(FilingOwner::Marks, ports.io)?;
-            self.marks.as_mut().unwrap().filing = filing;
-            if self.marks.as_ref().unwrap().filing.is_none() {
+            self.task_work_mut().unwrap().filing = filing;
+            if self.task_work().unwrap().filing.is_none() {
                 return Ok(());
             }
         }
-        let work = self.marks.as_ref().unwrap();
+        let work = self.task_work().unwrap();
         let filing = work.filing.as_ref().unwrap();
         let outcome = {
             let mut outcomes = filing.receipts().dispositions();
@@ -693,7 +719,7 @@ impl RecordingContext {
                 "mark filing changed its exact template/context/source association",
             ));
         }
-        self.marks.as_mut().unwrap().stage = if rejected {
+        self.task_work_mut().unwrap().stage = if rejected {
             Stage::Fault
         } else {
             Stage::Complete
@@ -705,7 +731,7 @@ impl RecordingContext {
         &mut self,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<(), RunFailure> {
-        let work = self.marks.as_ref().unwrap();
+        let work = self.task_work().unwrap();
         work.returned_author.check()?;
         if !work.fault_started {
             let filing = work.filing.as_ref().unwrap();
@@ -729,25 +755,25 @@ impl RecordingContext {
                     serde_json::value::to_raw_value(&fault).expect("typed fault serializes"),
                 )),
             };
-            self.marks.as_mut().unwrap().fault_started = true;
+            self.task_work_mut().unwrap().fault_started = true;
             let sequence = self.author_and_wait(ports, event).map_err(|failure| {
-                let work = self.marks.as_mut().unwrap();
+                let work = self.task_work_mut().unwrap();
                 work.returned_author
                     .retain_started(failure, &mut work.fault_started)
             })?;
-            self.marks.as_mut().unwrap().fault_sequence = Some(sequence);
+            self.task_work_mut().unwrap().fault_sequence = Some(sequence);
         } else if self.completed_author.is_some()
             || self.waiting_content.is_some()
             || self.barrier.pending_author().is_some()
         {
             let sequence = self.resume_author_and_wait(ports).map_err(|failure| {
-                let work = self.marks.as_mut().unwrap();
+                let work = self.task_work_mut().unwrap();
                 work.returned_author
                     .retain_started(failure, &mut work.fault_started)
             })?;
-            self.marks.as_mut().unwrap().fault_sequence = Some(sequence);
+            self.task_work_mut().unwrap().fault_sequence = Some(sequence);
         }
-        let work = self.marks.as_mut().unwrap();
+        let work = self.task_work_mut().unwrap();
         let sequence = work
             .fault_sequence
             .expect("recorded fault retained before fallible continuation");
@@ -757,7 +783,7 @@ impl RecordingContext {
     }
 
     pub(in crate::flow) fn cancel_task(&mut self) {
-        if let Some(work) = &mut self.marks {
+        if let Some(work) = self.task_work_mut() {
             work.cancelled = true;
         }
     }
@@ -767,7 +793,7 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<Option<TaskCompletion>, RunFailure> {
         self.live(io)?;
-        let Some(work) = &self.marks else {
+        let Some(work) = self.task_work() else {
             return Ok(None);
         };
         if !work.settled {
@@ -782,7 +808,10 @@ impl RecordingContext {
         if work.stage != Stage::Complete {
             return Ok(None);
         }
-        let mut work = self.marks.take().unwrap();
+        let Some(MarkOperation::Task(work)) = self.marks.take() else {
+            unreachable!("checked task owner")
+        };
+        let mut work = *work;
         if work.cancelled {
             return Ok(Some(TaskCompletion::Cancelled(TaskAccount { work })));
         }

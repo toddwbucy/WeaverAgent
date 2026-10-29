@@ -11,6 +11,9 @@ use crate::flow::ste100_channel::{Receive, Tag};
 use weaver_trace::serving::payloads as t;
 use weaver_traits::{ContentBlock, Message, Role};
 
+#[path = "context_plan_update_tests.rs"]
+mod root_update_tests;
+
 struct SummaryFixture {
     boot: BootFixture,
     repaired: Option<RepairedBootPairs>,
@@ -197,6 +200,41 @@ impl SummaryFixture {
             .unwrap();
     }
     fn classifier(&mut self, reject: bool) {
+        self.classifier_result(|request| {
+            assert_eq!(request.text, "Read plan.");
+            if reject {
+                s::Ste100Result::NotSte100 {
+                    code: s::Ste100DefectCode::NonSte100,
+                    detail: "fixture correct rejection".into(),
+                    spans: vec![],
+                }
+            } else {
+                s::Ste100Result::Accepted {
+                    bindings: vec![s::Binding {
+                        statement_span: s::Span {
+                            start: 0.into(),
+                            end: 10.into(),
+                        },
+                        verb: "read".into(),
+                        verb_span: s::Span {
+                            start: 0.into(),
+                            end: 4.into(),
+                        },
+                        condition: None,
+                        condition_span: None,
+                        nouns: vec![s::NounBinding {
+                            value: "plan".into(),
+                            span: s::Span {
+                                start: 5.into(),
+                                end: 9.into(),
+                            },
+                        }],
+                    }],
+                }
+            }
+        });
+    }
+    fn classifier_result(&mut self, make: impl FnOnce(&s::Ste100Request) -> s::Ste100Result) {
         self.transport(TransportSource::Classifier);
         let Receive::Complete(message) = self.boot._classifier.try_receive().unwrap() else {
             return;
@@ -204,37 +242,7 @@ impl SummaryFixture {
         assert_eq!(message.tag, Tag::Request);
         let request: s::Ste100Request =
             s::decode_strict(std::str::from_utf8(&message.payload).unwrap()).unwrap();
-        assert_eq!(request.text, "Read plan.");
-        let result = if reject {
-            s::Ste100Result::NotSte100 {
-                code: s::Ste100DefectCode::NonSte100,
-                detail: "fixture correct rejection".into(),
-                spans: vec![],
-            }
-        } else {
-            s::Ste100Result::Accepted {
-                bindings: vec![s::Binding {
-                    statement_span: s::Span {
-                        start: 0.into(),
-                        end: 10.into(),
-                    },
-                    verb: "read".into(),
-                    verb_span: s::Span {
-                        start: 0.into(),
-                        end: 4.into(),
-                    },
-                    condition: None,
-                    condition_span: None,
-                    nouns: vec![s::NounBinding {
-                        value: "plan".into(),
-                        span: s::Span {
-                            start: 5.into(),
-                            end: 9.into(),
-                        },
-                    }],
-                }],
-            }
-        };
+        let result = make(&request);
         let reply = s::Ste100Reply {
             request_id: request.request_id,
             target: request.target,

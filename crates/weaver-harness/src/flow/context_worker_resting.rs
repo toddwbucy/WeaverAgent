@@ -54,6 +54,7 @@ impl FoundationEnteredRollback {
         let dials = self.dials.as_mut().unwrap();
         assert!(self.gate_done && self.handoff.arms.port.is_none());
         assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());
+        let author_was_blocked = !run.context.serving_observation_author_available();
         run.resources.refresh_spu_observation(&mut run.context);
         if let Some(save) = &mut self.resting.save {
             save.prepare_expiry(&mut run.context, io)?;
@@ -64,7 +65,7 @@ impl FoundationEnteredRollback {
             .expect("S9 retains the admitted SPU");
         let mut lifecycle = dials.resting_ports();
         lifecycle.residency = Some(residency);
-        match run.context.advance_leaving_organ_faults(
+        let observation = run.context.advance_leaving_organ_faults(
             &mut PumpPorts {
                 lifecycle,
                 gate: None,
@@ -73,13 +74,11 @@ impl FoundationEnteredRollback {
                 io,
             },
             self.gate.as_ref().and_then(RollbackGate::world_closed),
-        )? {
-            serving_organ_loss::ObservationProgress::Complete => (),
-            _ => {
-                self.progress = FoundationEnteredRollbackProgress::Pending;
-                return Ok(());
-            }
-        }
+        )?;
+        let settled = matches!(
+            observation,
+            serving_organ_loss::ObservationProgress::Complete
+        );
         let mut save_progress = false;
         if let Some(save) = &mut self.resting.save {
             let (residency, decode) = run.resources.spu_ports_mut().unwrap();
@@ -94,7 +93,9 @@ impl FoundationEnteredRollback {
                     label: None,
                     io,
                 },
-                true,
+                // Continue existing work, but do not elect a capture boundary
+                // before settlement, even if Requested finishes in this call.
+                settled,
             )? {
                 SaveProgress::Complete => {
                     self.resting.save = None;
@@ -103,6 +104,22 @@ impl FoundationEnteredRollback {
                 SaveProgress::Progress => save_progress = true,
                 SaveProgress::Pending => (),
             }
+        }
+        if matches!(
+            observation,
+            serving_organ_loss::ObservationProgress::EarlierAuthor
+        ) && author_was_blocked
+            && run.context.serving_observation_author_available()
+        {
+            // Requested finished its original claim. Re-enter the owed organ
+            // observation before S9 waits on an otherwise idle queued save.
+            return Ok(());
+        }
+        if !settled {
+            if !save_progress {
+                self.progress = FoundationEnteredRollbackProgress::Pending;
+            }
+            return Ok(());
         }
         let load = self
             .handoff
@@ -225,3 +242,7 @@ impl FoundationEnteredRollback {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "context_worker_resting_progress_tests.rs"]
+mod progress_tests;
