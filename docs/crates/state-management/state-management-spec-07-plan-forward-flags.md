@@ -2,9 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #387
-
-**Version:** 0.18 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
+**Version:** 0.19 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -584,16 +582,27 @@ trace kind, counter or clock is introduced. [PLAN-6, FLOW-3, FLOW-4, COST-4]
 through:SourcePosition,content_sha256:Digest}. PLAN-PORT's
 work_reference(expected,step_id,span,through) constructs it for the current expected
 plan revision and active step. span and through supply the target and committed
-frontier for span_preview. The constructor hashes the complete canonical tagged result,
-including entries and pair records, and returns the checked WorkRef. The active step
-must own that span, and every
-attached pair must be terminal. A missing or changed source refuses invalid_target or
-work_changed. For reviewed closure the frontier precedes the review request. For
-unreviewed closure it is the last held work before the outcome. No model text can supply
-a trusted WorkRef. An admitted refusal uses PLAN-PORT-REFUSAL and records
-PLAN-PORT-RECORD's work_reference operation with the exact requested expected and
-nonnull step_id before returning it. No refused construction returns a WorkRef.
-[PLAN-2, MARK-4, STORE-3]
+frontier for span_preview. content_sha256 is SHA-256 over the exact complete tagged
+result bytes retained by the successful read owner. Concatenate the decoded page bytes
+in read order, including the span_preview tag, span, through, entries and complete pair
+records. Hash neither the control envelopes nor the base64 text or page boundaries.
+Validate and release the complete read before constructing the checked WorkRef.
+
+Do not parse and reserialize the result for this digest. Whitespace, field order and
+opaque record bytes remain part of the released result. Two encodings with equal JSON
+values can have different digests. The store uses the same result encoding for the
+serving preview, closure recheck and historical closure verification. A change to that
+encoding changes this evidence and must reach those producers and consumers together,
+with dump/load and preserved-closure fixtures. Reason: a WorkRef binds the complete
+held preview without an additional normalization algorithm. [PLAN-2, MARK-4, STORE-3]
+
+The active step must own that span, and every attached pair must be terminal. A missing
+or changed source refuses invalid_target or work_changed. For reviewed closure the
+frontier precedes the review request. For unreviewed closure it is the last held work
+before the outcome. No model text can supply a trusted WorkRef. An admitted refusal uses
+PLAN-PORT-REFUSAL and records PLAN-PORT-RECORD's work_reference operation with the exact
+requested expected and nonnull step_id before returning it. No refused construction
+returns a WorkRef. [PLAN-2, MARK-4, STORE-3]
 
 **CLOSURE-EVIDENCE.** ClosureEvidence is a private, single-use, run-bound grant holding
 {plan:PlanRef,step_id:StepId,review_call:Option<CallId>,work:WorkRef,
@@ -772,7 +781,7 @@ or task success. [PLAN-1 through PLAN-6, R20-12]
 | PLAN-PORT-REFUSAL and PLAN-PORT-RECORD | Every permitted initial/next code, counter overflow, correct template rejection, source/record pressure, Stop/leave, failed release and post-effect contrast | Break a plan on resource refusal, lose code/detail or parent, return before Recorded, renew a bound, skip cleanup or treat a failed refresh as a healthy refusal |
 | PLAN-FEED and PLAN-EFFECT | Trace-to-receipt fixture and private authority compile pin | Construct root authority from a gate frame or bypass trace |
 | PLAN-STORAGE and PLAN-READ | Literal DDL, current/history reads, every effect and rollback | Commit marks without the plan label or allow two active steps |
-| WORK-REFERENCE | Preview identity and unchanged-work corpus | Trust a model digest, accept an open pair or use a later frontier |
+| WORK-REFERENCE | Complete released bytes across page sizes, encoding-sensitive digests, closure recheck and historical verification after dump/load | Hash a page or parsed reconstruction, omit a pair, trust a model digest, accept an open pair or use a later frontier |
 | CLOSURE-EVIDENCE and CLOSURE | Matched review pair, revision, consumed-grant cases and a failed assessment traced and filed with null context | Accept model prose, stale work, ordinary external lane or reused evidence, omit the failed record or close a step from it |
 | PLAN-STATES | Create after complete and broken, replace and old-history reads | Reject a legal new plan or overwrite its predecessor |
 | FLAGS | Condition query after reorder/retirement | Retarget or delete a held flag |
