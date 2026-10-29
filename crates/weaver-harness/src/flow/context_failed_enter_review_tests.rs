@@ -4,43 +4,7 @@ use std::os::fd::AsRawFd;
 use std::time::Instant;
 
 pub(super) fn await_decoder_eof(fd: i32, bound: Duration) {
-    let deadline = Instant::now() + bound;
-    loop {
-        let mut byte = [0u8; 1];
-        // SAFETY: all callers retain their actual fixture-owned socket for this
-        // bounded call, including fd4 placed by the real exec producer.
-        let n =
-            unsafe { nix::libc::recv(fd, byte.as_mut_ptr().cast(), 1, nix::libc::MSG_DONTWAIT) };
-        if n == 0 {
-            return;
-        }
-        if n > 0 {
-            panic!("decoder carried bytes after its required retirement");
-        }
-        let error = std::io::Error::last_os_error();
-        assert!(
-            matches!(
-                error.kind(),
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-            ),
-            "decoder EOF: {error}"
-        );
-        assert!(
-            Instant::now() < deadline,
-            "decoder must actually close before Release completes"
-        );
-        let mut poll = nix::libc::pollfd {
-            fd,
-            events: nix::libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: one writable pollfd, borrowed live descriptor, finite wait.
-        let result = unsafe { nix::libc::poll(&mut poll, 1, 1) };
-        assert!(
-            result >= 0
-                || std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
-        );
-    }
+    crate::flow::fixture_eof::await_eof_until(fd, Instant::now() + bound, || {});
 }
 
 #[test]

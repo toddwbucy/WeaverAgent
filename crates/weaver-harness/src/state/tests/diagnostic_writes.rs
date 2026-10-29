@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 // The parent can kill a writer that blocks before its answer timer starts.
 // This is a transport regression instrument, with no organ or privileged scope.
-fn bounded_child(mode: &str) {
+fn child_output(mode: &str) -> (std::process::ExitStatus, bool, Vec<u8>, Vec<u8>) {
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -18,24 +18,47 @@ fn bounded_child(mode: &str) {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut expired = false;
-    while child.try_wait().unwrap().is_none() {
-        if Instant::now() >= deadline {
-            expired = true;
-            child.kill().unwrap();
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(1));
+    fn drain(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes).unwrap();
+            bytes
+        })
     }
-    let output = child.wait_with_output().unwrap();
+    let stdout = drain(child.stdout.take().unwrap());
+    let stderr = drain(child.stderr.take().unwrap());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let (status, expired) = crate::test_child::wait_until(&mut child, deadline).unwrap();
+    (
+        status,
+        expired,
+        stdout.join().unwrap(),
+        stderr.join().unwrap(),
+    )
+}
+
+fn bounded_child(mode: &str) {
+    let (status, expired, stdout, stderr) = child_output(mode);
     assert!(!expired, "Diagnostic {mode} blocked before its answer wait");
     assert!(
-        output.status.success(),
+        status.success(),
         "{mode}: {}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(&stdout),
+        String::from_utf8_lossy(&stderr)
     );
+}
+
+#[test]
+fn diagnostic_write_watchdog_retains_a_large_assertion_without_reporting_a_hang() {
+    let (status, expired, stdout, stderr) = child_output("large-failure");
+    assert!(
+        !expired,
+        "a failed assertion must not become a blocked-write verdict"
+    );
+    assert!(!status.success());
+    assert!(stdout.len() >= 1024 * 1024);
+    assert!(stderr.len() >= 1024 * 1024);
+    assert!(String::from_utf8_lossy(&stderr).contains("diagnostic output drain sentinel"));
 }
 
 #[test]
@@ -53,6 +76,15 @@ fn diagnostic_write_child() {
     let Ok(mode) = std::env::var("WEAVER_DIAGNOSTIC_WRITE_TEST") else {
         return;
     };
+    if mode == "large-failure" {
+        std::io::stdout()
+            .write_all(&vec![b'o'; 1024 * 1024])
+            .unwrap();
+        std::io::stderr()
+            .write_all(&vec![b'e'; 1024 * 1024])
+            .unwrap();
+        panic!("diagnostic output drain sentinel");
+    }
     let (ours, mut peer) = UnixStream::pair().unwrap();
     nix::sys::socket::setsockopt(&ours, nix::sys::socket::sockopt::SndBuf, &4096).unwrap();
     // No fixture sets O_NONBLOCK: the actual constructor must supply it.

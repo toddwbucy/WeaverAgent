@@ -1667,7 +1667,7 @@ impl<'a> Ports<'a> {
                 let Some(connection) = slot.as_ref() else {
                     return Ok(());
                 };
-                match crate::lifecycle::receive_entered(connection) {
+                match crate::lifecycle::receive_entered(connection, self.recorder.failed()) {
                     Ok(Some(envelope)) => {
                         let exchange = envelope.exchange.clone();
                         match envelope.payload {
@@ -2245,7 +2245,7 @@ impl<'a> Ports<'a> {
                     let Some(connection) = slot.as_ref() else {
                         continue;
                     };
-                    match crate::lifecycle::receive_entered(connection) {
+                    match crate::lifecycle::receive_entered(connection, self.recorder.failed()) {
                         Ok(Some(envelope)) => {
                             let exchange = envelope.exchange.clone();
                             match envelope.payload {

@@ -226,8 +226,8 @@ pub struct StateSeam {
 }
 
 impl StateSeam {
-    /// Crate-private, the port discipline: the enter constructs it from the
-    /// standing channel's clone and nothing outside loop 0 can.
+    /// Enter gives this owner the serving tee's channel clone or the whole
+    /// Diagnostic channel. This constructor establishes nonblocking mode.
     pub(crate) fn new(channel: UnixStream) -> StateSeam {
         // A Diagnostic run has no tee to set the shared file description's
         // mode. Every ask owner must establish its own nonblocking writes and
@@ -483,8 +483,8 @@ impl StateSeam {
     }
 
     /// One frame whole or nothing, the tee's own economics: the channel is
-    /// nonblocking - the flag rides the shared open file description the
-    /// tee set - and a peer that cannot take a frame now is not waited on.
+    /// nonblocking through this owner's constructor, and a peer that cannot
+    /// take a frame now is not waited on.
     /// **Settle the seam before an ask**, per `weaver-harness-Spec` section
     /// 6: after a missed snapshot leg, whatever the member sent late is
     /// read without blocking and discarded, the residual with it, and one
@@ -540,8 +540,8 @@ impl StateSeam {
     /// another ask's answer, so one landing late after a missed save-point
     /// leg, past the drain, is dropped and said and the wait goes on inside
     /// the same deadline; any other line is the answer or the ask missed.
-    /// The channel shares the tee's nonblocking flag, so the wait is a poll
-    /// deadline rather than a read timeout.
+    /// This owner's constructor sets the nonblocking flag, so the wait is a
+    /// poll deadline rather than a read timeout.
     fn await_answer<T>(&mut self, bound_ms: u64, parse: fn(&str) -> Option<T>) -> Option<T> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(bound_ms);
         loop {

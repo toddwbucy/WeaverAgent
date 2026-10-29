@@ -181,9 +181,9 @@ pub(crate) fn render_close_with_finish(
 /// declaration here would be one fact in two places, per
 /// `weaver-types-Spec` section 4's rule for the record.
 ///
-/// A refusal that could not be recorded is latched on the record (#116), and
-/// the answer to admin that follows reads the latch and ends service rather
-/// than announcing over the missing refusal.
+/// A serving refusal that could not be recorded latches the record (#116),
+/// preventing its announcement. Diagnostic setup has no replay bracket and
+/// owes no refusal event. Its answer to admin retains the usual record check.
 fn author_lifecycle_refusal(run: &mut Run, refusal: &LifecycleRefusal) {
     // Diagnostic setup has no replay bracket yet. Its Enter refusal reaches
     // admin, but cannot precede replay.opened on the diagnostic record (Spec 3).
@@ -468,11 +468,12 @@ impl Run {
 }
 
 /// The Gateless seat's standing, per `weaver-harness-Spec` section 6.2: the
-/// run itself is the work, so what is held is what the one grant needs and
-/// a flag that it happened.
+/// run itself is the work. Partial Enter custody does not grant replay: the
+/// aggregate must succeed, and the resulting seat can run only once.
 struct DiagnosticSeat {
     reader_elected: bool,
     artifact: String,
+    admitted: bool,
     replayed: bool,
 }
 
@@ -688,7 +689,7 @@ impl Harness {
                 Ok(Wake::Connection) => {
                     let connection = pending.take().expect("the wake proved a connection");
                     let received = if connection.is_diagnostic_wire() {
-                        match receive_entered(&connection) {
+                        match receive_entered(&connection, self.record_holds().is_err()) {
                             Ok(Some(envelope)) => Ok((envelope, None, None)),
                             Ok(None) => {
                                 pending = Some(connection);
@@ -892,7 +893,7 @@ impl Harness {
         let Some(seat) = run.diagnostic.as_mut() else {
             return Ok(());
         };
-        if seat.replayed {
+        if !seat.admitted || seat.replayed {
             return Ok(());
         }
         seat.replayed = true;
@@ -1845,7 +1846,10 @@ impl Harness {
         match (&mut self.state, directive) {
             (ChannelState::BeforeEnter, LifecycleDirective::Enter { payload }) => {
                 match self.enter(*payload, sink, state_end) {
-                    Ok(run) => {
+                    Ok(mut run) => {
+                        if let Some(seat) = run.diagnostic.as_mut() {
+                            seat.admitted = true;
+                        }
                         self.state = ChannelState::Entered(Box::new(run));
                         self.answer(connection, &exchange, LifecycleAnswer::Ready)?;
                     }
@@ -1855,19 +1859,13 @@ impl Harness {
                         self.refuse(connection, &exchange, refusal)?;
                     }
                     Err(EnterFailure::AfterLoad(mut run, refusal)) => {
-                        // **The refusal is clerked before the answer goes
-                        // out**, per `weaver-harness-Spec` section 6 and the
-                        // admin contract's clause of 2026-08-22: a bracket
-                        // that stands is a run whose record can say why its
-                        // enter was refused, and the answer alone leaves
-                        // nothing behind. This is the one site for every
-                        // after-load path that raises a lifecycle refusal,
-                        // a refusal being one kind of event whatever raised
-                        // it.
+                        // Serving records the refusal before answering.
+                        // Diagnostic Enter records nothing (Diagnostic Spec
+                        // 3.2); its retained children are rollback custody,
+                        // with no admitted replay seat or open bracket.
                         author_lifecycle_refusal(&mut run, &refusal);
-                        // The bracket stands, so the run stays in place for
-                        // the leave that unwinds it. Dropping it here would
-                        // orphan what forked and leave the bracket unclosed.
+                        // Retain what stood for Leave to unwind. Dropping the
+                        // partial run here would orphan its children.
                         self.state = ChannelState::Entered(run);
                         self.refuse(connection, &exchange, refusal)?;
                     }
@@ -2413,6 +2411,7 @@ impl Harness {
                     .0
                     .clone(),
                 replayed: false,
+                admitted: false,
             }),
         };
 
@@ -3969,7 +3968,7 @@ fn hear_dial(
     if !readable_by(&connection, deadline) {
         return;
     }
-    let Ok(Some(envelope)) = receive_entered(&connection) else {
+    let Ok(Some(envelope)) = receive_entered(&connection, latched) else {
         return;
     };
     let answer = match envelope.payload {

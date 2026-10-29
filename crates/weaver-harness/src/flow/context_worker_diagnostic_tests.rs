@@ -53,6 +53,7 @@ fn diagnostic_spu_child() {
         return;
     };
     let root = std::path::PathBuf::from(root);
+    let mode = std::env::var("WEAVER_WORKER_STARTUP_CASE").unwrap();
     std::fs::write(root.join("diagnostic-spawned"), b"spawned\n").unwrap();
     // SAFETY: this actual fork producer placed the two exclusive child ends.
     let lifecycle = unsafe { OwnedFd::from_raw_fd(3) };
@@ -63,6 +64,18 @@ fn diagnostic_spu_child() {
     };
     assert!(instruction.classify.is_none());
     assert!(instruction.decoder.refeed_permission);
+    if mode.ends_with("refused-admit") {
+        packet!(
+            lifecycle.as_raw_fd(),
+            &OrganEnvelope {
+                exchange: request.exchange,
+                position: Position::Close,
+                payload: Payload::Refusal(LifecycleRefusal::DeviceCannotAdmit),
+            }
+        );
+        finish_refused_enter(&root, &lifecycle, &decode);
+        return;
+    }
     packet!(
         lifecycle.as_raw_fd(),
         &OrganEnvelope {
@@ -78,12 +91,26 @@ fn diagnostic_spu_child() {
         panic!("Open follows Admit")
     };
     assert_eq!(messages.len(), 1);
+    if mode.ends_with("refused-open") {
+        packet!(decode.as_raw_fd(), &weaver_types::TokenRefusal::OutOfOrder);
+        finish_refused_enter(&root, &lifecycle, &decode);
+        return;
+    }
+    let session = if mode.ends_with("invalid-open") {
+        weaver_types::SessionId("foreign-session".into())
+    } else {
+        session
+    };
     let rendered = "<system>Read caf\u{e9}.</system>";
     packet!(decode.as_raw_fd(), &TokenAnswer::Opened(weaver_types::Opened {
         session, prefix_tokens: 3, capacity: 16384, generation_limit: 16, terminal_tokens: 1,
         request: serde_json::value::to_raw_value(&serde_json::json!({"rendered":rendered,"template":"fixture"})).unwrap(),
         measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"art","weights_hash":"h","prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap(),
     }));
+    if mode.ends_with("invalid-open") {
+        finish_refused_enter(&root, &lifecycle, &decode);
+        return;
+    }
     let TokenDirective::ReFeed {
         turn,
         rendered,
@@ -129,6 +156,32 @@ fn diagnostic_spu_child() {
     std::fs::write(root.join("diagnostic-released"), b"released\n").unwrap();
 }
 
+fn finish_refused_enter(root: &std::path::Path, lifecycle: &OwnedFd, decode: &OwnedFd) {
+    let release: OrganEnvelope = take!(lifecycle.as_raw_fd());
+    assert_eq!(
+        release.payload,
+        Payload::Directive(LifecycleDirective::Release)
+    );
+    crate::flow::fixture_eof::await_eof_until(
+        decode.as_raw_fd(),
+        Instant::now() + Duration::from_secs(3),
+        || {},
+    );
+    packet!(
+        lifecycle.as_raw_fd(),
+        &OrganEnvelope {
+            exchange: release.exchange,
+            position: Position::Close,
+            payload: Payload::Answer(LifecycleAnswer::Released),
+        }
+    );
+    std::fs::write(
+        root.join("diagnostic-released"),
+        b"released without replay\n",
+    )
+    .unwrap();
+}
+
 fn observed(peer: &OwnedFd, ordinal: u64, expected: AgentState, end: Instant) {
     send(peer, ordinal, LifecycleDirective::Observe);
     let response = ObservationEnvelope::decode(&receive(peer, end)).unwrap();
@@ -158,11 +211,17 @@ fn observed(peer: &OwnedFd, ordinal: u64, expected: AgentState, end: Instant) {
     );
 }
 
-fn malformed_management(peer: &OwnedFd, source: &EnterEnvelope, state: AgentState, end: Instant) {
+fn malformed_management(
+    peer: &OwnedFd,
+    source: &EnterEnvelope,
+    state: AgentState,
+    first_ordinal: u64,
+    end: Instant,
+) {
     let ordinary = OrganEnvelope {
         exchange: ExchangeId {
             opener: Opener::Admin,
-            ordinal: 930,
+            ordinal: first_ordinal,
         },
         position: Position::Open,
         payload: Payload::Directive(LifecycleDirective::Observe),
@@ -178,32 +237,40 @@ fn malformed_management(peer: &OwnedFd, source: &EnterEnvelope, state: AgentStat
         payload: Box::new(crate::channel::diagnostic::diagnostic_payload(source).unwrap()),
     });
     for (index, (mut request, reason, handles)) in [
-        (foreign, LifecycleRefusal::Malformed, false),
-        (continuation, LifecycleRefusal::Malformed, false),
-        (answer, LifecycleRefusal::Malformed, false),
-        (ordinary, LifecycleRefusal::Malformed, true),
-        (legacy, LifecycleRefusal::OutOfOrder, true),
+        (foreign, LifecycleRefusal::Malformed, 0),
+        (continuation, LifecycleRefusal::Malformed, 0),
+        (answer, LifecycleRefusal::Malformed, 0),
+        (ordinary.clone(), LifecycleRefusal::Malformed, 1),
+        (ordinary, LifecycleRefusal::Malformed, 2),
+        (legacy.clone(), LifecycleRefusal::OutOfOrder, 1),
+        (legacy, LifecycleRefusal::OutOfOrder, 2),
     ]
     .into_iter()
     .enumerate()
     {
-        request.exchange.ordinal += index as u64;
+        request.exchange.ordinal += 2 * index as u64;
         let (sink, mut reader) = UnixStream::pair().unwrap();
         let (member, mut watcher) = UnixStream::pair().unwrap();
-        let descriptors = if handles {
-            vec![sink.as_raw_fd(), member.as_raw_fd()]
-        } else {
-            Vec::new()
-        };
-        send_enter(peer, &serde_json::to_vec(&request).unwrap(), &descriptors);
+        let descriptors = [sink.as_raw_fd(), member.as_raw_fd()];
+        send_enter(
+            peer,
+            &serde_json::to_vec(&request).unwrap(),
+            &descriptors[..handles],
+        );
         drop((sink, member));
-        let refusal: OrganEnvelope = serde_json::from_slice(&receive(peer, end)).unwrap();
-        assert_eq!(refusal.exchange, request.exchange);
-        assert_eq!(refusal.position, Position::Close);
-        assert_eq!(refusal.payload, Payload::Refusal(reason));
+        let refusal: serde_json::Value = serde_json::from_slice(&receive(peer, end)).unwrap();
+        assert_eq!(
+            refusal,
+            serde_json::to_value(OrganEnvelope {
+                exchange: request.exchange.clone(),
+                position: Position::Close,
+                payload: Payload::Refusal(reason),
+            })
+            .unwrap()
+        );
         closed_empty(&mut reader, end);
         closed_empty(&mut watcher, end);
-        observed(peer, 940 + index as u64, state.clone(), end);
+        observed(peer, request.exchange.ordinal + 1, state.clone(), end);
     }
 }
 
@@ -230,6 +297,15 @@ pub(super) fn control(
     let wire = envelope.encode().unwrap();
     if mode.ends_with("opener-pressure") {
         opener_pressure(root, child, &envelope, sink, state, reader, member, end);
+        return;
+    }
+    if mode.ends_with("refused-admit")
+        || mode.ends_with("refused-open")
+        || mode.ends_with("invalid-open")
+    {
+        refused_enter(
+            root, mode, child, &envelope, sink, state, reader, member, end,
+        );
         return;
     }
     // A lost pre-load refusal must return the listener to admission too.
@@ -320,7 +396,7 @@ pub(super) fn control(
         closed_empty(&mut rejected_reader, end);
         closed_empty(&mut rejected_member, end);
         observed(&peer, 926, AgentState::Active, end);
-        malformed_management(&peer, &envelope, AgentState::Active, end);
+        malformed_management(&peer, &envelope, AgentState::Active, 1000, end);
         std::fs::write(root.join("diagnostic-continue"), b"finish\n").unwrap();
         loop {
             send(&peer, 922, LifecycleDirective::Observe);
@@ -349,7 +425,7 @@ pub(super) fn control(
             Payload::Refusal(LifecycleRefusal::OutOfOrder)
         );
         observed(&peer, 927, AgentState::Idle, end);
-        malformed_management(&peer, &envelope, AgentState::Idle, end);
+        malformed_management(&peer, &envelope, AgentState::Idle, 1100, end);
         send(
             &peer,
             924,
@@ -379,11 +455,9 @@ pub(super) fn control(
                 ..
             })
         ));
-        while child.try_wait().unwrap().is_none() {
-            assert!(Instant::now() < end);
-            std::thread::sleep(Duration::from_millis(1));
-        }
-        assert!(child.wait().unwrap().success());
+        let (status, expired) = crate::test_child::wait_until(child, end).unwrap();
+        assert!(!expired, "Diagnostic replay did not finish Leave");
+        assert!(status.success());
         responder.join().unwrap();
     });
     assert!(root.join("diagnostic-released").exists());
@@ -411,6 +485,119 @@ pub(super) fn control(
     assert!(
         rows.iter()
             .all(|r| r["kind"] != "load" && r["kind"] != "unload" && r["kind"] != "save_point")
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn refused_enter(
+    root: &std::path::Path,
+    mode: &str,
+    child: &mut std::process::Child,
+    source: &EnterEnvelope,
+    sink: OwnedFd,
+    state: OwnedFd,
+    reader: &mut UnixStream,
+    member: &mut UnixStream,
+    end: Instant,
+) {
+    member.set_nonblocking(false).unwrap();
+    member
+        .set_read_timeout(Some(Duration::from_secs(8)))
+        .unwrap();
+    let mut state_writer = member.try_clone().unwrap();
+    let peer = dial(&root.join("admin.sock"));
+    std::thread::scope(|scope| {
+        let responder = scope.spawn(move || {
+            let mut input = BufReader::new(member);
+            let mut lines = (&mut input).lines();
+            let opener = lines.next().unwrap().unwrap();
+            assert_eq!(opener, weaver_trace::opener("session", &weaver_trace::Election {
+                all_kinds: true, keys: Vec::new(),
+            }).trim_end());
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&lines.next().unwrap().unwrap()).unwrap(),
+                serde_json::json!({"ask":{"identity":{}}}));
+            writeln!(state_writer, "{}", serde_json::json!({"answer":{"identity":{"messages":[{
+                "envelope":{"session":"source","run":"source-run","kind":"message.system","sequence":"1"},
+                "pairs":{"role":"system","content":[{"type":"text","text":"Read caf\u{e9}."}]}
+            }]}}})).unwrap();
+            let extra = lines.next();
+            if extra.is_some() {
+                // End the faulty worker's reply wait before failing this
+                // instrument; otherwise the refused request has no responder.
+                input.get_ref().shutdown(std::net::Shutdown::Both).unwrap();
+            }
+            assert!(extra.is_none(), "failed Enter must not ask replay, tee content or save");
+        });
+        send_enter(
+            &peer,
+            &source.encode().unwrap(),
+            &[sink.as_raw_fd(), state.as_raw_fd()],
+        );
+        drop((sink, state));
+        let reason = if mode.ends_with("refused-admit") {
+            LifecycleRefusal::OrganRefused {
+                organ: weaver_types::RefusingOrgan::Spu,
+                reason: Box::new(LifecycleRefusal::DeviceCannotAdmit),
+            }
+        } else if mode.ends_with("refused-open") {
+            LifecycleRefusal::DeviceCannotAdmit
+        } else {
+            LifecycleRefusal::NoResidency
+        };
+        let refused: OrganEnvelope = serde_json::from_slice(&receive(&peer, end)).unwrap();
+        assert_eq!(
+            refused,
+            OrganEnvelope {
+                exchange: source.exchange.clone(),
+                position: Position::Close,
+                payload: Payload::Refusal(reason)
+            }
+        );
+        send(
+            &peer,
+            952,
+            LifecycleDirective::Leave {
+                cause: Cause { uid: 0 },
+                forced: true,
+                rollback: true,
+            },
+        );
+        let left: OrganEnvelope = serde_json::from_slice(&receive(&peer, end)).unwrap();
+        assert_eq!(
+            left.exchange,
+            ExchangeId {
+                opener: Opener::Admin,
+                ordinal: 952
+            }
+        );
+        assert_eq!(left.position, Position::Close);
+        assert!(matches!(
+            left.payload,
+            Payload::Answer(LifecycleAnswer::Left {
+                no_state: true,
+                save_point: None,
+                forced: true,
+                ..
+            })
+        ));
+        let (status, expired) = crate::test_child::wait_until(child, end).unwrap();
+        assert!(!expired, "refused Diagnostic Enter did not finish rollback");
+        assert!(status.success());
+        responder.join().unwrap();
+    });
+    assert!(root.join("diagnostic-spawned").exists());
+    assert!(root.join("diagnostic-released").exists());
+    assert!(!root.join("diagnostic-refeed").exists());
+    assert!(!root.join("diagnostic-forbidden-organ").exists());
+    reader.set_nonblocking(false).unwrap();
+    reader
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let mut trace = Vec::new();
+    reader.read_to_end(&mut trace).unwrap();
+    assert!(
+        trace.is_empty(),
+        "refused Diagnostic Enter cannot open a replay bracket"
     );
 }
 
@@ -488,14 +675,9 @@ fn opener_pressure(
             ..
         })
     ));
-    while child.try_wait().unwrap().is_none() {
-        assert!(
-            Instant::now() < end,
-            "failed Diagnostic entry did not finish rollback"
-        );
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    assert!(child.wait().unwrap().success());
+    let (status, expired) = crate::test_child::wait_until(child, end).unwrap();
+    assert!(!expired, "failed Diagnostic entry did not finish rollback");
+    assert!(status.success());
     assert!(!root.join("diagnostic-spawned").exists());
     assert!(!root.join("diagnostic-forbidden-organ").exists());
     for endpoint in [&*reader, &*member] {

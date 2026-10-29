@@ -183,6 +183,9 @@ pub use weaver_trace::LoopIdentity;
 #[cfg(test)]
 mod scratch;
 
+#[cfg(test)]
+mod test_child;
+
 pub use flow::context::worker_startup::rollback::failed::{
     FoundationRollbackExit, FoundationRollbackExitProgress, FoundationRollbackHandoff,
 };
