@@ -4,7 +4,7 @@
 
 **Landing PR:** #348
 
-**Version:** 0.39 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.40 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -1794,6 +1794,26 @@ review_required false and the current WorkRef, without a fabricated pair. close 
 the category before filing either form. Model and gate content have no constructor for
 this trusted operation capability. [PLAN-1, PLAN-2, PLAN-5, R20-12]
 
+The operation owner implements PLAN-PORT-REFUSAL and PLAN-PORT-RECORD. Keep the
+accepted request, finalized read/refusal or template-rejection evidence, source
+dispositions, original Decision deadline and any allocator grant together until
+settlement. Distinguish local allocation exhaustion from a member's counter_exhausted
+read reply. A correctly rejected effect/outcome template records its existing
+state_template_rejected fault, then the exact plan-operation refusal. Neither is a
+foundation halt solely because the template correctly refused. [PLAN-2, PLAN-6,
+CLASS-2, CLASS-8, FLOW-3, FLOW-4]
+
+Use the common paged read owner and its finalized refusal after acquired-snapshot
+release. Record the typed operation refusal before exposing its completion. Bind the
+refusing leg's measurement parent before another read or release can replace it. Reuse
+the same author event/ticket through pressure, and retain the first failure plus owed
+custody through Stop, leave and failed-run handoff. An operation cancelled during this
+accounting grants no continuation. Correct resource refusal preserves the prior
+committed plan/cache and releases the allocator only after owed work settles. A refused
+or failed mandatory post-effect refresh still latches foundation failure and exposes
+no stale success. These ports do not retry, select a successor or call record_break
+because a resource refused. [PLAN-2, PLAN-5, PLAN-6, SEAM-3, FLOW-3, FLOW-4]
+
 **HARNESS-PLAN-OBSERVE.** The explicit observation port implements PLAN-OBSERVATION
 without scheduling reads on each transition. It checks plan and receipt identity,
 same-run clocks and the once-per-assembly count before recording the caller's sample. It
@@ -1803,7 +1823,7 @@ has no store write or progression handle. A typed read refusal is unavailable, n
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
 | HARNESS-PLAN | Root update and source/receipt lifecycle rows, held receipt/digest mismatches, delayed Recording/Recorded, boot refusal and failed post-receipt refresh | Mint model authority, answer before commit, ignore held expectation, cache before Recorded or serve stale successful Observe/show after refresh failure |
-| HARNESS-PLAN-PORTS | Private-grant and exact work/pair fixtures | Close on model prose, reuse evidence or start review without a caller request |
+| HARNESS-PLAN-PORTS | Private-grant, exact work/pair and PLAN-PORT-REFUSAL settlement fixtures | Close on model prose, reuse evidence, start review without a caller request, return refusal before Recorded, lose read/source custody, renew Decision or release an allocator early |
 | HARNESS-PLAN-OBSERVE | Explicit call, receipt and duplicate sample corpus | Invent zero or count one assembly twice |
 
 ## 9. Selection, destinations sections 5, 6 and 8

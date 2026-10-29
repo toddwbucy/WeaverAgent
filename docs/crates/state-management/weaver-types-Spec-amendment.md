@@ -4,7 +4,7 @@
 
 **Landing PR:** #348
 
-**Version:** 0.34 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.35 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -764,6 +764,24 @@ harness owns purpose/reference checks, and the trace mirrors each case. The code
 fixture must reject a field or code belonging to another refusal family. A refusal
 prevents that instruction and operation, never changes store contents or becomes a
 classifier-component halt. [FLOW-8, CLASS-2]
+
+**TYPES-PLAN-PORT-REFUSAL.** Add Spec 07's PlanOperationCase and PlanPortOperation,
+and replace PlanOperationRefused with PLAN-PORT-REFUSAL's exact three-field shape.
+The existing eight semantic case spellings remain distinct from the three added
+operation cases. PlanBreakCase and every stored break field retain only their existing
+eight cases. Add RefusalRecord::PlanOperation with PLAN-PORT-RECORD's exact payload
+under the existing seam tag. This is a trace account of a trusted internal operation,
+not a new lifecycle directive, gate request or serialized private grant. [PLAN-2,
+PLAN-5, PLAN-6, FLOW-3]
+
+Use the strict object codec. Reject unknown or omitted fields, a non-string enum code,
+read_refused/null, another case with nonnull read_code, and read codes outside the
+PLAN-PORT-REFUSAL table's union. Reject null step_id for every operation except
+record_break. The harness checks selector, leg, loaded-seed identities and private
+proof association before constructing the record. Codec acceptance alone grants no
+operation or continuation. Exhaustive refusal consumers must retain this family and
+its exact nested outcome. Root PlanUpdateRefused and PlanBreakCase are unchanged.
+[PLAN-6, SEAM-2, SEAM-3, FLOW-3]
 
 **TYPES-PLAN-CONTROL.** Add LifecycleDirective::PlanUpdate and
 LifecycleAnswer::PlanUpdated with Spec 07's PLAN-EXCHANGE fields, using the existing
