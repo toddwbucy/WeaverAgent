@@ -366,7 +366,12 @@ pub(in crate::flow::context) fn drive(
     } else {
         mode
     };
-    let path = std::env::temp_dir().join(format!("weaver-gate-composition-{}", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "weaver-gate-composition-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::create_dir_all(&path).unwrap();
     let coordination = crate::channel::bind_coordination(&path.join("admin.sock")).unwrap();
     let listener = LifecycleListener::new(coordination).unwrap();

@@ -647,7 +647,7 @@ impl AuthorAtHalt {
             }
             AuthoredSource::ManagementInput(cause) => {
                 raw(out, b"{")?;
-                field!(out, "management_input", cause);
+                field!(out, "management_input", &cause.cause());
                 raw(out, b"}")?;
             }
             AuthoredSource::Model => value!(out, &"model")?,

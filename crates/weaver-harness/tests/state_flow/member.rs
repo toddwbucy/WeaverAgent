@@ -199,6 +199,9 @@ pub(super) struct NormalMember {
     held_prefix: usize,
     pub(super) corrupt_release: bool,
     pub(super) corrupt_abort: bool,
+    pub(super) refuse_first_snapshot: bool,
+    pub(super) damage_first_image: bool,
+    pub(super) wait_for_capture_join: bool,
     held_filing: Option<Vec<u8>>,
     released_filing: Option<Vec<u8>>,
     capture_delay: Option<CaptureDelay>,
@@ -275,6 +278,9 @@ impl NormalMember {
             held_prefix: 0,
             corrupt_release: false,
             corrupt_abort: false,
+            refuse_first_snapshot: false,
+            damage_first_image: false,
+            wait_for_capture_join: false,
             held_filing: None,
             released_filing: None,
             capture_delay: None,
@@ -385,6 +391,36 @@ impl NormalMember {
         while let Some(end) = self.request_lines.iter().position(|b| *b == b'\n') {
             let line: Vec<_> = self.request_lines.drain(..=end).collect();
             let frame = s::decode_state_line(&line, s::FrameDirection::Request).unwrap();
+            if self.refuse_first_snapshot
+                && let s::StateFrame::Control {
+                    frame: s::StateControl::Snapshot { capture_id },
+                    ..
+                } = &frame
+            {
+                self.refuse_first_snapshot = false;
+                // Make the actual SQLite member's O_EXCL image creation fail.
+                // Its normal refusal cleanup removes this owned-name remnant;
+                // the proxy forwards the real measured refusal and Abort reply.
+                let name = format!("capture-{}.sqlite.part", capture_id.0);
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(self.process.room.join(&name))
+                    .unwrap();
+                file.write_all(b"controlled image-name collision").unwrap();
+                std::fs::write(
+                    self.process
+                        .root
+                        .parent()
+                        .unwrap()
+                        .join("capture-collision.json"),
+                    serde_json::to_vec(
+                        &serde_json::json!({"capture_id":capture_id,"room_name":name}),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            }
             if let s::StateFrame::Control {
                 frame: s::StateControl::Abort { capture_id },
                 ..
@@ -410,7 +446,21 @@ impl NormalMember {
                 filings.push(frame);
             }
         }
-        flush(&mut self.stream, &mut self.to_member);
+        let joined = self
+            .process
+            .root
+            .parent()
+            .unwrap()
+            .join("capture-join-retained");
+        let collision = self
+            .process
+            .root
+            .parent()
+            .unwrap()
+            .join("capture-collision.json");
+        if !self.wait_for_capture_join || !collision.exists() || joined.exists() {
+            flush(&mut self.stream, &mut self.to_member);
+        }
         if self.harness_eof && self.to_member.is_empty() && !self.write_closed {
             self.stream.shutdown(std::net::Shutdown::Write).unwrap();
             self.write_closed = true;
@@ -430,6 +480,37 @@ impl NormalMember {
         while let Some(end) = self.response_lines.iter().position(|b| *b == b'\n') {
             let line: Vec<_> = self.response_lines.drain(..=end).collect();
             let mut response = s::decode_state_line(&line, s::FrameDirection::Response).unwrap();
+            if self.damage_first_image
+                && let s::StateFrame::ControlAnswer {
+                    frame:
+                        s::StateControlAnswer::Snapshot {
+                            room_name,
+                            size_bytes,
+                            ..
+                        },
+                    ..
+                } = &response
+            {
+                self.damage_first_image = false;
+                // The member reports its real image unchanged. Damage that
+                // owned room file before admin opens it, so the actual bounded
+                // publisher refuses the size mismatch and sends Aborted.
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(self.process.room.join(room_name))
+                    .unwrap()
+                    .set_len(size_bytes.0 + 1)
+                    .unwrap();
+                std::fs::write(
+                    self.process
+                        .root
+                        .parent()
+                        .unwrap()
+                        .join("capture-preparation-failure.json"),
+                    &line,
+                )
+                .unwrap();
+            }
             if matches!(
                 (&response, self.capture_delay),
                 (

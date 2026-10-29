@@ -7,7 +7,7 @@ floor. Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-harness-Spec`
 **Parent:** `weaver-harness-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #181
+**Landing PR:** #398
 
 ---
 
@@ -1183,7 +1183,8 @@ mirrors, so the descriptor arrives the same way, and the kind set carries no
 `load`, a replay's bracket being its own pair and its clock originating at the
 opening event that pair names. So this paragraph's citation of the serving surface
 reaches the receive under either kind and the event kind under one. What holds under
-either is the count, the descriptor, and that a run opens with an authored event.
+either is the count and the descriptor. A serving run opens with load; Diagnostic
+setup stays unrecorded until replay opens its own bracket (section 6.1.1).
 
 **Which recorder it is follows the kind, and nothing else in the walk does.**
 Both kinds receive a descriptor and author a record into it, per
@@ -1369,7 +1370,10 @@ deferred with the decode seam, per section 8, and the trace semantics are settle
 way, which is what `basic-inference-loop` section 7 already records.
 
 **Observe answers from any position and authors nothing**, per
-`weaver-admin-harness-contract` section 3 as of 2026-09-04. Before an enter the answer
+`weaver-admin-harness-contract` section 3 as of 2026-09-04. During pending Diagnostic
+setup or while a refused partial Diagnostic run is retained for rollback, it answers
+`InTransition` under section 6.1.1. A before-load refusal retaining no run keeps
+`Unloaded`. Outside those setup positions, before an enter the answer
 is `Unloaded` with no load. Entered, it is `Idle` where no turn key stands in flight and
 `Active` where one does, with `LoadFacts` beside it read from the run: the session and
 run, the declaration's digest the enter carried, the artifact, the elections, the store
@@ -2790,6 +2794,78 @@ from: weaver-harness
 to: harness-stop-polled-during-the-stream
 ```
 
+### 6.1.1 Diagnostic setup rollback (DIAGNOSTIC-SETUP-ROLLBACK)
+
+This rule covers a Diagnostic Enter after the worker has adopted its sink and
+state end, before it commits the Ready aggregate. Serving uses its own Enter
+window. Ready commits when all elected arms have confirmed and the worker
+selects the Ready outcome; delayed delivery does not undo that already established
+outcome. The admin invocation lock still permits only the load's own rollback
+in S1; this rule adds no operator verb or pre-Ready Stop.
+
+Every wait in this setup hears the original lifecycle peer and the authenticated
+listener: the state identity answer, SPU Admit, decode Open and elected classifier
+readiness. Partial messages, pending answers and the exact Enter exchange remain
+owned. Peer loss retires delivery alone. A silent new peer or a blocked answer
+cannot prevent the setup owner from hearing rollback or its current deadline.
+An Observe that reaches the worker during setup answers InTransition. This also
+holds after an Enter refusal while partial Diagnostic resources remain held for
+rollback: refusal custody is not a ready Idle run. SavePoint, Stop and other
+directives refuse OutOfOrder, except a forced Leave with rollback true. The
+before-load refusal that retained no run still returns to BeforeEnter and its
+existing Unloaded observation. Recorder failure still bars a successful answer.
+
+Accepting that rollback before Ready commits ends setup continuation. No further
+child is forked, no new identity/Open/classifier work starts and no replay grant
+is issued. The original Enter closes with NoResidency on its original exchange:
+here that code means the Diagnostic aggregate was withdrawn by rollback, not
+that a partially loaded device was observed empty. An earlier established Enter
+refusal retains its exact code instead. An Enter reply already committed is not
+replaced; a rollback after Ready follows the existing entered-run rule.
+
+The worker retains the rollback's peer, exchange and cause and starts the
+existing LEAVE_BOUND_MS interval at its acceptance. The interval includes setup
+settlement, release, reap, record drain and reply delivery; entering another
+phase or receiving traffic never renews it. It changes neither admin's bounds
+nor escalation and run-end duties (admin Spec section 3, S1 rollback).
+
+| State | Event | Required continuation |
+| --- | --- | --- |
+| Setup, no rollback accepted | An arm confirms or refuses | Continue setup or retain the exact Enter refusal under the existing aggregate rule; Ready requires every elected arm. |
+| Refused setup, partial run held | Observe, SavePoint or Stop | Answer InTransition to Observe and OutOfOrder to SavePoint/Stop; retain the exact established Enter refusal and await rollback, never replay. |
+| Setup, before Ready commits | Forced rollback Leave accepted | Retain both exchanges, retire setup continuation and admit the original Enter refusal above. Enter reply backpressure cannot delay cleanup. |
+| Rollback, identity ask pending | Any partial or late identity answer | Close the state ask end and retain no new identity work; no SPU fork follows. |
+| Rollback, Admit not completely sent | Its child exists | Close the child's ends and reap under the retained deadline; send neither a partial retry nor Release before a completed Admit. |
+| Rollback, Admit completely sent and unanswered | Matching Admit terminal arrives | Drain it without Open or Ready. Only its own opener, ordinal, Close position and Admitted/refusal payload settle Admit. Then close decode and release a confirmed residency. A refused or lost Admit closes its ends and reaps the child without inventing a confirmation or sending Release. |
+| Rollback, Admit still pending | Original rollback deadline expires | Close its ends, end and reap the owned child through existing failure cleanup. Never send Release ahead of Admit or report a release confirmation. |
+| Rollback, Open or classifier readiness pending | Rollback owns the work | Close the corresponding work channel, retain the child and release/reap under the same deadline. Open receives no turn-scoped Cancel and no replacement Open. |
+| Rollback, settlement complete | All owned resources released and record drain succeeds within the deadline | Answer the retained rollback Left with forced true, no_state true and no save point, then finish the worker. |
+| Any rollback phase | Deadline or cleanup failure prevents that completion | Preserve the failure and use existing failed-run termination; answer no successful Left. Admin still owns escalation and containment. |
+
+A late source terminal never reopens setup. Same-peer Enter and rollback replies
+retain their order; on different peers each keeps its own exchange, and a blocked
+or lost Enter reply cannot block the rollback. Pending delivery is retained within
+the same rollback interval, never retried as another request. Later management
+follows admin-harness contract section 4's pending-rollback rules; JoinLeave is
+OutOfOrder and Observe remains InTransition.
+
+Diagnostic setup authors no diagnostic event, including on a failed arm or
+rollback. The record starts only when an admitted replay authors ReplayOpened.
+Before that point operator diagnostics and the lifecycle outcome report setup
+failure; they do not manufacture a Fault or a replay bracket. A failed recorder
+still bars lifecycle success. This rule does not change a replay already begun,
+its interruption policy or the recorder's general wait limitation.
+
+The implementing act must exercise actual worker processes with identity,
+Admit, Open and elected classifier readiness held in turn; original-peer loss,
+same/new-peer rollback, pending reply pressure, partial state input, late
+terminals, exact Admit attribution, the original deadline and cleanup failure.
+It must prove no new fork/Open/Ready/replay after accepted rollback, no premature
+Release, no pre-bracket diagnostic event, and no successful Left on failed
+cleanup. Both entry consumers must use the same setup owner or receive separate
+process evidence. Removing the wait integration and deadline inheritance must
+break the instruments.
+
 ### 6.2 The invocation, chartered
 
 **This subsection charters how loop 1 comes to run, per the operator's ruling
@@ -2813,6 +2889,105 @@ concrete signature is the frameless form of the serving entry, listed with
 section 9's satellites, and the entered-state wait under this binding spans
 the coordination listener and the decode channel alone, the gate channel
 having no end to poll.
+
+**DIAGNOSTIC-INTERRUPT.** A replay grants no exemption from section 3's management
+authority. The entered replay owner retains the original Stop or Leave peer, opener
+and cause, its decode exchange and every owed record until they settle. Observe remains
+available while waiting. A disconnected requester does not cancel that accounting.
+Only an open replay turn can answer TurnAborted. Stop before any replay turn or between
+turns answers AtRest and does not cancel the pass or invent a turn.
+
+During a ReFeed, Stop and a forced or rollback Leave request that turn's Cancel once.
+A graceful Leave is held under its original drain bound while the current recorded
+turn finishes. An absent drain_bound retains section 3's unbounded graceful drain,
+as specified by admin Spec 3's bounds and the admin-harness contract 3. No cancellation
+timer starts merely because a graceful Leave was accepted. The management owner
+continues to hear Observe and a joining force while the SPU is blocked. A declared
+drain deadline or the operator's force-unload ends that wait through the forced
+transition. Without either, a blocked turn can keep the graceful drain pending.
+It starts no later turn or resident edit. A joining force or drain
+expiry turns it forced and requests cancellation without renewing any interval. Once
+Stop has been accepted against an open replay turn, or Leave against the entered pass,
+that pass cannot admit a new replay.closed. An earlier accepted closing event keeps its
+original author ticket and outcome and remains owed until its existing disposition.
+The run never retries or resumes the unfinished replay. A later certification needs
+a new diagnostic load.
+
+The cancellation interval starts when the owner accepts the first condition requiring
+the current turn to stop, before preparing or sending Cancel if a ReFeed is active.
+Its duration is DIAGNOSTIC_CANCEL_BOUND_MS from the floor. It covers send pressure,
+draining the ReFeed terminal and the cancel's AtRest, and recording the interrupted
+turn's close. It is capped by any earlier
+applicable enclosing deadline. Later progress, requester loss, Stop, Leave, JoinLeave
+or phase changes cannot restart it. A graceful drain keeps section 3's existing
+optional bound until it turns forced. No serving decision_wait is invented for a
+Diagnostic binding.
+
+An expired graceful-drain interval triggers the forced transition. That spent phase
+bound is not the new cancellation interval's deadline. Any already running Leave
+cleanup interval remains an enclosing cap and keeps its original origin.
+
+This local interval is independent of admin's existing sixty-second Stop receive wait,
+which starts at the directive. It promises no extra time to admin. Admin timing out
+does not retire the worker's accepted duty. A pending Leave retains its original
+cleanup deadlines. Expiry fails the unsettled operation through existing fault and
+organ-cleanup paths, never a successful Stop. Left remains subject to section 3's
+record, release and process-cleanup requirements, including its forced-failure rules.
+Once cancellation is accepted, a stuck prefill or kernel cannot make the cancellation
+owner wait without a deadline. That guarantee does not cap an undeclared graceful
+drain before a forced transition.
+
+The owner sends Cancel only for its retained active turn. At the SPU seam a Cancel
+naming a foreign turn is refused OutOfOrder and leaves the active ReFeed running,
+as the decode contract specifies. That valid refusal is distinct from a response
+to the owner's matching Cancel or a malformed terminal naming a foreign turn.
+
+| Replay state | Event | Required transition |
+| --- | --- | --- |
+| Entered, no turn open | Stop | Answer AtRest, retain the pass and its existing wait |
+| Entered, no turn open | Leave or rollback | Stop admitting replay work and hand the original request to lifecycle cleanup, without a new turn or certification |
+| Turn open, ReFeed active | Stop | Retain opener/cause, start the cancellation interval, send one matching Cancel, settle both decode exchanges |
+| Turn open, no decode ask outstanding | Stop or forced interruption | Start the same interval, admit no further decode ask, close the turn without inventing Cancel or AtRest |
+| Turn open | Graceful Leave | Retain Leave and original drain origin, finish only the current turn, then give back the seat without certification. With no declared drain bound, keep the drain unbounded and management responsive until that turn finishes or a joining force arrives |
+| Turn open | Forced Leave, rollback, joining force or drain expiry | Preserve earlier obligations, start cancellation only if none is already owed, settle the same turn and return the seat |
+| Cancel outstanding | RefeedInterrupted | Validate original turn, consumed less than path length and checked consumed + 1 no greater than resident no greater than capacity, retain the terminal and await AtRest |
+| Cancel outstanding | ReFed wins the race | Retain and record its truthful complete-generation facts, await AtRest, permit no next replay work or certification |
+| Cancel outstanding for the retained active turn | OutOfOrder for that matching Cancel, AtRest before a ReFeed terminal, a terminal carrying a foreign turn, impossible counts or duplicate terminal | Existing protocol-failure path, no completed Stop or certification |
+| Interrupted turn, every owed decode exchange settled | Pending close can be Recorded | Close the original turn once, stopped for the accepted Stop or unload cause under section 3's precedence, then answer Stop or continue Leave |
+| Graceful drain | Current turn finishes normally | Preserve its clean turn close and hand the original Leave to cleanup, with no next replay work or new certification |
+| Any retained operation | Requester EOF | Keep accepted duties, original causes and deadlines, retire only answer delivery |
+| Cancellation wait | Original interval expires, SPU fails or record fails | Preserve the first failure and partial record, allow no replay continuation, run the existing bounded failure cleanup |
+
+RefeedInterrupted is not projected into model.request, model.output or
+model.measurement. Previously received field and column events remain owed under
+their original positions. The interrupted terminal remains owned through the cancel's
+AtRest and the turn-close disposition. No parser or comparison receives it as a full
+Generation. A successful Stop requires every owed decode exchange settled and the one
+turn.closed Recorded before TurnAborted. Ordinary management refusals and joined-Leave
+precedence remain section 3's. Diagnostic still has no gate, wind-down generation or
+save point, and a completed Leave reports no_state.
+
+The implementation must keep management responsive during the entered replay ask,
+between recorded turns and while draining decode or trace work. The replay ask keeps
+its original parked-ask deadline. An at-rest Leave ends that ask through its existing
+channel-close and member-cleanup path rather than waiting for the preload to seal.
+No late answer can start another turn. Pre-Ready identity admission is section 2's
+separate boundary and is not granted a new interruption policy by this clause.
+
+The process instruments cover Stop, graceful and forced Leave, rollback, joining force
+and drain expiry during a real in-flight ReFeed. They retain original identities,
+causes and bounds under decode/record pressure and requester EOF, test both completion
+races and zero-token interruption, and include a silent SPU. Controls must fail when
+Cancel duplicates, AtRest is skipped, the interval renews, a next turn starts, a
+certificate appears after interruption, or Stop/Left precedes its required accounting.
+The SPU seam cases in its section 4.6 are required beside the harness's scripted-peer
+cases. Neither family alone qualifies a real-model diagnostic deployment.
+
+A no-drain-bound case retains the graceful Leave beyond DIAGNOSTIC_CANCEL_BOUND_MS
+without fabricating a cancellation or expiry, answers Observe, then accepts a joining
+force and applies the original cancellation and cleanup intervals. Keep the foreign
+Cancel refusal at the SPU seam separate from a foreign terminal for a matching Cancel
+at the harness, and require the respective unchanged-drive and protocol-failure paths.
 
 **The entered-state wait spans three descriptors, by `poll`, serial as ever.**
 Between enter and leave, loop 0 waits against the coordination listener, the

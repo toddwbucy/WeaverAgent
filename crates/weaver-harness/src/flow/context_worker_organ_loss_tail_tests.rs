@@ -230,4 +230,22 @@ pub(in crate::flow::context::worker_startup) fn finish(
         );
     }
     assert!(run.context.failure().is_none());
+    if mode.contains("-world-pressure-") {
+        let refusals: Vec<_> = rows
+            .iter()
+            .filter(|row| {
+                row["kind"] == "refusal" && row["payload"]["refusal"]["kind"] == "unloading"
+            })
+            .collect();
+        assert_eq!(refusals.len(), 1, "Leave retains Unloading after SPU loss");
+        assert_eq!(refusals[0]["payload"]["asked"]["ask"], "leave");
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row["kind"] == "input.offered")
+                .count(),
+            2,
+            "the frame behind Leave must not reenter serialized check intake"
+        );
+        assert!(!root.join("organ-loss-world-2").exists());
+    }
 }

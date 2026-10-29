@@ -74,6 +74,10 @@ mod terminal;
 use crate::flow::context::leave_capture::{ServingCapture, ServingCaptureProgress};
 use terminal::EnteredRollbackTerminal;
 
+#[path = "context_worker_resting.rs"]
+mod resting;
+use resting::RestingWork;
+
 #[path = "context_worker_forced_leave.rs"]
 pub mod forced;
 
@@ -130,6 +134,8 @@ impl LeaveKind {
 /// ```
 pub struct FoundationEnteredRollbackHandoff {
     pub(super) kind: LeaveKind,
+    pub(super) _plan: Option<Box<super::input::plan::PendingPlan>>,
+    pub(super) _flags: Option<Box<super::input::flags::FoundationFlags>>,
     pub(super) graceful_tail: Option<Box<super::input::graceful::GracefulTail>>,
     pub(super) origin: Arc<()>,
     pub(super) decode: PortIdentity,
@@ -264,6 +270,7 @@ pub enum FoundationEnteredRollbackProgress {
 enum CleanupStage {
     Gate,
     Capture,
+    RefusedAnswer,
     CaptureRefused,
     Grants,
     Seal,
@@ -293,6 +300,7 @@ pub struct FoundationEnteredRollback {
     release: Option<RollbackResidencyRelease>,
     terminal: Option<EnteredRollbackTerminal>,
     capture: Option<ServingCapture>,
+    resting: RestingWork,
     retained_failed_capture: Option<Box<crate::flow::context::leave_capture::FailedCapture>>,
     failed: Option<FailedRunCleanup>,
     reported: bool,
@@ -342,6 +350,7 @@ impl FoundationRun {
             release: None,
             terminal: None,
             capture: None,
+            resting: RestingWork::default(),
             retained_failed_capture: None,
             failed: None,
             reported: false,
@@ -369,6 +378,20 @@ impl EnteredRollbackDisposal {
 
 impl FoundationEnteredRollback {
     #[cfg(test)]
+    pub(in crate::flow::context::worker_startup) fn test_exit_detail(&self) -> String {
+        format!(
+            "detail={:?}, abandoned={}, terminal={:?}, failure={:?}, halt={:?}",
+            self.detail(),
+            self.abandoned(),
+            self.terminal
+                .as_ref()
+                .map(EnteredRollbackTerminal::test_detail),
+            self.run.as_ref().and_then(|run| run.context.failure()),
+            self.run.as_ref().and_then(|run| run.context.flow.halt()),
+        )
+    }
+
+    #[cfg(test)]
     pub(in crate::flow::context::worker_startup) fn test_account(
         &self,
     ) -> (&FoundationRun, &FoundationEnteredRollbackHandoff) {
@@ -395,6 +418,11 @@ impl FoundationEnteredRollback {
             || self.failed.as_ref().unwrap().context(),
             |run| &run.context,
         )
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context::worker_startup) fn test_end_resting_spu(&mut self) {
+        assert_eq!(self.stage, CleanupStage::CaptureRefused);
+        self.run.as_mut().unwrap().resources.end_spu_for_test();
     }
     #[cfg(test)]
     pub(in crate::flow::context::worker_startup) fn test_failed(
@@ -433,6 +461,27 @@ impl FoundationEnteredRollback {
     pub fn progress(&self) -> FoundationEnteredRollbackProgress {
         self.progress
     }
+    /// Report process disposition only after the original cleanup owner closes.
+    /// A terminal refusal, first failure or abandoned cleanup cannot claim the
+    /// ordinary exit even when an Unload sequence was retained.
+    pub fn process_exit(&self) -> Option<crate::FoundationProcessExit> {
+        if self.progress != FoundationEnteredRollbackProgress::Closed {
+            return None;
+        }
+        Some(
+            self.terminal
+                .as_ref()
+                .filter(|_| {
+                    self.failed.is_none()
+                        && !self.abandoned
+                        && self.run.as_ref().is_some_and(|run| {
+                            run.context.failure.is_none() && run.context.flow.halt().is_none()
+                        })
+                })
+                .and_then(EnteredRollbackTerminal::process_exit)
+                .unwrap_or(crate::FoundationProcessExit::Failure),
+        )
+    }
     pub fn detail(&self) -> Option<&str> {
         self.detail.as_deref()
     }
@@ -466,6 +515,9 @@ impl FoundationEnteredRollback {
     }
 
     fn close_dials(&mut self) {
+        if let Some(command) = self.resting.command.take() {
+            self.resting.retired_command = Some(command.retire());
+        }
         if let Some(dials) = self.dials.take() {
             self.retired_dials = Some(dials.retire_failed());
         }
@@ -569,18 +621,31 @@ impl FoundationEnteredRollback {
         self.progress = FoundationEnteredRollbackProgress::Progress;
         // The capture owner first reduces any timely whole CaptureComplete.
         // A delayed reduction must not re-expire that completed capture wait.
-        let result = if self.stage == CleanupStage::Capture {
+        let result = if self.stage == CleanupStage::Capture
+            || (self.stage == CleanupStage::CaptureRefused && self.resting.save.is_some())
+        {
             self.step(io)
         } else {
             self.clock(io).and_then(|()| self.step(io))
         };
         if let Err(error) = result {
-            self.handle_error(error, io);
+            if self.stage == CleanupStage::CaptureRefused {
+                match self.retain_resting_interrupt(&error, io) {
+                    Ok(true) => self.progress = FoundationEnteredRollbackProgress::Progress,
+                    Ok(false) => self.handle_error(error, io),
+                    Err(error) => self.handle_error(error, io),
+                }
+            } else {
+                self.handle_error(error, io);
+            }
         }
         self.progress
     }
 
     fn step(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        if self.stage == CleanupStage::CaptureRefused {
+            return self.step_resting(io);
+        }
         let run = self.run.as_mut().unwrap();
         let handoff = &mut self.handoff;
         let leave = handoff.leave;
@@ -895,7 +960,7 @@ impl FoundationEnteredRollback {
                     dials.freeze_outcome();
                     self.stage = CleanupStage::Grants;
                 }
-                ServingCaptureProgress::Refused => self.stage = CleanupStage::CaptureRefused,
+                ServingCaptureProgress::Refused => self.stage = CleanupStage::RefusedAnswer,
                 ServingCaptureProgress::Pending => {
                     self.progress = FoundationEnteredRollbackProgress::Pending
                 }
@@ -904,10 +969,52 @@ impl FoundationEnteredRollback {
             dials.prepare(&mut run.context, leave, io)?;
             return Ok(());
         }
-        if self.stage == CleanupStage::CaptureRefused {
-            // #348 has no merged authority. Retain the whole stopped capture;
-            // neither release nor a final Leave outcome is elected here.
+        if self.stage == CleanupStage::RefusedAnswer {
+            dials.prepare(&mut run.context, leave, io)?;
+            dials.freeze_refusal();
+            if dials.outcome().0 {
+                self.stage = CleanupStage::Grants;
+            } else if self.capture.as_mut().unwrap().finish_graceful_refusal(
+                &mut run.context,
+                &mut PumpPorts {
+                    lifecycle: dials.capture_ports(handoff.peer.as_mut().unwrap()),
+                    gate: None,
+                    decode: None,
+                    label: None,
+                    io,
+                },
+            )? {
+                // S9 retains the entered run, lowered gate and original capture
+                // evidence. Only the completed refused Leave's wait retires.
+                run.context.deadlines.disarm(PumpDeadline::Leave);
+                self.resting.completed_capture = Some((
+                    self.capture.take().unwrap(),
+                    handoff.peer.take().unwrap().retire_failed(),
+                ));
+                self.stage = CleanupStage::CaptureRefused;
+                self.progress = FoundationEnteredRollbackProgress::Pending;
+            } else {
+                self.progress = FoundationEnteredRollbackProgress::Pending;
+            }
             return Ok(());
+        }
+        if self
+            .capture
+            .as_ref()
+            .is_some_and(|capture| capture.refusal_leg().is_some())
+        {
+            // A first Aborted may cross any refused-Leave stage; the capture
+            // retains it and rejects a duplicate without repeating cleanup.
+            self.capture.as_mut().unwrap().advance(
+                &mut run.context,
+                &mut PumpPorts {
+                    lifecycle: dials.capture_ports(handoff.peer.as_mut().unwrap()),
+                    gate: None,
+                    decode: None,
+                    label: None,
+                    io,
+                },
+            )?;
         }
         if self.stage != CleanupStage::Terminal {
             dials.prepare(&mut run.context, leave, io)?;
@@ -1056,12 +1163,13 @@ impl FoundationEnteredRollback {
                         .unwrap()
                         .leave_outcome(forced, forced_by);
                     if handoff.kind.captures() {
-                        let report = self
-                            .capture
-                            .as_ref()
-                            .and_then(ServingCapture::report)
-                            .expect("Leave release requires the completed original capture");
-                        self.terminal.as_mut().unwrap().captured(report);
+                        let capture = self.capture.as_ref().expect("original Leave capture");
+                        if let Some(report) = capture.report() {
+                            self.terminal.as_mut().unwrap().captured(report);
+                        } else {
+                            assert!(capture.refusal_leg().is_some() && forced);
+                            self.terminal.as_mut().unwrap().refused_capture();
+                        }
                     }
                     self.stage = CleanupStage::Terminal;
                 }
@@ -1122,6 +1230,7 @@ impl FoundationEnteredRollback {
             }
             CleanupStage::Gate
             | CleanupStage::Capture
+            | CleanupStage::RefusedAnswer
             | CleanupStage::CaptureRefused
             | CleanupStage::Closed => unreachable!(),
         }
@@ -1158,14 +1267,26 @@ impl FoundationEnteredRollback {
         } else {
             None
         };
-        let mut tail = FailedRunCleanup::after_serving_rollback(
-            context,
-            resources,
-            self.handoff.leave,
-            cause,
-            self.release.take(),
-            admit_reply,
-        );
+        let mut tail = if self.stage == CleanupStage::CaptureRefused {
+            FailedRunCleanup::after_resting(context, resources, admit_reply)
+        } else {
+            FailedRunCleanup::after_serving_rollback(
+                context,
+                resources,
+                self.handoff.leave,
+                cause,
+                self.release.take(),
+                admit_reply,
+            )
+        };
+        if let Some(save) = self.resting.save.take() {
+            let (capture, request) = save.into_failed(&tail.context);
+            self.resting.failed_save = Some(request);
+            if let Err(capture) = tail.retain_failed_capture(capture) {
+                self.retained_failed_capture = Some(capture);
+                tail.secondary("S9 save could not join its original failed report");
+            }
+        }
         if let Some(capture) = self.capture.take() {
             let peer = self
                 .handoff
@@ -1287,6 +1408,10 @@ impl FoundationEnteredRollback {
         io: &mut impl PumpIo,
     ) -> FoundationEnteredRollbackProgress {
         if self.progress != FoundationEnteredRollbackProgress::Pending {
+            return self.progress;
+        }
+        if self.stage == CleanupStage::CaptureRefused && self.failed.is_none() {
+            self.wait_resting(io);
             return self.progress;
         }
         if let Some(tail) = &mut self.failed {
@@ -1430,3 +1555,7 @@ impl FoundationEnteredRollback {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "context_worker_entered_rollback_exit_tests.rs"]
+mod exit_tests;

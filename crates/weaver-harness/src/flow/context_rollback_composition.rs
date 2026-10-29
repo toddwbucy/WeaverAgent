@@ -170,7 +170,12 @@ impl EnterRefusalResponse<'_> {
             &waits,
         );
         match result {
-            Ok(crate::flow::pump::PumpStep::Deadline { key, bound }) => {
+            Ok(crate::flow::pump::PumpStep::Deadline {
+                key,
+                bound,
+                observed_ns,
+            }) => {
+                context.retain_pump_clock(observed_ns, ports.io)?;
                 return Err(RunFailure::Wait { key, bound });
             }
             Ok(_) => {}

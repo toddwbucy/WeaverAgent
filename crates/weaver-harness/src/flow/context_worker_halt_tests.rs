@@ -16,6 +16,34 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+fn observe_interrupt(root: &Path) {
+    let path = root.join("halt-interrupt.json");
+    if !path.exists() {
+        // This observes the fixture after the owner has submitted its actual
+        // interrupt. It does not advance or renew the owner's halt deadline.
+        std::fs::write(root.join("halt-observe-interrupt"), b"observer waiting").unwrap();
+    }
+    let end = Instant::now() + Duration::from_secs(10);
+    while !path.exists() {
+        assert!(
+            Instant::now() < end,
+            "gate must observe the actual interrupt"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let interrupt: OrganEnvelope = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let execution: OrganEnvelope =
+        serde_json::from_slice(&std::fs::read(root.join("external-2.json")).unwrap()).unwrap();
+    assert_eq!(interrupt.exchange, execution.exchange);
+    assert_eq!(interrupt.position, Position::Continue);
+    assert_eq!(
+        interrupt.payload,
+        Payload::ToolInterrupt {
+            by: weaver_types::KillCause::FlowFailure,
+        }
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn exercise(
     mut guard: Guard<'_>,
@@ -149,9 +177,19 @@ pub(super) fn exercise(
                 .gate
                 .held()
                 .is_some_and(|frame| matches!(frame.payload, Payload::ToolAnswer(_)));
-        let silent = mode.contains("-deadline") && root.join("halt-interrupt.json").exists();
+        let timed_interrupt = (mode.contains("-deadline") || mode.contains("halt-gate-clock"))
+            && input
+                .serving
+                .owner
+                .context
+                .halt_gate()
+                .is_some_and(|gate| gate.interrupt_sent());
+        if timed_interrupt {
+            observe_interrupt(root);
+        }
+        let silent = mode.contains("-deadline") && timed_interrupt;
         if mode.contains("halt-gate-clock")
-            && root.join("halt-interrupt.json").exists()
+            && timed_interrupt
             && progress == FoundationHaltProgress::Pending
         {
             let previous = clock.now().unwrap();
@@ -192,9 +230,17 @@ pub(super) fn exercise(
         }
         if mode.contains("pressure-late") && blocked_return && !pressure_released {
             assert!(
-                root.join("halt-interrupt.json").exists(),
+                owned
+                    .test_input()
+                    .serving
+                    .owner
+                    .context
+                    .halt_gate()
+                    .unwrap()
+                    .interrupt_sent(),
                 "interrupt precedes ordinary capacity"
             );
+            observe_interrupt(root);
             assert!(
                 owned
                     .test_input()
@@ -245,7 +291,8 @@ pub(super) fn exercise(
         assert!(!context.halt_gate().unwrap().interrupt_sent());
         assert!(!root.join("external-2.json").exists());
     } else if !unavailable {
-        assert!(root.join("halt-interrupt.json").exists());
+        assert!(context.halt_gate().unwrap().interrupt_sent());
+        observe_interrupt(root);
         if !expired {
             assert_eq!(
                 context.halt_gate_terminal().unwrap().1,

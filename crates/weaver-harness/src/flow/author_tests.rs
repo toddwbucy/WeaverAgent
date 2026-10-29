@@ -42,11 +42,12 @@ fn all_registered_kinds_have_only_their_declared_sources() {
     use AuthoredSource as S;
     let source_values = [
         S::BoundaryInput(1000),
-        S::ManagementInput(Cause { uid: 1000 }),
+        S::ManagementInput(crate::flow::plan::ManagementInput::for_test_root()),
         S::Model,
         S::Tool,
         S::Loop,
         S::Runtime,
+        S::ManagementInput(crate::flow::plan::ManagementInput::for_test_uid(1000)),
     ];
     let author = ServingAuthor::new("s".into(), "r".into(), 1000, 0).unwrap();
     // This independent table is the complete HARNESS-AUTHOR census. Test the
@@ -87,6 +88,9 @@ fn all_registered_kinds_have_only_their_declared_sources() {
                     allowed.contains(&index),
                     "{name} {source:?}"
                 );
+                if kind == Kind::PlanEvent && !allowed.contains(&index) {
+                    assert_eq!(result.unwrap_err(), AuthorError::UnlicensedSource);
+                }
             }
         }
     }

@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::{Value, json};
 use weaver_trace::serving::{Kind, Payload, payloads as trace};
-use weaver_trace::{Cause, Sequence, Subsystem, TurnRef};
+use weaver_trace::{Sequence, Subsystem, TurnRef};
 use weaver_types::{Opener, state_flow::Digest};
 
 fn source(sequence: u64, block: u64) -> SourceBlockId {
@@ -188,8 +188,8 @@ fn original_author_sources_are_externally_tagged_and_optional_members_stay_null(
             json!({"boundary_input":4242}),
         ),
         (
-            AuthoredSource::ManagementInput(Cause { uid: 7 }),
-            json!({"management_input":{"uid":7}}),
+            AuthoredSource::ManagementInput(crate::flow::plan::ManagementInput::for_test_root()),
+            json!({"management_input":{"uid":0}}),
         ),
         (AuthoredSource::Model, json!("model")),
         (AuthoredSource::Tool, json!("tool")),

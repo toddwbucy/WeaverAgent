@@ -22,6 +22,7 @@ impl<'a> FoundationManagement<'a> {
             || self.read_armed
             || self.input.has_graceful_leave()
             || self.input.serving.save.is_some()
+            || self.input.plan_pending()
             || !self.input.rollback_admissible()
         {
             return Err(self);

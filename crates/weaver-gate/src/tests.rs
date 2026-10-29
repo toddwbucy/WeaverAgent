@@ -651,6 +651,11 @@ fn undrawn() -> Vec<LifecycleDirective> {
         },
         LifecycleDirective::JoinLeave { cause },
         LifecycleDirective::SavePoint { cause },
+        LifecycleDirective::PlanUpdate {
+            cause,
+            document_sha256: weaver_types::state_flow::Digest::new("1".repeat(64)).unwrap(),
+            document: "{}".into(),
+        },
         LifecycleDirective::Stop { cause },
         LifecycleDirective::Observe,
         LifecycleDirective::Release,

@@ -892,6 +892,7 @@ fn dispatch_at(
             | LifecycleDirective::SavePoint { .. }
             | LifecycleDirective::SavePointVerb { .. }
             | LifecycleDirective::Restore { .. }
+            | LifecycleDirective::PlanUpdate { .. }
             | LifecycleDirective::ForceUnload { .. }
             | LifecycleDirective::JoinLeave { .. }
             | LifecycleDirective::Quiesce,

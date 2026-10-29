@@ -74,7 +74,7 @@ fn startup_composition_child() {
                         serde_json::from_slice(&message.payload).unwrap();
                     let (_, _, mut ready) = classifier_fixture();
                     ready.max_wire_bytes = bootstrap.instruction.max_wire_bytes;
-                    if mode.contains("emission") {
+                    if mode.contains("emission") || mode.starts_with("input-worker-plan-") {
                         use sha2::{Digest as _, Sha256};
                         let digest = s::Digest::new(format!(
                             "{:x}",
@@ -165,7 +165,8 @@ fn startup_composition_child() {
                             };
                         }
                         reply
-                    } else if mode.contains("generation")
+                    } else if (mode.contains("generation")
+                        || mode.starts_with("input-worker-plan-"))
                         && matches!(request.target, s::Ste100Target::Source(_))
                     {
                         let mut reply = if mode.contains("emission") {

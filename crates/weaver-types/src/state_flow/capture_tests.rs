@@ -80,6 +80,13 @@ fn continuations() -> Vec<(CaptureSender, Value)> {
         (
             CaptureSender::Harness,
             envelope(
+                "save_point_capture_refused",
+                json!({"capture_id":"7", "missed":"answer"}),
+            ),
+        ),
+        (
+            CaptureSender::Harness,
+            envelope(
                 "save_point_aborted",
                 json!({
                     "capture_id":"7", "code":"snapshot_failed", "detail":"exact refusal\nwith detail"
@@ -91,6 +98,38 @@ fn continuations() -> Vec<(CaptureSender, Value)> {
 
 fn decode(value: &Value, sender: CaptureSender) -> Result<CaptureEnvelope, CaptureCodecError> {
     CaptureEnvelope::decode(&serde_json::to_vec(value).unwrap(), sender)
+}
+
+#[test]
+fn refused_capture_acknowledgement_admits_only_cleanup_legs() {
+    for leg in ["answer", "finished", "published"] {
+        let value = envelope(
+            "save_point_capture_refused",
+            json!({"capture_id":"7", "missed":leg}),
+        );
+        let decoded = decode(&value, CaptureSender::Harness).unwrap();
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), value);
+        assert!(decoded.encode(CaptureSender::Harness).is_ok());
+    }
+    for leg in ["capture_not_ready", "member_dead", "unknown"] {
+        let value = envelope(
+            "save_point_capture_refused",
+            json!({"capture_id":"7", "missed":leg}),
+        );
+        assert!(decode(&value, CaptureSender::Harness).is_err());
+    }
+    let invalid = CaptureEnvelope {
+        exchange: ExchangeId {
+            opener: Opener::Admin,
+            ordinal: 19,
+        },
+        position: Position::Continue,
+        payload: CapturePayload::SavePointCaptureRefused(CaptureRefused {
+            capture_id: 7.into(),
+            missed: SavePointLeg::CaptureNotReady,
+        }),
+    };
+    assert!(invalid.encode(CaptureSender::Harness).is_err());
 }
 
 #[test]
