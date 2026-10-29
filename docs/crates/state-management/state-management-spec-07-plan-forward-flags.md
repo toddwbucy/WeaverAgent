@@ -2,9 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #384
-
-**Version:** 0.15 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
+**Version:** 0.16 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -134,6 +132,38 @@ the outcome before the answer. A lost answer is resolved by show's committed Pla
 and the receipt trace, never blind retry. A correctly rejected document refuses the
 operation and leaves the agent running. Component failure follows the foundation latch.
 [CLASS-8, PLAN-6, FLOW-4]
+
+**PLAN-ADMISSION-REFUSAL.** Trace-before-answer also applies when a fully received,
+well-formed PlanUpdate opener is judged and refused before plan-operation admission.
+This includes out_of_order and the existing root-cause refusal. The lifecycle owner
+retains the exact received packet and the selected refusal. Before it sends the
+refusal answer, it records RefusalRecord::Lifecycle with asked plan_update and that
+unchanged refusal under the existing refusal event. The event is harness/runtime
+metadata, with turn null and causal_parent null. It is not a plan input or effect and
+grants no allocator, read, placement or generation. [PLAN-6, FLOW-3, FLOW-4]
+
+This rule is specific to PlanUpdate. It adds no record obligation to other lifecycle
+directives. Invalid framing or descriptors and incomplete requests retain the existing
+transport disposition. A rejected PlanUpdate never queues for later admission, even
+if the original turn or operation finishes while its refusal records. [PLAN-6, SEAM-3]
+
+The refusal's accounting and delivery share one loaded decision-wait interval, starting
+at the worker's retained monotonic reading immediately after receiving the complete
+opener. It coexists with every earlier operation bound, which it cannot reset or
+retire. Trace pressure keeps the same event and author ticket. If an earlier author
+owns the slot, only that author's original continuation may consume its receipt. Run
+that continuation only as needed to free the slot, under its original bounds, then
+record the refusal. This does not cancel the original operation or elect its next
+workflow. [CLASS-8, FLOW-1, FLOW-4]
+
+EOF after the complete opener does not discard the owed record. A refusal that cannot
+reach Recorded within its original interval takes the foundation decision_bound failure
+path and retains its request, original or ticket, and first failure through teardown.
+Once Recorded, the exact author claim still consumes its own completion. Answer
+delivery uses only the remaining interval. EOF or delivery expiry then ends delivery
+without retry, without halting solely for the missing answer and without claiming the
+refusal was unrecorded. Recording a valid refusal preserves the active turn and prior
+committed plan. [PLAN-6, CLASS-8, FLOW-3, FLOW-4]
 
 **PLAN-PREFLIGHT-READ.** Before a root update admits its plan effect, a valid read
 refusal in the table below refuses only that operation as read_refused. The table
@@ -716,6 +746,7 @@ or task success. [PLAN-1 through PLAN-6, R20-12]
 | PLAN-ADMIN | Root/sudo cause, fixed-file, extra-argument, stdin and whole-envelope cases | Remove cause check or measure unencoded text only |
 | PLAN-TYPES and CATEGORY | Stable-ID and operator-only category fixtures | Reuse a retired ID or accept model category changes |
 | PLAN-EXCHANGE | Busy, stale, cancelled, refused and lost-answer transitions | Blindly retry an unanswered committed update |
+| PLAN-ADMISSION-REFUSAL | Busy/cause/inner refusal, prior-author custody, EOF, trace-before-send and both expiry boundaries | Answer before Recorded, admit after idle, steal a ticket, renew either bound or discard accounting at EOF |
 | PLAN-PREFLIGHT-READ | Every listed initial/next code, invalid leg/code, acquired release, record pressure, Stop/leave, expiry and post-effect contrast | Lose typed code/detail or measurement parent, invent recall, retry, renew the bound, author an effect, halt a valid preflight refusal or retain stale success after a failed post-effect refresh |
 | PLAN-PORT-REFUSAL and PLAN-PORT-RECORD | Every permitted initial/next code, counter overflow, correct template rejection, source/record pressure, Stop/leave, failed release and post-effect contrast | Break a plan on resource refusal, lose code/detail or parent, return before Recorded, renew a bound, skip cleanup or treat a failed refresh as a healthy refusal |
 | PLAN-FEED and PLAN-EFFECT | Trace-to-receipt fixture and private authority compile pin | Construct root authority from a gate frame or bypass trace |

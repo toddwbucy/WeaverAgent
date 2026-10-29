@@ -2,9 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #384
-
-**Version:** 0.40 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.41 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -1700,6 +1698,16 @@ FLOW-8]
 The boot summary must reflect any boot-repair receipts before loaded is reported.
 [PERSIST-6, PLAN-2]
 
+The management owner implements Spec 07 PLAN-ADMISSION-REFUSAL before sending a
+pre-admission PlanUpdate refusal. It retains the original opener, exact refusal and
+private trace claim beside the suspended input owner. Use the loaded decision wait
+from the complete opener's receive reading for accounting and delivery, independently
+of the active operation's unchanged bounds. A competing author finishes only through
+its original continuation. Never borrow that author's ticket or admit the rejected
+plan after it becomes idle. EOF keeps the accounting duty. Failed accounting retains
+the complete management owner through teardown. After Recorded, lost or expired
+delivery creates no retry and no new foundation failure. [PLAN-6, FLOW-1, FLOW-4]
+
 At boot, after pair repair and before enter confirmation/user admission, read
 plan_current through HARNESS-READ. At HARNESS-RECALL's Recording/Recorded
 transition, cache PlanSummary by projecting plan, status, document_sha256 and
@@ -1826,6 +1834,7 @@ has no store write or progression handle. A typed read refusal is unavailable, n
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
 | HARNESS-PLAN | Root update and source/receipt lifecycle rows, held receipt/digest mismatches, delayed Recording/Recorded, boot refusal and failed post-receipt refresh | Mint model authority, answer before commit, ignore held expectation, cache before Recorded or serve stale successful Observe/show after refresh failure |
+| PLAN-ADMISSION-REFUSAL | Root management refusal through trace pressure, earlier owners, delivery pressure and failed-run handoff | Lose a request or ticket, cancel the original turn, grant a plan operation or send before Recorded |
 | HARNESS-PLAN-PORTS | Private-grant, exact work/pair and PLAN-PORT-REFUSAL settlement fixtures | Close on model prose, reuse evidence, start review without a caller request, return refusal before Recorded, lose read/source custody, renew Decision or release an allocator early |
 | HARNESS-PLAN-OBSERVE | Explicit call, receipt and duplicate sample corpus | Invent zero or count one assembly twice |
 
