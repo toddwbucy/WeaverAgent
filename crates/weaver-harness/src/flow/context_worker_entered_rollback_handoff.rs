@@ -47,6 +47,7 @@ impl FoundationManagement<'_> {
             || self.input.serving.save.is_some()
             || self.input.plan_pending()
             || self.input.flags_pending()
+            || self.input.plan_operation_pending()
             || !self.input.rollback_admissible()
             || !self.peer.held().is_some_and(|message| {
                 message.envelope.exchange.opener == Opener::Admin
@@ -202,6 +203,7 @@ impl FoundationInput<'_> {
             save,
             plan,
             flags,
+            plan_operation,
         } = serving;
         let crate::flow::context::boot_composition::gate_startup::ready::EnteredServing {
             context,
@@ -242,6 +244,7 @@ impl FoundationInput<'_> {
             kind: directive.kind,
             _plan: plan.map(|plan| plan.retire_failed()),
             _flags: flags,
+            _plan_operation: plan_operation,
             graceful_tail: directive.graceful_tail,
             origin,
             decode,

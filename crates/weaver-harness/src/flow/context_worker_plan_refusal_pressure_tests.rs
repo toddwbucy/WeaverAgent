@@ -22,7 +22,7 @@ impl PumpIo for RecordedExpiry {
     }
 }
 
-pub(super) fn fill(context: &mut RecordingContext) {
+pub(in crate::flow::context::worker_startup) fn fill(context: &mut RecordingContext) {
     // Saturate the real event queue without making each ownership test drain
     // and parse 32 MiB inside an unrelated read's two-second interval. Allow
     // for compact records already flushed into the socket before it blocks.
@@ -55,7 +55,10 @@ pub(super) fn fill(context: &mut RecordingContext) {
     panic!("trace writer never reached capacity");
 }
 
-pub(super) fn drain(context: &RecordingContext, reader: &mut UnixStream) -> Vec<u8> {
+pub(in crate::flow::context::worker_startup) fn drain(
+    context: &RecordingContext,
+    reader: &mut UnixStream,
+) -> Vec<u8> {
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut bytes = vec![];
     loop {

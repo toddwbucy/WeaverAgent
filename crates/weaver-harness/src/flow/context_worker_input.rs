@@ -27,6 +27,9 @@ pub(in crate::flow::context::worker_startup) mod graceful;
 #[path = "context_worker_flags.rs"]
 pub(crate) mod flags;
 
+#[path = "context_worker_plan_ports.rs"]
+pub(crate) mod plan_ports;
+
 #[path = "context_worker_plan.rs"]
 pub(in crate::flow::context::worker_startup) mod plan;
 
@@ -188,7 +191,11 @@ impl<'a> FoundationInput<'a> {
         if self.serving.owner.listener.held().is_some() {
             return FoundationInputProgress::ManagementPending;
         }
-        if self.save_blocks_turn() || self.plan_pending() || self.flags_pending() {
+        if self.save_blocks_turn()
+            || self.plan_pending()
+            || self.flags_pending()
+            || self.plan_operation_pending()
+        {
             return FoundationInputProgress::Pending;
         }
         if let Some(progress) = self.wind_down_input_progress() {
@@ -279,6 +286,10 @@ impl<'a> FoundationInput<'a> {
                 // still lets its original owner run, without granting a boundary
                 // when that owner finishes in this same call.
                 let settled = matches!(observation, ObservationProgress::Complete);
+                if self.plan_operation_pending() {
+                    self.advance_plan_operation(None, io)?;
+                    return Ok(());
+                }
                 if self.flags_pending() {
                     self.advance_flags(None, io)?;
                     // Yield the completed sample before any unrelated idle wait.

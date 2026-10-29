@@ -12,7 +12,7 @@ use weaver_types::state_flow::Digest;
 use weaver_types::{Cause, LifecycleAsk, Opener, RefusalRecord};
 
 #[path = "context_worker_plan_refusal_pressure_tests.rs"]
-mod pressure;
+pub(in crate::flow::context::worker_startup) mod pressure;
 
 #[path = "context_worker_plan_refusal_prior_tests.rs"]
 pub(in crate::flow::context::worker_startup) mod prior;

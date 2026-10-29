@@ -35,13 +35,18 @@ pub(in crate::flow::context) fn templates() -> &'static [s::TemplateSpec] {
     ALL.get_or_init(|| {
         let mut all = crate::flow::context::template_tests::templates().to_vec();
         all.extend(
-            ["plan.authorize", "plan.lock", "plan.replace"]
-                .into_iter()
-                .map(|id| s::TemplateSpec {
-                    template_id: id.into(),
-                    kind: "plan.event".into(),
-                    parts: vec![s::TemplatePart::Literal("Read plan.".into())],
-                }),
+            [
+                "plan.authorize",
+                "plan.lock",
+                "plan.replace",
+                "plan.activate",
+            ]
+            .into_iter()
+            .map(|id| s::TemplateSpec {
+                template_id: id.into(),
+                kind: "plan.event".into(),
+                parts: vec![s::TemplatePart::Literal("Read plan.".into())],
+            }),
         );
         all
     })
@@ -127,7 +132,7 @@ fn observe(guard: &mut Guard<'_>, socket: &Path) -> s::enter::ObservationContent
     answer.payload
 }
 
-fn sqlite_update<'a>(
+pub(in crate::flow::context::worker_startup) fn sqlite_update<'a>(
     serving: FoundationServing<'a>,
     member: &mut Member,
     reader: &mut UnixStream,

@@ -294,6 +294,7 @@ impl<'a> FoundationEnter<'a> {
             save: None,
             plan: None,
             flags: None,
+            plan_operation: None,
         })
     }
 }
@@ -323,6 +324,7 @@ pub struct FoundationServing<'a> {
     save: Option<Box<input::save::PendingSave>>,
     plan: Option<Box<input::plan::PendingPlan>>,
     flags: Option<Box<input::flags::FoundationFlags>>,
+    plan_operation: Option<Box<input::plan_ports::PendingPlanOperation>>,
 }
 
 #[path = "context_worker_input.rs"]

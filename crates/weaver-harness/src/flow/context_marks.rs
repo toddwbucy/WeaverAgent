@@ -157,6 +157,7 @@ pub(super) struct MarksTransaction {
 pub(super) enum MarkOperation {
     Task(Box<MarksTransaction>),
     Plan(Box<super::plan_update_driver::RootPlanTransaction>),
+    Port(Box<super::plan_port_driver::PlanPortTransaction>),
 }
 
 impl MarksTransaction {
@@ -210,19 +211,20 @@ impl RecordingContext {
     pub(super) fn task_work(&self) -> Option<&MarksTransaction> {
         match self.marks.as_ref()? {
             MarkOperation::Task(work) => Some(work),
-            MarkOperation::Plan(_) => None,
+            MarkOperation::Plan(_) | MarkOperation::Port(_) => None,
         }
     }
     fn task_work_mut(&mut self) -> Option<&mut MarksTransaction> {
         match self.marks.as_mut()? {
             MarkOperation::Task(work) => Some(work),
-            MarkOperation::Plan(_) => None,
+            MarkOperation::Plan(_) | MarkOperation::Port(_) => None,
         }
     }
     pub(super) fn marks_blocks_external(&self) -> bool {
         match self.marks.as_ref() {
             Some(MarkOperation::Task(work)) => !work.driving,
             Some(MarkOperation::Plan(work)) => !work.driving,
+            Some(MarkOperation::Port(work)) => !work.driving,
             None => false,
         }
     }

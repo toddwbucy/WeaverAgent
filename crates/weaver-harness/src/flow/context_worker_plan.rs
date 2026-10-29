@@ -267,6 +267,7 @@ impl FoundationInput<'_> {
             && self.report.is_none()
             && !self.plan_pending()
             && !self.flags_pending()
+            && !self.plan_operation_pending()
             && self.serving.save.is_none()
             && !self.has_graceful_leave()
     }

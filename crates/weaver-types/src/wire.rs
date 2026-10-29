@@ -1509,6 +1509,14 @@ pub enum RefusalRecord {
         asked: LifecycleAsk,
         refusal: LifecycleRefusal,
     },
+    /// An admitted internal plan operation, separate from a root management ask.
+    #[serde(deserialize_with = "plan::operation_refusal")]
+    PlanOperation {
+        operation: crate::state_flow::PlanPortOperation,
+        expected: crate::state_flow::PlanRef,
+        step_id: Option<crate::state_flow::StepId>,
+        refusal: crate::state_flow::PlanOperationRefused,
+    },
     /// **Classify carries no ask**, its content standing in the
     /// `classify.request` event the harness authored before the exchange.
     Classify { refusal: LabelRefusal },

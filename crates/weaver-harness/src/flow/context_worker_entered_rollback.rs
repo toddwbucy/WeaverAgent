@@ -136,6 +136,7 @@ pub struct FoundationEnteredRollbackHandoff {
     pub(super) kind: LeaveKind,
     pub(super) _plan: Option<Box<super::input::plan::PendingPlan>>,
     pub(super) _flags: Option<Box<super::input::flags::FoundationFlags>>,
+    pub(super) _plan_operation: Option<Box<super::input::plan_ports::PendingPlanOperation>>,
     pub(super) graceful_tail: Option<Box<super::input::graceful::GracefulTail>>,
     pub(super) origin: Arc<()>,
     pub(super) decode: PortIdentity,

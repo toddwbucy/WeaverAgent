@@ -192,6 +192,7 @@ enum ReadPurpose {
     Ordinary,
     Marks,
     RootPlan,
+    PlanPort,
     PlanFlags(flags::FlagRead),
     BootPairs,
     PlanSummary,
@@ -277,6 +278,7 @@ impl ReadTransaction {
             ReadPurpose::Ordinary
             | ReadPurpose::Marks
             | ReadPurpose::RootPlan
+            | ReadPurpose::PlanPort
             | ReadPurpose::PlanFlags(_)
             | ReadPurpose::Inward(_) => false,
         }
@@ -397,6 +399,16 @@ impl RecordingContext {
         self.begin_read_with_purpose(selector, None, ReadPurpose::RootPlan, io)
     }
 
+    #[allow(clippy::result_large_err)]
+    pub(super) fn begin_plan_port_read(
+        &mut self,
+        selector: ReadSelector,
+        turn: Option<TurnRef>,
+        io: &mut impl PumpIo,
+    ) -> Result<(), ReadBeginError> {
+        self.begin_read_with_purpose(selector, turn, ReadPurpose::PlanPort, io)
+    }
+
     #[allow(clippy::result_large_err)] // Return the exact selector with admission refusal.
     pub(super) fn begin_inward_read(
         &mut self,
@@ -507,6 +519,7 @@ impl RecordingContext {
         let owned_continuation = match &purpose {
             ReadPurpose::Marks => self.marks_read_allowed(turn.as_ref()),
             ReadPurpose::RootPlan => self.root_plan_read_allowed(&selector) && turn.is_none(),
+            ReadPurpose::PlanPort => self.plan_port_read_allowed(&selector, turn.as_ref()),
             ReadPurpose::Inward(_) => inward.is_some(),
             ReadPurpose::BootPairs => self.boot_pairs_read_allowed(),
             ReadPurpose::PlanSummary => self.plan_summary_read_allowed(),
@@ -518,11 +531,15 @@ impl RecordingContext {
             || (self.boot_pairs.is_some() && !matches!(purpose, ReadPurpose::BootPairs))
             || (matches!(purpose, ReadPurpose::BootPairs) && !self.boot_pairs_read_allowed())
             || (self.marks.is_some()
-                && !matches!(purpose, ReadPurpose::Marks | ReadPurpose::RootPlan)
+                && !matches!(
+                    purpose,
+                    ReadPurpose::Marks | ReadPurpose::RootPlan | ReadPurpose::PlanPort
+                )
                 && !(matches!(purpose, ReadPurpose::PlanSummary)
                     && self.root_plan_summary_allowed(PumpDeadline::Decision)))
             || (matches!(purpose, ReadPurpose::Marks) && !owned_continuation)
-            || (matches!(purpose, ReadPurpose::RootPlan) && !owned_continuation)
+            || (matches!(purpose, ReadPurpose::RootPlan | ReadPurpose::PlanPort)
+                && !owned_continuation)
             || self.read.is_some()
             || self.inspection.is_some()
             || self.boot_open_blocks_external()
@@ -586,6 +603,13 @@ impl RecordingContext {
                 end = end.min(
                     self.plan_summary_read_bound()
                         .expect("summary inherits owner bound")
+                        .deadline_ns(),
+                );
+            }
+            if matches!(purpose, ReadPurpose::PlanPort) {
+                end = end.min(
+                    self.plan_port_bound()
+                        .expect("plan operation retains Decision")
                         .deadline_ns(),
                 );
             }
@@ -1084,6 +1108,7 @@ impl RecordingContext {
                     ReadPurpose::Ordinary
                     | ReadPurpose::Marks
                     | ReadPurpose::RootPlan
+                    | ReadPurpose::PlanPort
                     | ReadPurpose::PlanFlags(_)
                     | ReadPurpose::BootPairs
                     | ReadPurpose::PlanSummary

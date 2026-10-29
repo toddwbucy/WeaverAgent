@@ -1176,7 +1176,10 @@ fn circuit(mode: &str) {
             load.state_flow.persistence.snapshot_wait.elapsed_ns = 50_000_000.into();
         }
     }
-    if mode.contains("-flags-queued-save") || mode.contains("-plan-refusal-queued-") {
+    if mode.contains("-flags-queued-save")
+        || mode.contains("-plan-refusal-queued-")
+        || mode.ends_with("-port-root-save")
+    {
         // This real process case retains a save while the flag member delays;
         // its declared budget is not the fake-clock fixture's millisecond window.
         load.state_flow.persistence.save_wait.elapsed_ns = 5_000_000_000.into();
@@ -1565,6 +1568,24 @@ fn circuit(mode: &str) {
                     &mut member,
                     &mut reader,
                 );
+                return;
+            }
+            if mode.starts_with("input-worker-plan-save-sqlite-port-") {
+                assert!(member.normal.is_some(), "plan ports use normal SQLite");
+                if let Some(cleanup) = super::input::plan_ports::tests::exercise(
+                    serving,
+                    &mut member,
+                    &mut reader,
+                    &path,
+                    mode,
+                ) {
+                    super::input::plan_ports::tests::cleanup::finish(
+                        run.take_boxed(),
+                        cleanup,
+                        &mut member,
+                        &mut reader,
+                    );
+                }
                 return;
             }
             if mode.starts_with("input-worker-plan-save-sqlite-flags-") {
@@ -2277,6 +2298,54 @@ macro_rules! scenario {
 }
 scenario!(worker_startup_composition_ready, "ready");
 scenario!(worker_plan_composition_stop, "input-worker-plan-stop");
+scenario!(
+    worker_plan_port_active_assess,
+    "input-worker-plan-save-sqlite-port-active-assess"
+);
+scenario!(
+    worker_plan_port_active_work,
+    "input-worker-plan-save-sqlite-port-active-work"
+);
+scenario!(
+    worker_plan_port_active_wrong_category,
+    "input-worker-plan-save-sqlite-port-active-category"
+);
+scenario!(
+    worker_plan_port_active_unknown_tool,
+    "input-worker-plan-save-sqlite-port-active-tool"
+);
+scenario!(
+    worker_plan_port_owned_decision,
+    "input-worker-plan-save-sqlite-port-owned"
+);
+scenario!(
+    worker_plan_port_borrowed_decision,
+    "input-worker-plan-save-sqlite-port-borrowed"
+);
+scenario!(
+    worker_plan_port_busy_admission,
+    "input-worker-plan-save-sqlite-port-busy"
+);
+scenario!(
+    worker_plan_port_stop_owed_refusal,
+    "input-worker-plan-save-sqlite-port-stop"
+);
+scenario!(
+    worker_plan_port_leave_owed_refusal,
+    "input-worker-plan-save-sqlite-port-leave"
+);
+scenario!(
+    worker_plan_port_failed_owed_refusal,
+    "input-worker-plan-save-sqlite-port-failed"
+);
+scenario!(
+    worker_plan_port_root_refusal_prior_account,
+    "input-worker-plan-save-sqlite-port-root"
+);
+scenario!(
+    worker_plan_port_root_refusal_queued_save,
+    "input-worker-plan-save-sqlite-port-root-save"
+);
 scenario!(
     worker_plan_composition_disconnect_stop,
     "input-worker-plan-disconnect-stop"

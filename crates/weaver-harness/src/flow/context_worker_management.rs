@@ -108,6 +108,7 @@ impl<'a> FoundationInput<'a> {
             || self.serving.save.is_some()
             || self.plan_pending()
             || self.flags_pending()
+            || self.plan_operation_pending()
         {
             let Some(accepted) = self.serving.owner.listener.accepted_ns() else {
                 return Err(self);
@@ -539,6 +540,26 @@ impl<'a> FoundationManagement<'a> {
                     .complete_wait(PumpDeadline::AdminRead);
                 self.read_armed = false;
             }
+            if matches!(
+                envelope.payload,
+                Payload::Directive(
+                    LifecycleDirective::Stop { .. } | LifecycleDirective::Leave { .. }
+                )
+            ) {
+                self.input.cancel_plan_operation();
+                let progress = self
+                    .input
+                    .advance_plan_operation((!self.peer_unavailable).then_some(&mut self.peer), io);
+                self.keep_dial_failure(progress)?;
+                if self.input.plan_operation_pending() {
+                    return Ok(());
+                }
+            }
+            let envelope = &self
+                .peer
+                .held()
+                .expect("held directive survives plan operation settlement")
+                .envelope;
             if self.input.flags_pending()
                 && matches!(
                     envelope.payload,

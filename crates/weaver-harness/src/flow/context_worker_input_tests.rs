@@ -179,10 +179,15 @@ fn worker_input_gate_child() {
                         || mode.ends_with("-failed-read")
                         || mode.ends_with("-flags-leave")
                         || mode.ends_with("-flags-failed")
-                        || mode.ends_with("-flags-recorded-failed") =>
+                        || mode.ends_with("-flags-recorded-failed")
+                        || mode.ends_with("-port-leave")
+                        || mode.ends_with("-port-failed") =>
                 {
                     let lower: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
                     assert_eq!(lower.payload, Payload::Directive(LifecycleDirective::Lower));
+                    if mode.contains("-port-") {
+                        std::fs::write(root.join("plan-port-lowered"), b"lower\n").unwrap();
+                    }
                     packet(
                         port.as_raw_fd(),
                         &OrganEnvelope {
