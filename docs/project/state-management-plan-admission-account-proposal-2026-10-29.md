@@ -5,7 +5,7 @@
 
 This proposes an explicit trace obligation for rejected PlanUpdate openers. It awaits
 the operator's election, Planner review and merge. It changes no runtime code and
-claims no implementation or production qualification. The branch is
+claims no implementation or production qualification. Draft PR #387 uses
 `docs/state-plan-admission-account`, stacked on #384 at `cb17343e` to keep the shared
 Spec headers ordered. Its election is separate from #384's non-root plan-port result
 and trace representation.
