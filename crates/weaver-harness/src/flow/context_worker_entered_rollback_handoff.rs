@@ -45,6 +45,7 @@ impl FoundationManagement<'_> {
             || self.stop.is_some()
             || self.input.has_graceful_leave()
             || self.input.serving.save.is_some()
+            || self.input.plan_pending()
             || !self.input.rollback_admissible()
             || !self.peer.held().is_some_and(|message| {
                 message.envelope.exchange.opener == Opener::Admin
@@ -198,6 +199,7 @@ impl FoundationInput<'_> {
             gate_outgoing,
             graceful,
             save,
+            plan,
         } = serving;
         let crate::flow::context::boot_composition::gate_startup::ready::EnteredServing {
             context,
@@ -236,6 +238,7 @@ impl FoundationInput<'_> {
         );
         Box::new(FoundationEnteredRollbackHandoff {
             kind: directive.kind,
+            _plan: plan.map(|plan| plan.retire_failed()),
             graceful_tail: directive.graceful_tail,
             origin,
             decode,

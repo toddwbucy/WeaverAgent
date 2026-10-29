@@ -1905,6 +1905,7 @@ impl Harness {
                     connection,
                     &exchange,
                     LifecycleAnswer::State {
+                        plan: None,
                         state: weaver_types::AgentState::Unloaded,
                         load: None,
                         constituents: Vec::new(),
@@ -1923,6 +1924,7 @@ impl Harness {
                     connection,
                     &exchange,
                     LifecycleAnswer::State {
+                        plan: None,
                         state,
                         load: Some(Box::new(load)),
                         constituents: Vec::new(),

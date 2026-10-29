@@ -292,6 +292,7 @@ impl<'a> FoundationEnter<'a> {
             queued_inputs: Default::default(),
             graceful: None,
             save: None,
+            plan: None,
         })
     }
 }
@@ -319,6 +320,7 @@ pub struct FoundationServing<'a> {
     gate_outgoing: u64,
     graceful: Option<Box<input::graceful::PendingGraceful>>,
     save: Option<Box<input::save::PendingSave>>,
+    plan: Option<Box<input::plan::PendingPlan>>,
 }
 
 #[path = "context_worker_input.rs"]

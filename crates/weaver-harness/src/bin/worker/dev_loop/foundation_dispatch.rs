@@ -206,7 +206,8 @@ where
                 }
             }
             Progress::DirectivePending => {
-                if session.queue_save()
+                if session.queue_plan_update()
+                    || session.queue_save()
                     || session.defer_graceful_leave()
                     || session.join_graceful_leave()
                 {

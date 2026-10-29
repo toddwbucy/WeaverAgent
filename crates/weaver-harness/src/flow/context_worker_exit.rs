@@ -32,6 +32,7 @@ pub struct FoundationFailedHandoff {
     _graceful: Option<super::super::graceful::FailedGraceful>,
     capture: Option<Box<crate::flow::context::leave_capture::FailedCapture>>,
     _save_request: Option<super::super::save::FailedSaveRequest>,
+    _plan: Option<Box<super::super::plan::PendingPlan>>,
     gate: Option<OrganPort>,
     gate_child: OwnedChild,
     tools: Option<ToolsCgroup>,
@@ -128,6 +129,7 @@ impl FoundationHalt<'_> {
             gate_outgoing,
             graceful,
             save,
+            plan,
         } = serving;
         let crate::flow::context::boot_composition::gate_startup::ready::EnteredServing {
             context,
@@ -172,6 +174,7 @@ impl FoundationHalt<'_> {
             _graceful: graceful.map(|leave| leave.retire_failed()),
             capture,
             _save_request: save_request,
+            _plan: plan.map(|plan| plan.retire_failed()),
             input: FailedInput {
                 received: original,
                 turn,
@@ -929,3 +932,7 @@ pub(in crate::flow::context) mod tests;
 #[cfg(test)]
 #[path = "context_worker_exit_organ_tests.rs"]
 pub(in crate::flow::context) mod organ_tests;
+
+#[cfg(test)]
+#[path = "context_worker_plan_failure_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod plan_tests;

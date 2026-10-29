@@ -52,10 +52,10 @@ impl FilingCompletion {
     pub(super) fn receipt_identity(&self) -> &std::sync::Arc<()> {
         &self.receipt_identity
     }
-    pub(super) fn wait_key(&self) -> PumpDeadline {
+    pub(in crate::flow) fn wait_key(&self) -> PumpDeadline {
         self.key
     }
-    pub(super) fn wait_bound(&self) -> AbsoluteBound {
+    pub(in crate::flow) fn wait_bound(&self) -> AbsoluteBound {
         self.bound
     }
     pub(in crate::flow) fn sequence(&self) -> Sequence {
@@ -86,6 +86,7 @@ pub(super) enum FilingOwner {
     Pair,
     Outbound,
     Marks,
+    RootPlan,
     BootPairs,
 }
 
@@ -225,10 +226,15 @@ impl RecordingContext {
                 work.leg.is_none() && work.bound == bound && key == PumpDeadline::Decision
             }),
             FilingOwner::Marks => self.marks_filing_allowed(key),
+            FilingOwner::RootPlan => self.root_plan_filing_allowed(key),
             FilingOwner::BootPairs => self.boot_pairs_filing_allowed(),
             FilingOwner::Ordinary | FilingOwner::Outbound => false,
         };
         if (plan_effect && (!self.plan_cache.boot_started || self.plan_cache.committed.is_none()))
+            || (owner == FilingOwner::RootPlan && !self.root_plan_filing_allowed(key))
+            || (self.marks.is_some()
+                && !(matches!(owner, FilingOwner::Marks | FilingOwner::RootPlan)
+                    && owned_continuation))
             || (self.boot_pairs.is_some() && owner != FilingOwner::BootPairs)
             || (owner == FilingOwner::BootPairs && !self.boot_pairs_filing_allowed())
             || self.output.is_some()
@@ -444,6 +450,10 @@ impl RecordingContext {
         owner: FilingOwner,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<FilingProgress, RunFailure> {
+        if owner == FilingOwner::RootPlan && !self.root_plan_filing_allowed(PumpDeadline::Decision)
+        {
+            return Err(RunFailure::MarksOwned);
+        }
         if self
             .filing
             .as_ref()
@@ -561,6 +571,10 @@ impl RecordingContext {
         owner: FilingOwner,
         io: &mut impl PumpIo,
     ) -> Result<Option<FilingCompletion>, RunFailure> {
+        if owner == FilingOwner::RootPlan && !self.root_plan_filing_allowed(PumpDeadline::Decision)
+        {
+            return Err(RunFailure::MarksOwned);
+        }
         if self
             .filing
             .as_ref()
@@ -621,8 +635,19 @@ impl RecordingContext {
     /// Withdraw only an original that has not reached the recorder ticket.
     /// A pending/admitted author keeps its owed filing even during cancellation.
     pub(super) fn withdraw_unstarted_mark(&mut self) -> Option<AuthoredEvent> {
+        self.withdraw_unstarted_owned(FilingOwner::Marks)
+    }
+
+    pub(super) fn withdraw_unstarted_root_effect(&mut self) -> Option<AuthoredEvent> {
+        if !self.filing.as_ref().is_some_and(|owner| owner.plan_effect) {
+            return None;
+        }
+        self.withdraw_unstarted_owned(FilingOwner::RootPlan)
+    }
+
+    fn withdraw_unstarted_owned(&mut self, expected: FilingOwner) -> Option<AuthoredEvent> {
         let owner = self.filing.as_ref()?;
-        if owner.owner != FilingOwner::Marks
+        if owner.owner != expected
             || owner.sequence.is_some()
             || self.barrier.pending_author().is_some()
             || self.waiting_content.is_none()

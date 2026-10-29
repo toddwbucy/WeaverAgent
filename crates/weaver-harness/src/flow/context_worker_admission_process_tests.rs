@@ -171,6 +171,7 @@ fn ordinary(
         assert_eq!(answer.position, Position::Close);
         assert!(
             matches!(answer.payload, ObservationContent::Answer(ObservationAnswer::State {
+            plan: None,
             state: AgentState::Unloaded, load: None, ref constituents
         }) if constituents.is_empty())
         );

@@ -173,6 +173,27 @@ impl<'a> Workflow<'a> {
         }
     }
 
+    pub fn queue_plan_update(&mut self) -> bool {
+        if !self
+            .management
+            .as_ref()
+            .is_some_and(|owner| owner.progress() == FoundationManagementProgress::DirectivePending)
+        {
+            return false;
+        }
+        let owner = self.management.take().unwrap();
+        match owner.queue_plan_update() {
+            Ok(input) => {
+                self.input = Some(input);
+                true
+            }
+            Err(owner) => {
+                self.management = Some(owner);
+                false
+            }
+        }
+    }
+
     pub fn queue_save(&mut self) -> bool {
         if !self
             .management

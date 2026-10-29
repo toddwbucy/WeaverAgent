@@ -134,6 +134,7 @@ impl LeaveKind {
 /// ```
 pub struct FoundationEnteredRollbackHandoff {
     pub(super) kind: LeaveKind,
+    pub(super) _plan: Option<Box<super::input::plan::PendingPlan>>,
     pub(super) graceful_tail: Option<Box<super::input::graceful::GracefulTail>>,
     pub(super) origin: Arc<()>,
     pub(super) decode: PortIdentity,

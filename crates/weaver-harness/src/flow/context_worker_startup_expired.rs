@@ -574,6 +574,7 @@ impl FoundationExpiredRollback {
             let payload = match &message.envelope.payload {
                 Payload::Directive(LifecycleDirective::Observe) if self.before_load => {
                     Payload::Answer(LifecycleAnswer::State {
+                        plan: None,
                         state: weaver_types::AgentState::Unloaded,
                         load: None,
                         constituents: vec![],

@@ -90,6 +90,31 @@ fn worker_input_gate_child() {
             payload: Payload::Answer(LifecycleAnswer::GateReady),
         },
     );
+    if mode.starts_with("input-worker-plan-") {
+        // Keep the actual gate idle while root management owns the circuit.
+        // The guard reaps this real fixture child after the assertions.
+        loop {
+            match recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()) {
+                Ok(0) => return,
+                Ok(n) if mode.ends_with("-leave-read") || mode.ends_with("-failed-read") => {
+                    let lower: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
+                    assert_eq!(lower.payload, Payload::Directive(LifecycleDirective::Lower));
+                    packet(
+                        port.as_raw_fd(),
+                        &OrganEnvelope {
+                            exchange: lower.exchange,
+                            position: Position::Close,
+                            payload: Payload::Answer(LifecycleAnswer::GateStopped),
+                        },
+                    );
+                    return;
+                }
+                Ok(_) => panic!("root update emitted an unexpected gate directive"),
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(error) => panic!("idle root fixture gate: {error}"),
+            }
+        }
+    }
     if mode == "input-fault" {
         packet(
             3,
