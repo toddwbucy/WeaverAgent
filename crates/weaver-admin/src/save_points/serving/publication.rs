@@ -166,6 +166,7 @@ pub(crate) struct Publication<'repo> {
     guard_durable: bool,
     known_files: BTreeMap<&'static str, KnownFile>,
     indexed: bool,
+    commit_received: bool,
     stage: Stage,
     phase: PersistencePhase,
     failure: Option<Failure>,
@@ -373,6 +374,9 @@ impl<'repo> Publication<'repo> {
         if self.stage != Stage::Prepared || !self.matches_capture(run, capture_id) {
             return Err(self.fail("uncorrelated or out-of-phase Commit"));
         }
+        // Retain observed Commit even if its checkpoint fails before authority
+        // can be used. Failed loses the stage, not this irreversible boundary.
+        self.commit_received = true;
         self.check(PersistencePhase::Confirming, checkpoint)?;
         self.stage = Stage::Authorized;
         Ok(())
@@ -588,9 +592,12 @@ impl<'repo> Publication<'repo> {
             || (self.stage == Stage::Failed
                 && matches!(
                     self.phase,
-                    PersistencePhase::Hashing | PersistencePhase::Preparing
+                    PersistencePhase::Hashing
+                        | PersistencePhase::Preparing
+                        | PersistencePhase::Confirming
                 ));
         if !before_commit
+            || self.commit_received
             || self.indexed
             || !self.matches_capture(run, capture_id)
             || !matches!(
@@ -694,6 +701,7 @@ impl<'repo> Publication<'repo> {
             guard_durable: false,
             known_files: BTreeMap::new(),
             indexed: false,
+            commit_received: false,
             stage: Stage::Copied,
             phase: PersistencePhase::Hashing,
             failure: None,

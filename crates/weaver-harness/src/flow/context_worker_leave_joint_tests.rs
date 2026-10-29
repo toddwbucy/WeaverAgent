@@ -220,18 +220,49 @@ pub(super) fn scenario(name: &str, mode: &str) {
             .iter()
             .find(|r| r["kind"] == "save_point" && r["payload"]["phase"] == "refused")
             .unwrap();
-        assert_eq!(
-            refusal["payload"]["refusal_code"],
-            if preparation {
-                "publication_failed"
-            } else if snapshot_timeout {
-                "snapshot_timeout"
-            } else if finished_timeout {
-                "finished_timeout"
+        if mode.contains("-joint-expiry-") {
+            // Either peer can notice the shared capture deadline first. A
+            // capped member wait can also retain that expiry before the outer
+            // owner sees it. Keep the first cause; do not elect by scheduling.
+            let code = refusal["payload"]["refusal_code"].as_str().unwrap();
+            let missed = match code {
+                "capture_expired" => "published",
+                "snapshot_timeout" if snapshot_timeout => "answer",
+                "finished_timeout" if finished_timeout => "finished",
+                "capture_window_expired" if snapshot_timeout => "answer",
+                "capture_window_expired" if finished_timeout => "finished",
+                _ => panic!("unexpected expiry cause: {code}"),
+            };
+            let stem = if mode.contains("-graceful-save") {
+                "s9-admin-received-"
             } else {
-                "snapshot_failed"
-            }
-        );
+                "admin-received-"
+            };
+            let packets: Vec<serde_json::Value> = fs::read_dir(&root)
+                .unwrap()
+                .map(Result::unwrap)
+                .filter(|entry| entry.file_name().to_string_lossy().starts_with(stem))
+                .map(|entry| serde_json::from_slice(&fs::read(entry.path()).unwrap()).unwrap())
+                .collect();
+            let acknowledgement = packets
+                .iter()
+                .find(|packet| packet["payload"]["kind"] == "save_point_capture_refused")
+                .expect("actual cleanup acknowledgement");
+            assert_eq!(acknowledgement["payload"]["body"]["missed"], missed);
+        } else {
+            assert_eq!(
+                refusal["payload"]["refusal_code"],
+                if preparation {
+                    "publication_failed"
+                } else if snapshot_timeout {
+                    "snapshot_timeout"
+                } else if finished_timeout {
+                    "finished_timeout"
+                } else {
+                    "snapshot_failed"
+                }
+            );
+        }
         if snapshot_timeout || finished_timeout {
             let operation = if finished_timeout {
                 "acknowledge"

@@ -77,6 +77,16 @@ impl PendingSave {
         self.capture.blocks_turn()
     }
 
+    #[cfg(test)]
+    pub(in crate::flow::context::worker_startup) fn reply_held(&self) -> bool {
+        self.peer.capture_held().is_some()
+    }
+
+    #[cfg(test)]
+    pub(in crate::flow::context::worker_startup) fn test_boundary_pending(&self) -> bool {
+        self.capture.boundary_pending()
+    }
+
     /// Final refusal carry is deliberately nonblocking. The save has already
     /// been refused and the current turn may proceed. The same peer remains in
     /// the common pump; no new save or reply allowance replaces its old window.
@@ -278,13 +288,21 @@ impl FoundationInput<'_> {
             || save.capture.retain_peer_end(failure)
     }
 
-    pub(super) fn advance_save(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
-        let at_boundary = matches!(
-            self.stage,
-            Stage::Waiting | Stage::Completed | Stage::Refused | Stage::Aborted
-        );
+    pub(super) fn advance_save(
+        &mut self,
+        io: &mut impl PumpIo,
+        organs_settled: bool,
+    ) -> Result<SaveProgress, RunFailure> {
+        // Requested can become QueueBoundary in this same advance call, so
+        // permission must reach the boundary election, not just entry here.
+        let at_boundary = organs_settled
+            && !self.flags_pending()
+            && matches!(
+                self.stage,
+                Stage::Waiting | Stage::Completed | Stage::Refused | Stage::Aborted
+            );
         let Some(save) = &mut self.serving.save else {
-            return Ok(());
+            return Ok(SaveProgress::Complete);
         };
         let owner = &mut self.serving.owner;
         let progress = save.advance(
@@ -305,6 +323,6 @@ impl FoundationInput<'_> {
         if progress == SaveProgress::Complete {
             self.serving.save = None;
         }
-        Ok(())
+        Ok(progress)
     }
 }

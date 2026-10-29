@@ -550,12 +550,21 @@ impl<'repo> Capture<'repo> {
             // A checkpoint can receive the acknowledgement while hashing or
             // preparing. Publication retains its interrupted work; this owner
             // validates the packet and continues the original Leave instead.
-            if self.unexpected.as_ref().is_some_and(|received| {
-                matches!(
-                    received.envelope.payload,
-                    CapturePayload::SavePointCaptureRefused(_)
-                )
-            }) {
+            // A complete packet without a valid receive-clock witness remains
+            // evidence only. A later clock reading cannot repair that failure.
+            let receive_clock_failed = matches!(cause, FailureCause::Channel(ChannelFault::Closed))
+                || matches!(
+                    self.checkpoint_failure,
+                    Some(FailureCause::Channel(ChannelFault::Closed))
+                );
+            if !receive_clock_failed
+                && self.unexpected.as_ref().is_some_and(|received| {
+                    matches!(
+                        received.envelope.payload,
+                        CapturePayload::SavePointCaptureRefused(_)
+                    )
+                })
+            {
                 match self.accept_checkpoint_refusal() {
                     Ok(()) => return self.progress(),
                     Err(error) => {
@@ -564,7 +573,14 @@ impl<'repo> Capture<'repo> {
                     }
                 }
             }
-            let cause = self.checkpoint_failure.take().unwrap_or(cause);
+            let mut cause = self.checkpoint_failure.take().unwrap_or(cause);
+            if matches!(cause, FailureCause::Channel(ChannelFault::Unanswered)) {
+                match self.begin_expired_refusal() {
+                    Ok(true) => return self.progress(),
+                    Ok(false) => (),
+                    Err(error) => cause = error,
+                }
+            }
             if let Some(publication) = &mut self.publication {
                 self.publication_failure = Some(publication.failed(format!("{cause:?}")));
             }
@@ -574,19 +590,17 @@ impl<'repo> Capture<'repo> {
                 self.cleanup_failure = Some(cause);
             }
             if local_preparation_failed && self.refused.is_none() {
-                self.aborted_at = Some(self.stage);
-                self.abort = Some(CaptureEnvelope {
-                    exchange: self.directive.exchange().clone(),
-                    position: Position::Continue,
-                    payload: CapturePayload::SavePointAborted(
-                        weaver_types::state_flow::capture::CaptureAborted {
-                            capture_id: self.windows.capture().unwrap().capture_id,
-                            code: "publication_failed".into(),
-                            detail: "admin could not prepare the capture for publication".into(),
-                        },
-                    ),
-                });
-                self.stage = Stage::Aborting;
+                if self.windows.demand_window().is_none()
+                    && let Err(error) = self.windows.begin_refusal()
+                {
+                    self.cleanup_failure = Some(FailureCause::Channel(error));
+                    self.stage = Stage::Stopped;
+                } else {
+                    self.prepare_abort(
+                        "publication_failed",
+                        "admin could not prepare the capture for publication",
+                    );
+                }
             } else {
                 self.stage = Stage::Stopped;
             }
@@ -594,17 +608,33 @@ impl<'repo> Capture<'repo> {
         self.progress()
     }
 
-    fn send(&self, payload: CapturePayload) -> Result<(), FailureCause> {
-        self.channel
-            .send_capture(
-                &CaptureEnvelope {
-                    exchange: self.directive.exchange().clone(),
-                    position: Position::Continue,
-                    payload,
-                },
-                &self.windows,
-            )
-            .map_err(FailureCause::Channel)
+    fn send(&mut self, payload: CapturePayload, next: Stage) -> Result<(), FailureCause> {
+        let mut sent = false;
+        let result = self.channel.send_capture_attempt(
+            &CaptureEnvelope {
+                exchange: self.directive.exchange().clone(),
+                position: Position::Continue,
+                payload,
+            },
+            &self.windows,
+            &mut sent,
+        );
+        if sent {
+            // Physical carry determines which frame can cross cancellation,
+            // even when the post-send deadline check withdraws success.
+            self.stage = next;
+        }
+        match result {
+            Err(crate::channel::CaptureSendFailure::PeerClosed) if self.precommit_leave() => {
+                // A completed worker refusal can cross ImageChecked or
+                // Prepared and close this socket after the publication probe.
+                // This grants no send or cleanup receipt: only the existing
+                // correlated refusal reader can establish the disposition.
+                self.stage = Stage::AwaitCaptureRefused;
+                Ok(())
+            }
+            result => result.map_err(|failure| FailureCause::Channel(failure.channel_fault())),
+        }
     }
 
     fn receive(&mut self) -> Result<bool, FailureCause> {
@@ -626,11 +656,11 @@ impl<'repo> Capture<'repo> {
     }
 
     fn receive_correlated(&mut self) -> Result<(), FailureCause> {
-        let received = self
+        let read = self
             .channel
-            .recv_capture(&self.windows)
+            .recv_capture_retained(&self.windows)
             .map_err(FailureCause::Channel)?;
-        self.received.push(received);
+        self.received.push(read.received);
         let envelope = &self.received.last().unwrap().envelope;
         if &envelope.exchange != self.directive.exchange()
             || !same_run(envelope, &self.observed.facts.run)
@@ -641,6 +671,10 @@ impl<'repo> Capture<'repo> {
         {
             return Err(FailureCause::Protocol("foreign capture continuation"));
         }
+        if let Err(error) = read.timing {
+            self.unexpected = self.received.pop();
+            return Err(FailureCause::Channel(error));
+        }
         Ok(())
     }
 
@@ -648,12 +682,24 @@ impl<'repo> Capture<'repo> {
         self.windows.check().map_err(FailureCause::Channel)?;
         match self.stage {
             Stage::Aborting => {
-                self.channel
-                    .send_capture(
-                        self.abort.as_ref().expect("original local abort"),
-                        &self.windows,
-                    )
-                    .map_err(FailureCause::Channel)?;
+                match self.channel.send_capture_attempt(
+                    self.abort.as_ref().expect("original local abort"),
+                    &self.windows,
+                    &mut false,
+                ) {
+                    Ok(()) => (),
+                    Err(crate::channel::CaptureSendFailure::PeerClosed)
+                        if self.precommit_leave() =>
+                    {
+                        // The worker can complete refusal and close before
+                        // this send. Closure grants no delivery or cleanup:
+                        // drain only the existing correlated refusal path,
+                        // under its unchanged bounds, before judging the run.
+                    }
+                    Err(failure) => {
+                        return Err(FailureCause::Channel(failure.channel_fault()));
+                    }
+                }
                 self.stage = if self.windows.demand_window().is_some() {
                     Stage::AwaitAbortOutcome
                 } else {
@@ -756,8 +802,10 @@ impl<'repo> Capture<'repo> {
                     dump_sha256: publication.dump_sha256().clone(),
                 };
                 self.publication = Some(publication);
-                self.send(CapturePayload::SavePointImageChecked(checked))?;
-                self.stage = Stage::Finished;
+                self.send(
+                    CapturePayload::SavePointImageChecked(checked),
+                    Stage::Finished,
+                )?;
             }
             Stage::Finished => {
                 if !self.receive()? {
@@ -803,8 +851,7 @@ impl<'repo> Capture<'repo> {
                     config_sha256: identity.config_sha256,
                 };
                 self.prepared = Some(prepared.clone());
-                self.send(CapturePayload::SavePointPrepared(prepared))?;
-                self.stage = Stage::Commit;
+                self.send(CapturePayload::SavePointPrepared(prepared), Stage::Commit)?;
             }
             Stage::Commit => {
                 if !self.receive()? {
@@ -854,10 +901,12 @@ impl<'repo> Capture<'repo> {
                     publication::Progress::Renamed | publication::Progress::Verified => (),
                     publication::Progress::Published(identity) => {
                         self.published = Some(identity);
-                        self.send(CapturePayload::SavePointPublished(
-                            self.prepared.as_ref().unwrap().clone(),
-                        ))?;
-                        self.stage = Stage::Complete;
+                        self.send(
+                            CapturePayload::SavePointPublished(
+                                self.prepared.as_ref().unwrap().clone(),
+                            ),
+                            Stage::Complete,
+                        )?;
                     }
                     publication::Progress::Complete(_) => {
                         return Err(FailureCause::Protocol(
@@ -943,15 +992,20 @@ fn checkpoint<'a>(
     unexpected: &'a mut Option<ReceivedCapture>,
     failure: &'a mut Option<FailureCause>,
 ) -> impl FnMut(PersistencePhase) -> Result<(), String> + 'a {
-    move |_| match channel.try_recv_capture(windows) {
+    move |_| match channel.try_recv_capture_retained(windows) {
         Ok(None) => Ok(()),
-        Ok(Some(received)) => {
+        Ok(Some(read)) => {
+            let received = read.received;
             let correlated = &received.envelope.exchange == exchange
                 && same_run(&received.envelope, run)
                 && windows
                     .capture()
                     .is_none_or(|beginning| same_capture(&received.envelope, beginning.capture_id));
-            let cause = if correlated && negative(&received.envelope, windows, committed) {
+            let cause = if !correlated {
+                FailureCause::Protocol("packet during publication work")
+            } else if let Err(error) = read.timing {
+                FailureCause::Channel(error)
+            } else if negative(&received.envelope, windows, committed) {
                 FailureCause::WorkerOutcome
             } else {
                 FailureCause::Protocol("packet during publication work")

@@ -244,3 +244,88 @@ fn graceful_leave_finite_deadline_is_original_and_unbounded_still_checks_the_clo
     assert_eq!(windows.remaining_at(999), Err(ChannelFault::Closed));
     assert!(CaptureWindows::graceful_at(90, Duration::from_nanos(10), None, None, 0).is_err());
 }
+
+#[test]
+fn refused_capture_keeps_the_original_tail_after_capture_expiry_without_success_authority() {
+    for forced in [false, true] {
+        let mut windows = if forced {
+            CaptureWindows::at(90, 100 + LEAVE_NS * 2, 100).unwrap()
+        } else {
+            CaptureWindows::graceful_at(90, Duration::from_nanos(LEAVE_NS), None, None, 100)
+                .unwrap()
+        };
+        let value = beginning();
+        windows.accept_at(&value, 115).unwrap();
+        assert!(!windows.capture_expired_at(209).unwrap());
+        assert!(windows.capture_expired_at(210).unwrap());
+        assert_eq!(windows.remaining_at(210), Err(ChannelFault::Unanswered));
+        windows.begin_refusal_at(210).unwrap();
+        assert_eq!(windows.remaining_at(211), Ok(Some(100 + LEAVE_NS - 211)));
+        assert_eq!(
+            windows.complete_at(7.into(), 212),
+            Err(ChannelFault::Undecodable)
+        );
+        windows.refused_at(7.into(), 213).unwrap();
+        assert_eq!(windows.capture(), Some(&value));
+        assert_eq!(windows.remaining_at(100 + LEAVE_NS - 1), Ok(Some(1)));
+        assert_eq!(
+            windows.remaining_at(100 + LEAVE_NS),
+            Err(ChannelFault::Unanswered)
+        );
+    }
+}
+
+#[test]
+fn refused_capture_uses_the_earlier_original_outer_or_tail_at_equality() {
+    for outer in [220, 100 + LEAVE_NS * 2] {
+        let mut windows = CaptureWindows::at(90, outer, 100).unwrap();
+        let value = beginning();
+        windows.accept_at(&value, 115).unwrap();
+        windows.begin_refusal_at(210).unwrap();
+        let end = outer.min(100 + LEAVE_NS);
+        assert_eq!(windows.remaining_at(end - 1), Ok(Some(1)));
+        assert_eq!(
+            windows.refused_at(7.into(), end),
+            Err(ChannelFault::Unanswered)
+        );
+        assert_eq!(
+            windows.begin_refusal_at(end + 1),
+            Err(ChannelFault::Unanswered)
+        );
+        assert_eq!(windows.capture(), Some(&value));
+    }
+}
+
+#[test]
+fn refusal_only_window_requires_begun_leave_and_preserves_clock_and_capture_identity() {
+    let mut demand = CaptureWindows::demand_at(100, 50).unwrap();
+    let value = CaptureBeginning {
+        capture_id: 9.into(),
+        window: demand.demand_window().unwrap(),
+        tail_window: None,
+    };
+    demand.accept_at(&value, 120).unwrap();
+    assert_eq!(demand.begin_refusal_at(150), Err(ChannelFault::Undecodable));
+    assert_eq!(demand.remaining_at(150), Err(ChannelFault::Unanswered));
+    let mut unbegun = CaptureWindows::at(90, 300, 100).unwrap();
+    assert_eq!(
+        unbegun.begin_refusal_at(210),
+        Err(ChannelFault::Undecodable)
+    );
+    assert_eq!(unbegun.capture_expired_at(210), Ok(false));
+    let mut windows = CaptureWindows::at(90, 100 + LEAVE_NS, 100).unwrap();
+    windows.accept_at(&beginning(), 115).unwrap();
+    assert_eq!(
+        windows.refused_at(8.into(), 210),
+        Err(ChannelFault::Undecodable)
+    );
+    assert_eq!(windows.remaining_at(210), Err(ChannelFault::Unanswered));
+    windows.begin_refusal_at(211).unwrap();
+    assert_eq!(windows.remaining_at(210), Err(ChannelFault::Closed));
+    assert_eq!(windows.capture_expired_at(210), Err(ChannelFault::Closed));
+    windows.refused_at(7.into(), 212).unwrap();
+    assert_eq!(
+        windows.refused_at(7.into(), 213),
+        Err(ChannelFault::Undecodable)
+    );
+}

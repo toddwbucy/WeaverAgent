@@ -1905,6 +1905,7 @@ impl Harness {
                     connection,
                     &exchange,
                     LifecycleAnswer::State {
+                        plan: None,
                         state: weaver_types::AgentState::Unloaded,
                         load: None,
                         constituents: Vec::new(),
@@ -1923,6 +1924,7 @@ impl Harness {
                     connection,
                     &exchange,
                     LifecycleAnswer::State {
+                        plan: None,
                         state,
                         load: Some(Box::new(load)),
                         constituents: Vec::new(),
@@ -4153,7 +4155,7 @@ fn exchange(
     }
 }
 
-fn clear_dumpable() -> Result<(), AdoptionFault> {
+pub(crate) fn clear_dumpable() -> Result<(), AdoptionFault> {
     // SAFETY: prctl with PR_SET_DUMPABLE affects only this process.
     let rc = unsafe { nix::libc::prctl(nix::libc::PR_SET_DUMPABLE, 0, 0, 0, 0) };
     if rc == -1 {

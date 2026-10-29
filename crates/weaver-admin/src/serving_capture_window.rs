@@ -14,6 +14,7 @@ pub(crate) struct CaptureWindows {
     last: Cell<u64>,
     capture: Option<CaptureBeginning>,
     settled: bool,
+    refusal_only: bool,
     demand: Option<SaveWindow>,
 }
 
@@ -106,6 +107,7 @@ impl CaptureWindows {
             last: Cell::new(now),
             capture: None,
             settled: false,
+            refusal_only: false,
             demand: None,
         })
     }
@@ -170,15 +172,64 @@ impl CaptureWindows {
         self.complete_at(id, Self::now()?)
     }
 
-    /// The actor has validated CaptureRefused before Commit on an actual Leave.
-    /// Its timely acknowledgement disarms only capture, never the shared tail.
+    /// The actor has validated a pre-Commit Leave refusal or capture expiry.
+    /// Success stays forbidden; only the original finite Leave bounds remain.
+    pub(crate) fn begin_refusal(&mut self) -> Result<(), ChannelFault> {
+        self.begin_refusal_at(Self::now()?)
+    }
+
+    fn begin_refusal_at(&mut self, now: u64) -> Result<(), ChannelFault> {
+        if self.demand.is_some()
+            || self.settled
+            || self
+                .capture
+                .as_ref()
+                .and_then(|value| value.tail_window)
+                .is_none()
+        {
+            return Err(ChannelFault::Undecodable);
+        }
+        self.refusal_only = true;
+        self.remaining_at(now).map(|_| ())
+    }
+
+    pub(crate) fn capture_expired(&self) -> Result<bool, ChannelFault> {
+        self.capture_expired_at(Self::now()?)
+    }
+
+    fn capture_expired_at(&self, now: u64) -> Result<bool, ChannelFault> {
+        self.observe_clock(now)?;
+        Ok(self.demand.is_none()
+            && !self.settled
+            && !self.refusal_only
+            && self
+                .capture
+                .as_ref()
+                .is_some_and(|value| now >= value.window.deadline_ns.0))
+    }
+
+    /// CaptureRefused is a cleanup acknowledgement, not a late successful save.
     pub(crate) fn refused(&mut self, id: DecimalU64) -> Result<(), ChannelFault> {
-        self.complete_at(id, Self::now()?)
+        self.refused_at(id, Self::now()?)
+    }
+
+    fn refused_at(&mut self, id: DecimalU64, now: u64) -> Result<(), ChannelFault> {
+        if self
+            .capture
+            .as_ref()
+            .is_none_or(|value| value.capture_id != id)
+        {
+            return Err(ChannelFault::Undecodable);
+        }
+        self.begin_refusal_at(now)?;
+        self.settled = true;
+        Ok(())
     }
     fn complete_at(&mut self, id: DecimalU64, now: u64) -> Result<(), ChannelFault> {
         self.remaining_at(now)?;
         if self.demand.is_some()
             || self.settled
+            || self.refusal_only
             || self
                 .capture
                 .as_ref()
@@ -196,11 +247,15 @@ impl CaptureWindows {
         self.remaining_at(Self::now()?)
             .map(|left| left.map(Duration::from_nanos))
     }
-    fn remaining_at(&self, now: u64) -> Result<Option<u64>, ChannelFault> {
+    fn observe_clock(&self, now: u64) -> Result<(), ChannelFault> {
         if now < self.last.get() {
             return Err(ChannelFault::Closed);
         }
         self.last.set(now);
+        Ok(())
+    }
+    fn remaining_at(&self, now: u64) -> Result<Option<u64>, ChannelFault> {
+        self.observe_clock(now)?;
         let mut deadline = self.outer_deadline;
         if let Some(value) = &self.capture {
             if let Some(tail) = value.tail_window {
@@ -208,7 +263,7 @@ impl CaptureWindows {
                     deadline.map_or(tail.deadline_ns.0, |outer| outer.min(tail.deadline_ns.0)),
                 );
             }
-            if !self.settled {
+            if !self.settled && !self.refusal_only {
                 deadline = deadline.map(|end| end.min(value.window.deadline_ns.0));
             }
         }
@@ -222,6 +277,18 @@ impl CaptureWindows {
             .transpose()
     }
     fn now() -> Result<u64, ChannelFault> {
+        #[cfg(test)]
+        if let Some(now) = TEST_CLOCK.with(|clock| {
+            let mut clock = clock.borrow_mut();
+            let times = clock.as_mut()?;
+            if times.len() > 1 {
+                times.pop_front()
+            } else {
+                times.front().copied()
+            }
+        }) {
+            return Ok(now);
+        }
         crate::serving_load::window::raw_ns().map_err(|_| ChannelFault::Closed)
     }
 }
@@ -229,3 +296,24 @@ impl CaptureWindows {
 #[cfg(test)]
 #[path = "serving_capture_window_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CLOCK: std::cell::RefCell<Option<std::collections::VecDeque<u64>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Controls only this thread's capture-clock readings, not socket readiness or
+/// filesystem outcomes. The final reading persists until the scope exits.
+#[cfg(test)]
+pub(crate) fn with_test_times<T>(times: &[u64], action: impl FnOnce() -> T) -> T {
+    assert!(!times.is_empty());
+    struct Restore(Option<std::collections::VecDeque<u64>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_CLOCK.with(|clock| *clock.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore =
+        Restore(TEST_CLOCK.with(|clock| clock.replace(Some(times.iter().copied().collect()))));
+    action()
+}

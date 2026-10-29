@@ -385,6 +385,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
     .ok()
     .expect("matching run and original custody");
     let mut guard = Guard(exit);
+    if !mode.ends_with("-worker") {
+        assert_eq!(guard.0.process_exit(), None);
+    }
     let _panic_after_owner = PanicReader(reader.try_clone().unwrap());
     assert_eq!(guard.0.tail.failure(), &first);
     assert_eq!(guard.0.tail.deadline(), deadline);
@@ -457,6 +460,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
         }
     }
     assert_eq!(guard.0.channel_fault(), Some(crate::ChannelFault::Closed));
+    assert_eq!(
+        guard.0.process_exit(),
+        Some(crate::FoundationProcessExit::Failure)
+    );
     if let Some(arms) = &guard.0.handoff.gate {
         assert!(
             arms.port.is_none(),

@@ -524,6 +524,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
         run.failed_exit(handoff).ok().expect("same original run")
     }));
     let owner = guard.0.as_mut().unwrap();
+    if !mode.contains("-worker") {
+        assert_eq!(owner.process_exit(), None);
+    }
     if mode.contains("placement-pending-trace-loss") || mode.contains("rejection-unavailable") {
         for _ in 0..32 {
             owner.advance_with_io(clock);
@@ -767,6 +770,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
         owner.stage as u8,
         owner.tail.release_outcome(),
         owner.tail.context.halt().unwrap().secondary()
+    );
+    assert_eq!(
+        owner.process_exit(),
+        Some(crate::FoundationProcessExit::Failure)
     );
     if mode.contains("placement-pending-trace-loss") || mode.contains("rejection-unavailable") {
         assert!(
