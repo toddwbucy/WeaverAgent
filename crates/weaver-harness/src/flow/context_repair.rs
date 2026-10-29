@@ -1079,7 +1079,8 @@ impl RecordingContext {
                 Ok(RepairProgress::Complete)
             }
             RepairIntent::Exhausted => {
-                self.finish_repair_wait();
+                // Exhaustion still owes its caller's refused close. Keep the
+                // original barrier through extraction and world delivery.
                 Ok(RepairProgress::Exhausted)
             }
             RepairIntent::RecallRefusal(refusal) => self.start_recall_refusal(refusal, ports.io),
@@ -1889,7 +1890,6 @@ impl RecordingContext {
         }
         let result = work.ledger.take_exhausted();
         if result.is_some() {
-            self.finish_repair_wait();
             self.retire_repair_owner();
         }
         Ok(result)
@@ -2005,10 +2005,10 @@ impl RecordingContext {
         {
             return Ok(RepairProgress::Progress);
         }
-        // One retirement point for both initially debt-free refusals and the
-        // same refusal after backpressured records or pair accounting.
+        // Readiness and extraction transfer the original barrier to the caller;
+        // required original-request accounting and the refused close still owe
+        // that same deadline, including after backpressured correction records.
         self.repair.as_mut().unwrap().refused_ready = true;
-        self.finish_repair_wait();
         Ok(RepairProgress::Refused)
     }
 

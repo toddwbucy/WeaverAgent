@@ -58,6 +58,12 @@ pub(super) fn end(mode: &str, root: &Path, fd: i32, request: &OrganEnvelope, bou
         }
     }
     if mode.contains("crossed") {
+        if mode.ends_with("held-crossed") {
+            while !root.join("gate-loss-hold-answer-ready").exists() {
+                assert!(Instant::now() < bound);
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
         let answer = OrganEnvelope {
             exchange: request.exchange.clone(),
             position: Position::Close,
@@ -155,6 +161,8 @@ pub(super) fn exercise(
         );
         assert!(!root.join("external-2.json").exists());
         std::fs::write(root.join("gate-loss-close"), b"close unsent gate").unwrap();
+    } else if mode.ends_with("held-crossed") {
+        hold_crossed_before_owner_step(input, member, clock, root, mode);
     } else if mode.ends_with("crossed") {
         let end = Instant::now() + Duration::from_secs(5);
         loop {
@@ -346,6 +354,107 @@ pub(super) fn exercise(
         );
         assert!(sequence(start) < sequence(end));
         assert!(sequence(end) < sequence(closed[0]));
+    }
+}
+
+fn hold_crossed_before_owner_step(
+    input: &mut FoundationInput<'_>,
+    member: &mut Member,
+    clock: &mut FakePumpIo,
+    root: &Path,
+    mode: &str,
+) {
+    use crate::flow::context::serving_organ_loss::ObservationProgress;
+    use crate::flow::context::startup_composition::tests::CircuitIo;
+
+    let end = Instant::now() + Duration::from_secs(5);
+    while !root.join("external-2.json").exists()
+        || !input
+            .serving
+            .owner
+            .context
+            .pairs
+            .executing()
+            .is_some_and(|(_, _, sent)| sent)
+    {
+        assert!(Instant::now() < end, "actual tool request was not sent");
+        assert_eq!(
+            step(input, member, clock, mode),
+            FoundationInputProgress::Pending
+        );
+    }
+    assert!(
+        input
+            .serving
+            .owner
+            .context
+            .serving_observation_author_available()
+    );
+    std::fs::write(
+        root.join("gate-loss-hold-answer-ready"),
+        b"actual execution sent; hold answer before its owner runs",
+    )
+    .unwrap();
+    while input.serving.owner.gate.held().is_none() {
+        assert!(Instant::now() < end, "actual ToolAnswer was not received");
+        input.serving.owner.gate.try_receive().unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let answer: OrganEnvelope =
+        serde_json::from_slice(&std::fs::read(root.join("gate-loss-return.json")).unwrap())
+            .unwrap();
+    assert!(matches!(answer.payload, Payload::ToolAnswer(_)));
+    assert_eq!(input.serving.owner.gate.held(), Some(&answer));
+    assert!(input.serving.owner.context.pairs.next_terminal().is_none());
+    std::fs::write(root.join("gate-loss-close"), b"EOF beside held ToolAnswer").unwrap();
+    let failure = loop {
+        match input.observe(&mut CircuitIo(clock)) {
+            Err(failure) => break failure,
+            Ok(()) => {
+                assert!(Instant::now() < end, "actual gate EOF was not observed");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    };
+    assert!(matches!(
+        failure,
+        RunFailure::Transport {
+            source: PumpSource::Gate,
+            ..
+        }
+    ));
+    assert!(
+        input
+            .retain_organ_end(&failure, &mut CircuitIo(clock))
+            .unwrap()
+    );
+    assert!(matches!(
+        input
+            .advance_organ_observations(None, &mut CircuitIo(clock))
+            .unwrap(),
+        ObservationProgress::EarlierAuthor
+    ));
+    assert_eq!(input.serving.owner.gate.held(), Some(&answer));
+    assert!(input.serving.owner.context.pairs.next_terminal().is_none());
+    assert!(
+        input
+            .serving
+            .owner
+            .context
+            .serving_observation_author_available(),
+        "EarlierAuthor names held tool intake, not a blocked author slot"
+    );
+    while input.serving.owner.gate.held().is_some() {
+        assert!(
+            Instant::now() < end,
+            "an already-free author must not prevent the ToolAnswer owner from running"
+        );
+        assert_ne!(
+            step(input, member, clock, mode),
+            FoundationInputProgress::Stopped,
+            "{:?}",
+            input.detail()
+        );
     }
 }
 

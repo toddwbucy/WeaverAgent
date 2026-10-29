@@ -1747,6 +1747,7 @@ impl<'a> Ports<'a> {
                                     position: weaver_types::Position::Close,
                                     payload: weaver_types::Payload::Answer(
                                         weaver_types::LifecycleAnswer::State {
+                                            plan: None,
                                             state: weaver_types::AgentState::Active,
                                             load: Some(Box::new(self.load.clone())),
                                             constituents: Vec::new(),

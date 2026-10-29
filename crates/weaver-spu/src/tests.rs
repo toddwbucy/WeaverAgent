@@ -232,6 +232,11 @@ fn a_directive_outside_the_drawn_vocabulary_refuses_out_of_order() {
             LifecycleDirective::JoinLeave { cause },
             LifecycleDirective::Quiesce,
             LifecycleDirective::SavePoint { cause },
+            LifecycleDirective::PlanUpdate {
+                cause,
+                document_sha256: weaver_types::state_flow::Digest::new("1".repeat(64)).unwrap(),
+                document: "{}".into(),
+            },
             LifecycleDirective::Stop { cause },
             LifecycleDirective::Observe,
             LifecycleDirective::Raise {

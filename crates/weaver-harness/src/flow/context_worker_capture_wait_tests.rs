@@ -7,6 +7,7 @@ pub(super) struct Probe {
     key: PumpDeadline,
     finished: bool,
     published: bool,
+    forced: bool,
     original: Option<AbsoluteBound>,
     expired_in_wait: bool,
 }
@@ -35,6 +36,7 @@ impl Probe {
             },
             finished,
             published,
+            forced: expected_forced(mode),
             original: None,
             expired_in_wait: false,
         })
@@ -98,10 +100,20 @@ impl Probe {
         assert!(report.is_none());
         assert!(!packets.iter().any(|packet| matches!(
             packet,
-            CapturePayload::SavePointCaptureComplete(_) | CapturePayload::Answer(_)
+            CapturePayload::SavePointCaptureComplete(_)
+                | CapturePayload::Answer(CaptureAnswer::Left {
+                    save_point: Some(_),
+                    ..
+                })
+                | CapturePayload::Answer(CaptureAnswer::SavePointTaken { .. })
         )));
         if self.published {
-            assert_eq!(owner.progress(), FoundationForcedLeaveProgress::Closed);
+            assert!(
+                !packets
+                    .iter()
+                    .any(|packet| matches!(packet, CapturePayload::Answer(_)))
+            );
+            assert_eq!(owner.progress(), LeaveProgress::Closed);
             assert!(owner.test_inner().test_context().failure().is_some());
             assert!(
                 packets
@@ -112,7 +124,11 @@ impl Probe {
         }
         assert_eq!(
             owner.progress(),
-            FoundationForcedLeaveProgress::CaptureRefused
+            if self.forced {
+                LeaveProgress::Closed
+            } else {
+                LeaveProgress::CaptureRefused
+            }
         );
         assert!(owner.test_inner().test_context().failure().is_none());
         assert!(
@@ -122,13 +138,39 @@ impl Probe {
                 .capture_snapshot()
                 .is_none()
         );
-        assert!(owner.unload_sequence().is_none());
+        assert_eq!(owner.unload_sequence().is_some(), self.forced);
         assert!(member.held_control.is_none());
-        let expected = if self.finished {
+        let mut expected = if self.finished {
             vec!["snapshot", "acknowledge", "abort"]
         } else {
             vec!["snapshot", "abort"]
         };
+        if self.forced {
+            expected.push("grants");
+        }
+        let missed = if self.finished {
+            SavePointLeg::Finished
+        } else {
+            SavePointLeg::Answer
+        };
+        assert!(packets.iter().any(|packet| matches!(packet,
+            CapturePayload::SavePointCaptureRefused(ack) if ack.missed == missed)));
+        if self.forced {
+            assert!(matches!(
+                packets.last(),
+                Some(CapturePayload::Answer(CaptureAnswer::Left {
+                    save_point: None,
+                    forced: true,
+                    no_state: false,
+                }))
+            ));
+        } else {
+            assert!(
+                matches!(packets.last(), Some(CapturePayload::Refusal(CaptureRefusal::Save(
+                SaveRefusal::SavePointNotTaken { missed: actual }
+            ))) if *actual == missed)
+            );
+        }
         assert!(
             member
                 .requests

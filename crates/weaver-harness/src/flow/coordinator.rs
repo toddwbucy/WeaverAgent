@@ -1510,6 +1510,25 @@ impl<P: Ste100Port> FlowCoordinator<P> {
         self.capture.is_none() && self.settled_obligations(cx)
     }
 
+    /// Cancellation before a member barrier still owes the existing sources.
+    /// This check grants neither a snapshot nor a fabricated member holding.
+    pub(super) fn cancelled_capture_boundary_ready(
+        &mut self,
+        cx: &mut FlowRecording<'_>,
+    ) -> Result<bool, FlowFailure> {
+        self.require_active(cx)?;
+        if self.capture.is_some() {
+            return Err(self.fail(cx, "barrier", "unheld cancellation has a member capture"));
+        }
+        Ok(self.clean_obligations(cx)
+            && self.state().can_begin_filing()
+            && self
+                .classifier
+                .as_ref()
+                .is_none_or(|port| port.state() == ClassifierState::Idle)
+            && self.starting_classifier.is_none())
+    }
+
     fn settled_obligations(&self, cx: &FlowRecording<'_>) -> bool {
         self.settled_except_author(cx) && cx.barrier.pending().is_none()
     }
@@ -2227,6 +2246,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                         frame: StateControlAnswer::Finished { capture_id: returned, .. }, ..
                     },
                     discard_capture_result: false,
+                    ..
                 }, ..
             }) if *id == capture_id && *returned == capture_id
         );

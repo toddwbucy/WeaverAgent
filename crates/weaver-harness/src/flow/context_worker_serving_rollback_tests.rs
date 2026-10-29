@@ -400,6 +400,8 @@ pub(in crate::flow::context::worker_startup) fn handoff(
     let leave_at_held_member = mode.ends_with("-source-file")
         || mode.ends_with("-task-read")
         || mode.ends_with("-mark-file");
+    let leave_at_held_measurement =
+        is_mode(mode) && mode.contains("-placement") && !is_correction(mode);
     let root_leave = || {
         management(
             socket,
@@ -416,18 +418,22 @@ pub(in crate::flow::context::worker_startup) fn handoff(
             let mut peer = None;
             while !done.load(Ordering::SeqCst) {
                 member.step_live(mode);
-                if member.held_file.is_some() || member.held_control.is_some() {
+                let member_held = member.held_file.is_some() || member.held_control.is_some();
+                if member_held {
                     std::fs::write(
                         root.join("serving-rollback-member-held"),
                         b"original response held",
                     )
                     .unwrap();
-                    // The worker may already be waiting on this held response.
-                    // Wake that real wait through root management immediately,
-                    // rather than waiting for advance() to return to the test.
-                    if leave_at_held_member && peer.is_none() {
-                        peer = Some(root_leave());
-                    }
+                }
+                // The driver can already be waiting on either held answer.
+                // Deliver root Leave from this independent peer at that boundary.
+                if peer.is_none()
+                    && ((leave_at_held_member && member_held)
+                        || (leave_at_held_measurement
+                            && root.join("serving-rollback-measured").exists()))
+                {
+                    peer = Some(root_leave());
                 }
                 std::thread::sleep(Duration::from_millis(1));
             }
@@ -664,9 +670,15 @@ pub(in crate::flow::context::worker_startup) fn handoff(
                 }
             }
         }
+        if leave_at_held_measurement {
+            assert!(
+                root.join("serving-rollback-measured").exists(),
+                "independent Leave requires the held measurement boundary"
+            );
+        }
         let peer = pending_peer
             .take()
-            .or_else(|| (!leave_at_held_member).then(&root_leave));
+            .or_else(|| (!leave_at_held_member && !leave_at_held_measurement).then(&root_leave));
         if let Some(held) = &mut direct {
             let end = Instant::now() + Duration::from_secs(10);
             let input = held.input.as_mut().unwrap();

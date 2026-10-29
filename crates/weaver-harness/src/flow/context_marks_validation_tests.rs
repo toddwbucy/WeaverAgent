@@ -5,15 +5,14 @@ use super::*;
 
 pub(in crate::flow::context) fn fault_author_is_next(context: &RecordingContext) -> bool {
     context
-        .marks
-        .as_ref()
+        .task_work()
         .is_some_and(|work| work.stage == Stage::Fault)
 }
 
 pub(in crate::flow::context) fn returned_fault_author(
     context: &RecordingContext,
 ) -> Option<(&AuthorFailure, bool)> {
-    let work = context.marks.as_ref()?;
+    let work = context.task_work()?;
     work.returned_author
         .failure
         .as_ref()

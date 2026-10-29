@@ -396,7 +396,7 @@ fn conclude(
     // refuses Unloaded, but cannot make that completed save ineligible.
     let eligible =
         matches!(&marker, Ok(Some(save_points::Marker::Open { run: open })) if *open == run.0);
-    let publication = if eligible {
+    let publication = if eligible && leave.report.is_some() {
         leave
             .finish_leave()
             .map(|identity| *completed = Some(identity))

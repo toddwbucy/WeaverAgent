@@ -1271,7 +1271,7 @@ fn begin_task_bound_validator_inspects_an_actual_owner_without_replacing_it() {
         fx.input.run.context.complete_wait(PumpDeadline::Decision),
         None
     );
-    let work = fx.input.run.context.marks.as_ref().unwrap();
+    let work = fx.input.run.context.task_work().unwrap();
     assert!(work.has_original_wait(Some(fx.bound)));
     assert!(!work.has_original_wait(None));
     let duration = fx.bound.deadline_ns() - fx.bound.began_ns();

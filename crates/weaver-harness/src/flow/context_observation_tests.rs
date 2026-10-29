@@ -216,7 +216,8 @@ fn terminal_deadline_wins_before_or_at_the_observation_tick() {
             pump(&mut fixture, &deadlines),
             PumpStep::Deadline {
                 key: PumpDeadline::Decision,
-                bound
+                bound,
+                observed_ns: end,
             }
         );
         assert!(samples(&fixture).is_empty());
@@ -236,7 +237,8 @@ fn idle_flow_does_not_arm_an_observation_wake() {
         pump(&mut fixture, &deadlines),
         PumpStep::Deadline {
             key: PumpDeadline::Leave,
-            bound
+            bound,
+            observed_ns: bound.deadline_ns(),
         }
     );
     assert_eq!(
@@ -284,7 +286,8 @@ fn trace_pressure_coalesces_ticks_behind_the_original_pending_sample() {
         pump(&mut fixture, &deadlines),
         PumpStep::Deadline {
             key: PumpDeadline::Decision,
-            bound
+            bound,
+            observed_ns: bound.deadline_ns(),
         }
     );
     assert_eq!(
