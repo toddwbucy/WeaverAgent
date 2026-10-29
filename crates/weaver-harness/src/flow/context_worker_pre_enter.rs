@@ -182,8 +182,8 @@ impl FoundationAdmission {
         self.stopped.then_some(FoundationProcessExit::Failure)
     }
 
-    /// The worker reports an undelivered answer once. No next connection is
-    /// accepted until this notice is taken, so delayed callers cannot lose one
+    /// The worker reports an undelivered answer once. No further input is read
+    /// until this notice is taken, so delayed callers cannot lose one
     /// notice to another or cause an unbounded diagnostic queue.
     pub fn take_delivery_loss(&mut self) -> Option<String> {
         self.delivery_loss.take()
@@ -242,6 +242,7 @@ impl FoundationAdmission {
                     self.ordinary = Some(ordinary);
                     return self.stop(detail);
                 }
+                self.detail = None;
                 let (exchange, answer) = match &ordinary.message.envelope {
                     BeforeEnterOpener::Ordinary(envelope) => (
                         envelope.exchange.clone(),
@@ -291,6 +292,7 @@ impl FoundationAdmission {
             self.received = Some(original);
             return self.stop(detail);
         }
+        self.detail = None;
         let timing = original.check_window(io);
         let observed = original.observed_ns();
         self.received = Some(original);
@@ -308,6 +310,9 @@ impl FoundationAdmission {
             Err(EnterTimeError::Expired) => {
                 self.detail = Some("original Enter expired before admission".into());
                 self.received.as_mut().unwrap().close_unadmitted();
+                if let Err(detail) = self.resume_peer(true) {
+                    return self.stop(detail);
+                }
             }
             Err(EnterTimeError::Clock(detail)) => {
                 return self.stop(format!("Enter clock: {detail}"));
@@ -358,7 +363,10 @@ impl FoundationAdmission {
                         self.refuse(refusal, bound);
                     }
                     AdoptionFailureKind::Expired => {
-                        self.received.as_mut().unwrap().close_unadmitted()
+                        self.received.as_mut().unwrap().close_unadmitted();
+                        if let Err(detail) = self.resume_peer(true) {
+                            self.stop(detail);
+                        }
                     }
                     AdoptionFailureKind::Channel(failure)
                         if failure.fault == ChannelFault::Closed =>
@@ -407,7 +415,7 @@ impl FoundationAdmission {
         };
         let mut response = self.response.take().unwrap();
         if response.bound.is_some_and(|bound| bound.expired(now)) {
-            return self.progress();
+            return self.expire_response(response);
         }
         let mut failure = None;
         if let Some(answer) = response.answer.take() {
@@ -431,7 +439,7 @@ impl FoundationAdmission {
                 }
             };
             if response.bound.is_some_and(|bound| bound.expired(now)) {
-                return self.progress();
+                return self.expire_response(response);
             }
             failure = self.peer_mut(response.enter).try_send_observed(io).err();
         }
@@ -446,30 +454,7 @@ impl FoundationAdmission {
                 self.response = Some(response);
                 return self.stop(detail);
             }
-            // The admin closes an answered connection. Keep the sole receive
-            // owner for another directive or its EOF; dropping a socket with a
-            // second unread packet can reset it before the first answer is read.
-            let receiver = if response.enter {
-                match self.received.take().unwrap().resume() {
-                    Ok(receiver) => receiver,
-                    Err(original) => {
-                        self.received = Some(original);
-                        self.response = Some(response);
-                        return self.stop("answered Enter peer cannot resume receive".into());
-                    }
-                }
-            } else {
-                match self.ordinary.take().unwrap().resume() {
-                    Ok(receiver) => receiver,
-                    Err(original) => {
-                        self.ordinary = Some(original);
-                        self.response = Some(response);
-                        return self.stop("answered lifecycle peer cannot resume receive".into());
-                    }
-                }
-            };
-            self.receiver = Some(receiver);
-            return self.progress();
+            return self.finish_response(response);
         }
         if let Some(failure) = failure {
             if failure.fault == ChannelFault::Closed {
@@ -486,6 +471,54 @@ impl FoundationAdmission {
         self.response = Some(response);
         self.wait_ready = true;
         self.progress()
+    }
+
+    fn expire_response(&mut self, mut response: Response) -> FoundationAdmissionProgress {
+        if let Some(send) = &response.send {
+            match self.peer_mut(response.enter).withdraw_pending(send) {
+                Ok(Some(answer)) => response.answer = Some(answer),
+                result => {
+                    self.response = Some(response);
+                    return self.stop(format!("expired admission answer withdrawal: {result:?}"));
+                }
+            }
+        }
+        self.delivery_loss =
+            Some("lifecycle answer was not delivered: original Enter window expired".into());
+        self.finish_response(response)
+    }
+
+    fn finish_response(&mut self, response: Response) -> FoundationAdmissionProgress {
+        if let Err(detail) = self.resume_peer(response.enter) {
+            self.response = Some(response);
+            return self.stop(detail);
+        }
+        self.progress()
+    }
+
+    fn resume_peer(&mut self, enter: bool) -> Result<(), String> {
+        // Admin owns the connection's close. After a completed disposition,
+        // keep its sole reader for another directive or EOF. No unsent answer
+        // may cross this boundary into a later exchange.
+        let receiver = if enter {
+            match self.received.take().unwrap().resume() {
+                Ok(receiver) => receiver,
+                Err(original) => {
+                    self.received = Some(original);
+                    return Err("settled Enter peer cannot resume receive".into());
+                }
+            }
+        } else {
+            match self.ordinary.take().unwrap().resume() {
+                Ok(receiver) => receiver,
+                Err(original) => {
+                    self.ordinary = Some(original);
+                    return Err("answered lifecycle peer cannot resume receive".into());
+                }
+            }
+        };
+        self.receiver = Some(receiver);
+        Ok(())
     }
 
     /// A before-Enter peer has no invented opener deadline. A valid received

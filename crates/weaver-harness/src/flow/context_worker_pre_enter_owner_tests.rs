@@ -315,6 +315,35 @@ fn completed_enter_refusals_resume_the_same_peer_before_accepting_another_connec
 }
 
 #[test]
+fn a_new_enter_on_the_answered_peer_has_no_prior_refusal_detail() {
+    let mut fx = Fixture::new();
+    let bytes = enter();
+    fx.request(&bytes, &[]);
+    fx.owner.advance_with_io(&mut FakePumpIo::new(10));
+    fx.owner = fx
+        .owner
+        .adopt_with_io(&mut FakePumpIo::new(10))
+        .err()
+        .unwrap();
+    fx.owner.advance_with_io(&mut FakePumpIo::new(10));
+    assert!(packet(&fx.peer).is_some());
+    assert!(fx.owner.detail().is_some());
+    let mut next: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    next["exchange"]["ordinal"] = serde_json::json!(8);
+    let next = serde_json::to_vec(&next).unwrap();
+    fx.request(&next, &[]);
+    assert_eq!(
+        fx.owner.advance_with_io(&mut FakePumpIo::new(11)),
+        FoundationAdmissionProgress::Received
+    );
+    assert!(
+        fx.owner.detail().is_none(),
+        "a new Enter must clear the old refusal detail"
+    );
+    assert_eq!(fx.owner.received.as_ref().unwrap().wire(), next);
+}
+
+#[test]
 fn expired_staged_enter_refusal_sends_no_late_packet_and_keeps_its_original_window() {
     struct AcrossStage {
         first: bool,
@@ -353,9 +382,186 @@ fn expired_staged_enter_refusal_sends_no_late_packet_and_keeps_its_original_wind
         packet(&fx.peer).is_none(),
         "no first refusal send after serialization spends Enter"
     );
-    assert_eq!(fx.owner.received.as_ref().unwrap().wire(), bytes);
-    assert_eq!(fx.owner.received.as_ref().unwrap().window(), Some(bound));
+    assert!(
+        fx.owner
+            .take_delivery_loss()
+            .expect("expired owed refusal needs a delivery notice")
+            .contains("expired")
+    );
+    assert!(fx.owner.take_delivery_loss().is_none());
+    assert!(fx.owner.response.is_none());
+    assert_expired_peer_resumes(&mut fx, 107);
     assert_eq!(fx.owner.process_exit(), None);
+}
+
+fn assert_expired_peer_resumes(fx: &mut Fixture, now: u64) {
+    assert!(fx.owner.received.is_none());
+    let original_fd = fx
+        .owner
+        .receiver
+        .as_ref()
+        .unwrap()
+        .interest()
+        .fd
+        .as_raw_fd();
+    let mut io = FakePumpIo::new(now);
+    io.schedule(
+        now,
+        vec![crate::flow::clock::ReadyFd {
+            index: 0,
+            events: PollFlags::POLLIN,
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        fx.owner.advance_with_io(&mut io),
+        FoundationAdmissionProgress::Pending
+    );
+    fx.owner.wait_with_io(&mut io);
+    assert_eq!(io.waits().len(), 1);
+    assert_eq!(io.waits()[0].absolute_deadline, None);
+    assert_eq!(io.waits()[0].descriptors[0].0, original_fd);
+    assert!(io.waits()[0].descriptors[0].1.contains(PollFlags::POLLIN));
+    fx.request(
+        &serde_json::to_vec(&ordinary(191, LifecycleDirective::Observe)).unwrap(),
+        &[],
+    );
+    fx.owner.advance_with_io(&mut FakePumpIo::new(now));
+    let answer: OrganEnvelope = serde_json::from_slice(&packet(&fx.peer).unwrap()).unwrap();
+    assert_eq!(answer.exchange.ordinal, 191);
+    assert!(matches!(
+        answer.payload,
+        Payload::Answer(LifecycleAnswer::State {
+            state: weaver_types::AgentState::Unloaded,
+            ..
+        })
+    ));
+    let mut next: serde_json::Value = serde_json::from_slice(&enter()).unwrap();
+    next["exchange"]["ordinal"] = serde_json::json!(192);
+    next["payload"]["body"]["payload"]["binding"]["enter_window"] =
+        serde_json::json!({"began_ns":now.to_string(),"deadline_ns":(now+100).to_string()});
+    let next = serde_json::to_vec(&next).unwrap();
+    fx.request(&next, &[]);
+    assert_eq!(
+        fx.owner.advance_with_io(&mut FakePumpIo::new(now)),
+        FoundationAdmissionProgress::Received
+    );
+    assert_eq!(fx.owner.received.as_ref().unwrap().wire(), next);
+    assert!(
+        fx.owner.detail().is_none(),
+        "new Enter cannot inherit the prior refusal detail"
+    );
+    assert_eq!(fx.owner.process_exit(), None);
+}
+
+#[test]
+fn expired_enter_resumes_before_admission_and_before_adoption_without_an_answer() {
+    for before_adoption in [false, true] {
+        let mut fx = Fixture::new();
+        let (sink, mut trace) = UnixStream::pair().unwrap();
+        let (state, mut member) = UnixStream::pair().unwrap();
+        fx.request(&enter(), &[sink.as_raw_fd(), state.as_raw_fd()]);
+        drop((sink, state));
+        if before_adoption {
+            assert_eq!(
+                fx.owner.advance_with_io(&mut FakePumpIo::new(10)),
+                FoundationAdmissionProgress::Received
+            );
+            fx.owner = fx
+                .owner
+                .adopt_with_io(&mut FakePumpIo::new(100))
+                .err()
+                .unwrap();
+        } else {
+            assert_eq!(
+                fx.owner.advance_with_io(&mut FakePumpIo::new(100)),
+                FoundationAdmissionProgress::Pending
+            );
+        }
+        assert!(
+            fx.owner.receiver.is_some(),
+            "expired Enter must return its original peer to receive"
+        );
+        assert!(
+            fx.owner.take_delivery_loss().is_none(),
+            "expiry without an owed answer creates no delivery notice"
+        );
+        for reader in [&mut trace, &mut member] {
+            reader.set_nonblocking(true).unwrap();
+            assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+        }
+        assert_eq!(
+            recv(fx.peer.as_raw_fd(), &mut [0], MsgFlags::MSG_DONTWAIT),
+            Err(nix::errno::Errno::EAGAIN)
+        );
+        assert_expired_peer_resumes(&mut fx, 100);
+    }
+}
+
+#[test]
+fn expired_owed_refusal_reports_once_and_withdraws_only_its_unsent_answer() {
+    for staged in [false, true] {
+        let mut fx = Fixture::new();
+        fx.request(&enter(), &[]);
+        fx.owner.advance_with_io(&mut FakePumpIo::new(10));
+        fx.owner = fx
+            .owner
+            .adopt_with_io(&mut FakePumpIo::new(10))
+            .err()
+            .unwrap();
+        let probe = if staged {
+            fill(
+                fx.owner
+                    .received
+                    .as_mut()
+                    .unwrap()
+                    .peer_mut()
+                    .fd()
+                    .as_raw_fd(),
+            );
+            fx.owner.advance_with_io(&mut FakePumpIo::new(99));
+            Some(
+                fx.owner
+                    .response
+                    .as_ref()
+                    .unwrap()
+                    .send
+                    .as_ref()
+                    .unwrap()
+                    .state_probe_for_test(),
+            )
+        } else {
+            None
+        };
+        fx.owner.advance_with_io(&mut FakePumpIo::new(100));
+        assert!(
+            fx.owner
+                .delivery_loss
+                .as_ref()
+                .expect("expired owed refusal needs a delivery notice")
+                .contains("expired"),
+            "an owed refusal expiry must report failed delivery"
+        );
+        let notice = fx.owner.delivery_loss.clone();
+        fx.owner.advance_with_io(&mut FakePumpIo::new(101));
+        assert!(!fx.owner.wait_ready);
+        assert_eq!(fx.owner.take_delivery_loss(), notice);
+        assert!(fx.owner.take_delivery_loss().is_none());
+        if let Some(probe) = probe {
+            assert_eq!(
+                probe(),
+                (false, true),
+                "the exact unsent ticket must be withdrawn"
+            );
+        }
+        while let Some(bytes) = packet(&fx.peer) {
+            assert!(
+                bytes.iter().all(|&b| b == 0x55),
+                "no late refusal after capacity returns"
+            );
+        }
+        assert_expired_peer_resumes(&mut fx, 101);
+    }
 }
 
 #[test]
@@ -810,7 +1016,14 @@ fn post_constructor_expiry_or_clock_failure_closes_actual_handles_without_load_o
             .err()
             .expect("construction spent the original window");
         assert_eq!(io.samples, 3);
-        assert_eq!(fx.owner.received.as_ref().unwrap().wire(), bytes);
+        if fail {
+            assert_eq!(fx.owner.received.as_ref().unwrap().wire(), bytes);
+        } else {
+            assert!(
+                fx.owner.receiver.is_some(),
+                "settled constructor expiry resumes the same peer"
+            );
+        }
         assert_eq!(
             fx.owner.process_exit(),
             fail.then_some(FoundationProcessExit::Failure)
@@ -826,6 +1039,9 @@ fn post_constructor_expiry_or_clock_failure_closes_actual_handles_without_load_o
             .unwrap();
         assert_eq!(trace.read(&mut [0]).unwrap(), 0);
         assert_eq!(member.read(&mut [0]).unwrap(), 0);
+        if !fail {
+            assert_expired_peer_resumes(&mut fx, 107);
+        }
     }
 }
 
