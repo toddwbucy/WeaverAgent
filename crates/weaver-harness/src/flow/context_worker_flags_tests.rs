@@ -3,11 +3,19 @@ use super::*;
 use crate::flow::context::worker_startup::input::halt::exit::flags_tests as failed;
 use crate::{FoundationFlagObservation, FoundationFlagsRefusal};
 
+pub(in crate::flow::context::worker_startup) struct CheckedTurn {
+    root: std::path::PathBuf,
+    wire: Vec<u8>,
+    turn: TurnKey,
+    source: s::SourceBlockId,
+}
+
 pub(in crate::flow::context::worker_startup) enum Cleanup {
     Leave {
         handoff: Box<crate::FoundationEnteredRollbackHandoff>,
         peer: OwnedFd,
         sequence: weaver_trace::Sequence,
+        checked: Option<CheckedTurn>,
     },
     Failed(failed::Failure),
 }
@@ -20,7 +28,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     mode: &str,
 ) -> Option<Cleanup> {
     let mut guard = sqlite_update(serving, member, reader, socket, false);
-    let turn_boundary = mode.ends_with("-turn-boundary");
+    let turn_boundary = mode.contains("-flags-turn-boundary");
     if turn_boundary {
         prepare_checked_turn(&mut guard, member, socket);
     }
@@ -50,7 +58,12 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             input.serving.owner.context.open_turn,
             Some(weaver_trace::TurnRef("flags-boundary-turn".into()))
         );
-        input.received.as_ref().unwrap().raw_bytes().to_vec()
+        CheckedTurn {
+            root: socket.parent().unwrap().to_path_buf(),
+            wire: input.received.as_ref().unwrap().raw_bytes().to_vec(),
+            turn: input.turn.clone().unwrap(),
+            source: input.seated.as_ref().unwrap().source.clone(),
+        }
     });
     assert!(input.take_observed_flags().is_none());
     let refused = input
@@ -161,9 +174,6 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 }
             } else {
                 let input = guard.input.as_mut().unwrap();
-                if turn_boundary && input.flags_pending() {
-                    assert_eq!(input.progress(), FoundationInputProgress::Pending);
-                }
                 let progress = input.advance();
                 assert_ne!(
                     progress,
@@ -256,6 +266,40 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         request_id.0.to_string()
     );
     assert!(input.serving.owner.context.last_ns < bound.deadline_ns());
+    if let Some(original) = &original_input {
+        assert_eq!(input.received.as_ref().unwrap().raw_bytes(), original.wire);
+        assert_eq!(input.turn.as_ref(), Some(&original.turn));
+        assert_eq!(input.seated.as_ref().unwrap().source, original.source);
+        let started: Vec<_> = rows
+            .iter()
+            .filter(|row| row["kind"] == "turn.started")
+            .collect();
+        assert_eq!(started.len(), 1);
+        assert!(
+            started[0]["sequence"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                < sequence.0
+        );
+        if stop {
+            assert_turn_closed(&rows, sequence, &original.turn);
+            assert!(input.serving.owner.context.open_turn.is_none());
+        } else {
+            assert_eq!(
+                input
+                    .serving
+                    .owner
+                    .context
+                    .open_turn
+                    .as_ref()
+                    .map(|turn| &turn.0),
+                Some(&original.turn.0)
+            );
+            assert!(rows.iter().all(|row| row["kind"] != "turn.closed"));
+        }
+    }
     if let Some((peer, window)) = &queued_save {
         let saved = input
             .serving
@@ -293,10 +337,21 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             handoff._flags.as_ref().unwrap().observation(),
             FoundationFlagObservation::Cancelled
         );
+        if let Some(original) = &original_input {
+            assert_eq!(
+                handoff.input.original_input().unwrap().raw_bytes(),
+                original.wire
+            );
+            assert_eq!(
+                handoff.input.test_checked_source(),
+                Some((&original.turn, &original.source))
+            );
+        }
         return Some(Cleanup::Leave {
             handoff,
             peer: peer.unwrap(),
             sequence,
+            checked: original_input,
         });
     } else {
         if stop {
@@ -304,7 +359,13 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 serde_json::from_slice(&read_packet(peer.as_ref().unwrap()).unwrap()).unwrap();
             assert_eq!(
                 answer.payload,
-                Payload::Answer(weaver_types::LifecycleAnswer::AtRest)
+                Payload::Answer(if turn_boundary {
+                    weaver_types::LifecycleAnswer::TurnAborted {
+                        turn: TurnKey("flags-boundary-turn".into()),
+                    }
+                } else {
+                    weaver_types::LifecycleAnswer::AtRest
+                })
             );
             guard.input = Some(guard.management.take().unwrap().finish().ok().unwrap());
         }
@@ -316,23 +377,15 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         assert_eq!(taken.sequence(), sequence);
         assert!(input.take_observed_flags().is_none());
         if let Some(original) = original_input {
-            assert_eq!(input.received.as_ref().unwrap().raw_bytes(), original);
+            assert_eq!(input.received.as_ref().unwrap().raw_bytes(), original.wire);
+            if stop {
+                assert_eq!(input.progress(), FoundationInputProgress::Aborted);
+                assert_world_close(socket.parent().unwrap(), "the operator stopped the turn");
+                return None;
+            }
             assert_eq!(input.progress(), FoundationInputProgress::Turn);
             // The same checked turn becomes available only after the sample's
             // exact measurement above has crossed the recorder.
-            let started: Vec<_> = rows
-                .iter()
-                .filter(|row| row["kind"] == "turn.started")
-                .collect();
-            assert_eq!(started.len(), 1);
-            assert!(
-                started[0]["sequence"]
-                    .as_str()
-                    .unwrap()
-                    .parse::<u64>()
-                    .unwrap()
-                    < sequence.0
-            );
             assert_eq!(
                 input.serving.owner.context.open_turn,
                 Some(weaver_trace::TurnRef("flags-boundary-turn".into()))
@@ -347,6 +400,8 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             let super::super::FoundationInputResult::Turn(turn) = returned else {
                 panic!("the original checked turn must return")
             };
+            assert_eq!(turn.turn(), original.turn);
+            assert_eq!(turn.source(), &original.source);
             guard.input = Some(turn.into_service());
         }
     }
@@ -363,6 +418,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
         handoff,
         peer,
         sequence,
+        checked,
     } = cleanup
     else {
         let Cleanup::Failed(failure) = cleanup else {
@@ -437,6 +493,21 @@ pub(in crate::flow::context::worker_startup) fn finish(
     let sample = retained._flags.as_ref().unwrap();
     assert_eq!(sample.sequence(), sequence);
     assert_eq!(sample.observation(), FoundationFlagObservation::Cancelled);
+    if let Some(original) = &checked {
+        assert_eq!(
+            retained.input.original_input().unwrap().raw_bytes(),
+            original.wire
+        );
+        assert_eq!(
+            retained.input.test_checked_source(),
+            Some((&original.turn, &original.source))
+        );
+        assert!(run.context.open_turn.is_none());
+        assert!(
+            original.root.join("flags-turn-lowered").exists(),
+            "actual gate must confirm Lower"
+        );
+    }
     member.assert_closed_without_request();
     let answer: OrganEnvelope = serde_json::from_slice(&read_packet(&peer).unwrap()).unwrap();
     assert!(matches!(
@@ -452,6 +523,9 @@ pub(in crate::flow::context::worker_startup) fn finish(
         .map(|b| serde_json::from_slice(b).unwrap())
         .collect();
     assert_eq!(rows.iter().filter(|r| r["kind"] == "unload").count(), 1);
+    if let Some(original) = &checked {
+        assert_turn_closed(&rows, sequence, &original.turn);
+    }
     assert!(
         rows.iter().all(|r| r["kind"] != "state.plan.measurement"),
         "cleanup must not sample again"
@@ -497,17 +571,60 @@ fn advance_input_with_member(
         let _done = Done(&done);
         let end = Instant::now() + Duration::from_secs(5);
         while input.progress() != wanted {
-            assert_ne!(
-                input.advance(),
-                FoundationInputProgress::Stopped,
-                "{:?}",
+            let progress = input.advance();
+            assert!(
+                progress == FoundationInputProgress::Pending || progress == wanted,
+                "input reached {progress:?} while waiting for {wanted:?}: {:?}",
                 input.detail()
             );
-            assert!(Instant::now() < end, "input did not reach {wanted:?}");
+            assert!(
+                Instant::now() < end,
+                "input did not reach {wanted:?}: {progress:?}, {:?}",
+                input.detail()
+            );
+            std::thread::sleep(Duration::from_millis(1));
         }
         done.store(true, Ordering::SeqCst);
         responder.join().unwrap();
     });
+}
+
+fn assert_turn_closed(rows: &[serde_json::Value], sample: weaver_trace::Sequence, turn: &TurnKey) {
+    let closes: Vec<_> = rows
+        .iter()
+        .filter(|row| row["kind"] == "turn.closed")
+        .collect();
+    assert_eq!(
+        closes.len(),
+        1,
+        "cancelled sample must close the original turn once"
+    );
+    assert_eq!(closes[0]["turn"], turn.0);
+    assert!(
+        closes[0]["sequence"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            > sample.0
+    );
+}
+
+fn assert_world_close(root: &Path, text: &str) {
+    let path = root.join("flags-turn-close.json");
+    let end = Instant::now() + Duration::from_secs(2);
+    while !path.exists() {
+        assert!(Instant::now() < end, "gate did not receive the turn close");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let raw = std::fs::read(path).unwrap();
+    let envelope: OrganEnvelope = serde_json::from_slice(&raw).unwrap();
+    let Payload::Frame(frame) = envelope.payload else {
+        panic!("world frame required")
+    };
+    let world: serde_json::Value = serde_json::from_slice(&frame.octets().unwrap()).unwrap();
+    assert_eq!(world["reason"], text);
+    assert_eq!(world["turn"], "flags-boundary-turn");
 }
 
 fn queue_save(guard: &mut Guard<'_>, socket: &Path) -> (OwnedFd, s::SaveWindow) {

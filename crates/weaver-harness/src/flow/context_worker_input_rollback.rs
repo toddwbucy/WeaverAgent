@@ -89,6 +89,13 @@ impl RollbackInputWork {
     }
 
     #[cfg(test)]
+    pub(in crate::flow::context::worker_startup) fn test_checked_source(
+        &self,
+    ) -> Option<(&TurnKey, &weaver_types::state_flow::SourceBlockId)> {
+        Some((self._turn.as_ref()?, &self._seated.as_ref()?.source))
+    }
+
+    #[cfg(test)]
     pub(in crate::flow::context::worker_startup) fn test_received(&self) -> Option<&ReceivedOrgan> {
         self.received.as_ref()
     }

@@ -2290,6 +2290,14 @@ scenario!(
     "input-worker-plan-save-sqlite-flags-turn-boundary"
 );
 scenario!(
+    worker_plan_flags_turn_boundary_stop,
+    "input-worker-plan-save-sqlite-flags-turn-boundary-stop"
+);
+scenario!(
+    worker_plan_flags_turn_boundary_leave,
+    "input-worker-plan-save-sqlite-flags-turn-boundary-leave"
+);
+scenario!(
     worker_plan_flags_unavailable,
     "input-worker-plan-save-sqlite-flags-unavailable"
 );
