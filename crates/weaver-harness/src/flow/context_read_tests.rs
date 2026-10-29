@@ -30,6 +30,9 @@ mod resume_tests;
 #[path = "context_read_plan_tests.rs"]
 mod plan_tests;
 
+#[path = "context_read_flags_tests.rs"]
+mod flags_tests;
+
 #[path = "context_boot_read_tests.rs"]
 mod boot_tests;
 

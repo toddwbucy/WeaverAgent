@@ -118,7 +118,7 @@ pub(in crate::flow) fn plan_input(value: &shared::PlanInputContext) -> trace::Pl
         },
     }
 }
-fn plan_ref(value: &shared::PlanRef) -> trace::PlanRef {
+pub(in crate::flow) fn plan_ref(value: &shared::PlanRef) -> trace::PlanRef {
     let shared::PlanRef {
         plan_id: shared::PlanId { seed_id, local_id },
         revision,
@@ -129,6 +129,45 @@ fn plan_ref(value: &shared::PlanRef) -> trace::PlanRef {
             local_id: number(*local_id),
         },
         revision: number(*revision),
+    }
+}
+pub(in crate::flow) fn plan_flags(value: &shared::PlanFlagSnapshot) -> trace::PlanFlagSnapshot {
+    let shared::PlanFlagSnapshot {
+        plan,
+        after,
+        through,
+        total_flags,
+        matched_flags,
+        unmatched_flags,
+    } = value;
+    trace::PlanFlagSnapshot {
+        plan: plan_ref(plan),
+        after: source(after),
+        through: source_position(through),
+        total_flags: number(*total_flags),
+        matched_flags: number(*matched_flags),
+        unmatched_flags: number(*unmatched_flags),
+    }
+}
+pub(in crate::flow) fn read_refusal(value: shared::ReadRefusalCode) -> trace::ReadRefusalCode {
+    use shared::ReadRefusalCode as S;
+    use trace::ReadRefusalCode as T;
+    match value {
+        S::UnsupportedOperation => T::UnsupportedOperation,
+        S::InvalidSelector => T::InvalidSelector,
+        S::WrongSeed => T::WrongSeed,
+        S::NotFound => T::NotFound,
+        S::UnknownSpan => T::UnknownSpan,
+        S::SpanOpen => T::SpanOpen,
+        S::SpanPending => T::SpanPending,
+        S::PartialPair => T::PartialPair,
+        S::CounterExhausted => T::CounterExhausted,
+        S::ReadBusy => T::ReadBusy,
+        S::UnknownSnapshot => T::UnknownSnapshot,
+        S::WrongOffset => T::WrongOffset,
+        S::ResultTooLarge => T::ResultTooLarge,
+        S::ResultUnavailable => T::ResultUnavailable,
+        S::AnswerTooLarge => T::AnswerTooLarge,
     }
 }
 fn step_id(value: &shared::StepId) -> trace::StepId {
