@@ -569,6 +569,128 @@ fn diagnostic_busy_handoff_stops_with_original_custody_and_no_ready() {
 }
 
 #[test]
+#[ignore = "requires a root-authenticated second lifecycle connection"]
+fn diagnostic_held_listener_preserves_both_nonblocking_owners_and_custody() {
+    use nix::fcntl::{FcntlArg, OFlag, fcntl};
+    use nix::sys::socket::{UnixAddr, connect, socket};
+
+    assert!(nix::unistd::geteuid().is_root());
+    let mut fx = Fixture::new();
+    let mut value: serde_json::Value = serde_json::from_slice(&enter()).unwrap();
+    value["payload"]["body"]["payload"]["binding"] = serde_json::json!({
+        "kind":"diagnostic", "state_election":weaver_types::StateElection::default()
+    });
+    let bytes = serde_json::to_vec(&value).unwrap();
+    let (sink, mut trace) = UnixStream::pair().unwrap();
+    let (state, mut member) = UnixStream::pair().unwrap();
+    fx.request(&bytes, &[sink.as_raw_fd(), state.as_raw_fd()]);
+    drop((sink, state));
+    assert_eq!(
+        fx.owner.advance_with_io(&mut FakePumpIo::new(10)),
+        FoundationAdmissionProgress::Received
+    );
+    let original_peer = fx
+        .owner
+        .received
+        .as_mut()
+        .unwrap()
+        .peer_mut()
+        .fd()
+        .as_raw_fd();
+    let original_listener = fx.owner.listener.interest().0.as_raw_fd();
+    let second = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .unwrap();
+    connect(second.as_raw_fd(), &UnixAddr::new(&fx._path.0).unwrap()).unwrap();
+    let queued = serde_json::to_vec(&ordinary(92, LifecycleDirective::Observe)).unwrap();
+    assert_eq!(
+        send(second.as_raw_fd(), &queued, MsgFlags::MSG_NOSIGNAL).unwrap(),
+        queued.len()
+    );
+    assert!(fx.owner.listener.accept_observed(11).unwrap());
+    assert!(fx.owner.listener.held().is_some());
+    let listener_identity = fx.owner.listener.identity();
+
+    let FoundationDiagnosticResult::Admission(mut owner) =
+        fx.owner.serve_diagnostic(&diagnostic_program())
+    else {
+        panic!("a held listener cannot transfer custody")
+    };
+    assert_eq!(owner.progress(), FoundationAdmissionProgress::Stopped);
+    assert_eq!(owner.process_exit(), Some(FoundationProcessExit::Failure));
+    assert!(
+        owner
+            .detail()
+            .unwrap()
+            .contains("requires an idle listener")
+    );
+    assert!(listener_identity.matches(&owner.listener));
+    let original = owner.received.as_mut().unwrap();
+    assert_eq!(original.wire(), bytes);
+    assert_eq!(original.peer_mut().fd().as_raw_fd(), original_peer);
+    assert!(
+        OFlag::from_bits_retain(fcntl(original.peer_mut().fd(), FcntlArg::F_GETFL).unwrap())
+            .contains(OFlag::O_NONBLOCK),
+        "a refused listener must not change the retained original peer's mode"
+    );
+    assert_eq!(owner.listener.accepted_ns(), Some(11));
+    let second_owner = owner.listener.take_observed_connection().unwrap().0;
+    assert!(
+        OFlag::from_bits_retain(fcntl(second_owner.fd(), FcntlArg::F_GETFL).unwrap())
+            .contains(OFlag::O_NONBLOCK)
+    );
+    let mut observed = vec![0; queued.len()];
+    assert_eq!(
+        recv(
+            second_owner.fd().as_raw_fd(),
+            &mut observed,
+            MsgFlags::MSG_DONTWAIT
+        )
+        .unwrap(),
+        queued.len()
+    );
+    assert_eq!(observed, queued, "the second request remains unread");
+    assert_eq!(owner.listener.interest().0.as_raw_fd(), original_listener);
+    assert!(
+        OFlag::from_bits_retain(fcntl(owner.listener.interest().0, FcntlArg::F_GETFL).unwrap())
+            .contains(OFlag::O_NONBLOCK),
+        "the original listener must also remain nonblocking"
+    );
+    assert_eq!(
+        owner.advance_with_io(&mut FakePumpIo::new(12)),
+        FoundationAdmissionProgress::Stopped
+    );
+    for peer in [&fx.peer, &second] {
+        assert_eq!(
+            recv(peer.as_raw_fd(), &mut [0], MsgFlags::MSG_DONTWAIT),
+            Err(nix::errno::Errno::EAGAIN),
+            "neither retained peer receives Ready or EOF"
+        );
+    }
+    for reader in [&mut trace, &mut member] {
+        reader.set_nonblocking(true).unwrap();
+        assert_eq!(
+            reader.read(&mut [0]).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "both original Enter handles remain owned"
+        );
+    }
+    drop((owner, second_owner));
+    for peer in [&fx.peer, &second] {
+        assert_eq!(
+            recv(peer.as_raw_fd(), &mut [0], MsgFlags::MSG_DONTWAIT),
+            Ok(0)
+        );
+    }
+    assert_eq!(trace.read(&mut [0]).unwrap(), 0);
+    assert_eq!(member.read(&mut [0]).unwrap(), 0);
+}
+
+#[test]
 fn diagnostic_lost_preload_refusal_returns_listener_after_peer_departure() {
     let mut fx = Fixture::new();
     let mut value: serde_json::Value = serde_json::from_slice(&enter()).unwrap();

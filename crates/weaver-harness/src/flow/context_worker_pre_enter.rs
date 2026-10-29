@@ -67,8 +67,7 @@ impl FoundationAdmission {
             .received
             .as_mut()
             .unwrap()
-            .prepare_diagnostic()
-            .and_then(|()| self.listener.prepare_diagnostic());
+            .prepare_diagnostic(&mut self.listener);
         if let Err(failure) = prepared {
             self.stop(format!("Diagnostic handoff: {failure:?}"));
             return FoundationDiagnosticResult::Admission(Box::new(self));
