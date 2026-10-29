@@ -501,6 +501,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
         (owner, recorder.join().unwrap())
     });
     assert_eq!(owner.progress(), FoundationEnteredRollbackProgress::Closed);
+    assert_eq!(
+        owner.process_exit(),
+        Some(crate::FoundationProcessExit::Success)
+    );
     assert!(!owner.abandoned(), "{:?}", owner.detail());
     assert!(owner.detail().is_none(), "{:?}", owner.detail());
     let (run, account) = owner.test_account();
@@ -633,4 +637,7 @@ pub(in crate::flow::context::worker_startup) fn finish(
     }
     assert_eq!(owner.advance(), FoundationEnteredRollbackProgress::Closed);
     assert!(read_packet(&peer).is_none(), "Left is sent only once");
+    // Complete the real cleanup first; then isolate the disposition guards
+    // with the same successful terminal and original retained run.
+    owner.test_completed_exit_guards();
 }

@@ -30,6 +30,185 @@ fn unsaved_left() -> CapturePayload {
     })
 }
 
+fn advance_to_closed_outcome(owner: &mut Capture<'_>, case: &str) -> LeaveProgress {
+    // Queued packets followed by real EOF need no additional peer activity.
+    // Bound the number of actor reductions as well as the protocol's own waits.
+    for _ in 0..6 {
+        let progress = owner.advance();
+        if progress != LeaveProgress::Pending {
+            return progress;
+        }
+    }
+    panic!("{case}: queued closed-peer outcome did not settle");
+}
+
+fn graceful_refusal(missed: SavePointLeg) -> CapturePayload {
+    CapturePayload::Refusal(CaptureRefusal::Save(SaveRefusal::SavePointNotTaken {
+        missed,
+    }))
+}
+
+#[test]
+fn closed_graceful_capture_peer_retains_queued_cleanup_and_final_refusal() {
+    for (site, missed) in [
+        ("image", SavePointLeg::Answer),
+        ("finished", SavePointLeg::Finished),
+    ] {
+        let fixture = Fixture::new();
+        let mut repo = fixture.repository();
+        let (mut owner, peer, exchange) = at_refusal_site(&fixture, &mut repo, "graceful", site);
+        let original_index = fixture.index_bytes();
+        if site == "finished" {
+            // The scripted member has completed its refused capture cleanup.
+            fs::remove_file(fixture.room.join("capture-9.sqlite.part")).unwrap();
+        }
+        refused_packet(&peer, &exchange, missed);
+        packet(&peer, &exchange, graceful_refusal(missed));
+        // S9 retires the original Leave socket after its complete final carry.
+        // Both actual packets remain queued at admin when its capture expires.
+        drop(peer);
+        with_test_times(&[expired_now()], || {
+            assert_eq!(
+                advance_to_closed_outcome(&mut owner, site),
+                LeaveProgress::Stopped,
+                "{site}"
+            );
+            assert!(
+                matches!(owner.failure(), Some(FailureCause::WorkerOutcome)),
+                "{site}: retain the matching graceful refusal instead of failing the run: {:?}",
+                owner.failure()
+            );
+            assert!(owner.cleanup_failure().is_none(), "{site}");
+            assert!(
+                owner.finish_leave().is_err(),
+                "{site}: refusal grants no saved outcome"
+            );
+            assert_eq!(fixture.index_bytes(), original_index, "{site}");
+            assert_eq!(
+                fixture.names().len(),
+                2,
+                "{site}: only seed and index remain"
+            );
+        });
+    }
+}
+
+#[test]
+fn closed_capture_peer_requires_matching_cleanup_and_final_refusal() {
+    for case in [
+        "missing-both",
+        "missing-acknowledgement",
+        "missing-final",
+        "foreign-acknowledgement",
+        "foreign-final",
+        "mismatched-final",
+        "duplicate-acknowledgement",
+        "crossed-commit",
+    ] {
+        let fixture = Fixture::new();
+        let mut repo = fixture.repository();
+        let (mut owner, peer, exchange) = at_refusal_site(&fixture, &mut repo, "graceful", "image");
+        let original_index = fixture.index_bytes();
+        match case {
+            "missing-both" | "missing-acknowledgement" => (),
+            "foreign-acknowledgement" => packet(
+                &peer,
+                &exchange,
+                CapturePayload::SavePointCaptureRefused(CaptureRefused {
+                    capture_id: 10.into(),
+                    missed: SavePointLeg::Answer,
+                }),
+            ),
+            "crossed-commit" => packet(
+                &peer,
+                &exchange,
+                CapturePayload::SavePointCommit(CaptureIdentity {
+                    capture_id: 9.into(),
+                }),
+            ),
+            _ => refused_packet(&peer, &exchange, SavePointLeg::Answer),
+        }
+        if case == "duplicate-acknowledgement" {
+            refused_packet(&peer, &exchange, SavePointLeg::Answer);
+        }
+        if !matches!(case, "missing-both" | "missing-final") {
+            let mut final_exchange = exchange.clone();
+            if case == "foreign-final" {
+                final_exchange.ordinal += 1;
+            }
+            packet(
+                &peer,
+                &final_exchange,
+                graceful_refusal(if case == "mismatched-final" {
+                    SavePointLeg::Finished
+                } else {
+                    SavePointLeg::Answer
+                }),
+            );
+        }
+        drop(peer);
+        with_test_times(&[expired_now()], || {
+            assert_eq!(
+                advance_to_closed_outcome(&mut owner, case),
+                LeaveProgress::Stopped,
+                "{case}"
+            );
+            assert!(
+                matches!(
+                    owner.failure(),
+                    Some(FailureCause::Channel(_) | FailureCause::Protocol(_))
+                ),
+                "{case}: closure cannot establish a standing refusal: {:?}",
+                owner.failure()
+            );
+            assert!(owner.finish_leave().is_err(), "{case}");
+            assert_eq!(fixture.index_bytes(), original_index, "{case}");
+        });
+    }
+}
+
+#[test]
+fn aborted_send_clock_fault_cannot_admit_buffered_graceful_refusal() {
+    for after_send in [false, true] {
+        let fixture = Fixture::new();
+        let mut repo = fixture.repository();
+        let (mut owner, peer, exchange) = at_refusal_site(&fixture, &mut repo, "graceful", "image");
+        let original_index = fixture.index_bytes();
+        refused_packet(&peer, &exchange, SavePointLeg::Answer);
+        packet(&peer, &exchange, graceful_refusal(SavePointLeg::Answer));
+        let expired = expired_now();
+        with_test_times(&[expired], || {
+            pending(&mut owner); // Capture expiry prepares the sole Aborted.
+            // The first reading is the actor's step check. Reverse either at
+            // the channel's initial check or its post-send check, then recover
+            // the clock. Buffered valid replies cannot erase that prior fault.
+            let times = if after_send {
+                vec![expired, expired, expired, expired - 1, expired]
+            } else {
+                vec![expired, expired - 1, expired]
+            };
+            assert_eq!(
+                with_test_times(&times, || owner.advance()),
+                LeaveProgress::Stopped
+            );
+            assert!(matches!(
+                owner.failure(),
+                Some(FailureCause::Channel(ChannelFault::Closed))
+            ));
+            if after_send {
+                assert!(matches!(
+                    response(&peer),
+                    CapturePayload::SavePointAborted(_)
+                ));
+            } else {
+                no_packet(&peer);
+            }
+            assert!(owner.finish_leave().is_err());
+            assert_eq!(fixture.index_bytes(), original_index);
+        });
+    }
+}
+
 #[test]
 fn expired_leave_capture_cleans_each_precommit_phase_before_its_final_outcome() {
     for mode in ["forced", "graceful"] {

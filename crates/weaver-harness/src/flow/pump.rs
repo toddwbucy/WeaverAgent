@@ -33,6 +33,9 @@ use super::ste100_socket::{AdmissionPoll, SocketPort};
 const SOURCE_COUNT: usize = 11;
 const CONTROL_BYTES: usize = 256;
 
+#[path = "pump_plan.rs"]
+pub(super) mod plan;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PumpDeadline {
     Enter,
@@ -50,6 +53,8 @@ pub(super) enum PumpDeadline {
     StateControl,
     /// A silent secondary admin dial, owned by the accepted Leave.
     AdminRead,
+    /// Delivery uses only the remainder of the accepted root update window.
+    PlanAnswer,
     /// Snapshot/finished missing results require cleanup, not immediate halt.
     CaptureResult,
     /// The unchanged publication window, retained separately from leg waits.
@@ -113,6 +118,8 @@ pub(super) enum PumpStep {
     Deadline {
         key: PumpDeadline,
         bound: AbsoluteBound,
+        /// Actual validated clock sample which observed this expiry.
+        observed_ns: u64,
     },
     Idle,
 }
@@ -881,7 +888,11 @@ impl CommonPump {
         Ok(deadlines
             .expired(now)
             .min_by_key(|(_, bound)| bound.deadline_ns())
-            .map(|(key, bound)| PumpStep::Deadline { key, bound }))
+            .map(|(key, bound)| PumpStep::Deadline {
+                key,
+                bound,
+                observed_ns: now,
+            }))
     }
 
     /// No completion is consumed here, including a complete result that arrives

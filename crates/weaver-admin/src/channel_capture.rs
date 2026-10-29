@@ -21,6 +21,29 @@ pub(crate) struct CaptureRead {
     pub(crate) timing: Result<(), ChannelFault>,
 }
 
+/// Only a socket send can establish peer closure. A failed clock witness uses
+/// Closed too, but must never grant permission to continue the exchange.
+#[derive(Debug)]
+pub(crate) enum CaptureSendFailure {
+    Fault(ChannelFault),
+    PeerClosed,
+}
+
+impl CaptureSendFailure {
+    pub(crate) fn channel_fault(self) -> ChannelFault {
+        match self {
+            Self::Fault(fault) => fault,
+            Self::PeerClosed => ChannelFault::Closed,
+        }
+    }
+}
+
+impl From<ChannelFault> for CaptureSendFailure {
+    fn from(fault: ChannelFault) -> Self {
+        Self::Fault(fault)
+    }
+}
+
 impl Coordination {
     pub(crate) fn send_capture(
         &self,
@@ -36,17 +59,29 @@ impl Coordination {
         windows: &CaptureWindows,
         sent: &mut bool,
     ) -> Result<(), ChannelFault> {
+        self.send_capture_attempt(envelope, windows, sent)
+            .map_err(CaptureSendFailure::channel_fault)
+    }
+
+    pub(crate) fn send_capture_attempt(
+        &self,
+        envelope: &CaptureEnvelope,
+        windows: &CaptureWindows,
+        sent: &mut bool,
+    ) -> Result<(), CaptureSendFailure> {
         *sent = false;
         if let CapturePayload::Directive(CaptureDirective::SavePoint { window, .. }) =
             &envelope.payload
             && (windows.demand_window() != Some(*window) || windows.capture().is_some())
         {
-            return Err(ChannelFault::Undecodable);
+            return Err(ChannelFault::Undecodable.into());
         }
         windows.check()?;
         let bytes = envelope
             .encode(CaptureSender::Admin)
             .map_err(|_| ChannelFault::Undecodable)?;
+        #[cfg(test)]
+        before_capture_send(envelope);
         self.send_capture_bytes_tracked(&bytes, windows, sent)
     }
 
@@ -104,6 +139,7 @@ impl Coordination {
         windows: &CaptureWindows,
     ) -> Result<(), ChannelFault> {
         self.send_capture_bytes_tracked(bytes, windows, &mut false)
+            .map_err(CaptureSendFailure::channel_fault)
     }
 
     fn send_capture_bytes_tracked(
@@ -111,11 +147,12 @@ impl Coordination {
         bytes: &[u8],
         windows: &CaptureWindows,
         sent: &mut bool,
-    ) -> Result<(), ChannelFault> {
+    ) -> Result<(), CaptureSendFailure> {
         if bytes.len() > MAX_ENVELOPE_BYTES {
             return Err(ChannelFault::Truncated {
                 bound: MAX_ENVELOPE_BYTES,
-            });
+            }
+            .into());
         }
         loop {
             windows.check()?;
@@ -126,12 +163,17 @@ impl Coordination {
             ) {
                 Ok(count) if count == bytes.len() => {
                     *sent = true;
-                    return windows.check();
+                    return windows.check().map_err(CaptureSendFailure::Fault);
                 }
-                Ok(_) => return Err(ChannelFault::Closed),
+                Ok(_) => return Err(ChannelFault::Closed.into()),
                 Err(nix::errno::Errno::EINTR) => (),
                 Err(nix::errno::Errno::EAGAIN) => self.wait_capture(nix::libc::POLLOUT, windows)?,
-                Err(_) => return Err(ChannelFault::Closed),
+                Err(
+                    nix::errno::Errno::EPIPE
+                    | nix::errno::Errno::ECONNRESET
+                    | nix::errno::Errno::ENOTCONN,
+                ) => return Err(CaptureSendFailure::PeerClosed),
+                Err(_) => return Err(ChannelFault::Closed.into()),
             }
         }
     }
@@ -163,7 +205,7 @@ impl Coordination {
         windows: &CaptureWindows,
     ) -> Result<Option<CaptureRead>, ChannelFault> {
         windows.check()?;
-        let Some(wire) = self.capture_bytes()? else {
+        let Some(wire) = self.packet_bytes()? else {
             windows.check()?;
             return Ok(None);
         };
@@ -192,7 +234,7 @@ impl Coordination {
     ) -> Result<CaptureRead, ChannelFault> {
         loop {
             self.wait_capture(nix::libc::POLLIN, windows)?;
-            let Some(bytes) = self.capture_bytes()? else {
+            let Some(bytes) = self.packet_bytes()? else {
                 continue;
             };
             let envelope = decode(&bytes)?;
@@ -206,7 +248,7 @@ impl Coordination {
         }
     }
 
-    fn capture_bytes(&self) -> Result<Option<Vec<u8>>, ChannelFault> {
+    pub(super) fn packet_bytes(&self) -> Result<Option<Vec<u8>>, ChannelFault> {
         let mut bytes = vec![0; MAX_ENVELOPE_BYTES];
         let mut slices = [std::io::IoSliceMut::new(&mut bytes)];
         let received = match nix::sys::socket::recvmsg::<()>(
@@ -265,3 +307,61 @@ impl Coordination {
 #[cfg(test)]
 #[path = "channel_capture_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TestCaptureSend {
+    ImageChecked,
+    Prepared,
+    Published,
+    Aborted,
+}
+
+#[cfg(test)]
+type SendHook = (TestCaptureSend, Box<dyn FnOnce()>);
+
+#[cfg(test)]
+thread_local! {
+    static BEFORE_CAPTURE_SEND: std::cell::RefCell<Option<SendHook>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Controls the peer at the exact send boundary, after publication checkpoints.
+/// It changes no socket result, clock result, actor state or production branch.
+#[cfg(test)]
+pub(crate) fn with_before_capture_send<T>(
+    kind: TestCaptureSend,
+    before: impl FnOnce() + 'static,
+    action: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<SendHook>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BEFORE_CAPTURE_SEND.with(|hook| hook.replace(self.0.take()));
+        }
+    }
+    let _restore =
+        Restore(BEFORE_CAPTURE_SEND.with(|hook| hook.replace(Some((kind, Box::new(before))))));
+    action()
+}
+
+#[cfg(test)]
+fn before_capture_send(envelope: &CaptureEnvelope) {
+    let kind = match envelope.payload {
+        CapturePayload::SavePointImageChecked(_) => TestCaptureSend::ImageChecked,
+        CapturePayload::SavePointPrepared(_) => TestCaptureSend::Prepared,
+        CapturePayload::SavePointPublished(_) => TestCaptureSend::Published,
+        CapturePayload::SavePointAborted(_) => TestCaptureSend::Aborted,
+        _ => return,
+    };
+    let before = BEFORE_CAPTURE_SEND.with(|hook| {
+        let mut hook = hook.borrow_mut();
+        if hook.as_ref().is_some_and(|(expected, _)| *expected == kind) {
+            hook.take().map(|(_, before)| before)
+        } else {
+            None
+        }
+    });
+    if let Some(before) = before {
+        before();
+    }
+}

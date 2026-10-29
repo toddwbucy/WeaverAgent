@@ -24,6 +24,61 @@ fn fixture() -> ObservationEnvelope {
 fn load(value: &mut Value) -> &mut Value {
     &mut value["payload"]["body"]["load"]
 }
+
+#[test]
+fn replacement_observation_preserves_committed_plan_and_rejects_it_without_serving() {
+    let mut value = serde_json::to_value(fixture()).unwrap();
+    value["payload"]["body"]["plan"] = json!({
+        "plan":{"plan_id":{"seed_id":"seed","local_id":"3"},"revision":"8"},
+        "status":"locked","document_sha256":"1".repeat(64),
+        "last_source":{"block_id":{"run":"prior","sequence":"7","block":"0"},"turn":null}
+    });
+    let wire = serde_json::to_vec(&value).unwrap();
+    let parsed = ObservationEnvelope::decode(&wire).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&parsed.encode().unwrap()).unwrap(),
+        value
+    );
+    for case in [
+        "no-load",
+        "unknown",
+        "missing-turn",
+        "status-object",
+        "in-transition",
+    ] {
+        let mut invalid = value.clone();
+        match case {
+            "no-load" => {
+                invalid["payload"]["body"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("load");
+                invalid["payload"]["body"]["state"] = json!("unloaded");
+            }
+            "unknown" => invalid["payload"]["body"]["plan"]["extra"] = json!(0),
+            "missing-turn" => {
+                invalid["payload"]["body"]["plan"]["last_source"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("turn");
+            }
+            "status-object" => {
+                invalid["payload"]["body"]["plan"]["status"] = json!({"locked":null})
+            }
+            "in-transition" => {
+                let body = invalid["payload"]["body"].as_object_mut().unwrap();
+                body.remove("load");
+                body.remove("state");
+                body.insert("kind".into(), json!("in_transition"));
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            ObservationEnvelope::decode(&serde_json::to_vec(&invalid).unwrap()).is_err(),
+            "{case}"
+        );
+    }
+}
 #[test]
 fn replacement_observation_preserves_exact_state_and_rejects_legacy_parser() {
     let value = fixture();

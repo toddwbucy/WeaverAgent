@@ -2246,6 +2246,7 @@ impl<P: Ste100Port> FlowCoordinator<P> {
                         frame: StateControlAnswer::Finished { capture_id: returned, .. }, ..
                     },
                     discard_capture_result: false,
+                    ..
                 }, ..
             }) if *id == capture_id && *returned == capture_id
         );

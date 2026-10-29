@@ -3,6 +3,12 @@ use super::*;
 use weaver_types::state_flow::capture::{CaptureRefusal, CaptureRefused, SaveRefusal};
 
 impl Capture<'_> {
+    pub(super) fn precommit_leave(&self) -> bool {
+        matches!(self.directive, RequestEnvelope::Leave(_))
+            && self.windows.capture().is_some()
+            && !self.committed
+    }
+
     pub(super) fn prepare_abort(&mut self, code: &str, detail: &str) {
         assert!(self.abort.is_none(), "one admin cancellation per capture");
         self.aborted_at = Some(self.stage);
@@ -28,7 +34,12 @@ impl Capture<'_> {
             || self.abort.is_some()
             || !matches!(
                 self.stage,
-                Stage::Image | Stage::Hashing | Stage::Finished | Stage::Preparing | Stage::Commit
+                Stage::Image
+                    | Stage::Hashing
+                    | Stage::Finished
+                    | Stage::Preparing
+                    | Stage::Commit
+                    | Stage::AwaitCaptureRefused
             )
             || !self
                 .windows
@@ -152,7 +163,7 @@ impl Capture<'_> {
         );
         if !crossed || self.abort_crossed {
             return Err(FailureCause::Protocol(
-                "unexpected continuation after admin Aborted",
+                "unexpected continuation during capture refusal",
             ));
         }
         self.abort_crossed = true;

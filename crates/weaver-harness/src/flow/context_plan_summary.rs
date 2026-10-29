@@ -314,6 +314,7 @@ impl RecordingContext {
             return Err(PlanSummaryUnavailable::Failed);
         }
         if self.plan_effect_inflight()
+            || self.root_plan_work().is_some()
             || self.plan_summary.is_some()
             || self.plan_cache.required.is_some()
         {
@@ -378,7 +379,16 @@ impl RecordingContext {
                 .committed
                 .as_ref()
                 .and_then(|old| old.summary()),
-        );
+        )
+        .and_then(|mut expected| {
+            if let Some(work) = self.root_plan_work() {
+                let effect = work
+                    .effect()
+                    .ok_or("root receipt lost its private effect")?;
+                expected.digest = Some(effect.digest_for_commit(self, commit)?.clone());
+            }
+            Ok(expected)
+        });
         match expected {
             Ok(expected) => self.plan_cache.required = Some(expected),
             Err(detail) => self.plan_cache.invalid = Some(detail),
@@ -428,7 +438,7 @@ impl RecordingContext {
             || self.output.is_some()
             || self.read.is_some()
             || self.boot_pairs.is_some()
-            || self.marks.is_some()
+            || (self.marks.is_some() && !self.root_plan_summary_allowed(key))
             || self.repair.is_some()
             || self.pair_work.is_some()
             || self.inspection.is_some()

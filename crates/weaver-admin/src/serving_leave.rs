@@ -550,12 +550,21 @@ impl<'repo> Capture<'repo> {
             // A checkpoint can receive the acknowledgement while hashing or
             // preparing. Publication retains its interrupted work; this owner
             // validates the packet and continues the original Leave instead.
-            if self.unexpected.as_ref().is_some_and(|received| {
-                matches!(
-                    received.envelope.payload,
-                    CapturePayload::SavePointCaptureRefused(_)
-                )
-            }) {
+            // A complete packet without a valid receive-clock witness remains
+            // evidence only. A later clock reading cannot repair that failure.
+            let receive_clock_failed = matches!(cause, FailureCause::Channel(ChannelFault::Closed))
+                || matches!(
+                    self.checkpoint_failure,
+                    Some(FailureCause::Channel(ChannelFault::Closed))
+                );
+            if !receive_clock_failed
+                && self.unexpected.as_ref().is_some_and(|received| {
+                    matches!(
+                        received.envelope.payload,
+                        CapturePayload::SavePointCaptureRefused(_)
+                    )
+                })
+            {
                 match self.accept_checkpoint_refusal() {
                     Ok(()) => return self.progress(),
                     Err(error) => {
@@ -601,24 +610,31 @@ impl<'repo> Capture<'repo> {
 
     fn send(&mut self, payload: CapturePayload, next: Stage) -> Result<(), FailureCause> {
         let mut sent = false;
-        let result = self
-            .channel
-            .send_capture_tracked(
-                &CaptureEnvelope {
-                    exchange: self.directive.exchange().clone(),
-                    position: Position::Continue,
-                    payload,
-                },
-                &self.windows,
-                &mut sent,
-            )
-            .map_err(FailureCause::Channel);
+        let result = self.channel.send_capture_attempt(
+            &CaptureEnvelope {
+                exchange: self.directive.exchange().clone(),
+                position: Position::Continue,
+                payload,
+            },
+            &self.windows,
+            &mut sent,
+        );
         if sent {
             // Physical carry determines which frame can cross cancellation,
             // even when the post-send deadline check withdraws success.
             self.stage = next;
         }
-        result
+        match result {
+            Err(crate::channel::CaptureSendFailure::PeerClosed) if self.precommit_leave() => {
+                // A completed worker refusal can cross ImageChecked or
+                // Prepared and close this socket after the publication probe.
+                // This grants no send or cleanup receipt: only the existing
+                // correlated refusal reader can establish the disposition.
+                self.stage = Stage::AwaitCaptureRefused;
+                Ok(())
+            }
+            result => result.map_err(|failure| FailureCause::Channel(failure.channel_fault())),
+        }
     }
 
     fn receive(&mut self) -> Result<bool, FailureCause> {
@@ -666,12 +682,24 @@ impl<'repo> Capture<'repo> {
         self.windows.check().map_err(FailureCause::Channel)?;
         match self.stage {
             Stage::Aborting => {
-                self.channel
-                    .send_capture(
-                        self.abort.as_ref().expect("original local abort"),
-                        &self.windows,
-                    )
-                    .map_err(FailureCause::Channel)?;
+                match self.channel.send_capture_attempt(
+                    self.abort.as_ref().expect("original local abort"),
+                    &self.windows,
+                    &mut false,
+                ) {
+                    Ok(()) => (),
+                    Err(crate::channel::CaptureSendFailure::PeerClosed)
+                        if self.precommit_leave() =>
+                    {
+                        // The worker can complete refusal and close before
+                        // this send. Closure grants no delivery or cleanup:
+                        // drain only the existing correlated refusal path,
+                        // under its unchanged bounds, before judging the run.
+                    }
+                    Err(failure) => {
+                        return Err(FailureCause::Channel(failure.channel_fault()));
+                    }
+                }
                 self.stage = if self.windows.demand_window().is_some() {
                     Stage::AwaitAbortOutcome
                 } else {
