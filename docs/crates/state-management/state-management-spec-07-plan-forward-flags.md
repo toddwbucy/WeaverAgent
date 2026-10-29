@@ -445,12 +445,13 @@ component-failure rule. [STORE-5, FLOW-4, COST-4]
 ## 3. Transition ports and closure evidence
 
 **PLAN-PORT.** flow/plan.rs exposes activate(expected,step_id,successor),
-assess_act(expected,step_id,statement,act),
+assess_act(expected,step_id,statement,act), work_reference(expected,step_id,span,through),
 observe_review(expected,step_id,pair,work,assessment),
 attest_closure(expected,step_id,work), close(expected,step_id,evidence,outcome_span),
 and record_break(expected,step_id,case,proposed_source). IDs have PLAN-TYPES' types.
-statement is StatementRef, act is PlanAct, pair is Spec 05's private CompletedPair, work
-is WorkRef, and proposed_source is Option<SourceBlockId>. Each operation returns its
+statement is StatementRef, act is PlanAct, span is SpanRef, through is SourcePosition,
+pair is Spec 05's private CompletedPair, work is WorkRef, and proposed_source is
+Option<SourceBlockId>. Each operation returns its
 typed result or PLAN-PORT-REFUSAL's PlanOperationRefused. A transport/component
 failure remains the foundation failure, never a refusal. The mutable
 operation port belongs to the compiled loop and verified management handler. Neither a
@@ -468,8 +469,8 @@ return the committed PlanSnapshot. No operation selects a successor, invokes a r
 or starts a generation. Correct refusals leave durable state unchanged. [PLAN-2, PLAN-4,
 PLAN-5, R20-12]
 
-**PLAN-PORT-REFUSAL.** The named PLAN-PORT operations and the WORK-REFERENCE
-constructor return PlanOperationRefused
+**PLAN-PORT-REFUSAL.** The named PLAN-PORT operations, including WORK-REFERENCE's
+work_reference constructor, return PlanOperationRefused
 {case:PlanOperationCase,detail:String,read_code:ReadRefusalCode-or-null} for an
 admitted operation refusal. All fields are required. PlanOperationCase has the eight
 PLAN-BREAK spellings plus read_refused, counter_exhausted and template_rejected.
@@ -580,13 +581,19 @@ owed account without releasing a dependent grant. No lifecycle plan_update ask, 
 trace kind, counter or clock is introduced. [PLAN-6, FLOW-3, FLOW-4, COST-4]
 
 **WORK-REFERENCE.** WorkRef is {plan:PlanRef,step_id:StepId,span:SpanRef,
-through:SourcePosition,content_sha256:Digest}. Its constructor reads span_preview
-through the supplied committed frontier and hashes the complete canonical tagged result,
-including entries and pair records. The active step must own that span, and every
+through:SourcePosition,content_sha256:Digest}. PLAN-PORT's
+work_reference(expected,step_id,span,through) constructs it for the current expected
+plan revision and active step. span and through supply the target and committed
+frontier for span_preview. The constructor hashes the complete canonical tagged result,
+including entries and pair records, and returns the checked WorkRef. The active step
+must own that span, and every
 attached pair must be terminal. A missing or changed source refuses invalid_target or
 work_changed. For reviewed closure the frontier precedes the review request. For
 unreviewed closure it is the last held work before the outcome. No model text can supply
-a trusted WorkRef. [PLAN-2, MARK-4, STORE-3]
+a trusted WorkRef. An admitted refusal uses PLAN-PORT-REFUSAL and records
+PLAN-PORT-RECORD's work_reference operation with the exact requested expected and
+nonnull step_id before returning it. No refused construction returns a WorkRef.
+[PLAN-2, MARK-4, STORE-3]
 
 **CLOSURE-EVIDENCE.** ClosureEvidence is a private, single-use, run-bound grant holding
 {plan:PlanRef,step_id:StepId,review_call:Option<CallId>,work:WorkRef,

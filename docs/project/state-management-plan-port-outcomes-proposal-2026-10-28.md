@@ -1,12 +1,12 @@
 # Plan-operation refusal proposal
 
-**Version:** 0.2, 2026-10-28.
+**Version:** 0.3, 2026-10-28.
 **Parent:** Issue 146, state management implementation.
 
 This proposes the missing refusal outcomes for the non-root plan ports. It is a
 proposal for the operator and Planner, with no implementation or qualification claim.
-Draft PR #384 uses `docs/state-plan-port-outcomes`, based on main
-`f6f707799e2b0349180582032bc909a1e021a383`. The runtime audit also read draft #383
+PR #384 uses `docs/state-plan-port-outcomes`, based on main
+`f6f707799e2b0349180582032bc909a1e021a383`. The runtime audit also read #383
 at `dee6c94a13053c34455fa70e0ca7cf5b5669e07c`. The original serving implementation
 remains selected. Implementation waits for the operator's election, review and merge.
 
@@ -106,11 +106,11 @@ qualification with the full production tuple.
 
 | Act | Owning clauses | Disposition |
 | --- | --- | --- |
-| This draft | Spec 07 PLAN-PORT, PLAN-PORT-REFUSAL, PLAN-PORT-RECORD and instruments | Spec gap proposed for the operator. Owns exact cases, operation identities, leg/code set, cleanup, parents and pre/post-effect distinction. |
-| This draft | Types amendment TYPES-PLAN-PORT-REFUSAL | Spec gap proposed. Owns strict shared result and refusal codec. Root PlanUpdateRefused remains unchanged. |
-| This draft | Harness amendment HARNESS-PLAN-PORTS | Spec gap proposed. Owns one retained request/read/source/author account and allocator settlement. |
-| This draft | Trace amendment TRACE-REGISTRY and TRACE-PLAN instrument | Spec gap proposed. Existing raw refusal payload carries the exact floor encoding under the existing envelope checks. No floor dependency or new trace kind. |
-| After election, Planner review and merge | Issue #146 section D, checked successor and step-activation composition stacked after #383 | Implement these paired cases/codecs and the activation owner, worker adapter, shared allocator and real SQLite receipt/cache-refresh path together. Address review corrections and run gates before publication. |
+| This proposal | Spec 07 PLAN-PORT, WORK-REFERENCE, PLAN-PORT-REFUSAL, PLAN-PORT-RECORD and instruments | Spec gap proposed for the operator. Owns exact cases, operation identities, leg/code set, cleanup, parents and pre/post-effect distinction. |
+| This proposal | Types amendment TYPES-PLAN-PORT-REFUSAL | Spec gap proposed. Owns strict shared result and refusal codec. Root PlanUpdateRefused remains unchanged. |
+| This proposal | Harness amendment HARNESS-PLAN-PORTS | Spec gap proposed. Owns one retained request/read/source/author account and allocator settlement. |
+| This proposal | Trace amendment TRACE-REGISTRY and TRACE-PLAN instrument | Spec gap proposed. Existing raw refusal payload carries the exact floor encoding under the existing envelope checks. No floor dependency or new trace kind. |
+| After election, Planner review and merge | Issue #146 section D, checked successor and step-activation composition following merged #363 | Implement these paired cases/codecs and the activation owner, worker adapter, shared allocator and real SQLite receipt/cache-refresh path together. Address review corrections and run gates before publication. |
 | Before coupled cutover | Issue #146 qualification and trace-reader checks | Verify this refusal family through the full trace reader and measure its retained memory and recording time with the deployed artifact tuple. |
 
 Do not deploy from this document change. The code still has the two-field
@@ -135,6 +135,12 @@ Stop, leave and recorder pressure at the read, effect and refusal boundaries. Pr
 all owed evidence through failed-run handoff and prevent any cancelled continuation.
 Use an unready transport to pin the original Decision/read expiry. Pin local span-ID
 overflow and a correct certified-template rejection independently.
+
+Exercise work_reference(expected,step_id,span,through) through the same public port.
+Pin the requested current plan and active step, its owned span, committed frontier and
+complete canonical preview digest. An admitted refusal must record operation
+work_reference with the exact expected and nonnull step_id before returning the same
+typed refusal, without a WorkRef, effect or dependent grant.
 
 Codec fixtures reject missing read_code, incompatible case/code pairs, an unsupported
 read code, unknown fields, a missing required step and a foreign refusal family.
@@ -163,6 +169,15 @@ the implementing act.
 Planner review 5692796886 graded c13f4301 at zero document fixes and identified Q1/Q2
 as wording to settle with the operator's election. This revision supplies the explicit
 domain table, typed code combinations and null-parent scope above. It supersedes the
-initial claim that only read_refused may have a nonnull read_code. The operator's
-ruling on this revised proposal and Planner review of the revision remain pending.
-Q3's unavailable-skill limitation is unchanged and remains disclosed.
+initial claim that only read_refused may have a nonnull read_code. Planner regrade
+5692936855 at cb17343e accepts Q1/Q2 and stays at zero document fixes. The operator's
+ruling remains pending. Q3's unavailable-skill limitation is unchanged and remains
+disclosed.
+
+CodeRabbit review 5700865473 identified the work_reference name missing from the
+public PLAN-PORT list. The list and HARNESS-PLAN-PORTS now name the existing
+WORK-REFERENCE constructor, its typed arguments and result. Its admitted refusals use
+the same PLAN-PORT-REFUSAL and PLAN-PORT-RECORD rules. The existing span ownership,
+frontier, read and terminal-pair checks remain required. No operation, refusal family,
+trace field, retry or selection policy is added by this correction. Review of this
+revision remains pending.
