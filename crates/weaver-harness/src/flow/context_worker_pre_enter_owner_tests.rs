@@ -147,6 +147,7 @@ fn before_enter_answers_only_the_original_ordinary_opener_and_closes_unused_hand
         ) {
             assert!(
                 matches!(answer.payload, Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Unloaded, load: None, constituents
             }) if constituents.is_empty())
             );
@@ -305,6 +306,7 @@ fn completed_enter_refusals_resume_the_same_peer_before_accepting_another_connec
         assert_eq!(answer.exchange.ordinal, 74);
         assert!(
             matches!(answer.payload, Payload::Answer(LifecycleAnswer::State {
+            plan: None,
             state: weaver_types::AgentState::Unloaded, load: None, constituents
         }) if constituents.is_empty())
         );

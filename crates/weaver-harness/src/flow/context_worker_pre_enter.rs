@@ -167,6 +167,7 @@ impl FoundationAdmission {
                             Payload::Directive(LifecycleDirective::Observe)
                         ) {
                             Payload::Answer(LifecycleAnswer::State {
+                                plan: None,
                                 state: weaver_types::AgentState::Unloaded,
                                 load: None,
                                 constituents: Vec::new(),

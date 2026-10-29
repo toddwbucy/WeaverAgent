@@ -205,7 +205,7 @@ impl Coordination {
         windows: &CaptureWindows,
     ) -> Result<Option<CaptureRead>, ChannelFault> {
         windows.check()?;
-        let Some(wire) = self.capture_bytes()? else {
+        let Some(wire) = self.packet_bytes()? else {
             windows.check()?;
             return Ok(None);
         };
@@ -234,7 +234,7 @@ impl Coordination {
     ) -> Result<CaptureRead, ChannelFault> {
         loop {
             self.wait_capture(nix::libc::POLLIN, windows)?;
-            let Some(bytes) = self.capture_bytes()? else {
+            let Some(bytes) = self.packet_bytes()? else {
                 continue;
             };
             let envelope = decode(&bytes)?;
@@ -248,7 +248,7 @@ impl Coordination {
         }
     }
 
-    fn capture_bytes(&self) -> Result<Option<Vec<u8>>, ChannelFault> {
+    pub(super) fn packet_bytes(&self) -> Result<Option<Vec<u8>>, ChannelFault> {
         let mut bytes = vec![0; MAX_ENVELOPE_BYTES];
         let mut slices = [std::io::IoSliceMut::new(&mut bytes)];
         let received = match nix::sys::socket::recvmsg::<()>(

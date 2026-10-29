@@ -136,6 +136,8 @@ impl StateInterest {
 #[derive(Debug)]
 pub(super) struct StateCompletion {
     pub answer: StateFrame,
+    /// The original measurement's Recorded sequence, never a later cleanup leg.
+    pub measurement_sequence: weaver_trace::Sequence,
     /// A timeout cleanup was elected before the original answer was recorded.
     pub discard_capture_result: bool,
 }
@@ -894,6 +896,10 @@ impl StateChannel {
         self.exchanges.pop_front();
         Ok(Some(StateCompletion {
             answer: held.answer,
+            measurement_sequence: held
+                .recorded
+                .expect("checked original measurement proof")
+                .sequence(),
             discard_capture_result,
         }))
     }

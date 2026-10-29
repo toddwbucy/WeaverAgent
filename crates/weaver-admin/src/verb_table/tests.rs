@@ -22,6 +22,22 @@ use AdminView as V;
 use HolderVerb as H;
 use VerbAction as A;
 
+#[test]
+fn plan_update_table_requires_a_serving_observation_without_an_invocation_holder() {
+    for (view, expected) in [
+        (V::Down, A::RefuseOutOfOrder),
+        (V::HeldByUnload, A::RefuseInvocationInFlight),
+        (V::HeldByOther, A::RefuseInvocationInFlight),
+        (V::Serving, A::DirectPlanUpdate),
+        (V::Wedged, A::RefuseUnanswered),
+        (V::LeavePendingUnheld, A::RefuseOutOfOrder),
+        (V::NeverEntered, A::RefuseOutOfOrder),
+        (V::WorkerGone, A::RefuseOutOfOrder),
+    ] {
+        assert_eq!(act(Verb::PlanUpdate, view), expected, "{view:?}");
+    }
+}
+
 // **The state-to-class mapping**: each state's presentation to admin.
 class!(
     s0_s0d_and_s8b_freed_present_down,

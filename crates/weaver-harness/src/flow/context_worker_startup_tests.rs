@@ -343,7 +343,9 @@ impl Files {
                 headroom_bytes: Some("123456".into()),
             },
             composer: LoopIdentity::compiled("worker"),
-            templates: if mode.contains("emission") {
+            templates: if mode.starts_with("input-worker-plan-") {
+                super::input::plan::tests::templates()
+            } else if mode.contains("emission") {
                 super::input::generation::emission::tests::templates(mode)
             } else if mode.contains("generation") {
                 super::input::generation::tests::templates()
@@ -1065,6 +1067,7 @@ fn before_load_probe(
             assert_eq!(answer.position, weaver_types::Position::Close);
             assert!(
                 matches!(answer.payload, weaver_types::Payload::Answer(weaver_types::LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Unloaded, load: None, ref constituents
             }) if constituents.is_empty())
             );
@@ -1102,7 +1105,9 @@ fn circuit(mode: &str) {
     }
     let (state, member) = UnixStream::pair().unwrap();
     let (mut bootstrap, mut scheme, _) = classifier_fixture();
-    if mode.contains("emission") {
+    if mode.starts_with("input-worker-plan-") {
+        super::input::plan::tests::scheme(&mut bootstrap, &mut scheme);
+    } else if mode.contains("emission") {
         super::input::generation::emission::tests::scheme(&mut bootstrap, &mut scheme);
     }
     let mut config = super::super::tests::config();
@@ -1168,6 +1173,11 @@ fn circuit(mode: &str) {
             load.state_flow.persistence.save_wait.elapsed_ns = 250_000_000.into();
             load.state_flow.persistence.snapshot_wait.elapsed_ns = 50_000_000.into();
         }
+    }
+    if mode.ends_with("-flags-queued-save") {
+        // This real process case retains a save while the flag member delays;
+        // its declared budget is not the fake-clock fixture's millisecond window.
+        load.state_flow.persistence.save_wait.elapsed_ns = 5_000_000_000.into();
     }
     if mode.starts_with("input-worker") {
         load.state_flow.ste100.decision_wait.elapsed_ns = 5_000_000_000.into();
@@ -1535,6 +1545,53 @@ fn circuit(mode: &str) {
         assert_serving(&mut serving, &peer, &bytes, &member, bound);
         if mode.starts_with("input-worker") {
             drop(peer);
+            if mode == "input-worker-plan-failed-read" {
+                let handoff =
+                    super::input::halt::exit::plan_tests::handoff(serving, &mut member, &path);
+                let actual = run.take_boxed();
+                super::input::halt::exit::plan_tests::finish(actual, handoff, &mut reader);
+                return;
+            }
+            if mode == "input-worker-plan-leave-read" {
+                let handoff =
+                    super::input::plan::tests::cleanup::handoff(serving, &mut member, &path);
+                let actual = run.take_boxed();
+                super::input::plan::tests::cleanup::finish(
+                    actual,
+                    handoff,
+                    &mut member,
+                    &mut reader,
+                );
+                return;
+            }
+            if mode.starts_with("input-worker-plan-save-sqlite-flags-") {
+                assert!(
+                    member.normal.is_some(),
+                    "flag observations use normal SQLite"
+                );
+                if let Some(cleanup) = super::input::plan::tests::flags::exercise(
+                    serving,
+                    &mut member,
+                    &mut reader,
+                    &path,
+                    mode,
+                ) {
+                    super::input::plan::tests::flags::finish(
+                        run.take_boxed(),
+                        cleanup,
+                        &mut member,
+                        &mut reader,
+                    );
+                }
+                return;
+            }
+            if mode.starts_with("input-worker-plan-") {
+                if mode.contains("-save-sqlite-") {
+                    assert!(member.normal.is_some(), "root success uses normal SQLite");
+                }
+                super::input::plan::tests::exercise(serving, &mut member, &mut reader, &path, mode);
+                return;
+            }
             if mode.starts_with("input-worker-management-wait-") {
                 super::input::management::wait_tests::exercise(serving, &mut member, &path, mode);
                 return;
@@ -2167,6 +2224,7 @@ fn scenario(name: &str, mode: &str) {
     let status = if super::input::generation::session_tests::serving_rollback::is_mode(mode)
         || super::input::generation::session_tests::forced_leave::is_mode(mode)
         || super::input::generation::session_tests::demand_save::is_mode(mode)
+        || mode.starts_with("input-worker-plan-")
         || mode.contains("-graceful-quiesce-")
         || mode.contains("-graceful-wind-down-")
     {
@@ -2205,6 +2263,88 @@ macro_rules! scenario {
     };
 }
 scenario!(worker_startup_composition_ready, "ready");
+scenario!(worker_plan_composition_stop, "input-worker-plan-stop");
+scenario!(
+    worker_plan_composition_open_turn,
+    "input-worker-plan-open-turn"
+);
+scenario!(
+    worker_plan_flags_queued_save,
+    "input-worker-plan-save-sqlite-flags-queued-save"
+);
+scenario!(
+    worker_plan_flags_failed,
+    "input-worker-plan-save-sqlite-flags-failed"
+);
+scenario!(
+    worker_plan_flags_recorded_failed,
+    "input-worker-plan-save-sqlite-flags-recorded-failed"
+);
+scenario!(
+    worker_plan_flags_success,
+    "input-worker-plan-save-sqlite-flags-success"
+);
+scenario!(
+    worker_plan_flags_unavailable,
+    "input-worker-plan-save-sqlite-flags-unavailable"
+);
+scenario!(
+    worker_plan_flags_stop,
+    "input-worker-plan-save-sqlite-flags-stop"
+);
+scenario!(
+    worker_plan_flags_leave,
+    "input-worker-plan-save-sqlite-flags-leave"
+);
+scenario!(
+    worker_plan_composition_cancel_input_filing,
+    "input-worker-plan-save-sqlite-cancel-input"
+);
+scenario!(
+    worker_plan_composition_cancel_committed_effect,
+    "input-worker-plan-save-sqlite-cancel-effect"
+);
+scenario!(
+    worker_plan_composition_answer_pressure,
+    "input-worker-plan-answer-pressure"
+);
+scenario!(
+    worker_plan_composition_answer_expiry,
+    "input-worker-plan-answer-expiry"
+);
+scenario!(
+    worker_plan_composition_failed_read,
+    "input-worker-plan-failed-read"
+);
+scenario!(
+    worker_plan_composition_leave_read,
+    "input-worker-plan-leave-read"
+);
+scenario!(
+    worker_plan_composition_sqlite_success,
+    "input-worker-plan-save-sqlite-success"
+);
+scenario!(
+    worker_plan_composition_sqlite_admin,
+    "input-worker-plan-save-sqlite-admin"
+);
+scenario!(
+    worker_plan_composition_sqlite_lost_answer,
+    "input-worker-plan-save-sqlite-lost-answer"
+);
+scenario!(
+    worker_plan_composition_malformed,
+    "input-worker-plan-malformed"
+);
+scenario!(
+    worker_plan_composition_disconnected,
+    "input-worker-plan-disconnected"
+);
+scenario!(
+    worker_plan_composition_read_refused,
+    "input-worker-plan-read-refused"
+);
+
 scenario!(
     worker_admission_composition_diagnostic_retains_original,
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-two"

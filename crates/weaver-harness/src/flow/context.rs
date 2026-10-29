@@ -235,6 +235,7 @@ enum AuthorClaim {
     Measurement(std::sync::Arc<()>),
     ServingObservation(std::sync::Arc<serving_observation::ServingObservationAuthor>),
     EnterRefusal(std::sync::Arc<()>),
+    RootPlan(std::sync::Arc<()>),
     PairRejection(std::sync::Arc<()>),
     RollbackGate(std::sync::Arc<worker_startup::expired::gate::RollbackGateAuthor>),
 }
@@ -245,6 +246,7 @@ impl AuthorClaim {
             (Self::Placement(a), Self::Placement(b))
             | (Self::Measurement(a), Self::Measurement(b))
             | (Self::EnterRefusal(a), Self::EnterRefusal(b))
+            | (Self::RootPlan(a), Self::RootPlan(b))
             | (Self::PairRejection(a), Self::PairRejection(b)) => std::sync::Arc::ptr_eq(a, b),
             (Self::ServingObservation(a), Self::ServingObservation(b)) => {
                 std::sync::Arc::ptr_eq(a, b)
@@ -389,7 +391,7 @@ pub(crate) struct RecordingContext {
     plan_summary: Option<plan_summary_driver::PlanSummaryTransaction>,
     retired_enter: Option<AbsoluteBound>,
     inspection: Option<inspection_driver::InspectionTransaction>,
-    marks: Option<marks_driver::MarksTransaction>,
+    marks: Option<marks_driver::MarkOperation>,
     // Pointer identity survives moves and is never recreated from trace IDs.
     read_origin: std::sync::Arc<()>,
     content_read_started: bool,
@@ -1408,6 +1410,12 @@ impl RecordingContext {
         if let Some(failure) = self.failure.clone() {
             return Err(failure.into());
         }
+        if self
+            .root_plan_author_claim()
+            .is_some_and(|actual| !claim.as_ref().is_some_and(|claim| actual.matches(claim)))
+        {
+            return Err(RunFailure::MarksOwned.into());
+        }
         if self.rollback_gate_author.as_ref().is_some_and(|actual| {
             !matches!(&claim, Some(AuthorClaim::RollbackGate(owner)) if std::sync::Arc::ptr_eq(actual, owner))
         }) {
@@ -1428,6 +1436,7 @@ impl RecordingContext {
         if claim.is_some() && !claim_phase {
             return Err((match claim {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
+                Some(AuthorClaim::RootPlan(_)) => RunFailure::MarksOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 Some(AuthorClaim::PairRejection(_)) => RunFailure::PairOwned,
                 Some(AuthorClaim::RollbackGate(_) | AuthorClaim::ServingObservation(_)) => {
@@ -1454,6 +1463,7 @@ impl RecordingContext {
         if claim.is_some() && std::mem::take(&mut self.pause_claim_queue_for_test) {
             return Err((match claim {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
+                Some(AuthorClaim::RootPlan(_)) => RunFailure::MarksOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 Some(AuthorClaim::PairRejection(_)) => RunFailure::PairOwned,
                 Some(AuthorClaim::RollbackGate(_) | AuthorClaim::ServingObservation(_)) => {
@@ -1555,6 +1565,9 @@ impl RecordingContext {
                             .is_some_and(|owner| owner.claim(&identity, ticket)),
                         AuthorClaim::Measurement(identity) => {
                             self.claim_measure_author_ticket(&identity, ticket)
+                        }
+                        AuthorClaim::RootPlan(identity) => {
+                            self.claim_root_plan_author_ticket(&identity, ticket)
                         }
                         AuthorClaim::ServingObservation(owner) => self
                             .serving_observation_author
@@ -1675,6 +1688,12 @@ impl RecordingContext {
         if let Some(failure) = self.failure.clone() {
             return Err(failure.into());
         }
+        if self
+            .root_plan_author_claim()
+            .is_some_and(|actual| !claim.as_ref().is_some_and(|claim| actual.matches(claim)))
+        {
+            return Err(RunFailure::MarksOwned.into());
+        }
         if self.rollback_gate_author.as_ref().is_some_and(|actual| {
             !matches!(&claim, Some(AuthorClaim::RollbackGate(owner)) if std::sync::Arc::ptr_eq(actual, owner))
         }) {
@@ -1765,6 +1784,7 @@ impl RecordingContext {
             self.bind_place_measure_author(sequence);
             self.bind_place_author(sequence);
             self.bind_enter_refusal_author(sequence);
+            self.bind_root_plan_author(sequence);
             self.bind_rejected_author(sequence);
             self.bind_rollback_gate_author(sequence);
             self.bind_serving_observation_author(sequence);
@@ -1797,6 +1817,7 @@ impl RecordingContext {
                 self.bind_place_measure_author(sequence);
                 self.bind_place_author(sequence);
                 self.bind_enter_refusal_author(sequence);
+                self.bind_root_plan_author(sequence);
                 self.bind_rejected_author(sequence);
                 self.bind_rollback_gate_author(sequence);
                 self.bind_serving_observation_author(sequence);
@@ -1813,6 +1834,7 @@ impl RecordingContext {
                 self.bind_place_measure_author(*sequence);
                 self.bind_place_author(*sequence);
                 self.bind_enter_refusal_author(*sequence);
+                self.bind_root_plan_author(*sequence);
                 self.bind_rejected_author(*sequence);
                 self.bind_rollback_gate_author(*sequence);
                 self.bind_serving_observation_author(*sequence);
@@ -2422,6 +2444,7 @@ impl RecordingContext {
             | PumpDeadline::Lower
             | PumpDeadline::Label
             | PumpDeadline::AdminRead
+            | PumpDeadline::PlanAnswer
             | PumpDeadline::CaptureResult
             | PumpDeadline::SaveQueued
             | PumpDeadline::CaptureWindow => {
@@ -2908,11 +2931,14 @@ pub(in crate::flow) use plan_summary_driver::{
 pub(super) mod expired_read_driver;
 #[path = "context_read.rs"]
 mod read_driver;
+
+#[path = "context_plan_update.rs"]
+pub(super) mod plan_update_driver;
 #[allow(unused_imports)] // Composed by dependent boot, recall and placement primitives.
 pub(super) use read_driver::{
     BootHead, BootReadBeginError, BootReadBeginRefusal, BootReadCompletion, CancelledRead,
     ReadBeginError, ReadBeginRefusal, ReadCompletion, ReadProgress, ReadRollbackPermit,
-    RecordedRead,
+    RecordedRead, RecordedReadRefusal,
 };
 
 #[path = "context_freshness.rs"]

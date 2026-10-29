@@ -145,6 +145,9 @@ pub use flow::context::worker_startup::expired::{
 pub use flow::context::worker_startup::failed::{
     FoundationStartupExit, FoundationStartupExitProgress, FoundationStartupHandoff,
 };
+pub use flow::context::worker_startup::input::flags::{
+    FoundationFlagObservation, FoundationFlags, FoundationFlagsError, FoundationFlagsRefusal,
+};
 pub use flow::context::worker_startup::input::generation::FoundationGeneration;
 pub use flow::context::worker_startup::input::generation::emission::{
     FoundationEmission, FoundationOutbound, FoundationRepairAdmission, FoundationRestatement,
