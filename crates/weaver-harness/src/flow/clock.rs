@@ -372,6 +372,59 @@ pub(super) mod testing {
         }
     }
 
+    /// Observe the real clock and kernel readiness without blocking a fixture's
+    /// outer watchdog. A missing response never receives invented readiness.
+    pub(in crate::flow) struct NonblockingIo {
+        pub waits: usize,
+    }
+
+    impl PumpIo for NonblockingIo {
+        fn now(&mut self) -> io::Result<u64> {
+            monotonic_ns()
+        }
+
+        fn wait(
+            &mut self,
+            interests: &[WaitInterest<'_>],
+            absolute_deadline: Option<u64>,
+        ) -> io::Result<WaitOutcome> {
+            self.waits += 1;
+            unique_descriptors(interests)?;
+            let before = monotonic_ns()?;
+            if absolute_deadline.is_some_and(|deadline| before >= deadline) {
+                return Ok(WaitOutcome::Timeout);
+            }
+            let mut descriptors: Vec<_> = interests
+                .iter()
+                .map(|interest| nix::libc::pollfd {
+                    fd: interest.fd.as_raw_fd(),
+                    events: interest.events.bits(),
+                    revents: 0,
+                })
+                .collect();
+            let count = nix::libc::nfds_t::try_from(descriptors.len())
+                .map_err(|_| io::Error::other("poll descriptor count overflows"))?;
+            // SAFETY: all descriptors remain borrowed, the vector owns count
+            // writable pollfd entries, and zero timeout cannot block.
+            if unsafe { nix::libc::poll(descriptors.as_mut_ptr(), count, 0) } < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let after = monotonic_ns()?;
+            if absolute_deadline.is_some_and(|deadline| after >= deadline) {
+                return Ok(WaitOutcome::Timeout);
+            }
+            let ready = descriptors
+                .iter()
+                .enumerate()
+                .filter_map(|(index, descriptor)| {
+                    let events = PollFlags::from_bits_retain(descriptor.revents);
+                    (!events.is_empty()).then_some(ReadyFd { index, events })
+                })
+                .collect();
+            Ok(WaitOutcome::Ready(ready))
+        }
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     pub(in crate::flow) struct FakeWait {
         pub began_ns: u64,

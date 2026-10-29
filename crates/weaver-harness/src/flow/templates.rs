@@ -468,8 +468,8 @@ impl TemplateCheckTranscript {
 mod expansion;
 #[allow(unused_imports)] // The repair owner consumes the certified runtime port.
 pub(super) use expansion::{
-    ExpansionIdentity, ExpansionRefusal, RestatementTemplate, TemplateExpansion, expand_begin_task,
-    expand_outbound, expand_wind_down,
+    ExpansionIdentity, ExpansionRefusal, RestatementTemplate, RootPlanTemplate, TemplateExpansion,
+    expand_begin_task, expand_outbound, expand_wind_down,
 };
 
 #[cfg(test)]

@@ -79,6 +79,7 @@ pub(super) fn finish(
         }
     });
     let owner = &mut guard.0;
+    assert_eq!(owner.process_exit(), None);
     let done = AtomicBool::new(false);
     reader.set_nonblocking(true).unwrap();
     let bytes = std::thread::scope(|scope| {
@@ -109,7 +110,27 @@ pub(super) fn finish(
             std::thread::sleep(Duration::from_millis(1));
             progress
         };
-        if mode.ends_with("-clock-failure") {
+        if mode.ends_with("-answer-lost") {
+            while owner.test_context().phase != crate::flow::context::RecordingPhase::Closed {
+                assert_ne!(tick(owner), RollbackProgress::Closed);
+                assert_eq!(owner.process_exit(), None);
+            }
+            assert!(owner.unload_sequence().is_some());
+            assert!(
+                read_packet(&peer).is_none(),
+                "the final answer is still owed"
+            );
+            nix::sys::socket::shutdown(peer.as_raw_fd(), nix::sys::socket::Shutdown::Read).unwrap();
+            while owner.progress() != RollbackProgress::Closed {
+                tick(owner);
+            }
+            assert_eq!(
+                owner.process_exit(),
+                Some(crate::FoundationProcessExit::Success)
+            );
+            assert!(!owner.abandoned());
+            assert!(owner.detail().is_none(), "{:?}", owner.detail());
+        } else if mode.ends_with("-clock-failure") {
             assert!(owner.test_gate().is_none());
             assert_eq!(
                 owner.advance_with_io(&mut BrokenOnce {
@@ -200,6 +221,11 @@ pub(super) fn finish(
                 while owner.unload_sequence().is_none() {
                     assert_ne!(tick(owner), RollbackProgress::Closed);
                 }
+                assert_eq!(
+                    owner.process_exit(),
+                    None,
+                    "Unload alone is no exit receipt"
+                );
                 if mode.ends_with("-drained-clock") {
                     while owner.test_context().phase != crate::flow::context::RecordingPhase::Closed
                     {
@@ -234,6 +260,12 @@ pub(super) fn finish(
             assert_eq!(account.gate_reply.raw_bytes(), raw_ready);
             assert_eq!(account.enter, enter);
         }
+        if !mode.ends_with("-answer-lost") {
+            assert_eq!(
+                owner.process_exit(),
+                Some(crate::FoundationProcessExit::Failure)
+            );
+        }
         assert!(std::sync::Arc::ptr_eq(
             &owner.test_context().read_origin,
             &origin
@@ -259,7 +291,7 @@ pub(super) fn finish(
     });
     assert!(
         read_packet(&peer).is_none(),
-        "failed or capped cleanup grants no Left"
+        "failed, capped or disconnected cleanup delivers no Left"
     );
     let rows: Vec<serde_json::Value> = bytes
         .split(|byte| *byte == b'\n')

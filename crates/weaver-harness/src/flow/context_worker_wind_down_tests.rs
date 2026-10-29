@@ -203,12 +203,23 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                 }
                 packet!(fd, &TokenAnswer::Generated(generation));
                 if mode.contains("-session-graceful-save") {
-                    if mode.contains("-resting-held-reply-") {
+                    if mode.contains("-resting-queued-author-") {
+                        wait_file(&root, "s9-requested-author-waiting");
+                        nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
+                    } else if mode.contains("-resting-held-reply-") {
                         wait_file(&root, "s9-image-held");
                         nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
                         std::fs::write(root.join("s9-decode-closed"), b"actual decode EOF")
                             .unwrap();
                         wait_file(&root, "s9-reply-reduced");
+                    } else if mode.contains("-resting-queued-requested-")
+                        || mode.contains("-resting-queued-boundary-")
+                    {
+                        wait_file(&root, "s9-save-queued");
+                        nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
+                        std::fs::write(root.join("s9-decode-closed"), b"actual queued-save EOF")
+                            .unwrap();
+                        wait_file(&root, "s9-queued-boundary-checked");
                     }
                     return;
                 }

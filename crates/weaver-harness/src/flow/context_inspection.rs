@@ -483,6 +483,10 @@ impl RecordingContext {
                 .expired(recorded_ns)
                 .min_by_key(|(_, bound)| bound.deadline_ns())
                 .expect("the original inspection wait is armed and expired");
+            // Preserve the actual Recorded witness for a consuming expiry
+            // handoff. This retained receipt can precede a later valid clock
+            // observation; it advances the floor without replacing that one.
+            self.last_ns = self.last_ns.max(recorded_ns);
             return Err(self.expired(io, key, bound));
         }
         self.deadlines.disarm(PumpDeadline::StateControl);

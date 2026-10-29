@@ -364,6 +364,10 @@ impl FoundationStartupExit {
     pub fn progress(&self) -> FoundationStartupExitProgress {
         self.progress
     }
+    pub fn process_exit(&self) -> Option<crate::FoundationProcessExit> {
+        (self.progress == FoundationStartupExitProgress::Closed)
+            .then_some(crate::FoundationProcessExit::Failure)
+    }
     pub fn advance(&mut self) -> FoundationStartupExitProgress {
         self.advance_with_io(&mut MonotonicIo)
     }

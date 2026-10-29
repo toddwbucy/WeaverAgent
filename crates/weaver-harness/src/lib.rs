@@ -138,8 +138,15 @@ pub use flow::context::worker_startup::entered_rollback::graceful_exit::{
 pub use flow::context::worker_startup::entered_rollback::{
     FoundationEnteredRollback, FoundationEnteredRollbackHandoff, FoundationEnteredRollbackProgress,
 };
+pub use flow::context::worker_startup::expired::{
+    FoundationExpiredEnter, FoundationExpiredRollback, FoundationExpiredRollbackExit,
+    FoundationExpiredRollbackProgress,
+};
 pub use flow::context::worker_startup::failed::{
     FoundationStartupExit, FoundationStartupExitProgress, FoundationStartupHandoff,
+};
+pub use flow::context::worker_startup::input::flags::{
+    FoundationFlagObservation, FoundationFlags, FoundationFlagsError, FoundationFlagsRefusal,
 };
 pub use flow::context::worker_startup::input::generation::FoundationGeneration;
 pub use flow::context::worker_startup::input::generation::emission::{
@@ -159,7 +166,7 @@ pub use flow::context::worker_startup::input::{
 pub use flow::context::worker_startup::rollback::{FoundationRollback, FoundationRollbackProgress};
 pub use flow::context::worker_startup::{
     FoundationAdmission, FoundationAdmissionProgress, FoundationEnter, FoundationEnterProgress,
-    FoundationProgram, FoundationRun, FoundationServing,
+    FoundationProcessExit, FoundationProgram, FoundationRun, FoundationServing,
 };
 pub use lifecycle::{Harness, OrganBinaries, OrganParameters};
 pub use record::{Record, RecordFailure};

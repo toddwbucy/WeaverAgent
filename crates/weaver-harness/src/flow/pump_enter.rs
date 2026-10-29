@@ -6,7 +6,60 @@ use weaver_types::state_flow::enter::EnterEnvelope;
 pub(in crate::flow) struct EnterReceiver {
     peer: LifecyclePeer,
     held: Option<LifecycleMessage<EnterEnvelope>>,
+    ordinary: Option<LifecycleMessage<BeforeEnterOpener>>,
     received_ns: Option<u64>,
+}
+
+pub(in crate::flow) enum BeforeEnterOpener {
+    Ordinary(OrganEnvelope),
+    Save(Box<CaptureEnvelope>),
+}
+
+pub(in crate::flow) struct ReceivedBeforeEnter {
+    pub(in crate::flow) peer: LifecyclePeer,
+    pub(in crate::flow) message: LifecycleMessage<BeforeEnterOpener>,
+    pub(in crate::flow) _wire: Vec<u8>,
+    pub(in crate::flow) received_ns: u64,
+}
+
+pub(in crate::flow) enum AdmissionReceiveFailure {
+    Clock(String),
+    Channel(Failure),
+}
+
+enum AdmissionEnvelope {
+    Enter(Box<EnterEnvelope>),
+    Ordinary(BeforeEnterOpener),
+}
+
+fn decode_admission(bytes: &[u8]) -> Result<AdmissionEnvelope, serde_json::Error> {
+    if let Ok(envelope) = EnterEnvelope::decode(bytes) {
+        return Ok(AdmissionEnvelope::Enter(Box::new(envelope)));
+    }
+    match decode_serving_opener(bytes)? {
+        ServingOpener::Ordinary(envelope)
+            if envelope.exchange.opener == weaver_types::Opener::Admin
+                && envelope.position == weaver_types::Position::Open
+                && matches!(envelope.payload, weaver_types::Payload::Directive(_))
+                && !matches!(
+                    envelope.payload,
+                    weaver_types::Payload::Directive(
+                        weaver_types::LifecycleDirective::Enter { .. }
+                    )
+                ) =>
+        {
+            Ok(AdmissionEnvelope::Ordinary(BeforeEnterOpener::Ordinary(
+                envelope,
+            )))
+        }
+        ServingOpener::Save(envelope) => Ok(AdmissionEnvelope::Ordinary(BeforeEnterOpener::Save(
+            Box::new(envelope),
+        ))),
+        _ => Err(serde_json::Error::io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "before-Enter requires a canonical Enter or lifecycle opener",
+        ))),
+    }
 }
 pub(in crate::flow) struct ReceivedEnter {
     peer: LifecyclePeer,
@@ -16,6 +69,18 @@ pub(in crate::flow) struct ReceivedEnter {
     received_ns: u64,
     observed_ns: std::cell::Cell<u64>,
     closed_unadmitted: Option<(bool, bool)>,
+}
+
+impl ReceivedBeforeEnter {
+    /// A completed answer releases its payload and unused handles, while the
+    /// admin still owns when this serial lifecycle connection closes.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn resume(self) -> Result<EnterReceiver, Self> {
+        match EnterReceiver::from_peer(self.peer) {
+            Ok(receiver) => Ok(receiver),
+            Err(peer) => Err(Self { peer, ..self }),
+        }
+    }
 }
 
 /// Complete original Enter evidence after its actual handles have closed.
@@ -77,15 +142,89 @@ impl EnterReceiver {
         Ok(Self {
             peer,
             held: None,
+            ordinary: None,
             received_ns: None,
         })
     }
+
+    /// The same sole recvmsg owner judges an unopened lifecycle connection.
+    /// Canonical Enter never falls back to the old Serving spelling.
+    pub(in crate::flow) fn advance_admission(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<ReceiveProgress, AdmissionReceiveFailure> {
+        if self.held.is_some() || self.ordinary.is_some() {
+            return Ok(ReceiveProgress::Pending);
+        }
+        let mut clock_failure = None;
+        let received_ns = &mut self.received_ns;
+        let result = self.peer.receive_message(|bytes| {
+            *received_ns = Some(io.now().map_err(|error| {
+                clock_failure = Some(error.to_string());
+                serde_json::Error::io(error)
+            })?);
+            decode_admission(bytes)
+        });
+        let message = result.map_err(|failure| {
+            clock_failure.map_or(
+                AdmissionReceiveFailure::Channel(failure),
+                AdmissionReceiveFailure::Clock,
+            )
+        })?;
+        let Some(LifecycleMessage {
+            envelope,
+            sink,
+            state,
+        }) = message
+        else {
+            return Ok(ReceiveProgress::Pending);
+        };
+        match envelope {
+            AdmissionEnvelope::Enter(envelope) => {
+                self.held = Some(LifecycleMessage {
+                    envelope: *envelope,
+                    sink,
+                    state,
+                });
+            }
+            AdmissionEnvelope::Ordinary(envelope) => {
+                self.ordinary = Some(LifecycleMessage {
+                    envelope,
+                    sink,
+                    state,
+                });
+            }
+        }
+        Ok(ReceiveProgress::Held)
+    }
+
+    pub(in crate::flow) fn interest(&self) -> WaitInterest<'_> {
+        WaitInterest {
+            fd: self.peer.fd(),
+            events: self.peer.interest(),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn into_ordinary(mut self) -> Result<ReceivedBeforeEnter, Self> {
+        let Some(message) = self.ordinary.take() else {
+            return Err(self);
+        };
+        Ok(ReceivedBeforeEnter {
+            _wire: self.peer.wire.take().expect("actual received opener"),
+            peer: self.peer,
+            message,
+            received_ns: self.received_ns.expect("receipt sampled before parse"),
+        })
+    }
+    #[cfg(test)]
     pub(in crate::flow) fn advance(
         &mut self,
         io: &mut impl PumpIo,
     ) -> Result<ReceiveProgress, Failure> {
         self.advance_with_decoder(io, EnterEnvelope::decode)
     }
+    #[cfg(test)]
     fn advance_with_decoder(
         &mut self,
         io: &mut impl PumpIo,
@@ -145,6 +284,22 @@ pub(in crate::flow) enum EnterTimeError {
     Clock(String),
 }
 impl ReceivedEnter {
+    pub(in crate::flow) fn observed_ns(&self) -> u64 {
+        self.observed_ns.get()
+    }
+
+    pub(in crate::flow) fn window(&self) -> Option<AbsoluteBound> {
+        let weaver_types::state_flow::enter::EnterBinding::Serving { enter_window, .. } =
+            &self.envelope().enter().binding
+        else {
+            return None;
+        };
+        Some(
+            AbsoluteBound::from_absolute(enter_window.began_ns.0, enter_window.deadline_ns.0)
+                .expect("the canonical receiver validates the interval"),
+        )
+    }
+
     pub(in crate::flow) fn into_response_peer(self) -> (LifecyclePeer, DetachedEnter) {
         (
             self.peer,
@@ -187,6 +342,15 @@ impl ReceivedEnter {
             drop(self.message.state.take());
         }
     }
+    /// Only call after a completed refusal. No owed Enter or ancillary handle
+    /// is carried into a later directive on the same authenticated peer.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::flow) fn resume(self) -> Result<EnterReceiver, Self> {
+        match EnterReceiver::from_peer(self.peer) {
+            Ok(receiver) => Ok(receiver),
+            Err(peer) => Err(Self { peer, ..self }),
+        }
+    }
     pub(in crate::flow) fn retire_failed(self) -> RetiredEnter {
         RetiredEnter {
             _peer: self.peer.retire_failed(),
@@ -221,7 +385,17 @@ pub(in crate::flow) struct AdoptedEnter {
 }
 pub(in crate::flow) struct AdoptionFailure {
     pub(in crate::flow) source: ReceivedEnter,
+    pub(in crate::flow) kind: AdoptionFailureKind,
     pub(in crate::flow) detail: String,
+}
+
+pub(in crate::flow) enum AdoptionFailureKind {
+    Refused(weaver_types::LifecycleRefusal),
+    Expired,
+    Clock,
+    Channel(Failure),
+    Diagnostic,
+    Invalid,
 }
 impl ReceivedEnter {
     #[allow(clippy::result_large_err)]
@@ -229,21 +403,32 @@ impl ReceivedEnter {
         mut self,
         io: &mut impl PumpIo,
     ) -> Result<AdoptedEnter, AdoptionFailure> {
-        use super::super::{channel::StateChannel, context::RecordingContext};
+        use super::super::{
+            channel::StateChannel,
+            context::{ContextAdmissionError, RecordingContext},
+        };
+        use weaver_types::LifecycleRefusal;
         use weaver_types::state_flow::enter::EnterBinding;
         if let Err(error) = self.check_window(io) {
             if error == EnterTimeError::Expired {
                 self.close_unadmitted();
             }
+            let kind = match &error {
+                EnterTimeError::Future => AdoptionFailureKind::Refused(LifecycleRefusal::Malformed),
+                EnterTimeError::Expired => AdoptionFailureKind::Expired,
+                EnterTimeError::Clock(_) => AdoptionFailureKind::Clock,
+            };
             return Err(AdoptionFailure {
                 source: self,
+                kind,
                 detail: format!("Enter window: {error:?}"),
             });
         }
         let result = (|| {
-            self.peer
-                .check_terminal()
-                .map_err(|error| format!("Enter peer: {error:?}"))?;
+            self.peer.check_terminal().map_err(|error| {
+                let detail = format!("Enter peer: {error:?}");
+                (AdoptionFailureKind::Channel(error), detail)
+            })?;
             let payload = self.message.envelope.enter();
             let EnterBinding::Serving {
                 state_management,
@@ -252,30 +437,48 @@ impl ReceivedEnter {
                 ..
             } = &payload.binding
             else {
-                return Err("recording adoption requires Serving".to_owned());
+                return Err((
+                    AdoptionFailureKind::Diagnostic,
+                    "recording adoption requires Serving".to_owned(),
+                ));
             };
             if payload.state_store.engine != weaver_types::StoreEngine::Sqlite
                 || payload.declaration != start.config_sha256.as_str()
                 || state_management.start.dump_sha256 != start.dump_sha256
+                || payload.session.0.is_empty()
+                || payload.run.0.is_empty()
             {
-                return Err("Enter store or artifact identity disagrees".to_owned());
+                return Err((
+                    AdoptionFailureKind::Refused(LifecycleRefusal::Malformed),
+                    "Enter store or artifact identity disagrees".to_owned(),
+                ));
             }
             if self.message.sink.is_none() || self.message.state.is_none() {
-                return Err("Serving Enter requires trace and state descriptors".to_owned());
+                return Err((
+                    AdoptionFailureKind::Refused(LifecycleRefusal::DescriptorsUnusable),
+                    "Serving Enter requires trace and state descriptors".to_owned(),
+                ));
             }
             // Validate before consuming any handle. Lower constructors own and
             // close consumed handles on failure; source bytes/peer remain owed.
-            state_management
-                .flow
-                .validate()
-                .map_err(|error| error.to_string())?;
+            state_management.flow.validate().map_err(|error| {
+                (
+                    AdoptionFailureKind::Refused(LifecycleRefusal::Malformed),
+                    error.to_string(),
+                )
+            })?;
             let state = StateChannel::new(
                 std::os::unix::net::UnixStream::from(self.message.state.take().unwrap()),
                 payload.session.0.clone(),
                 payload.run.0.clone(),
             )
-            .map_err(|error| format!("state descriptor: {error}"))?;
-            RecordingContext::new(
+            .map_err(|error| {
+                (
+                    AdoptionFailureKind::Refused(LifecycleRefusal::DescriptorsUnusable),
+                    format!("state descriptor: {error}"),
+                )
+            })?;
+            RecordingContext::admit(
                 self.message.sink.take().unwrap(),
                 state,
                 payload.session.0.clone(),
@@ -286,28 +489,65 @@ impl ReceivedEnter {
                     enter_window.began_ns.0,
                     enter_window.deadline_ns.0,
                 )
-                .map_err(|error| error.to_string())?,
+                .map_err(|error| (AdoptionFailureKind::Invalid, error.to_string()))?,
                 io,
             )
-            .map_err(|error| error.0)
+            .map_err(|error| match error {
+                ContextAdmissionError::Clock(detail) => (AdoptionFailureKind::Clock, detail),
+                ContextAdmissionError::Expired { observed_ns } => {
+                    if observed_ns < self.observed_ns.get() {
+                        (
+                            AdoptionFailureKind::Clock,
+                            "Enter clock reversed during context construction".into(),
+                        )
+                    } else {
+                        self.observed_ns.set(observed_ns);
+                        (
+                            AdoptionFailureKind::Expired,
+                            "original Enter window expired before context construction".into(),
+                        )
+                    }
+                }
+                ContextAdmissionError::Trace(detail) => (
+                    AdoptionFailureKind::Refused(LifecycleRefusal::DescriptorsUnusable),
+                    detail,
+                ),
+                ContextAdmissionError::Invalid(detail) => (AdoptionFailureKind::Invalid, detail),
+            })
         })();
         match result {
             Ok(context) => {
                 if context.origin_ns() < self.observed_ns.get() {
                     return Err(AdoptionFailure {
                         source: self,
+                        kind: AdoptionFailureKind::Clock,
                         detail: "Enter clock reversed during context construction".into(),
                     });
                 }
                 self.observed_ns.set(context.origin_ns());
+                if let Err(error) = self.check_window(io) {
+                    let kind = match &error {
+                        EnterTimeError::Future => {
+                            AdoptionFailureKind::Refused(LifecycleRefusal::Malformed)
+                        }
+                        EnterTimeError::Expired => AdoptionFailureKind::Expired,
+                        EnterTimeError::Clock(_) => AdoptionFailureKind::Clock,
+                    };
+                    return Err(AdoptionFailure {
+                        source: self,
+                        kind,
+                        detail: format!("Enter window after context construction: {error:?}"),
+                    });
+                }
                 self.adopted_origin = Some(std::sync::Arc::clone(context.enter_origin()));
                 Ok(AdoptedEnter {
                     source: self,
                     context,
                 })
             }
-            Err(detail) => Err(AdoptionFailure {
+            Err((kind, detail)) => Err(AdoptionFailure {
                 source: self,
+                kind,
                 detail,
             }),
         }

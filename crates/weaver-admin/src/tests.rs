@@ -1392,6 +1392,7 @@ fn show_reads_the_lock_and_names_the_constituents() {
     assert_eq!(
         show(&config),
         Ok(LifecycleAnswer::State {
+            plan: None,
             state: weaver_types::AgentState::Unloaded,
             load: None,
             constituents: Vec::new(),
@@ -1450,6 +1451,7 @@ fn s8b_save_point_refuses_out_of_order() {
 fn show_ladder_rung_0_to_iv() {
     let state = |state| {
         weaver_types::Payload::Answer(LifecycleAnswer::State {
+            plan: None,
             state,
             load: None,
             constituents: Vec::new(),
@@ -1464,6 +1466,7 @@ fn show_ladder_rung_0_to_iv() {
             Some(state(weaver_types::AgentState::Idle)),
             |pid| {
                 Ok(LifecycleAnswer::State {
+                    plan: None,
                     state: weaver_types::AgentState::Idle,
                     load: None,
                     constituents: vec![pid],
@@ -1518,6 +1521,7 @@ fn show_ladder_rung_0_to_iv() {
 /// The verb's answer once the run has ended.
 fn unloaded() -> Result<LifecycleAnswer, LifecycleRefusal> {
     Ok(LifecycleAnswer::State {
+        plan: None,
         state: weaver_types::AgentState::Unloaded,
         load: None,
         constituents: Vec::new(),
@@ -1583,6 +1587,7 @@ fn a_force_on_a_run_never_entered_directs_the_leave_first() {
         (
             "a run never entered",
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Unloaded,
                 load: None,
                 constituents: Vec::new(),
@@ -2156,6 +2161,7 @@ fn concluded_by(
         config,
         vec![
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Idle,
                 load: None,
                 constituents: Vec::new(),
@@ -2355,6 +2361,7 @@ fn answers_past_the_seal() -> Vec<(weaver_types::Payload, LifecycleRefusal)> {
         .collect();
     answers.push((
         weaver_types::Payload::Answer(LifecycleAnswer::State {
+            plan: None,
             state: weaver_types::AgentState::Idle,
             load: None,
             constituents: Vec::new(),
@@ -2388,6 +2395,7 @@ fn a_leave_refused_past_the_seal_concludes_as_no_answer() {
             &config,
             vec![
                 weaver_types::Payload::Answer(LifecycleAnswer::State {
+                    plan: None,
                     state: weaver_types::AgentState::Idle,
                     load: None,
                     constituents: Vec::new(),
@@ -2508,6 +2516,7 @@ fn another_runs_open_marker_is_left_alone() {
 /// The worker's `Idle` word, its load's facts declaring `bounds`.
 fn idle_declaring(bounds: (Option<u64>, Option<u64>)) -> weaver_types::Payload {
     weaver_types::Payload::Answer(LifecycleAnswer::State {
+        plan: None,
         state: weaver_types::AgentState::Idle,
         load: Some(Box::new(weaver_types::LoadFacts {
             session: weaver_types::SessionId("s-1".into()),
@@ -2988,6 +2997,7 @@ fn an_unload_without_its_save_point_stops_and_a_forced_one_completes() {
         &config,
         vec![
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Idle,
                 load: None,
                 constituents: Vec::new(),
@@ -3030,6 +3040,7 @@ fn an_unload_without_its_save_point_stops_and_a_forced_one_completes() {
         &config,
         vec![
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Idle,
                 load: None,
                 constituents: Vec::new(),
@@ -3044,6 +3055,7 @@ fn an_unload_without_its_save_point_stops_and_a_forced_one_completes() {
     assert_eq!(
         unload_within(&config, TEST_UNLOAD_BOUNDS, true),
         Ok(LifecycleAnswer::State {
+            plan: None,
             state: weaver_types::AgentState::Unloaded,
             load: None,
             constituents: Vec::new(),
@@ -3081,6 +3093,7 @@ fn an_unload_without_its_save_point_stops_and_a_forced_one_completes() {
         &config,
         vec![
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Idle,
                 load: None,
                 constituents: Vec::new(),
@@ -3141,6 +3154,7 @@ fn the_save_point_verb_answers_the_report_and_is_out_of_order_without_a_run() {
         &config,
         vec![
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Idle,
                 load: None,
                 constituents: Vec::new(),
@@ -3199,6 +3213,7 @@ fn the_save_point_verb_answers_the_report_and_is_out_of_order_without_a_run() {
         &config,
         vec![
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Idle,
                 load: None,
                 constituents: Vec::new(),
@@ -3269,6 +3284,7 @@ fn a_save_point_reported_for_another_run_publishes_as_recovered() {
         &config,
         vec![
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Idle,
                 load: None,
                 constituents: Vec::new(),
@@ -3321,6 +3337,7 @@ fn a_save_point_over_a_marker_that_does_not_read_refuses_and_publishes_nothing()
         &config,
         vec![
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Idle,
                 load: None,
                 constituents: Vec::new(),
@@ -3352,6 +3369,7 @@ fn a_force_refused_before_left_answers_without_the_wait() {
         &config,
         vec![
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Active,
                 load: None,
                 constituents: Vec::new(),
@@ -3511,6 +3529,7 @@ fn the_marker_where_the_run_already_ended() {
         &config,
         vec![
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Idle,
                 load: None,
                 constituents: Vec::new(),
@@ -3593,6 +3612,7 @@ fn a_clean_unload_whose_save_point_did_not_publish_stops() {
         &config,
         vec![
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Idle,
                 load: None,
                 constituents: Vec::new(),
@@ -3740,6 +3760,7 @@ fn a_leave_ended_by_the_escalation_still_publishes_its_save_point() {
             config,
             vec![
                 weaver_types::Payload::Answer(LifecycleAnswer::State {
+                    plan: None,
                     state: weaver_types::AgentState::Idle,
                     load: None,
                     constituents: Vec::new(),
@@ -3905,6 +3926,7 @@ fn a_leave_reporting_another_runs_save_point_leaves_the_marker_open() {
                 config,
                 vec![
                     weaver_types::Payload::Answer(LifecycleAnswer::State {
+                        plan: None,
                         state: weaver_types::AgentState::Idle,
                         load: None,
                         constituents: Vec::new(),
@@ -4183,6 +4205,7 @@ fn unload_leaves_waits_and_escalates() {
         (
             "idle",
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Idle,
                 load: None,
                 constituents: Vec::new(),
@@ -4209,6 +4232,7 @@ fn unload_leaves_waits_and_escalates() {
         assert_eq!(
             unload_within(&config, TEST_UNLOAD_BOUNDS, false),
             Ok(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Unloaded,
                 load: None,
                 constituents: Vec::new(),
@@ -4258,6 +4282,7 @@ fn a_refused_leave_ends_nothing() {
         &config,
         vec![
             weaver_types::Payload::Answer(LifecycleAnswer::State {
+                plan: None,
                 state: weaver_types::AgentState::Active,
                 load: None,
                 constituents: Vec::new(),
@@ -4395,6 +4420,7 @@ fn unload_ends_a_run_that_never_entered() {
     assert_eq!(
         unload(&config),
         Ok(LifecycleAnswer::State {
+            plan: None,
             state: weaver_types::AgentState::Unloaded,
             load: None,
             constituents: Vec::new(),

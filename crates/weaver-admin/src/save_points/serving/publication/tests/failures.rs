@@ -971,3 +971,37 @@ fn cancelled_failed_leave_keeps_original_failure_without_rebreaking_its_guard() 
         assert_eq!(fixture.index().len(), 1);
     }
 }
+
+#[test]
+fn refused_leave_cancels_failed_prepared_work_but_keeps_an_observed_commit_guarded() {
+    for committed in [false, true] {
+        let fixture = Fixture::new();
+        let mut repo = fixture.repository();
+        let loaded = fixture.seed_complete(&mut repo);
+        let mut publication =
+            fixture.capture(&mut repo, &loaded, 3, PersistenceCause::GracefulUnload);
+        let prepared = publication
+            .image_finished(&run(), 3.into(), "capture-3.sqlite", &mut alive)
+            .unwrap();
+        let failure = if committed {
+            publication
+                .commit(&run(), 3.into(), &mut |_| {
+                    Err("Commit checkpoint failed".into())
+                })
+                .unwrap_err()
+        } else {
+            publication.failed("capture expired before Commit")
+        };
+        assert_eq!(failure.phase, PersistencePhase::Confirming);
+        fixture.assert_guarded(&prepared, PublicationState::Broken);
+        let result = publication.cancel_unconfirmed_leave(&run(), 3.into());
+        if committed {
+            assert!(result.is_err());
+            fixture.assert_guarded(&prepared, PublicationState::Broken);
+        } else {
+            result.unwrap();
+            assert_eq!(fixture.names().len(), 2);
+        }
+        assert_eq!(fixture.index().len(), 1);
+    }
+}

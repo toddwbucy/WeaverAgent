@@ -4,7 +4,7 @@
 
 **Landing PR:** #348
 
-**Version:** 0.38 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.39 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -772,6 +772,9 @@ qualification obligations. [PERSIST-4, FLOW-5, COST-4]
 For a refused pre-Commit leave capture, follow foundation PERSIST-LEAVE-REFUSAL.
 Only proven member cleanup and Recorded refusal permit the worker's matching
 SavePointCaptureRefused acknowledgement. It ends no Leave. Preserve the shared tail
+for its carry even when cleanup finishes after the capture window. Admin's refusal-only
+wait uses that same original tail and its original outer deadline as foundation
+PERSIST-LEAVE-REFUSAL specifies. Capture expiry grants no late save success. Keep the tail
 through release and the real final response, Left without a save report for a forced
 leave or
 SavePointNotTaken at S9 for a leave that stayed graceful. A refused capture never sends
@@ -863,8 +866,10 @@ also exercise a late explicit capture refusal, wrong capture ID, deletion failur
 silent cleanup.
 Admin Aborted is exercised in every pre-Commit phase and crossing each refusal state,
 including the no-member-request case and the fresh release after finished. No callback
-may infer cleanup from receipt of Aborted. A late CaptureRefused after admin expiry
-must leave Unanswered and an Open marker. A still-graceful orphan stays in S9.
+may infer cleanup from receipt of Aborted. CaptureRefused after capture expiry can be
+timely under the original shared-tail and outer leave deadlines, and grants no save
+report. After either remaining deadline expires, Unanswered and the Open marker remain.
+A still-graceful orphan stays in S9.
 Removing the abort, correlation, barrier or cleanup-bound guard must fail its case.
 [SEAM-2, PERSIST-4, FLOW-4]
 

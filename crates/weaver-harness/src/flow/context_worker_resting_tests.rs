@@ -82,6 +82,7 @@ fn saved(
     forced: Option<bool>,
     previous: AbsoluteBound,
     held_root: Option<&Path>,
+    queued_root: Option<&Path>,
 ) -> s::DecimalU64 {
     let mut id = None;
     let mut artifact = None;
@@ -105,6 +106,12 @@ fn saved(
         .unwrap();
         match packet.payload {
             CapturePayload::SavePointBeginning(beginning) => {
+                if let Some(root) = queued_root {
+                    assert!(
+                        root.join("s9-organ-observation-recorded").exists(),
+                        "queued S9 save carried Beginning before the organ observation was Recorded"
+                    );
+                }
                 assert!(id.replace(beginning.capture_id).is_none());
                 stage = "image";
                 if forced.is_some() {
@@ -149,6 +156,14 @@ fn saved(
             CapturePayload::SavePointImageFinished(finished) => {
                 stage = "commit";
                 assert_eq!(Some(finished.capture_id), id);
+                if let Some(root) = held_root {
+                    std::fs::write(
+                        root.join("s9-finished-carried"),
+                        b"actual ImageFinished received; Prepared withheld",
+                    )
+                    .unwrap();
+                    wait_file(root, "s9-reply-reduced");
+                }
                 reply(
                     peer,
                     &packet.exchange,
@@ -387,8 +402,12 @@ pub(super) fn exercise(
     let lower = std::fs::read(root.join("ready-rollback-lower.json")).unwrap();
     let forced = mode.contains("-resting-force-");
     let held_reply = mode.contains("-resting-held-reply-");
-    let spu_dead = mode.contains("-resting-spu-") || held_reply;
-    if spu_dead && !held_reply {
+    let queued_requested = mode.contains("-resting-queued-requested-");
+    let queued_boundary = mode.contains("-resting-queued-boundary-");
+    let queued_author = mode.contains("-resting-queued-author-");
+    let queued_save = queued_requested || queued_boundary || queued_author;
+    let spu_dead = mode.contains("-resting-spu-") || held_reply || queued_save;
+    if spu_dead && !held_reply && !queued_save {
         owner.0.test_inner().test_end_resting_spu();
     }
     let save_wait = owner
@@ -405,10 +424,20 @@ pub(super) fn exercise(
     let paced = mode.contains("-resting-paced-");
     let done = AtomicBool::new(false);
     let admin_done = AtomicBool::new(false);
+    let hold_trace = AtomicBool::new(false);
+    let trace_paused = AtomicBool::new(false);
     let (bytes, expired_window) = std::thread::scope(|scope| {
         let responder = scope.spawn(|| {
             let end = Instant::now() + Duration::from_secs(20);
             while !done.load(Ordering::SeqCst) && Instant::now() < end {
+                if held_reply
+                    && root.join("s9-image-held").exists()
+                    && !root.join("s9-member-resume").exists()
+                {
+                    std::fs::write(root.join("s9-member-paused"), b"acknowledge pending").unwrap();
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
                 member.step_live("input-worker-generation-emission-session-graceful-save");
                 std::thread::sleep(Duration::from_millis(1));
             }
@@ -417,6 +446,11 @@ pub(super) fn exercise(
             let mut bytes = vec![];
             let end = Instant::now() + Duration::from_secs(20);
             while !done.load(Ordering::SeqCst) && Instant::now() < end {
+                if hold_trace.load(Ordering::SeqCst) {
+                    trace_paused.store(true, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
                 let _ = reader.read_to_end(&mut bytes);
                 std::thread::sleep(Duration::from_millis(1));
             }
@@ -474,7 +508,13 @@ pub(super) fn exercise(
                 send(peer.as_raw_fd(), &ask, MsgFlags::MSG_NOSIGNAL),
                 Ok(ask.len())
             );
-            let demand = saved(&peer, None, previous, held_reply.then_some(root));
+            let demand = saved(
+                &peer,
+                None,
+                previous,
+                held_reply.then_some(root),
+                queued_save.then_some(root),
+            );
             let peer = management(
                 socket,
                 LifecycleDirective::Leave {
@@ -483,7 +523,7 @@ pub(super) fn exercise(
                     rollback: false,
                 },
             );
-            let retry = saved(&peer, Some(forced || spu_dead), previous, None);
+            let retry = saved(&peer, Some(forced || spu_dead), previous, None, None);
             assert_ne!(demand, retry, "a retry owns a fresh capture identity");
             admin_done.store(true, Ordering::SeqCst);
             expired_window
@@ -492,6 +532,21 @@ pub(super) fn exercise(
         let end = Instant::now() + Duration::from_secs(20);
         let mut pinned = false;
         loop {
+            if queued_author && !pinned {
+                pinned = owner
+                    .0
+                    .test_inner()
+                    .test_resting_requested_author_yields_to_observation(
+                        root,
+                        &hold_trace,
+                        &trace_paused,
+                    );
+            } else if queued_save && !pinned {
+                pinned = owner
+                    .0
+                    .test_inner()
+                    .test_keep_resting_queued_save_behind_settlement(root, queued_requested);
+            }
             if held_reply && !pinned && root.join("s9-image-held").exists() {
                 owner
                     .0
@@ -525,7 +580,7 @@ pub(super) fn exercise(
                 owner.0.wait_for_progress();
             }
         }
-        assert_eq!(pinned, held_reply);
+        assert_eq!(pinned, held_reply || queued_save);
         let expired_window = admin.join().unwrap();
         assert!(admin_done.load(Ordering::SeqCst));
         done.store(true, Ordering::SeqCst);
@@ -598,16 +653,21 @@ pub(super) fn exercise(
             })
             .collect();
         assert_eq!(faults.len(), 1);
-        assert!(
-            held_reply
-                || faults[0].0
-                    < rows
-                        .iter()
-                        .position(|row| row["kind"] == "save_point"
-                            && row["payload"]["phase"] == "requested")
-                        .unwrap(),
-            "the retained SPU death is Recorded before a new S9 capture"
-        );
+        let requested = rows
+            .iter()
+            .position(|row| row["kind"] == "save_point" && row["payload"]["phase"] == "requested")
+            .unwrap();
+        if held_reply || queued_save {
+            assert!(
+                requested < faults[0].0,
+                "the retained S9 save is requested before the later SPU death is Recorded"
+            );
+        } else {
+            assert!(
+                faults[0].0 < requested,
+                "the retained SPU death is Recorded before a new S9 capture"
+            );
+        }
         assert_eq!(
             rows.last().unwrap()["payload"]["release"]["spu"],
             "unconfirmed"
