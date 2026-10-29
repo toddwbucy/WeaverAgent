@@ -5,7 +5,7 @@
 **Date filed:** 2026-08-27
 **Document ID:** `weaver-harness-diagnostic-contract`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #136
+**Landing PR:** #393
 
 ---
 
@@ -169,8 +169,9 @@ rendering in one place and the acknowledgment is the sequence.
 
 - **A bracket per pass.** Every run of a replay opens with the opening kind
   and closes with the closing kind, and the closing kind carries the pass's
-  outcome. A pass that ends without its closing event is a pass that died,
-  and the record says so by the absence, per section 5.
+  outcome when it completes. A pass stopped before its completion, by failure or
+  accepted management interruption, keeps an unclosed bracket. The absence reports
+  unended, not a certificate or a conclusion about process liveness, per section 5.
 - **One outcome, stated once.** The closing event names which outcome the
   pass reached, from the closed set `weaver-diagnostic-Spec` declares, and
   names it from what the pass observed rather than from what it expected.
@@ -222,13 +223,20 @@ read. What the harness does with that is its own, per
 `weaver-harness-Spec`, and this seam requires only that the failure is named
 rather than swallowed.
 
-**A pass that dies mid-replay leaves an unclosed bracket, and that is the
+**A pass that stops before completion leaves an unclosed bracket, and that is the
 record telling the truth.** No party manufactures a closing event for a pass
 that did not reach one, because a fabricated outcome is worse than an absent
 one: the reader's four outcomes, per `weaver-analysis-PRD` section 4, are
 certified, diverged, abandoned, and unended, and the fourth is exactly the
 absence of the other three. Writing one at a death would collapse the fourth
-into the third and tell a reader a run ended when it stopped.
+into the third and tell a reader a run ended when it stopped. Accepted management
+interruption has the same unended outcome. An interrupted turn's existing close records
+the Stop or unload cause. A turn finishing normally during graceful drain keeps its
+clean close. Earlier truthful observations remain in the
+record. It introduces no new diagnostic kind, payload or outcome and permits no
+downstream artifact from that unfinished pass. A closing event already accepted before
+management admission keeps its original outcome and remains owed. Interruption cannot
+withdraw, replace or duplicate that earlier accepted event.
 
 ## 6. What neither party may do
 

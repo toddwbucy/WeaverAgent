@@ -1,14 +1,14 @@
 # Diagnostic Replay Loop
 
-**Status:** MERGED v0.6, 2026-10-20. The workflow document for the diagnostic replay
-loop, filed under the harness's `Loops/` container per the Document Format's container
+**Status:** DRAFT v0.8, proposed 2026-10-29. The workflow for diagnostic replay,
+filed under the harness's `Loops/` container per the Document Format's container
 entry. It argues no edges of its own: the seams it walks are declared in the crate
 charters, and a graph block here would duplicate a record that already has a home.
 
 **Document ID:** `diagnostic-replay-loop`
 **Parent:** `weaver-harness-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #181
+**Landing PR:** #393
 
 ---
 
@@ -148,6 +148,26 @@ null replay, and that act is the one that cleared it.
 
 ## 3. Certification, walked
 
+Management during the walk follows DIAGNOSTIC-INTERRUPT in weaver-harness-Spec
+section 6.2. Stop against an open recorded turn ends this pass after the same turn's
+accounting, without retrying or proceeding to another generation. A graceful Leave
+allows only that turn to finish, and a force, rollback, join or drain expiry can
+interrupt it. With no declared drain bound, the graceful drain is unbounded under
+the existing lifecycle rule. Management remains responsive and force-unload is the
+recourse for a blocked turn. The cancellation interval starts at the accepted
+interruption, not at the graceful Leave. That accepted management request admits no
+new replay.closed.
+An earlier accepted closing event retains its original author and outcome. Stop with
+no turn open answers AtRest and
+does not cancel the pass. Leave with no turn open ends admission of further work.
+
+The decode seam's RefeedInterrupted result retains a truthful recorded prefix and
+settles before Cancel's AtRest. The loop never compares it as a completed generation.
+It keeps prior diagnostic observations and closes any open turn with the accepted
+management cause, then retains the run for later management or gives its pending Leave
+back to lifecycle cleanup. The unclosed replay bracket remains unended. A new
+certification is a fresh load, never a continuation of this partial drive.
+
 The charter's section 4 procedure, as this loop performs it:
 
 1. **Input identity first.** The loop establishes, from the answered
@@ -216,6 +236,10 @@ even the first instrument reads from a replay that did not certify.
   prefix needs no cleanup, the next preload's opener retiring it.
 - **The holdings fail input identity.** The loop refuses at certification
   step one, named above.
+- **Management interrupts the pass.** The state table, original cancellation interval
+  and failure cleanup are DIAGNOSTIC-INTERRUPT's. No completed-path answer or
+  certificate is fabricated. Field and column observations remain true partial
+  evidence. Diagnostic Leave still has no save point, gate or wind-down generation.
 - **The decode seam refuses mid-replay.** The loop ends the run and the record
   it authors carries where the replay stopped. **The no-write guarantee is the
   third refusal's and does not reach that record**, which is the point of

@@ -7,7 +7,7 @@ written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-diagnostic-Spec`
 **Parent:** `weaver-diagnostic-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #136
+**Landing PR:** #393
 
 ---
 
@@ -483,12 +483,24 @@ from: weaver-harness
 to: diagnostic-divergence-position-is-the-resident-length
 ```
 
-**No outcome is authored for a pass that died.** The contract's section 5 forbids
+**No outcome is authored for a pass stopped before completion.** The contract's
+section 5 includes failure and accepted management interruption and forbids
 manufacturing one, and the reason is the fourth outcome: a closing event written at
 a death would collapse unended into abandoned and tell a reader a pass ended when it
 stopped. **`Abandoned` is for a pass that reached its own end without certifying**,
 whatever stopped it, the loop's likeliest being a refusal at input identity before
 any forward pass ran. What `AbandonReason` enumerates is section 8's.
+
+DIAGNOSTIC-INTERRUPT in the harness Spec governs replay management. An interrupted
+turn's existing turn.closed carries its Stop or unload reason and cause. A turn that
+finishes normally during graceful drain keeps its clean close. Earlier
+field and column observations stand. RefeedInterrupted is an internal decode answer,
+not a new diagnostic event or a model generation. It produces no partial certification,
+model.request/output/measurement triplet or new replay.closed. An earlier accepted
+replay.closed retains its original author and outcome until its disposition. Otherwise
+the interrupted pass stays unended even when its SPU or run remains alive.
+The reader's existing rule for every unclosed bracket still applies, whichever way it
+became unclosed. No output artifact is authorized by the partial record.
 
 ```graph
 node: diagnostic-outcome-absent-not-manufactured
