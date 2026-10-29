@@ -185,7 +185,12 @@ pub(crate) fn render_close_with_finish(
 /// the answer to admin that follows reads the latch and ends service rather
 /// than announcing over the missing refusal.
 fn author_lifecycle_refusal(run: &mut Run, refusal: &LifecycleRefusal) {
-    author_refusal_on(run, weaver_types::LifecycleAsk::Enter, refusal);
+    // Diagnostic setup has no replay bracket yet. Its Enter refusal reaches
+    // admin, but cannot precede replay.opened on the diagnostic record (Spec 3).
+    // Serving has already authored load and owes this refusal inside that run.
+    if run.diagnostic.is_none() {
+        author_refusal_on(run, weaver_types::LifecycleAsk::Enter, refusal);
+    }
 }
 
 /// A lifecycle refusal on the record, naming the ask it answered.
@@ -2143,12 +2148,9 @@ impl Harness {
                 // eaten as an opener naming no session. The harness sends
                 // it here, the same rendering the tee would have sent.
                 None => {
-                    use std::io::Write;
-                    let mut channel = channel;
                     let frame = weaver_trace::opener(&session.0, &election);
-                    if channel.write_all(frame.as_bytes()).is_ok() {
-                        state_seam = Some(crate::state::StateSeam::new(channel));
-                    }
+                    state_seam =
+                        crate::state::StateSeam::open_diagnostic(channel, frame.as_bytes());
                 }
             }
         }

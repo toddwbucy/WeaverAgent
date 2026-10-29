@@ -229,9 +229,13 @@ impl StateSeam {
     /// Crate-private, the port discipline: the enter constructs it from the
     /// standing channel's clone and nothing outside loop 0 can.
     pub(crate) fn new(channel: UnixStream) -> StateSeam {
+        // A Diagnostic run has no tee to set the shared file description's
+        // mode. Every ask owner must establish its own nonblocking writes and
+        // reads before a syscall can escape the caller's answer bound.
+        let dead = channel.set_nonblocking(true).is_err();
         StateSeam {
             channel,
-            dead: false,
+            dead,
             unsettled: false,
             discarding: false,
             snapshot_ordinal: 1,
@@ -239,6 +243,16 @@ impl StateSeam {
             snapshot_answer_bound_ms: SNAPSHOT_ANSWER_BOUND_MS,
             restored_answer_bound_ms: RESTORED_ANSWER_BOUND_MS,
         }
+    }
+
+    /// The Diagnostic opener uses the same immediate-write rule as later asks.
+    /// A partial or refused write closes this sole end and grants no ask owner.
+    pub(crate) fn open_diagnostic(channel: UnixStream, opener: &[u8]) -> Option<Self> {
+        let mut seam = Self::new(channel);
+        if seam.dead || !seam.send(opener) {
+            return None;
+        }
+        Some(seam)
     }
 
     /// Whether the seam has retired on a failure, the member found dead.

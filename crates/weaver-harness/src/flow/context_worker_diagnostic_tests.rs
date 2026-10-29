@@ -53,6 +53,7 @@ fn diagnostic_spu_child() {
         return;
     };
     let root = std::path::PathBuf::from(root);
+    std::fs::write(root.join("diagnostic-spawned"), b"spawned\n").unwrap();
     // SAFETY: this actual fork producer placed the two exclusive child ends.
     let lifecycle = unsafe { OwnedFd::from_raw_fd(3) };
     let decode = unsafe { OwnedFd::from_raw_fd(4) };
@@ -227,6 +228,10 @@ pub(super) fn control(
     payload.spu_instruction.decoder.refeed_permission = true;
     payload.spu_instruction.decoder.model_binding.artifact.0 = "art".into();
     let wire = envelope.encode().unwrap();
+    if mode.ends_with("opener-pressure") {
+        opener_pressure(root, child, &envelope, sink, state, reader, member, end);
+        return;
+    }
     // A lost pre-load refusal must return the listener to admission too.
     let lost = dial(&root.join("admin.sock"));
     send_enter(&lost, &wire, &[]);
@@ -406,5 +411,110 @@ pub(super) fn control(
     assert!(
         rows.iter()
             .all(|r| r["kind"] != "load" && r["kind"] != "unload" && r["kind"] != "save_point")
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn opener_pressure(
+    root: &std::path::Path,
+    child: &mut std::process::Child,
+    source: &EnterEnvelope,
+    sink: OwnedFd,
+    state: OwnedFd,
+    reader: &mut UnixStream,
+    member: &mut UnixStream,
+    end: Instant,
+) {
+    nix::sys::socket::setsockopt(&state, nix::sys::socket::sockopt::SndBuf, &4096).unwrap();
+    let flags = nix::fcntl::fcntl(&state, nix::fcntl::FcntlArg::F_GETFL).unwrap();
+    assert_eq!(
+        flags & nix::libc::O_NONBLOCK,
+        0,
+        "fixture does not fix the worker's end"
+    );
+    let mut filled = 0;
+    loop {
+        match nix::sys::socket::send(
+            state.as_raw_fd(),
+            &[b'x'; 4096],
+            MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL,
+        ) {
+            Ok(n) => {
+                assert!(n > 0);
+                filled += n;
+            }
+            Err(nix::errno::Errno::EAGAIN) => break,
+            Err(error) => panic!("fixture state fill: {error}"),
+        }
+    }
+    let peer = dial(&root.join("admin.sock"));
+    send_enter(
+        &peer,
+        &source.encode().unwrap(),
+        &[sink.as_raw_fd(), state.as_raw_fd()],
+    );
+    drop((sink, state));
+    let refused: OrganEnvelope = serde_json::from_slice(&receive(&peer, end)).unwrap();
+    assert_eq!(refused.exchange, source.exchange);
+    assert_eq!(refused.position, Position::Close);
+    assert_eq!(
+        refused.payload,
+        Payload::Refusal(LifecycleRefusal::DescriptorsUnusable)
+    );
+    send(
+        &peer,
+        951,
+        LifecycleDirective::Leave {
+            cause: Cause { uid: 0 },
+            forced: true,
+            rollback: true,
+        },
+    );
+    let left: OrganEnvelope = serde_json::from_slice(&receive(&peer, end)).unwrap();
+    assert_eq!(
+        left.exchange,
+        ExchangeId {
+            opener: Opener::Admin,
+            ordinal: 951
+        }
+    );
+    assert_eq!(left.position, Position::Close);
+    assert!(matches!(
+        left.payload,
+        Payload::Answer(LifecycleAnswer::Left {
+            no_state: true,
+            save_point: None,
+            forced: true,
+            ..
+        })
+    ));
+    while child.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < end,
+            "failed Diagnostic entry did not finish rollback"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(child.wait().unwrap().success());
+    assert!(!root.join("diagnostic-spawned").exists());
+    assert!(!root.join("diagnostic-forbidden-organ").exists());
+    for endpoint in [&*reader, &*member] {
+        endpoint.set_nonblocking(false).unwrap();
+        endpoint
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+    }
+    let mut trace = Vec::new();
+    reader.read_to_end(&mut trace).unwrap();
+    assert!(
+        trace.is_empty(),
+        "no replay bracket, load or fabricated refusal trace"
+    );
+    let mut received = Vec::new();
+    member.read_to_end(&mut received).unwrap();
+    assert_eq!(
+        received,
+        vec![b'x'; filled],
+        "no opener, ask or retry crossed the full seam"
     );
 }
