@@ -6,9 +6,9 @@
 //! deadlines, rotation, trace authoring and completion reduction. In particular,
 //! organ channels have two initiators: incoming traffic is legal while sending.
 //!
-//! Ordinary organ traffic admits no ancillary handles. Preflight Enter's sink
-//! and state descriptors still belong to channel.rs::recv_with_descriptor until
-//! the paired P1d migration. That owner must finish custody before conversion.
+//! Ordinary organ traffic admits no ancillary handles. The active lifecycle's
+//! Enter reader and the dormant foundation Enter receiver each retain their
+//! original sink and state descriptors before any organ-port conversion.
 //! Decode retains the existing SegmentPreamble wire, not the STE100 framing.
 
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
@@ -478,6 +478,23 @@ impl ReceivedOrgan {
 }
 
 impl OrganPort {
+    pub(super) fn idle_for_diagnostic(&self) -> bool {
+        self.outgoing.is_none()
+            && self.series.is_none()
+            && self.received_wire.is_none()
+            && self.received_reservation.is_none()
+            && self.held.is_none()
+            && self.decode_reservation.is_none()
+            && self.failure.is_none()
+            && !self.zero_received
+            && matches!(self.closed_receive, ClosedReceive::Finished)
+    }
+
+    pub(super) fn into_diagnostic_fd(self) -> OwnedFd {
+        assert!(self.idle_for_diagnostic(), "prepared Diagnostic transport");
+        self.end
+    }
+
     pub(super) fn admit_not_started(&self) -> bool {
         self.outgoing
             .as_ref()
@@ -601,6 +618,29 @@ impl OrganPort {
             Stage::Queued => Ok(TrackedStage::Queued(self.track_staged(exchange))),
             Stage::Busy(input) => Ok(TrackedStage::Busy(input)),
         }
+    }
+
+    /// Withdraw a live ordinary datagram only through its exact current ticket.
+    /// A prior ticket on this port, even for the same exchange, has no authority.
+    pub(super) fn withdraw_tracked_pending(
+        &mut self,
+        send: &OrganSend,
+    ) -> Result<Option<OrganEnvelope>, Failure> {
+        self.live()?;
+        if !send.belongs_to(self) {
+            return Err(Failure::invalid("withdrawal requires the original port"));
+        }
+        let Some(outbound) = self.outgoing.as_ref() else {
+            return Ok(None);
+        };
+        if outbound
+            .tracked
+            .as_ref()
+            .is_none_or(|tracked| !Arc::ptr_eq(tracked, &send.tracked))
+        {
+            return Err(Failure::invalid("withdrawal requires the current ticket"));
+        }
+        self.withdraw_pending(&send.exchange)
     }
 
     /// Withdraw only this exact exchange's wholly unsent organ datagram. A

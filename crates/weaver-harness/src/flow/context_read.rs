@@ -4,6 +4,7 @@
 //! Neither result grants placement or decoder authority.
 
 use super::*;
+use crate::flow::channel::StateCompletion;
 use crate::flow::coordinator::{ControlOperation, OperationStart};
 use crate::flow::read::{CompletedRead, PageRead, ReadAdvance, ReadFailure};
 use weaver_trace::TurnRef;
@@ -15,6 +16,9 @@ use boot::BootCandidate;
 pub(in crate::flow) use boot::{
     BootHead, BootReadBeginError, BootReadBeginRefusal, BootReadCompletion,
 };
+
+#[path = "context_read_flags.rs"]
+pub(in crate::flow) mod flags;
 
 const READ_NS: u64 = 2_000_000_000;
 
@@ -100,6 +104,63 @@ pub(in crate::flow) enum ReadCompletion {
     Cancelled(CancelledRead),
 }
 
+/// Finalized refusal evidence, transferred only after any acquired cursor is released.
+/// It grants neither content nor retry authority. Its constructor remains with the reader.
+#[derive(Debug)]
+pub(in crate::flow) struct RecordedReadRefusal {
+    selector: ReadSelector,
+    request: StateControl,
+    refused: StateCompletion,
+    release: Option<StateCompletion>,
+    snapshot: Option<DecimalU64>,
+    partial: Vec<u8>,
+    bound: AbsoluteBound,
+    origin: std::sync::Arc<()>,
+}
+
+impl RecordedReadRefusal {
+    pub(in crate::flow) fn selector(&self) -> &ReadSelector {
+        &self.selector
+    }
+    pub(in crate::flow) fn request(&self) -> &StateControl {
+        &self.request
+    }
+    pub(in crate::flow) fn answer(&self) -> &StateFrame {
+        &self.refused.answer
+    }
+    pub(in crate::flow) fn measurement_sequence(&self) -> Sequence {
+        self.refused.measurement_sequence
+    }
+    pub(in crate::flow) fn release(&self) -> Option<&StateCompletion> {
+        self.release.as_ref()
+    }
+    pub(in crate::flow) fn snapshot(&self) -> Option<DecimalU64> {
+        self.snapshot
+    }
+    pub(in crate::flow) fn partial_bytes(&self) -> &[u8] {
+        &self.partial
+    }
+    pub(in crate::flow) fn bound(&self) -> AbsoluteBound {
+        self.bound
+    }
+    pub(in crate::flow) fn belongs_to(&self, context: &RecordingContext) -> bool {
+        std::sync::Arc::ptr_eq(&self.origin, &context.read_origin)
+    }
+}
+
+#[derive(Debug)]
+pub(in crate::flow) struct RetainedReadCompletion {
+    pub completion: ReadCompletion,
+    pub refusal: Option<Box<RecordedReadRefusal>>,
+}
+
+#[derive(Debug)]
+struct PendingReadRefusal {
+    request: StateControl,
+    refused: StateCompletion,
+    release: Option<StateCompletion>,
+}
+
 #[derive(Debug)]
 pub(in crate::flow) struct ReadTransaction {
     purpose: ReadPurpose,
@@ -122,6 +183,7 @@ pub(in crate::flow) struct ReadTransaction {
     // Preserve the received answer if higher-level validation fails after its
     // operation measurement was recorded. A failure never becomes empty data.
     rejected: Option<OperationCompletion>,
+    refused: Option<Box<PendingReadRefusal>>,
 }
 
 #[allow(clippy::large_enum_variant)] // Retain exact boot inputs in the one read owner.
@@ -129,6 +191,8 @@ pub(in crate::flow) struct ReadTransaction {
 enum ReadPurpose {
     Ordinary,
     Marks,
+    RootPlan,
+    PlanFlags(flags::FlagRead),
     BootPairs,
     PlanSummary,
     Inward(weaver_types::state_flow::CallId),
@@ -168,6 +232,11 @@ impl ReadRollbackPermit {
 }
 
 impl ReadTransaction {
+    /// Inspection during cleanup carries no finalized operation-refusal authority.
+    #[cfg(test)]
+    pub(in crate::flow) fn refused_answer(&self) -> Option<&StateFrame> {
+        self.refused.as_ref().map(|proof| &proof.refused.answer)
+    }
     pub(super) fn orphan_recorded(&self) -> Option<&RecordedRead> {
         self.orphan_recorded.as_ref()
     }
@@ -184,7 +253,10 @@ impl ReadTransaction {
         self.bound
     }
     pub(super) fn plan_ticket(&self) -> Option<u64> {
-        self.author_ticket
+        match &self.purpose {
+            ReadPurpose::PlanFlags(flags) if flags.event.is_some() => flags.ticket,
+            _ => self.author_ticket,
+        }
     }
     pub(super) fn plan_recorded(&self) -> Option<Sequence> {
         self.recorded
@@ -202,7 +274,11 @@ impl ReadTransaction {
             ReadPurpose::PlanSummary => {
                 context.plan_summary.is_some() && context.plan_summary_is_boot_cleanup()
             }
-            ReadPurpose::Ordinary | ReadPurpose::Marks | ReadPurpose::Inward(_) => false,
+            ReadPurpose::Ordinary
+            | ReadPurpose::Marks
+            | ReadPurpose::RootPlan
+            | ReadPurpose::PlanFlags(_)
+            | ReadPurpose::Inward(_) => false,
         }
     }
 
@@ -261,6 +337,8 @@ impl RecordingContext {
                 if read.is_some_and(|read| {
                     read.plan_ticket().is_some() && read.plan_ticket() == ticket
                 }) => {}
+            Some(Kind::StatePlanMeasurement)
+                if read.is_some_and(|read| matches!(&read.purpose, ReadPurpose::PlanFlags(flags) if flags.ticket.is_some() && flags.ticket == ticket)) => {}
             Some(Kind::StateStoreMeasurement)
                 if ticket.is_some()
                     && read.and_then(|read| read.plan_expected()).is_some_and(
@@ -308,6 +386,15 @@ impl RecordingContext {
         io: &mut impl PumpIo,
     ) -> Result<(), ReadBeginError> {
         self.begin_read_with_purpose(ReadSelector::Marks {}, Some(turn), ReadPurpose::Marks, io)
+    }
+
+    #[allow(clippy::result_large_err)] // Return the original selector without error-path allocation.
+    pub(super) fn begin_root_plan_read(
+        &mut self,
+        selector: ReadSelector,
+        io: &mut impl PumpIo,
+    ) -> Result<(), ReadBeginError> {
+        self.begin_read_with_purpose(selector, None, ReadPurpose::RootPlan, io)
     }
 
     #[allow(clippy::result_large_err)] // Return the exact selector with admission refusal.
@@ -419,6 +506,7 @@ impl RecordingContext {
         // require that caller to retrieve its held original first.
         let owned_continuation = match &purpose {
             ReadPurpose::Marks => self.marks_read_allowed(turn.as_ref()),
+            ReadPurpose::RootPlan => self.root_plan_read_allowed(&selector) && turn.is_none(),
             ReadPurpose::Inward(_) => inward.is_some(),
             ReadPurpose::BootPairs => self.boot_pairs_read_allowed(),
             ReadPurpose::PlanSummary => self.plan_summary_read_allowed(),
@@ -429,7 +517,12 @@ impl RecordingContext {
             || (matches!(purpose, ReadPurpose::PlanSummary) && !self.plan_summary_read_allowed())
             || (self.boot_pairs.is_some() && !matches!(purpose, ReadPurpose::BootPairs))
             || (matches!(purpose, ReadPurpose::BootPairs) && !self.boot_pairs_read_allowed())
-            || (self.marks.is_some() && !matches!(purpose, ReadPurpose::Marks))
+            || (self.marks.is_some()
+                && !matches!(purpose, ReadPurpose::Marks | ReadPurpose::RootPlan)
+                && !(matches!(purpose, ReadPurpose::PlanSummary)
+                    && self.root_plan_summary_allowed(PumpDeadline::Decision)))
+            || (matches!(purpose, ReadPurpose::Marks) && !owned_continuation)
+            || (matches!(purpose, ReadPurpose::RootPlan) && !owned_continuation)
             || self.read.is_some()
             || self.inspection.is_some()
             || self.boot_open_blocks_external()
@@ -496,6 +589,13 @@ impl RecordingContext {
                         .deadline_ns(),
                 );
             }
+            if matches!(purpose, ReadPurpose::RootPlan) {
+                end = end.min(
+                    self.root_plan_bound()
+                        .expect("root allocator retains its Decision")
+                        .deadline_ns(),
+                );
+            }
             let bound =
                 AbsoluteBound::from_absolute(start, end).map_err(|error| error.to_string())?;
             self.deadlines
@@ -531,6 +631,7 @@ impl RecordingContext {
             cancelled: false,
             complete: false,
             rejected: None,
+            refused: None,
         });
         if let Some(call) = &inward
             && let Err(failure) = self.admit_inward_read(call, io)
@@ -593,11 +694,11 @@ impl RecordingContext {
         }
         self.read_wait_matches(ports.io)?;
         if self.read_blocks_reduction() {
-            return self.advance_read_recall(ports);
+            return self.advance_read_observation(ports);
         }
         let advance = self.reduce_flow(ports.io)?;
         if self.read_blocks_reduction() {
-            return self.advance_read_recall(ports);
+            return self.advance_read_observation(ports);
         }
         if self.read.as_ref().is_some_and(|read| read.complete) {
             return Ok(ReadProgress::Complete);
@@ -615,6 +716,23 @@ impl RecordingContext {
         &mut self,
         io: &mut impl PumpIo,
     ) -> Result<Option<ReadCompletion>, RunFailure> {
+        self.take_read_retained(io)
+            .map(|value| value.map(|read| read.completion))
+    }
+
+    /// Root preflight retains the causal measurement as well as the ordinary outcome.
+    pub(in crate::flow) fn take_read_retained(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<Option<RetainedReadCompletion>, RunFailure> {
+        self.take_read_retained_owned(io, false)
+    }
+
+    fn take_read_retained_owned(
+        &mut self,
+        io: &mut impl PumpIo,
+        flags_owner: bool,
+    ) -> Result<Option<RetainedReadCompletion>, RunFailure> {
         self.live(io)?;
         if self.plan_summary_blocks_external() {
             return Err(RunFailure::PlanSummaryOwned);
@@ -627,6 +745,13 @@ impl RecordingContext {
         }
         if self.inward_blocks_external() {
             return Err(RunFailure::PairOwned);
+        }
+        if self
+            .read
+            .as_ref()
+            .is_some_and(|read| matches!(read.purpose, ReadPurpose::PlanFlags(_)) != flags_owner)
+        {
+            return Err(RunFailure::ReadOwned);
         }
         if self.read.as_ref().is_some_and(|read| {
             matches!(
@@ -642,6 +767,46 @@ impl RecordingContext {
         let Some(result) = read.released.take() else {
             return Err(self.read_fault(io, "complete read lost its owned result"));
         };
+        if result.is_err() != read.refused.is_some() {
+            read.released = Some(result);
+            return Err(self.read_fault(io, "completed read refusal lost its recorded evidence"));
+        }
+        if let Some(proof) = &read.refused {
+            let refusal_matches = matches!((&result, &proof.refused.answer),
+                (Err(ReadFailure::Refused { code, detail }), StateFrame::ControlAnswer {
+                    frame: weaver_types::state_flow::StateControlAnswer::ControlRefused {
+                        code: weaver_types::state_flow::ControlRefusalCode::Read(actual), detail: text
+                    }, ..
+                }) if code == actual && detail == text);
+            let cleanup_matches = match (read.pages.snapshot(), &proof.release) {
+                (None, None) => true,
+                (Some(snapshot), Some(release)) => {
+                    matches!(&release.answer, StateFrame::ControlAnswer {
+                    frame: weaver_types::state_flow::StateControlAnswer::Released { snapshot_id }, ..
+                } if *snapshot_id == snapshot && release.measurement_sequence.0 > proof.refused.measurement_sequence.0)
+                }
+                _ => false,
+            };
+            if !refusal_matches || !cleanup_matches {
+                read.released = Some(result);
+                return Err(self.read_fault(
+                    io,
+                    "read refusal differs from its measured answer or cleanup",
+                ));
+            }
+        }
+        let refusal = read.refused.take().map(|proof| {
+            Box::new(RecordedReadRefusal {
+                selector: read.pages.selector().clone(),
+                request: proof.request,
+                refused: proof.refused,
+                release: proof.release,
+                snapshot: read.pages.snapshot(),
+                partial: read.pages.take_buffered_bytes(),
+                bound: read.bound,
+                origin: self.read_origin.clone(),
+            })
+        });
         let result = match result {
             Ok(completed) => Ok(RecordedRead {
                 read: completed,
@@ -661,7 +826,10 @@ impl RecordingContext {
             }
         };
         self.read = None;
-        Ok(Some(result))
+        Ok(Some(RetainedReadCompletion {
+            completion: result,
+            refusal,
+        }))
     }
 
     /// Revoke consumption without discarding a sent exchange, acquired cursor
@@ -757,6 +925,9 @@ impl RecordingContext {
             if matches!(read.purpose, ReadPurpose::Boot { .. }) {
                 self.boot_read_started = true;
             }
+            if let ReadPurpose::PlanFlags(flags) = &mut read.purpose {
+                flags.request_id = Some(request_id);
+            }
         }
         if let Err(error) = read.pages.bind_request(request_id, &request) {
             return Err(self.read_fault(io, error.to_string()));
@@ -849,6 +1020,34 @@ impl RecordingContext {
             .accept(common.request_id, request, frame);
         match accepted {
             Ok(progress) => {
+                // Retain the actual measured reply before the post-accept clock can
+                // yield. A later Released receipt is separate evidence, never its parent.
+                let OperationCompletion::State {
+                    request,
+                    completion,
+                    ..
+                } = result
+                else {
+                    unreachable!("checked state completion keeps its owner");
+                };
+                let read = self.read.as_mut().unwrap();
+                if matches!(
+                    completion.answer,
+                    StateFrame::ControlAnswer {
+                        frame: weaver_types::state_flow::StateControlAnswer::ControlRefused { .. },
+                        ..
+                    }
+                ) {
+                    read.refused = Some(Box::new(PendingReadRefusal {
+                        request,
+                        refused: completion,
+                        release: None,
+                    }));
+                } else if matches!(request, StateControl::Release { .. })
+                    && let Some(refusal) = &mut read.refused
+                {
+                    refusal.release = Some(completion);
+                }
                 self.read.as_mut().unwrap().accepted = Some(progress);
                 self.finish_accepted_read(io)
             }
@@ -875,13 +1074,17 @@ impl RecordingContext {
                     .expect("complete read keeps its disposition"),
             );
             if matches!(read.released, Some(Err(_))) {
-                read.complete = true;
-                self.deadlines.disarm(PumpDeadline::StateControl);
+                if !matches!(read.purpose, ReadPurpose::PlanFlags(_)) {
+                    read.complete = true;
+                    self.deadlines.disarm(PumpDeadline::StateControl);
+                }
             } else {
                 let completed = read.released.as_ref().unwrap().as_ref().unwrap();
                 let record = match &mut read.purpose {
                     ReadPurpose::Ordinary
                     | ReadPurpose::Marks
+                    | ReadPurpose::RootPlan
+                    | ReadPurpose::PlanFlags(_)
                     | ReadPurpose::BootPairs
                     | ReadPurpose::PlanSummary
                     | ReadPurpose::Inward(_) => {
@@ -1037,12 +1240,24 @@ impl RecordingContext {
     }
 
     fn finish_recorded_recall(&mut self, io: &mut impl PumpIo) -> Result<ReadProgress, RunFailure> {
+        let complete = !self
+            .read
+            .as_ref()
+            .is_some_and(|read| matches!(read.purpose, ReadPurpose::PlanFlags(_)));
+        self.finish_recorded_read_observation(io, complete)
+    }
+
+    fn finish_recorded_read_observation(
+        &mut self,
+        io: &mut impl PumpIo,
+        complete: bool,
+    ) -> Result<ReadProgress, RunFailure> {
         let now = io.now().map_err(|error| {
             self.fail(
                 io,
                 FlowHaltReason::TraceFailed,
                 HaltPoint::Author,
-                format!("recall Recorded clock failed: {error}"),
+                format!("read observation Recorded clock failed: {error}"),
             )
         })?;
         if now < self.last_ns {
@@ -1050,7 +1265,7 @@ impl RecordingContext {
                 io,
                 FlowHaltReason::TraceFailed,
                 HaltPoint::Author,
-                "recall Recorded clock reversed",
+                "read observation Recorded clock reversed",
             ));
         }
         self.last_ns = now;
@@ -1061,10 +1276,16 @@ impl RecordingContext {
             self.live(io)?;
             return Err(self.expired(io, PumpDeadline::StateControl, bound));
         }
-        self.read.as_mut().unwrap().complete = true;
-        self.deadlines.disarm(PumpDeadline::StateControl);
+        if complete {
+            self.read.as_mut().unwrap().complete = true;
+            self.deadlines.disarm(PumpDeadline::StateControl);
+        }
         self.live(io)?;
-        Ok(ReadProgress::Complete)
+        Ok(if complete {
+            ReadProgress::Complete
+        } else {
+            ReadProgress::Progress
+        })
     }
 
     fn read_fault(&mut self, io: &mut impl PumpIo, detail: impl Into<String>) -> RunFailure {

@@ -801,40 +801,109 @@ fn inspection_release_cannot_discard_a_completed_untaken_answer() {
 
 #[test]
 fn inspection_late_recorded_proof_keeps_enclosing_lifecycle_priority() {
+    struct NoClock;
+    impl PumpIo for NoClock {
+        fn now(&mut self) -> std::io::Result<u64> {
+            panic!("the retained Recorded witness needs no new clock reading");
+        }
+        fn wait(
+            &mut self,
+            _: &[crate::flow::clock::WaitInterest<'_>],
+            _: Option<u64>,
+        ) -> std::io::Result<crate::flow::clock::WaitOutcome> {
+            panic!("the retained Recorded witness needs no new wait");
+        }
+    }
     for key in [PumpDeadline::Enter, PumpDeadline::Leave] {
-        let mut member = Member::new();
-        let outer = AbsoluteBound::after(member.now(), 20).unwrap();
-        member
-            .run
-            .context
-            .arm(key, outer, &mut member.run.clock)
-            .unwrap();
-        let request = begin(&mut member, InspectionKind::Shape);
-        member.respond(&request, s::StateControlAnswer::Shape(vec![]));
-        // Exercise the actual recorder completing at the bound inside the
-        // coordinator, before the context gets its post-record clock check.
-        member.run.clock.advance_to(outer.deadline_ns()).unwrap();
-        member.record_completion_only();
-        assert_eq!(
-            advance(&mut member).unwrap_err(),
-            RunFailure::Wait { key, bound: outer }
-        );
-        assert!(member.run.context.flow.operation_completion().is_some());
-        assert!(member.run.context.failure().is_none());
-        assert_eq!(member.run.context.complete_wait(key), Some(outer));
-        assert!(matches!(
-            advance(&mut member),
-            Err(RunFailure::Flow {
-                reason: FlowHaltReason::ControlBound,
-                ..
-            })
-        ));
-        assert!(
+        for later_observation in [false, true] {
+            let mut member = Member::new();
+            let outer = AbsoluteBound::after(member.now(), 20).unwrap();
             member
                 .run
                 .context
-                .take_inspection(&mut member.run.clock)
-                .is_err()
-        );
+                .arm(key, outer, &mut member.run.clock)
+                .unwrap();
+            let request = begin(&mut member, InspectionKind::Shape);
+            member.respond(&request, s::StateControlAnswer::Shape(vec![]));
+            // Exercise the actual recorder completing past the bound inside the
+            // coordinator, before the context gets its post-record clock check.
+            let recorded_ns = outer.deadline_ns() + 7;
+            member.run.clock.advance_to(recorded_ns).unwrap();
+            member.record_completion_only();
+            assert_eq!(
+                member
+                    .run
+                    .context
+                    .flow
+                    .control_recorded_boundary()
+                    .unwrap()
+                    .3,
+                recorded_ns
+            );
+            assert!(member.run.context.last_ns < recorded_ns);
+            let expected_ns = if later_observation {
+                // A genuine later pump observation must not turn the already
+                // valid retained receipt into a reversed-clock failure.
+                member.run.clock.advance_to(recorded_ns + 5).unwrap();
+                let context = &mut member.run.context;
+                let crate::flow::pump::PumpStep::Deadline {
+                    key: observed_key,
+                    bound,
+                    observed_ns,
+                } = context
+                    .pump
+                    .step(
+                        &mut ports(&mut member.run.clock),
+                        Some(&mut context.flow),
+                        &mut FlowRecording {
+                            barrier: &mut context.barrier,
+                            inbox: &mut context.inbox,
+                            budget: &mut context.budget,
+                            author: &context.author,
+                        },
+                        &context.deadlines,
+                    )
+                    .unwrap()
+                else {
+                    panic!("the original lifecycle bound has expired");
+                };
+                assert_eq!((observed_key, bound), (key, outer));
+                assert_eq!(observed_ns, recorded_ns + 5);
+                context
+                    .retain_pump_clock(observed_ns, &mut NoClock)
+                    .unwrap();
+                observed_ns
+            } else {
+                recorded_ns
+            };
+            assert_eq!(
+                member
+                    .run
+                    .context
+                    .advance_inspection(&mut ports(&mut NoClock))
+                    .unwrap_err(),
+                RunFailure::Wait { key, bound: outer }
+            );
+            assert_eq!(member.run.context.last_ns, expected_ns);
+            assert!(outer.expired(member.run.context.last_ns));
+            assert_eq!(member.run.context.deadlines.get(key), Some(outer));
+            assert!(member.run.context.flow.operation_completion().is_some());
+            assert!(member.run.context.failure().is_none());
+            assert_eq!(member.run.context.complete_wait(key), Some(outer));
+            assert!(matches!(
+                advance(&mut member),
+                Err(RunFailure::Flow {
+                    reason: FlowHaltReason::ControlBound,
+                    ..
+                })
+            ));
+            assert!(
+                member
+                    .run
+                    .context
+                    .take_inspection(&mut member.run.clock)
+                    .is_err()
+            );
+        }
     }
 }

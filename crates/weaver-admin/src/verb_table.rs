@@ -43,6 +43,8 @@ pub enum HolderVerb {
     Seed,
     /// Replacement offline binding. Its command is inactive until cutover.
     BindState,
+    /// Root plan driver, held for the coupled command cutover.
+    PlanUpdate,
 }
 
 impl HolderVerb {
@@ -59,6 +61,7 @@ impl HolderVerb {
             HolderVerb::Validate => "validate",
             HolderVerb::Seed => "seed",
             HolderVerb::BindState => "bind-state",
+            HolderVerb::PlanUpdate => "plan-update",
         }
     }
 
@@ -77,6 +80,7 @@ impl HolderVerb {
             "validate" => HolderVerb::Validate,
             "seed" => HolderVerb::Seed,
             "bind-state" => HolderVerb::BindState,
+            "plan-update" => HolderVerb::PlanUpdate,
             _ => return None,
         };
         (verb.spelled() == spelled).then_some(verb)
@@ -139,6 +143,7 @@ pub enum Verb {
     Unload,
     ForceUnload,
     SavePoint,
+    PlanUpdate,
     // `restore` names the save point for the next load in every view it can
     // meet, so it reads no view until the live restore, A5.
     #[cfg_attr(not(test), expect(dead_code, reason = "read by the live restore, A5"))]
@@ -174,6 +179,8 @@ pub enum VerbAction {
     EndByEscalation,
     /// The `SavePoint` directive, the harness taking it at rest or refusing.
     DirectSavePoint,
+    /// A root update after the checked serving Observe; the worker checks rest again.
+    DirectPlanUpdate,
     /// Name the save point the next load restores.
     NameForNextLoad,
     /// Rung (0): `InTransition` at once, without dialing.
@@ -204,7 +211,8 @@ pub fn class_of(seen: Seen) -> AdminView {
             | HolderVerb::Stop
             | HolderVerb::Validate
             | HolderVerb::Seed
-            | HolderVerb::BindState,
+            | HolderVerb::BindState
+            | HolderVerb::PlanUpdate,
         ) => AdminView::HeldByOther,
         Seen::RunLockFree => AdminView::Down,
         Seen::RunLockHeld(WorkerSeen::Idle | WorkerSeen::Active) => AdminView::Serving,
@@ -224,7 +232,7 @@ pub fn act(verb: Verb, view: AdminView) -> VerbAction {
         (Verb::Show, HeldByUnload | HeldByOther) => ShowInTransition,
         (Verb::ForceUnload, HeldByUnload) => Join,
         (
-            Verb::Load | Verb::Unload | Verb::SavePoint | Verb::Restore,
+            Verb::Load | Verb::Unload | Verb::SavePoint | Verb::Restore | Verb::PlanUpdate,
             HeldByUnload | HeldByOther,
         )
         | (Verb::ForceUnload, HeldByOther) => RefuseInvocationInFlight,
@@ -255,6 +263,12 @@ pub fn act(verb: Verb, view: AdminView) -> VerbAction {
         // answers `Unanswered`.
         (Verb::SavePoint, Serving | Wedged) => DirectSavePoint,
         (Verb::SavePoint, Down | LeavePendingUnheld | NeverEntered | WorkerGone) => {
+            RefuseOutOfOrder
+        }
+
+        (Verb::PlanUpdate, Serving) => DirectPlanUpdate,
+        (Verb::PlanUpdate, Wedged) => RefuseUnanswered,
+        (Verb::PlanUpdate, Down | LeavePendingUnheld | NeverEntered | WorkerGone) => {
             RefuseOutOfOrder
         }
 

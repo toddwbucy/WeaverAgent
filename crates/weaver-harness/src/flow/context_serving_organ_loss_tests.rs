@@ -28,6 +28,18 @@ fn ports<I: PumpIo>(io: &mut I) -> PumpPorts<'_, I> {
     }
 }
 
+/// A retained observation for input's clock/trace fixtures. Actual child loss
+/// and the continuing lifecycle are exercised by the worker process circuit.
+pub(in crate::flow::context) fn retain_spu_for_input(context: &mut RecordingContext) {
+    let (channel, _peer) = crate::channel::OrganChannel::pair().unwrap();
+    let port = OrganPort::from_channel(channel).unwrap();
+    context.serving_organs.spu = Some(ObservedSpu {
+        decode: port.port_identity(),
+        residency: port.port_identity(),
+        observation: None,
+    });
+}
+
 fn observed_gate(now: u64, outcome: Containment) -> Observation {
     let mut observation = Observation::new(
         "gate",

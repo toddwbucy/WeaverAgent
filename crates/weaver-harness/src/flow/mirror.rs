@@ -7,6 +7,10 @@
 use weaver_trace::serving::payloads as trace;
 use weaver_types::state_flow as shared;
 
+#[path = "mirror_plan.rs"]
+mod plan;
+pub(super) use plan::{plan_flags, plan_input, plan_ref, read_refusal, root_plan_effect};
+
 pub(super) fn ste100(value: &shared::Ste100Reply) -> trace::Ste100Reply {
     let shared::Ste100Reply {
         request_id,

@@ -33,6 +33,93 @@ const _: fn() = || {
     let _ = <LifecycleMessage as NoClone<_>>::check;
 };
 
+#[test]
+fn lifecycle_owned_peer_acquires_nonblocking_mode_with_queued_input() {
+    let (end, peer) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        nix::sys::socket::SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+    let original = OFlag::from_bits_retain(fcntl(&end, FcntlArg::F_GETFL).unwrap());
+    assert!(!original.contains(OFlag::O_NONBLOCK));
+    send_envelope(&peer, 44);
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    assert_eq!(
+        OFlag::from_bits_retain(fcntl(owner.fd(), FcntlArg::F_GETFL).unwrap()),
+        original | OFlag::O_NONBLOCK
+    );
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    assert_eq!(
+        owner.take_completion().unwrap().unwrap().envelope,
+        envelope(44)
+    );
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Pending);
+}
+
+#[test]
+fn diagnostic_handoff_preserves_held_request_and_pending_answer() {
+    let (end, peer) = pair();
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    send_envelope(&peer, 41);
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    assert!(owner.prepare_diagnostic().is_err());
+    let original = owner.take_completion().unwrap().unwrap();
+    assert_eq!(original.envelope, envelope(41));
+    assert!(matches!(
+        owner.sender.stage(envelope(42)).unwrap(),
+        Stage::Queued
+    ));
+    assert!(owner.prepare_diagnostic().is_err());
+    assert!(owner.sender.send_pending());
+    assert_eq!(owner.sender.try_send().unwrap(), SendProgress::Complete);
+    owner.prepare_diagnostic().unwrap();
+    let channel = owner.into_diagnostic();
+    assert!(channel.is_diagnostic_wire());
+    assert!(
+        !OFlag::from_bits_retain(fcntl(channel.as_fd(), FcntlArg::F_GETFL).unwrap())
+            .contains(OFlag::O_NONBLOCK)
+    );
+    let mut bytes = vec![0; 4096];
+    let n = nix::sys::socket::recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<OrganEnvelope>(&bytes[..n]).unwrap(),
+        envelope(42)
+    );
+}
+
+#[test]
+#[should_panic(expected = "prepared Diagnostic transport")]
+fn diagnostic_transfer_rejects_a_reserved_sender_without_preparation() {
+    let (end, _peer) = pair();
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    assert!(matches!(
+        owner.sender.stage(envelope(42)).unwrap(),
+        Stage::Queued
+    ));
+    owner.into_diagnostic();
+}
+
+#[test]
+fn diagnostic_refusal_restores_nonblocking_original_peer_with_queued_request() {
+    let (end, peer) = pair();
+    let mut owner = LifecyclePeer::from_owned(end).unwrap();
+    owner.prepare_diagnostic().unwrap();
+    let channel = owner.into_diagnostic();
+    send_envelope(&peer, 43);
+    let mut owner = LifecyclePeer::from_channel(channel).unwrap();
+    assert!(
+        OFlag::from_bits_retain(fcntl(owner.fd(), FcntlArg::F_GETFL).unwrap())
+            .contains(OFlag::O_NONBLOCK)
+    );
+    assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    assert_eq!(
+        owner.take_completion().unwrap().unwrap().envelope,
+        envelope(43)
+    );
+}
+
 fn capture_message(id: u64) -> weaver_types::state_flow::capture::CaptureEnvelope {
     use weaver_types::state_flow::capture::*;
     CaptureEnvelope {
@@ -763,7 +850,8 @@ fn ordinary_ready_sources_rotate_and_partial_readiness_does_not_renew_deadlines(
             .unwrap(),
         PumpStep::Deadline {
             key: PumpDeadline::Cut,
-            bound: cut
+            bound: cut,
+            observed_ns: 105,
         }
     );
     assert_eq!(deadlines.get(PumpDeadline::Cut), Some(cut));
@@ -775,7 +863,7 @@ fn expired_bound_prevents_transport_even_when_lifecycle_is_ready() {
     let (admin, peer) = pair();
     let mut admin = LifecyclePeer::from_owned(admin).unwrap();
     send_envelope(&peer, 41);
-    let mut io = FakePumpIo::new(105);
+    let mut io = FakePumpIo::new(107);
     let mut deadlines = DeadlineRegistry::new();
     let bound = AbsoluteBound::after(100, 5).unwrap();
     deadlines.arm(PumpDeadline::Enter, bound).unwrap();
@@ -787,7 +875,8 @@ fn expired_bound_prevents_transport_even_when_lifecycle_is_ready() {
             .unwrap(),
         PumpStep::Deadline {
             key: PumpDeadline::Enter,
-            bound
+            bound,
+            observed_ns: 107,
         }
     );
     assert!(admin.held().is_none());
@@ -830,7 +919,8 @@ fn bound_is_checked_immediately_after_a_lifecycle_unit() {
             .unwrap(),
         PumpStep::Deadline {
             key: PumpDeadline::Leave,
-            bound
+            bound,
+            observed_ns: 103,
         }
     );
     assert_eq!(
@@ -1200,9 +1290,11 @@ fn an_already_held_gate_completion_is_not_progress_while_other_sources_are_ready
             PumpStep::Deadline {
                 key,
                 bound: observed,
+                observed_ns,
             } => {
                 assert_eq!(key, PumpDeadline::Leave);
                 assert_eq!(observed, bound);
+                assert_eq!(observed_ns, bound.deadline_ns());
                 expired = true;
                 break;
             }
@@ -1245,7 +1337,8 @@ fn an_already_held_residency_completion_does_not_spin_as_new_progress() {
             .unwrap(),
         PumpStep::Deadline {
             key: PumpDeadline::Leave,
-            bound
+            bound,
+            observed_ns: 105,
         }
     );
     assert_eq!(io.waits().len(), 1);
@@ -1372,10 +1465,12 @@ fn real_silent_socket_wait_expires_at_the_original_bound_with_a_watchdog() {
                 PumpStep::Deadline {
                     key,
                     bound: observed,
+                    observed_ns,
                 } => {
                     assert_eq!(key, PumpDeadline::Gate);
                     assert_eq!(observed, bound);
-                    assert!(io.now().unwrap() >= bound.deadline_ns());
+                    assert!(observed_ns >= bound.deadline_ns());
+                    assert!(io.now().unwrap() >= observed_ns);
                     assert!(gate.held().is_none());
                     finished.send(()).unwrap();
                     break;
@@ -1469,6 +1564,7 @@ fn final_trace_unit_cannot_return_progress_after_the_absolute_bound() {
         PumpStep::Deadline {
             key: PumpDeadline::Leave,
             bound,
+            observed_ns: 103,
         },
         "there is no next unit whose precheck can hide a missing post-unit check"
     );

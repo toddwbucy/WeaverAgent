@@ -106,6 +106,12 @@ pub(in crate::flow) struct PageRead {
 }
 
 impl PageRead {
+    pub(in crate::flow) fn selector(&self) -> &ReadSelector {
+        &self.selector
+    }
+    pub(in crate::flow) fn take_buffered_bytes(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.bytes)
+    }
     pub(in crate::flow) fn buffered_bytes(&self) -> &[u8] {
         &self.bytes
     }

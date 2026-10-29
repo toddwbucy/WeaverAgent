@@ -96,7 +96,7 @@ fn final_drain_leave_wait_preserves_queued_records_for_successful_retry() {
         peer.set_write_timeout(Some(Duration::from_secs(3)))
             .unwrap();
         let mut clock = FakePumpIo::new(100);
-        let context = RecordingContext::new(
+        let context = RecordingContext::admit(
             sink.into(),
             StateChannel::new(state, "session".into(), "run".into()).unwrap(),
             "session".into(),

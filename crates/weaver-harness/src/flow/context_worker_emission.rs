@@ -507,7 +507,6 @@ impl EmissionWork {
                             self.refusal_author = Some(event);
                             self.stage = EmissionStage::RefusalAuthor;
                         } else if !busy {
-                            context.complete_wait(PumpDeadline::Decision);
                             self.stage = EmissionStage::Refused;
                         }
                         if let Some(failure) = failure {
@@ -528,7 +527,6 @@ impl EmissionWork {
                             EmissionStage::Sorted
                         }
                         OutboundCompletion::Refused { .. } => {
-                            context.complete_wait(PumpDeadline::Decision);
                             self.detail = Some("outbound instruction refused".into());
                             EmissionStage::Refused
                         }
@@ -572,7 +570,8 @@ impl EmissionWork {
                 };
                 self.refusal_started = false;
                 self.refusal_record = Some(sequence);
-                context.complete_wait(PumpDeadline::Decision);
+                // Required pair accounting and the refused world close still
+                // belong to this barrier, including after cancellation.
                 self.stage = if self.cancelled.is_some() {
                     EmissionStage::CancelAccount
                 } else {

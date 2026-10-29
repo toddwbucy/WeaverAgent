@@ -29,6 +29,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         .rollback_refusal()
         .ok()
         .expect("actual classifier refusal");
+    assert_eq!(owner.process_exit(), None);
     let _panic_reader = PanicReader(reader.try_clone().unwrap());
     let limit = Instant::now() + Duration::from_secs(8);
     let mut enter_lost = false;
@@ -353,6 +354,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         }
         member.step(clock.now().unwrap(), mode);
         if mode == "rollback-expired" && progress == FoundationRollbackProgress::Stopped {
+            assert_eq!(owner.process_exit(), None);
             assert!(expired);
             assert!(
                 packet(&peer).is_none(),
@@ -370,6 +372,11 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 | "rollback-drain-expired"
         ) && progress == FoundationRollbackProgress::Stopped
         {
+            assert_eq!(
+                owner.process_exit(),
+                None,
+                "Recorded Unload is not completion"
+            );
             assert!(
                 owner.unload_sequence().is_some(),
                 "retain actual Unload after a later failure"
@@ -403,6 +410,10 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         ));
     }
     let reply = packet(&peer).expect("Left after actual drain");
+    assert_eq!(
+        owner.process_exit(),
+        Some(crate::FoundationProcessExit::Success)
+    );
     assert_eq!(reply.exchange, leave.exchange);
     assert!(matches!(
         reply.payload,

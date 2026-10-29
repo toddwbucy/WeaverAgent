@@ -12,7 +12,7 @@ later releasing it.
 **Parent:** `weaver-agent-PRD`
 **Companion contract:** `weaver-harness-spu-contract`, drafted with this document
 **Editorial:** Per the Working Rules.
-**Landing PR:** #235
+**Landing PR:** #393
 
 ---
 
@@ -1367,11 +1367,22 @@ recorded self instead of drifting behind the first divergence.
 that checkable.** No token intermediate crosses, there being no drawn piece
 to stream, while the field and the column cross where their elections
 stand, which is what makes this drive the reader pass's substrate. The
-answer carries the measurement with the recomputed draw identifiers where
+completed answer carries the measurement with the recomputed draw identifiers where
 sampled identifiers would sit, and it is its own answer and never a
 generation's: a supplied path in a sampled path's clothes is the collapse
 the protoautonomic design names as the defect class, and the answer's own
 type makes it unrepresentable rather than discouraged.
+
+**An interrupted drive is an account of partial work, never a certificate.** An
+operator must be able to stop a diagnostic turn through the same management authority
+that stops a serving turn. A matching cancel ends a re-feed at a token boundary. The
+SPU retains the recorded prefix it appended and the family's terminator, and answers
+with a distinct interrupted result naming that prefix's length and the session's
+fullness. It does not represent the remaining supplied path as completed work. Elected
+intermediates already sent remain true observations. A failed engine or broken stream
+still faults, and an interruption is not permission to conceal such a failure. The
+harness ends the replay without certifying the prefix and may release the coherent
+session. A new certification attempt requires a fresh diagnostic load.
 
 **The permission is admin's, set from the binding's kind, named
 individually beside the column's per the no-bundle rule.** A serving
