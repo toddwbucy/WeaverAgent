@@ -1,6 +1,6 @@
 # PlanUpdate admission-refusal account proposal
 
-**Version:** 0.3, 2026-10-29.
+**Version:** 0.4, 2026-10-29.
 **Parent:** Issue 146, state management implementation.
 
 This proposes an explicit trace obligation for rejected PlanUpdate openers. It awaits
@@ -34,9 +34,10 @@ It cannot be cited as implementation evidence or selected for serving.
 Elect trace-before-answer for a fully received, well-formed PlanUpdate that the
 lifecycle owner judges and refuses before admitting a plan operation. Record the
 existing lifecycle refusal with asked LifecycleAsk::PlanUpdate, exact refusal,
-runtime attribution, turn null and causal_parent null. Busy-state and invalid-root-cause
-refusals both owe this account. Invalid framing, descriptors and incomplete openers
-retain the current transport treatment.
+runtime attribution and no turn or causal parent. The trace envelope omits turn and
+causal_parent under its absence rule, without explicit JSON null members. Busy-state
+and invalid-root-cause refusals both owe this account. Invalid framing, descriptors
+and incomplete openers retain the current transport treatment.
 
 The ask carrier is specified by TYPES-PLAN-CONTROL: LifecycleAsk::PlanUpdate has no
 body and encodes as {"ask":"plan_update"}. That clause is already in the merged types
@@ -46,7 +47,7 @@ an unchanged capability of the current floor. TYPES-PLAN-PORT-REFUSAL in #384 go
 the distinct RefusalRecord::PlanOperation for accepted internal work. It does not
 define this lifecycle ask. The two operator elections remain separate.
 
-The null turn names the rejected root opener's lack of an accepted operation, even
+The absent turn names the rejected root opener's lack of an accepted operation, even
 when another caller has an open turn. Its run still comes from the trace envelope.
 The non-root refusal in #384 belongs to an accepted internal operation and uses that
 operation's nullable turn. Both rules attribute the event to its own work rather than
@@ -119,7 +120,8 @@ clean-admission refusal branches independently.
 Pin the exact {"ask":"plan_update"} codec inside RefusalRecord::Lifecycle, including
 both out_of_order and the existing root-cause refusal. Exercise every typed refusal
 consumer with that carrier under the existing codec rules. Trace's opaque payload must
-retain the exact encoded record without a new floor link.
+retain the exact encoded record without a new floor link. Pin omission of turn and
+causal_parent in the serialized envelope, rather than explicit null members.
 
 Hold a previous author's original and its admitted ticket in separate cases. Show
 that its exact owner finishes it, that no competing ticket consumes its completion,

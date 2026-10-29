@@ -4,7 +4,7 @@
 
 **Landing PR:** #387
 
-**Version:** 0.32 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
+**Version:** 0.33 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
 
 ## 0. What this document is
 
@@ -147,9 +147,11 @@ Spec 07 PLAN-ADMISSION-REFUSAL uses the existing refusal payload and event, carr
 RefusalRecord::Lifecycle with TYPES-PLAN-CONTROL's LifecycleAsk::PlanUpdate, encoded
 as {"ask":"plan_update"}, and the exact refusal. This depends on implementing that
 floor ask variant and its typed consumers together with the harness author path.
-The harness authors it as runtime metadata with no turn or causal parent. The recorder
-keeps the payload opaque and applies its existing envelope validation. Trace gains no
-new Cargo dependency on the floor, event kind or selectable content. [PLAN-6, FLOW-3,
+The harness authors it as runtime metadata with no turn or causal parent. The envelope
+omits turn and causal_parent under the existing absence rule, without explicit JSON
+null members. The recorder keeps the payload opaque and applies its existing envelope
+validation. Trace gains no new Cargo dependency on the floor, event kind or selectable
+content. [PLAN-6, FLOW-3,
 FLOW-8]
 
 Payload::StepOutcome carries Spec 07's exact StepOutcomeRecord and licenses only
