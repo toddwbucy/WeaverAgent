@@ -8,6 +8,13 @@ use weaver_types::state_flow::capture::{
     CaptureEnvelope, CapturePayload, CaptureRefusal, SaveRefusal,
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::flow::context::worker_startup) enum SaveProgress {
+    Complete,
+    Progress,
+    Pending,
+}
+
 pub(in crate::flow::context::worker_startup) struct PendingSave {
     pub(super) peer: LifecyclePeer,
     pub(super) request: ReceivedCapture,
@@ -70,6 +77,16 @@ impl PendingSave {
         self.capture.blocks_turn()
     }
 
+    #[cfg(test)]
+    pub(in crate::flow::context::worker_startup) fn reply_held(&self) -> bool {
+        self.peer.capture_held().is_some()
+    }
+
+    #[cfg(test)]
+    pub(in crate::flow::context::worker_startup) fn test_boundary_pending(&self) -> bool {
+        self.capture.boundary_pending()
+    }
+
     /// Final refusal carry is deliberately nonblocking. The save has already
     /// been refused and the current turn may proceed. The same peer remains in
     /// the common pump; no new save or reply allowance replaces its old window.
@@ -77,10 +94,10 @@ impl PendingSave {
         &mut self,
         context: &mut RecordingContext,
         io: &mut impl PumpIo,
-    ) -> Result<bool, RunFailure> {
+    ) -> Result<SaveProgress, RunFailure> {
         context.live(io)?;
         if !self.capture.peer_available() {
-            return Ok(true);
+            return Ok(SaveProgress::Complete);
         }
         if self.refusal.is_none() && self.send.is_none() {
             self.refusal = Some(CaptureEnvelope {
@@ -125,7 +142,7 @@ impl PendingSave {
             });
         }
         let Some(send) = self.send.as_ref().filter(|send| send.sent()) else {
-            return Ok(false);
+            return Ok(SaveProgress::Pending);
         };
         if !self.peer.owns_send(send)
             || !send.matches_exchange(&self.request.message.envelope.exchange)
@@ -139,7 +156,7 @@ impl PendingSave {
             ));
         }
         context.live(io)?;
-        Ok(true)
+        Ok(SaveProgress::Complete)
     }
 
     pub(in crate::flow::context::worker_startup) fn advance<I: PumpIo>(
@@ -147,7 +164,7 @@ impl PendingSave {
         context: &mut RecordingContext,
         ports: PumpPorts<'_, I>,
         at_boundary: bool,
-    ) -> Result<bool, RunFailure> {
+    ) -> Result<SaveProgress, RunFailure> {
         if self.capture.refusal_leg().is_some() {
             return self.send_refusal(context, ports.io);
         }
@@ -172,7 +189,7 @@ impl PendingSave {
             loop {
                 let progress = self.capture.advance(context, &mut ports)?;
                 if progress == ServingCaptureProgress::Published {
-                    return Ok(true);
+                    return Ok(SaveProgress::Complete);
                 }
                 if progress == ServingCaptureProgress::Refused {
                     break;
@@ -201,8 +218,11 @@ impl PendingSave {
                         Err(failure) => return Err(failure),
                         Ok(_) => (),
                     }
+                    // This pump may retain the very reply the capture needs.
+                    // Return to its reduction before any outer owner waits again.
+                    return Ok(SaveProgress::Progress);
                 }
-                return Ok(false);
+                return Ok(SaveProgress::Pending);
             }
         }
         self.send_refusal(context, io)
@@ -268,16 +288,24 @@ impl FoundationInput<'_> {
             || save.capture.retain_peer_end(failure)
     }
 
-    pub(super) fn advance_save(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
-        let at_boundary = matches!(
-            self.stage,
-            Stage::Waiting | Stage::Completed | Stage::Refused | Stage::Aborted
-        );
+    pub(super) fn advance_save(
+        &mut self,
+        io: &mut impl PumpIo,
+        organs_settled: bool,
+    ) -> Result<SaveProgress, RunFailure> {
+        // Requested can become QueueBoundary in this same advance call, so
+        // permission must reach the boundary election, not just entry here.
+        let at_boundary = organs_settled
+            && !self.flags_pending()
+            && matches!(
+                self.stage,
+                Stage::Waiting | Stage::Completed | Stage::Refused | Stage::Aborted
+            );
         let Some(save) = &mut self.serving.save else {
-            return Ok(());
+            return Ok(SaveProgress::Complete);
         };
         let owner = &mut self.serving.owner;
-        let done = save.advance(
+        let progress = save.advance(
             owner.context,
             PumpPorts {
                 lifecycle: LifecyclePorts {
@@ -292,9 +320,9 @@ impl FoundationInput<'_> {
             },
             at_boundary,
         )?;
-        if done {
+        if progress == SaveProgress::Complete {
             self.serving.save = None;
         }
-        Ok(())
+        Ok(progress)
     }
 }

@@ -144,6 +144,23 @@ impl RollbackDials {
         io: &mut impl PumpIo,
     ) -> Result<(), RunFailure> {
         context.live(io)?;
+        // The listener may already hold the next connection while the prior
+        // dial finishes. Retire that dial before adopting the held connection,
+        // so the caller cannot sleep with neither an accept nor a read interest.
+        if let Some(failure) = self
+            .active
+            .as_ref()
+            .and_then(|dial| dial.peer.failure())
+            .cloned()
+        {
+            self.retire_failed_dial(context, &failure, io)?;
+        } else if self
+            .active
+            .as_ref()
+            .is_some_and(|dial| dial.send.as_ref().is_some_and(OrganSend::sent))
+        {
+            self.active = None;
+        }
         if self.active.is_none() && self.listener.held().is_some() {
             let Some(accepted) = self.listener.accepted_ns() else {
                 return Err(context.fail(
@@ -192,17 +209,6 @@ impl RollbackDials {
             // Acceptance may have preceded a delayed reduction. Do not grant a
             // late directive a fresh two seconds when the owner finally runs.
             context.live(io)?;
-        }
-        let Some(dial) = &mut self.active else {
-            return Ok(());
-        };
-        if dial.peer.failure().is_some() {
-            self.drop_dial(context, "dialer transport closed or failed");
-            return Ok(());
-        }
-        if dial.send.as_ref().is_some_and(OrganSend::sent) {
-            self.active = None;
-            return Ok(());
         }
         Ok(())
     }
@@ -482,6 +488,29 @@ impl RollbackDials {
         }
     }
 
+    fn retire_failed_dial(
+        &mut self,
+        context: &mut RecordingContext,
+        failure: &crate::flow::pump_transport::Failure,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
+        if self
+            .active
+            .as_ref()
+            .and_then(|dial| dial.send.as_ref())
+            .is_some_and(|send| send.sent() && send.sent_at().is_none())
+        {
+            return Err(context.fail(
+                io,
+                FlowHaltReason::TraceFailed,
+                HaltPoint::Author,
+                format!("rollback dial send clock observation failed: {failure:?}"),
+            ));
+        }
+        self.drop_dial(context, "dialer transport closed or failed");
+        Ok(())
+    }
+
     /// Only a secondary peer or its exact silent-read expiry is recoverable.
     /// Listener/state/trace/clock failure and the original Leave expiry survive.
     pub(in crate::flow::context) fn recover(
@@ -500,22 +529,9 @@ impl RollbackDials {
             }
             RunFailure::Transport {
                 source: PumpSource::AdminDial,
-                ..
+                failure,
             } if self.active.is_some() => {
-                if self
-                    .active
-                    .as_ref()
-                    .and_then(|dial| dial.send.as_ref())
-                    .is_some_and(|send| send.sent() && send.sent_at().is_none())
-                {
-                    return Err(context.fail(
-                        io,
-                        FlowHaltReason::TraceFailed,
-                        HaltPoint::Author,
-                        format!("rollback dial send clock observation failed: {error:?}"),
-                    ));
-                }
-                self.drop_dial(context, "dialer transport closed or failed");
+                self.retire_failed_dial(context, failure, io)?;
                 context.live(io)
             }
             _ => Err(error),

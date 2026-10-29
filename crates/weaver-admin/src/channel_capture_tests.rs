@@ -205,3 +205,59 @@ fn capture_channel_matches_original_graceful_or_forced_direction() {
         assert_eq!(actual, request);
     }
 }
+
+#[test]
+fn capture_reader_retains_whole_commit_when_decode_crosses_the_deadline() {
+    use crate::serving_capture_window::with_test_times;
+    let (channel, peer) = pair();
+    let expected = packet();
+    let wire = expected.encode(CaptureSender::Harness).unwrap();
+    send(peer.as_raw_fd(), &wire, MsgFlags::MSG_NOSIGNAL).unwrap();
+    let windows = with_test_times(&[100], || {
+        CaptureWindows::begin(Duration::from_nanos(10), 100).unwrap()
+    });
+    let read = with_test_times(&[101, 102, 110], || {
+        channel.recv_capture_retained_with(&windows, |bytes| {
+            let envelope = CaptureEnvelope::decode(bytes, CaptureSender::Harness).unwrap();
+            // The scripted third reading expires after this actual packet decode.
+            Ok(envelope)
+        })
+    });
+    let read = read.unwrap();
+    assert_eq!(read.received.envelope, expected);
+    assert_eq!(read.received.wire, wire);
+    assert_eq!(read.timing, Err(ChannelFault::Unanswered));
+}
+
+#[test]
+fn capture_send_retains_physical_carry_when_the_post_send_deadline_expires() {
+    use crate::serving_capture_window::with_test_times;
+    let (channel, peer) = pair();
+    let windows = with_test_times(&[100], || {
+        CaptureWindows::begin(Duration::from_nanos(10), 100).unwrap()
+    });
+    let envelope = CaptureEnvelope {
+        payload: CapturePayload::SavePointAborted(CaptureAborted {
+            capture_id: 7.into(),
+            code: "fixture".into(),
+            detail: "bounded cancellation".into(),
+        }),
+        ..packet()
+    };
+    let mut sent = false;
+    let result = with_test_times(&[101, 102, 110], || {
+        channel.send_capture_tracked(&envelope, &windows, &mut sent)
+    });
+    assert_eq!(result, Err(ChannelFault::Unanswered));
+    assert!(
+        sent,
+        "post-send expiry must retain the whole physical carry"
+    );
+    let mut bytes = vec![0; MAX_ENVELOPE_BYTES];
+    let count =
+        nix::sys::socket::recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT).unwrap();
+    assert_eq!(
+        &bytes[..count],
+        envelope.encode(CaptureSender::Admin).unwrap()
+    );
+}

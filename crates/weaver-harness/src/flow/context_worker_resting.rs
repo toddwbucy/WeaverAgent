@@ -3,7 +3,9 @@ use super::*;
 use crate::flow::context::startup_composition::refusal::response::listener::{
     RestingCommand, RestingRequest,
 };
-use crate::flow::context::worker_startup::input::save::{FailedSaveRequest, PendingSave};
+use crate::flow::context::worker_startup::input::save::{
+    FailedSaveRequest, PendingSave, SaveProgress,
+};
 use weaver_types::state_flow::capture::{CaptureDirective, CapturePayload};
 
 #[derive(Default)]
@@ -18,6 +20,14 @@ pub(super) struct RestingWork {
 }
 
 impl FoundationEnteredRollback {
+    #[cfg(test)]
+    pub(in crate::flow::context::worker_startup) fn test_resting_reply_held(&mut self) -> bool {
+        self.resting
+            .save
+            .as_mut()
+            .and_then(|save| save.port())
+            .is_some_and(|peer| peer.capture_held().is_some())
+    }
     pub(super) fn retain_resting_interrupt(
         &mut self,
         failure: &RunFailure,
@@ -44,6 +54,7 @@ impl FoundationEnteredRollback {
         let dials = self.dials.as_mut().unwrap();
         assert!(self.gate_done && self.handoff.arms.port.is_none());
         assert!(run.context.deadlines.get(PumpDeadline::Leave).is_none());
+        let author_was_blocked = !run.context.serving_observation_author_available();
         run.resources.refresh_spu_observation(&mut run.context);
         if let Some(save) = &mut self.resting.save {
             save.prepare_expiry(&mut run.context, io)?;
@@ -54,7 +65,7 @@ impl FoundationEnteredRollback {
             .expect("S9 retains the admitted SPU");
         let mut lifecycle = dials.resting_ports();
         lifecycle.residency = Some(residency);
-        match run.context.advance_leaving_organ_faults(
+        let observation = run.context.advance_leaving_organ_faults(
             &mut PumpPorts {
                 lifecycle,
                 gate: None,
@@ -63,18 +74,17 @@ impl FoundationEnteredRollback {
                 io,
             },
             self.gate.as_ref().and_then(RollbackGate::world_closed),
-        )? {
-            serving_organ_loss::ObservationProgress::Complete => (),
-            _ => {
-                self.progress = FoundationEnteredRollbackProgress::Pending;
-                return Ok(());
-            }
-        }
+        )?;
+        let settled = matches!(
+            observation,
+            serving_organ_loss::ObservationProgress::Complete
+        );
+        let mut save_progress = false;
         if let Some(save) = &mut self.resting.save {
             let (residency, decode) = run.resources.spu_ports_mut().unwrap();
             let mut lifecycle = dials.resting_ports();
             lifecycle.residency = Some(residency);
-            if save.advance(
+            match save.advance(
                 &mut run.context,
                 PumpPorts {
                     lifecycle,
@@ -83,10 +93,33 @@ impl FoundationEnteredRollback {
                     label: None,
                     io,
                 },
-                true,
+                // Continue existing work, but do not elect a capture boundary
+                // before settlement, even if Requested finishes in this call.
+                settled,
             )? {
-                self.resting.save = None;
+                SaveProgress::Complete => {
+                    self.resting.save = None;
+                    save_progress = true;
+                }
+                SaveProgress::Progress => save_progress = true,
+                SaveProgress::Pending => (),
             }
+        }
+        if matches!(
+            observation,
+            serving_organ_loss::ObservationProgress::EarlierAuthor
+        ) && author_was_blocked
+            && run.context.serving_observation_author_available()
+        {
+            // Requested finished its original claim. Re-enter the owed organ
+            // observation before S9 waits on an otherwise idle queued save.
+            return Ok(());
+        }
+        if !settled {
+            if !save_progress {
+                self.progress = FoundationEnteredRollbackProgress::Pending;
+            }
+            return Ok(());
         }
         let load = self
             .handoff
@@ -99,7 +132,9 @@ impl FoundationEnteredRollback {
                 dials.prepare_resting(&mut run.context, load, self.resting.save.is_none(), io)?;
         }
         let Some(command) = &mut self.resting.command else {
-            self.progress = FoundationEnteredRollbackProgress::Pending;
+            if !save_progress {
+                self.progress = FoundationEnteredRollbackProgress::Pending;
+            }
             return Ok(());
         };
         match &command.request {
@@ -207,3 +242,7 @@ impl FoundationEnteredRollback {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "context_worker_resting_progress_tests.rs"]
+mod progress_tests;

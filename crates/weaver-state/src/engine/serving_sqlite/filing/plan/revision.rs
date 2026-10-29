@@ -342,6 +342,9 @@ impl Operation<'_, '_> {
                 [content_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
+            // A later ordinary task can be open after this plan completed.
+            // Renewal uses the old held prefix but needs a new open path.
+            marks::retire_open_path(self.tx, self.context, self.source)?;
             Some(ContentRef::Event {
                 block_id: SourceBlockId {
                     run,

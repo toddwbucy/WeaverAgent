@@ -383,6 +383,19 @@ impl FailedEnterResources {
     pub(in crate::flow) fn spu_child(&self) -> Option<ChildState> {
         self.spu.as_ref().map(|spu| spu.child.state())
     }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn children_ended_or_signalled_for_test(&self) -> bool {
+        [
+            self.classifier.as_ref(),
+            self.spu.as_ref().map(|spu| &spu.child),
+        ]
+        .into_iter()
+        .flatten()
+        .all(|child| {
+            matches!(child.state(), ChildState::Reaped(_))
+                || matches!(child.kill_attempt(), Some(Ok(())))
+        })
+    }
     pub(in crate::flow::context) fn child_failures(&self) -> [Option<String>; 2] {
         [
             self.spu.as_ref().map(|spu| &spu.child),
