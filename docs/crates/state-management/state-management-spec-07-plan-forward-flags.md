@@ -144,6 +144,12 @@ unchanged refusal under the existing refusal event. The event is harness/runtime
 metadata, with turn null and causal_parent null. It is not a plan input or effect and
 grants no allocator, read, placement or generation. [PLAN-6, FLOW-3, FLOW-4]
 
+The refusal belongs to the rejected management opener, which has no accepted plan
+operation or turn. An already open turn remains the original caller's work. The
+trace envelope still supplies the current run. PLAN-PORT-RECORD instead attributes
+its refusal to an accepted internal operation and that operation's nullable turn.
+Neither owner borrows the ambient turn merely because it is open. [PLAN-6, FLOW-3]
+
 This rule is specific to PlanUpdate. It adds no record obligation to other lifecycle
 directives. Invalid framing or descriptors and incomplete requests retain the existing
 transport disposition. A rejected PlanUpdate never queues for later admission, even
@@ -151,9 +157,11 @@ if the original turn or operation finishes while its refusal records. [PLAN-6, S
 
 The refusal's accounting and delivery share one loaded decision-wait interval, starting
 at the worker's retained monotonic reading immediately after receiving the complete
-opener. It coexists with every earlier operation bound, which it cannot reset or
-retire. Trace pressure keeps the same event and author ticket. If an earlier author
-owns the slot, only that author's original continuation may consume its receipt. Run
+opener. It borrows the loaded decision_wait elapsed_ns value, not the model's decision
+barrier or its authority. It coexists with every earlier operation bound, which it
+cannot reset or retire. Trace pressure keeps the same event and author ticket. If an
+earlier author owns the slot, only that author's original continuation may consume its
+receipt. Run
 that continuation only as needed to free the slot, under its original bounds, then
 record the refusal. This does not cancel the original operation or elect its next
 workflow. [CLASS-8, FLOW-1, FLOW-4]

@@ -1,6 +1,6 @@
 # PlanUpdate admission-refusal account proposal
 
-**Version:** 0.1, 2026-10-29.
+**Version:** 0.2, 2026-10-29.
 **Parent:** Issue 146, state management implementation.
 
 This proposes an explicit trace obligation for rejected PlanUpdate openers. It awaits
@@ -38,6 +38,13 @@ turn null and causal_parent null. Busy-state and invalid-root-cause refusals bot
 this account. Invalid framing, descriptors and incomplete openers retain the current
 transport treatment.
 
+The null turn names the rejected root opener's lack of an accepted operation, even
+when another caller has an open turn. Its run still comes from the trace envelope.
+The non-root refusal in #384 belongs to an accepted internal operation and uses that
+operation's nullable turn. Both rules attribute the event to its own work rather than
+borrowing an ambient turn. This answers Planner #387 BB1 without changing either
+proposed attribution.
+
 This election reaches PlanUpdate only. Other lifecycle refusals keep their current
 rules. The reason is that the operator-facing plan exchange already promises a traced
 outcome, and this makes that promise explicit across its admission boundary. It does
@@ -67,7 +74,10 @@ as a plan input. A later idle boundary does not retry that request.
 | Recorded and live delivery | Management sender | Send the unchanged refusal on the original exchange under the interval's remaining time. |
 | Recorded | EOF or delivery expiry | End delivery without retry or a halt solely for the lost answer. Preserve the recorded outcome. |
 
-There is no new timer value in the declaration or protocol. The independent local
+There is no new timer value in the declaration or protocol. This borrows only the
+loaded decision_wait elapsed_ns value, as admin does for its plan exchange. It does
+not start or borrow a model decision barrier or grant its authority. This answers
+Planner #387 BB2. The independent local
 interval prevents this management work from resetting an active turn's Decision,
 Cut, read or lifecycle bound. It includes trace accounting and send backpressure.
 The new refusal record adds trace work and retained memory which the production
