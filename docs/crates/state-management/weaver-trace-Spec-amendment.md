@@ -2,8 +2,9 @@
 
 **Status:** MERGED.
 
-**Version:** 0.29 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
-**Landing branch:** code/state-expired-enter-rollback
+**Landing PR:** #387
+
+**Version:** 0.33 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
 
 ## 0. What this document is
 
@@ -96,6 +97,16 @@ floor carrier and its checked source proof before submission. Trace gains no flo
 dependency, new kind or pair mirror, and does not infer bindings from the refusal
 payload. [FLOW-3, TAP-1, TAP-5, READ-3]
 
+The existing refusal kind also carries TYPES-PLAN-PORT-REFUSAL's harness-authored
+raw RefusalRecord::PlanOperation encoding. Its envelope is internal/runtime, subsystem
+harness, with the accepted operation's run and nullable turn. It has no selectable
+projection. The harness validates exact request identities, case/read_code combination,
+required step, original evidence and PLAN-PORT-RECORD's parent before submission. Trace
+preserves these bytes under its existing refusal payload/envelope checks, without a
+floor dependency, new event kind or private-grant constructor. A Recorded refusal
+certifies its account, not a plan break or successful operation. [PLAN-2, PLAN-6,
+FLOW-3, TAP-1, TAP-5]
+
 `input_id` is a run-local decimal-string counter assigned by the harness at serialized
 check intake, before input.offered authoring, under Spec 02's INPUT. The gate deadline
 starts at that same intake. Arrival behind an active turn assigns no input_id and starts
@@ -130,6 +141,17 @@ input/operator, without a turn. It admits PlanEffect only on internal/loop. auth
 replace and operator-source lock forbid a turn. Model-source lock, activate and break
 require one. The close effect is never a plan.event payload. Reason: the two authors
 share one event kind without sharing update authority. [PLAN-1, PLAN-2, PLAN-6, FLOW-3,
+FLOW-8]
+
+Spec 07 PLAN-ADMISSION-REFUSAL uses the existing refusal payload and event, carrying
+RefusalRecord::Lifecycle with TYPES-PLAN-CONTROL's LifecycleAsk::PlanUpdate, encoded
+as {"ask":"plan_update"}, and the exact refusal. This depends on implementing that
+floor ask variant and its typed consumers together with the harness author path.
+The harness authors it as runtime metadata with no turn or causal parent. The envelope
+omits turn and causal_parent under the existing absence rule, without explicit JSON
+null members. The recorder keeps the payload opaque and applies its existing envelope
+validation. Trace gains no new Cargo dependency on the floor, event kind or selectable
+content. [PLAN-6, FLOW-3,
 FLOW-8]
 
 Payload::StepOutcome carries Spec 07's exact StepOutcomeRecord and licenses only
@@ -313,7 +335,7 @@ serving contract remains applicable.
 | TRACE-ENVELOPE | Perturbation in tests/recorder.rs, canonical fixture with escaped content and omitted options | Infer origin from content or change sequence to a JSON number |
 | TRACE-REJECTED-RETURN | Real recorder lines from exact multiline, escaped and maximum admitted packets, and capacity/cancellation resume | Embed RawValue, normalize the packet, discard before Recorded or turn the evidence into a selectable projection |
 | TRACE-REGISTRY | Exhaustive enum match and tests/kinds.rs, plus table-driven turn/payload tests and harness-authored recall refusal bytes | Omit a new kind, alter the typed refusal bytes or admit a forbidden projection |
-| TRACE-PLAN | Canonical operator/effect, failed/closed outcome and break fixtures, checked against the floor-to-trace conversion | Swap the two plan payloads, license close as plan.event, omit null context, change an identity or accept a wrong turn/channel/origin |
+| TRACE-PLAN | Canonical operator/effect, failed/closed outcome and break fixtures checked against the floor-to-trace conversion, plus exact plan-operation refusal bytes and envelope | Swap the two plan payloads, license close as plan.event, omit null context, change a refusal field or identity, select refusal content or accept a wrong turn/channel/origin |
 | Plan observation | Canonical fixtures for flags success/refusal, successor readiness and both capacity paths | Replace unavailable with zero, drop an identity, add an unknown variant or admit the measurement to residue |
 | TRACE-VALIDATION | Load matrix covering every required call/task tuple and forbidden kind | Permit partial pair or mark coverage, select a boot read or allow a payload predicate |
 | TRACE-COPY | Review of Tee fields and methods for no transport ownership, compile pin for result types | Reintroduce UnixStream or a store frame into Tee |

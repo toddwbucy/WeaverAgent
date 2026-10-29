@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #268
+**Landing PR:** #387
 
-**Version:** 0.14 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
+**Version:** 0.18 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -134,6 +134,50 @@ the outcome before the answer. A lost answer is resolved by show's committed Pla
 and the receipt trace, never blind retry. A correctly rejected document refuses the
 operation and leaves the agent running. Component failure follows the foundation latch.
 [CLASS-8, PLAN-6, FLOW-4]
+
+**PLAN-ADMISSION-REFUSAL.** Trace-before-answer also applies when a fully received,
+well-formed PlanUpdate opener is judged and refused before plan-operation admission.
+This includes out_of_order and the existing root-cause refusal. The lifecycle owner
+retains the exact received packet and the selected refusal. Before it sends the
+refusal answer, it records RefusalRecord::Lifecycle with asked LifecycleAsk::PlanUpdate
+from TYPES-PLAN-CONTROL, encoded as {"ask":"plan_update"}, and that unchanged refusal
+under the existing refusal event. This requires the floor ask variant, its codec and
+typed refusal consumers to be implemented with the author path before this accounting
+is enabled. The event is harness/runtime metadata with no turn or causal parent.
+Its envelope omits turn and causal_parent under the trace's absence rule, without
+explicit JSON null members. It is not a plan input or effect and grants no allocator,
+read, placement or generation. [PLAN-6, FLOW-3, FLOW-4]
+
+The refusal belongs to the rejected management opener, which has no accepted plan
+operation or turn. An already open turn remains the original caller's work. The
+trace envelope still supplies the current run. PLAN-PORT-RECORD instead attributes
+its refusal to an accepted internal operation and that operation's nullable turn.
+Neither owner borrows the ambient turn merely because it is open. [PLAN-6, FLOW-3]
+
+This rule is specific to PlanUpdate. It adds no record obligation to other lifecycle
+directives. Invalid framing or descriptors and incomplete requests retain the existing
+transport disposition. A rejected PlanUpdate never queues for later admission, even
+if the original turn or operation finishes while its refusal records. [PLAN-6, SEAM-3]
+
+The refusal's accounting and delivery share one loaded decision-wait interval, starting
+at the worker's retained monotonic reading immediately after receiving the complete
+opener. It borrows the loaded decision_wait elapsed_ns value, not the model's decision
+barrier or its authority. It coexists with every earlier operation bound, which it
+cannot reset or retire. Trace pressure keeps the same event and author ticket. If an
+earlier author owns the slot, only that author's original continuation may consume its
+receipt. Run
+that continuation only as needed to free the slot, under its original bounds, then
+record the refusal. This does not cancel the original operation or elect its next
+workflow. [CLASS-8, FLOW-1, FLOW-4]
+
+EOF after the complete opener does not discard the owed record. A refusal that cannot
+reach Recorded within its original interval takes the foundation decision_bound failure
+path and retains its request, original or ticket, and first failure through teardown.
+Once Recorded, the exact author claim still consumes its own completion. Answer
+delivery uses only the remaining interval. EOF or delivery expiry then ends delivery
+without retry, without halting solely for the missing answer and without claiming the
+refusal was unrecorded. Recording a valid refusal preserves the active turn and prior
+committed plan. [PLAN-6, CLASS-8, FLOW-3, FLOW-4]
 
 **PLAN-PREFLIGHT-READ.** Before a root update admits its plan effect, a valid read
 refusal in the table below refuses only that operation as read_refused. The table
@@ -401,14 +445,15 @@ component-failure rule. [STORE-5, FLOW-4, COST-4]
 ## 3. Transition ports and closure evidence
 
 **PLAN-PORT.** flow/plan.rs exposes activate(expected,step_id,successor),
-assess_act(expected,step_id,statement,act),
+assess_act(expected,step_id,statement,act), work_reference(expected,step_id,span,through),
 observe_review(expected,step_id,pair,work,assessment),
 attest_closure(expected,step_id,work), close(expected,step_id,evidence,outcome_span),
 and record_break(expected,step_id,case,proposed_source). IDs have PLAN-TYPES' types.
-statement is StatementRef, act is PlanAct, pair is Spec 05's private CompletedPair, work
-is WorkRef, and proposed_source is Option<SourceBlockId>. Each operation returns its
-typed result or PlanOperationRefused {case:PlanBreakCase,detail:String}. A
-transport/component failure remains the foundation failure, never a refusal. The mutable
+statement is StatementRef, act is PlanAct, span is SpanRef, through is SourcePosition,
+pair is Spec 05's private CompletedPair, work is WorkRef, and proposed_source is
+Option<SourceBlockId>. Each operation returns its
+typed result or PLAN-PORT-REFUSAL's PlanOperationRefused. A transport/component
+failure remains the foundation failure, never a refusal. The mutable
 operation port belongs to the compiled loop and verified management handler. Neither a
 model message nor a gate frame can construct it or a private grant. Reason: callers
 request mechanics, while authority and exact state remain checked at the primitive.
@@ -424,14 +469,131 @@ return the committed PlanSnapshot. No operation selects a successor, invokes a r
 or starts a generation. Correct refusals leave durable state unchanged. [PLAN-2, PLAN-4,
 PLAN-5, R20-12]
 
+**PLAN-PORT-REFUSAL.** The named PLAN-PORT operations, including WORK-REFERENCE's
+work_reference constructor, return PlanOperationRefused
+{case:PlanOperationCase,detail:String,read_code:ReadRefusalCode-or-null} for an
+admitted operation refusal. All fields are required. PlanOperationCase has the eight
+PLAN-BREAK spellings plus read_refused, counter_exhausted and template_rejected.
+PlanBreakCase keeps its existing eight cases. An operation refusal never implicitly
+requests record_break. The three additional cases cannot appear in a PlanEffect::Break,
+PlanBreakRecord or plan.break. Reason: a bounded read or rejected template does not
+establish that the locked plan is broken. [PLAN-2, PLAN-5, PLAN-6, FLOW-4]
+
+read_code is required nonnull for read_refused. A read-derived invalid_target or
+work_changed also carries its exact nonnull code under the table below. Those two
+cases carry null when a local check, rather than a refused read, established the cause.
+Every other case carries null. For every read-derived refusal, copy the finalized read
+owner's code and detail unchanged. A local checked allocation
+overflow after successful reads returns counter_exhausted with read_code null. A
+correctly rejected compiled plan or outcome template returns template_rejected with
+read_code null, after its complete source dispositions and existing
+state_template_rejected fault record. Neither case grants an effect or a successful
+plan result. detail is diagnostic text, never another machine-coded case. [PLAN-2,
+PLAN-6, MARK-6, CLASS-2, FLOW-3, FLOW-4]
+
+Before effect admission, and before a read-only operation grants its result, the
+following resource refusals end only that operation as read_refused. This table applies
+to the plan_current, plan, marks, statement and span_preview reads already required by
+these ports. It licenses no new read, narrower substitute or retry. The following
+domain table supplies the exact mapping for these required reads. The standalone
+STEP-QUERY read keeps its existing read outcome and does not activate a step. [PLAN-2,
+PLAN-4, PLAN-6, SEAM-3]
+
+| Refusing leg | Codes admitted to read_refused |
+| --- | --- |
+| Initial required read | counter_exhausted, result_too_large, result_unavailable, answer_too_large |
+| next for an acquired required snapshot | unknown_snapshot, wrong_offset, result_unavailable, answer_too_large |
+| release | None. Require its matching released answer. |
+
+| Initial required read domain outcome | Plan-operation disposition |
+| --- | --- |
+| not_found from plan or statement | invalid_target, retaining read_code not_found. |
+| invalid_selector, span_pending or partial_pair from span_preview | work_changed, retaining that exact read_code. The requested work frontier cannot establish closure evidence. |
+| wrong_seed from any required read | Foundation protocol failure. The harness must validate the loaded seed before submitting the selector. A foreign request identity is refused locally as invalid_target with null read_code. |
+| not_found from plan_current, marks or span_preview | Foundation protocol failure. These selectors do not license this outcome. |
+| invalid_selector from plan_current, plan, marks or statement | Foundation protocol failure. These required validated selectors do not license this outcome. |
+| unknown_span or span_open from any required read | Foundation protocol failure. They belong to the closed-span selector, which this port table does not authorize. span_preview uses invalid_selector for an absent or terminal span. |
+| span_pending or partial_pair from a selector other than span_preview | Foundation protocol failure. These codes belong to the required work preview only. |
+
+A successful plan_current with null current, or a current status other than locked,
+establishes no_locked_plan with null read_code where a port requires a locked plan.
+An expected-plan/revision mismatch checked against a successful snapshot is
+invalid_target with null read_code. A locally detected WorkRef digest/frontier mismatch
+is work_changed with null read_code. These are successful reads followed by domain
+judgments, not read refusals. Keep their required checked proofs. No domain code on a
+next or release leg uses this initial-read table. [PLAN-2, PLAN-5, PLAN-6, SEAM-3]
+
+All read-derived refusals in both tables obey the same following cleanup and recording
+rules. Refusal changes no durable plan, even when its case is invalid_target or
+work_changed. [PLAN-2, PLAN-6, FLOW-4]
+
+Admit only the exact pending selector, request and complete correlated reply with its
+valid observation and Recorded state.store.measurement. An initial refusal owns no
+cursor and sends no release. A refusal after an acquired page retains the cursor and
+partial result until the single required release completes. Consume the read owner's
+finalized refusal after that cleanup, never a raw control_refused. Keep its original
+selector, leg, request identity, exact reply, measurement sequence and acquired evidence
+in the private operation account. A release measurement cannot replace the refusing
+leg's sequence. No refused read yields recall, an empty plan, a private grant or a
+successful result. [SEAM-3, PLAN-6, FLOW-3, FLOW-4]
+
+An invalid leg/code, mismatched identity, malformed response or observation, failed
+release, dead seam or applicable expiry keeps its existing foundation/lifecycle
+failure. Do not convert read_busy, an impossible selector outcome or failed cleanup to
+read_refused. All reads, cleanup and recording consume their original bounds within the
+operation's single Decision deadline. Cancellation grants no continuation, but retains
+and settles all already owed records and admitted source dispositions under existing
+shutdown permissions. Release the allocator, if owned, only after these duties settle.
+A pre-effect refusal leaves the committed plan/cache unchanged. Once an effect is
+admitted, settle its actual disposition. After a committed effect, the mandatory summary
+refresh still follows PLAN-SUMMARY-EVIDENCE's foundation latch on refusal and forbids
+stale success. [PLAN-6, CLASS-8, FLOW-3, FLOW-4, SEAM-3]
+
+**PLAN-PORT-RECORD.** Before returning an admitted PlanOperationRefused, author the
+existing refusal event with RefusalRecord::PlanOperation. Its exact payload is
+{seam:"plan_operation",operation:PlanPortOperation,expected:PlanRef,
+step_id:StepId-or-null,refusal:PlanOperationRefused}. PlanPortOperation is activate,
+assess_act, work_reference, observe_review, attest_closure, close or record_break.
+step_id is required nonnull except for record_break, where it preserves the request's
+optional step. expected and step_id preserve the request's exact typed values, including
+a foreign identity refused before a read. These metadata values grant no loaded-seed
+authority. The harness validates the loaded seed before constructing a selector or
+private grant. The nested refusal is the same value returned to the caller. Busy
+admission
+returns the unaccepted request under PLAN-STATES and is outside this record. [PLAN-2,
+PLAN-5, PLAN-6, FLOW-3]
+
+License internal/runtime, subsystem harness, the accepted operation's run and nullable
+turn, with no selectable content. For any nonnull read_code, causal_parent is the
+refusing leg's Recorded state.store.measurement sequence. For template_rejected it is
+the existing
+Recorded state_template_rejected fault sequence. For the remaining cases use the latest
+Recorded read proof consumed by that operation, including a checked proof already held
+in its committed cache. Use null only when the refusal precedes consumption of any
+read proof, such as local request-identity validation or a record_break validation that
+needs no read. A judgment about held plan or work state still requires its owning
+clause's checked proof. Do not omit that proof to manufacture a null parent. This rule
+adds no fresh read when an already held proof satisfies the owning clause.
+The owner retains that parent before authoring. Neither a caller-supplied sequence nor a
+later unrelated event can replace it. Keep the same event and author ticket through
+pressure. Only Recorded completes the refusal, and cancellation/failure retains the
+owed account without releasing a dependent grant. No lifecycle plan_update ask, new
+trace kind, counter or clock is introduced. [PLAN-6, FLOW-3, FLOW-4, COST-4]
+
 **WORK-REFERENCE.** WorkRef is {plan:PlanRef,step_id:StepId,span:SpanRef,
-through:SourcePosition,content_sha256:Digest}. Its constructor reads span_preview
-through the supplied committed frontier and hashes the complete canonical tagged result,
-including entries and pair records. The active step must own that span, and every
+through:SourcePosition,content_sha256:Digest}. PLAN-PORT's
+work_reference(expected,step_id,span,through) constructs it for the current expected
+plan revision and active step. span and through supply the target and committed
+frontier for span_preview. The constructor hashes the complete canonical tagged result,
+including entries and pair records, and returns the checked WorkRef. The active step
+must own that span, and every
 attached pair must be terminal. A missing or changed source refuses invalid_target or
 work_changed. For reviewed closure the frontier precedes the review request. For
 unreviewed closure it is the last held work before the outcome. No model text can supply
-a trusted WorkRef. [PLAN-2, MARK-4, STORE-3]
+a trusted WorkRef. An admitted refusal uses PLAN-PORT-REFUSAL and records
+PLAN-PORT-RECORD's work_reference operation with the exact requested expected and
+nonnull step_id before returning it. No refused construction returns a WorkRef.
+[PLAN-2, MARK-4, STORE-3]
 
 **CLOSURE-EVIDENCE.** ClosureEvidence is a private, single-use, run-bound grant holding
 {plan:PlanRef,step_id:StepId,review_call:Option<CallId>,work:WorkRef,
@@ -605,7 +767,9 @@ or task success. [PLAN-1 through PLAN-6, R20-12]
 | PLAN-ADMIN | Root/sudo cause, fixed-file, extra-argument, stdin and whole-envelope cases | Remove cause check or measure unencoded text only |
 | PLAN-TYPES and CATEGORY | Stable-ID and operator-only category fixtures | Reuse a retired ID or accept model category changes |
 | PLAN-EXCHANGE | Busy, stale, cancelled, refused and lost-answer transitions | Blindly retry an unanswered committed update |
+| PLAN-ADMISSION-REFUSAL | Busy/cause/inner refusal, prior-author custody, EOF, trace-before-send and both expiry boundaries | Answer before Recorded, admit after idle, steal a ticket, renew either bound or discard accounting at EOF |
 | PLAN-PREFLIGHT-READ | Every listed initial/next code, invalid leg/code, acquired release, record pressure, Stop/leave, expiry and post-effect contrast | Lose typed code/detail or measurement parent, invent recall, retry, renew the bound, author an effect, halt a valid preflight refusal or retain stale success after a failed post-effect refresh |
+| PLAN-PORT-REFUSAL and PLAN-PORT-RECORD | Every permitted initial/next code, counter overflow, correct template rejection, source/record pressure, Stop/leave, failed release and post-effect contrast | Break a plan on resource refusal, lose code/detail or parent, return before Recorded, renew a bound, skip cleanup or treat a failed refresh as a healthy refusal |
 | PLAN-FEED and PLAN-EFFECT | Trace-to-receipt fixture and private authority compile pin | Construct root authority from a gate frame or bypass trace |
 | PLAN-STORAGE and PLAN-READ | Literal DDL, current/history reads, every effect and rollback | Commit marks without the plan label or allow two active steps |
 | WORK-REFERENCE | Preview identity and unchanged-work corpus | Trust a model digest, accept an open pair or use a later frontier |

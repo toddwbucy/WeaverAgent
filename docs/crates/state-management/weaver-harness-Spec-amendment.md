@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #348
+**Landing PR:** #387
 
-**Version:** 0.39 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.42 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -1700,6 +1700,19 @@ FLOW-8]
 The boot summary must reflect any boot-repair receipts before loaded is reported.
 [PERSIST-6, PLAN-2]
 
+The management owner implements Spec 07 PLAN-ADMISSION-REFUSAL before sending a
+pre-admission PlanUpdate refusal. It retains the original opener, exact refusal and
+private trace claim beside the suspended input owner. Its RefusalRecord::Lifecycle
+uses TYPES-PLAN-CONTROL's LifecycleAsk::PlanUpdate. The implementing act completes
+that floor variant, its codec and typed consumers with this author path. Use the
+loaded decision wait from the complete opener's receive reading for accounting and
+delivery, independently of the active operation's unchanged bounds. A competing
+author finishes only through its original continuation. Never borrow that author's
+ticket or admit the rejected
+plan after it becomes idle. EOF keeps the accounting duty. Failed accounting retains
+the complete management owner through teardown. After Recorded, lost or expired
+delivery creates no retry and no new foundation failure. [PLAN-6, FLOW-1, FLOW-4]
+
 At boot, after pair repair and before enter confirmation/user admission, read
 plan_current through HARNESS-READ. At HARNESS-RECALL's Recording/Recorded
 transition, cache PlanSummary by projecting plan, status, document_sha256 and
@@ -1786,13 +1799,38 @@ component faults. The table extends the serialized lifecycle reducer, not admin 
 **HARNESS-PLAN-PORTS.** Implement Spec 07 PLAN-PORT in flow/plan.rs. Its public
 operations request activation, predicate checking, work-reference construction, review
 assessment binding, category-authorized attest_closure, closure and break recording.
-Each returns its typed result after the source/receipt conditions in Spec 07. No method
+work_reference(expected,step_id,span,through) is Spec 07 WORK-REFERENCE's constructor
+and returns its checked WorkRef or the recorded PlanOperationRefused. Each operation
+returns its typed result after the source/receipt conditions in Spec 07. No method
 selects a next step, launches a review, interprets a review script or starts a decode
 pass. The caller supplies ReviewAssessment and the primitive checks its association with
 a held completed review pair and unchanged WorkRef. attest_closure requires
 review_required false and the current WorkRef, without a fabricated pair. close rechecks
 the category before filing either form. Model and gate content have no constructor for
 this trusted operation capability. [PLAN-1, PLAN-2, PLAN-5, R20-12]
+
+The operation owner implements PLAN-PORT-REFUSAL and PLAN-PORT-RECORD. Keep the
+accepted request, finalized read/refusal or template-rejection evidence, source
+dispositions, original Decision deadline and any allocator grant together until
+settlement. Apply PLAN-PORT-REFUSAL's selector-specific domain mappings, retaining the
+exact nonnull read_code for read-derived invalid_target and work_changed too. A code
+that the selector/leg cannot produce keeps its foundation failure path. Distinguish
+local allocation exhaustion from a member's counter_exhausted read reply. A correctly
+rejected effect/outcome template records its existing
+state_template_rejected fault, then the exact plan-operation refusal. Neither is a
+foundation halt solely because the template correctly refused. [PLAN-2, PLAN-6,
+CLASS-2, CLASS-8, FLOW-3, FLOW-4]
+
+Use the common paged read owner and its finalized refusal after acquired-snapshot
+release. Record the typed operation refusal before exposing its completion. Bind the
+refusing leg's measurement parent before another read or release can replace it. Reuse
+the same author event/ticket through pressure, and retain the first failure plus owed
+custody through Stop, leave and failed-run handoff. An operation cancelled during this
+accounting grants no continuation. Correct resource refusal preserves the prior
+committed plan/cache and releases the allocator only after owed work settles. A refused
+or failed mandatory post-effect refresh still latches foundation failure and exposes
+no stale success. These ports do not retry, select a successor or call record_break
+because a resource refused. [PLAN-2, PLAN-5, PLAN-6, SEAM-3, FLOW-3, FLOW-4]
 
 **HARNESS-PLAN-OBSERVE.** The explicit observation port implements PLAN-OBSERVATION
 without scheduling reads on each transition. It checks plan and receipt identity,
@@ -1803,7 +1841,8 @@ has no store write or progression handle. A typed read refusal is unavailable, n
 | Claim | Instrument | Protective change that must fail |
 | --- | --- | --- |
 | HARNESS-PLAN | Root update and source/receipt lifecycle rows, held receipt/digest mismatches, delayed Recording/Recorded, boot refusal and failed post-receipt refresh | Mint model authority, answer before commit, ignore held expectation, cache before Recorded or serve stale successful Observe/show after refresh failure |
-| HARNESS-PLAN-PORTS | Private-grant and exact work/pair fixtures | Close on model prose, reuse evidence or start review without a caller request |
+| PLAN-ADMISSION-REFUSAL | Root management refusal through trace pressure, earlier owners, delivery pressure and failed-run handoff | Lose a request or ticket, cancel the original turn, grant a plan operation or send before Recorded |
+| HARNESS-PLAN-PORTS | Private-grant, exact work/pair and PLAN-PORT-REFUSAL settlement fixtures | Close on model prose, reuse evidence, start review without a caller request, return refusal before Recorded, lose read/source custody, renew Decision or release an allocator early |
 | HARNESS-PLAN-OBSERVE | Explicit call, receipt and duplicate sample corpus | Invent zero or count one assembly twice |
 
 ## 9. Selection, destinations sections 5, 6 and 8
