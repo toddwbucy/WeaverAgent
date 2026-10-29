@@ -90,7 +90,7 @@ fn worker_input_gate_child() {
             payload: Payload::Answer(LifecycleAnswer::GateReady),
         },
     );
-    if mode.starts_with("input-worker-plan-") {
+    if mode.starts_with("input-worker-plan-") && !mode.ends_with("-open-turn") {
         // Keep the actual gate idle while root management owns the circuit.
         // The guard reaps this real fixture child after the assertions.
         loop {

@@ -2265,6 +2265,10 @@ macro_rules! scenario {
 scenario!(worker_startup_composition_ready, "ready");
 scenario!(worker_plan_composition_stop, "input-worker-plan-stop");
 scenario!(
+    worker_plan_composition_open_turn,
+    "input-worker-plan-open-turn"
+);
+scenario!(
     worker_plan_flags_queued_save,
     "input-worker-plan-save-sqlite-flags-queued-save"
 );

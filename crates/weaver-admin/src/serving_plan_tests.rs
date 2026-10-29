@@ -204,6 +204,8 @@ fn root_plan_exchange_preserves_receipts_refusals_and_lost_answer_without_replay
         "foreign-exchange",
         "wrong-position",
         "wrong-seed",
+        "wrong-run",
+        "turn-attributed",
         "active",
     ] {
         let (end, peer) = socketpair(
@@ -277,6 +279,20 @@ fn root_plan_exchange_preserves_receipts_refusals_and_lost_answer_without_replay
             if case == "wrong-seed" {
                 answer["payload"]["body"]["plan"]["plan_id"]["seed_id"] = json!("foreign")
             }
+            if case == "wrong-run" {
+                answer["payload"]["body"]["source"]["block_id"]["run"] = json!("foreign-run")
+            }
+            if case == "turn-attributed" {
+                answer["payload"]["body"]["source"]["turn"] = json!("foreign-turn")
+            }
+            if matches!(case, "wrong-seed" | "wrong-run" | "turn-attributed") {
+                let decoded: OrganEnvelope = decode_strict(&answer.to_string())
+                    .expect("identity fixture must reach the owner's check, not fail its codec");
+                assert!(matches!(
+                    decoded.payload,
+                    Payload::Answer(LifecycleAnswer::PlanUpdated { .. })
+                ));
+            }
             transmit(&peer, &answer);
             let mut bytes = [0; 1];
             assert_eq!(
@@ -318,7 +334,8 @@ fn root_plan_exchange_preserves_receipts_refusals_and_lost_answer_without_replay
             ) if detail == "exact worker detail" => (),
             ("eof" | "timeout", Err(LifecycleRefusal::Unanswered)) => (),
             (
-                "foreign-exchange" | "wrong-position" | "wrong-seed",
+                "foreign-exchange" | "wrong-position" | "wrong-seed" | "wrong-run"
+                | "turn-attributed",
                 Err(LifecycleRefusal::Malformed),
             ) => (),
             ("active", Err(LifecycleRefusal::ActivityNotAtRest)) => (),
@@ -515,4 +532,205 @@ fn root_plan_command_refuses_before_config_and_never_waits_for_stdin() {
         );
         assert!(!root.as_ref().exists());
     }
+}
+
+struct PlanPeerChild(std::process::Child);
+impl Drop for PlanPeerChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Re-exec keeps the listener's kernel credentials distinct from the observed
+/// worker. A socketpair created before a fork would retain the parent's PID.
+#[test]
+fn root_plan_foreign_worker_child() {
+    let Some(path) = std::env::var_os("WEAVER_PLAN_FOREIGN_PEER") else {
+        return;
+    };
+    use nix::sys::socket::{Backlog, UnixAddr, accept4, bind, listen, socket};
+    let path = std::path::PathBuf::from(path);
+    let listener = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .unwrap();
+    bind(listener.as_raw_fd(), &UnixAddr::new(&path).unwrap()).unwrap();
+    listen(&listener, Backlog::new(1).unwrap()).unwrap();
+    std::fs::write(path.with_extension("ready"), std::process::id().to_string()).unwrap();
+    // SAFETY: accept4 returns a new descriptor owned only by this child.
+    let peer = unsafe {
+        <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(
+            accept4(listener.as_raw_fd(), SockFlag::SOCK_CLOEXEC).unwrap(),
+        )
+    };
+    let mut poll = nix::libc::pollfd {
+        fd: peer.as_raw_fd(),
+        events: nix::libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: the descriptor and stack pollfd remain live through this bounded wait.
+    assert!(unsafe { nix::libc::poll(&mut poll, 1, 5000) } > 0);
+    let mut bytes = [0; MAX_ENVELOPE_BYTES];
+    assert_eq!(
+        recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT).unwrap(),
+        0,
+        "a different worker must receive no plan-update bytes"
+    );
+}
+
+#[test]
+fn root_plan_second_dial_must_match_the_observed_worker_process() {
+    use nix::sys::socket::{UnixAddr, connect, socket};
+    let root = crate::scratch::Scratch(std::env::temp_dir().join(format!(
+        "plan-foreign-{}",
+        crate::random::random_hex(12).unwrap()
+    )));
+    std::fs::create_dir(root.as_ref()).unwrap();
+    let path = root.as_ref().join("peer.sock");
+    let mut child = PlanPeerChild(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "serving_plan::tests::root_plan_foreign_worker_child",
+                "--nocapture",
+            ])
+            .env("WEAVER_PLAN_FOREIGN_PEER", &path)
+            .spawn()
+            .unwrap(),
+    );
+    let until = Instant::now() + Duration::from_secs(5);
+    while !path.with_extension("ready").exists() {
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "foreign listener exited before bind"
+        );
+        assert!(Instant::now() < until, "foreign listener did not bind");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let (observed, peer) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+    let worker = std::thread::spawn(move || {
+        let request = receive(&peer);
+        transmit(
+            &peer,
+            &observation(&request.exchange, "idle", 1_000_000_000),
+        );
+    });
+    let update = socket(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        SockFlag::SOCK_CLOEXEC,
+        None,
+    )
+    .unwrap();
+    connect(update.as_raw_fd(), &UnixAddr::new(&path).unwrap()).unwrap();
+    let mut channels = [observed, update].into_iter();
+    let result = exchange(
+        prepare_bytes(document("OPEN the file."), Cause { uid: 0 }).unwrap(),
+        || {
+            Ok(Coordination::adopt(
+                channels.next().expect("only Observe and update dials"),
+            ))
+        },
+    );
+    worker.join().unwrap();
+    assert_eq!(result, Err(LifecycleRefusal::BoundaryUnverified));
+    assert!(channels.next().is_none());
+    loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        assert!(Instant::now() < until, "foreign listener was not closed");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn root_plan_backpressured_send_does_not_renew_the_receive_deadline() {
+    let (observed, peer) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+    let (update, update_peer) = socketpair(
+        AddressFamily::Unix,
+        SockType::SeqPacket,
+        None,
+        SockFlag::SOCK_CLOEXEC,
+    )
+    .unwrap();
+    let filler = [b'x'; 4096];
+    let mut queued = Vec::new();
+    for bytes in [&filler[..], &filler[..1]] {
+        loop {
+            match send(
+                update.as_raw_fd(),
+                bytes,
+                MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL,
+            ) {
+                Ok(n) => {
+                    assert_eq!(n, bytes.len());
+                    queued.push(n);
+                }
+                Err(nix::errno::Errno::EAGAIN) => break,
+                other => panic!("fill plan socket: {other:?}"),
+            }
+        }
+    }
+    assert!(!queued.is_empty());
+    let (started, sending) = std::sync::mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let request = receive(&peer);
+        transmit(&peer, &observation(&request.exchange, "idle", 500_000_000));
+        // The delay is shorter than the original bound and consumes its send
+        // phase. Equality of the observed bounds, not a timing tolerance, pins
+        // the read. The peer retains the socket until admin's own expiry.
+        sending.recv_timeout(Duration::from_secs(5)).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let mut bytes = [0; MAX_ENVELOPE_BYTES];
+        for count in queued {
+            let n = recv(update_peer.as_raw_fd(), &mut bytes, MsgFlags::empty()).unwrap();
+            assert_eq!(n, count);
+            assert_eq!(&bytes[..n], &filler[..count]);
+        }
+        assert!(matches!(
+            receive(&update_peer).payload,
+            Payload::Directive(LifecycleDirective::PlanUpdate { .. })
+        ));
+        assert_eq!(
+            recv(update_peer.as_raw_fd(), &mut bytes, MsgFlags::empty()).unwrap(),
+            0
+        );
+    });
+    let mut channels = [observed, update].into_iter();
+    let (result, deadlines) = crate::channel::with_plan_deadlines(started, || {
+        exchange(
+            prepare_bytes(document("OPEN the file."), Cause { uid: 0 }).unwrap(),
+            || Ok(Coordination::adopt(channels.next().expect("no replay"))),
+        )
+    });
+    worker.join().unwrap();
+    assert_eq!(result, Err(LifecycleRefusal::Unanswered));
+    assert_eq!(deadlines.len(), 2, "one send and one receive only");
+    assert!(deadlines[0].0 && !deadlines[1].0);
+    assert_eq!(
+        deadlines[0].1, deadlines[1].1,
+        "the receive must inherit the send's exact deadline"
+    );
+    assert!(
+        deadlines[1].2.duration_since(deadlines[0].2) >= Duration::from_millis(25),
+        "send must consume a measurable part of the sole budget"
+    );
 }

@@ -39,6 +39,8 @@ pub(crate) use capture::{CaptureSendFailure, ReceivedCapture};
 mod plan;
 #[cfg(test)]
 pub(crate) use capture::{TestCaptureSend, with_before_capture_send};
+#[cfg(test)]
+pub(crate) use plan::with_plan_deadlines;
 
 /// A fault below the exchange layer on the coordination channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
