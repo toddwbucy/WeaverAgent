@@ -775,10 +775,15 @@ not a new lifecycle directive, gate request or serialized private grant. [PLAN-2
 PLAN-5, PLAN-6, FLOW-3]
 
 Use the strict object codec. Reject unknown or omitted fields, a non-string enum code,
-read_refused/null, another case with nonnull read_code, and read codes outside the
-PLAN-PORT-REFUSAL table's union. Reject null step_id for every operation except
-record_break. The harness checks selector, leg, loaded-seed identities and private
-proof association before constructing the record. Codec acceptance alone grants no
+read_refused/null and incompatible case/read_code combinations. read_refused admits
+only the resource/next table's code union. invalid_target admits null or not_found.
+work_changed admits null, invalid_selector, span_pending or partial_pair. Every other
+case requires null. Reject null step_id for every operation except record_break.
+The harness checks selector, leg and private proof association before constructing a
+read-derived record. A local identity refusal preserves the requested identities as
+metadata, while every submitted selector and granted operation requires the loaded
+seed. No refused identity is normalized into a usable one. Codec acceptance alone grants
+no
 operation or continuation. Exhaustive refusal consumers must retain this family and
 its exact nested outcome. Root PlanUpdateRefused and PlanBreakCase are unchanged.
 [PLAN-6, SEAM-2, SEAM-3, FLOW-3]

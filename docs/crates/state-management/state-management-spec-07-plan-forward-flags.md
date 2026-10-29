@@ -434,8 +434,11 @@ requests record_break. The three additional cases cannot appear in a PlanEffect:
 PlanBreakRecord or plan.break. Reason: a bounded read or rejected template does not
 establish that the locked plan is broken. [PLAN-2, PLAN-5, PLAN-6, FLOW-4]
 
-read_code is nonnull only for read_refused and null for every other case. For that case,
-copy the finalized read owner's code and detail unchanged. A local checked allocation
+read_code is required nonnull for read_refused. A read-derived invalid_target or
+work_changed also carries its exact nonnull code under the table below. Those two
+cases carry null when a local check, rather than a refused read, established the cause.
+Every other case carries null. For every read-derived refusal, copy the finalized read
+owner's code and detail unchanged. A local checked allocation
 overflow after successful reads returns counter_exhausted with read_code null. A
 correctly rejected compiled plan or outcome template returns template_rejected with
 read_code null, after its complete source dispositions and existing
@@ -446,16 +449,38 @@ PLAN-6, MARK-6, CLASS-2, FLOW-3, FLOW-4]
 Before effect admission, and before a read-only operation grants its result, the
 following resource refusals end only that operation as read_refused. This table applies
 to the plan_current, plan, marks, statement and span_preview reads already required by
-these ports. It licenses no new read, narrower substitute or retry. Domain refusals
-retain their owning clause's identity/work checks and outcomes. In particular, the
-standalone STEP-QUERY read keeps its existing read outcome and does not activate a
-step. [PLAN-2, PLAN-4, PLAN-6, SEAM-3]
+these ports. It licenses no new read, narrower substitute or retry. The following
+domain table supplies the exact mapping for these required reads. The standalone
+STEP-QUERY read keeps its existing read outcome and does not activate a step. [PLAN-2,
+PLAN-4, PLAN-6, SEAM-3]
 
 | Refusing leg | Codes admitted to read_refused |
 | --- | --- |
 | Initial required read | counter_exhausted, result_too_large, result_unavailable, answer_too_large |
 | next for an acquired required snapshot | unknown_snapshot, wrong_offset, result_unavailable, answer_too_large |
 | release | None. Require its matching released answer. |
+
+| Initial required read domain outcome | Plan-operation disposition |
+| --- | --- |
+| not_found from plan or statement | invalid_target, retaining read_code not_found. |
+| invalid_selector, span_pending or partial_pair from span_preview | work_changed, retaining that exact read_code. The requested work frontier cannot establish closure evidence. |
+| wrong_seed from any required read | Foundation protocol failure. The harness must validate the loaded seed before submitting the selector. A foreign request identity is refused locally as invalid_target with null read_code. |
+| not_found from plan_current, marks or span_preview | Foundation protocol failure. These selectors do not license this outcome. |
+| invalid_selector from plan_current, plan, marks or statement | Foundation protocol failure. These required validated selectors do not license this outcome. |
+| unknown_span or span_open from any required read | Foundation protocol failure. They belong to the closed-span selector, which this port table does not authorize. span_preview uses invalid_selector for an absent or terminal span. |
+| span_pending or partial_pair from a selector other than span_preview | Foundation protocol failure. These codes belong to the required work preview only. |
+
+A successful plan_current with null current, or a current status other than locked,
+establishes no_locked_plan with null read_code where a port requires a locked plan.
+An expected-plan/revision mismatch checked against a successful snapshot is
+invalid_target with null read_code. A locally detected WorkRef digest/frontier mismatch
+is work_changed with null read_code. These are successful reads followed by domain
+judgments, not read refusals. Keep their required checked proofs. No domain code on a
+next or release leg uses this initial-read table. [PLAN-2, PLAN-5, PLAN-6, SEAM-3]
+
+All read-derived refusals in both tables obey the same following cleanup and recording
+rules. Refusal changes no durable plan, even when its case is invalid_target or
+work_changed. [PLAN-2, PLAN-6, FLOW-4]
 
 Admit only the exact pending selector, request and complete correlated reply with its
 valid observation and Recorded state.store.measurement. An initial refusal owns no
@@ -485,16 +510,25 @@ existing refusal event with RefusalRecord::PlanOperation. Its exact payload is
 step_id:StepId-or-null,refusal:PlanOperationRefused}. PlanPortOperation is activate,
 assess_act, work_reference, observe_review, attest_closure, close or record_break.
 step_id is required nonnull except for record_break, where it preserves the request's
-optional step. expected and step_id are the accepted request's exact loaded-seed
-identities. The nested refusal is the same value returned to the caller. Busy admission
+optional step. expected and step_id preserve the request's exact typed values, including
+a foreign identity refused before a read. These metadata values grant no loaded-seed
+authority. The harness validates the loaded seed before constructing a selector or
+private grant. The nested refusal is the same value returned to the caller. Busy
+admission
 returns the unaccepted request under PLAN-STATES and is outside this record. [PLAN-2,
 PLAN-5, PLAN-6, FLOW-3]
 
 License internal/runtime, subsystem harness, the accepted operation's run and nullable
-turn, with no selectable content. For read_refused, causal_parent is the refusing leg's
-Recorded state.store.measurement sequence. For template_rejected it is the existing
+turn, with no selectable content. For any nonnull read_code, causal_parent is the
+refusing leg's Recorded state.store.measurement sequence. For template_rejected it is
+the existing
 Recorded state_template_rejected fault sequence. For the remaining cases use the latest
-Recorded read proof consumed by that operation, or null if no read proof was consumed.
+Recorded read proof consumed by that operation, including a checked proof already held
+in its committed cache. Use null only when the refusal precedes consumption of any
+read proof, such as local request-identity validation or a record_break validation that
+needs no read. A judgment about held plan or work state still requires its owning
+clause's checked proof. Do not omit that proof to manufacture a null parent. This rule
+adds no fresh read when an already held proof satisfies the owning clause.
 The owner retains that parent before authoring. Neither a caller-supplied sequence nor a
 later unrelated event can replace it. Keep the same event and author ticket through
 pressure. Only Recorded completes the refusal, and cancellation/failure retains the

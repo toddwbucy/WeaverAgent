@@ -1797,8 +1797,11 @@ this trusted operation capability. [PLAN-1, PLAN-2, PLAN-5, R20-12]
 The operation owner implements PLAN-PORT-REFUSAL and PLAN-PORT-RECORD. Keep the
 accepted request, finalized read/refusal or template-rejection evidence, source
 dispositions, original Decision deadline and any allocator grant together until
-settlement. Distinguish local allocation exhaustion from a member's counter_exhausted
-read reply. A correctly rejected effect/outcome template records its existing
+settlement. Apply PLAN-PORT-REFUSAL's selector-specific domain mappings, retaining the
+exact nonnull read_code for read-derived invalid_target and work_changed too. A code
+that the selector/leg cannot produce keeps its foundation failure path. Distinguish
+local allocation exhaustion from a member's counter_exhausted read reply. A correctly
+rejected effect/outcome template records its existing
 state_template_rejected fault, then the exact plan-operation refusal. Neither is a
 foundation halt solely because the template correctly refused. [PLAN-2, PLAN-6,
 CLASS-2, CLASS-8, FLOW-3, FLOW-4]

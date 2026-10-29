@@ -1,6 +1,6 @@
 # Plan-operation refusal proposal
 
-**Version:** 0.1, 2026-10-28.
+**Version:** 0.2, 2026-10-28.
 **Parent:** Issue 146, state management implementation.
 
 This proposes the missing refusal outcomes for the non-root plan ports. It is a
@@ -23,8 +23,10 @@ internal activation or closure request.
 
 Elect a separate PlanOperationCase containing the existing eight spellings plus
 read_refused, counter_exhausted and template_rejected. PlanBreakCase stays unchanged.
-PlanOperationRefused becomes {case,detail,read_code}, with required nonnull read_code
-only for read_refused. The code and detail are the finalized read's unchanged values.
+PlanOperationRefused becomes {case,detail,read_code}. read_refused requires a nonnull
+code. Read-derived invalid_target and work_changed also preserve the exact code under
+the selector-specific table. Local checks use null. The code and detail of a refused
+read are its finalized unchanged values.
 Local allocation overflow has read_code null. Correct template rejection retains its
 complete source dispositions and existing state_template_rejected fault before the
 operation refusal. No one of these outcomes asks the primitive to break the plan.
@@ -32,8 +34,11 @@ operation refusal. No one of these outcomes asks the primitive to break the plan
 Elect a typed RefusalRecord::PlanOperation under the existing refusal event. It names
 the exact accepted operation, expected plan, optional step and returned refusal. Read
 refusals parent the refusing leg's Recorded measurement. Template rejection parents its
-Recorded fault. Other cases parent the latest Recorded read proof consumed by that
-operation, or null when none was consumed. The record is metadata with no selectable
+Recorded fault. Every read-derived refusal, including invalid_target/work_changed,
+parents the refusing measurement. Other cases parent the latest consumed Recorded read
+proof, including an already held cache proof. Null is permitted only before any read
+proof is consumed, such as request-identity or no-read record_break validation. The
+record is metadata with no selectable
 content. This is an internal result and trace carrier, not a new management request.
 
 Both changes are part of this election. A result whose diagnostic text encodes an
@@ -45,7 +50,7 @@ cast into a stored plan break. Callers still elect every subsequent operation.
 
 | Boundary | Proposed result |
 | --- | --- |
-| Required initial plan_current, plan, marks, statement or span_preview read | Resource codes counter_exhausted, result_too_large, result_unavailable and answer_too_large become read_refused. Domain checks retain their existing meanings. |
+| Required initial plan_current, plan, marks, statement or span_preview read | Resource codes counter_exhausted, result_too_large, result_unavailable and answer_too_large become read_refused. Domain codes use the explicit selector table below. |
 | next after an acquired page | unknown_snapshot, wrong_offset, result_unavailable and answer_too_large retain that cursor until matching release, then read_refused. |
 | Initial refusal without a page | No cursor, no release, no successful recall or private grant. |
 | release refusal, malformed reply/observation, invalid leg/code, dead seam or expiry | Existing failure path, never a healthy operation refusal. |
@@ -55,6 +60,24 @@ cast into a stored plan break. Callers still elect every subsequent operation.
 | Stop or leave | Retain owed read/source/author custody under original bounds and shutdown permissions, grant no dependent continuation. |
 | Effect admitted before cancellation | Settle the actual disposition. Never claim cancellation proves that no commit occurred. |
 | Mandatory summary refresh after commit | Existing foundation failure on refusal, committed receipt retained, no stale successful cache or operation result. |
+
+The domain mapping answers Planner #384 Q1. A plan/statement not_found becomes
+invalid_target with that code. span_preview invalid_selector, span_pending or
+partial_pair becomes work_changed with that code. wrong_seed, unknown_span and
+span_open are impossible outcomes of these validated required selectors and keep the
+foundation protocol-failure path, as do those other domain codes on unlicensed
+selectors/legs. A successful plan_current with no locked plan establishes
+no_locked_plan, a checked revision mismatch establishes invalid_target, and a local
+work digest/frontier mismatch establishes work_changed, all with null read_code.
+The codec rejects every incompatible case/code pair. detail stays diagnostic and is
+never parsed to recover a missing code.
+
+For Q2, consumed cache proofs count as read proofs even when no new query is needed.
+Only a refusal before any such proof was used can have a null parent. A local identity
+refusal records the exact requested identity as metadata, including a foreign seed,
+without granting it authority or submitting that invalid selector. A judgment about
+held plan/work state still owes its checked proof. This clarifies the null case without
+requiring an extra store query or allowing a caller to invent a parent.
 
 The generic reader, store selectors and paging wire do not change. STEP-QUERY still
 returns a checked successor or its existing read outcome. Returning that read never
@@ -114,7 +137,11 @@ Use an unready transport to pin the original Decision/read expiry. Pin local spa
 overflow and a correct certified-template rejection independently.
 
 Codec fixtures reject missing read_code, incompatible case/code pairs, an unsupported
-read code, unknown fields, a missing required step and a foreign refusal family. Break
+read code, unknown fields, a missing required step and a foreign refusal family.
+Exercise each domain mapping and
+reject its code on every unlicensed selector/leg. Pin the parent for cached proofs and
+both permitted pre-proof/null cases, and keep a foreign refused request identity
+verbatim without submitting a foreign selector. Break
 codecs reject each of the three new operation-only cases. Exact serialized refusal
 bytes and their canonical envelope must round-trip through the ordinary trace path.
 Compiled protective controls must remove the individual custody, deadline, parent,
@@ -130,3 +157,12 @@ code-review and verification-before-completion skills are unavailable in this se
 so no skill pass or Planner grade is claimed. No runtime source changed and no Rust
 suite was run for this proposal. Runtime gates and protective controls remain owed by
 the implementing act.
+
+## Planner review and revised election
+
+Planner review 5692796886 graded c13f4301 at zero document fixes and identified Q1/Q2
+as wording to settle with the operator's election. This revision supplies the explicit
+domain table, typed code combinations and null-parent scope above. It supersedes the
+initial claim that only read_refused may have a nonnull read_code. The operator's
+ruling on this revised proposal and Planner review of the revision remain pending.
+Q3's unavailable-skill limitation is unchanged and remains disclosed.
