@@ -7,6 +7,7 @@ pub(in crate::flow::context::worker_startup) struct CheckedTurn {
     root: std::path::PathBuf,
     wire: Vec<u8>,
     turn: TurnKey,
+    run: String,
     source: s::SourceBlockId,
 }
 
@@ -62,6 +63,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             root: socket.parent().unwrap().to_path_buf(),
             wire: input.received.as_ref().unwrap().raw_bytes().to_vec(),
             turn: input.turn.clone().unwrap(),
+            run: input.serving.owner.context.flow.run().to_owned(),
             source: input.seated.as_ref().unwrap().source.clone(),
         }
     });
@@ -275,14 +277,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             .filter(|row| row["kind"] == "turn.started")
             .collect();
         assert_eq!(started.len(), 1);
-        assert!(
-            started[0]["sequence"]
-                .as_str()
-                .unwrap()
-                .parse::<u64>()
-                .unwrap()
-                < sequence.0
-        );
+        assert!(trace_sequence(started[0]) < sequence.0);
         if stop {
             assert_turn_closed(&rows, sequence, &original.turn);
             assert!(input.serving.owner.context.open_turn.is_none());
@@ -361,7 +356,7 @@ pub(in crate::flow::context::worker_startup) fn exercise(
                 answer.payload,
                 Payload::Answer(if turn_boundary {
                     weaver_types::LifecycleAnswer::TurnAborted {
-                        turn: TurnKey("flags-boundary-turn".into()),
+                        turn: original_input.as_ref().unwrap().turn.clone(),
                     }
                 } else {
                     weaver_types::LifecycleAnswer::AtRest
@@ -380,7 +375,8 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             assert_eq!(input.received.as_ref().unwrap().raw_bytes(), original.wire);
             if stop {
                 assert_eq!(input.progress(), FoundationInputProgress::Aborted);
-                assert_world_close(socket.parent().unwrap(), "the operator stopped the turn");
+                assert_world_close(&original, "the operator stopped the turn");
+                assert_stop_keeps_gate(input, &original.root);
                 return None;
             }
             assert_eq!(input.progress(), FoundationInputProgress::Turn);
@@ -507,6 +503,10 @@ pub(in crate::flow::context::worker_startup) fn finish(
             original.root.join("flags-turn-lowered").exists(),
             "actual gate must confirm Lower"
         );
+        assert!(
+            !original.root.join("flags-turn-close.json").exists(),
+            "rollback leaves the retained world's disposition to Lower"
+        );
     }
     member.assert_closed_without_request();
     let answer: OrganEnvelope = serde_json::from_slice(&read_packet(&peer).unwrap()).unwrap();
@@ -600,18 +600,15 @@ fn assert_turn_closed(rows: &[serde_json::Value], sample: weaver_trace::Sequence
         "cancelled sample must close the original turn once"
     );
     assert_eq!(closes[0]["turn"], turn.0);
-    assert!(
-        closes[0]["sequence"]
-            .as_str()
-            .unwrap()
-            .parse::<u64>()
-            .unwrap()
-            > sample.0
-    );
+    assert!(trace_sequence(closes[0]) > sample.0);
 }
 
-fn assert_world_close(root: &Path, text: &str) {
-    let path = root.join("flags-turn-close.json");
+fn trace_sequence(row: &serde_json::Value) -> u64 {
+    row["sequence"].as_str().unwrap().parse().unwrap()
+}
+
+fn assert_world_close(original: &CheckedTurn, text: &str) {
+    let path = original.root.join("flags-turn-close.json");
     let end = Instant::now() + Duration::from_secs(2);
     while !path.exists() {
         assert!(Instant::now() < end, "gate did not receive the turn close");
@@ -623,8 +620,53 @@ fn assert_world_close(root: &Path, text: &str) {
         panic!("world frame required")
     };
     let world: serde_json::Value = serde_json::from_slice(&frame.octets().unwrap()).unwrap();
+    assert_eq!(world["kind"], "stopped");
     assert_eq!(world["reason"], text);
-    assert_eq!(world["turn"], "flags-boundary-turn");
+    assert_eq!(world["turn"], original.turn.0);
+    assert_eq!(world["run"], original.run);
+}
+
+fn assert_stop_keeps_gate(input: &FoundationInput<'_>, root: &Path) {
+    let lower = root.join("flags-turn-lowered");
+    assert!(!lower.exists(), "Stop must not lower the gate");
+    let fence = OrganEnvelope {
+        exchange: weaver_types::ExchangeId {
+            opener: weaver_types::Opener::Harness,
+            ordinal: u64::MAX,
+        },
+        position: Position::Open,
+        payload: Payload::Directive(LifecycleDirective::Observe),
+    };
+    let bytes = serde_json::to_vec(&fence).unwrap();
+    let end = Instant::now() + Duration::from_secs(2);
+    loop {
+        assert!(!lower.exists(), "Stop must not lower the gate");
+        match send(
+            input.serving.owner.gate.fd().as_raw_fd(),
+            &bytes,
+            MsgFlags::MSG_DONTWAIT | MsgFlags::MSG_NOSIGNAL,
+        ) {
+            Ok(n) => {
+                assert_eq!(n, bytes.len());
+                break;
+            }
+            Err(nix::errno::Errno::EAGAIN | nix::errno::Errno::EINTR) => {}
+            other => panic!("gate fixture fence: {other:?}"),
+        }
+        assert!(Instant::now() < end, "gate fixture fence did not send");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let checked = root.join("flags-turn-stop-checked");
+    while !checked.exists() {
+        assert!(!lower.exists(), "Stop must not lower the gate");
+        assert!(
+            Instant::now() < end,
+            "gate did not acknowledge the Stop boundary"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(std::fs::read(checked).unwrap(), b"checked\n");
+    assert!(!lower.exists(), "Stop must not lower the gate");
 }
 
 fn queue_save(guard: &mut Guard<'_>, socket: &Path) -> (OwnedFd, s::SaveWindow) {

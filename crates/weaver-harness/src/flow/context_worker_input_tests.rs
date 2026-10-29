@@ -110,11 +110,23 @@ fn worker_input_gate_child() {
                 Ok(0) => return,
                 Ok(n) if flags_turn && (mode.ends_with("-stop") || mode.ends_with("-leave")) => {
                     let answer: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
+                    if mode.ends_with("-stop")
+                        && answer.exchange.ordinal == u64::MAX
+                        && answer.payload == Payload::Directive(LifecycleDirective::Observe)
+                    {
+                        // A private fixture fence on the same ordered socket.
+                        // The parent sends it after Stop settles, so every
+                        // earlier worker packet has reached this observer.
+                        let temporary = root.join("flags-turn-stop-checked.pending");
+                        std::fs::write(&temporary, b"checked\n").unwrap();
+                        std::fs::rename(temporary, root.join("flags-turn-stop-checked")).unwrap();
+                        continue;
+                    }
                     if answer.payload == Payload::Directive(LifecycleDirective::Lower) {
-                        assert!(mode.ends_with("-leave"));
                         // Rollback lowers the gate before it closes the retained
                         // turn in the trace. The gate owns the world's unload
-                        // disposition; no worker world frame is required here.
+                        // disposition. Record even an erroneous Stop Lower so
+                        // the parent, rather than this child alone, rejects it.
                         std::fs::write(root.join("flags-turn-lowered"), b"lower\n").unwrap();
                         packet(
                             port.as_raw_fd(),

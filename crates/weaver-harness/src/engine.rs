@@ -1667,8 +1667,8 @@ impl<'a> Ports<'a> {
                 let Some(connection) = slot.as_ref() else {
                     return Ok(());
                 };
-                match connection.recv() {
-                    Ok(envelope) => {
+                match crate::lifecycle::receive_entered(connection, self.recorder.failed()) {
+                    Ok(Some(envelope)) => {
                         let exchange = envelope.exchange.clone();
                         match envelope.payload {
                             weaver_types::Payload::Directive(
@@ -1848,6 +1848,7 @@ impl<'a> Ports<'a> {
                             _ => return Err(TurnError::ChannelLost),
                         }
                     }
+                    Ok(None) => {}
                     Err(crate::failure::ChannelFault::Closed) => {
                         // The dialer left, and the stream continues.
                         *slot = None;
@@ -2219,8 +2220,9 @@ impl<'a> Ports<'a> {
                 // Only an execution waits on the interrupt's bound.
                 ExchangeWake::InterruptBound => {}
                 // The coordination channel is heard while the re-feed
-                // streams, exactly as a generation hears it, and everything
-                // but a channel loss is refused: the replay has no stop
+                // streams, exactly as a generation hears it. Observe reads
+                // the running replay's facts without changing its bracket.
+                // Other directives retain the existing refusal: replay has no stop
                 // semantics of its own in this act, the run being the work.
                 ExchangeWake::Dial => {
                     let Some(slot) = self.pending.as_deref_mut() else {
@@ -2243,10 +2245,26 @@ impl<'a> Ports<'a> {
                     let Some(connection) = slot.as_ref() else {
                         continue;
                     };
-                    match connection.recv() {
-                        Ok(envelope) => {
+                    match crate::lifecycle::receive_entered(connection, self.recorder.failed()) {
+                        Ok(Some(envelope)) => {
                             let exchange = envelope.exchange.clone();
                             match envelope.payload {
+                                weaver_types::Payload::Directive(
+                                    weaver_types::LifecycleDirective::Observe,
+                                ) => {
+                                    let _ = connection.send(&weaver_types::OrganEnvelope {
+                                        exchange,
+                                        position: weaver_types::Position::Close,
+                                        payload: weaver_types::Payload::Answer(
+                                            weaver_types::LifecycleAnswer::State {
+                                                state: weaver_types::AgentState::Active,
+                                                load: Some(Box::new(self.load.clone())),
+                                                plan: None,
+                                                constituents: Vec::new(),
+                                            },
+                                        ),
+                                    });
+                                }
                                 weaver_types::Payload::Directive(_) => {
                                     let _ = connection.send(&weaver_types::OrganEnvelope {
                                         exchange,
@@ -2259,6 +2277,7 @@ impl<'a> Ports<'a> {
                                 _ => return Err(TurnError::ChannelLost),
                             }
                         }
+                        Ok(None) => {}
                         Err(crate::failure::ChannelFault::Closed) => {
                             *slot = None;
                         }
