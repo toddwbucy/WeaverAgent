@@ -184,12 +184,17 @@ enum ListenProgress {
 }
 
 impl LifecycleListener {
-    pub(super) fn prepare_diagnostic(&mut self) -> Result<(), Failure> {
+    fn require_diagnostic(&self) -> Result<(), Failure> {
         if self.held.is_some() || self.failure.is_some() {
             return Err(invalid_failure(
                 "Diagnostic handoff requires an idle listener",
             ));
         }
+        Ok(())
+    }
+
+    fn prepare_diagnostic(&mut self) -> Result<(), Failure> {
+        self.require_diagnostic()?;
         let flags = fcntl(self.listener.as_fd(), FcntlArg::F_GETFL).map_err(io_failure)?;
         fcntl(
             self.listener.as_fd(),
@@ -381,7 +386,7 @@ pub(super) struct LifecyclePeer {
 }
 
 impl LifecyclePeer {
-    pub(super) fn prepare_diagnostic(&mut self) -> Result<(), Failure> {
+    fn require_diagnostic(&self) -> Result<(), Failure> {
         if self.held.is_some()
             || self.capture_held.is_some()
             || self.wire.is_some()
@@ -394,6 +399,11 @@ impl LifecyclePeer {
                 "Diagnostic handoff requires the idle original peer",
             ));
         }
+        Ok(())
+    }
+
+    fn prepare_diagnostic(&mut self) -> Result<(), Failure> {
+        self.require_diagnostic()?;
         let flags = fcntl(self.fd(), FcntlArg::F_GETFL).map_err(io_failure)?;
         fcntl(
             self.fd(),
@@ -407,9 +417,13 @@ impl LifecyclePeer {
         OrganChannel::diagnostic_from_owned(self.sender.into_diagnostic_fd())
     }
 
+    /// Transfer the sole retained handle to this socket end, as for from_owned.
     pub(super) fn from_channel(channel: OrganChannel) -> Result<Self, Failure> {
         Self::from_owned(channel.into_fd())
     }
+    /// The caller must retain no duplicate of this socket end. O_NONBLOCK belongs
+    /// to the open file description, so acquiring or changing mode also affects
+    /// any duplicate, including one inherited by another process.
     pub(super) fn from_owned(end: OwnedFd) -> Result<Self, Failure> {
         // Every admission path acquires nonblocking mode here, including the
         // original peer returned by Diagnostic after a pre-load refusal.
@@ -627,6 +641,18 @@ impl LifecyclePeer {
     }
     pub(super) fn owns_send(&self, send: &super::pump_transport::OrganSend) -> bool {
         send.belongs_to(&self.sender)
+    }
+
+    pub(super) fn withdraw_pending(
+        &mut self,
+        send: &super::pump_transport::OrganSend,
+    ) -> Result<Option<OrganEnvelope>, Failure> {
+        self.live()?;
+        let answer = self.sender.withdraw_tracked_pending(send)?;
+        if answer.is_some() {
+            self.enter_ready_guard = false;
+        }
+        Ok(answer)
     }
 
     pub(super) fn withdraw_capture_pending(
