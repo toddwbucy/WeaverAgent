@@ -643,6 +643,18 @@ impl LifecyclePeer {
         send.belongs_to(&self.sender)
     }
 
+    pub(super) fn withdraw_pending(
+        &mut self,
+        send: &super::pump_transport::OrganSend,
+    ) -> Result<Option<OrganEnvelope>, Failure> {
+        self.live()?;
+        let answer = self.sender.withdraw_tracked_pending(send)?;
+        if answer.is_some() {
+            self.enter_ready_guard = false;
+        }
+        Ok(answer)
+    }
+
     pub(super) fn withdraw_capture_pending(
         &mut self,
         send: &super::pump_transport::OrganSend,

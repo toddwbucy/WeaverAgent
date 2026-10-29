@@ -365,8 +365,8 @@ impl ReceivedEnter {
             drop(self.message.state.take());
         }
     }
-    /// Only call after a completed refusal. No owed Enter or ancillary handle
-    /// is carried into a later directive on the same authenticated peer.
+    /// Only call after a completed refusal or settled unadmitted expiry. No owed
+    /// answer or ancillary handle is carried into a later directive on this peer.
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn resume(self) -> Result<EnterReceiver, Self> {
         match EnterReceiver::from_peer(self.peer) {
