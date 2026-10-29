@@ -620,6 +620,29 @@ impl OrganPort {
         }
     }
 
+    /// Withdraw a live ordinary datagram only through its exact current ticket.
+    /// A prior ticket on this port, even for the same exchange, has no authority.
+    pub(super) fn withdraw_tracked_pending(
+        &mut self,
+        send: &OrganSend,
+    ) -> Result<Option<OrganEnvelope>, Failure> {
+        self.live()?;
+        if !send.belongs_to(self) {
+            return Err(Failure::invalid("withdrawal requires the original port"));
+        }
+        let Some(outbound) = self.outgoing.as_ref() else {
+            return Ok(None);
+        };
+        if outbound
+            .tracked
+            .as_ref()
+            .is_none_or(|tracked| !Arc::ptr_eq(tracked, &send.tracked))
+        {
+            return Err(Failure::invalid("withdrawal requires the current ticket"));
+        }
+        self.withdraw_pending(&send.exchange)
+    }
+
     /// Withdraw only this exact exchange's wholly unsent organ datagram. A
     /// successful SEQPACKET send removes it atomically, so absence after send
     /// never becomes a claim that the operation was not dispatched. A failed

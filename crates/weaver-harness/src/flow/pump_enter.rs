@@ -284,7 +284,13 @@ pub(in crate::flow) enum EnterTimeError {
     Clock(String),
 }
 impl ReceivedEnter {
-    pub(in crate::flow) fn prepare_diagnostic(&mut self) -> Result<(), Failure> {
+    /// Check both owners before either descriptor changes mode. A system-call
+    /// failure after these checks is terminal for the retained admission owner;
+    /// this does not promise an atomic two-descriptor flag update.
+    pub(in crate::flow) fn prepare_diagnostic(
+        &mut self,
+        listener: &mut LifecycleListener,
+    ) -> Result<(), Failure> {
         if !matches!(
             self.envelope().enter().binding,
             weaver_types::state_flow::enter::EnterBinding::Diagnostic { .. }
@@ -295,7 +301,10 @@ impl ReceivedEnter {
                 "only an unadopted Diagnostic Enter can transfer",
             ));
         }
-        self.peer.prepare_diagnostic()
+        self.peer.require_diagnostic()?;
+        listener.require_diagnostic()?;
+        self.peer.prepare_diagnostic()?;
+        listener.prepare_diagnostic()
     }
 
     pub(in crate::flow) fn observed_ns(&self) -> u64 {
@@ -356,8 +365,8 @@ impl ReceivedEnter {
             drop(self.message.state.take());
         }
     }
-    /// Only call after a completed refusal. No owed Enter or ancillary handle
-    /// is carried into a later directive on the same authenticated peer.
+    /// Only call after a completed refusal or settled unadmitted expiry. No owed
+    /// answer or ancillary handle is carried into a later directive on this peer.
     #[allow(clippy::result_large_err)]
     pub(in crate::flow) fn resume(self) -> Result<EnterReceiver, Self> {
         match EnterReceiver::from_peer(self.peer) {
