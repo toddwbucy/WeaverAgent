@@ -1360,15 +1360,39 @@ knobs of section 8 through the sampler exactly as a generation runs them, and wh
 generation emits the drawn token and streams its piece, the drive records the draw's
 identifier into the measurement's output slots and appends the recorded token instead,
 streaming nothing. The field and the column intermediates cross where their elections
-stand, on the same sites the generation crosses them. The answer wraps the generation
-shape under the floor's own `ReFed` arm, the variant and not the payload being what
-keeps a supplied path out of a sampled path's clothes. The permission is judged where
+stand, on the same sites the generation crosses them. The completed answer wraps the
+generation shape under the floor's own `ReFed` arm. The variant keeps a supplied path
+out of a sampled path's clothes. The permission is judged where
 every admitted member is judged, and the two-arm registry is the charter's, cited rather
 than restated. **The watches are the building act's**, per the pattern section 7's
 unasked vector set: the drive is unbuilt, its instruments cannot exist before it, and
 the act that builds it buys them in the same motion or their tags stand as the lie 13.7
 refuses. The building act bought them, four watches below, each seen red under the
 perturbation it names before its tag landed.
+
+**A matching cancel returns RefeedInterrupted after a coherent prefix.** The drive
+polls cancellation at the same token boundaries as generation. It checks the turn
+against the active ReFeed before accepting the cancel. A foreign-turn cancel answers
+OutOfOrder and does not end that drive. Once a cancel is accepted, the drive stops
+before the next recorded token, appends the family's terminator exactly once, and
+sends RefeedInterrupted with the original turn, consumed equal to the number of
+recorded path tokens appended, and the actual resident and capacity counts. consumed
+excludes the input prefill and terminator. It may be zero and is strictly less than
+path.len(). The cancel then answers AtRest. Field and column intermediates already sent
+are retained, but no ReFed, emission parse or completed-path measurement is invented.
+
+If the whole recorded path completed before the cancel was polled, the normal ReFed
+stands and the cancel is handled at rest. There is no second terminal for the re-feed.
+A prefill, token or terminator failure, a malformed seam or a failed intermediate send
+remains a fault and cannot become RefeedInterrupted. Token-boundary polling makes no
+wall-time promise about a stuck prefill or kernel. The harness's section 6.2 interval
+bounds its wait and uses ordinary failed-organ cleanup when the SPU cannot settle.
+
+The seam instruments cancel before the first path token and after an interior prefix,
+require the exact resident prefix and terminator, retain earlier field/column frames,
+and require the two terminal answers in order. Separate cases cover a completed answer
+crossing Cancel, a foreign turn, a failed terminator and a failed intermediate send.
+Removing any count, framing, correlation, order or failure check must fail its case.
 
 **The session appends the recorded token whatever the draw said**, the
 drawn identifiers landing in the answer's output slots and one measurement

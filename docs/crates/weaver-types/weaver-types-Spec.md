@@ -2072,6 +2072,12 @@ pub enum TokenAnswer {
     Column { position: u64, layers: Vec<Vec<f32>> },
     Generated(Generation),
     ReFed(Generation),
+    RefeedInterrupted {
+        turn: TurnKey,
+        consumed: u64,
+        resident: u64,
+        capacity: u64,
+    },
     AtRest,
     Flushed {
         resident_before: u64,
@@ -2421,6 +2427,24 @@ loop learns which of the four edges it crossed. **`OutOfOrder` is the same word
 loop 0's refusal carries and is not the same case**, because the states it is
 judged against are the decode seam's, which is why the trio carries its own
 rather than drawing loop 0's.
+
+**The re-feed interruption is not a Generation.** RefeedInterrupted is a terminal
+TokenAnswer under the same existing answer encoding as ReFed. Every member above is
+required, with no omitted or default values. consumed counts recorded path tokens that
+became resident, excluding the rendered input and terminator. It is less than the
+nonempty supplied path length, and can be zero. resident includes the rendered input,
+the appended prefix and the terminator. Checked consumed + 1 must not exceed resident,
+and resident must not exceed capacity. The echoed turn must name the outstanding
+ReFeed. The harness accepts this answer only after it has
+requested that turn's cancellation, retains it until the following AtRest, and never
+converts it to a completed-path measurement or certification. A completed ReFed followed
+by AtRest is the other valid completion/cancel race. The floor carries no partial
+emission or fabricated measurement in RefeedInterrupted.
+
+DIAGNOSTIC_CANCEL_BOUND_MS is 60_000 milliseconds. The harness owns its original
+absolute interval as specified in weaver-harness-Spec section 6.2. This is an internal
+diagnostic cancellation bound, not an added Enter member or a change to admin's Stop
+exchange deadline.
 
 **A cancel with nothing in flight answers `AtRest` rather than refusing**, per
 the contract's section 2, an answer because it is not a failure of the ask.
