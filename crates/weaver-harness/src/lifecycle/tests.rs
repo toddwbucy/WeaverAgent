@@ -2916,6 +2916,7 @@ fn observe_answers_from_any_position_and_authors_nothing() {
         }
     }
     let unloaded = LifecycleAnswer::State {
+        plan: None,
         state: weaver_types::AgentState::Unloaded,
         load: None,
         constituents: Vec::new(),

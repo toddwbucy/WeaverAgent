@@ -1,14 +1,81 @@
-//! Dormant committed PlanSummary evidence. These private projections grant no
-//! plan effect, management input, placement, generation or lifecycle readiness.
+//! Private root-input custody and committed PlanSummary evidence. A root packet
+//! grants no effect without its filing and preflight, or lifecycle readiness.
 use super::clock::AbsoluteBound;
 use super::context::RecordedRead;
 use super::ledger::{CommittedSource, LedgerFile};
 use super::pump::PumpDeadline;
 use std::sync::Arc;
+#[path = "plan_input.rs"]
+mod input;
+pub(super) use input::{AcceptedPlanUpdate, ManagementInput, PreparedRootEffect, RootPlanEvidence};
 use weaver_types::state_flow::{
     Digest, PlanEffect, PlanRef, PlanSummary, QueryResult, ReadSelector, SourcePathPart,
     SourcePosition, StartIdentity, StatementEffect, decode_strict,
 };
+
+/// PLAN-PREFLIGHT-READ narrows the generic reader's valid outcomes. The root
+/// owner supplies its exact pending selector (a statement only for a preserved
+/// closure), retains this finalized account, and still owns phase, cancellation,
+/// the original Decision wait, dispositions and refusal authoring. This value
+/// grants no continuation and cannot be used for the post-effect refresh.
+pub(super) fn preflight_read_refusal(
+    context: &super::context::RecordingContext,
+    expected: &ReadSelector,
+    proof: &super::context::RecordedReadRefusal,
+) -> Result<weaver_types::state_flow::PlanUpdateRefused, &'static str> {
+    use weaver_types::state_flow::{
+        ControlRefusalCode, PlanUpdateCase, PlanUpdateRefused, ReadRefusalCode as Code,
+        StateControl, StateControlAnswer, StateFrame,
+    };
+    if !proof.belongs_to(context) || proof.selector() != expected {
+        return Err("plan preflight refusal belongs to another read");
+    }
+    if !matches!(
+        expected,
+        ReadSelector::PlanCurrent {} | ReadSelector::Marks {} | ReadSelector::Statement { .. }
+    ) {
+        return Err("plan preflight refusal has an unlicensed selector");
+    }
+    let StateFrame::ControlAnswer {
+        frame:
+            StateControlAnswer::ControlRefused {
+                code: ControlRefusalCode::Read(code),
+                detail,
+            },
+        ..
+    } = proof.answer()
+    else {
+        return Err("plan preflight lacks a finalized read refusal");
+    };
+    let allowed = match proof.request() {
+        StateControl::Read { selector } if selector == expected => {
+            matches!(
+                code,
+                Code::CounterExhausted
+                    | Code::ResultTooLarge
+                    | Code::ResultUnavailable
+                    | Code::AnswerTooLarge
+            ) || (*code == Code::NotFound && matches!(expected, ReadSelector::Statement { .. }))
+        }
+        StateControl::Next { .. } => matches!(
+            code,
+            Code::UnknownSnapshot
+                | Code::WrongOffset
+                | Code::ResultUnavailable
+                | Code::AnswerTooLarge
+        ),
+        _ => false,
+    };
+    if !allowed {
+        return Err("read refusal is not valid for this plan preflight leg");
+    }
+    Ok(PlanUpdateRefused {
+        case: PlanUpdateCase::ReadRefused,
+        detail: detail.clone(),
+        rejected_blocks: Vec::new(),
+        read_code: Some(*code),
+    })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::flow) enum PlanSummaryUnavailable {
@@ -144,8 +211,8 @@ impl EffectExpectation {
             return Err("plan effect receipt has another plan seed");
         }
         // A prior cache is independent only for this exact revision. Replacement
-        // never borrows the old revision's operator digest. Future accepted root
-        // input can extend this proof; a free Digest parameter cannot.
+        // never borrows the old revision's operator digest. The root owner extends
+        // this proof through its retained private grant, never a free Digest.
         let digest = previous
             .filter(|old| old.plan == plan)
             .map(|old| old.document_sha256.clone());
