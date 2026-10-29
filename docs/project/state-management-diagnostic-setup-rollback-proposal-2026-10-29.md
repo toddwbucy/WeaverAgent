@@ -2,7 +2,7 @@
 
 Date: 2026-10-29. Proposed authority for #146 E, #390 and #395 AI1.
 Base: main f6f707799e2b0349180582032bc909a1e021a383.
-Branch: docs/state-diagnostic-setup-rollback.
+Draft proposal: #398. Branch: docs/state-diagnostic-setup-rollback.
 
 ## Problem and evidence
 
