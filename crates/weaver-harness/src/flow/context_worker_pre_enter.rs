@@ -60,7 +60,7 @@ impl FoundationAdmission {
         mut self,
         program: &super::FoundationProgram,
     ) -> FoundationDiagnosticResult {
-        if self.binding_kind() != Some(BindingKind::Diagnostic) {
+        if self.stopped || self.binding_kind() != Some(BindingKind::Diagnostic) {
             return FoundationDiagnosticResult::Admission(Box::new(self));
         }
         let prepared = self

@@ -1,5 +1,6 @@
 use super::*;
 use crate::flow::clock::{WaitOutcome, testing::FakePumpIo};
+use crate::flow::fixture_eof::await_eof_until;
 use nix::sys::socket::{
     AddressFamily, ControlMessage, MsgFlags, SockFlag, SockType, recv, send, sendmsg, socketpair,
 };
@@ -7,6 +8,7 @@ use std::io::{IoSlice, Read};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 const ENTER: &[u8] = include_bytes!("../../../weaver-types/tests/fixtures/state-enter.json");
 static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -458,8 +460,8 @@ fn assert_expired_peer_resumes(fx: &mut Fixture, now: u64) {
 fn expired_enter_resumes_before_admission_and_before_adoption_without_an_answer() {
     for before_adoption in [false, true] {
         let mut fx = Fixture::new();
-        let (sink, mut trace) = UnixStream::pair().unwrap();
-        let (state, mut member) = UnixStream::pair().unwrap();
+        let (sink, trace) = UnixStream::pair().unwrap();
+        let (state, member) = UnixStream::pair().unwrap();
         fx.request(&enter(), &[sink.as_raw_fd(), state.as_raw_fd()]);
         drop((sink, state));
         if before_adoption {
@@ -486,9 +488,9 @@ fn expired_enter_resumes_before_admission_and_before_adoption_without_an_answer(
             fx.owner.take_delivery_loss().is_none(),
             "expiry without an owed answer creates no delivery notice"
         );
-        for reader in [&mut trace, &mut member] {
-            reader.set_nonblocking(true).unwrap();
-            assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+        let end = Instant::now() + Duration::from_secs(3);
+        for reader in [&trace, &member] {
+            await_eof_until(reader.as_raw_fd(), end, || {});
         }
         assert_eq!(
             recv(fx.peer.as_raw_fd(), &mut [0], MsgFlags::MSG_DONTWAIT),
@@ -706,6 +708,38 @@ fn diagnostic_program() -> super::super::FoundationProgram {
 }
 
 #[test]
+fn stopped_diagnostic_admission_cannot_retry_an_eligible_handoff() {
+    let mut fx = Fixture::new();
+    let mut value: serde_json::Value = serde_json::from_slice(&enter()).unwrap();
+    value["payload"]["body"]["payload"]["binding"] = serde_json::json!({
+        "kind":"diagnostic", "state_election":weaver_types::StateElection::default()
+    });
+    let bytes = serde_json::to_vec(&value).unwrap();
+    fx.request(&bytes, &[]);
+    assert_eq!(
+        fx.owner.advance_with_io(&mut FakePumpIo::new(10)),
+        FoundationAdmissionProgress::Received
+    );
+    fx.owner.stop("first admission failure".into());
+    let FoundationDiagnosticResult::Admission(owner) =
+        fx.owner.serve_diagnostic(&diagnostic_program())
+    else {
+        panic!("a stopped admission cannot hand off Diagnostic")
+    };
+    assert_eq!(
+        owner.progress(),
+        FoundationAdmissionProgress::Stopped,
+        "the original stop cannot become a fresh Diagnostic refusal"
+    );
+    assert_eq!(owner.detail(), Some("first admission failure"));
+    assert_eq!(owner.received.as_ref().unwrap().wire(), bytes);
+    assert_eq!(
+        recv(fx.peer.as_raw_fd(), &mut [0], MsgFlags::MSG_DONTWAIT),
+        Err(nix::errno::Errno::EAGAIN)
+    );
+}
+
+#[test]
 fn diagnostic_busy_handoff_stops_with_original_custody_and_no_ready() {
     let mut fx = Fixture::new();
     let mut value: serde_json::Value = serde_json::from_slice(&enter()).unwrap();
@@ -767,11 +801,9 @@ fn diagnostic_busy_handoff_stops_with_original_custody_and_no_ready() {
     // The real entry retains this stopped owner until failure exit. Closing it
     // here models exit's FD cleanup: admin gets EOF, never an invented Ready.
     drop(owner);
-    assert_eq!(
-        recv(fx.peer.as_raw_fd(), &mut [0], MsgFlags::MSG_DONTWAIT).unwrap(),
-        0
-    );
-    assert_eq!(reader.read(&mut [0]).unwrap(), 0);
+    let end = Instant::now() + Duration::from_secs(3);
+    await_eof_until(fx.peer.as_raw_fd(), end, || {});
+    await_eof_until(reader.as_raw_fd(), end, || {});
 }
 
 #[test]
@@ -886,14 +918,12 @@ fn diagnostic_held_listener_preserves_both_nonblocking_owners_and_custody() {
         );
     }
     drop((owner, second_owner));
+    let end = Instant::now() + Duration::from_secs(3);
     for peer in [&fx.peer, &second] {
-        assert_eq!(
-            recv(peer.as_raw_fd(), &mut [0], MsgFlags::MSG_DONTWAIT),
-            Ok(0)
-        );
+        await_eof_until(peer.as_raw_fd(), end, || {});
     }
-    assert_eq!(trace.read(&mut [0]).unwrap(), 0);
-    assert_eq!(member.read(&mut [0]).unwrap(), 0);
+    await_eof_until(trace.as_raw_fd(), end, || {});
+    await_eof_until(member.as_raw_fd(), end, || {});
 }
 
 #[test]

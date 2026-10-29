@@ -2,8 +2,9 @@
 
 Version: 0.1, 2026-10-29.
 
-This act answers #379 V3, V4 and V7 and advances issue #146 section E. It is
-stacked on draft #400 at a39b54590caa280265d6cc111785ad6be4a01778.
+This act answers #379 V3, V4 and V7, and #400 AN2, AN7 and AN8. It advances
+issue #146 section E and is stacked on draft #400 at
+a39b54590caa280265d6cc111785ad6be4a01778.
 
 ## Authority and disposition
 
@@ -79,6 +80,30 @@ source to remain parked. That expectation now distinguishes settled expiry,
 which resumes, from a clock failure, which retains the failed source. Both arms
 still require actual trace/state handle closure with no fabricated load.
 
+The Diagnostic handoff also rejects an already stopped admission owner before
+checking its retained binding. A second call keeps the original stop detail and
+source and sends nothing. Without this guard, the new test reaches a fresh
+refusal even though the original owner had stopped. The live driver does not
+retry today; this pins the owner boundary for later callers (#400 AN2).
+
+Both Diagnostic handoff cleanup instruments now use the shared bounded EOF
+helper for all retained peers and ancillary handles, under one three-second
+fixture deadline. They reject bytes and require actual EOF while allowing a
+concurrent fork's temporary descriptor copy to close (#400 AN8). This replaces
+the one-shot cleanup assertions; it does not establish the strict fork custody
+or Release ordering instruments still owed under #399 AM1/AM2. The earlier
+handoff record's broken census wrap is corrected (#400 AN7).
+Final author review applied the same helper to the new expiry handle-closure
+check, avoiding another one-shot EOF assertion in this act.
+
+The evidence retains two source cohorts. Six compiled expiry controls and the
+first full gates belong to fc88626a7b3927decf1fa6a6c5465f388bb84d82 and its
+archive. The additional stopped-handoff control and final full gates belong to
+the final source archive. Each cohort has its own 815-file Rust/configuration
+hash record; the two changed Rust files are the admission owner and its tests.
+The actual worker's receive-resumption control fails at the fixture's 35-second
+reply watchdog, not at a typed runtime refusal. All controls restore source.
+
 ## Review and remaining work
 
 The PR body records final gates, compiled controls, source hashes and the verified
@@ -86,10 +111,14 @@ evidence deposit. The code-review and verification-before-completion skills are
 unavailable in this session. Manual author review covers all changed callers and
 the rework, with no Planner, security or production qualification claim.
 
-#379 V1/V2/V5/V6/V8-V10 and the inherited review register remain. #393/#398 still
-need operator elections and merges before the separate Diagnostic interruption
-and setup rollback work. #399's AM1/AM2 custody instruments and other batch rows
-remain owed. No broad #146 checkbox closes, and no deployment or cutover occurs.
+#379 V1/V2/V5/V6/V8-V10 and the inherited review register remain. #400
+AN1/AN3-AN6 remain: the two descriptor mode changes are not atomic, the Spec
+wording and consolidation work are separate, and the explicitly root-only
+instrument still asserts its prerequisite rather than silently passing without
+running. #393/#398 still need operator elections and merges before the separate
+Diagnostic interruption and setup rollback work. #399's AM1/AM2 custody
+instruments and other batch rows remain owed. No broad #146 checkbox closes, and
+no deployment or cutover occurs.
 
 Carry into later admission changes: settlement must dispose of the send ticket
 and re-establish the connection's reader together. A test that checks only that

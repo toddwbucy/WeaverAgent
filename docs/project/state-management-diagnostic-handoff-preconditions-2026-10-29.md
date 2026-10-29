@@ -41,9 +41,8 @@ FoundationAdmission::serve_diagnostic. It retains the complete source on a faile
 preparation, stops before Harness::listen or any Diagnostic load, and sends no
 Ready. Success retains the raw bytes while moving the original peer, listener,
 envelope and ancillary handles into the existing Diagnostic path. A pre-load refusal
-returns that same peer and listener through their nonblocking constructors. The dormant
-foundation
-admission driver is the public adapter's only non-test consumer.
+returns that same peer and listener through their nonblocking constructors. The
+dormant foundation admission driver is the public adapter's only non-test consumer.
 
 The new owner test receives an original Diagnostic Enter with trace and state
 handles, then accepts a second root-authenticated connection into the listener's
