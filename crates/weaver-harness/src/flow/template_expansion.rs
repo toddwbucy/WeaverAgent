@@ -77,6 +77,13 @@ pub(in crate::flow) fn expand_activate(
     expand(certificate, identity, "plan.activate", "plan.event", None)
 }
 
+pub(in crate::flow) fn expand_break(
+    certificate: &TemplateCertificate,
+    identity: ExpansionIdentity<'_>,
+) -> Result<TemplateExpansion, ExpansionRefusal> {
+    expand(certificate, identity, "plan.break", "plan.event", None)
+}
+
 /// Root effect families have literal text. Plan identities and operator bytes
 /// are carried in typed context, never substituted into the certified sentence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

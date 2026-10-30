@@ -1,9 +1,23 @@
 //! Exhaustive conversion of root input metadata into the serialize-only mirror.
 use super::*;
 
-pub(in crate::flow) fn activation_effect(
+pub(in crate::flow) fn execution_effect(
     value: &shared::PlanEffect,
 ) -> Result<trace::PlanEffect, &'static str> {
+    if let shared::PlanEffect::Break {
+        expected,
+        step_id: step,
+        case,
+        proposed_source,
+    } = value
+    {
+        return Ok(trace::PlanEffect::Break {
+            expected: plan_ref(expected),
+            step_id: step.as_ref().map(step_id),
+            case: plan_break_case(*case),
+            proposed_source: proposed_source.as_ref().map(source),
+        });
+    }
     let shared::PlanEffect::Activate {
         expected,
         step_id: step,
@@ -266,5 +280,33 @@ fn replacement(value: &shared::PlanInputReplacement) -> trace::PlanInputReplacem
         groups: groups.iter().map(group).collect(),
         review: setup(review),
         preserved_closures: preserved_closures.iter().map(step_id).collect(),
+    }
+}
+
+fn plan_break_case(value: shared::PlanBreakCase) -> trace::PlanBreakCase {
+    match value {
+        shared::PlanBreakCase::NoLockedPlan => trace::PlanBreakCase::NoLockedPlan,
+        shared::PlanBreakCase::WrongCategory => trace::PlanBreakCase::WrongCategory,
+        shared::PlanBreakCase::UnknownTool => trace::PlanBreakCase::UnknownTool,
+        shared::PlanBreakCase::SelfEdit => trace::PlanBreakCase::SelfEdit,
+        shared::PlanBreakCase::InvalidTarget => trace::PlanBreakCase::InvalidTarget,
+        shared::PlanBreakCase::WorkChanged => trace::PlanBreakCase::WorkChanged,
+        shared::PlanBreakCase::ReviewSetupChanged => trace::PlanBreakCase::ReviewSetupChanged,
+        shared::PlanBreakCase::ReviewRequired => trace::PlanBreakCase::ReviewRequired,
+    }
+}
+
+pub(in crate::flow) fn plan_break(value: &shared::PlanBreakReport) -> trace::PlanBreakReport {
+    let shared::PlanBreakReport {
+        plan,
+        step_id: step,
+        proposed_source,
+        case,
+    } = value;
+    trace::PlanBreakReport {
+        plan: plan.as_ref().map(plan_ref),
+        step_id: step.as_ref().map(step_id),
+        proposed_source: proposed_source.as_ref().map(source),
+        case: plan_break_case(*case),
     }
 }

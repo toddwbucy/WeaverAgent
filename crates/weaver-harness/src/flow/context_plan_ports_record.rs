@@ -61,7 +61,10 @@ impl RecordingContext {
             return false;
         };
         if !work.driving
-            || !matches!(work.stage, Stage::Refusal | Stage::TemplateFault)
+            || !matches!(
+                work.stage,
+                Stage::Refusal | Stage::TemplateFault | Stage::BreakReport
+            )
             || !Arc::ptr_eq(&record.identity, identity)
             || record.ticket.is_some()
         {

@@ -17,6 +17,9 @@ use weaver_diagnostic::{
     SubmitRefusal, Subsystem, TurnRef,
 };
 
+#[path = "recorder/managed.rs"]
+mod managed;
+
 /// A recorder over a fresh temp file, with the file readable back beside it.
 fn stand(session: &str, run: &str) -> (Recorder, std::fs::File) {
     let file = tempfile();

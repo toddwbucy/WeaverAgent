@@ -2060,6 +2060,7 @@ impl<'a> Ports<'a> {
     /// because the derived seed of `weaver-spu-Spec` section 8.5 hashes the
     /// key and a re-fed generation under a fresh key would draw from a seed
     /// the source never used.
+    #[cfg(test)]
     pub(crate) fn replay_turn_started(&mut self, turn: &TurnKey) -> Result<(), TurnError> {
         self.author
             .author(
@@ -2077,6 +2078,7 @@ impl<'a> Ports<'a> {
     /// The replay's turn bracket closes clean: a re-fed turn has no stop to
     /// hear and no execution to await, and a seam refusal mid-turn closes
     /// through the refusal path instead.
+    #[cfg(test)]
     pub(crate) fn replay_turn_closed(&mut self, turn: &TurnKey) -> Result<(), TurnError> {
         self.author
             .author(
@@ -2094,6 +2096,7 @@ impl<'a> Ports<'a> {
     /// The replay's bracket closed stopped, the serving close's own rule -
     /// every exit past the open closes the bracket - applied to a re-fed
     /// turn a seam refusal or fault ended early.
+    #[cfg(test)]
     pub(crate) fn replay_turn_stopped(
         &mut self,
         turn: &TurnKey,
@@ -2128,6 +2131,7 @@ impl<'a> Ports<'a> {
     /// The four authorings mirror the serving ones event for event, which is
     /// what makes the diagnostic record readable by the serving record's
     /// instruments, per `weaver-diagnostic-Spec` section 4.
+    #[cfg(test)]
     pub(crate) fn refeed(
         &mut self,
         turn: &TurnKey,
@@ -2366,6 +2370,7 @@ impl<'a> Ports<'a> {
     /// One replay-native event authored, the loop's own kinds, per
     /// `weaver-diagnostic-Spec` section 3: the bracket's open, the identity
     /// it established, and the close with its outcome.
+    #[cfg(test)]
     pub(crate) fn author_replay(
         &mut self,
         kind: weaver_diagnostic::Kind,
@@ -2378,6 +2383,7 @@ impl<'a> Ports<'a> {
     }
 
     /// The declared session's name, for the identity event that carries it.
+    #[cfg(test)]
     pub(crate) fn session_name(&self) -> String {
         self.author.session().to_string()
     }

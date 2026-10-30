@@ -32,8 +32,75 @@ use weaver_diagnostic::{
 };
 use weaver_types::TurnKey;
 
-use crate::engine::{Ports, TurnError};
+use crate::engine::TurnError;
 use crate::state::Recalled;
+
+/// The replay walker has no transport policy. The entered owner keeps every
+/// wait under management, and interruption never becomes a Generation.
+pub(crate) trait ReplaySeat {
+    fn checkpoint(&mut self) -> Result<bool, TurnError>;
+    fn replay(&mut self, bound_ms: u64) -> Option<Vec<Recalled>>;
+    fn session_name(&self) -> String;
+    fn author_replay(&mut self, kind: Kind, payload: Payload) -> Result<(), TurnError>;
+    fn replay_turn_started(&mut self, turn: &TurnKey) -> Result<bool, TurnError>;
+    fn replay_turn_closed(&mut self, turn: &TurnKey) -> Result<(), TurnError>;
+    fn replay_turn_stopped(
+        &mut self,
+        turn: &TurnKey,
+        reason: weaver_trace::StopReason,
+    ) -> Result<(), TurnError>;
+    fn refeed(
+        &mut self,
+        turn: &TurnKey,
+        rendered: String,
+        path: Vec<u32>,
+    ) -> Result<Option<weaver_types::Generation>, TurnError>;
+    fn flush(&mut self, keep: u64) -> Result<Option<(u64, u64)>, TurnError>;
+    fn elide(&mut self, from: u64, to: u64) -> Result<Option<(u64, u64)>, TurnError>;
+}
+
+#[cfg(test)]
+impl ReplaySeat for crate::engine::Ports<'_> {
+    fn checkpoint(&mut self) -> Result<bool, TurnError> {
+        Ok(true)
+    }
+    fn replay(&mut self, bound_ms: u64) -> Option<Vec<Recalled>> {
+        self.replay(bound_ms)
+    }
+    fn session_name(&self) -> String {
+        self.session_name()
+    }
+    fn author_replay(&mut self, kind: Kind, payload: Payload) -> Result<(), TurnError> {
+        self.author_replay(kind, payload)
+    }
+    fn replay_turn_started(&mut self, turn: &TurnKey) -> Result<bool, TurnError> {
+        self.replay_turn_started(turn).map(|()| true)
+    }
+    fn replay_turn_closed(&mut self, turn: &TurnKey) -> Result<(), TurnError> {
+        self.replay_turn_closed(turn)
+    }
+    fn replay_turn_stopped(
+        &mut self,
+        turn: &TurnKey,
+        reason: weaver_trace::StopReason,
+    ) -> Result<(), TurnError> {
+        self.replay_turn_stopped(turn, reason)
+    }
+    fn refeed(
+        &mut self,
+        turn: &TurnKey,
+        rendered: String,
+        path: Vec<u32>,
+    ) -> Result<Option<weaver_types::Generation>, TurnError> {
+        self.refeed(turn, rendered, path).map(Some)
+    }
+    fn flush(&mut self, keep: u64) -> Result<Option<(u64, u64)>, TurnError> {
+        Ok(self.flush(keep))
+    }
+    fn elide(&mut self, from: u64, to: u64) -> Result<Option<(u64, u64)>, TurnError> {
+        Ok(self.elide(from, to))
+    }
+}
 
 /// How long the replay ask waits on the seal, milliseconds. The operator
 /// sequences the driver after the load, per the walk's three acts, so this
@@ -83,7 +150,10 @@ struct Grouped {
 /// port authors its own refusal and no close follows, as a refused re-feed
 /// ends the pass, and counts that disagree close it abandoned at identity,
 /// since the replay would go on feeding a context the source never held.
-fn reproduce(seat: &mut Ports<'_>, edit: Edit) -> Result<bool, TurnError> {
+fn reproduce(seat: &mut impl ReplaySeat, edit: Edit) -> Result<bool, TurnError> {
+    if !seat.checkpoint()? {
+        return Ok(false);
+    }
     let (answered, recorded, what) = match edit {
         Edit::Flush { before, after } => (seat.flush(after), (before, after), "flush"),
         Edit::Elision {
@@ -93,7 +163,7 @@ fn reproduce(seat: &mut Ports<'_>, edit: Edit) -> Result<bool, TurnError> {
             after,
         } => (seat.elide(from, to), (before, after), "elision"),
     };
-    let Some(answered) = answered else {
+    let Some(answered) = answered? else {
         return Ok(false);
     };
     if answered != recorded {
@@ -113,7 +183,7 @@ fn reproduce(seat: &mut Ports<'_>, edit: Edit) -> Result<bool, TurnError> {
 /// close. Returns only on a channel-level failure the service cannot
 /// survive: every outcome of the replay itself is the record's.
 pub(crate) fn drive(
-    seat: &mut Ports<'_>,
+    seat: &mut impl ReplaySeat,
     reader_elected: bool,
     declared_artifact: &str,
 ) -> Result<(), TurnError> {
@@ -126,7 +196,13 @@ pub(crate) fn drive(
         Payload::ReplayOpened(ReplayOpened { reader_elected }),
     )?;
 
+    if !seat.checkpoint()? {
+        return Ok(());
+    }
     let Some(events) = seat.replay(REPLAY_ASK_BOUND_MS) else {
+        if !seat.checkpoint()? {
+            return Ok(());
+        }
         // A leg that is down, an answer that is malformed, and a bound that
         // expired on a seal that never came are one outcome, per the loop
         // document's failure terms: no answer is no answer, and the account
@@ -139,6 +215,9 @@ pub(crate) fn drive(
         );
     };
 
+    if !seat.checkpoint()? {
+        return Ok(());
+    }
     let Grouped { turns, edits } = match group(&events) {
         Ok(grouped) => grouped,
         Err(detail) => return refuse_identity(seat, detail),
@@ -196,11 +275,17 @@ pub(crate) fn drive(
             }
         }
         let turn = TurnKey(turn_key.clone());
-        seat.replay_turn_started(&turn)?;
+        if !seat.replay_turn_started(&turn)? {
+            return Ok(());
+        }
         for source in generations {
             let refed =
                 match seat.refeed(&turn, source.rendered.clone(), source.output_tokens.clone()) {
-                    Ok(generation) => generation,
+                    Ok(Some(generation)) => generation,
+                    Ok(None) => {
+                        seat.replay_turn_stopped(&turn, weaver_trace::StopReason::Directive)?;
+                        return Ok(());
+                    }
                     // Every exit past the open closes the bracket, the serving
                     // close's own rule: the record channel is the sink and may
                     // still hold what the decode channel lost.
@@ -251,14 +336,14 @@ pub(crate) fn drive(
     close(seat, ReplayOutcome::Certified)
 }
 
-fn close(seat: &mut Ports<'_>, outcome: ReplayOutcome) -> Result<(), TurnError> {
+fn close(seat: &mut impl ReplaySeat, outcome: ReplayOutcome) -> Result<(), TurnError> {
     seat.author_replay(
         Kind::ReplayClosed,
         Payload::ReplayClosed(ReplayClosed { outcome }),
     )
 }
 
-fn refuse_identity(seat: &mut Ports<'_>, detail: String) -> Result<(), TurnError> {
+fn refuse_identity(seat: &mut impl ReplaySeat, detail: String) -> Result<(), TurnError> {
     close(
         seat,
         ReplayOutcome::Abandoned {

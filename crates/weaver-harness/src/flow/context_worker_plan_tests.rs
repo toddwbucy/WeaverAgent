@@ -40,6 +40,7 @@ pub(in crate::flow::context) fn templates() -> &'static [s::TemplateSpec] {
                 "plan.lock",
                 "plan.replace",
                 "plan.activate",
+                "plan.break",
             ]
             .into_iter()
             .map(|id| s::TemplateSpec {

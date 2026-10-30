@@ -469,7 +469,7 @@ mod expansion;
 #[allow(unused_imports)] // The repair owner consumes the certified runtime port.
 pub(super) use expansion::{
     ExpansionIdentity, ExpansionRefusal, RestatementTemplate, RootPlanTemplate, TemplateExpansion,
-    expand_activate, expand_begin_task, expand_outbound, expand_wind_down,
+    expand_activate, expand_begin_task, expand_break, expand_outbound, expand_wind_down,
 };
 
 #[cfg(test)]

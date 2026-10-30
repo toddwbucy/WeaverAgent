@@ -37,6 +37,9 @@ pub enum FoundationPlanOutcome<'a> {
         detail: &'a str,
     },
     Activated(&'a weaver_types::state_flow::PlanStep),
+    BreakRecorded {
+        current: Option<&'a weaver_types::state_flow::PlanSnapshot>,
+    },
     Allowed,
     Work(&'a WorkRef),
     Refused(&'a PlanOperationRefused),
@@ -77,6 +80,9 @@ impl FoundationPlanOperation {
                 FoundationPlanOutcome::QueryRefused { code, detail }
             }
             PlanPortCompletion::Activated(step) => FoundationPlanOutcome::Activated(step.step()),
+            PlanPortCompletion::BreakRecorded(_) => FoundationPlanOutcome::BreakRecorded {
+                current: self.completion.break_snapshot(),
+            },
             PlanPortCompletion::Allowed(_) => FoundationPlanOutcome::Allowed,
             PlanPortCompletion::Work(work) => FoundationPlanOutcome::Work(work.reference()),
             PlanPortCompletion::Refused { refusal, .. } => FoundationPlanOutcome::Refused(refusal),
@@ -137,6 +143,30 @@ impl FoundationInput<'_> {
                 successor,
             },
             Some(turn),
+            &mut MonotonicIo,
+        )
+    }
+
+    /// Record only the requested break. A locked plan requires an open turn
+    /// for its classified effect. Without a locked plan this records metadata
+    /// alone and returns the held current snapshot, which may be absent.
+    #[allow(clippy::result_large_err)]
+    pub fn record_break(
+        &mut self,
+        expected: PlanRef,
+        step_id: Option<StepId>,
+        case: weaver_types::state_flow::PlanBreakCase,
+        proposed_source: Option<weaver_types::state_flow::SourceBlockId>,
+        turn: Option<TurnKey>,
+    ) -> Result<(), FoundationPlanOperationError> {
+        self.begin_plan_operation(
+            FoundationPlanRequest::RecordBreak {
+                expected,
+                step_id,
+                case,
+                proposed_source,
+            },
+            turn,
             &mut MonotonicIo,
         )
     }
@@ -339,12 +369,10 @@ impl FoundationInput<'_> {
                             ports.io,
                             FlowHaltReason::ProtocolFailed,
                             HaltPoint::Barrier,
-                            "activation lost its loaded template certificate",
+                            "plan effect lost its loaded template certificate",
                         ));
                     };
-                    owner
-                        .context
-                        .begin_activation_effect(certificate, ports.io)?;
+                    owner.context.begin_plan_effect(certificate, ports.io)?;
                 }
                 PlanPortProgress::Progress => (),
                 PlanPortProgress::Pending => {

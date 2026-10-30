@@ -95,8 +95,9 @@ fn worker_input_gate_child() {
         && !mode.ends_with("-source-author")
         && !mode.ends_with("-task-author")
     {
-        let flags_turn =
-            mode.contains("-flags-turn-boundary") || mode.contains("-port-activation-");
+        let flags_turn = mode.contains("-flags-turn-boundary")
+            || mode.contains("-port-activation-")
+            || mode.contains("-port-break-");
         if flags_turn {
             let end = Instant::now() + Duration::from_secs(15);
             while !root.join("flags-turn-request").exists() {
@@ -156,7 +157,7 @@ fn worker_input_gate_child() {
                         // disposition. Record even an erroneous Stop Lower so
                         // the parent, rather than this child alone, rejects it.
                         std::fs::write(root.join("flags-turn-lowered"), b"lower\n").unwrap();
-                        if mode.contains("-port-activation-") {
+                        if mode.contains("-port-activation-") || mode.contains("-port-break-") {
                             std::fs::write(root.join("plan-port-lowered"), b"lower\n").unwrap();
                         }
                         packet(

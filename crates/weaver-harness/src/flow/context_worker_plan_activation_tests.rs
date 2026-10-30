@@ -1,4 +1,4 @@
-//! Actual checked world input and SQLite activation, interrupted while its
+//! Actual checked world input and SQLite plan effects, interrupted while their
 //! committed receipt is held by the byte-preserving member proxy.
 use super::*;
 use crate::flow::context::worker_startup::input::plan::tests as root_plan;
@@ -31,6 +31,8 @@ pub(super) fn exercise(
     socket: &Path,
     mode: &str,
 ) -> Option<Cleanup> {
+    let breaking = mode.contains("-port-break-");
+    let active_break = breaking && mode.contains("-break-active-");
     let mut guard = root_plan::sqlite_update(serving, member, reader, socket, false);
     root_plan::flags::prepare_checked_turn(&mut guard, member, socket);
     let input = guard.input.as_mut().unwrap();
@@ -46,20 +48,45 @@ pub(super) fn exercise(
         .unwrap()
         .plan
         .clone();
-    input
-        .step_successor(plan, None, Some(turn.clone()))
-        .unwrap();
-    let checked = complete(input, member).into_successor().unwrap();
-    let successor = checked.reference().clone();
-    member.hold_next_normal_filing();
-    input
-        .activate(
-            successor.plan.clone(),
-            successor.step_id.clone(),
-            checked,
-            turn.clone(),
-        )
-        .unwrap();
+    let mut active_step = None;
+    if !breaking || active_break {
+        input
+            .step_successor(plan.clone(), None, Some(turn.clone()))
+            .unwrap();
+        let checked = complete(input, member).into_successor().unwrap();
+        let successor = checked.reference().clone();
+        if !breaking {
+            member.hold_next_normal_filing();
+        }
+        input
+            .activate(
+                plan.clone(),
+                successor.step_id.clone(),
+                checked,
+                turn.clone(),
+            )
+            .unwrap();
+        if breaking {
+            let activated = complete(input, member);
+            assert!(matches!(
+                activated.outcome(),
+                FoundationPlanOutcome::Activated(_)
+            ));
+            active_step = Some(successor.step_id);
+        }
+    }
+    if breaking {
+        member.hold_next_normal_filing();
+        input
+            .record_break(
+                plan,
+                active_step,
+                s::PlanBreakCase::WorkChanged,
+                Some(source.clone()),
+                Some(turn.clone()),
+            )
+            .unwrap();
+    }
     let bound = input
         .serving
         .owner
@@ -72,13 +99,13 @@ pub(super) fn exercise(
         step(input, member);
         assert!(
             Instant::now() < end,
-            "activation receipt never reached the proxy"
+            "plan effect receipt never reached the proxy"
         );
     }
     let context = &mut input.serving.owner.context;
     let request = format!("{:?}", context.plan_port_work().unwrap().test_request());
-    let effect = context.test_activation_effect().unwrap().clone();
-    assert!(matches!(effect, s::PlanEffect::Activate { .. }));
+    let effect = context.test_plan_effect().unwrap().clone();
+    assert_eq!(matches!(effect, s::PlanEffect::Break { .. }), breaking);
     assert!(!context.native_place_cache_ready());
     assert!(input.take_plan_operation().is_none());
     assert!(input.plan_operation_pending());
@@ -211,7 +238,7 @@ pub(super) fn exercise(
     assert!(context.plan_cache.required.is_none());
     assert!(
         context.native_place_cache_ready(),
-        "cancelled committed activation must adopt scopes"
+        "cancelled committed effect must adopt its native cache"
     );
     let s::QueryResult::PlanCurrent {
         current: Some(current),
@@ -226,16 +253,41 @@ pub(super) fn exercise(
     else {
         panic!("actual complete plan snapshot")
     };
-    let active = current
-        .steps
-        .iter()
-        .find(|step| step.step_id == successor.step_id)
-        .unwrap();
-    assert_eq!(active.status, s::StepStatus::Active);
-    let s::PlanEffect::Activate { step_span, .. } = &effect else {
-        unreachable!()
-    };
-    assert_eq!(active.span.as_ref(), Some(step_span));
+    match &effect {
+        s::PlanEffect::Activate {
+            step_id, step_span, ..
+        } => {
+            let active = current
+                .steps
+                .iter()
+                .find(|step| &step.step_id == step_id)
+                .unwrap();
+            assert_eq!(active.status, s::StepStatus::Active);
+            assert_eq!(active.span.as_ref(), Some(step_span));
+        }
+        s::PlanEffect::Break {
+            expected,
+            step_id,
+            case,
+            proposed_source,
+        } => {
+            assert_eq!(&current.plan, expected);
+            assert_eq!(current.status, s::PlanStatus::Broken);
+            let broken = current.broken.as_ref().unwrap();
+            assert_eq!(&broken.step_id, step_id);
+            assert_eq!(&broken.case, case);
+            assert_eq!(&broken.proposed_source, proposed_source);
+            assert_eq!(broken.source, current.last_source.block_id);
+            assert_eq!(
+                current
+                    .steps
+                    .iter()
+                    .any(|step| step.status == s::StepStatus::Active),
+                active_break
+            );
+        }
+        _ => unreachable!(),
+    }
     let effect_sequence = current.last_source.block_id.sequence.0;
     let through = context.barrier.latest_recorded().unwrap();
     let rows = trace_through(
@@ -249,8 +301,22 @@ pub(super) fn exercise(
         rows.iter()
             .filter(|row| row["kind"] == "plan.event")
             .count(),
-        1
+        if active_break { 2 } else { 1 }
     );
+    let reports: Vec<_> = rows
+        .iter()
+        .filter(|row| row["kind"] == "plan.break")
+        .collect();
+    assert_eq!(reports.len(), usize::from(breaking));
+    if breaking {
+        assert_eq!(reports[0]["causal_parent"], effect_sequence.to_string());
+        assert_eq!(reports[0]["turn"], turn.0);
+        assert_eq!(reports[0]["payload"]["case"], "work_changed");
+        assert_eq!(
+            reports[0]["payload"]["proposed_source"],
+            serde_json::to_value(&source).unwrap()
+        );
+    }
     assert!(
         rows.iter()
             .all(|row| row["kind"] != "model.request" && row["kind"] != "refusal")
@@ -285,6 +351,20 @@ pub(super) fn exercise(
         .collect();
     assert_eq!(closes.len(), 1);
     assert_eq!(closes[0]["turn"], turn.0);
+    if breaking {
+        assert!(
+            closes[0]["sequence"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+                > reports[0]["sequence"]
+                    .as_str()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+        );
+    }
     assert!(
         closes[0]["sequence"]
             .as_str()

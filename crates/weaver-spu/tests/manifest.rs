@@ -76,6 +76,7 @@ const TABLE: &[(&str, &[&str], &[&str])] = &[
         &[
             "WEAVER_ARTIFACT_COLUMN_LAYERS",
             "WEAVER_ARTIFACT_COLUMN_WIDTH",
+            "WEAVER_ARTIFACT_QWEN25_SAFETENSORS",
             "WEAVER_TEST_GGUF",
         ],
     ),
