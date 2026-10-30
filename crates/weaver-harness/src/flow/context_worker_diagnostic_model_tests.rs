@@ -34,7 +34,8 @@ pub(super) fn prepare(root: &std::path::Path, path: &std::path::Path) {
     .unwrap();
 }
 /// The scenario's model, by the SPU tests' fixture convention (SPU Spec 1.2):
-/// `WEAVER_ARTIFACT_QWEN25_SAFETENSORS` names the native directory and
+/// `WEAVER_ARTIFACT_QWEN25_SAFETENSORS` names the native directory, which
+/// the SPU's resolution walks into, and
 /// `WEAVER_TEST_GGUF` the GGUF file. Unset and absent skips; named and absent
 /// fails, so a runner that asked for the real model is told it did not run.
 pub(crate) fn artifact(mode: &str) -> Option<PathBuf> {
@@ -52,12 +53,12 @@ pub(crate) fn artifact(mode: &str) -> Option<PathBuf> {
         )
     };
     let resolve = |path: PathBuf| {
-        let file = if native {
-            path.join("model.safetensors")
+        let present = if native {
+            path.is_dir()
         } else {
-            path
+            path.is_file()
         };
-        file.is_file().then_some(file)
+        present.then_some(path)
     };
     match std::env::var_os(variable) {
         Some(named) => {

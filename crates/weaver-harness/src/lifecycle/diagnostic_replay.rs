@@ -777,7 +777,10 @@ impl ReplayPorts<'_, '_> {
                 DecodeReply::Answer(TokenAnswer::Fault(report)) => {
                     // Bound best-effort fault accounting before touching a
                     // possibly blocked sink. Keep an earlier interval intact.
+                    // The ReFeed has ended: a Stop landing during the record
+                    // must not send a Cancel to it.
                     let control = self.management.replay.as_mut().unwrap();
+                    control.active = false;
                     let earlier = control.failure_deadline.is_some();
                     control.failure_deadline.get_or_insert_with(|| {
                         shared_deadline(Instant::now()).expect("representable cleanup bound")
@@ -799,7 +802,6 @@ impl ReplayPorts<'_, '_> {
                     // An uninterrupted fault ends the pass, not the run: the
                     // bracket closes stopped and the run stands for Leave. The
                     // bound covered only this fault's record.
-                    control.active = false;
                     control.decode_busy = false;
                     if !earlier {
                         control.failure_deadline = None;

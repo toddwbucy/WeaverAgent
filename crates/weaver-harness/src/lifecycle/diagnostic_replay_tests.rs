@@ -566,27 +566,87 @@ fn diagnostic_replay_uninterrupted_fault_stands_for_leave() {
 /// A Stop heard while a clean turn.closed is still being written answers
 /// AtRest after that close and leaves the pass running (Spec section 6.2).
 #[test]
+fn diagnostic_replay_stop_during_a_fault_record_sends_no_cancel() {
+    use std::io::Read;
+    use std::os::unix::net::UnixStream;
+    fixture("fault-record-stop", |owner, far| {
+        let turn = TurnKey("original-turn".into());
+        owner.replay.as_mut().unwrap().turn = Some(turn.clone());
+        let (decode, spu) = DecodeChannel::pair().unwrap();
+        let spu = spu.into_channel();
+        let (sink, mut reader) = UnixStream::pair().unwrap();
+        sink.set_nonblocking(true).unwrap();
+        full(sink.as_fd());
+        let mut recorder = recorder(sink);
+        let author = Author::new(&SessionId("s".into()), &weaver_types::RunId("r".into()));
+        let report = crate::authorship::harness_report(
+            weaver_types::FaultCase::DeviceFaultDuringGeneration,
+            "{\"refeed\":true}",
+        );
+        std::thread::scope(|scope| {
+            let sent = report.clone();
+            let peer = scope.spawn(move || {
+                assert!(matches!(
+                    take_directive(&spu),
+                    TokenDirective::ReFeed { .. }
+                ));
+                spu_sends(&spu, serde_json::to_vec(&TokenAnswer::Fault(sent)).unwrap());
+                // The fault's record is blocked on the full sink when the
+                // Stop lands; the ended ReFeed must not be cancelled.
+                std::thread::sleep(Duration::from_millis(100));
+                stop(far, 2);
+                std::thread::sleep(Duration::from_millis(100));
+                reader
+                    .set_read_timeout(Some(Duration::from_millis(300)))
+                    .unwrap();
+                let mut bytes = [0; 16_384];
+                while reader.read(&mut bytes).is_ok_and(|n| n > 0) {}
+                (spu, reader)
+            });
+            let mut ports = ReplayPorts {
+                management: owner,
+                decode: &decode,
+                author: &author,
+                recorder: &mut recorder,
+                state: None,
+                failed: false,
+            };
+            let faulted = ports.refeed(&turn, "rendered".into(), vec![3, 4, 5]);
+            let (spu, _reader) = peer.join().unwrap();
+            assert!(
+                matches!(faulted, Err(TurnError::Faulted { .. })),
+                "a Stop during the fault's record leaves it Faulted, got {faulted:?}"
+            );
+            let control = ports.management.replay.as_ref().unwrap();
+            assert!(!control.cancel_sent, "no Cancel to an ended ReFeed");
+            let mut bytes = [0; 64];
+            assert_eq!(
+                recv(spu.as_fd().as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
+                Err(nix::errno::Errno::EAGAIN),
+                "the SPU received a Cancel"
+            );
+        });
+    });
+}
+
+#[test]
 fn diagnostic_replay_stop_during_a_clean_close_keeps_the_pass() {
-    use std::io::{Read, Write};
+    use std::io::Read;
     use std::os::unix::net::UnixStream;
     fixture("closing-stop", |owner, far| {
         let turn = TurnKey("original-turn".into());
         owner.replay.as_mut().unwrap().turn = Some(turn.clone());
         let (decode, _spu) = DecodeChannel::pair().unwrap();
-        let (mut sink, mut reader) = UnixStream::pair().unwrap();
+        let (sink, mut reader) = UnixStream::pair().unwrap();
         sink.set_nonblocking(true).unwrap();
-        loop {
-            match sink.write(&[b'x'; 16_384]) {
-                Ok(n) => assert!(n > 0),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                other => panic!("fill the real record sink: {other:?}"),
-            }
-        }
+        full(sink.as_fd());
         let mut recorder = recorder(sink);
         let author = Author::new(&SessionId("s".into()), &weaver_types::RunId("r".into()));
         std::thread::scope(|scope| {
             let drain = scope.spawn(move || {
-                // The close is blocked on the full sink when the Stop lands.
+                // The close's opening checkpoint runs before it is closing:
+                // let it reach the full sink before the Stop lands.
+                std::thread::sleep(Duration::from_millis(100));
                 stop(far, 2);
                 std::thread::sleep(Duration::from_millis(100));
                 reader
