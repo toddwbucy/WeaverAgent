@@ -78,7 +78,7 @@ pub(super) fn exercise(
                 // Admit close against the actual member, then hold its
                 // step.outcome receipt so Stop/Leave arrives after admission.
                 let evidence = attest(input, member, &plan, &successor.step_id, span, &turn);
-                let outcome = outcome_span(input, member);
+                let outcome = outcome_span(input, member, &plan, &turn);
                 member.hold_next_normal_filing();
                 input
                     .close(
@@ -474,48 +474,20 @@ fn attest(
     complete(input, member).into_closure_evidence().unwrap()
 }
 
-/// The caller's own recorded marks read, through the one span allocator.
-fn outcome_span(input: &mut FoundationInput<'_>, member: &mut Member) -> s::SpanRef {
-    use crate::flow::context::ReadCompletion;
+/// The caller's outcome span, through the public outcome_span operation.
+/// The owner holds its read for the close that follows.
+fn outcome_span(
+    input: &mut FoundationInput<'_>,
+    member: &mut Member,
+    plan: &s::PlanRef,
+    turn: &TurnKey,
+) -> s::SpanRef {
     input
-        .serving
-        .owner
-        .context
-        .begin_read(s::ReadSelector::Marks {}, None, &mut MonotonicIo)
+        .outcome_span(plan.clone(), Some(turn.clone()))
         .unwrap();
-    let end = Instant::now() + Duration::from_secs(5);
-    loop {
-        let owner = &mut input.serving.owner;
-        let mut io = NonblockingIo { waits: 0 };
-        let mut ports = PumpPorts {
-            lifecycle: LifecyclePorts {
-                listener: Some(&mut owner.listener),
-                residency: Some(owner.resident.residency),
-                ..Default::default()
-            },
-            gate: Some(&mut owner.gate),
-            decode: Some(owner.decode),
-            label: None,
-            io: &mut io,
-        };
-        owner.context.advance_read(&mut ports).unwrap();
-        if let Some(done) = owner.context.take_read(ports.io).unwrap() {
-            let ReadCompletion::Recorded(read) = done else {
-                panic!("caller marks read refused")
-            };
-            let seed = owner.context.open_start.as_ref().unwrap().seed_id.clone();
-            let Ok(spans) = crate::flow::plan::ports::activation::SpanAllocator::from_marks(
-                owner.context,
-                &read,
-                &seed,
-            ) else {
-                panic!("recorded marks allocate")
-            };
-            return spans.peek();
-        }
-        owner.context.pump_once(&mut ports).unwrap();
-        member.step_live("ready");
-        assert!(Instant::now() < end, "caller marks read did not settle");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    let result = complete(input, member);
+    let FoundationPlanOutcome::OutcomeSpan(span) = result.outcome() else {
+        panic!("outcome_span must allocate: {result:?}")
+    };
+    span.clone()
 }

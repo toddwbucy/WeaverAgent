@@ -205,8 +205,8 @@ pub(super) fn exercise(
             panic!("actual committed plan snapshot")
         };
         let before_steps = before_snapshot.steps.clone();
-        if mode.ends_with("-close") {
-            close(input, &successor, span, through);
+        if mode.ends_with("-close") || mode.ends_with("-close-raced") {
+            close(input, &successor, span, through, mode.ends_with("-raced"));
             return;
         }
         let expected_digest = if mode.ends_with("-work") {
@@ -366,6 +366,14 @@ pub(super) fn exercise(
         );
     });
     let rows = management::tests::trace(reader);
+    if mode.ends_with("-close-raced") {
+        // The source was authored before the store refused it; no operation
+        // refusal follows a halt, and no closure is recorded as committed.
+        let outcomes = rows.iter().filter(|row| row["kind"] == "step.outcome");
+        assert_eq!(outcomes.count(), 1);
+        assert!(rows.iter().all(|row| row["kind"] != "refusal"));
+        return;
+    }
     if mode.ends_with("-close") {
         let outcomes: Vec<_> = rows
             .iter()
@@ -566,12 +574,18 @@ fn interrupt_completed(guard: &mut Guard<'_>, socket: &Path, leave: bool) {
 
 /// D1 against the actual member: its served preview becomes the harness
 /// WorkRef, attest_closure grants the evidence, the caller allocates the
-/// outcome span from its own marks read, and the store accepts the close.
+/// outcome span through outcome_span, and the store accepts the close.
+///
+/// Raced, the caller's span is one past the held catalog's: the next span the
+/// store would see had another allocation landed after the read. The local
+/// check admits it, the store's consecutive-span guard rejects the filing,
+/// and the member's plan and marks stay as they were.
 fn close(
     input: &mut FoundationInput<'_>,
     successor: &s::StepQueryRef,
     span: s::SpanRef,
     through: s::SourcePosition,
+    raced: bool,
 ) {
     let preview = read(
         input,
@@ -602,15 +616,17 @@ fn close(
         )
         .unwrap();
     let evidence = complete_operation(input).into_closure_evidence().unwrap();
-    let marks = read(input, s::ReadSelector::Marks {});
-    let context = &input.serving.owner.context;
-    let seed = context.open_start.as_ref().unwrap().seed_id.clone();
-    let Ok(spans) =
-        crate::flow::plan::ports::activation::SpanAllocator::from_marks(context, &marks, &seed)
-    else {
-        panic!("recorded marks allocate")
+    input
+        .outcome_span(successor.plan.clone(), Some(TurnKey(TURN.into())))
+        .unwrap();
+    let result = complete_operation(input);
+    let FoundationPlanOutcome::OutcomeSpan(allocated) = result.outcome() else {
+        panic!("outcome_span must allocate: {result:?}")
     };
-    let outcome = spans.peek();
+    let mut outcome = allocated.clone();
+    if raced {
+        outcome.local_id = (outcome.local_id.0 + 1).into();
+    }
     let bound = AbsoluteBound::after(MonotonicIo.now().unwrap(), 5_000_000_000).unwrap();
     input
         .serving
@@ -627,6 +643,28 @@ fn close(
             TurnKey(TURN.into()),
         )
         .unwrap();
+    if raced {
+        // Today a store guard refusal of the filed effect halts the run as
+        // FilingRefused; the store's own D1 test pins its bytes unchanged.
+        let end = Instant::now() + Duration::from_secs(5);
+        while input.advance() != FoundationInputProgress::Stopped {
+            assert!(Instant::now() < end, "the refused filing must stop the run");
+        }
+        let failure = input.serving.owner.context.failure().unwrap();
+        assert!(
+            matches!(
+                failure,
+                RunFailure::Flow {
+                    reason: FlowHaltReason::FilingRefused,
+                    detail,
+                    ..
+                } if detail.contains("span allocation is not consecutive")
+            ),
+            "{failure:?}"
+        );
+        assert!(input.take_plan_operation().is_none());
+        return;
+    }
     let result = complete_operation(input);
     let FoundationPlanOutcome::Closed(current) = result.outcome() else {
         panic!("close must return its committed snapshot: {result:?}")

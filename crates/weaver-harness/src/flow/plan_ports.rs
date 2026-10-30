@@ -2,7 +2,6 @@
 //! create no effect, and never classify a held statement again.
 use super::CommittedPlanSummary;
 use crate::flow::context::{RecordedRead, RecordedReadRefusal, RecordingContext};
-use sha2::{Digest as _, Sha256};
 use weaver_types::state_flow as s;
 
 #[path = "plan_activation.rs"]
@@ -53,8 +52,12 @@ pub enum PlanRequest {
         step_id: s::StepId,
         work: CheckedWork,
     },
-    /// The caller allocates outcome_span from a recorded marks catalog. The
-    /// store still requires it to be the next span below the active step.
+    /// The caller's outcome_span allocation for close: a standalone Marks
+    /// read that keeps its read outcome, records no refusal and creates no
+    /// effect. The owner holds its recorded catalog for the next close.
+    OutcomeSpan { expected: s::PlanRef },
+    /// outcome_span is the caller's allocation from the owner's held Marks
+    /// read. The store still requires it to be the next span below the step.
     Close {
         expected: s::PlanRef,
         step_id: s::StepId,
@@ -72,12 +75,13 @@ impl PlanRequest {
             | Self::AssessAct { expected, .. }
             | Self::WorkReference { expected, .. }
             | Self::AttestClosure { expected, .. }
+            | Self::OutcomeSpan { expected }
             | Self::Close { expected, .. } => expected,
         }
     }
     pub(in crate::flow) fn step_id(&self) -> Option<&s::StepId> {
         match self {
-            Self::StepSuccessor { .. } => None,
+            Self::StepSuccessor { .. } | Self::OutcomeSpan { .. } => None,
             Self::RecordBreak { step_id, .. } => step_id.as_ref(),
             Self::Activate { step_id, .. }
             | Self::AssessAct { step_id, .. }
@@ -88,7 +92,7 @@ impl PlanRequest {
     }
     pub(in crate::flow) fn operation(&self) -> Option<s::PlanPortOperation> {
         Some(match self {
-            Self::StepSuccessor { .. } => return None,
+            Self::StepSuccessor { .. } | Self::OutcomeSpan { .. } => return None,
             Self::Activate { .. } => s::PlanPortOperation::Activate,
             Self::RecordBreak { .. } => s::PlanPortOperation::RecordBreak,
             Self::AssessAct { .. } => s::PlanPortOperation::AssessAct,
@@ -118,7 +122,7 @@ impl PlanRequest {
                 plan: expected.clone(),
                 previous_step: previous_step.clone(),
             },
-            Self::Activate { .. } => s::ReadSelector::Marks {},
+            Self::Activate { .. } | Self::OutcomeSpan { .. } => s::ReadSelector::Marks {},
             Self::RecordBreak { .. } => unreachable!("break consumes the committed cache"),
             Self::AssessAct { statement, .. } => s::ReadSelector::Statement {
                 statement: statement.clone(),
@@ -260,11 +264,7 @@ pub(in crate::flow) fn assess(
             "statement proof changed its requested identity",
         ));
     }
-    let category = plan
-        .categories
-        .iter()
-        .find(|category| category.id == step.category)
-        .ok_or(PlanCheckFailure::Protocol("active step category is absent"))?;
+    let category = closure::category(plan, step)?;
     if let s::PlanAct::ExternalTool { name } = act
         && (name != "sh" || loaded_tools.sh.is_none())
     {
@@ -315,13 +315,7 @@ pub(in crate::flow) fn work_reference(
             "work preview has another result family",
         ));
     };
-    if actual != span
-        || frontier != through
-        || entries
-            .iter()
-            .flat_map(|entry| &entry.pairs)
-            .any(|pair| pair.fate == s::PairFate::Opened)
-    {
+    if actual != span || frontier != through || closure::open_pair(entries) {
         return Err(PlanCheckFailure::Protocol(
             "work preview changed its frontier or retained an open pair",
         ));
@@ -331,8 +325,7 @@ pub(in crate::flow) fn work_reference(
         step_id: step_id.clone(),
         span: span.clone(),
         through: through.clone(),
-        content_sha256: s::Digest::new(format!("{:x}", Sha256::digest(preview.raw_bytes())))
-            .expect("SHA-256 has the digest shape"),
+        content_sha256: closure::digest(preview.raw_bytes()),
     })
 }
 

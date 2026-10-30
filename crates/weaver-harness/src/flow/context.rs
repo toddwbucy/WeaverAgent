@@ -394,6 +394,9 @@ pub(crate) struct RecordingContext {
     retired_enter: Option<AbsoluteBound>,
     inspection: Option<inspection_driver::InspectionTransaction>,
     marks: Option<marks_driver::MarkOperation>,
+    /// The latest outcome_span operation's recorded Marks read. The loop
+    /// cannot supply one; close consumes it once admitted.
+    outcome_marks: Option<plan_port_driver::HeldOutcome>,
     // Pointer identity survives moves and is never recreated from trace IDs.
     read_origin: std::sync::Arc<()>,
     content_read_started: bool,
@@ -559,6 +562,7 @@ impl RecordingContext {
             retired_enter: None,
             inspection: None,
             marks: None,
+            outcome_marks: None,
             read_origin: std::sync::Arc::new(()),
             content_read_started: false,
             boot_read_started: false,

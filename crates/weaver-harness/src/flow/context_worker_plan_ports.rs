@@ -46,6 +46,9 @@ pub enum FoundationPlanOutcome<'a> {
     Work(&'a WorkRef),
     /// attest_closure granted unreviewed ClosureEvidence for this work.
     Attested(&'a WorkRef),
+    /// outcome_span's next unallocated span. The owner holds its read for
+    /// the next close; a later outcome_span replaces it.
+    OutcomeSpan(&'a SpanRef),
     /// close committed this snapshot, as its mandatory refresh adopted it.
     Closed(&'a weaver_types::state_flow::PlanSnapshot),
     Refused(&'a PlanOperationRefused),
@@ -109,6 +112,11 @@ impl FoundationPlanOperation {
             PlanPortCompletion::Attested(evidence) => {
                 FoundationPlanOutcome::Attested(evidence.work())
             }
+            PlanPortCompletion::OutcomeSpan(_) => FoundationPlanOutcome::OutcomeSpan(
+                self.completion
+                    .outcome_span()
+                    .expect("a settled outcome_span retains its span"),
+            ),
             PlanPortCompletion::Closed(_) => FoundationPlanOutcome::Closed(
                 self.completion
                     .closed_snapshot()
@@ -266,9 +274,42 @@ impl FoundationInput<'_> {
         )
     }
 
-    /// Close the active step with this consumed grant. The caller allocates
-    /// outcome_span from a recorded marks catalog. The original Decision bounds
-    /// the work reread, the step.outcome, its refresh and native adoption.
+    /// Allocate close's outcome_span: one recorded Marks read through the
+    /// plan port. The outcome shows the next unallocated span, and this owner
+    /// keeps the read for the next close, replacing any older one. It files
+    /// nothing; a refused read keeps its read outcome and holds no read.
+    #[allow(clippy::result_large_err)]
+    pub fn outcome_span(
+        &mut self,
+        expected: PlanRef,
+        turn: Option<TurnKey>,
+    ) -> Result<(), FoundationPlanOperationError> {
+        self.begin_plan_operation(
+            FoundationPlanRequest::OutcomeSpan { expected },
+            turn,
+            &mut MonotonicIo,
+        )
+    }
+
+    /// Close the active step with this consumed grant. outcome_span comes
+    /// from [`Self::outcome_span`], whose read this owner holds. Admitted,
+    /// close takes that read once: with none held for this run and revision,
+    /// or a seed or revision not that catalog's, it refuses before any read.
+    /// The original Decision bounds the reread, step.outcome, refresh and
+    /// adoption.
+    ///
+    /// The loop cannot supply a Marks read: the request has no such field,
+    /// and no read or grant type for one is public.
+    ///
+    /// ```compile_fail,E0026
+    /// fn held(request: weaver_harness::FoundationPlanRequest) {
+    ///     if let weaver_harness::FoundationPlanRequest::Close { marks, .. } = request {}
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0425
+    /// fn held(_: weaver_harness::OutcomeMarks) {}
+    /// ```
     #[allow(clippy::result_large_err)]
     pub fn close(
         &mut self,

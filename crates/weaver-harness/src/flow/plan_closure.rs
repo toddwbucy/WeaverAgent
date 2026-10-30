@@ -1,12 +1,15 @@
 //! Unreviewed closure consumes moved checked work and a private grant. Neither
 //! public WorkRef metadata nor model text can construct the evidence it needs.
+use super::activation::SpanAllocator;
 use super::effect::PreparedPortEffect;
 use super::*;
 use crate::flow::clock::AbsoluteBound;
+use crate::flow::context::plan_port_driver::HeldOutcome;
+use sha2::{Digest as _, Sha256};
 use std::sync::Arc;
 use weaver_trace::TurnRef;
 
-fn category<'a>(
+pub(super) fn category<'a>(
     plan: &'a s::PlanSnapshot,
     step: &s::PlanStep,
 ) -> Result<&'a s::Category, PlanCheckFailure> {
@@ -35,11 +38,11 @@ fn held_target(
     Ok(())
 }
 
-fn digest(bytes: &[u8]) -> s::Digest {
+pub(super) fn digest(bytes: &[u8]) -> s::Digest {
     s::Digest::new(format!("{:x}", Sha256::digest(bytes))).expect("SHA-256 has the digest shape")
 }
 
-fn open_pair(entries: &[s::ReadEntry]) -> bool {
+pub(super) fn open_pair(entries: &[s::ReadEntry]) -> bool {
     entries
         .iter()
         .flat_map(|entry| &entry.pairs)
@@ -104,12 +107,28 @@ pub(in crate::flow) fn attest(
 /// work reread. Correct refusals here leave the plan and cache unchanged.
 pub(in crate::flow) fn validate_close<'a>(
     request: &PlanRequest,
+    held: Option<&HeldOutcome>,
     context: &RecordingContext,
     current: &'a CommittedPlanSummary,
 ) -> Result<(&'a s::PlanSnapshot, &'a s::PlanStep), PlanCheckFailure> {
     let (plan, step) = active(request, context, current)?;
-    let PlanRequest::Close { evidence, .. } = request else {
+    let PlanRequest::Close {
+        evidence,
+        outcome_span,
+        ..
+    } = request
+    else {
         return Err(PlanCheckFailure::Protocol("close received another request"));
+    };
+    // The owner's held outcome_span read, from this run and for this plan
+    // revision. The loop cannot supply one, so its absence is a refusal.
+    let Some(held) =
+        held.filter(|held| held.belongs_to(context) && held.expected() == request.expected())
+    else {
+        return Err(refuse(
+            s::PlanOperationCase::InvalidTarget,
+            "close has no held outcome_span read for this run and plan revision",
+        ));
     };
     if !evidence.belongs_to(context) {
         return Err(PlanCheckFailure::Protocol(
@@ -123,6 +142,16 @@ pub(in crate::flow) fn validate_close<'a>(
         ));
     }
     held_target(evidence.work(), plan, step)?;
+    // The caller's span must be an allocation from its held catalog. Its
+    // local_id stays the store's: a span allocated since the read is a race
+    // the store guards, after the effect is admitted.
+    let held = SpanAllocator::from_marks(context, held.read(), &plan.plan.plan_id.seed_id)?.peek();
+    if outcome_span.seed_id != held.seed_id || outcome_span.revision != held.revision {
+        return Err(refuse(
+            s::PlanOperationCase::InvalidTarget,
+            "outcome span is not an allocation from its held marks catalog",
+        ));
+    }
     if evidence.setup() != &plan.review {
         return Err(refuse(
             s::PlanOperationCase::ReviewSetupChanged,
@@ -144,13 +173,15 @@ pub(in crate::flow) fn validate_close<'a>(
 /// the same selector are PLAN-PORT-REFUSAL's local work_changed with null code.
 pub(in crate::flow) fn prepare_close(
     request: &PlanRequest,
+    held: Option<&HeldOutcome>,
     context: &RecordingContext,
     current: &CommittedPlanSummary,
     preview: &RecordedRead,
     turn: TurnRef,
     bound: AbsoluteBound,
 ) -> Result<PreparedPortEffect, PlanCheckFailure> {
-    validate_close(request, context, current)?;
+    validate_close(request, held, context, current)?;
+    let held = held.expect("validated close holds its outcome read");
     let PlanRequest::Close {
         expected,
         step_id,
@@ -160,9 +191,13 @@ pub(in crate::flow) fn prepare_close(
     else {
         unreachable!()
     };
+    // The reread follows every proof close consumed: the committed cache,
+    // the attestation (and through it the checked work) and the held marks.
     if !preview.belongs_to(context)
         || preview.selector() != &request.selector()
         || preview.recall_sequence().0 <= current.read().recall_sequence().0
+        || preview.recall_sequence().0 <= evidence.sequence().0
+        || preview.recall_sequence().0 <= held.sequence().0
         || turn.0.is_empty()
     {
         return Err(PlanCheckFailure::Protocol(
