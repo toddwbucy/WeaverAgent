@@ -2,7 +2,7 @@
 //! owners, with a scripted member. The preview bytes are the store's own pinned
 //! encoding (weaver-state work_bytes_d1.rs serves and accepts the same bytes).
 use super::*;
-use crate::flow::context::plan_port_driver::ClosureEvidence;
+use crate::flow::context::plan_port_driver::{ClosureEvidence, ClosureReceipt};
 use crate::flow::context::{ReadCompletion, RecordedRead};
 use crate::flow::templates::{CompiledInventory, TemplateCertificate};
 
@@ -15,6 +15,7 @@ const _: fn() = || {
     impl<T: ?Sized> NotClone<()> for T {}
     impl<T: Clone> NotClone<u8> for T {}
     let _ = <ClosureEvidence as NotClone<_>>::pin;
+    let _ = <ClosureReceipt as NotClone<_>>::pin;
 };
 
 fn pinned() -> s::WorkRef {
@@ -34,6 +35,16 @@ fn work_request() -> PlanRequest {
 /// A locked plan whose first step is active over the pinned work span. With
 /// an effect certificate the native scopes are installed for adoption.
 fn closure_fixture(review_required: bool, effect: bool) -> (SummaryFixture, TemplateCertificate) {
+    closure_fixture_with(review_required, effect, false)
+}
+
+/// The closure fixture; with `prior_closed`, an earlier step ahead of the
+/// pinned one is already closed with its own closure source.
+fn closure_fixture_with(
+    review_required: bool,
+    effect: bool,
+    prior_closed: bool,
+) -> (SummaryFixture, TemplateCertificate) {
     static SPECS: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     let mut fx = if effect {
         let inventory = CompiledInventory::new(SPECS.get_or_init(|| {
@@ -86,7 +97,22 @@ fn closure_fixture(review_required: bool, effect: bool) -> (SummaryFixture, Temp
         work: None,
         closure_source: None,
     };
-    plan.steps = vec![step(1, 1, true), step(2, 2, false)];
+    plan.steps = if prior_closed {
+        let mut closed = step(3, 1, false);
+        closed.status = s::StepStatus::Closed;
+        closed.span = Some(s::SpanRef {
+            local_id: 4.into(),
+            ..work.span.clone()
+        });
+        closed.outcome_span = Some(s::SpanRef {
+            local_id: 5.into(),
+            ..work.span.clone()
+        });
+        closed.closure_source = Some(prior_closure());
+        vec![closed, step(1, 2, true), step(2, 3, false)]
+    } else {
+        vec![step(1, 1, true), step(2, 2, false)]
+    };
     let boot = fx.boot(Some(plan));
     let run = fx.run();
     run.context.install_place(boot, &mut run.clock).unwrap();
@@ -104,6 +130,16 @@ fn closure_fixture(review_required: bool, effect: bool) -> (SummaryFixture, Temp
         )
         .unwrap();
     (fx, certificate)
+}
+
+/// The closure source the prior closed step holds, distinct from any close
+/// this suite commits.
+fn prior_closure() -> s::SourceBlockId {
+    s::SourceBlockId {
+        run: "run".into(),
+        sequence: 2.into(),
+        block: 0.into(),
+    }
 }
 
 /// Serve exact bytes as consecutive pages of at most `capacity` octets,
@@ -566,7 +602,11 @@ fn closed_snapshot(
         panic!()
     };
     let mut snapshot = snapshot.clone();
-    let step = &mut snapshot.steps[0];
+    let step = snapshot
+        .steps
+        .iter_mut()
+        .find(|step| step.step_id == pinned().step_id)
+        .unwrap();
     step.status = s::StepStatus::Closed;
     step.outcome_span = Some(outcome.clone());
     step.work = Some(pinned());
@@ -1258,4 +1298,120 @@ fn closure_close_marks_read_refusal_keeps_its_code_or_faults() {
     assert!(format!("{failure:?}").contains("impossible for this initial plan selector"));
     assert!(fx.records(Kind::Refusal).is_empty());
     assert!(fx.records(Kind::StepOutcome).is_empty());
+}
+
+#[test]
+fn closure_receipt_names_the_committed_closure_and_only_an_uncancelled_close_grants_it() {
+    for cancel_at in ["none", "source", "receipt"] {
+        let (mut fx, certificate) = closure_fixture(false, true);
+        let evidence = evidence(&mut fx);
+        begin_close(&mut fx, evidence);
+        serve(&mut fx, PREVIEW, PREVIEW.len());
+        let outcome = serve_marks(&mut fx, 4);
+        effect_ready(&mut fx);
+        let run = fx.run();
+        run.context
+            .begin_plan_effect(&certificate, &mut run.clock)
+            .unwrap();
+        let source = committed(&mut fx, cancel_at == "source");
+        if cancel_at == "receipt" {
+            fx.run().context.cancel_plan_operation();
+        }
+        let snapshot = closed_snapshot(&mut fx, &source, &outcome);
+        release_summary(&mut fx, snapshot);
+        let result = finish(&mut fx);
+        if cancel_at == "none" {
+            let receipt = result
+                .into_closure_receipt()
+                .unwrap_or_else(|_| panic!("a committed close grants its receipt"));
+            // The filed step.outcome is the closure the refreshed revision holds.
+            let outcomes = fx.records(Kind::StepOutcome);
+            assert_eq!(outcomes.len(), 1);
+            assert_eq!(receipt.closed(), &source.block_id);
+            assert_eq!(receipt.plan(), &pinned().plan);
+            assert_eq!(receipt.previous_step(), &pinned().step_id);
+            assert!(format!("{receipt:?}").contains("ClosureReceipt"));
+        } else {
+            // Cancellation revokes the grant, not the committed effect.
+            let Err(whole) = result.into_closure_receipt() else {
+                panic!("a cancelled close must not grant a receipt: {cancel_at}")
+            };
+            assert!(matches!(whole, PlanPortCompletion::Cancelled(_)));
+        }
+    }
+}
+
+/// One committed, uncancelled close through the scripted member, with the
+/// step.outcome source it committed.
+fn closure_receipt(
+    fx: &mut SummaryFixture,
+    certificate: &TemplateCertificate,
+) -> (ClosureReceipt, s::SourceBlockId) {
+    let evidence = evidence(fx);
+    begin_close(fx, evidence);
+    serve(fx, PREVIEW, PREVIEW.len());
+    let outcome = serve_marks(fx, 4);
+    effect_ready(fx);
+    let run = fx.run();
+    run.context
+        .begin_plan_effect(certificate, &mut run.clock)
+        .unwrap();
+    let source = committed(fx, false);
+    let snapshot = closed_snapshot(fx, &source, &outcome);
+    release_summary(fx, snapshot);
+    let receipt = finish(fx)
+        .into_closure_receipt()
+        .unwrap_or_else(|_| panic!("a committed close grants its receipt"));
+    (receipt, source.block_id)
+}
+
+#[test]
+fn closure_receipt_names_the_closed_step_behind_an_earlier_closure() {
+    // The step ahead of the pinned one is already closed with its own
+    // source; the receipt names the step this close closed and its source.
+    let (mut fx, certificate) = closure_fixture_with(false, true, true);
+    let (receipt, source) = closure_receipt(&mut fx, &certificate);
+    assert_ne!(source, prior_closure());
+    assert_eq!(receipt.closed(), &source);
+    assert_eq!(receipt.previous_step(), &pinned().step_id);
+    assert_eq!(receipt.plan(), &pinned().plan);
+}
+
+#[test]
+fn closure_receipt_belongs_only_to_the_run_whose_close_granted_it() {
+    let (mut own, certificate) = closure_fixture(false, true);
+    let (receipt, _) = closure_receipt(&mut own, &certificate);
+    let (mut other, _) = closure_fixture(false, true);
+    assert!(receipt.belongs_to(&own.run().context));
+    assert!(!receipt.belongs_to(&other.run().context));
+}
+
+#[test]
+fn closure_receipt_is_not_granted_by_a_refused_close_or_by_closure_evidence() {
+    let (mut fx, _) = closure_fixture(false, false);
+    let work = checked_work(&mut fx, PREVIEW.len());
+    let Err(attested) = attest(&mut fx, work).into_closure_receipt() else {
+        panic!("closure evidence is not a closure receipt")
+    };
+    let Ok(evidence) = attested.into_closure_evidence() else {
+        panic!("the attestation returns whole")
+    };
+    begin_close(&mut fx, evidence);
+    let mut changed = PREVIEW.to_vec();
+    let at = changed.iter().position(|&b| b == b'z').unwrap();
+    changed[at] = b'y';
+    serve(&mut fx, &changed, 500);
+    let Err(whole) = finish(&mut fx).into_closure_receipt() else {
+        panic!("a refused close must not grant a receipt")
+    };
+    assert!(matches!(
+        whole,
+        PlanPortCompletion::Refused {
+            refusal: s::PlanOperationRefused {
+                case: s::PlanOperationCase::WorkChanged,
+                ..
+            },
+            ..
+        }
+    ));
 }

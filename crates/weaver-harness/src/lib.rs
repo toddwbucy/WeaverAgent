@@ -160,9 +160,9 @@ pub use flow::context::worker_startup::input::management::{
     FoundationManagement, FoundationManagementProgress,
 };
 pub use flow::context::worker_startup::input::plan_ports::{
-    CheckedStepSuccessor, CheckedWork, ClosureEvidence, FoundationPlanAdmissionRefusal,
-    FoundationPlanOperation, FoundationPlanOperationError, FoundationPlanOutcome,
-    FoundationPlanRequest,
+    CheckedStepSuccessor, CheckedWork, ClosureEvidence, ClosureReceipt,
+    FoundationPlanAdmissionRefusal, FoundationPlanOperation, FoundationPlanOperationError,
+    FoundationPlanOutcome, FoundationPlanRequest,
 };
 pub use flow::context::worker_startup::input::wind_down::FoundationWindDownProgress;
 pub use flow::context::worker_startup::input::{
