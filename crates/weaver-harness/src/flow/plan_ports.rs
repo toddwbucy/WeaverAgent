@@ -10,8 +10,11 @@ pub(in crate::flow) mod activation;
 pub use activation::CheckedStepSuccessor;
 #[path = "plan_break.rs"]
 pub(in crate::flow) mod break_plan;
+#[path = "plan_closure.rs"]
+pub(in crate::flow) mod closure;
 #[path = "plan_port_effect.rs"]
 pub(in crate::flow) mod effect;
+pub use crate::flow::context::plan_port_driver::{CheckedWork, ClosureEvidence};
 
 #[derive(Debug)]
 pub enum PlanRequest {
@@ -43,6 +46,21 @@ pub enum PlanRequest {
         span: s::SpanRef,
         through: s::SourcePosition,
     },
+    /// Unreviewed closure under the operator's category. The checked work is
+    /// moved in, so one held preview supplies at most one attestation.
+    AttestClosure {
+        expected: s::PlanRef,
+        step_id: s::StepId,
+        work: CheckedWork,
+    },
+    /// The caller allocates outcome_span from a recorded marks catalog. The
+    /// store still requires it to be the next span below the active step.
+    Close {
+        expected: s::PlanRef,
+        step_id: s::StepId,
+        evidence: ClosureEvidence,
+        outcome_span: s::SpanRef,
+    },
 }
 
 impl PlanRequest {
@@ -52,7 +70,9 @@ impl PlanRequest {
             | Self::Activate { expected, .. }
             | Self::RecordBreak { expected, .. }
             | Self::AssessAct { expected, .. }
-            | Self::WorkReference { expected, .. } => expected,
+            | Self::WorkReference { expected, .. }
+            | Self::AttestClosure { expected, .. }
+            | Self::Close { expected, .. } => expected,
         }
     }
     pub(in crate::flow) fn step_id(&self) -> Option<&s::StepId> {
@@ -61,7 +81,9 @@ impl PlanRequest {
             Self::RecordBreak { step_id, .. } => step_id.as_ref(),
             Self::Activate { step_id, .. }
             | Self::AssessAct { step_id, .. }
-            | Self::WorkReference { step_id, .. } => Some(step_id),
+            | Self::WorkReference { step_id, .. }
+            | Self::AttestClosure { step_id, .. }
+            | Self::Close { step_id, .. } => Some(step_id),
         }
     }
     pub(in crate::flow) fn operation(&self) -> Option<s::PlanPortOperation> {
@@ -71,12 +93,15 @@ impl PlanRequest {
             Self::RecordBreak { .. } => s::PlanPortOperation::RecordBreak,
             Self::AssessAct { .. } => s::PlanPortOperation::AssessAct,
             Self::WorkReference { .. } => s::PlanPortOperation::WorkReference,
+            Self::AttestClosure { .. } => s::PlanPortOperation::AttestClosure,
+            Self::Close { .. } => s::PlanPortOperation::Close,
         })
     }
     pub(in crate::flow) fn local_refusal(&self, seed: &str) -> Option<s::PlanOperationRefused> {
         (self.expected().plan_id.seed_id != seed
             || self.step_id().is_some_and(|id| id.seed_id != seed)
-            || matches!(self, Self::WorkReference { span, .. } if span.seed_id != seed))
+            || matches!(self, Self::WorkReference { span, .. } if span.seed_id != seed)
+            || matches!(self, Self::Close { outcome_span, .. } if outcome_span.seed_id != seed))
         .then(|| {
             refusal(
                 s::PlanOperationCase::InvalidTarget,
@@ -101,6 +126,12 @@ impl PlanRequest {
             Self::WorkReference { span, through, .. } => s::ReadSelector::SpanPreview {
                 span: span.clone(),
                 through: through.clone(),
+            },
+            Self::AttestClosure { .. } => unreachable!("attestation consumes held proofs"),
+            // close rereads the exact held work selector to recheck its bytes.
+            Self::Close { evidence, .. } => s::ReadSelector::SpanPreview {
+                span: evidence.work().span.clone(),
+                through: evidence.work().through.clone(),
             },
         }
     }

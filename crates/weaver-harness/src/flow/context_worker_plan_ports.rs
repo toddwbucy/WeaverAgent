@@ -9,7 +9,9 @@ use weaver_types::state_flow::{
     PlanAct, PlanOperationRefused, PlanRef, SourcePosition, SpanRef, StatementRef, StepId, WorkRef,
 };
 
-pub use crate::flow::plan::ports::{CheckedStepSuccessor, PlanRequest as FoundationPlanRequest};
+pub use crate::flow::plan::ports::{
+    CheckedStepSuccessor, CheckedWork, ClosureEvidence, PlanRequest as FoundationPlanRequest,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoundationPlanAdmissionRefusal {
@@ -42,6 +44,10 @@ pub enum FoundationPlanOutcome<'a> {
     },
     Allowed,
     Work(&'a WorkRef),
+    /// attest_closure granted unreviewed ClosureEvidence for this work.
+    Attested(&'a WorkRef),
+    /// close committed this snapshot, as its mandatory refresh adopted it.
+    Closed(&'a weaver_types::state_flow::PlanSnapshot),
     Refused(&'a PlanOperationRefused),
     Cancelled,
 }
@@ -67,6 +73,21 @@ impl FoundationPlanOperation {
             .map_err(|completion| Self { completion })
     }
 
+    /// Move the checked work into attest_closure. Any other result returns
+    /// the entire original operation; WorkRef metadata cannot rebuild it.
+    pub fn into_checked_work(self) -> Result<CheckedWork, Self> {
+        self.completion
+            .into_checked_work()
+            .map_err(|completion| Self { completion })
+    }
+
+    /// Move the single-use grant into close. Any other result returns whole.
+    pub fn into_closure_evidence(self) -> Result<ClosureEvidence, Self> {
+        self.completion
+            .into_closure_evidence()
+            .map_err(|completion| Self { completion })
+    }
+
     pub fn request(&self) -> &FoundationPlanRequest {
         self.completion.request()
     }
@@ -85,6 +106,14 @@ impl FoundationPlanOperation {
             },
             PlanPortCompletion::Allowed(_) => FoundationPlanOutcome::Allowed,
             PlanPortCompletion::Work(work) => FoundationPlanOutcome::Work(work.reference()),
+            PlanPortCompletion::Attested(evidence) => {
+                FoundationPlanOutcome::Attested(evidence.work())
+            }
+            PlanPortCompletion::Closed(_) => FoundationPlanOutcome::Closed(
+                self.completion
+                    .closed_snapshot()
+                    .expect("a committed close retains its refreshed plan"),
+            ),
             PlanPortCompletion::Refused { refusal, .. } => FoundationPlanOutcome::Refused(refusal),
             PlanPortCompletion::Cancelled(_) => FoundationPlanOutcome::Cancelled,
         }
@@ -212,6 +241,51 @@ impl FoundationInput<'_> {
                 through,
             },
             turn,
+            &mut MonotonicIo,
+        )
+    }
+
+    /// Attest unreviewed closure for this moved checked work under the
+    /// operator's category. It reads nothing and files nothing.
+    #[allow(clippy::result_large_err)]
+    pub fn attest_closure(
+        &mut self,
+        expected: PlanRef,
+        step_id: StepId,
+        work: CheckedWork,
+        turn: Option<TurnKey>,
+    ) -> Result<(), FoundationPlanOperationError> {
+        self.begin_plan_operation(
+            FoundationPlanRequest::AttestClosure {
+                expected,
+                step_id,
+                work,
+            },
+            turn,
+            &mut MonotonicIo,
+        )
+    }
+
+    /// Close the active step with this consumed grant. The caller allocates
+    /// outcome_span from a recorded marks catalog. The original Decision bounds
+    /// the work reread, the step.outcome, its refresh and native adoption.
+    #[allow(clippy::result_large_err)]
+    pub fn close(
+        &mut self,
+        expected: PlanRef,
+        step_id: StepId,
+        evidence: ClosureEvidence,
+        outcome_span: SpanRef,
+        turn: TurnKey,
+    ) -> Result<(), FoundationPlanOperationError> {
+        self.begin_plan_operation(
+            FoundationPlanRequest::Close {
+                expected,
+                step_id,
+                evidence,
+                outcome_span,
+            },
+            Some(turn),
             &mut MonotonicIo,
         )
     }

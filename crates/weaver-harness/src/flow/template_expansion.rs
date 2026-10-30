@@ -77,6 +77,15 @@ pub(in crate::flow) fn expand_activate(
     expand(certificate, identity, "plan.activate", "plan.event", None)
 }
 
+/// The closure port elects this literal family in code. The close effect and
+/// its WorkRef stay in typed context, never substituted into the sentence.
+pub(in crate::flow) fn expand_step_closed(
+    certificate: &TemplateCertificate,
+    identity: ExpansionIdentity<'_>,
+) -> Result<TemplateExpansion, ExpansionRefusal> {
+    expand(certificate, identity, "step.closed", "step.outcome", None)
+}
+
 pub(in crate::flow) fn expand_break(
     certificate: &TemplateCertificate,
     identity: ExpansionIdentity<'_>,

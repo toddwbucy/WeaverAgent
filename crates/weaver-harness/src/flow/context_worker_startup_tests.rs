@@ -2554,6 +2554,14 @@ scenario!(
     "input-worker-plan-save-sqlite-port-activation-failed"
 );
 scenario!(
+    worker_plan_port_close_stop,
+    "input-worker-plan-save-sqlite-port-activation-close-stop"
+);
+scenario!(
+    worker_plan_port_close_leave,
+    "input-worker-plan-save-sqlite-port-activation-close-leave"
+);
+scenario!(
     worker_plan_port_active_assess,
     "input-worker-plan-save-sqlite-port-active-assess"
 );
@@ -2568,6 +2576,10 @@ scenario!(
 scenario!(
     worker_plan_port_active_work,
     "input-worker-plan-save-sqlite-port-active-work"
+);
+scenario!(
+    worker_plan_port_active_close,
+    "input-worker-plan-save-sqlite-port-active-close"
 );
 scenario!(
     worker_plan_port_active_wrong_category,

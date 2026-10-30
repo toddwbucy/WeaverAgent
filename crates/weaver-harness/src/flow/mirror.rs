@@ -10,7 +10,8 @@ use weaver_types::state_flow as shared;
 #[path = "mirror_plan.rs"]
 mod plan;
 pub(super) use plan::{
-    execution_effect, plan_break, plan_flags, plan_input, plan_ref, read_refusal, root_plan_effect,
+    closed_outcome, execution_effect, plan_break, plan_flags, plan_input, plan_ref, read_refusal,
+    root_plan_effect,
 };
 
 pub(super) fn ste100(value: &shared::Ste100Reply) -> trace::Ste100Reply {

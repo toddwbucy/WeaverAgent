@@ -7,6 +7,7 @@ use crate::flow::place::PlaceError;
 use crate::flow::plan::ports::effect::PreparedPortEffect;
 use crate::flow::templates::{
     ExpansionIdentity, TemplateCertificate, TemplateExpansion, expand_activate, expand_break,
+    expand_step_closed,
 };
 
 pub(super) struct PlanEffectWork {
@@ -116,6 +117,7 @@ impl RecordingContext {
         let expand = match self.plan_effect().prepared.effect() {
             s::PlanEffect::Activate { .. } => expand_activate,
             s::PlanEffect::Break { .. } => expand_break,
+            s::PlanEffect::Close { .. } => expand_step_closed,
             _ => unreachable!("private plan effect"),
         };
         match expand(
@@ -274,6 +276,12 @@ impl RecordingContext {
         ) {
             return self.finish_break_summary(ports.io);
         }
+        if matches!(
+            self.plan_effect().prepared.effect(),
+            s::PlanEffect::Close { .. }
+        ) {
+            return self.finish_close_summary(ports.io);
+        }
         let s::PlanEffect::Activate {
             expected,
             step_id,
@@ -317,6 +325,50 @@ impl RecordingContext {
         // Cancellation revokes the caller's grant, not the committed effect.
         // Adopt its native scopes through the exact receipt before releasing
         // the allocator. Otherwise later work sees a permanently stale engine.
+        work.stage = Stage::Native;
+        Ok(PlanPortProgress::Progress)
+    }
+
+    /// The refreshed revision must hold this exact closure: the step closed
+    /// with this outcome span, WorkRef and null review, and this source as its
+    /// closure and the plan's last source. Ancestor closure is the store's.
+    fn finish_close_summary(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<PlanPortProgress, RunFailure> {
+        let Some(PlanSummaryCompletion::Effect(proof)) = &self.plan_effect().summary else {
+            unreachable!("checked effect summary")
+        };
+        let s::PlanEffect::Close {
+            expected,
+            step_id,
+            review_call,
+            work,
+            outcome_span,
+        } = self.plan_effect().prepared.effect()
+        else {
+            unreachable!("private close continuation")
+        };
+        let checked = matches!(proof.read().result(),
+            s::QueryResult::PlanCurrent { current: Some(snapshot), .. }
+                if &snapshot.plan == expected
+                    && matches!(snapshot.status, s::PlanStatus::Locked | s::PlanStatus::Complete)
+                    && (snapshot.status == s::PlanStatus::Complete)
+                        == snapshot.steps.iter().all(|step| step.status == s::StepStatus::Closed)
+                    && snapshot.steps.iter().any(|step| &step.step_id == step_id
+                        && step.status == s::StepStatus::Closed
+                        && step.outcome_span.as_ref() == Some(outcome_span)
+                        && step.review_call.as_ref() == review_call.as_ref()
+                        && step.work.as_ref() == Some(work)
+                        && step.closure_source.as_ref() == Some(&snapshot.last_source.block_id)));
+        if !checked {
+            return Err(self.plan_port_fault(io, "close refresh changed its committed closure"));
+        }
+        let current = Arc::clone(self.plan_cache.committed.as_ref().unwrap());
+        let work = self.plan_port_work_mut().unwrap();
+        work.current = Some(current);
+        // As for activation, the committed closing scopes are adopted before
+        // the allocator is released, even if the caller has cancelled.
         work.stage = Stage::Native;
         Ok(PlanPortProgress::Progress)
     }

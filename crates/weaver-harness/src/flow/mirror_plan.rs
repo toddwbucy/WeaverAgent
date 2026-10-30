@@ -18,6 +18,22 @@ pub(in crate::flow) fn execution_effect(
             proposed_source: proposed_source.as_ref().map(source),
         });
     }
+    if let shared::PlanEffect::Close {
+        expected,
+        step_id: step,
+        review_call,
+        work,
+        outcome_span,
+    } = value
+    {
+        return Ok(trace::PlanEffect::Close {
+            expected: plan_ref(expected),
+            step_id: step_id(step),
+            review_call: review_call.as_ref().map(call_id),
+            work: work_ref(work),
+            outcome_span: span_ref(outcome_span),
+        });
+    }
     let shared::PlanEffect::Activate {
         expected,
         step_id: step,
@@ -26,7 +42,7 @@ pub(in crate::flow) fn execution_effect(
         successor,
     } = value
     else {
-        return Err("activation grant has another effect");
+        return Err("execution grant has another effect");
     };
     Ok(trace::PlanEffect::Activate {
         expected: plan_ref(expected),
@@ -39,6 +55,35 @@ pub(in crate::flow) fn execution_effect(
             step_id: step_id(&successor.step_id),
             instruction: statement(&successor.instruction),
         },
+    })
+}
+
+/// PLAN-TRACE's closed step.outcome. Its outer identities are copied from
+/// the exact close effect, so the record cannot name another step or work.
+pub(in crate::flow) fn closed_outcome(
+    value: &shared::PlanEffect,
+    message: Box<serde_json::value::RawValue>,
+    template_id: String,
+) -> Result<trace::StepOutcomeRecord, &'static str> {
+    let shared::PlanEffect::Close {
+        expected,
+        step_id: step,
+        review_call,
+        work,
+        ..
+    } = value
+    else {
+        return Err("closed outcome requires its close effect");
+    };
+    Ok(trace::StepOutcomeRecord {
+        message,
+        template_id,
+        context: Some(execution_effect(value)?),
+        plan: plan_ref(expected),
+        step_id: step_id(step),
+        review_call: review_call.as_ref().map(call_id),
+        work: work_ref(work),
+        outcome: trace::ReviewOutcome::Closed {},
     })
 }
 

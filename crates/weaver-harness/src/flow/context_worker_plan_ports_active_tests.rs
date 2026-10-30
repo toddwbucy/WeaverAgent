@@ -205,6 +205,10 @@ pub(super) fn exercise(
             panic!("actual committed plan snapshot")
         };
         let before_steps = before_snapshot.steps.clone();
+        if mode.ends_with("-close") {
+            close(input, &successor, span, through);
+            return;
+        }
         let expected_digest = if mode.ends_with("-work") {
             let preview = read(
                 input,
@@ -362,6 +366,26 @@ pub(super) fn exercise(
         );
     });
     let rows = management::tests::trace(reader);
+    if mode.ends_with("-close") {
+        let outcomes: Vec<_> = rows
+            .iter()
+            .filter(|row| row["kind"] == "step.outcome")
+            .collect();
+        assert_eq!(outcomes.len(), 1, "one certified closed outcome");
+        assert_eq!(outcomes[0]["payload"]["template_id"], "step.closed");
+        assert_eq!(
+            outcomes[0]["payload"]["outcome"],
+            serde_json::json!({"closed": {}})
+        );
+        assert_eq!(outcomes[0]["turn"], TURN);
+        assert!(rows.iter().all(|row| row["kind"] != "refusal"));
+        assert!(
+            rows.iter()
+                .all(|row| row["kind"] != "tool.call.started" && row["kind"] != "model.request"),
+            "closure invokes no reviewer and starts no generation"
+        );
+        return;
+    }
     assert_eq!(
         rows.iter()
             .filter(|row| row["kind"] == "plan.event")
@@ -538,4 +562,105 @@ fn interrupt_completed(guard: &mut Guard<'_>, socket: &Path, leave: bool) {
     assert_eq!(format!("{:?}", result.request()), request);
     // The caller must observe revocation through the public take below, after
     // management has returned the input. Do not cancel from this fixture.
+}
+
+/// D1 against the actual member: its served preview becomes the harness
+/// WorkRef, attest_closure grants the evidence, the caller allocates the
+/// outcome span from its own marks read, and the store accepts the close.
+fn close(
+    input: &mut FoundationInput<'_>,
+    successor: &s::StepQueryRef,
+    span: s::SpanRef,
+    through: s::SourcePosition,
+) {
+    let preview = read(
+        input,
+        s::ReadSelector::SpanPreview {
+            span: span.clone(),
+            through: through.clone(),
+        },
+    );
+    let digest = format!("{:x}", Sha256::digest(preview.raw_bytes()));
+    input
+        .work_reference(
+            successor.plan.clone(),
+            successor.step_id.clone(),
+            span.clone(),
+            through,
+            Some(TurnKey(TURN.into())),
+        )
+        .unwrap();
+    let work = complete_operation(input).into_checked_work().unwrap();
+    assert_eq!(work.reference().content_sha256.as_str(), digest);
+    let reference = work.reference().clone();
+    input
+        .attest_closure(
+            successor.plan.clone(),
+            successor.step_id.clone(),
+            work,
+            Some(TurnKey(TURN.into())),
+        )
+        .unwrap();
+    let evidence = complete_operation(input).into_closure_evidence().unwrap();
+    let marks = read(input, s::ReadSelector::Marks {});
+    let context = &input.serving.owner.context;
+    let seed = context.open_start.as_ref().unwrap().seed_id.clone();
+    let Ok(spans) =
+        crate::flow::plan::ports::activation::SpanAllocator::from_marks(context, &marks, &seed)
+    else {
+        panic!("recorded marks allocate")
+    };
+    let outcome = spans.peek();
+    let bound = AbsoluteBound::after(MonotonicIo.now().unwrap(), 5_000_000_000).unwrap();
+    input
+        .serving
+        .owner
+        .context
+        .arm(PumpDeadline::Decision, bound, &mut MonotonicIo)
+        .unwrap();
+    input
+        .close(
+            successor.plan.clone(),
+            successor.step_id.clone(),
+            evidence,
+            outcome.clone(),
+            TurnKey(TURN.into()),
+        )
+        .unwrap();
+    let result = complete_operation(input);
+    let FoundationPlanOutcome::Closed(current) = result.outcome() else {
+        panic!("close must return its committed snapshot: {result:?}")
+    };
+    let closed = current
+        .steps
+        .iter()
+        .find(|step| step.step_id == successor.step_id)
+        .unwrap();
+    assert_eq!(closed.status, s::StepStatus::Closed);
+    assert_eq!(closed.outcome_span.as_ref(), Some(&outcome));
+    assert_eq!(closed.work.as_ref(), Some(&reference));
+    assert_eq!(closed.review_call, None);
+    assert_eq!(
+        closed.closure_source.as_ref(),
+        Some(&current.last_source.block_id)
+    );
+    assert!(input.serving.owner.context.native_place_cache_ready());
+    // The member's own marks show the outcome opened and closed below the step.
+    let marks = read(input, s::ReadSelector::Marks {});
+    let s::QueryResult::Marks { open_scopes, .. } = marks.result() else {
+        panic!()
+    };
+    assert!(
+        open_scopes
+            .iter()
+            .all(|scope| scope.span != span && scope.span != outcome)
+    );
+    assert_eq!(
+        input
+            .serving
+            .owner
+            .context
+            .complete_wait(PumpDeadline::Decision),
+        Some(bound)
+    );
 }

@@ -33,6 +33,7 @@ pub(super) fn exercise(
 ) -> Option<Cleanup> {
     let breaking = mode.contains("-port-break-");
     let active_break = breaking && mode.contains("-break-active-");
+    let closing = mode.contains("-activation-close-");
     let mut guard = root_plan::sqlite_update(serving, member, reader, socket, false);
     root_plan::flags::prepare_checked_turn(&mut guard, member, socket);
     let input = guard.input.as_mut().unwrap();
@@ -55,7 +56,7 @@ pub(super) fn exercise(
             .unwrap();
         let checked = complete(input, member).into_successor().unwrap();
         let successor = checked.reference().clone();
-        if !breaking {
+        if !breaking && !closing {
             member.hold_next_normal_filing();
         }
         input
@@ -66,13 +67,29 @@ pub(super) fn exercise(
                 turn.clone(),
             )
             .unwrap();
-        if breaking {
+        if breaking || closing {
             let activated = complete(input, member);
-            assert!(matches!(
-                activated.outcome(),
-                FoundationPlanOutcome::Activated(_)
-            ));
-            active_step = Some(successor.step_id);
+            let FoundationPlanOutcome::Activated(step) = activated.outcome() else {
+                panic!("activation must commit before its break or closure")
+            };
+            let span = step.span.clone().unwrap();
+            active_step = Some(successor.step_id.clone());
+            if closing {
+                // Admit close against the actual member, then hold its
+                // step.outcome receipt so Stop/Leave arrives after admission.
+                let evidence = attest(input, member, &plan, &successor.step_id, span, &turn);
+                let outcome = outcome_span(input, member);
+                member.hold_next_normal_filing();
+                input
+                    .close(
+                        plan.clone(),
+                        successor.step_id.clone(),
+                        evidence,
+                        outcome,
+                        turn.clone(),
+                    )
+                    .unwrap();
+            }
         }
     }
     if breaking {
@@ -106,6 +123,7 @@ pub(super) fn exercise(
     let request = format!("{:?}", context.plan_port_work().unwrap().test_request());
     let effect = context.test_plan_effect().unwrap().clone();
     assert_eq!(matches!(effect, s::PlanEffect::Break { .. }), breaking);
+    assert_eq!(matches!(effect, s::PlanEffect::Close { .. }), closing);
     assert!(!context.native_place_cache_ready());
     assert!(input.take_plan_operation().is_none());
     assert!(input.plan_operation_pending());
@@ -265,6 +283,25 @@ pub(super) fn exercise(
             assert_eq!(active.status, s::StepStatus::Active);
             assert_eq!(active.span.as_ref(), Some(step_span));
         }
+        s::PlanEffect::Close {
+            step_id,
+            outcome_span,
+            work,
+            ..
+        } => {
+            let closed = current
+                .steps
+                .iter()
+                .find(|step| &step.step_id == step_id)
+                .unwrap();
+            assert_eq!(closed.status, s::StepStatus::Closed);
+            assert_eq!(closed.outcome_span.as_ref(), Some(outcome_span));
+            assert_eq!(closed.work.as_ref(), Some(work));
+            assert_eq!(
+                closed.closure_source.as_ref(),
+                Some(&current.last_source.block_id)
+            );
+        }
         s::PlanEffect::Break {
             expected,
             step_id,
@@ -302,6 +339,12 @@ pub(super) fn exercise(
             .filter(|row| row["kind"] == "plan.event")
             .count(),
         if active_break { 2 } else { 1 }
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["kind"] == "step.outcome")
+            .count(),
+        usize::from(closing)
     );
     let reports: Vec<_> = rows
         .iter()
@@ -396,4 +439,83 @@ pub(super) fn exercise(
     assert_eq!(close.position, Position::Close);
     assert!(matches!(close.payload, Payload::Frame(_)));
     None
+}
+
+fn attest(
+    input: &mut FoundationInput<'_>,
+    member: &mut Member,
+    plan: &s::PlanRef,
+    step_id: &s::StepId,
+    span: s::SpanRef,
+    turn: &TurnKey,
+) -> ClosureEvidence {
+    let through = input
+        .serving
+        .owner
+        .context
+        .committed_plan_summary()
+        .unwrap()
+        .unwrap()
+        .last_source
+        .clone();
+    input
+        .work_reference(
+            plan.clone(),
+            step_id.clone(),
+            span,
+            through,
+            Some(turn.clone()),
+        )
+        .unwrap();
+    let work = complete(input, member).into_checked_work().unwrap();
+    input
+        .attest_closure(plan.clone(), step_id.clone(), work, Some(turn.clone()))
+        .unwrap();
+    complete(input, member).into_closure_evidence().unwrap()
+}
+
+/// The caller's own recorded marks read, through the one span allocator.
+fn outcome_span(input: &mut FoundationInput<'_>, member: &mut Member) -> s::SpanRef {
+    use crate::flow::context::ReadCompletion;
+    input
+        .serving
+        .owner
+        .context
+        .begin_read(s::ReadSelector::Marks {}, None, &mut MonotonicIo)
+        .unwrap();
+    let end = Instant::now() + Duration::from_secs(5);
+    loop {
+        let owner = &mut input.serving.owner;
+        let mut io = NonblockingIo { waits: 0 };
+        let mut ports = PumpPorts {
+            lifecycle: LifecyclePorts {
+                listener: Some(&mut owner.listener),
+                residency: Some(owner.resident.residency),
+                ..Default::default()
+            },
+            gate: Some(&mut owner.gate),
+            decode: Some(owner.decode),
+            label: None,
+            io: &mut io,
+        };
+        owner.context.advance_read(&mut ports).unwrap();
+        if let Some(done) = owner.context.take_read(ports.io).unwrap() {
+            let ReadCompletion::Recorded(read) = done else {
+                panic!("caller marks read refused")
+            };
+            let seed = owner.context.open_start.as_ref().unwrap().seed_id.clone();
+            let Ok(spans) = crate::flow::plan::ports::activation::SpanAllocator::from_marks(
+                owner.context,
+                &read,
+                &seed,
+            ) else {
+                panic!("recorded marks allocate")
+            };
+            return spans.peek();
+        }
+        owner.context.pump_once(&mut ports).unwrap();
+        member.step_live("ready");
+        assert!(Instant::now() < end, "caller marks read did not settle");
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }

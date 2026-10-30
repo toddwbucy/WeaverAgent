@@ -129,9 +129,9 @@ pub(in crate::flow) fn prepare(
         ));
     }
     let s::QueryResult::Marks {
-        next_span_id,
         current_task,
         open_scopes,
+        ..
     } = marks.result()
     else {
         return Err(PlanCheckFailure::Protocol(
@@ -147,12 +147,7 @@ pub(in crate::flow) fn prepare(
             "plan task disagrees with its open marks path",
         ));
     }
-    let span = |id| s::SpanRef {
-        seed_id: seed.clone(),
-        local_id: id,
-        revision: 1.into(),
-    };
-    let mut next = *next_span_id;
+    let mut spans = SpanAllocator::from_marks(context, marks, seed)?;
     let group_span = match &step.group {
         None => None,
         Some(id) => {
@@ -166,20 +161,7 @@ pub(in crate::flow) fn prepare(
             }
             Some(match &group.span {
                 Some(existing) => existing.clone(),
-                None => {
-                    let allocated = span(next);
-                    next = next
-                        .0
-                        .checked_add(1)
-                        .ok_or_else(|| {
-                            refuse(
-                                s::PlanOperationCase::CounterExhausted,
-                                "activation step counter exhausted",
-                            )
-                        })?
-                        .into();
-                    allocated
-                }
+                None => spans.take("activation step counter exhausted")?,
             })
         }
     };
@@ -206,7 +188,7 @@ pub(in crate::flow) fn prepare(
         effect: s::PlanEffect::Activate {
             expected: plan.plan.clone(),
             step_id: step.step_id.clone(),
-            step_span: span(next),
+            step_span: spans.peek(),
             group_span,
             successor: successor.reference().clone(),
         },
@@ -214,4 +196,56 @@ pub(in crate::flow) fn prepare(
         turn: Some(turn),
         bound,
     })
+}
+
+/// The one span allocator over a recorded marks catalog. Activation and the
+/// caller of close both take new span IDs here, never from a second counter.
+/// The store still requires each opened span to be its exact next ID.
+pub(in crate::flow) struct SpanAllocator {
+    seed: String,
+    next: s::DecimalU64,
+}
+
+impl SpanAllocator {
+    pub(in crate::flow) fn from_marks(
+        context: &RecordingContext,
+        marks: &RecordedRead,
+        seed: &str,
+    ) -> Result<Self, PlanCheckFailure> {
+        let s::QueryResult::Marks { next_span_id, .. } = marks.result() else {
+            return Err(PlanCheckFailure::Protocol(
+                "span allocation has no marks catalog",
+            ));
+        };
+        if !marks.belongs_to(context) || marks.selector() != &(s::ReadSelector::Marks {}) {
+            return Err(PlanCheckFailure::Protocol(
+                "span allocation has a foreign marks proof",
+            ));
+        }
+        Ok(Self {
+            seed: seed.into(),
+            next: *next_span_id,
+        })
+    }
+
+    /// The next unallocated span. It does not advance the catalog.
+    pub(in crate::flow) fn peek(&self) -> s::SpanRef {
+        s::SpanRef {
+            seed_id: self.seed.clone(),
+            local_id: self.next,
+            revision: 1.into(),
+        }
+    }
+
+    /// Allocate one span before a later one in the same effect.
+    pub(in crate::flow) fn take(&mut self, detail: &str) -> Result<s::SpanRef, PlanCheckFailure> {
+        let allocated = self.peek();
+        self.next = self
+            .next
+            .0
+            .checked_add(1)
+            .ok_or_else(|| refuse(s::PlanOperationCase::CounterExhausted, detail))?
+            .into();
+        Ok(allocated)
+    }
 }

@@ -10,6 +10,8 @@ use sha2::{Digest as _, Sha256};
 mod activation_tests;
 #[path = "context_plan_break_tests.rs"]
 mod break_tests;
+#[path = "context_plan_closure_tests.rs"]
+mod closure_tests;
 #[path = "context_plan_ports_review_tests.rs"]
 mod review;
 

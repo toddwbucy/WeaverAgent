@@ -22,8 +22,42 @@ impl PreparedPortEffect {
         match self.effect {
             s::PlanEffect::Activate { .. } => "plan.activate",
             s::PlanEffect::Break { .. } => "plan.break",
+            s::PlanEffect::Close { .. } => "step.closed",
             _ => unreachable!("private execution effect"),
         }
+    }
+
+    /// PLAN-TRACE: close is a step.outcome. Every other execution effect is
+    /// a plan.event. The store refuses either kind carrying the other's effect.
+    fn kind(&self) -> weaver_trace::serving::Kind {
+        if matches!(self.effect, s::PlanEffect::Close { .. }) {
+            weaver_trace::serving::Kind::StepOutcome
+        } else {
+            weaver_trace::serving::Kind::PlanEvent
+        }
+    }
+
+    fn payload(
+        &self,
+        expansion: &TemplateExpansion,
+    ) -> Result<weaver_trace::serving::Payload, &'static str> {
+        let message =
+            serde_json::value::to_raw_value(expansion.message()).expect("Message serializes");
+        let template_id = expansion.template_id().into();
+        Ok(match self.kind() {
+            weaver_trace::serving::Kind::StepOutcome => {
+                weaver_trace::serving::Payload::StepOutcome(Box::new(
+                    crate::flow::mirror::closed_outcome(&self.effect, message, template_id)?,
+                ))
+            }
+            _ => weaver_trace::serving::Payload::PlanEffect(Box::new(
+                weaver_trace::serving::payloads::PlanEffectRecord {
+                    message,
+                    context: crate::flow::mirror::execution_effect(&self.effect)?,
+                    template_id,
+                },
+            )),
+        })
     }
 
     pub(in crate::flow) fn effect(&self) -> &s::PlanEffect {
@@ -41,19 +75,12 @@ impl PreparedPortEffect {
             return Err("plan effect lost its context or compiled template family");
         }
         Ok(AuthoredEvent {
-            kind: weaver_trace::serving::Kind::PlanEvent,
+            kind: self.kind(),
             subsystem: weaver_trace::Subsystem::Harness,
             turn: self.turn.clone(),
             source: AuthoredSource::Loop,
             causal_parent: Some(self.parent),
-            payload: Some(weaver_trace::serving::Payload::PlanEffect(Box::new(
-                weaver_trace::serving::payloads::PlanEffectRecord {
-                    message: serde_json::value::to_raw_value(expansion.message())
-                        .expect("Message serializes"),
-                    context: crate::flow::mirror::execution_effect(&self.effect)?,
-                    template_id: expansion.template_id().into(),
-                },
-            ))),
+            payload: Some(self.payload(expansion)?),
         })
     }
 
@@ -94,7 +121,7 @@ impl PreparedPortEffect {
         if file.block_id.run != expansion.run_id()
             || file.block_id.sequence.0 != filing.sequence().0
             || file.block_id.block.0 != 0
-            || file.source.kind != "plan.event"
+            || file.source.kind != self.kind().as_str()
             || file.source.channel != "internal"
             || file.source.origin != "loop"
             || file.source.turn.as_deref() != self.turn.as_ref().map(|turn| turn.0.as_str())

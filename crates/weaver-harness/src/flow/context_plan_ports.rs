@@ -72,6 +72,7 @@ pub(super) struct PlanPortTransaction {
     effect: Option<PlanEffectWork>,
     break_report: Option<s::PlanBreakReport>,
     successor: Option<checked::CheckedStepSuccessor>,
+    setup: Option<s::ReviewSetupRef>,
     cancelled: bool,
 }
 
@@ -93,7 +94,13 @@ impl AllowedAct {
 }
 
 /// Public WorkRef metadata alone cannot construct this checked work account.
-pub(in crate::flow) struct CheckedWork {
+/// It retains the released preview read whose exact bytes its digest names.
+///
+/// ```compile_fail,E0277
+/// fn cloned<T: Clone>() {}
+/// cloned::<weaver_harness::CheckedWork>();
+/// ```
+pub struct CheckedWork {
     account: PlanPortAccount,
 }
 impl CheckedWork {
@@ -103,6 +110,107 @@ impl CheckedWork {
             .work_ref
             .as_ref()
             .expect("checked preview")
+    }
+    pub(in crate::flow) fn preview(&self) -> &RecordedRead {
+        let ReadCompletion::Recorded(read) = &self.account.work.read.as_ref().unwrap().completion
+        else {
+            unreachable!("checked work retains its released preview")
+        };
+        read
+    }
+    pub(in crate::flow) fn belongs_to(&self, context: &RecordingContext) -> bool {
+        Arc::ptr_eq(&self.account.work.origin, &context.read_origin)
+    }
+    /// The latest recorded proof this work consumed, its preview read.
+    fn sequence(&self) -> Sequence {
+        self.account.work.parent.unwrap()
+    }
+}
+impl std::fmt::Debug for CheckedWork {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("CheckedWork")
+            .field(self.reference())
+            .finish()
+    }
+}
+
+/// CLOSURE-EVIDENCE: a private, single-use, run-bound grant. Only the
+/// attest_closure port constructs it, and close consumes it by value.
+/// It holds the attestation account, which retains the moved checked work.
+///
+/// ```compile_fail,E0277
+/// fn cloned<T: Clone>() {}
+/// cloned::<weaver_harness::ClosureEvidence>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn serialized(evidence: &weaver_harness::ClosureEvidence) {
+///     let _ = serde_json::to_vec(evidence);
+/// }
+/// ```
+///
+/// ```compile_fail,E0277
+/// let _ = serde_json::from_str::<weaver_harness::ClosureEvidence>("{}");
+/// ```
+///
+/// ```compile_fail,E0451
+/// fn forged() -> weaver_harness::ClosureEvidence {
+///     weaver_harness::ClosureEvidence { account: todo!() }
+/// }
+/// ```
+pub struct ClosureEvidence {
+    account: PlanPortAccount,
+}
+impl ClosureEvidence {
+    fn from_attestation(account: PlanPortAccount) -> Self {
+        assert!(
+            matches!(account.work.request, PlanRequest::AttestClosure { .. })
+                && account.work.setup.is_some()
+                && account.work.refusal.is_none()
+                && !account.work.cancelled,
+            "only a settled attestation grants closure evidence"
+        );
+        Self { account }
+    }
+    fn work_check(&self) -> &CheckedWork {
+        let PlanRequest::AttestClosure { work, .. } = &self.account.work.request else {
+            unreachable!("private attestation account")
+        };
+        work
+    }
+    pub(in crate::flow) fn plan(&self) -> &s::PlanRef {
+        self.account.work.request.expected()
+    }
+    pub(in crate::flow) fn step_id(&self) -> &s::StepId {
+        self.account.work.request.step_id().unwrap()
+    }
+    /// attest_closure grants unreviewed evidence only.
+    pub(in crate::flow) fn review_call(&self) -> Option<&s::CallId> {
+        None
+    }
+    pub(in crate::flow) fn work(&self) -> &s::WorkRef {
+        self.work_check().reference()
+    }
+    pub(in crate::flow) fn setup(&self) -> &s::ReviewSetupRef {
+        self.account.work.setup.as_ref().unwrap()
+    }
+    pub(in crate::flow) fn belongs_to(&self, context: &RecordingContext) -> bool {
+        Arc::ptr_eq(&self.account.work.origin, &context.read_origin)
+            && self.work_check().belongs_to(context)
+    }
+    fn sequence(&self) -> Sequence {
+        self.account.work.parent.unwrap()
+    }
+}
+impl std::fmt::Debug for ClosureEvidence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClosureEvidence")
+            .field("plan", self.plan())
+            .field("step_id", self.step_id())
+            .field("review_call", &self.review_call())
+            .field("work", self.work())
+            .field("setup", self.setup())
+            .finish()
     }
 }
 
@@ -129,6 +237,8 @@ pub(in crate::flow) enum PlanPortCompletion {
     BreakRecorded(PlanPortAccount),
     Allowed(AllowedAct),
     Work(CheckedWork),
+    Attested(ClosureEvidence),
+    Closed(PlanPortAccount),
     Refused {
         refusal: s::PlanOperationRefused,
         account: PlanPortAccount,
@@ -147,6 +257,49 @@ impl PlanPortCompletion {
             unreachable!()
         };
         current.as_ref()
+    }
+
+    /// close returns the committed snapshot its mandatory refresh adopted.
+    pub(in crate::flow) fn closed_snapshot(&self) -> Option<&s::PlanSnapshot> {
+        let Self::Closed(account) = self else {
+            return None;
+        };
+        let s::QueryResult::PlanCurrent { current, .. } =
+            account.work.current.as_ref().unwrap().read().result()
+        else {
+            unreachable!()
+        };
+        current.as_ref()
+    }
+
+    pub(in crate::flow) fn closure_evidence(&self) -> Option<&ClosureEvidence> {
+        match self {
+            Self::Attested(evidence) => Some(evidence),
+            _ => None,
+        }
+    }
+
+    pub(in crate::flow) fn checked_work(&self) -> Option<&CheckedWork> {
+        match self {
+            Self::Work(work) => Some(work),
+            _ => None,
+        }
+    }
+
+    /// Move the checked work into attest_closure. Any other result returns whole.
+    pub(in crate::flow) fn into_checked_work(self) -> Result<CheckedWork, Self> {
+        match self {
+            Self::Work(work) => Ok(work),
+            other => Err(other),
+        }
+    }
+
+    /// Move the single-use grant into close. Any other result returns whole.
+    pub(in crate::flow) fn into_closure_evidence(self) -> Result<ClosureEvidence, Self> {
+        match self {
+            Self::Attested(evidence) => Ok(evidence),
+            other => Err(other),
+        }
     }
 
     pub(in crate::flow) fn successor(&self) -> Option<&checked::CheckedStepSuccessor> {
@@ -178,7 +331,9 @@ impl PlanPortCompletion {
             Self::Activated(grant) => &grant.account,
             Self::Allowed(grant) => &grant.account,
             Self::Work(work) => &work.account,
+            Self::Attested(evidence) => &evidence.account,
             Self::BreakRecorded(account)
+            | Self::Closed(account)
             | Self::Successor(account)
             | Self::QueryRefused(account)
             | Self::Refused { account, .. }
@@ -196,7 +351,9 @@ impl PlanPortCompletion {
             Self::Activated(grant) => grant.account,
             Self::Allowed(grant) => grant.account,
             Self::Work(work) => work.account,
+            Self::Attested(evidence) => evidence.account,
             Self::BreakRecorded(account)
+            | Self::Closed(account)
             | Self::Successor(account)
             | Self::QueryRefused(account)
             | Self::Refused { account, .. }
@@ -317,7 +474,13 @@ impl RecordingContext {
             && self.plan_cache.committed.as_ref().is_some_and(|proof|
                 matches!(proof.read().result(), s::QueryResult::PlanCurrent { current: Some(plan), .. }
                     if plan.status == s::PlanStatus::Locked));
-        if (matches!(request, PlanRequest::Activate { .. }) || break_needs_turn) && turn.is_none() {
+        // activate and close author effects whose trace kinds require a turn.
+        if (matches!(
+            request,
+            PlanRequest::Activate { .. } | PlanRequest::Close { .. }
+        ) || break_needs_turn)
+            && turn.is_none()
+        {
             return Err(error(
                 request,
                 turn,
@@ -347,6 +510,7 @@ impl RecordingContext {
             effect: None,
             break_report: None,
             successor: None,
+            setup: None,
             cancelled: false,
         })));
         Ok(())
@@ -410,6 +574,12 @@ impl RecordingContext {
                     PlanRequest::RecordBreak { .. }
                 ) {
                     return self.prepare_plan_break(ports.io);
+                }
+                if matches!(
+                    self.plan_port_work().unwrap().request,
+                    PlanRequest::AttestClosure { .. } | PlanRequest::Close { .. }
+                ) {
+                    return self.validate_plan_closure(ports.io);
                 }
                 let work = self.plan_port_work().unwrap();
                 let check = if let PlanRequest::Activate { successor, .. } = &work.request {
@@ -520,8 +690,16 @@ impl RecordingContext {
         };
         let parent = proof.recall_sequence();
         let current = work.current.as_ref().unwrap();
-        if matches!(work.request, PlanRequest::Activate { .. }) {
-            let prepared = checked::activation::prepare(
+        if matches!(
+            work.request,
+            PlanRequest::Activate { .. } | PlanRequest::Close { .. }
+        ) {
+            let prepare = if matches!(work.request, PlanRequest::Close { .. }) {
+                checked::closure::prepare_close
+            } else {
+                checked::activation::prepare
+            };
+            let prepared = prepare(
                 &work.request,
                 self,
                 current,
@@ -543,6 +721,8 @@ impl RecordingContext {
         let result = match &work.request {
             PlanRequest::RecordBreak { .. }
             | PlanRequest::Activate { .. }
+            | PlanRequest::Close { .. }
+            | PlanRequest::AttestClosure { .. }
             | PlanRequest::StepSuccessor { .. } => unreachable!(),
             PlanRequest::AssessAct { .. } => checked::assess(
                 &work.request,
@@ -603,6 +783,51 @@ impl RecordingContext {
         }
         self.plan_port_work_mut().unwrap().stage = Stage::Complete;
         Ok(PlanPortProgress::Complete)
+    }
+
+    /// attest_closure settles here without a read. close continues to the
+    /// reread of its exact held work selector. Both consume the committed cache
+    /// and the moved proof, so a refusal's parent is the later of the two.
+    fn validate_plan_closure(
+        &mut self,
+        io: &mut impl PumpIo,
+    ) -> Result<PlanPortProgress, RunFailure> {
+        let work = self.plan_port_work().unwrap();
+        let held = match &work.request {
+            PlanRequest::AttestClosure { work, .. } if work.belongs_to(self) => {
+                Some(work.sequence())
+            }
+            PlanRequest::Close { evidence, .. } if evidence.belongs_to(self) => {
+                Some(evidence.sequence())
+            }
+            _ => None,
+        };
+        if let Some(held) = held {
+            let parent = Sequence(work.parent.unwrap().0.max(held.0));
+            self.plan_port_work_mut().unwrap().parent = Some(parent);
+        }
+        let work = self.plan_port_work().unwrap();
+        let current = work.current.as_ref().unwrap();
+        if matches!(work.request, PlanRequest::Close { .. }) {
+            match checked::closure::validate_close(&work.request, self, current) {
+                Ok(_) => self.plan_port_work_mut().unwrap().stage = Stage::Read,
+                Err(failure) => self.retain_plan_check_failure(failure, io)?,
+            }
+            return Ok(PlanPortProgress::Progress);
+        }
+        match checked::closure::attest(&work.request, self, current) {
+            Ok(setup) => {
+                self.live(io)?;
+                let work = self.plan_port_work_mut().unwrap();
+                work.setup = Some(setup);
+                work.stage = Stage::Complete;
+                Ok(PlanPortProgress::Complete)
+            }
+            Err(failure) => {
+                self.retain_plan_check_failure(failure, io)?;
+                Ok(PlanPortProgress::Progress)
+            }
+        }
     }
 
     fn retain_plan_check_failure(
@@ -677,6 +902,10 @@ impl RecordingContext {
             PlanPortCompletion::Activated(ActivatedStep { account })
         } else if matches!(account.work.request, PlanRequest::AssessAct { .. }) {
             PlanPortCompletion::Allowed(AllowedAct { account })
+        } else if matches!(account.work.request, PlanRequest::AttestClosure { .. }) {
+            PlanPortCompletion::Attested(ClosureEvidence::from_attestation(account))
+        } else if matches!(account.work.request, PlanRequest::Close { .. }) {
+            PlanPortCompletion::Closed(account)
         } else {
             PlanPortCompletion::Work(CheckedWork { account })
         }))
