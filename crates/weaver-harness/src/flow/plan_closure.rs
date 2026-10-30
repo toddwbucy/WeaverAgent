@@ -195,8 +195,8 @@ pub(in crate::flow) fn check_reread(
     Ok(())
 }
 
-/// close's own Marks read follows its checked reread. outcome_span must be
-/// that catalog's next allocation exactly, as activation's step span is, so
+/// close's own Marks read follows its checked reread. The outcome span is
+/// that catalog's next allocation, from the one allocator activate uses, so
 /// only an allocation between this read and the filing reaches the store.
 pub(in crate::flow) fn prepare_close(
     request: &PlanRequest,
@@ -210,7 +210,6 @@ pub(in crate::flow) fn prepare_close(
         expected,
         step_id,
         evidence,
-        outcome_span,
     } = request
     else {
         return Err(PlanCheckFailure::Protocol("close received another request"));
@@ -220,13 +219,7 @@ pub(in crate::flow) fn prepare_close(
             "close lost its ordered marks read or turn",
         ));
     }
-    let next = SpanAllocator::from_marks(context, marks, &expected.plan_id.seed_id)?.peek();
-    if outcome_span != &next {
-        return Err(refuse(
-            s::PlanOperationCase::InvalidTarget,
-            "outcome span is not the next allocation in close's marks read",
-        ));
-    }
+    let outcome_span = SpanAllocator::from_marks(context, marks, &expected.plan_id.seed_id)?.peek();
     Ok(PreparedPortEffect {
         origin: Arc::clone(marks.origin()),
         effect: s::PlanEffect::Close {
@@ -234,7 +227,7 @@ pub(in crate::flow) fn prepare_close(
             step_id: step_id.clone(),
             review_call: evidence.review_call().cloned(),
             work: evidence.work().clone(),
-            outcome_span: outcome_span.clone(),
+            outcome_span,
         },
         parent: marks.recall_sequence(),
         turn: Some(turn),

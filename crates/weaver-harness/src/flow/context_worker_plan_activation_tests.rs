@@ -78,14 +78,12 @@ pub(super) fn exercise(
                 // Admit close against the actual member, then hold its
                 // step.outcome receipt so Stop/Leave arrives after admission.
                 let evidence = attest(input, member, &plan, &successor.step_id, span, &turn);
-                let outcome = outcome_span(input, member, &plan, &turn);
                 member.hold_next_normal_filing();
                 input
                     .close(
                         plan.clone(),
                         successor.step_id.clone(),
                         evidence,
-                        outcome,
                         turn.clone(),
                     )
                     .unwrap();
@@ -472,22 +470,4 @@ fn attest(
         .attest_closure(plan.clone(), step_id.clone(), work, Some(turn.clone()))
         .unwrap();
     complete(input, member).into_closure_evidence().unwrap()
-}
-
-/// The caller's outcome span, through the public outcome_span operation.
-/// The owner holds its read for the close that follows.
-fn outcome_span(
-    input: &mut FoundationInput<'_>,
-    member: &mut Member,
-    plan: &s::PlanRef,
-    turn: &TurnKey,
-) -> s::SpanRef {
-    input
-        .outcome_span(plan.clone(), Some(turn.clone()))
-        .unwrap();
-    let result = complete(input, member);
-    let FoundationPlanOutcome::OutcomeSpan(span) = result.outcome() else {
-        panic!("outcome_span must allocate: {result:?}")
-    };
-    span.clone()
 }

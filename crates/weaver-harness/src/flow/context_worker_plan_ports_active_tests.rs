@@ -205,8 +205,8 @@ pub(super) fn exercise(
             panic!("actual committed plan snapshot")
         };
         let before_steps = before_snapshot.steps.clone();
-        if mode.ends_with("-close") || mode.ends_with("-close-raced") {
-            close(input, &successor, span, through, mode.ends_with("-raced"));
+        if mode.ends_with("-close") {
+            close(input, &successor, span, through);
             return;
         }
         let expected_digest = if mode.ends_with("-work") {
@@ -366,19 +366,6 @@ pub(super) fn exercise(
         );
     });
     let rows = management::tests::trace(reader);
-    if mode.ends_with("-close-raced") {
-        // A local refusal under close, before any step.outcome is authored.
-        assert!(rows.iter().all(|row| row["kind"] != "step.outcome"));
-        let refusals: Vec<_> = rows.iter().filter(|row| row["kind"] == "refusal").collect();
-        assert_eq!(refusals.len(), 1);
-        assert_eq!(refusals[0]["payload"]["operation"], "close");
-        assert_eq!(refusals[0]["payload"]["refusal"]["case"], "invalid_target");
-        assert_eq!(
-            refusals[0]["payload"]["refusal"]["read_code"],
-            serde_json::Value::Null
-        );
-        return;
-    }
     if mode.ends_with("-close") {
         let outcomes: Vec<_> = rows
             .iter()
@@ -578,21 +565,13 @@ fn interrupt_completed(guard: &mut Guard<'_>, socket: &Path, leave: bool) {
 }
 
 /// D1 against the actual member: its served preview becomes the harness
-/// WorkRef, attest_closure grants the evidence, the caller allocates the
-/// outcome span through outcome_span, and the store accepts the close.
-///
-/// Raced, the caller's span is one past its allocation, as if taken from a
-/// stale catalog. close's own Marks read refuses it locally (invalid_target,
-/// null read_code) before any effect, and the member's plan and marks stay
-/// as they were. A true race, an allocation between close's Marks read and
-/// its filing, has no path here: the admitted plan port excludes every other
-/// allocator in the run, and the member serves only this worker.
+/// WorkRef, attest_closure grants the evidence, close allocates its outcome
+/// span from its own Marks read, and the store accepts the close.
 fn close(
     input: &mut FoundationInput<'_>,
     successor: &s::StepQueryRef,
     span: s::SpanRef,
     through: s::SourcePosition,
-    raced: bool,
 ) {
     let preview = read(
         input,
@@ -623,19 +602,17 @@ fn close(
         )
         .unwrap();
     let evidence = complete_operation(input).into_closure_evidence().unwrap();
-    input
-        .outcome_span(successor.plan.clone(), Some(TurnKey(TURN.into())))
-        .unwrap();
-    let result = complete_operation(input);
-    let FoundationPlanOutcome::OutcomeSpan(allocated) = result.outcome() else {
-        panic!("outcome_span must allocate: {result:?}")
-    };
-    let mut outcome = allocated.clone();
-    if raced {
-        outcome.local_id = (outcome.local_id.0 + 1).into();
-    }
+    // The span close must allocate, stated from the member's catalog
+    // independently of the allocator: next_span_id at revision one.
     let catalog = read(input, s::ReadSelector::Marks {});
-    let plan_before = read(input, s::ReadSelector::PlanCurrent {});
+    let s::QueryResult::Marks { next_span_id, .. } = catalog.result() else {
+        panic!("member marks")
+    };
+    let outcome = s::SpanRef {
+        seed_id: successor.plan.plan_id.seed_id.clone(),
+        local_id: *next_span_id,
+        revision: 1.into(),
+    };
     let bound = AbsoluteBound::after(MonotonicIo.now().unwrap(), 5_000_000_000).unwrap();
     input
         .serving
@@ -648,48 +625,10 @@ fn close(
             successor.plan.clone(),
             successor.step_id.clone(),
             evidence,
-            outcome.clone(),
             TurnKey(TURN.into()),
         )
         .unwrap();
     let result = complete_operation(input);
-    if raced {
-        let FoundationPlanOutcome::Refused(refusal) = result.outcome() else {
-            panic!("a span that is not the next allocation must refuse: {result:?}")
-        };
-        assert_eq!(refusal.case, s::PlanOperationCase::InvalidTarget);
-        assert_eq!(refusal.read_code, None);
-        assert!(input.serving.owner.context.failure().is_none());
-        let plan_after = read(input, s::ReadSelector::PlanCurrent {});
-        assert_eq!(plan_after.raw_bytes(), plan_before.raw_bytes());
-        let s::QueryResult::PlanCurrent {
-            current: Some(plan),
-            ..
-        } = plan_after.result()
-        else {
-            panic!("member plan")
-        };
-        let step = plan
-            .steps
-            .iter()
-            .find(|step| step.step_id == successor.step_id)
-            .unwrap();
-        assert_eq!(step.status, s::StepStatus::Active);
-        assert_eq!(step.outcome_span, None);
-        assert_eq!(
-            read(input, s::ReadSelector::Marks {}).raw_bytes(),
-            catalog.raw_bytes()
-        );
-        assert_eq!(
-            input
-                .serving
-                .owner
-                .context
-                .complete_wait(PumpDeadline::Decision),
-            Some(bound)
-        );
-        return;
-    }
     let FoundationPlanOutcome::Closed(current) = result.outcome() else {
         panic!("close must return its committed snapshot: {result:?}")
     };

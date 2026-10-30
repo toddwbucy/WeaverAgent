@@ -176,40 +176,21 @@ fn evidence(fx: &mut SummaryFixture) -> ClosureEvidence {
     }
 }
 
-/// The caller allocates outcome_span through the outcome_span operation: one
-/// fresh recorded Marks read and its next span. Nothing is held for close.
-fn outcome_span_for(fx: &mut SummaryFixture, expected: s::PlanRef) -> s::SpanRef {
-    begin(fx, PlanRequest::OutcomeSpan { expected });
-    let read = next(fx);
-    assert!(matches!(
-        &read,
-        s::StateFrame::Control {
-            frame: s::StateControl::Read {
-                selector: s::ReadSelector::Marks {}
-            },
-            ..
-        }
-    ));
-    let bytes = serde_json::to_vec(&s::QueryResult::Marks {
-        next_span_id: 4.into(),
-        current_task: None,
-        open_scopes: vec![],
-    })
-    .unwrap();
-    fx.boot
-        .member
-        .respond(&read, page(62, 0, bytes.len(), &bytes));
-    let release = next(fx);
-    fx.boot.member.respond(
-        &release,
-        s::StateControlAnswer::Released {
-            snapshot_id: 62.into(),
-        },
-    );
-    finish(fx)
-        .outcome_span()
-        .cloned()
-        .expect("a recorded marks catalog allocates the outcome span")
+/// The span close's own Marks read must allocate when serve_marks names 4:
+/// stated independently of the allocator, so a shifted allocation fails.
+fn next_span(fx: &mut SummaryFixture) -> s::SpanRef {
+    s::SpanRef {
+        seed_id: fx
+            .run()
+            .context
+            .open_start
+            .as_ref()
+            .unwrap()
+            .seed_id
+            .clone(),
+        local_id: 4.into(),
+        revision: 1.into(),
+    }
 }
 
 /// Serve close's own Marks read, after its reread, then release it.
@@ -242,11 +223,7 @@ fn serve_marks(fx: &mut SummaryFixture, next_span_id: u64) {
     );
 }
 
-fn outcome_span(fx: &mut SummaryFixture) -> s::SpanRef {
-    outcome_span_for(fx, pinned().plan)
-}
-
-fn begin_close(fx: &mut SummaryFixture, evidence: ClosureEvidence, outcome: s::SpanRef) {
+fn begin_close(fx: &mut SummaryFixture, evidence: ClosureEvidence) {
     let work = pinned();
     let run = fx.run();
     let turn = TurnRef("closure".into());
@@ -269,7 +246,6 @@ fn begin_close(fx: &mut SummaryFixture, evidence: ClosureEvidence, outcome: s::S
                 expected: work.plan,
                 step_id: work.step_id,
                 evidence,
-                outcome_span: outcome,
             },
             Some(turn),
             &mut run.clock,
@@ -389,9 +365,8 @@ fn closure_attest_permitted_grants_evidence_without_read_or_effect() {
 fn closure_close_changed_work_bytes_refuse_work_changed_with_null_code() {
     let (mut fx, _) = closure_fixture(false, false);
     let evidence = evidence(&mut fx);
-    let outcome = outcome_span(&mut fx);
     let before = fx.run().context.committed_plan_summary().unwrap().cloned();
-    begin_close(&mut fx, evidence, outcome);
+    begin_close(&mut fx, evidence);
     // One encoded byte changed under the same echoed selector.
     let mut changed = PREVIEW.to_vec();
     let at = changed.iter().position(|&b| b == b'z').unwrap();
@@ -419,8 +394,7 @@ fn closure_close_incomplete_reread_keeps_its_read_code() {
     ] {
         let (mut fx, _) = closure_fixture(false, false);
         let evidence = evidence(&mut fx);
-        let outcome = outcome_span(&mut fx);
-        begin_close(&mut fx, evidence, outcome);
+        begin_close(&mut fx, evidence);
         let read = next(&mut fx);
         fx.boot.member.respond(&read, refuse(code));
         let refusal = refused_close(&mut fx);
@@ -433,7 +407,6 @@ fn closure_close_incomplete_reread_keeps_its_read_code() {
 fn closure_close_stale_revision_refuses_before_any_read() {
     let (mut fx, _) = closure_fixture(false, false);
     let evidence = evidence(&mut fx);
-    let outcome = outcome_span(&mut fx);
     let work = pinned();
     let run = fx.run();
     let turn = TurnRef("closure".into());
@@ -458,7 +431,6 @@ fn closure_close_stale_revision_refuses_before_any_read() {
                 expected: stale,
                 step_id: work.step_id,
                 evidence,
-                outcome_span: outcome,
             },
             Some(turn),
             &mut run.clock,
@@ -475,8 +447,7 @@ fn closure_close_echo_violation_or_open_pair_is_a_member_protocol_fault() {
     for open_pair in [false, true] {
         let (mut fx, _) = closure_fixture(false, false);
         let evidence = evidence(&mut fx);
-        let outcome = outcome_span(&mut fx);
-        begin_close(&mut fx, evidence, outcome);
+        begin_close(&mut fx, evidence);
         let mut result: s::QueryResult = serde_json::from_slice(PREVIEW).unwrap();
         let s::QueryResult::SpanPreview {
             through, entries, ..
@@ -594,9 +565,8 @@ fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
         let (mut fx, certificate) = closure_fixture(false, true);
         let bound = fx.run().context.deadlines.get(PumpDeadline::Decision);
         let evidence = evidence(&mut fx);
-        let outcome = outcome_span(&mut fx);
-        assert_eq!(outcome.local_id.0, 4);
-        begin_close(&mut fx, evidence, outcome.clone());
+        let outcome = next_span(&mut fx);
+        begin_close(&mut fx, evidence);
         // The reread pages the same bytes at a different capacity.
         serve(&mut fx, PREVIEW, 333);
         serve_marks(&mut fx, 4);
@@ -673,8 +643,7 @@ fn closure_close_refresh_without_the_exact_closure_latches() {
     for field in ["outcome_span", "closure_source"] {
         let (mut fx, certificate) = closure_fixture(false, true);
         let evidence = evidence(&mut fx);
-        let outcome = outcome_span(&mut fx);
-        begin_close(&mut fx, evidence, outcome.clone());
+        begin_close(&mut fx, evidence);
         serve(&mut fx, PREVIEW, PREVIEW.len());
         serve_marks(&mut fx, 4);
         effect_ready(&mut fx);
@@ -683,6 +652,7 @@ fn closure_close_refresh_without_the_exact_closure_latches() {
             .begin_plan_effect(&certificate, &mut run.clock)
             .unwrap();
         let source = committed(&mut fx, false);
+        let outcome = next_span(&mut fx);
         let mut snapshot = closed_snapshot(&mut fx, &source, &outcome);
         if field == "outcome_span" {
             snapshot.steps[0].outcome_span = None;
@@ -715,58 +685,12 @@ fn closure_close_foreign_evidence_latches_without_read_or_effect() {
         "public identities deliberately match"
     );
     let foreign = evidence(&mut other);
-    let outcome = outcome_span(&mut original);
-    begin_close(&mut original, foreign, outcome);
+    begin_close(&mut original, foreign);
     let failure = advance(&mut original).unwrap_err();
     assert!(format!("{failure:?}").contains("foreign closure evidence"));
     original.boot.member.no_request();
     assert!(original.records(Kind::Refusal).is_empty());
     assert!(original.records(Kind::StepOutcome).is_empty());
-}
-
-#[test]
-fn closure_close_outcome_span_not_the_next_allocation_refuses_before_effect() {
-    for field in ["local_id", "revision", "seed"] {
-        let (mut fx, _) = closure_fixture(false, false);
-        let evidence = evidence(&mut fx);
-        let allocated = outcome_span(&mut fx);
-        assert_eq!((allocated.local_id.0, allocated.revision.0), (4, 1));
-        assert_eq!(
-            allocated.seed_id,
-            fx.run().context.open_start.as_ref().unwrap().seed_id
-        );
-        let mut outcome = allocated.clone();
-        match field {
-            "local_id" => outcome.local_id = 5.into(),
-            "revision" => outcome.revision = 2.into(),
-            _ => outcome.seed_id.push('x'),
-        }
-        let before = fx.run().context.committed_plan_summary().unwrap().cloned();
-        begin_close(&mut fx, evidence, outcome);
-        if field != "seed" {
-            // Refused against close's own Marks read, after its reread.
-            serve(&mut fx, PREVIEW, PREVIEW.len());
-            serve_marks(&mut fx, 4);
-        }
-        let refusal = refused_close(&mut fx);
-        assert_eq!(refusal.case, s::PlanOperationCase::InvalidTarget, "{field}");
-        assert_eq!(refusal.read_code, None, "{field}");
-        if field != "seed" {
-            assert_eq!(
-                refusal.detail,
-                "outcome span is not the next allocation in close's marks read"
-            );
-            assert_eq!(
-                fx.records(Kind::Refusal)[0]["causal_parent"],
-                fx.records(Kind::Recall).last().unwrap()["sequence"]
-            );
-        }
-        fx.boot.member.no_request();
-        assert_eq!(
-            fx.run().context.committed_plan_summary().unwrap(),
-            before.as_ref()
-        );
-    }
 }
 
 /// Answer the next statement filing with the store's guard refusal.
@@ -804,12 +728,13 @@ fn refuse_filing(fx: &mut SummaryFixture, detail: &str) -> bool {
 fn closure_close_store_guard_refusal_halts_without_closure_or_refresh() {
     let (mut fx, certificate) = closure_fixture(false, true);
     let evidence = evidence(&mut fx);
-    // The scripted member models a true race: the span is close's own next
-    // allocation, and an allocation lands before its filing, so the store's
-    // consecutive-span guard refuses the filed effect.
-    let raced = outcome_span(&mut fx);
+    // The operator's ruling: a store-guard refusal of close after the local
+    // rechecks pass (an allocation race between close's Marks read and its
+    // filing) is a foundation fault, not a PlanOperationRefused. The scripted
+    // member models that race; no harness path can construct it.
+    let raced = next_span(&mut fx);
     let before = fx.run().context.committed_plan_summary().unwrap().cloned();
-    begin_close(&mut fx, evidence, raced.clone());
+    begin_close(&mut fx, evidence);
     serve(&mut fx, PREVIEW, PREVIEW.len());
     serve_marks(&mut fx, 4);
     effect_ready(&mut fx);
@@ -930,7 +855,6 @@ fn closure_close_reread_must_follow_the_attestation() {
         expected: work.plan,
         step_id: work.step_id,
         evidence,
-        outcome_span: work.span,
     };
     let run = fx.run();
     let current = std::sync::Arc::clone(run.context.plan_cache.committed.as_ref().unwrap());
@@ -1030,7 +954,6 @@ fn close_against(
 ) -> s::PlanOperationRefused {
     let (mut fx, _) = closure_fixture(false, false);
     let evidence = evidence(&mut fx);
-    let outcome = outcome_span(&mut fx);
     swap_current(&mut fx, change);
     let work = pinned();
     let mut plan = work.plan.clone();
@@ -1056,7 +979,6 @@ fn close_against(
                 expected: plan,
                 step_id: work.step_id,
                 evidence,
-                outcome_span: outcome,
             },
             Some(turn),
             &mut run.clock,

@@ -46,8 +46,6 @@ pub enum FoundationPlanOutcome<'a> {
     Work(&'a WorkRef),
     /// attest_closure granted unreviewed ClosureEvidence for this work.
     Attested(&'a WorkRef),
-    /// outcome_span's next unallocated span from a fresh Marks read.
-    OutcomeSpan(&'a SpanRef),
     /// close committed this snapshot, as its mandatory refresh adopted it.
     Closed(&'a weaver_types::state_flow::PlanSnapshot),
     Refused(&'a PlanOperationRefused),
@@ -111,11 +109,6 @@ impl FoundationPlanOperation {
             PlanPortCompletion::Attested(evidence) => {
                 FoundationPlanOutcome::Attested(evidence.work())
             }
-            PlanPortCompletion::OutcomeSpan(_) => FoundationPlanOutcome::OutcomeSpan(
-                self.completion
-                    .outcome_span()
-                    .expect("a settled outcome_span retains its span"),
-            ),
             PlanPortCompletion::Closed(_) => FoundationPlanOutcome::Closed(
                 self.completion
                     .current_snapshot()
@@ -273,39 +266,17 @@ impl FoundationInput<'_> {
         )
     }
 
-    /// Allocate close's outcome_span: one fresh recorded Marks read through
-    /// the plan port, whose outcome shows the next unallocated span. It holds
-    /// nothing for close and files nothing; a refused read keeps its outcome.
-    #[allow(clippy::result_large_err)]
-    pub fn outcome_span(
-        &mut self,
-        expected: PlanRef,
-        turn: Option<TurnKey>,
-    ) -> Result<(), FoundationPlanOperationError> {
-        self.begin_plan_operation(
-            FoundationPlanRequest::OutcomeSpan { expected },
-            turn,
-            &mut MonotonicIo,
-        )
-    }
-
     /// Close the active step with this consumed grant. After the work reread
-    /// close takes its own Marks read, and refuses invalid_target unless
-    /// outcome_span is that read's next allocation exactly (as from
-    /// [`Self::outcome_span`]). The original Decision bounds both reads, the
-    /// step.outcome, its refresh and native adoption.
+    /// close takes its own Marks read and allocates the outcome span there,
+    /// as activate allocates its step span. The original Decision bounds both
+    /// reads, the step.outcome, its refresh and native adoption.
     ///
-    /// The loop cannot supply a Marks read: the request has no such field,
-    /// and no read or grant type for one is public.
+    /// The loop supplies no outcome span: the request has no such field.
     ///
     /// ```compile_fail,E0026
-    /// fn held(request: weaver_harness::FoundationPlanRequest) {
-    ///     if let weaver_harness::FoundationPlanRequest::Close { marks, .. } = request {}
+    /// fn span(request: weaver_harness::FoundationPlanRequest) {
+    ///     if let weaver_harness::FoundationPlanRequest::Close { outcome_span, .. } = request {}
     /// }
-    /// ```
-    ///
-    /// ```compile_fail,E0425
-    /// fn held(_: weaver_harness::OutcomeMarks) {}
     /// ```
     #[allow(clippy::result_large_err)]
     pub fn close(
@@ -313,7 +284,6 @@ impl FoundationInput<'_> {
         expected: PlanRef,
         step_id: StepId,
         evidence: ClosureEvidence,
-        outcome_span: SpanRef,
         turn: TurnKey,
     ) -> Result<(), FoundationPlanOperationError> {
         self.begin_plan_operation(
@@ -321,7 +291,6 @@ impl FoundationInput<'_> {
                 expected,
                 step_id,
                 evidence,
-                outcome_span,
             },
             Some(turn),
             &mut MonotonicIo,

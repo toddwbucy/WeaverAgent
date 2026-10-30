@@ -73,7 +73,6 @@ pub(super) struct PlanPortTransaction {
     break_report: Option<s::PlanBreakReport>,
     successor: Option<checked::CheckedStepSuccessor>,
     setup: Option<s::ReviewSetupRef>,
-    outcome_span: Option<s::SpanRef>,
     /// close's own Marks read, taken after its checked work reread.
     marks_read: Option<read_driver::RetainedReadCompletion>,
     cancelled: bool,
@@ -253,7 +252,6 @@ pub(in crate::flow) enum PlanPortCompletion {
     Allowed(AllowedAct),
     Work(CheckedWork),
     Attested(ClosureEvidence),
-    OutcomeSpan(PlanPortAccount),
     Closed(PlanPortAccount),
     Refused {
         refusal: s::PlanOperationRefused,
@@ -275,14 +273,6 @@ impl PlanPortCompletion {
             unreachable!()
         };
         current.as_ref()
-    }
-
-    /// outcome_span's allocation: a fresh read's next span. Nothing is held.
-    pub(in crate::flow) fn outcome_span(&self) -> Option<&s::SpanRef> {
-        match self {
-            Self::OutcomeSpan(account) => account.work.outcome_span.as_ref(),
-            _ => None,
-        }
     }
 
     /// Move the checked work into attest_closure. Any other result returns whole.
@@ -333,7 +323,6 @@ impl PlanPortCompletion {
             Self::Attested(evidence) => &evidence.account,
             Self::BreakRecorded(account)
             | Self::Closed(account)
-            | Self::OutcomeSpan(account)
             | Self::Successor(account)
             | Self::QueryRefused(account)
             | Self::Refused { account, .. }
@@ -354,7 +343,6 @@ impl PlanPortCompletion {
             Self::Attested(evidence) => evidence.account,
             Self::BreakRecorded(account)
             | Self::Closed(account)
-            | Self::OutcomeSpan(account)
             | Self::Successor(account)
             | Self::QueryRefused(account)
             | Self::Refused { account, .. }
@@ -391,10 +379,7 @@ impl RecordingContext {
                 && !work.cancelled
                 && work.stage == Stage::Read
                 && (work.current.is_some()
-                    || matches!(
-                        work.request,
-                        PlanRequest::StepSuccessor { .. } | PlanRequest::OutcomeSpan { .. }
-                    ))
+                    || matches!(work.request, PlanRequest::StepSuccessor { .. }))
                 && &work.read_selector() == selector
                 && work.turn.as_ref() == turn
                 && self.deadlines.get(PumpDeadline::Decision) == Some(work.bound)
@@ -515,7 +500,6 @@ impl RecordingContext {
             break_report: None,
             successor: None,
             setup: None,
-            outcome_span: None,
             marks_read: None,
             cancelled: false,
         })));
@@ -554,10 +538,7 @@ impl RecordingContext {
         }
         match work.stage {
             Stage::Validate => {
-                if matches!(
-                    work.request,
-                    PlanRequest::StepSuccessor { .. } | PlanRequest::OutcomeSpan { .. }
-                ) {
+                if matches!(work.request, PlanRequest::StepSuccessor { .. }) {
                     self.plan_port_work_mut().unwrap().stage = Stage::Read;
                     return Ok(PlanPortProgress::Progress);
                 }
@@ -680,9 +661,6 @@ impl RecordingContext {
         if matches!(work.request, PlanRequest::StepSuccessor { .. }) {
             return self.finish_step_successor_read(ports.io);
         }
-        if matches!(work.request, PlanRequest::OutcomeSpan { .. }) {
-            return self.finish_outcome_span_read(ports.io);
-        }
         let retained = if marks_leg {
             work.marks_read.as_ref().unwrap()
         } else {
@@ -750,7 +728,6 @@ impl RecordingContext {
             | PlanRequest::Activate { .. }
             | PlanRequest::Close { .. }
             | PlanRequest::AttestClosure { .. }
-            | PlanRequest::OutcomeSpan { .. }
             | PlanRequest::StepSuccessor { .. } => unreachable!(),
             PlanRequest::AssessAct { .. } => checked::assess(
                 &work.request,
@@ -807,40 +784,6 @@ impl RecordingContext {
             _ => {
                 self.plan_port_work_mut().unwrap().read = Some(retained);
                 return Err(self.plan_port_fault(io, "step query lacks its complete read outcome"));
-            }
-        }
-        self.plan_port_work_mut().unwrap().stage = Stage::Complete;
-        Ok(PlanPortProgress::Complete)
-    }
-
-    /// outcome_span allocates from its recorded catalog with the one span
-    /// allocator, under the loaded seed. A refused read keeps its outcome.
-    fn finish_outcome_span_read(
-        &mut self,
-        io: &mut impl PumpIo,
-    ) -> Result<PlanPortProgress, RunFailure> {
-        let retained = self.plan_port_work().unwrap().read.as_ref().unwrap();
-        match &retained.completion {
-            ReadCompletion::Recorded(read) => {
-                let seed = &self.open_start.as_ref().unwrap().seed_id;
-                match checked::activation::SpanAllocator::from_marks(self, read, seed) {
-                    Ok(spans) => {
-                        let span = spans.peek();
-                        self.plan_port_work_mut().unwrap().outcome_span = Some(span);
-                    }
-                    Err(_) => {
-                        return Err(
-                            self.plan_port_fault(io, "outcome span read has no marks catalog")
-                        );
-                    }
-                }
-            }
-            ReadCompletion::Refused(crate::flow::read::ReadFailure::Refused { .. })
-                if retained.refusal.is_some() => {}
-            _ => {
-                return Err(
-                    self.plan_port_fault(io, "outcome span lacks its complete read outcome")
-                );
             }
         }
         self.plan_port_work_mut().unwrap().stage = Stage::Complete;
@@ -932,10 +875,7 @@ impl RecordingContext {
         }
         if !work.cancelled
             && work.refusal.is_none()
-            && !matches!(
-                work.request,
-                PlanRequest::StepSuccessor { .. } | PlanRequest::OutcomeSpan { .. }
-            )
+            && !matches!(work.request, PlanRequest::StepSuccessor { .. })
             && !self.plan_cache.committed.as_ref().is_some_and(|current| {
                 work.current
                     .as_ref()
@@ -956,12 +896,6 @@ impl RecordingContext {
         } else if matches!(account.work.request, PlanRequest::StepSuccessor { .. }) {
             if account.work.successor.is_some() {
                 PlanPortCompletion::Successor(account)
-            } else {
-                PlanPortCompletion::QueryRefused(account)
-            }
-        } else if matches!(account.work.request, PlanRequest::OutcomeSpan { .. }) {
-            if account.work.outcome_span.is_some() {
-                PlanPortCompletion::OutcomeSpan(account)
             } else {
                 PlanPortCompletion::QueryRefused(account)
             }

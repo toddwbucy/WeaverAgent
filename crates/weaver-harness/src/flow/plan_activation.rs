@@ -199,7 +199,7 @@ pub(in crate::flow) fn prepare(
 }
 
 /// The one span allocator over a recorded marks catalog. Activation and the
-/// outcome_span operation both take new span IDs here, never a second counter.
+/// close both take new span IDs here, never from a second counter.
 /// The store still requires each opened span to be its exact next ID.
 pub(in crate::flow) struct SpanAllocator {
     seed: String,

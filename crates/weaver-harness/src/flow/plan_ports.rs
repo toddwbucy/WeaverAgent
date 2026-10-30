@@ -52,18 +52,13 @@ pub enum PlanRequest {
         step_id: s::StepId,
         work: CheckedWork,
     },
-    /// The caller's outcome_span allocation for close: a standalone Marks
-    /// read that keeps its read outcome, records no refusal, creates no
-    /// effect and holds nothing for close.
-    OutcomeSpan { expected: s::PlanRef },
-    /// close rereads its work, then takes its own Marks read; outcome_span
-    /// must be that read's next allocation exactly. The store still requires
-    /// it to be the next span below the step when the effect files.
+    /// close rereads its work, then takes its own Marks read and allocates
+    /// the outcome span there, as activate allocates its step span. The
+    /// store still requires it to be the next span below the step at filing.
     Close {
         expected: s::PlanRef,
         step_id: s::StepId,
         evidence: ClosureEvidence,
-        outcome_span: s::SpanRef,
     },
 }
 
@@ -76,13 +71,12 @@ impl PlanRequest {
             | Self::AssessAct { expected, .. }
             | Self::WorkReference { expected, .. }
             | Self::AttestClosure { expected, .. }
-            | Self::OutcomeSpan { expected }
             | Self::Close { expected, .. } => expected,
         }
     }
     pub(in crate::flow) fn step_id(&self) -> Option<&s::StepId> {
         match self {
-            Self::StepSuccessor { .. } | Self::OutcomeSpan { .. } => None,
+            Self::StepSuccessor { .. } => None,
             Self::RecordBreak { step_id, .. } => step_id.as_ref(),
             Self::Activate { step_id, .. }
             | Self::AssessAct { step_id, .. }
@@ -93,7 +87,7 @@ impl PlanRequest {
     }
     pub(in crate::flow) fn operation(&self) -> Option<s::PlanPortOperation> {
         Some(match self {
-            Self::StepSuccessor { .. } | Self::OutcomeSpan { .. } => return None,
+            Self::StepSuccessor { .. } => return None,
             Self::Activate { .. } => s::PlanPortOperation::Activate,
             Self::RecordBreak { .. } => s::PlanPortOperation::RecordBreak,
             Self::AssessAct { .. } => s::PlanPortOperation::AssessAct,
@@ -105,8 +99,7 @@ impl PlanRequest {
     pub(in crate::flow) fn local_refusal(&self, seed: &str) -> Option<s::PlanOperationRefused> {
         (self.expected().plan_id.seed_id != seed
             || self.step_id().is_some_and(|id| id.seed_id != seed)
-            || matches!(self, Self::WorkReference { span, .. } if span.seed_id != seed)
-            || matches!(self, Self::Close { outcome_span, .. } if outcome_span.seed_id != seed))
+            || matches!(self, Self::WorkReference { span, .. } if span.seed_id != seed))
         .then(|| {
             refusal(
                 s::PlanOperationCase::InvalidTarget,
@@ -123,7 +116,7 @@ impl PlanRequest {
                 plan: expected.clone(),
                 previous_step: previous_step.clone(),
             },
-            Self::Activate { .. } | Self::OutcomeSpan { .. } => s::ReadSelector::Marks {},
+            Self::Activate { .. } => s::ReadSelector::Marks {},
             Self::RecordBreak { .. } => unreachable!("break consumes the committed cache"),
             Self::AssessAct { statement, .. } => s::ReadSelector::Statement {
                 statement: statement.clone(),
