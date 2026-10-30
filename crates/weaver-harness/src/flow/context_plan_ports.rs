@@ -704,6 +704,7 @@ impl RecordingContext {
                 checked::closure::prepare_close(
                     &work.request,
                     self,
+                    current,
                     preview,
                     proof,
                     turn,

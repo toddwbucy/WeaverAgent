@@ -195,12 +195,14 @@ pub(in crate::flow) fn check_reread(
     Ok(())
 }
 
-/// close's own Marks read follows its checked reread. The outcome span is
-/// that catalog's next allocation, from the one allocator activate uses, so
-/// only an allocation between this read and the filing reaches the store.
+/// close's own Marks read follows its checked reread. Its catalog must be
+/// coherent and open on the plan's task and the active step's span, as
+/// activation's is, or it is a protocol fault before any effect. The outcome
+/// span is that catalog's next allocation through SpanAllocator.
 pub(in crate::flow) fn prepare_close(
     request: &PlanRequest,
     context: &RecordingContext,
+    current: &CommittedPlanSummary,
     preview: &RecordedRead,
     marks: &RecordedRead,
     turn: TurnRef,
@@ -217,6 +219,21 @@ pub(in crate::flow) fn prepare_close(
     if marks.recall_sequence().0 <= preview.recall_sequence().0 || turn.0.is_empty() {
         return Err(PlanCheckFailure::Protocol(
             "close lost its ordered marks read or turn",
+        ));
+    }
+    let (plan, step) = active(request, context, current)?;
+    let open_scopes = super::activation::task_catalog(marks, plan)?;
+    let s::QueryResult::Marks { next_span_id, .. } = marks.result() else {
+        unreachable!("a checked task catalog is a Marks result")
+    };
+    let step_span = step.span.as_ref();
+    if !open_scopes
+        .last()
+        .is_some_and(|scope| Some(&scope.span) == step_span && scope.kind == s::SpanKind::Step)
+        || step_span.is_none_or(|span| span.local_id >= *next_span_id)
+    {
+        return Err(PlanCheckFailure::Protocol(
+            "close marks differ from its active step scope",
         ));
     }
     let outcome_span = SpanAllocator::from_marks(context, marks, &expected.plan_id.seed_id)?.peek();

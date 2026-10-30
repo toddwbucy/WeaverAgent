@@ -271,12 +271,23 @@ impl FoundationInput<'_> {
     /// as activate allocates its step span. The original Decision bounds both
     /// reads, the step.outcome, its refresh and native adoption.
     ///
-    /// The loop supplies no outcome span: the request has no such field.
+    /// The loop supplies no outcome span and no Marks read: the request has
+    /// neither field, and no read or grant type for one is public.
     ///
     /// ```compile_fail,E0026
     /// fn span(request: weaver_harness::FoundationPlanRequest) {
     ///     if let weaver_harness::FoundationPlanRequest::Close { outcome_span, .. } = request {}
     /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0026
+    /// fn held(request: weaver_harness::FoundationPlanRequest) {
+    ///     if let weaver_harness::FoundationPlanRequest::Close { marks, .. } = request {}
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0425
+    /// fn held(_: weaver_harness::OutcomeMarks) {}
     /// ```
     #[allow(clippy::result_large_err)]
     pub fn close(

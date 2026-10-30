@@ -128,25 +128,8 @@ pub(in crate::flow) fn prepare(
             "activation lost its ordered marks proof or turn",
         ));
     }
-    let s::QueryResult::Marks {
-        current_task,
-        open_scopes,
-        ..
-    } = marks.result()
-    else {
-        return Err(PlanCheckFailure::Protocol(
-            "activation has no marks catalog",
-        ));
-    };
+    let open_scopes = task_catalog(marks, plan)?;
     let seed = &plan.plan.plan_id.seed_id;
-    if !matches!(crate::flow::marks::catalog(marks.result(), seed),
-        Ok(crate::flow::marks::TaskCatalog::Existing(task)) if task == plan.task)
-        || current_task.as_ref() != Some(&plan.task)
-    {
-        return Err(PlanCheckFailure::Protocol(
-            "plan task disagrees with its open marks path",
-        ));
-    }
     let mut spans = SpanAllocator::from_marks(context, marks, seed)?;
     let group_span = match &step.group {
         None => None,
@@ -198,8 +181,34 @@ pub(in crate::flow) fn prepare(
     })
 }
 
-/// The one span allocator over a recorded marks catalog. Activation and the
-/// close both take new span IDs here, never from a second counter.
+/// The catalog activation and close allocate from: a coherent Marks result
+/// whose open path is the plan's own task. It returns the open scopes.
+pub(in crate::flow) fn task_catalog<'a>(
+    marks: &'a RecordedRead,
+    plan: &s::PlanSnapshot,
+) -> Result<&'a [s::SpanInfo], PlanCheckFailure> {
+    let s::QueryResult::Marks {
+        current_task,
+        open_scopes,
+        ..
+    } = marks.result()
+    else {
+        return Err(PlanCheckFailure::Protocol("marks read has no catalog"));
+    };
+    let seed = &plan.plan.plan_id.seed_id;
+    if !matches!(crate::flow::marks::catalog(marks.result(), seed),
+        Ok(crate::flow::marks::TaskCatalog::Existing(task)) if task == plan.task)
+        || current_task.as_ref() != Some(&plan.task)
+    {
+        return Err(PlanCheckFailure::Protocol(
+            "plan task disagrees with its open marks path",
+        ));
+    }
+    Ok(open_scopes)
+}
+
+/// The span allocator over a recorded marks catalog. Activation and close
+/// allocate their new span IDs through it.
 /// The store still requires each opened span to be its exact next ID.
 pub(in crate::flow) struct SpanAllocator {
     seed: String,

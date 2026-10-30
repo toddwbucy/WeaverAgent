@@ -4,7 +4,7 @@
 
 **Landing PR:** #408
 
-**Version:** 0.19 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
+**Version:** 0.20 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -649,10 +649,10 @@ nothing. [SERVE-3, SORT-4, PLAN-2, MARK-1, FLOW-8]
 The store opens and closes outcome_span below the active step, closes that step, and
 closes complete ancestors from their held membership. The pair and frontier guards
 remain STATE-PLAN-FILE's. No caller supplies an arbitrary ancestor list. A close receipt
-changes no argument and fires no successor. A store-guard refusal of close after the
-local rechecks pass, an allocation race between close's Marks read and its filing, is a
-foundation fault, not a PlanOperationRefused (the operator's ruling). [PLAN-2, MARK-1,
-MARK-5, R20-12]
+changes no argument and fires no successor. Any store-guard refusal of close after the
+local rechecks pass is a foundation fault, not a PlanOperationRefused (the operator's
+ruling of 2026-10-30). The guard is a defence: close's allocation is serialized with
+every other allocator in the run. [PLAN-2, MARK-1, MARK-5, R20-12]
 
 ## 4. Flags and locked-plan predicates
 

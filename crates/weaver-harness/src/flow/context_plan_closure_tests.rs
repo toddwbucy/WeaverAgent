@@ -176,25 +176,51 @@ fn evidence(fx: &mut SummaryFixture) -> ClosureEvidence {
     }
 }
 
-/// The span close's own Marks read must allocate when serve_marks names 4:
-/// stated independently of the allocator, so a shifted allocation fails.
-fn next_span(fx: &mut SummaryFixture) -> s::SpanRef {
-    s::SpanRef {
-        seed_id: fx
-            .run()
-            .context
-            .open_start
-            .as_ref()
-            .unwrap()
-            .seed_id
-            .clone(),
-        local_id: 4.into(),
-        revision: 1.into(),
+/// A coherent catalog: the plan's task open, the active step's span open
+/// below it, and next_span_id above both.
+fn coherent_marks(fx: &mut SummaryFixture, next_span_id: u64) -> s::QueryResult {
+    let s::QueryResult::PlanCurrent {
+        current: Some(plan),
+        ..
+    } = fx
+        .run()
+        .context
+        .plan_cache
+        .committed
+        .as_ref()
+        .unwrap()
+        .read()
+        .result()
+    else {
+        panic!("committed plan")
+    };
+    let task = plan.task.clone();
+    let scope = |span: &s::SpanRef, parent: Option<&s::SpanRef>, kind| s::SpanInfo {
+        span: span.clone(),
+        parent: parent.cloned(),
+        kind,
+        status: s::SpanStatus::Open,
+        opened_source: Some(s::SourceBlockId {
+            run: "run".into(),
+            sequence: 1.into(),
+            block: 0.into(),
+        }),
+        ended_source: None,
+        replacement: None,
+    };
+    let step = pinned().span;
+    s::QueryResult::Marks {
+        next_span_id: next_span_id.into(),
+        open_scopes: vec![
+            scope(&task.task, None, s::SpanKind::Task),
+            scope(&step, Some(&task.task), s::SpanKind::Step),
+        ],
+        current_task: Some(task),
     }
 }
 
 /// Serve close's own Marks read, after its reread, then release it.
-fn serve_marks(fx: &mut SummaryFixture, next_span_id: u64) {
+fn serve_marks_result(fx: &mut SummaryFixture, result: &s::QueryResult) {
     let read = next(fx);
     assert!(matches!(
         &read,
@@ -205,12 +231,7 @@ fn serve_marks(fx: &mut SummaryFixture, next_span_id: u64) {
             ..
         }
     ));
-    let bytes = serde_json::to_vec(&s::QueryResult::Marks {
-        next_span_id: next_span_id.into(),
-        current_task: None,
-        open_scopes: vec![],
-    })
-    .unwrap();
+    let bytes = serde_json::to_vec(result).unwrap();
     fx.boot
         .member
         .respond(&read, page(64, 0, bytes.len(), &bytes));
@@ -221,6 +242,25 @@ fn serve_marks(fx: &mut SummaryFixture, next_span_id: u64) {
             snapshot_id: 64.into(),
         },
     );
+}
+
+/// Serve a coherent catalog naming `next_span_id`, and return the span close
+/// must allocate from it, stated independently of the allocator.
+fn serve_marks(fx: &mut SummaryFixture, next_span_id: u64) -> s::SpanRef {
+    let result = coherent_marks(fx, next_span_id);
+    serve_marks_result(fx, &result);
+    s::SpanRef {
+        seed_id: fx
+            .run()
+            .context
+            .open_start
+            .as_ref()
+            .unwrap()
+            .seed_id
+            .clone(),
+        local_id: next_span_id.into(),
+        revision: 1.into(),
+    }
 }
 
 fn begin_close(fx: &mut SummaryFixture, evidence: ClosureEvidence) {
@@ -565,11 +605,11 @@ fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
         let (mut fx, certificate) = closure_fixture(false, true);
         let bound = fx.run().context.deadlines.get(PumpDeadline::Decision);
         let evidence = evidence(&mut fx);
-        let outcome = next_span(&mut fx);
         begin_close(&mut fx, evidence);
         // The reread pages the same bytes at a different capacity.
         serve(&mut fx, PREVIEW, 333);
-        serve_marks(&mut fx, 4);
+        // A catalog whose next span is not the step's successor ID.
+        let outcome = serve_marks(&mut fx, 9);
         effect_ready(&mut fx);
         let run = fx.run();
         run.context
@@ -645,14 +685,13 @@ fn closure_close_refresh_without_the_exact_closure_latches() {
         let evidence = evidence(&mut fx);
         begin_close(&mut fx, evidence);
         serve(&mut fx, PREVIEW, PREVIEW.len());
-        serve_marks(&mut fx, 4);
+        let outcome = serve_marks(&mut fx, 4);
         effect_ready(&mut fx);
         let run = fx.run();
         run.context
             .begin_plan_effect(&certificate, &mut run.clock)
             .unwrap();
         let source = committed(&mut fx, false);
-        let outcome = next_span(&mut fx);
         let mut snapshot = closed_snapshot(&mut fx, &source, &outcome);
         if field == "outcome_span" {
             snapshot.steps[0].outcome_span = None;
@@ -728,15 +767,14 @@ fn refuse_filing(fx: &mut SummaryFixture, detail: &str) -> bool {
 fn closure_close_store_guard_refusal_halts_without_closure_or_refresh() {
     let (mut fx, certificate) = closure_fixture(false, true);
     let evidence = evidence(&mut fx);
-    // The operator's ruling: a store-guard refusal of close after the local
-    // rechecks pass (an allocation race between close's Marks read and its
-    // filing) is a foundation fault, not a PlanOperationRefused. The scripted
-    // member models that race; no harness path can construct it.
-    let raced = next_span(&mut fx);
+    // The operator's ruling of 2026-10-30: any store-guard refusal of close
+    // after the local rechecks pass is a foundation fault, not a
+    // PlanOperationRefused. The scripted member refuses a coherent close; no
+    // harness path makes the real store's guard bite.
     let before = fx.run().context.committed_plan_summary().unwrap().cloned();
     begin_close(&mut fx, evidence);
     serve(&mut fx, PREVIEW, PREVIEW.len());
-    serve_marks(&mut fx, 4);
+    let raced = serve_marks(&mut fx, 4);
     effect_ready(&mut fx);
     let run = fx.run();
     run.context
@@ -1023,4 +1061,122 @@ fn closure_close_rechecks_required_review() {
     // Unreachable in a run (a category changes only with a revision): defence.
     let refusal = close_against(|plan| plan.categories[0].review_required = true, |_| ());
     assert_eq!(refusal.case, s::PlanOperationCase::ReviewRequired);
+}
+
+#[test]
+fn closure_close_incoherent_marks_catalog_faults_before_any_effect() {
+    for case in ["no-task", "no-step-scope", "next-below-step"] {
+        let (mut fx, _) = closure_fixture(false, true);
+        let evidence = evidence(&mut fx);
+        let before = fx.run().context.committed_plan_summary().unwrap().cloned();
+        begin_close(&mut fx, evidence);
+        serve(&mut fx, PREVIEW, PREVIEW.len());
+        let mut result = coherent_marks(&mut fx, 4);
+        let s::QueryResult::Marks {
+            next_span_id,
+            current_task,
+            open_scopes,
+        } = &mut result
+        else {
+            unreachable!()
+        };
+        match case {
+            "no-task" => {
+                *current_task = None;
+                open_scopes.clear();
+            }
+            "no-step-scope" => {
+                open_scopes.pop();
+            }
+            _ => {
+                // The step span opened at 3, yet the catalog names 3 as next.
+                open_scopes.pop();
+                *next_span_id = 3.into();
+            }
+        }
+        serve_marks_result(&mut fx, &result);
+        let failure = (0..128)
+            .find_map(|_| advance(&mut fx).err())
+            .expect("an incoherent close catalog is no ordinary refusal");
+        assert!(
+            matches!(
+                failure,
+                RunFailure::Flow {
+                    reason: FlowHaltReason::ProtocolFailed,
+                    ..
+                }
+            ),
+            "{case}: {failure:?}"
+        );
+        assert!(fx.records(Kind::StepOutcome).is_empty(), "{case}");
+        assert!(fx.records(Kind::Refusal).is_empty(), "{case}");
+        assert!(fx.files.is_empty(), "{case}");
+        fx.boot.member.no_request();
+        let s::QueryResult::PlanCurrent {
+            current: Some(plan),
+            ..
+        } = fx
+            .run()
+            .context
+            .plan_cache
+            .committed
+            .as_ref()
+            .unwrap()
+            .read()
+            .result()
+        else {
+            panic!()
+        };
+        assert_eq!(plan.steps[0].status, s::StepStatus::Active, "{case}");
+        assert_eq!(&plan.plan, &before.unwrap().plan);
+    }
+}
+
+#[test]
+fn closure_close_marks_read_refusal_keeps_its_code_or_faults() {
+    // counter_exhausted on close's Marks read is read_refused with that code,
+    // parented on the Marks read's measurement, and files nothing.
+    let (mut fx, _) = closure_fixture(false, false);
+    let grant = evidence(&mut fx);
+    begin_close(&mut fx, grant);
+    serve(&mut fx, PREVIEW, PREVIEW.len());
+    let read = next(&mut fx);
+    assert!(matches!(
+        &read,
+        s::StateFrame::Control {
+            frame: s::StateControl::Read {
+                selector: s::ReadSelector::Marks {}
+            },
+            ..
+        }
+    ));
+    fx.boot
+        .member
+        .respond(&read, refuse(s::ReadRefusalCode::CounterExhausted));
+    let refusal = refused_close(&mut fx);
+    assert_eq!(refusal.case, s::PlanOperationCase::ReadRefused);
+    assert_eq!(
+        refusal.read_code,
+        Some(s::ReadRefusalCode::CounterExhausted)
+    );
+    assert_eq!(
+        fx.records(Kind::Refusal)[0]["causal_parent"],
+        fx.records(Kind::StateStoreMeasurement).last().unwrap()["sequence"]
+    );
+    // not_found is impossible for a Marks read (PLAN-PORT-REFUSAL maps it only
+    // for plan and statement selectors), so it keeps the foundation failure.
+    let (mut fx, _) = closure_fixture(false, false);
+    let grant = evidence(&mut fx);
+    begin_close(&mut fx, grant);
+    serve(&mut fx, PREVIEW, PREVIEW.len());
+    let read = next(&mut fx);
+    fx.boot
+        .member
+        .respond(&read, refuse(s::ReadRefusalCode::NotFound));
+    let failure = (0..128)
+        .find_map(|_| advance(&mut fx).err())
+        .expect("not_found on close's Marks read is no ordinary refusal");
+    assert!(format!("{failure:?}").contains("impossible for this initial plan selector"));
+    assert!(fx.records(Kind::Refusal).is_empty());
+    assert!(fx.records(Kind::StepOutcome).is_empty());
 }
