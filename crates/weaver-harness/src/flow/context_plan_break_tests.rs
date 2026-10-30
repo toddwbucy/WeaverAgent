@@ -566,3 +566,112 @@ fn plan_break_report_retains_exact_ticket_through_pressure_cancellation_and_expi
         }
     }
 }
+
+#[test]
+fn plan_break_report_waits_for_an_earlier_author_before_recording_and_completion() {
+    for committed_effect in [false, true] {
+        let mut fx = if committed_effect {
+            let (mut fx, certificate) = certified(true);
+            let req = break_request(&fx, true);
+            begin_turn(&mut fx, req);
+            start_effect(&mut fx, &certificate);
+            let source = committed(&mut fx, false);
+            let snapshot = snapshot(&mut fx, source);
+            release_summary(&mut fx, snapshot);
+            fx
+        } else {
+            let mut fx = ready(false);
+            let req = break_request(&fx, false);
+            begin_turn(&mut fx, req);
+            fx
+        };
+        assert!((0..128).any(|_| {
+            advance(&mut fx).unwrap();
+            fx.run()
+                .context
+                .plan_port_work()
+                .unwrap()
+                .test_stage()
+                .starts_with("BreakReport")
+        }));
+        assert!(fx.records(Kind::PlanBreak).is_empty());
+        fx.boot.member.fill_trace();
+        let run = fx.run();
+        let bound = run.context.plan_port_bound().unwrap();
+        // Admit an earlier observation through the actual recorder. The test
+        // does not install a pending flag or manufacture an author ticket.
+        assert!(matches!(
+            run.context.submit_context_author(
+                AuthoredEvent {
+                    kind: Kind::ModelMeasurement,
+                    subsystem: weaver_trace::Subsystem::Harness,
+                    turn: Some(TurnRef("break".into())),
+                    source: AuthoredSource::Runtime,
+                    causal_parent: None,
+                    payload: Some(Payload::ModelMeasurement(
+                        serde_json::value::to_raw_value(&serde_json::json!({
+                            "fixture": "earlier observation before the break report"
+                        }))
+                        .unwrap(),
+                    )),
+                },
+                RecordPurpose::Observation,
+                1,
+                &mut run.clock,
+            ),
+            RecordProgress::Pending
+        ));
+        let prior = run.context.pending_author().unwrap();
+        let prior_ticket = prior.ticket;
+        let prior_event = format!("{:?}", prior.event);
+        assert!(!run.context.serving_observation_author_available());
+        for _ in 0..3 {
+            assert_eq!(advance(&mut fx).unwrap(), PlanPortProgress::Pending);
+            assert!(take(&mut fx).is_none());
+            assert!(fx.records(Kind::PlanBreak).is_empty());
+            let context = &fx.run().context;
+            assert_eq!(context.plan_port_bound(), Some(bound));
+            let prior = context.pending_author().unwrap();
+            assert_eq!(prior.ticket, prior_ticket);
+            assert_eq!(format!("{:?}", prior.event), prior_event);
+            let (_, ticket, sequence, consumed) =
+                context.plan_port_work().unwrap().test_refusal_account();
+            assert_eq!((ticket, sequence, consumed), (None, None, false));
+        }
+        fx.drain();
+        let run = fx.run();
+        let RecordProgress::Recorded {
+            sequence: prior_sequence,
+            ..
+        } = run.context.resume_context_author(&mut run.clock)
+        else {
+            panic!("the earlier observation must actually reach Recorded")
+        };
+        assert_eq!(
+            run.context.barrier.recorded_author_ticket(prior_sequence),
+            Some(prior_ticket)
+        );
+        assert!(run.context.serving_observation_author_available());
+        assert!(fx.records(Kind::PlanBreak).is_empty());
+        assert_eq!(advance(&mut fx).unwrap(), PlanPortProgress::Complete);
+        let rows = fx.records(Kind::PlanBreak);
+        assert_eq!(rows.len(), 1, "Recorded precedes taking BreakRecorded");
+        let sequence =
+            weaver_trace::Sequence(rows[0]["sequence"].as_str().unwrap().parse().unwrap());
+        let run = fx.run();
+        let (_, ticket, recorded, consumed) =
+            run.context.plan_port_work().unwrap().test_refusal_account();
+        assert!(consumed);
+        assert_eq!(recorded, Some(sequence));
+        assert_eq!(run.context.barrier.recorded_author_ticket(sequence), ticket);
+        assert!(ticket.is_some() && ticket != Some(prior_ticket));
+        assert!(sequence > prior_sequence);
+        assert_eq!(run.context.plan_port_bound(), Some(bound));
+        assert!(matches!(
+            take(&mut fx),
+            Some(PlanPortCompletion::BreakRecorded(_))
+        ));
+        assert_eq!(fx.files.len(), usize::from(committed_effect));
+        fx.boot.member.no_request();
+    }
+}

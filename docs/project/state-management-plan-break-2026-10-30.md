@@ -1,6 +1,6 @@
 # Checked plan break recording
 
-**Version:** 0.1, 2026-10-30.
+**Version:** 0.2, 2026-10-30.
 **Parent:** Issue 146, state management implementation.
 
 Implements: state-management-spec-07-plan-forward-flags PLAN-PORT's record_break,
@@ -106,7 +106,7 @@ The restored focused suites pass 46 owner and 23 worker-port cases.
 | Refuse instead of recording with no locked plan | Report-only case fails. |
 | Accept changed break metadata in the refresh | Changed case/proposed-source case fails. |
 | Skip native adoption | Actual worker active success case fails. |
-| Finish before the report is Recorded | Report pressure/ticket case fails. |
+| Skip the report author's advance call | Report pressure/ticket case fails. |
 | Drop the report's effect parent | Committed-cancellation matrix fails. |
 | Skip committed settlement after cancellation | Actual active Stop case fails. |
 | Omit BreakReport from the author claim | Report pressure/ticket case fails. |
@@ -137,6 +137,46 @@ binary and normal SQLite member. Command arrays and logs are retained.
 Evidence deposit:
 /bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/plan-break-20261030
 
+## Planner FX1 correction
+
+Review 5706764287 reads the runtime correct and requires one missing test.
+The earlier record-before-result control skipped the entire author advance
+call. K10 preserves that call but ignores its false result when another author
+owns the slot. The prior report-ticket pressure matrix did not pin this case.
+
+The new test admits a measurement through the real recorder while its queue is
+full. Both the committed-effect and report-only paths reach BreakReport with
+that earlier author pending. Three advances retain the exact earlier event and
+ticket, the original Decision, no report ticket or sequence, and no completion.
+After pressure drains, the earlier ticket reaches Recorded. Only then does the
+report reach Recorded and the operation return BreakRecorded. The test checks
+the distinct tickets and the sequence order before taking the result. This is
+an owner instrument using the context's recorder admission, not a new claim of
+worker scheduling coverage.
+
+K10 compiles independently and fails the new Pending assertion with Complete.
+Restoring the source passes the test, 2,289 ordinary harness tests/doctests and
+all 70 worker-plan process cases. The suite reports 972 ignored and skips the
+same known #331 case. Strict harness lint, lock, formatting, diff and three
+DocsMirror checks pass. No runtime file changes. Original controls and types
+results retain their earlier source scope. Exact hashes match the control
+restoration and final gates. Only this record changes after those gates.
+
+The first test run compared the full stage description with a bare stage name.
+Using the existing stage-prefix convention fixes that fixture error. Both the
+failed attempt and final source snapshots remain in the supplemental deposit:
+
+/bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/plan-break-fx1-20261030
+
+The correction awaits Planner regrade. B1's separate Broken-status instrument
+remains carried. B2-B4 require operator elections about case/state agreement,
+cancellation of an unstarted report and the nonlocked report's plan reference.
+Their behavior is unchanged. B5 retains the Planner's declined disposition:
+the effect expectation fixes last_source to this filing's exact source, and
+the break source must equal it. B6-B8 remain a batch for shared-owner cleanup
+before further effect kinds. B9 retains the UTC-date disposition. All are
+tracked by #146 and the linked review.
+
 ## Development findings and carries
 
 The first compile exposed three old activation method names and an Option
@@ -148,18 +188,19 @@ needed an explicit sequence conversion. The corrected owner, process, control
 and gate runs pass. All failed attempts remain in the deposit.
 
 #407 FX1 is carried in through its exact correction and rerun against the shared
-effect owner. The parent still requires Planner regrade. Its B1/B2/B5/B6/B7
+effect owner. Planner regrade 5706589894 accepts it with zero fix. Its B1/B2/B5/B6/B7
 batch items and B3 optional hardening remain carried, with B4 declined by the
 Planner. #406 B1-B5/B7-B9, #402/#405 and inherited ownership, security,
-measurement and qualification duties remain tracked in #146. #408's WorkRef
-byte-definition ruling and merge are required before dependent closure work.
+measurement and qualification duties remain tracked in #146. The operator
+merged #408 at cdcc391e, ratifying its WorkRef byte definition. The closure act
+still owes D1's real served-preview, store recheck and dump/load verification.
 This slice changes no WorkRef hashing.
 
 Review/closure ports, next_ready/fit_refused, selection, Diagnostic interruption,
 production language artifacts, prompt/template certificates, integrated limits
 and qualification, and the coupled cutover remain unfinished. The code-review
 and verification-before-completion skills are unavailable. Manual author
-reading and executed gates are not skill passes. Planner review is owed.
+reading and executed gates are not skill passes. Planner regrade is owed.
 No CodeRabbit review, deployment or full-goal completion is claimed.
 
 ## After-action review
@@ -170,3 +211,6 @@ the native cache even though break closes no mark. The active worker test and
 compiled omission pin that distinction. The report is another owed author
 duty, so its pressure matrix checks the actual ticket and original bound
 instead of treating the filing receipt as completion of the whole operation.
+FX1 adds the earlier-author wait separately from pressure on the report's own
+ticket. A protective control must keep the exact conditional being claimed:
+skipping a whole call does not establish that its false-result branch is pinned.
