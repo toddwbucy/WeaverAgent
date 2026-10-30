@@ -645,10 +645,25 @@ fn close(
         closed.closure_source.as_ref(),
         Some(&current.last_source.block_id)
     );
-    // The member's committed closure is the receipt's closed source.
-    let closure_source = closed.closure_source.clone().unwrap();
     let receipt = result.into_closure_receipt().unwrap();
-    assert_eq!(receipt.closed(), &closure_source);
+    // The receipt's closed source is the closure the member committed, read
+    // afresh from the member rather than from the snapshot the receipt kept.
+    let committed = read(input, s::ReadSelector::PlanCurrent {});
+    let s::QueryResult::PlanCurrent {
+        current: Some(committed),
+        ..
+    } = committed.result()
+    else {
+        panic!("member current plan")
+    };
+    let member_closure = committed
+        .steps
+        .iter()
+        .find(|step| step.step_id == successor.step_id)
+        .and_then(|step| step.closure_source.as_ref())
+        .expect("the member holds the closure");
+    assert_eq!(receipt.closed(), member_closure);
+    assert_ne!(receipt.closed(), &reference.through.block_id);
     assert_eq!(receipt.plan(), &successor.plan);
     assert_eq!(receipt.previous_step(), &successor.step_id);
     assert!(input.serving.owner.context.native_place_cache_ready());

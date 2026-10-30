@@ -2,7 +2,7 @@
 //! owners, with a scripted member. The preview bytes are the store's own pinned
 //! encoding (weaver-state work_bytes_d1.rs serves and accepts the same bytes).
 use super::*;
-use crate::flow::context::plan_port_driver::ClosureEvidence;
+use crate::flow::context::plan_port_driver::{ClosureEvidence, ClosureReceipt};
 use crate::flow::context::{ReadCompletion, RecordedRead};
 use crate::flow::templates::{CompiledInventory, TemplateCertificate};
 
@@ -15,6 +15,7 @@ const _: fn() = || {
     impl<T: ?Sized> NotClone<()> for T {}
     impl<T: Clone> NotClone<u8> for T {}
     let _ = <ClosureEvidence as NotClone<_>>::pin;
+    let _ = <ClosureReceipt as NotClone<_>>::pin;
 };
 
 fn pinned() -> s::WorkRef {
@@ -1260,15 +1261,6 @@ fn closure_close_marks_read_refusal_keeps_its_code_or_faults() {
     assert!(fx.records(Kind::StepOutcome).is_empty());
 }
 
-const _: fn() = || {
-    trait NotClone<M> {
-        fn pin() {}
-    }
-    impl<T: ?Sized> NotClone<()> for T {}
-    impl<T: Clone> NotClone<u8> for T {}
-    let _ = <crate::flow::context::plan_port_driver::ClosureReceipt as NotClone<_>>::pin;
-};
-
 #[test]
 fn closure_receipt_names_the_committed_closure_and_only_an_uncancelled_close_grants_it() {
     for cancel_at in ["none", "source", "receipt"] {
@@ -1308,6 +1300,34 @@ fn closure_receipt_names_the_committed_closure_and_only_an_uncancelled_close_gra
             assert!(matches!(whole, PlanPortCompletion::Cancelled(_)));
         }
     }
+}
+
+/// One committed, uncancelled close through the scripted member.
+fn closure_receipt(fx: &mut SummaryFixture, certificate: &TemplateCertificate) -> ClosureReceipt {
+    let evidence = evidence(fx);
+    begin_close(fx, evidence);
+    serve(fx, PREVIEW, PREVIEW.len());
+    let outcome = serve_marks(fx, 4);
+    effect_ready(fx);
+    let run = fx.run();
+    run.context
+        .begin_plan_effect(certificate, &mut run.clock)
+        .unwrap();
+    let source = committed(fx, false);
+    let snapshot = closed_snapshot(fx, &source, &outcome);
+    release_summary(fx, snapshot);
+    finish(fx)
+        .into_closure_receipt()
+        .unwrap_or_else(|_| panic!("a committed close grants its receipt"))
+}
+
+#[test]
+fn closure_receipt_belongs_only_to_the_run_whose_close_granted_it() {
+    let (mut own, certificate) = closure_fixture(false, true);
+    let receipt = closure_receipt(&mut own, &certificate);
+    let (mut other, _) = closure_fixture(false, true);
+    assert!(receipt.belongs_to(&own.run().context));
+    assert!(!receipt.belongs_to(&other.run().context));
 }
 
 #[test]

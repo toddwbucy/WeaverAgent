@@ -94,6 +94,15 @@ impl PlanPortTransaction {
 pub(in crate::flow) struct PlanPortAccount {
     work: Box<PlanPortTransaction>,
 }
+impl PlanPortAccount {
+    /// The current plan this account's committed read holds, if any.
+    fn current_plan(&self) -> Option<&s::PlanSnapshot> {
+        match self.work.current.as_ref()?.read().result() {
+            s::QueryResult::PlanCurrent { current, .. } => current.as_ref(),
+            _ => None,
+        }
+    }
+}
 
 /// Only the checked predicate creates this grant, with its actual proofs.
 /// The later consumer must recheck the context, current revision and exact act.
@@ -231,7 +240,8 @@ impl std::fmt::Debug for ClosureEvidence {
 /// PLAN-OBSERVATION's same-session closure receipt: a private, single-use,
 /// run-bound account of one committed close. Only a settled close that was
 /// not cancelled constructs it, after its mandatory refresh adopted the
-/// closure. It retains the whole close account. Metadata cannot rebuild it.
+/// closure. It keeps only its run binding and the closure it names, captured
+/// once from the close account. Metadata cannot rebuild it.
 ///
 /// ```compile_fail,E0277
 /// fn cloned<T: Clone>() {}
@@ -250,14 +260,24 @@ impl std::fmt::Debug for ClosureEvidence {
 ///
 /// ```compile_fail,E0451
 /// fn forged() -> weaver_harness::ClosureReceipt {
-///     weaver_harness::ClosureReceipt { account: todo!() }
+///     weaver_harness::ClosureReceipt {
+///         origin: todo!(),
+///         plan: todo!(),
+///         previous_step: todo!(),
+///         closed: todo!(),
+///     }
 /// }
 /// ```
 pub struct ClosureReceipt {
-    account: PlanPortAccount,
+    origin: Arc<()>,
+    plan: s::PlanRef,
+    previous_step: s::StepId,
+    closed: s::SourceBlockId,
 }
 impl ClosureReceipt {
-    fn from_close(account: PlanPortAccount) -> Self {
+    /// Capture the receipt from a settled close. The refreshed revision must
+    /// hold this step's closure source, or the account returns whole.
+    fn from_close(account: PlanPortAccount) -> Result<Self, PlanPortAccount> {
         assert!(
             matches!(account.work.request, PlanRequest::Close { .. })
                 && account.work.stage == Stage::Complete
@@ -265,39 +285,48 @@ impl ClosureReceipt {
                 && !account.work.cancelled,
             "only a settled close grants a closure receipt"
         );
-        Self { account }
+        let request = &account.work.request;
+        let closed = request.step_id().and_then(|step_id| {
+            account
+                .current_plan()?
+                .steps
+                .iter()
+                .find(|step| &step.step_id == step_id)?
+                .closure_source
+                .clone()
+        });
+        let (Some(previous_step), Some(closed)) = (request.step_id().cloned(), closed) else {
+            return Err(account);
+        };
+        Ok(Self {
+            origin: Arc::clone(&account.work.origin),
+            plan: request.expected().clone(),
+            previous_step,
+            closed,
+        })
     }
     /// The revision close committed against. A close changes no revision.
     pub fn plan(&self) -> &s::PlanRef {
-        self.account.work.request.expected()
+        &self.plan
     }
     /// The closed step, the successor query's previous step.
     pub fn previous_step(&self) -> &s::StepId {
-        self.account.work.request.step_id().unwrap()
+        &self.previous_step
     }
     /// The step.outcome source the refreshed revision holds as this closure.
     pub fn closed(&self) -> &s::SourceBlockId {
-        let s::QueryResult::PlanCurrent {
-            current: Some(snapshot),
-            ..
-        } = self.account.work.current.as_ref().unwrap().read().result()
-        else {
-            unreachable!("a committed close retains its refreshed plan")
-        };
-        snapshot
-            .steps
-            .iter()
-            .find(|step| &step.step_id == self.previous_step())
-            .and_then(|step| step.closure_source.as_ref())
-            .expect("the close refresh checked this closure source")
+        &self.closed
+    }
+    pub(in crate::flow) fn belongs_to(&self, context: &RecordingContext) -> bool {
+        Arc::ptr_eq(&self.origin, &context.read_origin)
     }
 }
 impl std::fmt::Debug for ClosureReceipt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClosureReceipt")
-            .field("plan", self.plan())
-            .field("previous_step", self.previous_step())
-            .field("closed", self.closed())
+            .field("plan", &self.plan)
+            .field("previous_step", &self.previous_step)
+            .field("closed", &self.closed)
             .finish()
     }
 }
@@ -341,12 +370,7 @@ impl PlanPortCompletion {
         let (Self::BreakRecorded(account) | Self::Closed(account)) = self else {
             return None;
         };
-        let s::QueryResult::PlanCurrent { current, .. } =
-            account.work.current.as_ref().unwrap().read().result()
-        else {
-            unreachable!()
-        };
-        current.as_ref()
+        account.current_plan()
     }
 
     /// Move the checked work into attest_closure. Any other result returns whole.
@@ -366,10 +390,11 @@ impl PlanPortCompletion {
     }
 
     /// Move a committed close's receipt out. Any other result, including a
-    /// cancelled close whose effect committed, returns whole.
+    /// cancelled close whose effect committed or a close whose refreshed
+    /// revision lacks its closure source, returns whole.
     pub(in crate::flow) fn into_closure_receipt(self) -> Result<ClosureReceipt, Self> {
         match self {
-            Self::Closed(account) => Ok(ClosureReceipt::from_close(account)),
+            Self::Closed(account) => ClosureReceipt::from_close(account).map_err(Self::Closed),
             other => Err(other),
         }
     }
