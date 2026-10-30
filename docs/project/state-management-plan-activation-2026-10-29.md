@@ -1,6 +1,6 @@
 # Checked plan activation
 
-**Version:** 0.1, 2026-10-29.
+**Version:** 0.2, 2026-10-30.
 **Parent:** Issue 146, state management implementation.
 
 Implements: state-management-spec-07-plan-forward-flags PLAN-PORT's activate
@@ -97,12 +97,14 @@ Lower/rollback. EOF retains the first failure, original operation and filing
 identity through the complete failed exit. These are gate/classifier/model
 test adapters, not production artifact or hardware qualification.
 
-Final source gates pass 2,274 ordinary harness tests and doctests, all 64
-worker-plan process cases with 64 test threads, strict all-target harness lint,
+The original 56eb0160 source gates pass 2,276 ordinary harness tests and doctests,
+all 64 worker-plan process cases with 64 test threads, strict all-target lint,
 lock, formatting, diff checks and three DocsMirror tests. The ordinary harness
 suite reports 966 ignored cases and explicitly skips known #331's
 a_real_pending_trace_author_does_not_reduce_or_replace_packet_completions.
 Counts use each outer suite's final summary and exclude child summaries.
+The corrected count includes two separately reported doctests omitted from
+the original total of 2,274. No test result changed with this recount.
 The focused owner suite passes 36 cases and the worker-port suite passes 17.
 Both pass again after the controls restore the source.
 
@@ -138,6 +140,61 @@ Evidence deposit:
 The deposit contains the final source, source hashes, gates, all control
 attempts and their scripts. Its verified manifest is linked from the PR body.
 Earlier checkpoints remain separately deposited and retain their own scope.
+
+## Planner cancellation coverage correction
+
+Planner review 5706321297 grades 56eb0160 one fix, FX1, for missing cancellation
+coverage. It accepts the runtime and the shared pending-owner guard, closing
+#406 B6. The correction adds two tests and changes no runtime source.
+
+The first case cancels after certified expansion reaches EffectFiling but
+before the filing owner starts. The second fills the actual recorder to
+ORDINARY_CAPACITY, then explores clock-read boundaries with an earlier pump
+deadline until the source is held in waiting_content. That state has a filing
+owner and consumer reservation, but no recorder ticket. No owner, receipt or
+admission bit is fabricated. The test retires only that earlier pump deadline.
+
+Both cases cancel before relieving recorder pressure. Each then requires a
+Cancelled result, no plan.event, no file or receipt, unchanged committed cache,
+no remaining filing consumer or held source, and the same original Decision.
+Neither sends a member request. Relieving pressure after cancellation lets a
+missing guard admit its forbidden source, so the negative control cannot pass
+only because the recorder stays full.
+
+| Review item | Disposition and evidence |
+| --- | --- |
+| FX1 / A13 | The admitted-but-unstarted source case fails when withdrawal is removed. |
+| A14 | The pre-filing window is reachable. Its separate case fails when the cancelled check before begin_owned_filing is removed. |
+| B1 | Open-scope path, filed causal parent and successor step_query mismatch instruments remain batch test gaps. |
+| B2 | Exact refreshed step/group span mismatch instruments remain batch. |
+| B3 | The digest allegation is declined because EffectExpectation checks it. Comparing unrelated steps remains optional hardening, not a PLAN-SUMMARY-EVIDENCE requirement. |
+| B4 | The refusal allegation is declined. An inconsistent scope path is a store inconsistency and correctly fails the foundation run. |
+| B5 | The native layer pins empty positions. Restoring empty-position and last-source assertions through the public port remains batch. |
+| B6 | Explicit begun or receipt identity in the operation owner remains batch hardening. Current safety depends on exclusive admission. This is #407 B6, separate from the closed #406 B6. |
+| B7 | Redundant request arguments, repeated guards and group lookup remain batch simplification. |
+
+Both controls compile independently and fail Progress-versus-Complete after
+cancellation. The restored source passes both new cases, 2,278 ordinary harness
+tests/doctests, all 64 worker-plan cases under a root-delegated scope with 64
+threads, strict all-target lint, lock, format, diff and three DocsMirror checks.
+The ordinary suite still reports 966 ignored and explicitly skips known #331.
+The original twelve controls remain evidence for unchanged runtime at 56eb0160.
+The new A13/A14 controls and full gates share restored source hashes.
+
+The first fixture attempt queried the committed summary during an active
+filing and correctly received Pending. The corrected case captures that
+summary before admission. The initial failed run and corrected passing run
+remain with the evidence. The Planner's two unrelated intermittent worker
+family failures remain disclosed in review 5706321297 and are not claimed
+fixed by these tests. The code-review skills remain unavailable.
+
+Supplemental evidence deposit:
+/bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/plan-activation-fx1-20261029
+
+This deposit preserves its own source and logs. The earlier deposit is not
+overwritten. The PR body names the verified manifest and source reconciliation.
+The correction requires Planner regrade. No new runtime surface, caller,
+refusal, bound or state is introduced.
 
 ## Development findings and carries
 

@@ -2,6 +2,9 @@
 use super::*;
 use crate::flow::templates::{CompiledInventory, TemplateCertificate};
 
+#[path = "context_plan_activation_cancel_tests.rs"]
+mod cancel;
+
 fn ready_effect(group: u8) -> (SummaryFixture, TemplateCertificate) {
     static SPECS: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     let inventory = CompiledInventory::new(SPECS.get_or_init(|| {
