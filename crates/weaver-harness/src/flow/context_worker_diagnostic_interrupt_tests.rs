@@ -63,6 +63,11 @@ pub(super) fn spu(root: &std::path::Path, mode: &str, lifecycle: &OwnedFd, decod
             if mode.ends_with("-close-report") {
                 pending::spu(root, mode, decode);
             }
+            if mode.ends_with("-close-stop") || mode.ends_with("-close-report") {
+                // A Stop during the close answers AtRest and the pass
+                // continues: the edit and the next turn are still owed.
+                closing::finish_source(decode);
+            }
         } else if mode.ends_with("-graceful-complete")
             || mode.contains("-idle-complete-")
             || mode.ends_with("-later-complete")
@@ -96,6 +101,10 @@ pub(super) fn spu(root: &std::path::Path, mode: &str, lifecycle: &OwnedFd, decod
             }
             if mode.ends_with("-complete-race") {
                 packet!(decode.as_raw_fd(), &completed());
+            } else if mode.ends_with("-refeed-refused") {
+                // The ReFeed's refusal crosses the Cancel: it is the ReFeed's
+                // terminal, and the Cancel still answers at rest.
+                packet!(decode.as_raw_fd(), &weaver_types::TokenRefusal::OutOfOrder);
             } else {
                 packet!(
                     decode.as_raw_fd(),
@@ -185,6 +194,9 @@ pub(super) fn control(
     let record_failure = mode.ends_with("-record-failure");
     let before_send = mode.contains("-before-send");
     let closing = mode.contains("-close-");
+    // A Stop during the close continues the pass (Spec 6.2).
+    let closing_stop = mode.ends_with("-close-stop") || mode.ends_with("-close-report");
+    let two_turns = mode.ends_with("-later-complete") || closing_stop;
     let ticket = mode.ends_with("-ticket-leave");
     let followup = mode.contains("-stop-then-");
     let followup_graceful = mode.ends_with("-stop-then-graceful");
@@ -426,6 +438,11 @@ pub(super) fn control(
                             responder.join().unwrap();
                             return;
                         }
+                        if closing_stop {
+                            // Draining the held close lets it record; the
+                            // continued pass then certifies the later turn.
+                            idle::await_certificate(reader, &mut early_bytes);
+                        }
                     } else if before_send {
                         send_pressure::stopped_before_send(root, &peer, end);
                     } else {
@@ -596,7 +613,7 @@ pub(super) fn control(
         rows.iter()
             .filter(|row| row["kind"] == "replay.closed")
             .count(),
-        usize::from(certified || ticket)
+        usize::from(certified || ticket || closing_stop)
     );
     let closes: Vec<_> = rows
         .iter()
@@ -604,7 +621,7 @@ pub(super) fn control(
         .collect();
     assert_eq!(
         closes.len(),
-        if mode.ends_with("-later-complete") {
+        if two_turns {
             2
         } else {
             usize::from(!preload && !timed && !ticket)
@@ -612,11 +629,11 @@ pub(super) fn control(
     );
     assert_eq!(
         rows.iter().filter(|r| r["kind"] == "elision").count(),
-        usize::from(mode.ends_with("-later-complete"))
+        usize::from(two_turns)
     );
     assert_eq!(
         rows.iter().filter(|r| r["kind"] == "turn.started").count(),
-        if mode.ends_with("-later-complete") {
+        if two_turns {
             2
         } else {
             usize::from(!preload && !ticket)
@@ -663,7 +680,7 @@ pub(super) fn control(
             }
         }
     }
-    if mode.ends_with("-later-complete") {
+    if two_turns {
         assert_eq!(closes[1]["turn"], "t-2");
         assert_eq!(closes[1]["payload"]["close"], "clean");
     }
@@ -680,10 +697,26 @@ pub(super) fn control(
     if pressure {
         record_pressure::rows(&rows);
     }
+    if mode.ends_with("-refeed-refused") {
+        // The refusal is the ReFeed's terminal, recorded inside its turn.
+        let refusals: Vec<_> = rows.iter().filter(|r| r["kind"] == "refusal").collect();
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(refusals[0]["turn"], source_turn);
+        assert_eq!(
+            refusals[0]["payload"],
+            serde_json::to_value(weaver_types::RefusalRecord::Decode {
+                asked: weaver_types::TokenAsk::ReFeed,
+                refusal: weaver_types::TokenRefusal::OutOfOrder,
+            })
+            .unwrap()
+        );
+        let at = |kind: &str| rows.iter().position(|r| r["kind"] == kind).unwrap();
+        assert!(at("refusal") < at("turn.closed"));
+    }
     for kind in ["model.request", "model.output", "model.measurement"] {
         assert_eq!(
             rows.iter().filter(|row| row["kind"] == kind).count(),
-            if mode.ends_with("-later-complete") {
+            if two_turns {
                 2
             } else {
                 usize::from(clean || certified || closing || mode.ends_with("-complete-race"))

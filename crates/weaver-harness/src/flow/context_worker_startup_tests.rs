@@ -2477,6 +2477,10 @@ scenario!(
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-duplicate"
 );
 scenario!(
+    worker_diagnostic_interruption_refeed_refused,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-refeed-refused"
+);
+scenario!(
     worker_diagnostic_interruption_fail_cancel_refused,
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-cancel-refused"
 );
