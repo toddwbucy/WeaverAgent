@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #387
+**Landing PR:** #408
 
-**Version:** 0.42 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.43 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -1800,14 +1800,16 @@ component faults. The table extends the serialized lifecycle reducer, not admin 
 operations request activation, predicate checking, work-reference construction, review
 assessment binding, category-authorized attest_closure, closure and break recording.
 work_reference(expected,step_id,span,through) is Spec 07 WORK-REFERENCE's constructor
-and returns its checked WorkRef or the recorded PlanOperationRefused. Each operation
-returns its typed result after the source/receipt conditions in Spec 07. No method
-selects a next step, launches a review, interprets a review script or starts a decode
-pass. The caller supplies ReviewAssessment and the primitive checks its association with
-a held completed review pair and unchanged WorkRef. attest_closure requires
-review_required false and the current WorkRef, without a fabricated pair. close rechecks
-the category before filing either form. Model and gate content have no constructor for
-this trusted operation capability. [PLAN-1, PLAN-2, PLAN-5, R20-12]
+and returns its checked WorkRef or the recorded PlanOperationRefused. Hash the complete
+released result bytes under WORK-REFERENCE, retaining the read owner's original bytes
+through all pages and release. Parsed metadata cannot substitute for that byte proof.
+Each operation returns its typed result after the source/receipt conditions in Spec 07.
+No method selects a next step, launches a review, interprets a review script or starts a
+decode pass. The caller supplies ReviewAssessment and the primitive checks its
+association with a held completed review pair and unchanged WorkRef. attest_closure
+requires review_required false and the current WorkRef, without a fabricated pair. close
+rechecks the category before filing either form. Model and gate content have no
+constructor for this trusted operation capability. [PLAN-1, PLAN-2, PLAN-5, R20-12]
 
 The operation owner implements PLAN-PORT-REFUSAL and PLAN-PORT-RECORD. Keep the
 accepted request, finalized read/refusal or template-rejection evidence, source

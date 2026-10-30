@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #244
+**Landing PR:** #408
 
-**Version:** 0.22 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
+**Version:** 0.23 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
 
 ## 0. What this document is
 
@@ -494,11 +494,15 @@ review ID fields, and the private attest_closure grant on the harness side. Othe
 require lane review, fate completed, Result outcome, exact request.setup and
 request.work equal to the plan's setup and effect.work. A partial review ID refuses.
 WorkRef must match the current plan, step and active span in both cases. Recompute its
-preview/digest and require unchanged work. For a reviewed close the frontier predates
-the review request, allowing only that request, its pair and this outcome afterward. For
-an unreviewed close only this outcome may follow the work frontier. The outcome label is
-closed. The harness verifies trusted authority, while the store verifies this structural
-account. [PLAN-2, MARK-4, STORE-5, PAIR-3, R20-17]
+complete tagged preview bytes using the serving read's result encoding, then hash those
+bytes under Spec 07 WORK-REFERENCE and require unchanged work. Historical closure
+verification uses that same encoding, including after dump/load and preserved closure.
+Do not replace the byte comparison with JSON-value equality or a parsed reconstruction.
+For a reviewed close the frontier predates the review request, allowing only that
+request, its pair and this outcome afterward. For an unreviewed close only this outcome
+may follow the work frontier. The outcome label is closed. The harness verifies trusted
+authority, while the store verifies this structural account. [PLAN-2, MARK-4, STORE-5,
+PAIR-3, R20-17]
 
 The guarded step UPDATE below must change exactly one row. It is executed in the same
 transaction as the outcome/step marks. All bound IDs are resolved from typed references
