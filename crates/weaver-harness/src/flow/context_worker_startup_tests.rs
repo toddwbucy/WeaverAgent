@@ -2297,6 +2297,215 @@ macro_rules! scenario {
     };
 }
 scenario!(worker_startup_composition_ready, "ready");
+scenario!(
+    worker_diagnostic_interruption_preload_report_leave,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-preload-report-leave"
+);
+scenario!(
+    worker_diagnostic_interruption_preload_report_resume,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-preload-report-resume"
+);
+scenario!(
+    worker_diagnostic_interruption_preload_death_late,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-preload-death-late"
+);
+scenario!(
+    worker_diagnostic_interruption_close_report,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-close-report"
+);
+scenario!(
+    worker_diagnostic_setup_release_eof,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-release-eof"
+);
+scenario!(
+    worker_diagnostic_interruption_release_write_failure,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-release-write-failure"
+);
+scenario!(
+    worker_diagnostic_interruption_release_eof,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-release-eof"
+);
+scenario!(
+    worker_diagnostic_interruption_release_refused,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-release-refused"
+);
+scenario!(
+    worker_diagnostic_interruption_release_confirmed,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-release-confirmed"
+);
+scenario!(
+    worker_diagnostic_interruption_ticket_leave,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-ticket-leave"
+);
+scenario!(
+    worker_diagnostic_interruption_stop_then_graceful,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-stop-then-graceful"
+);
+scenario!(
+    worker_diagnostic_interruption_stop_then_forced,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-stop-then-forced"
+);
+scenario!(
+    worker_diagnostic_interruption_close_stop,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-close-stop"
+);
+scenario!(
+    worker_diagnostic_interruption_close_leave,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-close-leave"
+);
+scenario!(
+    worker_diagnostic_interruption_close_duplicate,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-close-duplicate"
+);
+scenario!(
+    worker_diagnostic_interruption_later_turn,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-later-turn"
+);
+scenario!(
+    worker_diagnostic_interruption_later_edit,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-later-edit"
+);
+scenario!(
+    worker_diagnostic_interruption_later_complete,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-later-complete"
+);
+scenario!(
+    worker_diagnostic_interruption_send_delayed_silent,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-send-delayed-silent"
+);
+scenario!(
+    worker_diagnostic_interruption_before_send,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-before-send"
+);
+scenario!(
+    worker_diagnostic_interruption_send_pressure,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-send-pressure"
+);
+scenario!(
+    worker_diagnostic_interruption_send_silent,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-send-silent"
+);
+scenario!(
+    worker_diagnostic_interruption_idle_complete_report,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-idle-complete-report"
+);
+scenario!(
+    worker_diagnostic_interruption_idle_complete_death,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-idle-complete-death"
+);
+
+scenario!(
+    worker_diagnostic_interruption_idle_report,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-idle-report"
+);
+scenario!(
+    worker_diagnostic_interruption_idle_death,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-idle-death"
+);
+scenario!(
+    worker_diagnostic_interruption_idle_invalid,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-idle-invalid"
+);
+scenario!(
+    worker_diagnostic_interruption_idle_write_failed,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-idle-write-failed"
+);
+scenario!(
+    worker_diagnostic_interruption_preload_stop_leave,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-preload"
+);
+scenario!(
+    worker_diagnostic_interruption_refeed_stop,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-refeed"
+);
+scenario!(
+    worker_diagnostic_interruption_forced_leave,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-forced-leave"
+);
+scenario!(
+    worker_diagnostic_interruption_rollback,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-rollback"
+);
+scenario!(
+    worker_diagnostic_interruption_graceful_join,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-graceful-join"
+);
+scenario!(
+    worker_diagnostic_interruption_graceful_complete,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-graceful-complete"
+);
+scenario!(
+    worker_diagnostic_interruption_drain_expiry,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-drain-expiry"
+);
+scenario!(
+    worker_diagnostic_interruption_complete_race,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-complete-race"
+);
+scenario!(
+    worker_diagnostic_interruption_fail_foreign_turn,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-foreign-turn"
+);
+scenario!(
+    worker_diagnostic_interruption_fail_whole_path,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-whole-path"
+);
+scenario!(
+    worker_diagnostic_interruption_fail_resident_small,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-resident-small"
+);
+scenario!(
+    worker_diagnostic_interruption_fail_capacity_small,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-capacity-small"
+);
+scenario!(
+    worker_diagnostic_interruption_fail_count_overflow,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-count-overflow"
+);
+scenario!(
+    worker_diagnostic_interruption_fail_early_rest,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-early-rest"
+);
+scenario!(
+    worker_diagnostic_interruption_fail_duplicate,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-duplicate"
+);
+scenario!(
+    worker_diagnostic_interruption_fail_cancel_refused,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-cancel-refused"
+);
+scenario!(
+    worker_diagnostic_interruption_fail_malformed,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-malformed"
+);
+scenario!(
+    worker_diagnostic_interruption_fail_decode_eof,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-decode-eof"
+);
+scenario!(
+    worker_diagnostic_interruption_fail_silent,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-silent"
+);
+scenario!(
+    worker_diagnostic_interruption_fail_no_rest,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-no-rest"
+);
+scenario!(
+    worker_diagnostic_interruption_long_graceful_silent,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-long-graceful-silent"
+);
+scenario!(
+    worker_diagnostic_interruption_record_pressure,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-record-pressure"
+);
+scenario!(
+    worker_diagnostic_interruption_record_failure,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-record-failure"
+);
+scenario!(
+    worker_diagnostic_setup_ready_bystander_expiry,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-classifier-ready-bystander-expiry"
+);
 scenario!(worker_plan_composition_stop, "input-worker-plan-stop");
 scenario!(
     worker_plan_port_break_stop,
@@ -2599,6 +2808,118 @@ scenario!(
 scenario!(
     worker_admission_composition_diagnostic_opener_pressure,
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-opener-pressure"
+);
+scenario!(
+    worker_diagnostic_setup_identity_same_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-identity-same"
+);
+scenario!(
+    worker_diagnostic_setup_identity_new_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-identity-new"
+);
+scenario!(
+    worker_diagnostic_setup_identity_original_peer_eof,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-identity-eof"
+);
+scenario!(
+    worker_diagnostic_setup_admit_same_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-same"
+);
+scenario!(
+    worker_diagnostic_setup_admit_new_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-new"
+);
+scenario!(
+    worker_diagnostic_setup_admit_original_peer_eof,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-eof"
+);
+scenario!(
+    worker_diagnostic_setup_admit_refused,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-refused"
+);
+scenario!(
+    worker_diagnostic_setup_admit_lost,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-lost"
+);
+scenario!(
+    worker_diagnostic_setup_admit_wrong_opener,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-wrong-opener"
+);
+scenario!(
+    worker_diagnostic_setup_admit_wrong_ordinal,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-wrong-ordinal"
+);
+scenario!(
+    worker_diagnostic_setup_admit_wrong_position,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-wrong-position"
+);
+scenario!(
+    worker_diagnostic_setup_admit_wrong_payload,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-wrong-payload"
+);
+scenario!(
+    worker_diagnostic_setup_open_same_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-same"
+);
+scenario!(
+    worker_diagnostic_setup_open_new_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-new"
+);
+scenario!(
+    worker_diagnostic_setup_open_original_peer_eof,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-eof"
+);
+scenario!(
+    worker_diagnostic_setup_open_partial_reply,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-partial"
+);
+scenario!(
+    worker_diagnostic_setup_classifier_same_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-classifier-same"
+);
+scenario!(
+    worker_diagnostic_setup_classifier_new_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-classifier-new"
+);
+scenario!(
+    worker_diagnostic_setup_classifier_original_peer_eof,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-classifier-eof"
+);
+scenario!(
+    worker_diagnostic_setup_release_wrong_ordinal,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-release-wrong"
+);
+scenario!(
+    worker_diagnostic_setup_release_refused,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-release-refused"
+);
+scenario!(
+    worker_diagnostic_setup_ready_rollback_unconfirmed_release,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-classifier-ready-release-wrong"
+);
+scenario!(
+    worker_diagnostic_setup_ready_rollback_release_eof,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-classifier-ready-release-eof"
+);
+scenario!(
+    worker_diagnostic_setup_reap_pending,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-reap-held"
+);
+scenario!(
+    worker_diagnostic_setup_reply_pressure,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-pressure"
+);
+scenario!(
+    worker_diagnostic_setup_original_deadline,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-deadline"
+);
+scenario!(
+    worker_diagnostic_setup_silent_peer_during_leave,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-silent-leave"
+);
+scenario!(
+    worker_diagnostic_setup_silent_peer_before_leave,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-silent-before-leave"
 );
 scenario!(
     worker_admission_composition_unified_serving,
@@ -6051,4 +6372,27 @@ scenario!(
 scenario!(
     worker_session_graceful_leave_joint_sqlite_expiry_finished_capture_refusal,
     "input-worker-generation-emission-session-graceful-save-sqlite-joint-expiry-finished-timeout-capture-refusal"
+);
+
+scenario!(
+    worker_diagnostic_interruption_before_send_death,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-before-send-death"
+);
+scenario!(
+    worker_diagnostic_interruption_active_death,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-active-death"
+);
+
+scenario!(
+    worker_diagnostic_interruption_real_member,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-real-member"
+);
+
+scenario!(
+    worker_diagnostic_interruption_real_model_gguf,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-real-model-gguf"
+);
+scenario!(
+    worker_diagnostic_interruption_real_model_native,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-real-model-native"
 );

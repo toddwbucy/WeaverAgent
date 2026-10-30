@@ -19,11 +19,13 @@
 //! admission first, the sequence assigned, the line rendered once, the bytes
 //! on the sink before the call returns.
 
-use std::io::Write;
-use std::os::fd::OwnedFd;
+use std::io::{Error, ErrorKind, Write};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 use crate::event::{Event, Kind, Payload, RunRef, Sequence, SessionRef};
 use crate::failure::{Failure, FieldName, SubmitRefusal, WriteError};
+
+type Wait<'a> = dyn FnMut(BorrowedFd<'_>) -> std::io::Result<()> + 'a;
 
 /// The diagnostic record's writer. Private members, no accessor yielding a
 /// held event, and no path at any point: the receive takes a descriptor,
@@ -62,7 +64,29 @@ impl Recorder {
     /// the replayed session's name - the one place that name may appear is
     /// the identity payload. A gapless run-scoped order likewise cannot be
     /// authored by the caller.
-    pub fn submit(&mut self, mut event: Event) -> Result<Sequence, Failure> {
+    pub fn submit(&mut self, event: Event) -> Result<Sequence, Failure> {
+        self.submit_with(event, None)
+    }
+
+    /// Keep the one admitted rendering while the harness services management
+    /// before each write attempt. The caller supplies a nonblocking sink and
+    /// waits for its writability inside the operation's original bounds.
+    /// The hook cannot read or replace the event, sequence or rendered bytes.
+    /// A hook failure is a terminal write failure, including before byte zero.
+    /// A refused event never calls the hook. There is no queue or second event.
+    pub fn submit_managed(
+        &mut self,
+        event: Event,
+        wait: &mut dyn FnMut(BorrowedFd<'_>) -> std::io::Result<()>,
+    ) -> Result<Sequence, Failure> {
+        self.submit_with(event, Some(wait))
+    }
+
+    fn submit_with(
+        &mut self,
+        mut event: Event,
+        mut wait: Option<&mut Wait<'_>>,
+    ) -> Result<Sequence, Failure> {
         if let Some(failure) = &self.standing {
             return Err(failure.clone());
         }
@@ -72,7 +96,23 @@ impl Recorder {
         let sequence = Sequence(self.next);
         event.envelope.sequence = sequence;
         let line = render(&event)?;
-        if let Err(error) = self.sink.write_all(line.as_bytes()) {
+        let written = (|| {
+            let mut remaining = line.as_bytes();
+            while !remaining.is_empty() {
+                if let Some(wait) = wait.as_mut() {
+                    wait(self.sink.as_fd())?;
+                }
+                match self.sink.write(remaining) {
+                    Ok(0) => return Err(Error::from(ErrorKind::WriteZero)),
+                    Ok(count) => remaining = &remaining[count..],
+                    Err(error) if error.kind() == ErrorKind::Interrupted => (),
+                    Err(error) if wait.is_some() && error.kind() == ErrorKind::WouldBlock => (),
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(())
+        })();
+        if let Err(error) = written {
             let failure = Failure::WriteFailed {
                 error: WriteError(error.to_string()),
             };

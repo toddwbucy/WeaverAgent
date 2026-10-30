@@ -240,7 +240,21 @@ pub(in crate::flow::context::worker_startup) fn scenario(name: &str, mode: &str)
         drop(write);
         read
     });
-    let end = Instant::now() + Duration::from_secs(35);
+    // These instruments spend actual lifecycle intervals. The outer fixture
+    // watch permits that evidence and never shortens a production bound.
+    let watchdog = if mode.contains("-real-model-")
+        || mode.ends_with("-setup-arm-admit-deadline")
+        || mode.ends_with("-ready-bystander-expiry")
+    {
+        200
+    } else if mode.contains("-interrupt-")
+        && (mode.ends_with("-silent") || mode.ends_with("-no-rest"))
+    {
+        180
+    } else {
+        35
+    };
+    let end = Instant::now() + Duration::from_secs(watchdog);
     let control = loop {
         assert!(
             Instant::now() < end,

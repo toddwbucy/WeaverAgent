@@ -87,6 +87,34 @@ impl Record {
         self.latch(submitted)
     }
 
+    /// The entered Diagnostic owner retains one authored event while its
+    /// management wait services the sink. Serving cannot select this door.
+    pub(crate) fn submit_managed_diagnostic(
+        &mut self,
+        event: Event,
+        wait: &mut dyn FnMut(std::os::fd::BorrowedFd<'_>) -> std::io::Result<()>,
+    ) -> Result<Sequence, RecordFailure> {
+        let submitted = convert(event).and_then(|event| {
+            self.submit_native_managed(event, wait)
+                .map(|sequence| Sequence(sequence.0))
+        });
+        self.latch(submitted)
+    }
+
+    pub(crate) fn submit_native_managed(
+        &mut self,
+        event: weaver_diagnostic::Event,
+        wait: &mut dyn FnMut(std::os::fd::BorrowedFd<'_>) -> std::io::Result<()>,
+    ) -> Result<weaver_diagnostic::Sequence, RecordFailure> {
+        let submitted = match &mut self.arm {
+            Arm::Serving(_) => Err(RecordFailure::DiagnosticDoorOnServingRecord),
+            Arm::Diagnostic(recorder) => recorder
+                .submit_managed(event, wait)
+                .map_err(RecordFailure::Diagnostic),
+        };
+        self.latch(submitted)
+    }
+
     /// Shared authoring in the replacement trace vocabulary, admitted only
     /// to a diagnostic binding. DIAGNOSTIC-CONVERT keeps its legacy schema:
     /// new kinds and payloads refuse before the diagnostic writer is called.
