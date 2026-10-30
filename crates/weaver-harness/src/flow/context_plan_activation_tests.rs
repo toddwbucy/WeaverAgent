@@ -353,6 +353,50 @@ fn plan_activation_allocates_ungrouped_new_group_and_existing_group_from_marks()
 }
 
 #[test]
+fn plan_activation_marks_off_the_plan_task_or_group_path_fault_before_any_effect() {
+    // "prompt": the served catalog is coherent and its open path is the
+    // plan's own task, yet the plan's task names another prompt, so the
+    // catalog's current task is not the plan's. "group": the open Subtask
+    // span is not the plan's group span.
+    for case in ["prompt", "group"] {
+        let (mut fx, mut marks) = activation_fixture_with(2, |plan| {
+            if case == "prompt" {
+                plan.task.prompt.local_id = 7.into();
+            }
+        });
+        if case == "group" {
+            let s::QueryResult::Marks { open_scopes, .. } = &mut marks else {
+                unreachable!()
+            };
+            open_scopes[1].span.local_id = 8.into();
+        }
+        begin_activation(&mut fx);
+        release_result(&mut fx, &marks);
+        let failure = (0..128)
+            .find_map(|_| advance(&mut fx).err())
+            .expect("activation off its marks path is no ordinary refusal");
+        let detail = if case == "prompt" {
+            "plan task disagrees with its open marks path"
+        } else {
+            "activation marks differ from its task/group scopes"
+        };
+        assert!(
+            matches!(
+                &failure,
+                RunFailure::Flow {
+                    reason: FlowHaltReason::ProtocolFailed,
+                    ..
+                }
+            ) && format!("{failure:?}").contains(detail),
+            "{case}: {failure:?}"
+        );
+        assert!(fx.run().context.test_plan_effect().is_none(), "{case}");
+        assert!(fx.records(Kind::PlanEvent).is_empty(), "{case}");
+        assert!(fx.records(Kind::Refusal).is_empty(), "{case}");
+    }
+}
+
+#[test]
 fn plan_activation_group_counter_exhaustion_records_refusal_without_effect() {
     let (mut fx, mut marks) = activation_fixture(1);
     let s::QueryResult::Marks { next_span_id, .. } = &mut marks else {
