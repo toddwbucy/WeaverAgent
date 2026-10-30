@@ -676,6 +676,7 @@ fn close(
         Some(&current.last_source.block_id)
     );
     let receipt = result.into_closure_receipt().unwrap();
+    assert!(receipt.belongs_to(input.serving.owner.context));
     // The receipt's closed source is the closure the member committed, read
     // afresh from the member rather than from the snapshot the receipt kept.
     let committed = read(input, s::ReadSelector::PlanCurrent {});

@@ -595,7 +595,6 @@ fn next_ready_keeps_both_steps_its_assembly_and_every_distinct_clock_reading() {
         closure_to_next_ns: 28.into(),
     });
     let mirrored = serde_json::to_value(plan_measurement(&value)).unwrap();
-    assert_eq!(mirrored, serde_json::to_value(&value).unwrap());
     assert_eq!(
         serde_json::to_vec(&plan_measurement(&value)).unwrap(),
         serde_json::to_vec(&value).unwrap(),
