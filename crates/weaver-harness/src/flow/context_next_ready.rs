@@ -5,7 +5,7 @@
 //! never bridges a replacement, a reload or a missing endpoint into an interval.
 use super::*;
 use crate::flow::author::AuthoredSource;
-use crate::flow::context::plan_port_driver::ClosureReceipt;
+use crate::flow::context::plan_port_driver::{ActivationReceipt, ClosureReceipt};
 use crate::flow::context::worker_startup::input::generation::step_instruction::StepPlacementReceipt;
 use crate::flow::mirror;
 use weaver_types::state_flow as s;
@@ -27,12 +27,14 @@ pub(in crate::flow) enum NextReadyRefusal {
     CrossRun,
     /// The committed revision is not the one close and placement shared.
     Replaced,
-    /// The committed revision no longer holds the closure, or the placed step
-    /// is not the active successor of the closed step.
+    /// The committed revision no longer holds the closure, or no longer holds
+    /// the activated step active over its activated span.
     MissingEndpoint,
-    /// The placement does not carry the successor's filed instruction unit.
+    /// The activation did not follow this closure's step, or the placement
+    /// does not carry the activated step's filed instruction unit.
     NotTheSuccessor,
-    /// The readings are out of order, zero, or the placement precedes closure.
+    /// A reading is zero or reversed, or the chain's sources are not one
+    /// run's in order: closure, activation, step instruction, placement.
     ClockOrder,
 }
 
@@ -70,11 +72,15 @@ impl RecordingContext {
         }
     }
 
-    /// Check both receipts against this run and the committed revision, then
-    /// build the unauthored measurement. Its causal parent is the placement.
+    /// Check the identity chain closure -> activation of the successor ->
+    /// its step loop.instruction -> its placement, against this run and the
+    /// committed revision, then build the unauthored measurement. The
+    /// successor is the step the activation's checked step_successor result
+    /// named, never the snapshot's next step. Its causal parent is the placement.
     pub(in crate::flow) fn next_ready_event(
         &mut self,
         start: &NextReadyStart,
+        activation: &ActivationReceipt,
         placed: &StepPlacementReceipt,
     ) -> Result<AuthoredEvent, NextReadyRefusal> {
         use NextReadyRefusal as R;
@@ -82,54 +88,83 @@ impl RecordingContext {
         if !std::sync::Arc::ptr_eq(&start.origin, &self.read_origin)
             || !std::sync::Arc::ptr_eq(&placed.origin, &self.read_origin)
             || !receipt.belongs_to(self)
+            || !activation.belongs_to(self)
             || !placed.unit.belongs_to(self)
         {
             return Err(R::CrossRun);
         }
-        if placed.plan() != receipt.plan() {
+        if placed.plan() != receipt.plan() || activation.plan() != receipt.plan() {
             return Err(R::Replaced);
         }
         let plan = self.committed_revision().ok_or(R::Replaced)?;
         if &plan.plan != receipt.plan() || plan.status != s::PlanStatus::Locked {
             return Err(R::Replaced);
         }
-        let closed = plan
-            .steps
-            .iter()
-            .position(|step| &step.step_id == receipt.previous_step())
-            .filter(|&at| {
-                let step = &plan.steps[at];
-                step.status == s::StepStatus::Closed
-                    && step.closure_source.as_ref() == Some(receipt.closed())
-            })
-            .ok_or(R::MissingEndpoint)?;
-        let successor = plan.steps.get(closed + 1).ok_or(R::MissingEndpoint)?;
-        if successor.status != s::StepStatus::Active || successor.span.is_none() {
+        // One run's sources, in chain order: closure, successor query and
+        // activation, filed step instruction, placement.
+        let closed = receipt.closed();
+        let activated = activation.activated();
+        if start.began_ns == 0
+            || placed.ended_ns < start.began_ns
+            || activated.run != closed.run
+            || placed.source.run != closed.run
+            || activation.successor_sequence().0 <= closed.sequence.0
+            || activated.sequence.0 <= closed.sequence.0
+            || placed.source.sequence.0 <= activated.sequence.0
+            || placed.placement.0 <= placed.source.sequence.0
+        {
+            return Err(R::ClockOrder);
+        }
+        let successor = activation.step();
+        let held = |id: &s::StepId| plan.steps.iter().find(|step| &step.step_id == id);
+        let Some(closed_step) = held(receipt.previous_step()).filter(|step| {
+            step.status == s::StepStatus::Closed && step.closure_source.as_ref() == Some(closed)
+        }) else {
+            return Err(R::MissingEndpoint);
+        };
+        if !held(&successor.step_id).is_some_and(|step| {
+            step.status == s::StepStatus::Active
+                && step.span.is_some()
+                && step.span == successor.span
+        }) {
             return Err(R::MissingEndpoint);
         }
-        if placed.step_id() != &successor.step_id
+        // The activation follows this closure: its successor comes after the
+        // closed step, and every step between them holds a closure that
+        // predates this one (a preserved closure), so no later closure in this
+        // run intervened. Its query names the successor's own predecessor.
+        let between_preserved = plan.steps.iter().all(|step| {
+            step.ordinal <= closed_step.ordinal
+                || step.ordinal >= successor.ordinal
+                || (step.status == s::StepStatus::Closed
+                    && step.closure_source.as_ref().is_some_and(|source| {
+                        source.run != closed.run || source.sequence.0 < closed.sequence.0
+                    }))
+        });
+        let predecessor = plan
+            .steps
+            .iter()
+            .find(|step| step.ordinal.0 + 1 == successor.ordinal.0)
+            .map(|step| &step.step_id);
+        let query = activation.successor();
+        if successor.ordinal <= closed_step.ordinal
+            || !between_preserved
+            || query.previous_step.as_ref() != predecessor
+            || query.step_id != successor.step_id
+            || placed.step_id() != &successor.step_id
             || placed.instruction() != &successor.instruction
             || Some(placed.span()) != successor.span.as_ref()
             || !crate::flow::material::is_instruction_unit(&placed.unit, &placed.source, self)
         {
             return Err(R::NotTheSuccessor);
         }
-        let closed_at = receipt.closed().sequence.0;
-        if start.began_ns == 0
-            || placed.ended_ns < start.began_ns
-            || placed.source.run != receipt.closed().run
-            || placed.source.sequence.0 <= closed_at
-            || placed.placement.0 <= placed.source.sequence.0
-        {
-            return Err(R::ClockOrder);
-        }
         let payload = mirror::plan_measurement(&s::PlanMeasurement {
             instrument_version: "plan-observation/1".into(),
             plan: receipt.plan().clone(),
             event: s::PlanMeasureEvent::NextReady {
-                closed: receipt.closed().clone(),
+                closed: closed.clone(),
                 previous_step: receipt.previous_step().clone(),
-                step_id: placed.step_id().clone(),
+                step_id: successor.step_id.clone(),
                 assembly_id: placed.assembly_id(),
                 began_ns: start.began_ns.into(),
                 ended_ns: placed.ended_ns.into(),

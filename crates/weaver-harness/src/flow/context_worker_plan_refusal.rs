@@ -198,7 +198,7 @@ impl FoundationManagement<'_> {
                     self.input.advance_plan_operation(peer, io)?;
                 } else if self.input.flags_pending() {
                     self.input.advance_flags(peer, io)?;
-                } else if self.input.next_ready_pending() {
+                } else if self.input.next_ready_started() {
                     self.input.advance_next_ready(peer, io)?;
                 } else if self.input.plan_pending() {
                     self.input.advance_plan(peer, io)?;

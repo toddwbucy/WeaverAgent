@@ -606,8 +606,22 @@ impl<'a> FoundationManagement<'a> {
                     return Ok(());
                 }
             }
-            // A next_ready observation has no cancel: its ticket settles first.
-            if self.input.next_ready_pending() {
+            // On Stop or Leave an unadmitted next_ready observation is
+            // discarded, never fabricated; an admitted ticket settles first.
+            let ending = matches!(
+                self.peer
+                    .held()
+                    .expect("held directive survives flag settlement")
+                    .envelope
+                    .payload,
+                Payload::Directive(
+                    LifecycleDirective::Stop { .. } | LifecycleDirective::Leave { .. }
+                )
+            );
+            if ending
+                && self.input.next_ready_pending()
+                && !self.input.discard_unstarted_next_ready()
+            {
                 let progress = self
                     .input
                     .advance_next_ready((!self.peer_unavailable).then_some(&mut self.peer), io);

@@ -193,7 +193,7 @@ impl<'a> FoundationInput<'a> {
         if self.serving.owner.listener.held().is_some() {
             return FoundationInputProgress::ManagementPending;
         }
-        if self.save_blocks_turn() || self.plan_work_pending() {
+        if self.save_blocks_turn() || self.plan_owner_pending() {
             return FoundationInputProgress::Pending;
         }
         if let Some(progress) = self.wind_down_input_progress() {
@@ -293,8 +293,8 @@ impl<'a> FoundationInput<'a> {
                     // Yield the completed sample before any unrelated idle wait.
                     return Ok(());
                 }
-                if self.next_ready_pending() {
-                    self.advance_next_ready(None, io)?;
+                if self.next_ready_pending() && self.advance_next_ready(None, io)? {
+                    // Yield the Recorded measurement, or its pending ticket.
                     return Ok(());
                 }
                 let plan_was_pending = self.plan_pending();

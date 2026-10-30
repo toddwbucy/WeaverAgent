@@ -166,7 +166,7 @@ pub use flow::context::worker_startup::input::next_ready::{
     FoundationNextReadyError, FoundationNextReadyRefusal, FoundationNextReadyStart,
 };
 pub use flow::context::worker_startup::input::plan_ports::{
-    CheckedStepSuccessor, CheckedWork, ClosureEvidence, ClosureReceipt,
+    ActivationReceipt, CheckedStepSuccessor, CheckedWork, ClosureEvidence, ClosureReceipt,
     FoundationPlanAdmissionRefusal, FoundationPlanOperation, FoundationPlanOperationError,
     FoundationPlanOutcome, FoundationPlanRequest,
 };

@@ -427,11 +427,29 @@ impl EngineWork {
         let (Some(source), Some(meta)) = (step.source, step.meta) else {
             return Err("step placement lost its filed instruction");
         };
+        self.step_receipt = Some(StepPlacementReceipt::from_grant(
+            grant, meta, source, context, ended_ns,
+        )?);
+        Ok(())
+    }
+}
+
+impl StepPlacementReceipt {
+    /// The receipt of an actual Granted placement whose last unit is the
+    /// filed step instruction's unit, on that instruction's turn. ended_ns is
+    /// the reading taken as the placement's Recorded grant was received.
+    pub(in crate::flow) fn from_grant(
+        grant: &crate::flow::place::PlacementGrant,
+        meta: StepMeta,
+        source: SourceBlockId,
+        context: &RecordingContext,
+        ended_ns: u64,
+    ) -> Result<Self, &'static str> {
         if !placed_step_unit(&grant.units, &source, context) || grant.turn != meta.turn {
             return Err("step placement does not hold its filed instruction unit");
         }
         let unit = Arc::clone(grant.units.last().expect("checked instruction unit"));
-        self.step_receipt = Some(StepPlacementReceipt {
+        Ok(Self {
             origin: Arc::clone(&grant.origin),
             meta,
             source,
@@ -439,7 +457,6 @@ impl EngineWork {
             assembly_id: grant.assembly_id(),
             ended_ns,
             unit,
-        });
-        Ok(())
+        })
     }
 }

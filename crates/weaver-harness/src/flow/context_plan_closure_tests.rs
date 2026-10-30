@@ -39,6 +39,15 @@ fn work_request() -> PlanRequest {
 /// A locked plan whose first step is active over the pinned work span. With
 /// an effect certificate the native scopes are installed for adoption.
 fn closure_fixture(review_required: bool, effect: bool) -> (SummaryFixture, TemplateCertificate) {
+    closure_fixture_with(review_required, effect, |_| {})
+}
+
+/// The same fixture, with the booted plan edited first.
+fn closure_fixture_with(
+    review_required: bool,
+    effect: bool,
+    edit: impl FnOnce(&mut s::PlanSnapshot),
+) -> (SummaryFixture, TemplateCertificate) {
     static SPECS: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     let mut fx = if effect {
         let inventory = CompiledInventory::new(SPECS.get_or_init(|| {
@@ -51,6 +60,11 @@ fn closure_fixture(review_required: bool, effect: bool) -> (SummaryFixture, Temp
                 s::TemplateSpec {
                     template_id: "step.instruction".into(),
                     kind: "loop.instruction".into(),
+                    parts: vec![s::TemplatePart::Literal("Read plan.".into())],
+                },
+                s::TemplateSpec {
+                    template_id: "plan.activate".into(),
+                    kind: "plan.event".into(),
                     parts: vec![s::TemplatePart::Literal("Read plan.".into())],
                 },
             ]
@@ -99,6 +113,7 @@ fn closure_fixture(review_required: bool, effect: bool) -> (SummaryFixture, Temp
         closure_source: None,
     };
     plan.steps = vec![step(1, 1, true), step(2, 2, false)];
+    edit(&mut plan);
     let boot = fx.boot(Some(plan));
     let run = fx.run();
     run.context.install_place(boot, &mut run.clock).unwrap();

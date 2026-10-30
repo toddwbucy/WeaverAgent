@@ -10,7 +10,7 @@ use weaver_types::state_flow::{
 };
 
 pub use crate::flow::plan::ports::{
-    CheckedStepSuccessor, CheckedWork, ClosureEvidence, ClosureReceipt,
+    ActivationReceipt, CheckedStepSuccessor, CheckedWork, ClosureEvidence, ClosureReceipt,
     PlanRequest as FoundationPlanRequest,
 };
 
@@ -94,6 +94,14 @@ impl FoundationPlanOperation {
     pub fn into_closure_receipt(self) -> Result<ClosureReceipt, Self> {
         self.completion
             .into_closure_receipt()
+            .map_err(|completion| Self { completion })
+    }
+
+    /// Move a committed activation's receipt out. Any other result returns
+    /// the entire original operation.
+    pub fn into_activation_receipt(self) -> Result<ActivationReceipt, Self> {
+        self.completion
+            .into_activation_receipt()
             .map_err(|completion| Self { completion })
     }
 
