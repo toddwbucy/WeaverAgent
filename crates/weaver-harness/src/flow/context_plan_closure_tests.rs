@@ -2,7 +2,7 @@
 //! owners, with a scripted member. The preview bytes are the store's own pinned
 //! encoding (weaver-state work_bytes_d1.rs serves and accepts the same bytes).
 use super::*;
-use crate::flow::context::plan_port_driver::ClosureEvidence;
+use crate::flow::context::plan_port_driver::{ClosureEvidence, ClosureReceipt};
 use crate::flow::context::{ReadCompletion, RecordedRead};
 use crate::flow::templates::{CompiledInventory, TemplateCertificate};
 
@@ -20,6 +20,7 @@ const _: fn() = || {
     impl<T: ?Sized> NotClone<()> for T {}
     impl<T: Clone> NotClone<u8> for T {}
     let _ = <ClosureEvidence as NotClone<_>>::pin;
+    let _ = <ClosureReceipt as NotClone<_>>::pin;
 };
 
 fn pinned() -> s::WorkRef {
@@ -39,13 +40,16 @@ fn work_request() -> PlanRequest {
 /// A locked plan whose first step is active over the pinned work span. With
 /// an effect certificate the native scopes are installed for adoption.
 fn closure_fixture(review_required: bool, effect: bool) -> (SummaryFixture, TemplateCertificate) {
-    closure_fixture_with(review_required, effect, |_| {})
+    closure_fixture_with(review_required, effect, false, |_| {})
 }
 
-/// The same fixture, with the booted plan edited first.
+/// The closure fixture; with `prior_closed`, an earlier step ahead of the
+/// pinned one is already closed with its own closure source. `edit` changes
+/// the booted plan last.
 fn closure_fixture_with(
     review_required: bool,
     effect: bool,
+    prior_closed: bool,
     edit: impl FnOnce(&mut s::PlanSnapshot),
 ) -> (SummaryFixture, TemplateCertificate) {
     static SPECS: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
@@ -112,7 +116,22 @@ fn closure_fixture_with(
         work: None,
         closure_source: None,
     };
-    plan.steps = vec![step(1, 1, true), step(2, 2, false)];
+    plan.steps = if prior_closed {
+        let mut closed = step(3, 1, false);
+        closed.status = s::StepStatus::Closed;
+        closed.span = Some(s::SpanRef {
+            local_id: 4.into(),
+            ..work.span.clone()
+        });
+        closed.outcome_span = Some(s::SpanRef {
+            local_id: 5.into(),
+            ..work.span.clone()
+        });
+        closed.closure_source = Some(prior_closure());
+        vec![closed, step(1, 2, true), step(2, 3, false)]
+    } else {
+        vec![step(1, 1, true), step(2, 2, false)]
+    };
     edit(&mut plan);
     let boot = fx.boot(Some(plan));
     let run = fx.run();
@@ -131,6 +150,16 @@ fn closure_fixture_with(
         )
         .unwrap();
     (fx, certificate)
+}
+
+/// The closure source the prior closed step holds, distinct from any close
+/// this suite commits.
+fn prior_closure() -> s::SourceBlockId {
+    s::SourceBlockId {
+        run: "run".into(),
+        sequence: 2.into(),
+        block: 0.into(),
+    }
 }
 
 /// Serve exact bytes as consecutive pages of at most `capacity` octets,
@@ -593,7 +622,11 @@ fn closed_snapshot(
         panic!()
     };
     let mut snapshot = snapshot.clone();
-    let step = &mut snapshot.steps[0];
+    let step = snapshot
+        .steps
+        .iter_mut()
+        .find(|step| step.step_id == pinned().step_id)
+        .unwrap();
     step.status = s::StepStatus::Closed;
     step.outcome_span = Some(outcome.clone());
     step.work = Some(pinned());
@@ -796,12 +829,14 @@ fn closure_close_store_guard_refusal_halts_without_closure_or_refresh() {
     let evidence = evidence(&mut fx);
     // The operator's ruling of 2026-10-30: any store-guard refusal of close
     // after the local rechecks pass is a foundation fault, not a
-    // PlanOperationRefused. The scripted member refuses a coherent close; no
-    // harness path makes the real store's guard bite.
+    // PlanOperationRefused. The scripted member stands in for the store's
+    // defence firing on a coherent close: close's allocation is serialized
+    // with every other allocator in the run, so no harness path makes the
+    // real store's guard bite.
     let before = fx.run().context.committed_plan_summary().unwrap().cloned();
     begin_close(&mut fx, evidence);
     serve(&mut fx, PREVIEW, PREVIEW.len());
-    let raced = serve_marks(&mut fx, 4);
+    let allocated = serve_marks(&mut fx, 4);
     effect_ready(&mut fx);
     let run = fx.run();
     run.context
@@ -818,7 +853,7 @@ fn closure_close_store_guard_refusal_halts_without_closure_or_refresh() {
             Ok(_) => assert!(take(&mut fx).is_none(), "a refused filing grants nothing"),
         }
         fx.classifier(false);
-        refused |= refuse_filing(&mut fx, "span allocation is not consecutive");
+        refused |= refuse_filing(&mut fx, "store guard refused the close effect");
     }
     assert!(refused, "the close effect reached the store");
     let failure = failure.expect("a refused statement filing halts the run");
@@ -829,7 +864,7 @@ fn closure_close_store_guard_refusal_halts_without_closure_or_refresh() {
                 reason: FlowHaltReason::FilingRefused,
                 detail,
                 ..
-            } if detail.contains("span allocation is not consecutive")
+            } if detail.contains("store guard refused the close effect")
         ),
         "{failure:?}"
     );
@@ -839,7 +874,7 @@ fn closure_close_store_guard_refusal_halts_without_closure_or_refresh() {
     assert!(matches!(
         &fx.files[0].effect,
         Some(s::StatementEffect::Plan(effect))
-            if matches!(&**effect, s::PlanEffect::Close { outcome_span, .. } if outcome_span == &raced)
+            if matches!(&**effect, s::PlanEffect::Close { outcome_span, .. } if outcome_span == &allocated)
     ));
     assert!(fx.records(Kind::Refusal).is_empty());
     assert!(fx.run().context.plan_cache.required.is_none());
@@ -1091,13 +1126,22 @@ fn closure_close_rechecks_required_review() {
 }
 
 #[test]
-fn closure_close_incoherent_marks_catalog_faults_before_any_effect() {
-    for case in ["no-task", "no-step-scope", "next-below-step"] {
+fn closure_close_marks_off_the_active_step_path_fault_before_any_effect() {
+    // Each case serves close a Marks catalog that is incoherent or open on
+    // another path than the active step's, and names the check that faults.
+    let catalog = "plan task disagrees with its open marks path";
+    let path = "close marks differ from its active step path";
+    for (case, detail) in [
+        ("no-task", catalog),
+        ("no-step-scope", path),
+        ("next-not-above-step", catalog),
+        ("other-current-task", catalog),
+        ("plan-prompt-differs", catalog),
+        ("missing-group-scope", path),
+    ] {
         let (mut fx, _) = closure_fixture(false, true);
         let evidence = evidence(&mut fx);
-        let before = fx.run().context.committed_plan_summary().unwrap().cloned();
-        begin_close(&mut fx, evidence);
-        serve(&mut fx, PREVIEW, PREVIEW.len());
+        // The served catalog is the coherent one for the original plan.
         let mut result = coherent_marks(&mut fx, 4);
         let s::QueryResult::Marks {
             next_span_id,
@@ -1115,24 +1159,55 @@ fn closure_close_incoherent_marks_catalog_faults_before_any_effect() {
             "no-step-scope" => {
                 open_scopes.pop();
             }
-            _ => {
-                // The step span opened at 3, yet the catalog names 3 as next.
-                open_scopes.pop();
+            "next-not-above-step" => {
+                // The step scope stays last, yet the catalog names its span,
+                // 3, as the next allocation.
                 *next_span_id = 3.into();
             }
+            "other-current-task" => {
+                // The step scope stays last under the plan's task scope, but
+                // the catalog's current task is another one.
+                let task = current_task.as_mut().unwrap();
+                task.task.local_id = 4.into();
+                task.prompt.local_id = 5.into();
+                *next_span_id = 6.into();
+            }
+            "plan-prompt-differs" => {
+                // The open path is the plan's, but the plan's task names
+                // another prompt than the catalog's current task.
+                swap_current(&mut fx, |plan| plan.task.prompt.local_id = 7.into());
+            }
+            _ => {
+                // The step's group has a Subtask span, so the open path must
+                // run task, Subtask, step; the served path omits only the
+                // middle scope and still ends at the step.
+                swap_current(&mut fx, |plan| {
+                    let mut span = plan.task.task.clone();
+                    span.local_id = 9.into();
+                    plan.steps[0].group = Some("group".into());
+                    plan.groups = vec![s::PlanGroup {
+                        id: "group".into(),
+                        step_ids: vec![plan.steps[0].step_id.clone()],
+                        span: Some(span),
+                    }];
+                });
+            }
         }
+        let before = fx.run().context.committed_plan_summary().unwrap().cloned();
+        begin_close(&mut fx, evidence);
+        serve(&mut fx, PREVIEW, PREVIEW.len());
         serve_marks_result(&mut fx, &result);
         let failure = (0..128)
             .find_map(|_| advance(&mut fx).err())
-            .expect("an incoherent close catalog is no ordinary refusal");
+            .expect("a close catalog off its step path is no ordinary refusal");
         assert!(
             matches!(
-                failure,
+                &failure,
                 RunFailure::Flow {
                     reason: FlowHaltReason::ProtocolFailed,
                     ..
                 }
-            ),
+            ) && format!("{failure:?}").contains(detail),
             "{case}: {failure:?}"
         );
         assert!(fx.records(Kind::StepOutcome).is_empty(), "{case}");
@@ -1157,6 +1232,43 @@ fn closure_close_incoherent_marks_catalog_faults_before_any_effect() {
         assert_eq!(plan.steps[0].status, s::StepStatus::Active, "{case}");
         assert_eq!(&plan.plan, &before.unwrap().plan);
     }
+}
+
+#[test]
+fn closure_close_foreign_marks_proof_is_a_custody_fault() {
+    // A Marks read recorded by another run reaches prepare_close directly:
+    // its run binding is checked before its catalog is inspected.
+    let (mut fx, _) = closure_fixture(false, false);
+    let (mut other, _) = closure_fixture(false, false);
+    let evidence = evidence(&mut fx);
+    let marks = coherent_marks(&mut fx, 4);
+    let preview = recorded_preview(&mut fx);
+    let foreign = plain_read(
+        &mut other,
+        s::ReadSelector::Marks {},
+        &serde_json::to_vec(&marks).unwrap(),
+    );
+    let work = pinned();
+    let request = PlanRequest::Close {
+        expected: work.plan,
+        step_id: work.step_id,
+        evidence,
+    };
+    let run = fx.run();
+    let current = std::sync::Arc::clone(run.context.plan_cache.committed.as_ref().unwrap());
+    let result = crate::flow::plan::ports::closure::prepare_close(
+        &request,
+        &run.context,
+        &current,
+        &preview,
+        &foreign,
+        TurnRef("closure".into()),
+        AbsoluteBound::after(run.clock.now().unwrap(), 5_000_000_000).unwrap(),
+    );
+    let Err(crate::flow::plan::ports::PlanCheckFailure::Protocol(detail)) = result else {
+        panic!("a foreign marks proof must not prepare close")
+    };
+    assert_eq!(detail, "close has a foreign marks proof");
 }
 
 #[test]
@@ -1208,15 +1320,6 @@ fn closure_close_marks_read_refusal_keeps_its_code_or_faults() {
     assert!(fx.records(Kind::StepOutcome).is_empty());
 }
 
-const _: fn() = || {
-    trait NotClone<M> {
-        fn pin() {}
-    }
-    impl<T: ?Sized> NotClone<()> for T {}
-    impl<T: Clone> NotClone<u8> for T {}
-    let _ = <crate::flow::context::plan_port_driver::ClosureReceipt as NotClone<_>>::pin;
-};
-
 #[test]
 fn closure_receipt_names_the_committed_closure_and_only_an_uncancelled_close_grants_it() {
     for cancel_at in ["none", "source", "receipt"] {
@@ -1256,6 +1359,51 @@ fn closure_receipt_names_the_committed_closure_and_only_an_uncancelled_close_gra
             assert!(matches!(whole, PlanPortCompletion::Cancelled(_)));
         }
     }
+}
+
+/// One committed, uncancelled close through the scripted member, with the
+/// step.outcome source it committed.
+fn closure_receipt(
+    fx: &mut SummaryFixture,
+    certificate: &TemplateCertificate,
+) -> (ClosureReceipt, s::SourceBlockId) {
+    let evidence = evidence(fx);
+    begin_close(fx, evidence);
+    serve(fx, PREVIEW, PREVIEW.len());
+    let outcome = serve_marks(fx, 4);
+    effect_ready(fx);
+    let run = fx.run();
+    run.context
+        .begin_plan_effect(certificate, &mut run.clock)
+        .unwrap();
+    let source = committed(fx, false);
+    let snapshot = closed_snapshot(fx, &source, &outcome);
+    release_summary(fx, snapshot);
+    let receipt = finish(fx)
+        .into_closure_receipt()
+        .unwrap_or_else(|_| panic!("a committed close grants its receipt"));
+    (receipt, source.block_id)
+}
+
+#[test]
+fn closure_receipt_names_the_closed_step_behind_an_earlier_closure() {
+    // The step ahead of the pinned one is already closed with its own
+    // source; the receipt names the step this close closed and its source.
+    let (mut fx, certificate) = closure_fixture_with(false, true, true, |_| {});
+    let (receipt, source) = closure_receipt(&mut fx, &certificate);
+    assert_ne!(source, prior_closure());
+    assert_eq!(receipt.closed(), &source);
+    assert_eq!(receipt.previous_step(), &pinned().step_id);
+    assert_eq!(receipt.plan(), &pinned().plan);
+}
+
+#[test]
+fn closure_receipt_belongs_only_to_the_run_whose_close_granted_it() {
+    let (mut own, certificate) = closure_fixture(false, true);
+    let (receipt, _) = closure_receipt(&mut own, &certificate);
+    let (mut other, _) = closure_fixture(false, true);
+    assert!(receipt.belongs_to(&own.run().context));
+    assert!(!receipt.belongs_to(&other.run().context));
 }
 
 #[test]

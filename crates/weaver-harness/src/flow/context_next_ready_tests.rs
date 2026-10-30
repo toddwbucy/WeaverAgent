@@ -405,7 +405,7 @@ fn chain_over(
     next_span_id: u64,
     before_place: impl FnOnce(&mut SummaryFixture),
 ) -> Chain {
-    let (mut fx, certificate) = closure_fixture_with(false, true, edit);
+    let (mut fx, certificate) = closure_fixture_with(false, true, false, edit);
     let (mut port, peer) = fx._decode.take().unwrap();
     let receipt = closed_at(&mut fx, &certificate, next_span_id);
     let run = fx.run();

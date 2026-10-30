@@ -1,6 +1,6 @@
 //! Unreviewed closure consumes moved checked work and a private grant. Neither
 //! public WorkRef metadata nor model text can construct the evidence it needs.
-use super::activation::SpanAllocator;
+use super::activation::{path_matches, step_path, task_catalog};
 use super::effect::PreparedPortEffect;
 use super::*;
 use crate::flow::clock::AbsoluteBound;
@@ -195,10 +195,12 @@ pub(in crate::flow) fn check_reread(
     Ok(())
 }
 
-/// close's own Marks read follows its checked reread. Its catalog must be
-/// coherent and open on the plan's task and the active step's span, as
-/// activation's is, or it is a protocol fault before any effect. The outcome
-/// span is that catalog's next allocation through SpanAllocator.
+/// close's own Marks read follows its checked reread. The proof must be this
+/// run's Marks read, then its catalog must be coherent and open on exactly the
+/// active step's path (the plan's task, its group's Subtask span when it has
+/// one, then the step's span), as activation's is, or it is a protocol fault
+/// before any effect. The outcome span is that catalog's next allocation
+/// through SpanAllocator.
 pub(in crate::flow) fn prepare_close(
     request: &PlanRequest,
     context: &RecordingContext,
@@ -216,27 +218,40 @@ pub(in crate::flow) fn prepare_close(
     else {
         return Err(PlanCheckFailure::Protocol("close received another request"));
     };
+    if !marks.belongs_to(context) || marks.selector() != &(s::ReadSelector::Marks {}) {
+        return Err(PlanCheckFailure::Protocol(
+            "close has a foreign marks proof",
+        ));
+    }
     if marks.recall_sequence().0 <= preview.recall_sequence().0 || turn.0.is_empty() {
         return Err(PlanCheckFailure::Protocol(
             "close lost its ordered marks read or turn",
         ));
     }
-    let (plan, step) = active(request, context, current)?;
-    let open_scopes = super::activation::task_catalog(marks, plan)?;
-    let s::QueryResult::Marks { next_span_id, .. } = marks.result() else {
-        unreachable!("a checked task catalog is a Marks result")
+    // validate_close and check_reread already held this same committed proof
+    // to the active step; this only looks the pair up again.
+    let s::QueryResult::PlanCurrent {
+        current: Some(plan),
+        ..
+    } = current.read().result()
+    else {
+        return Err(PlanCheckFailure::Protocol("close lost its current plan"));
     };
-    let step_span = step.span.as_ref();
-    if !open_scopes
-        .last()
-        .is_some_and(|scope| Some(&scope.span) == step_span && scope.kind == s::SpanKind::Step)
-        || step_span.is_none_or(|span| span.local_id >= *next_span_id)
-    {
+    let Some(step) = plan.steps.iter().find(|step| &step.step_id == step_id) else {
+        return Err(PlanCheckFailure::Protocol("close lost its active step"));
+    };
+    let (open_scopes, spans) = task_catalog(marks, plan)?;
+    let mut path = step_path(plan, step);
+    let step_span = step.span.as_ref().ok_or(PlanCheckFailure::Protocol(
+        "close's active step has no span",
+    ))?;
+    path.push((step_span, s::SpanKind::Step));
+    if !path_matches(open_scopes, &path) {
         return Err(PlanCheckFailure::Protocol(
-            "close marks differ from its active step scope",
+            "close marks differ from its active step path",
         ));
     }
-    let outcome_span = SpanAllocator::from_marks(context, marks, &expected.plan_id.seed_id)?.peek();
+    let outcome_span = spans.peek();
     Ok(PreparedPortEffect {
         origin: Arc::clone(marks.origin()),
         effect: s::PlanEffect::Close {
