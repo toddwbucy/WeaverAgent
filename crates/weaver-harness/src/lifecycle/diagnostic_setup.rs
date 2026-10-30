@@ -36,6 +36,7 @@ struct Peer {
     channel: Option<OrganChannel>,
     replies: VecDeque<Reply>,
     first_request_deadline: Option<Instant>,
+    first_request_pending: bool,
 }
 
 pub(super) struct Leaving {
@@ -74,6 +75,7 @@ impl<'a> Setup<'a> {
                 channel: Some(connection.try_clone()?),
                 replies: VecDeque::new(),
                 first_request_deadline: None,
+                first_request_pending: false,
             }],
             exchange,
             enter_selected: false,
@@ -142,6 +144,7 @@ impl<'a> Setup<'a> {
 
     fn hear(&mut self, peer: usize) -> Result<(), ChannelFault> {
         self.peers[peer].first_request_deadline = None;
+        self.peers[peer].first_request_pending = false;
         let channel = self.peers[peer].channel.as_ref().unwrap();
         let incoming = if channel.is_diagnostic_wire() {
             channel.recv_diagnostic()
@@ -343,6 +346,7 @@ impl<'a> Setup<'a> {
                         first_request_deadline: self.leaving.as_ref().map(|_| {
                             Instant::now() + Duration::from_millis(crate::state::ANSWER_BOUND_MS)
                         }),
+                        first_request_pending: true,
                     });
                     progress = true;
                 }
@@ -490,7 +494,10 @@ impl<'a> Setup<'a> {
     }
 
     fn replies_done(&self) -> bool {
-        self.enter_done && self.peers.iter().all(|peer| peer.replies.is_empty())
+        self.enter_done
+            && self.peers.iter().all(|peer| {
+                peer.replies.is_empty() && (peer.channel.is_none() || !peer.first_request_pending)
+            })
     }
 
     fn await_disposition(&mut self, run: &mut Run) -> Result<bool, ChannelFault> {
@@ -542,6 +549,21 @@ impl<'a> Setup<'a> {
         self.phase = Phase::Cleanup;
         // No state answer after acceptance can start a new setup step.
         drop(run.state.take());
+        if self.ready {
+            // Ready commits at selection, even if its reply cannot yet cross.
+            // A later rollback is the entered run's Leave: an unconfirmed SPU
+            // release still closes/reaps the child and does not undo residency.
+            let leave = self.leaving.as_ref().expect("accepted Leave");
+            return leave_after(
+                run,
+                Some(leave.cause),
+                leave.forced,
+                None,
+                None,
+                Some(leave.deadline),
+            )
+            .map_err(|_| ChannelFault::Closed);
+        }
         let mut children = Children::default();
         if let Some(arm) = run.classify.take() {
             children.0.push(arm.pid);
