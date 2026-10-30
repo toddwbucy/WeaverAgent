@@ -34,8 +34,7 @@ pub(super) fn prepare(root: &std::path::Path, path: &std::path::Path) {
     .unwrap();
 }
 /// The scenario's model, by the SPU tests' fixture convention (SPU Spec 1.2):
-/// `WEAVER_ARTIFACT_QWEN25_SAFETENSORS` names the native directory, which
-/// the SPU's resolution walks into, and
+/// `WEAVER_ARTIFACT_QWEN25_SAFETENSORS` names the native directory and
 /// `WEAVER_TEST_GGUF` the GGUF file. Unset and absent skips; named and absent
 /// fails, so a runner that asked for the real model is told it did not run.
 pub(crate) fn artifact(mode: &str) -> Option<PathBuf> {
@@ -52,13 +51,15 @@ pub(crate) fn artifact(mode: &str) -> Option<PathBuf> {
             false,
         )
     };
+    // The native load binds the resolved weights file: the record carries
+    // that file, and a replay declaring the directory is refused by identity.
     let resolve = |path: PathBuf| {
-        let present = if native {
-            path.is_dir()
+        let file = if native {
+            path.join("model.safetensors")
         } else {
-            path.is_file()
+            path
         };
-        present.then_some(path)
+        file.is_file().then_some(file)
     };
     match std::env::var_os(variable) {
         Some(named) => {
