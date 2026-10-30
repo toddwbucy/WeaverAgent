@@ -37,6 +37,9 @@ use weaver_types::{MAX_ENVELOPE_BYTES, OrganEnvelope};
 
 use crate::failure::ChannelFault;
 
+#[path = "channel_managed.rs"]
+pub(crate) mod managed;
+
 /// The control buffer's size, generous against the one descriptor loop 0
 /// legitimately carries so an honest message never truncates. A message that
 /// truncates it anyway is a fault, and every descriptor it did deliver is
@@ -496,6 +499,11 @@ impl OrganChannel {
     /// asserted at the write site too, because a bound only the receiver holds
     /// is a bound the sender discovers in production.
     pub fn send(&self, envelope: &OrganEnvelope) -> Result<(), ChannelFault> {
+        send_octets(self.end.as_fd(), &self.encode(envelope)?)
+    }
+
+    /// Retained management sends use the same selected wire codec.
+    pub(crate) fn encode(&self, envelope: &OrganEnvelope) -> Result<Vec<u8>, ChannelFault> {
         let body = if self.canonical_diagnostic {
             diagnostic::encode_answer(envelope)?
         } else {
@@ -506,7 +514,7 @@ impl OrganChannel {
                 bound: MAX_ENVELOPE_BYTES,
             });
         }
-        send_octets(self.end.as_fd(), &body)
+        Ok(body)
     }
 
     /// Reads one envelope. The buffer is sized to the maximum envelope, and a
@@ -767,45 +775,54 @@ impl DecodeChannel {
         &self,
         directive: &weaver_types::TokenDirective,
     ) -> Result<(), ChannelFault> {
-        let body = serde_json::to_vec(directive).map_err(|_| ChannelFault::Undecodable)?;
-        if body.len() <= weaver_types::MAX_ENVELOPE_BYTES {
-            return send_octets(self.end.as_fd(), &body);
-        }
-        if body.len() > weaver_types::DECODE_MESSAGE_BOUND {
-            return Err(ChannelFault::Truncated {
-                bound: weaver_types::DECODE_MESSAGE_BOUND,
-            });
-        }
-        let preamble = weaver_types::SegmentPreamble {
-            segments: body.len().div_ceil(weaver_types::MAX_ENVELOPE_BYTES) as u64,
-            bytes: body.len() as u64,
-        };
-        let preamble = serde_json::to_vec(&preamble).map_err(|_| ChannelFault::Undecodable)?;
-        send_octets(self.end.as_fd(), &preamble)?;
-        for slice in body.chunks(weaver_types::MAX_ENVELOPE_BYTES) {
-            send_octets(self.end.as_fd(), slice)?;
-        }
-        Ok(())
+        send_decode(directive, |bytes| send_octets(self.end.as_fd(), bytes))
     }
 
     /// Receive one decode frame, blocking, reassembling a segment series
-    /// into the one frame it carries: the series is the channel's fact and
-    /// no layer above it sees a segment, per the decode contract. A frame
-    /// is a `TokenAnswer` or a `TokenRefusal`, the two sharing the seam
-    /// with disjoint tag vocabularies, so the receive distinguishes them
-    /// rather than reading only the answer and losing a refusal to an
-    /// undecodable fault.
+    /// into the one frame it carries. Refusals and answers keep their
+    /// separate typed vocabularies through the same decoder.
     pub fn recv_reply(&self) -> Result<DecodeReply, ChannelFault> {
-        let first = recv_octets(self.end.as_fd())?;
-        let octets = reassemble_if_series(first, || recv_octets(self.end.as_fd()))?;
-        if let Ok(answer) = serde_json::from_slice::<weaver_types::TokenAnswer>(&octets) {
-            return Ok(DecodeReply::Answer(answer));
-        }
-        if let Ok(refusal) = serde_json::from_slice::<weaver_types::TokenRefusal>(&octets) {
-            return Ok(DecodeReply::Refusal(refusal));
-        }
-        Err(ChannelFault::Undecodable)
+        receive_decode(|| recv_octets(self.end.as_fd()))
     }
+}
+
+fn send_decode(
+    directive: &weaver_types::TokenDirective,
+    mut send: impl FnMut(&[u8]) -> Result<(), ChannelFault>,
+) -> Result<(), ChannelFault> {
+    let body = serde_json::to_vec(directive).map_err(|_| ChannelFault::Undecodable)?;
+    if body.len() <= weaver_types::MAX_ENVELOPE_BYTES {
+        return send(&body);
+    }
+    if body.len() > weaver_types::DECODE_MESSAGE_BOUND {
+        return Err(ChannelFault::Truncated {
+            bound: weaver_types::DECODE_MESSAGE_BOUND,
+        });
+    }
+    let preamble = weaver_types::SegmentPreamble {
+        segments: body.len().div_ceil(weaver_types::MAX_ENVELOPE_BYTES) as u64,
+        bytes: body.len() as u64,
+    };
+    let preamble = serde_json::to_vec(&preamble).map_err(|_| ChannelFault::Undecodable)?;
+    send(&preamble)?;
+    for slice in body.chunks(weaver_types::MAX_ENVELOPE_BYTES) {
+        send(slice)?;
+    }
+    Ok(())
+}
+
+fn receive_decode(
+    mut next: impl FnMut() -> Result<Vec<u8>, ChannelFault>,
+) -> Result<DecodeReply, ChannelFault> {
+    let first = next()?;
+    let octets = reassemble_if_series(first, next)?;
+    if let Ok(answer) = serde_json::from_slice::<weaver_types::TokenAnswer>(&octets) {
+        return Ok(DecodeReply::Answer(answer));
+    }
+    if let Ok(refusal) = serde_json::from_slice::<weaver_types::TokenRefusal>(&octets) {
+        return Ok(DecodeReply::Refusal(refusal));
+    }
+    Err(ChannelFault::Undecodable)
 }
 
 /// One frame off the decode seam: an answer to advance the exchange or a typed

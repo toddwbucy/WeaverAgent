@@ -191,11 +191,7 @@ impl<'a> FoundationInput<'a> {
         if self.serving.owner.listener.held().is_some() {
             return FoundationInputProgress::ManagementPending;
         }
-        if self.save_blocks_turn()
-            || self.plan_pending()
-            || self.flags_pending()
-            || self.plan_operation_pending()
-        {
+        if self.save_blocks_turn() || self.plan_work_pending() {
             return FoundationInputProgress::Pending;
         }
         if let Some(progress) = self.wind_down_input_progress() {

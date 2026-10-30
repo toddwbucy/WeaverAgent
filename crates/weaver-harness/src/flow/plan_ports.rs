@@ -5,8 +5,32 @@ use crate::flow::context::{RecordedRead, RecordedReadRefusal, RecordingContext};
 use sha2::{Digest as _, Sha256};
 use weaver_types::state_flow as s;
 
+#[path = "plan_activation.rs"]
+pub(in crate::flow) mod activation;
+pub use activation::CheckedStepSuccessor;
+#[path = "plan_break.rs"]
+pub(in crate::flow) mod break_plan;
+#[path = "plan_port_effect.rs"]
+pub(in crate::flow) mod effect;
+
 #[derive(Debug)]
 pub enum PlanRequest {
+    /// Standalone STEP-QUERY. It keeps its read outcome and creates no effect.
+    StepSuccessor {
+        expected: s::PlanRef,
+        previous_step: Option<s::StepId>,
+    },
+    Activate {
+        expected: s::PlanRef,
+        step_id: s::StepId,
+        successor: CheckedStepSuccessor,
+    },
+    RecordBreak {
+        expected: s::PlanRef,
+        step_id: Option<s::StepId>,
+        case: s::PlanBreakCase,
+        proposed_source: Option<s::SourceBlockId>,
+    },
     AssessAct {
         expected: s::PlanRef,
         step_id: s::StepId,
@@ -24,23 +48,34 @@ pub enum PlanRequest {
 impl PlanRequest {
     pub(in crate::flow) fn expected(&self) -> &s::PlanRef {
         match self {
-            Self::AssessAct { expected, .. } | Self::WorkReference { expected, .. } => expected,
+            Self::StepSuccessor { expected, .. }
+            | Self::Activate { expected, .. }
+            | Self::RecordBreak { expected, .. }
+            | Self::AssessAct { expected, .. }
+            | Self::WorkReference { expected, .. } => expected,
         }
     }
-    pub(in crate::flow) fn step_id(&self) -> &s::StepId {
+    pub(in crate::flow) fn step_id(&self) -> Option<&s::StepId> {
         match self {
-            Self::AssessAct { step_id, .. } | Self::WorkReference { step_id, .. } => step_id,
+            Self::StepSuccessor { .. } => None,
+            Self::RecordBreak { step_id, .. } => step_id.as_ref(),
+            Self::Activate { step_id, .. }
+            | Self::AssessAct { step_id, .. }
+            | Self::WorkReference { step_id, .. } => Some(step_id),
         }
     }
-    pub(in crate::flow) fn operation(&self) -> s::PlanPortOperation {
-        match self {
+    pub(in crate::flow) fn operation(&self) -> Option<s::PlanPortOperation> {
+        Some(match self {
+            Self::StepSuccessor { .. } => return None,
+            Self::Activate { .. } => s::PlanPortOperation::Activate,
+            Self::RecordBreak { .. } => s::PlanPortOperation::RecordBreak,
             Self::AssessAct { .. } => s::PlanPortOperation::AssessAct,
             Self::WorkReference { .. } => s::PlanPortOperation::WorkReference,
-        }
+        })
     }
     pub(in crate::flow) fn local_refusal(&self, seed: &str) -> Option<s::PlanOperationRefused> {
         (self.expected().plan_id.seed_id != seed
-            || self.step_id().seed_id != seed
+            || self.step_id().is_some_and(|id| id.seed_id != seed)
             || matches!(self, Self::WorkReference { span, .. } if span.seed_id != seed))
         .then(|| {
             refusal(
@@ -51,6 +86,15 @@ impl PlanRequest {
     }
     pub(in crate::flow) fn selector(&self) -> s::ReadSelector {
         match self {
+            Self::StepSuccessor {
+                expected,
+                previous_step,
+            } => s::ReadSelector::StepSuccessor {
+                plan: expected.clone(),
+                previous_step: previous_step.clone(),
+            },
+            Self::Activate { .. } => s::ReadSelector::Marks {},
+            Self::RecordBreak { .. } => unreachable!("break consumes the committed cache"),
             Self::AssessAct { statement, .. } => s::ReadSelector::Statement {
                 statement: statement.clone(),
             },
@@ -83,6 +127,31 @@ pub(in crate::flow) fn active<'a>(
     context: &RecordingContext,
     current: &'a CommittedPlanSummary,
 ) -> Result<(&'a s::PlanSnapshot, &'a s::PlanStep), PlanCheckFailure> {
+    use s::PlanOperationCase as Case;
+    let plan = locked(request, context, current)?;
+    let step = plan
+        .steps
+        .iter()
+        .find(|step| {
+            Some(&step.step_id) == request.step_id() && step.status == s::StepStatus::Active
+        })
+        .ok_or_else(|| refuse(Case::InvalidTarget, "requested step is not active"))?;
+    if let PlanRequest::WorkReference { span, .. } = request
+        && step.span.as_ref() != Some(span)
+    {
+        return Err(refuse(
+            Case::InvalidTarget,
+            "requested work span is not the active step's span",
+        ));
+    }
+    Ok((plan, step))
+}
+
+pub(in crate::flow) fn locked<'a>(
+    request: &PlanRequest,
+    context: &RecordingContext,
+    current: &'a CommittedPlanSummary,
+) -> Result<&'a s::PlanSnapshot, PlanCheckFailure> {
     use s::PlanOperationCase as Case;
     if !current.read().belongs_to(context)
         || current.read().selector() != &(s::ReadSelector::PlanCurrent {})
@@ -117,20 +186,7 @@ pub(in crate::flow) fn active<'a>(
             "expected plan is not the current revision",
         ));
     }
-    let step = plan
-        .steps
-        .iter()
-        .find(|step| &step.step_id == request.step_id() && step.status == s::StepStatus::Active)
-        .ok_or_else(|| refuse(Case::InvalidTarget, "requested step is not active"))?;
-    if let PlanRequest::WorkReference { span, .. } = request
-        && step.span.as_ref() != Some(span)
-    {
-        return Err(refuse(
-            Case::InvalidTarget,
-            "requested work span is not the active step's span",
-        ));
-    }
-    Ok((plan, step))
+    Ok(plan)
 }
 
 pub(in crate::flow) fn assess(

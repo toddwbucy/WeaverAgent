@@ -6,8 +6,9 @@
 //! and 4. This is the path `tests/seam.rs` names as its gap, closed here for
 //! the build that carries a backend.
 //!
-//! Everything in this file needs the `cuda` and `gguf` features, a CUDA device,
-//! and a real GGUF on disk. Each absence skips loudly: a suite that reports
+//! Everything in this file needs the `cuda` and `gguf` features and a CUDA
+//! device. Most cases use a real GGUF. The native ReFeed case uses Qwen2.5
+//! safetensors. Each absent implicit fixture skips loudly: a suite that reports
 //! success for tests it did not run is the failure mode this corpus treats as
 //! worse than a red result.
 
@@ -1064,48 +1065,45 @@ mod seam_success {
         std::fs::remove_file(&log_path).ok();
     }
 
-    /// **A cancelled re-feed certifies nothing and faults across the seam.**
-    /// The drive is handed the whole recorded path upfront, so the text it
-    /// owes is the record's while the measurement is the run's, and a cancel
-    /// parts them. What would be left to say is a prefix, which is the nothing
-    /// the registry's second arm already refuses, so the seam carries a fault
-    /// rather than a `ReFed` whose text covers positions the run never
-    /// reached, per the operator's ruling of 2026-09-14.
-    ///
-    /// **The cancel is queued behind the directive rather than raced against
-    /// it.** Both frames are sent before the drive starts, so the poll at the
-    /// top of the first position finds the cancel already waiting and the stop
-    /// lands at zero. Nothing here depends on how fast the device is.
-    ///
-    /// **The certificate is what is withheld, not every frame.** This admit
-    /// elects no field and asks no column, so nothing streams from the sinks
-    /// and the socket is silent until the fault. Where a field or column is
-    /// elected the intermediates for the positions that did become resident
-    /// have already crossed, per `weaver-harness-Spec` section 6 and
-    /// `weaver-diagnostic-Spec` section 3.2, which have them author as they
-    /// arrive. They are true of what ran. This test reads the certificate's
-    /// absence and says so rather than claiming a silence it arranged.
-    ///
-    /// **This is the instrument the unit test cannot be.** The guard is in the
-    /// binary, so `session.rs`'s cancelled re-feed test pins what the session
-    /// does and not what the caller decides about it. Removing the
-    /// `cancel.cancelled` term from that guard leaves the unit test green and
-    /// this one red, which is the whole reason it is here.
-    ///
-    /// Perturbation: drop `cancel.cancelled` from the re-feed arm's guard and
-    /// the process answers `ReFed` instead of faulting and remains live. With
-    /// the parent's endpoints held open, the bounded exit wait fails.
+    /// A real loaded child rejects a foreign-turn Cancel, completes that
+    /// original path, and answers a subsequent at-rest Cancel. Repeating the
+    /// same input after Flush then cancels before token zero. The interrupted
+    /// fullness must equal the complete run minus its three path tokens.
+    /// Both terminal order and post-interruption residency cross real sockets.
     #[test]
-    fn a_cancelled_refeed_faults_and_certifies_nothing() {
-        use weaver_traits::{ContentBlock, Message, Role};
-        use weaver_types::{SessionId, TokenAnswer, TokenDirective, TurnKey};
-
+    fn a_cancelled_refeed_retains_zero_prefix_and_answers_before_at_rest() {
         let Some(model) = model_present() else {
-            eprintln!("SKIP a_cancelled_refeed_faults: no model at {MODEL}");
+            eprintln!("SKIP a_cancelled_refeed_retains_zero_prefix: no model at {MODEL}");
             return;
         };
+        check_cancelled_refeed(model);
+    }
+
+    #[test]
+    fn native_cancelled_refeed_retains_zero_prefix_and_answers_before_at_rest() {
+        let variable = "WEAVER_ARTIFACT_QWEN25_SAFETENSORS";
+        let explicit = std::env::var_os(variable);
+        let model = PathBuf::from(
+            explicit
+                .clone()
+                .unwrap_or_else(|| "/bulk-store/models/Qwen--Qwen2.5-0.5B-Instruct".into()),
+        );
+        if !model.is_dir() {
+            assert!(
+                explicit.is_none(),
+                "{variable} names an unavailable artifact"
+            );
+            eprintln!("SKIP native cancelled ReFeed: no implicit model fixture");
+            return;
+        }
+        check_cancelled_refeed(model);
+    }
+
+    fn check_cancelled_refeed(model: PathBuf) {
+        use weaver_traits::{ContentBlock, Message, Role};
+        use weaver_types::{SessionId, TokenAnswer, TokenDirective, TurnKey};
         if device_context().is_none() {
-            eprintln!("SKIP a_cancelled_refeed_faults: no CUDA device");
+            eprintln!("SKIP a_cancelled_refeed_retains_zero_prefix: no CUDA device");
             return;
         }
         let _device = device_lock();
@@ -1113,8 +1111,9 @@ mod seam_success {
         let (lifecycle, child_lifecycle) = seqpacket_pair();
         let (decode_parent, child_decode) = seqpacket_pair();
         let log_path = std::env::temp_dir().join(format!(
-            "weaver-spu-refeed-cancel-child-{}.log",
-            std::process::id()
+            "weaver-spu-refeed-cancel-child-{}-{}.log",
+            std::process::id(),
+            if model.is_dir() { "native" } else { "gguf" }
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
         let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
@@ -1126,7 +1125,14 @@ mod seam_success {
             &mut command,
             &[child_lifecycle.as_raw_fd(), child_decode.as_raw_fd()],
         );
-        let mut child = command.spawn().expect("the binary starts");
+        struct Reap(std::process::Child);
+        impl Drop for Reap {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let mut child = Reap(command.spawn().expect("the binary starts"));
         // The parent must not keep the peer alive after the child faults.
         drop(child_lifecycle);
         drop(child_decode);
@@ -1146,7 +1152,7 @@ mod seam_success {
                             devices: vec![DeviceOrdinal(0)],
                         },
                         residual_readout_election: false,
-                        field_election: None,
+                        field_election: Some(weaver_types::FieldElection { depth: 40 }),
                         surprisal_election: false,
                         refeed_permission: true,
                         column_permission: false,
@@ -1181,10 +1187,100 @@ mod seam_success {
         let opened: TokenAnswer =
             serde_json::from_slice(&decode.recv_octets().expect("the open answers"))
                 .expect("the answer parses");
+        let TokenAnswer::Opened(ref facts) = opened else {
+            panic!("Open facts required")
+        };
+        let prefix = facts.prefix_tokens;
         assert_opened(opened);
 
-        // Both frames before the drive starts, so the first poll finds the
-        // cancel rather than racing the device for it.
+        // Stop the owned child and observe that stop before queuing both
+        // requests. The active turn is therefore deterministic on any device.
+        let pause = |child: &std::process::Child| {
+            let pid = nix::unistd::Pid::from_raw(child.id() as i32);
+            // SAFETY: this live unreaped child belongs to this fixture.
+            assert_eq!(
+                unsafe { nix::libc::kill(pid.as_raw(), nix::libc::SIGSTOP) },
+                0
+            );
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                match nix::sys::wait::waitpid(
+                    pid,
+                    Some(
+                        nix::sys::wait::WaitPidFlag::WUNTRACED
+                            | nix::sys::wait::WaitPidFlag::WNOHANG,
+                    ),
+                )
+                .unwrap()
+                {
+                    nix::sys::wait::WaitStatus::Stopped(..) => break,
+                    nix::sys::wait::WaitStatus::StillAlive if std::time::Instant::now() < until => {
+                        std::thread::sleep(std::time::Duration::from_millis(1))
+                    }
+                    other => panic!("the owned child must stop: {other:?}"),
+                }
+            }
+        };
+        let resume = |child: &std::process::Child| {
+            // SAFETY: this stopped unreaped child belongs to this fixture.
+            assert_eq!(
+                unsafe { nix::libc::kill(child.id() as i32, nix::libc::SIGCONT) },
+                0
+            );
+        };
+        pause(&child.0);
+        send(&TokenDirective::ReFeed {
+            turn: TurnKey("baseline".into()),
+            rendered: "anything".into(),
+            path: vec![1, 2, 3],
+        });
+        send(&TokenDirective::Cancel {
+            turn: TurnKey("foreign".into()),
+        });
+        resume(&child.0);
+        assert_eq!(
+            serde_json::from_slice::<weaver_types::TokenRefusal>(&decode.recv_octets().unwrap())
+                .unwrap(),
+            weaver_types::TokenRefusal::OutOfOrder
+        );
+        let mut positions = Vec::new();
+        for _ in 0..3 {
+            let TokenAnswer::Field { position, .. } =
+                serde_json::from_slice(&decode.recv_octets().unwrap()).unwrap()
+            else {
+                panic!("each recorded position must retain its field")
+            };
+            positions.push(position);
+        }
+        assert_eq!(
+            positions,
+            vec![positions[0], positions[0] + 1, positions[0] + 2]
+        );
+        // The last position has crossed its cancellation poll. Cancel now
+        // crosses the pending complete terminal and must answer second.
+        send(&TokenDirective::Cancel {
+            turn: TurnKey("baseline".into()),
+        });
+        let TokenAnswer::ReFed(complete) =
+            serde_json::from_slice(&decode.recv_octets().unwrap()).unwrap()
+        else {
+            panic!("foreign Cancel must leave the whole path running")
+        };
+        let expected_resident = complete.resident - 3;
+        assert_eq!(
+            serde_json::from_slice::<TokenAnswer>(&decode.recv_octets().unwrap()).unwrap(),
+            TokenAnswer::AtRest
+        );
+        send(&TokenDirective::Flush { keep: prefix });
+        assert_eq!(
+            serde_json::from_slice::<TokenAnswer>(&decode.recv_octets().unwrap()).unwrap(),
+            TokenAnswer::Flushed {
+                resident_before: complete.resident,
+                resident_after: prefix
+            }
+        );
+
+        pause(&child.0);
         send(&TokenDirective::ReFeed {
             turn: TurnKey("t-1".into()),
             rendered: "anything".into(),
@@ -1194,39 +1290,38 @@ mod seam_success {
             turn: TurnKey("t-1".into()),
         });
 
-        // Keep the parent's endpoints open until the child exits. Its own fault,
-        // rather than our teardown, must end the process and close the peer.
-        let status = wait_bounded(
-            &mut child,
-            30,
-            &format!(
-                "the cancelled worker exits, child stderr at {}",
-                log_path.display()
-            ),
-        );
-        // **No certificate crosses.** Once the child is reaped, require actual
-        // EOF. A timeout or a still-held duplicate peer must not count as EOF.
-        let mut byte = [0_u8; 1];
+        resume(&child.0);
+        let interrupted: TokenAnswer =
+            serde_json::from_slice(&decode.recv_octets().expect("interrupted terminal")).unwrap();
         assert_eq!(
-            nix::sys::socket::recv(
-                decode.as_fd().as_raw_fd(),
-                &mut byte,
-                nix::sys::socket::MsgFlags::MSG_DONTWAIT,
-            ),
-            Ok(0),
-            "a cancelled re-feed must close without any answer"
+            interrupted,
+            TokenAnswer::RefeedInterrupted {
+                turn: TurnKey("t-1".into()),
+                consumed: 0,
+                resident: expected_resident,
+                capacity: complete.capacity
+            }
+        );
+        assert_eq!(
+            serde_json::from_slice::<TokenAnswer>(&decode.recv_octets().unwrap()).unwrap(),
+            TokenAnswer::AtRest
+        );
+        assert!(decode.try_recv_octets().unwrap().is_none());
+        send(&TokenDirective::Flush { keep: u64::MAX });
+        assert_eq!(
+            serde_json::from_slice::<TokenAnswer>(&decode.recv_octets().unwrap()).unwrap(),
+            TokenAnswer::Flushed {
+                resident_before: expected_resident,
+                resident_after: expected_resident
+            }
         );
         drop(decode);
+        assert_eq!(
+            ask(&lifecycle, 2, LifecycleDirective::Release).payload,
+            Payload::Answer(LifecycleAnswer::Released)
+        );
         drop(lifecycle);
-        assert!(
-            !status.success(),
-            "the fault is the exit code as well as the line"
-        );
-        let said = std::fs::read_to_string(&log_path).unwrap_or_default();
-        assert!(
-            said.contains("\"fault\":\"undecodable\""),
-            "the fault names itself on stderr, which held: {said}"
-        );
+        assert!(wait_bounded(&mut child.0, 30, "interrupted ReFeed release").success());
         std::fs::remove_file(&log_path).ok();
     }
 

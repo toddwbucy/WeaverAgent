@@ -8,13 +8,27 @@ pub(super) struct PlanPortRecord {
     identity: Arc<()>,
     original: Option<AuthoredEvent>,
     ticket: Option<u64>,
-    sequence: Option<Sequence>,
+    pub(super) sequence: Option<Sequence>,
     consumed: bool,
     returned: StoppedAuthor,
 }
 
 #[cfg(test)]
 impl PlanPortTransaction {
+    pub(in crate::flow::context) fn test_request(&self) -> &PlanRequest {
+        &self.request
+    }
+    pub(in crate::flow::context) fn test_cancelled(&self) -> bool {
+        self.cancelled
+    }
+    pub(in crate::flow::context) fn test_stage(&self) -> String {
+        format!(
+            "{:?}, request {:?}, cancelled {}",
+            self.stage,
+            self.request.operation(),
+            self.cancelled
+        )
+    }
     pub(in crate::flow::context) fn test_refusal_account(
         &self,
     ) -> (&PlanRequest, Option<u64>, Option<Sequence>, bool) {
@@ -47,7 +61,10 @@ impl RecordingContext {
             return false;
         };
         if !work.driving
-            || work.stage != Stage::Refusal
+            || !matches!(
+                work.stage,
+                Stage::Refusal | Stage::TemplateFault | Stage::BreakReport
+            )
             || !Arc::ptr_eq(&record.identity, identity)
             || record.ticket.is_some()
         {
@@ -85,23 +102,38 @@ impl RecordingContext {
                 causal_parent: work.parent,
                 payload: Some(Payload::Refusal(
                     serde_json::value::to_raw_value(&RefusalRecord::PlanOperation {
-                        operation: work.request.operation(),
+                        operation: work
+                            .request
+                            .operation()
+                            .expect("operation refusal, not STEP-QUERY"),
                         expected: work.request.expected().clone(),
-                        step_id: Some(work.request.step_id().clone()),
+                        step_id: work.request.step_id().cloned(),
                         refusal: refusal.clone(),
                     })
                     .expect("typed plan operation refusal serializes"),
                 )),
             };
-            self.plan_port_work_mut().unwrap().record = Some(PlanPortRecord {
-                identity: Arc::new(()),
-                original: Some(event),
-                ticket: None,
-                sequence: None,
-                consumed: false,
-                returned: StoppedAuthor::default(),
-            });
+            self.start_plan_port_record(event);
         }
+        self.advance_plan_port_record(ports)
+    }
+
+    pub(super) fn start_plan_port_record(&mut self, event: AuthoredEvent) {
+        assert!(self.plan_port_work().unwrap().record.is_none());
+        self.plan_port_work_mut().unwrap().record = Some(PlanPortRecord {
+            identity: Arc::new(()),
+            original: Some(event),
+            ticket: None,
+            sequence: None,
+            consumed: false,
+            returned: StoppedAuthor::default(),
+        });
+    }
+
+    pub(super) fn advance_plan_port_record<I: PumpIo>(
+        &mut self,
+        ports: &mut PumpPorts<'_, I>,
+    ) -> Result<bool, RunFailure> {
         let record = self.plan_port_work().unwrap().record.as_ref().unwrap();
         record.returned.check()?;
         let claim = AuthorClaim::PlanPort(Arc::clone(&record.identity));
