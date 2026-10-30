@@ -240,7 +240,14 @@ pub(in crate::flow::context::worker_startup) fn scenario(name: &str, mode: &str)
         drop(write);
         read
     });
-    let end = Instant::now() + Duration::from_secs(35);
+    // This one instrument uses the actual 150-second rollback interval, then
+    // rejects a renewed cleanup cap. The runtime bound is never shortened.
+    let watchdog = if mode.ends_with("-setup-arm-admit-deadline") {
+        200
+    } else {
+        35
+    };
+    let end = Instant::now() + Duration::from_secs(watchdog);
     let control = loop {
         assert!(
             Instant::now() < end,

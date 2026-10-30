@@ -312,21 +312,28 @@ impl StateSeam {
     /// answer is an answer, the first load, and a miss is the one the enter
     /// does not convert.
     pub(crate) fn ask_identity_within(&mut self, bound_ms: u64) -> Option<Vec<Recalled>> {
+        self.ask_identity_managed(bound_ms, &mut Self::readable_until)
+    }
+
+    /// The setup owner hears management while this same seam retains a
+    /// partial identity line and its original parked-ask deadline.
+    pub(crate) fn ask_identity_managed(
+        &mut self,
+        bound_ms: u64,
+        wait: &mut dyn FnMut(std::os::fd::BorrowedFd<'_>, std::time::Instant) -> bool,
+    ) -> Option<Vec<Recalled>> {
         if self.dead {
             return None;
         }
-        let answered = self.identity_exchange(bound_ms);
+        let answered = if self.send(b"{\"ask\":{\"identity\":{}}}\n") {
+            self.await_answer_managed(bound_ms, parse_identity_answer, wait)
+        } else {
+            None
+        };
         if answered.is_none() {
             self.dead = true;
         }
         answered
-    }
-
-    fn identity_exchange(&mut self, bound_ms: u64) -> Option<Vec<Recalled>> {
-        if !self.send(b"{\"ask\":{\"identity\":{}}}\n") {
-            return None;
-        }
-        self.await_answer(bound_ms, parse_identity_answer)
     }
 
     /// The recall ask, per the contract: the conversation as custody holds
@@ -543,9 +550,18 @@ impl StateSeam {
     /// This owner's constructor sets the nonblocking flag, so the wait is a
     /// poll deadline rather than a read timeout.
     fn await_answer<T>(&mut self, bound_ms: u64, parse: fn(&str) -> Option<T>) -> Option<T> {
+        self.await_answer_managed(bound_ms, parse, &mut Self::readable_until)
+    }
+
+    fn await_answer_managed<T>(
+        &mut self,
+        bound_ms: u64,
+        parse: fn(&str) -> Option<T>,
+        wait: &mut dyn FnMut(std::os::fd::BorrowedFd<'_>, std::time::Instant) -> bool,
+    ) -> Option<T> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(bound_ms);
         loop {
-            let line = self.await_line_until(deadline)?;
+            let line = self.await_line_managed(deadline, wait)?;
             let Some(carried) = protocol_ordinal(&line) else {
                 return parse(&line);
             };
@@ -591,6 +607,29 @@ impl StateSeam {
     }
 
     fn await_line_until(&mut self, deadline: std::time::Instant) -> Option<String> {
+        self.await_line_managed(deadline, &mut Self::readable_until)
+    }
+
+    fn readable_until(end: std::os::fd::BorrowedFd<'_>, deadline: std::time::Instant) -> bool {
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let mut fds = [nix::poll::PollFd::new(end, nix::poll::PollFlags::POLLIN)];
+            match nix::poll::poll(&mut fds, Self::poll_slice(remaining)) {
+                Ok(0) | Err(nix::errno::Errno::EINTR) => (),
+                Ok(_) => return true,
+                Err(_) => return false,
+            }
+        }
+    }
+
+    fn await_line_managed(
+        &mut self,
+        deadline: std::time::Instant,
+        wait: &mut dyn FnMut(std::os::fd::BorrowedFd<'_>, std::time::Instant) -> bool,
+    ) -> Option<String> {
         let mut buffer: Vec<u8> = std::mem::take(&mut self.residual);
         loop {
             if let Some(position) = buffer.iter().position(|&b| b == b'\n') {
@@ -619,16 +658,9 @@ impl StateSeam {
                 self.residual = buffer;
                 return None;
             }
-            let wait = Self::poll_slice(remaining);
-            let mut fds = [nix::poll::PollFd::new(
-                self.channel.as_fd(),
-                nix::poll::PollFlags::POLLIN,
-            )];
-            match nix::poll::poll(&mut fds, wait) {
-                Ok(0) => continue,
-                Ok(_) => {}
-                Err(nix::errno::Errno::EINTR) => continue,
-                Err(_) => return None,
+            if !wait(self.channel.as_fd(), deadline) {
+                self.residual = buffer;
+                return None;
             }
             let mut chunk = [0u8; 65536];
             match self.channel.read(&mut chunk) {

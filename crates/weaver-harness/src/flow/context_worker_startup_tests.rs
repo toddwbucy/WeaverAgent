@@ -2601,6 +2601,98 @@ scenario!(
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-opener-pressure"
 );
 scenario!(
+    worker_diagnostic_setup_identity_same_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-identity-same"
+);
+scenario!(
+    worker_diagnostic_setup_identity_new_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-identity-new"
+);
+scenario!(
+    worker_diagnostic_setup_identity_original_peer_eof,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-identity-eof"
+);
+scenario!(
+    worker_diagnostic_setup_admit_same_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-same"
+);
+scenario!(
+    worker_diagnostic_setup_admit_new_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-new"
+);
+scenario!(
+    worker_diagnostic_setup_admit_original_peer_eof,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-eof"
+);
+scenario!(
+    worker_diagnostic_setup_admit_refused,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-refused"
+);
+scenario!(
+    worker_diagnostic_setup_admit_lost,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-lost"
+);
+scenario!(
+    worker_diagnostic_setup_admit_wrong_opener,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-wrong-opener"
+);
+scenario!(
+    worker_diagnostic_setup_admit_wrong_ordinal,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-wrong-ordinal"
+);
+scenario!(
+    worker_diagnostic_setup_admit_wrong_position,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-wrong-position"
+);
+scenario!(
+    worker_diagnostic_setup_admit_wrong_payload,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-wrong-payload"
+);
+scenario!(
+    worker_diagnostic_setup_open_same_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-same"
+);
+scenario!(
+    worker_diagnostic_setup_open_new_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-new"
+);
+scenario!(
+    worker_diagnostic_setup_open_original_peer_eof,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-eof"
+);
+scenario!(
+    worker_diagnostic_setup_open_partial_reply,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-partial"
+);
+scenario!(
+    worker_diagnostic_setup_classifier_same_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-classifier-same"
+);
+scenario!(
+    worker_diagnostic_setup_classifier_new_peer,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-classifier-new"
+);
+scenario!(
+    worker_diagnostic_setup_classifier_original_peer_eof,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-classifier-eof"
+);
+scenario!(
+    worker_diagnostic_setup_release_wrong_ordinal,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-release-wrong"
+);
+scenario!(
+    worker_diagnostic_setup_reap_pending,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-reap-held"
+);
+scenario!(
+    worker_diagnostic_setup_reply_pressure,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-pressure"
+);
+scenario!(
+    worker_diagnostic_setup_original_deadline,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-deadline"
+);
+scenario!(
     worker_admission_composition_unified_serving,
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-unified-two"
 );

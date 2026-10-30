@@ -5,6 +5,9 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::os::fd::FromRawFd;
 use weaver_types::{LifecycleAnswer, TokenAnswer, TokenDirective};
 
+#[path = "context_worker_diagnostic_setup_tests.rs"]
+mod setup;
+
 pub(super) fn prepare(program: &mut FoundationProgram, root: &std::path::Path) {
     let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
     let path = root.join("diagnostic-spu");
@@ -27,6 +30,7 @@ pub(super) fn prepare(program: &mut FoundationProgram, root: &std::path::Path) {
         )
         .unwrap();
     }
+    setup_arms::prepare(program, root);
 }
 
 macro_rules! packet {
@@ -47,6 +51,9 @@ macro_rules! take {
     }};
 }
 
+#[path = "context_worker_diagnostic_arm_tests.rs"]
+mod setup_arms;
+
 #[test]
 fn diagnostic_spu_child() {
     let Ok(root) = std::env::var("WEAVER_DIAGNOSTIC_CHILD") else {
@@ -58,6 +65,10 @@ fn diagnostic_spu_child() {
     // SAFETY: this actual fork producer placed the two exclusive child ends.
     let lifecycle = unsafe { OwnedFd::from_raw_fd(3) };
     let decode = unsafe { OwnedFd::from_raw_fd(4) };
+    if mode.contains("-setup-arm-") {
+        setup_arms::spu(&root, &mode, &lifecycle, &decode);
+        return;
+    }
     let request: OrganEnvelope = take!(lifecycle.as_raw_fd());
     let Payload::Directive(LifecycleDirective::Admit { instruction }) = &request.payload else {
         panic!("Admit first")
@@ -73,7 +84,10 @@ fn diagnostic_spu_child() {
                 payload: Payload::Refusal(LifecycleRefusal::DeviceCannotAdmit),
             }
         );
-        finish_refused_enter(&root, &lifecycle, &decode);
+        let end = Instant::now() + Duration::from_secs(3);
+        crate::flow::fixture_eof::await_eof_until(decode.as_raw_fd(), end, || {});
+        crate::flow::fixture_eof::await_eof_until(lifecycle.as_raw_fd(), end, || {});
+        std::fs::write(root.join("diagnostic-refused-closed"), b"no Release\n").unwrap();
         return;
     }
     packet!(
@@ -291,10 +305,28 @@ pub(super) fn control(
     payload.binding = EnterBinding::Diagnostic {
         state_election: weaver_types::StateElection::default(),
     };
-    payload.spu_instruction.classify = None;
+    if !mode.contains("-setup-arm-") {
+        payload.spu_instruction.classify = None;
+    } else {
+        payload.spu_instruction.classify = Some(weaver_types::ClassifyInstruction {
+            model_binding: payload.spu_instruction.decoder.model_binding.clone(),
+        });
+    }
     payload.spu_instruction.decoder.refeed_permission = true;
     payload.spu_instruction.decoder.model_binding.artifact.0 = "art".into();
     let wire = envelope.encode().unwrap();
+    if mode.contains("-setup-arm-") {
+        setup_arms::control(
+            root, mode, child, &envelope, sink, state, reader, member, end,
+        );
+        return;
+    }
+    if mode.contains("-setup-identity-") {
+        setup::identity(
+            root, mode, child, &envelope, sink, state, reader, member, end,
+        );
+        return;
+    }
     if mode.ends_with("opener-pressure") {
         opener_pressure(root, child, &envelope, sink, state, reader, member, end);
         return;
@@ -553,6 +585,26 @@ fn refused_enter(
                 payload: Payload::Refusal(reason)
             }
         );
+        send(&peer, 950, LifecycleDirective::Observe);
+        let observed = ObservationEnvelope::decode(&receive(&peer, end)).unwrap();
+        assert_eq!(observed.exchange.ordinal, 950);
+        assert!(matches!(
+            observed.payload,
+            ObservationContent::Answer(ObservationAnswer::InTransition { .. })
+        ));
+        send(
+            &peer,
+            951,
+            LifecycleDirective::Stop {
+                cause: Cause { uid: 0 },
+            },
+        );
+        let stopped: OrganEnvelope = serde_json::from_slice(&receive(&peer, end)).unwrap();
+        assert_eq!(stopped.exchange.ordinal, 951);
+        assert_eq!(
+            stopped.payload,
+            Payload::Refusal(LifecycleRefusal::OutOfOrder)
+        );
         send(
             &peer,
             952,
@@ -586,7 +638,12 @@ fn refused_enter(
         responder.join().unwrap();
     });
     assert!(root.join("diagnostic-spawned").exists());
-    assert!(root.join("diagnostic-released").exists());
+    if mode.ends_with("refused-admit") {
+        assert!(root.join("diagnostic-refused-closed").exists());
+        assert!(!root.join("diagnostic-released").exists());
+    } else {
+        assert!(root.join("diagnostic-released").exists());
+    }
     assert!(!root.join("diagnostic-refeed").exists());
     assert!(!root.join("diagnostic-forbidden-organ").exists());
     reader.set_nonblocking(false).unwrap();
