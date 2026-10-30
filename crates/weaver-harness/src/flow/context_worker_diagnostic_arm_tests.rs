@@ -171,7 +171,7 @@ pub(super) fn spu(root: &std::path::Path, mode: &str, lifecycle: &OwnedFd, decod
     wait_marker(root, "diagnostic-setup-settle", || {
         no_packet(lifecycle.as_raw_fd())
     });
-    if mode.ends_with("-ready-release-eof") {
+    if mode.ends_with("-release-eof") {
         // No Release answer at all. The entered-run rule retains an
         // unconfirmed release and still reaps before completing Leave.
         return;
@@ -285,6 +285,7 @@ pub(super) fn control(
     if mode.contains("-ready-") {
         ready::control(
             root,
+            mode,
             child,
             source,
             original.as_ref().unwrap(),
@@ -394,6 +395,7 @@ pub(super) fn control(
     }
     if mode.ends_with("-release-wrong")
         || mode.ends_with("-release-refused")
+        || mode.ends_with("-release-eof")
         || mode.ends_with("-deadline")
     {
         let cap = if mode.ends_with("-deadline") {
@@ -448,6 +450,7 @@ pub(super) fn control(
         status.success(),
         !mode.ends_with("-release-wrong")
             && !mode.ends_with("-release-refused")
+            && !mode.ends_with("-release-eof")
             && !mode.ends_with("-deadline")
     );
     let pid = std::fs::read_to_string(root.join("diagnostic-setup-spu-pid")).unwrap();

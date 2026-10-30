@@ -62,7 +62,19 @@ impl Author {
         turn: Option<&TurnKey>,
         payload: Option<Payload>,
     ) -> Result<Sequence, RecordFailure> {
-        let event = Event {
+        recorder.submit(self.event(kind, subsystem, turn, payload))
+    }
+
+    /// Stamp once before the caller lends the admitted event to a managed
+    /// writer. Management progress cannot change these authored facts.
+    pub(crate) fn event(
+        &self,
+        kind: Kind,
+        subsystem: Subsystem,
+        turn: Option<&TurnKey>,
+        payload: Option<Payload>,
+    ) -> Event {
+        Event {
             envelope: Envelope {
                 session: self.session.clone(),
                 run: self.run.clone(),
@@ -77,8 +89,7 @@ impl Author {
                 monotonic_ns: MonotonicNs(self.origin.elapsed().as_nanos() as u64),
             },
             payload,
-        };
-        recorder.submit(event)
+        }
     }
 
     /// Authors one diagnostic-native event and submits it, per
@@ -93,7 +104,16 @@ impl Author {
         turn: Option<&TurnKey>,
         payload: Option<weaver_diagnostic::Payload>,
     ) -> Result<weaver_diagnostic::Sequence, RecordFailure> {
-        let event = weaver_diagnostic::Event {
+        recorder.submit_diagnostic(self.diagnostic_event(kind, turn, payload))
+    }
+
+    pub(crate) fn diagnostic_event(
+        &self,
+        kind: weaver_diagnostic::Kind,
+        turn: Option<&TurnKey>,
+        payload: Option<weaver_diagnostic::Payload>,
+    ) -> weaver_diagnostic::Event {
+        weaver_diagnostic::Event {
             envelope: weaver_diagnostic::Envelope {
                 session: weaver_diagnostic::SessionRef(self.session.0.clone()),
                 run: weaver_diagnostic::RunRef(self.run.0.clone()),
@@ -110,8 +130,7 @@ impl Author {
                 ),
             },
             payload,
-        };
-        recorder.submit_diagnostic(event)
+        }
     }
 
     /// The session's reference, for the one reader that names it in a

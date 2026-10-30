@@ -56,6 +56,12 @@ pub const LOWER_BOUND_MS: u64 = 10_000;
 /// here once, the floor, so admin and the harness read one value.
 pub const LEAVE_BOUND_MS: u64 = 150_000;
 
+/// The entered Diagnostic replay's cancellation interval, starting at the
+/// first accepted interruption and capped by earlier enclosing deadlines.
+/// The harness owns that interval under its Spec section 6.2. It changes
+/// neither the optional graceful-drain bound nor admin's Stop deadline.
+pub const DIAGNOSTIC_CANCEL_BOUND_MS: u64 = 60_000;
+
 /// **The gate's settle margin**, per `weaver-gate-Spec` section 4: a draining
 /// gate answers `GateStopped` at most this far inside the lower bound, timed
 /// from hearing the `Lower`, so its answer reaches a harness still waiting the
@@ -1256,6 +1262,17 @@ pub enum TokenAnswer {
     /// the payload is what the type buys, and the protoautonomic collapse
     /// is unrepresentable rather than discouraged.
     ReFed(Generation),
+    /// A cancelled ReFeed's retained prefix, never a completed Generation.
+    /// The consumer checks the original turn, consumed < supplied path length
+    /// and checked consumed + 1 <= resident <= capacity, then retains this
+    /// terminal until the matching Cancel's AtRest. Counts include the input
+    /// and terminator in resident, but only appended path tokens in consumed.
+    RefeedInterrupted {
+        turn: TurnKey,
+        consumed: u64,
+        resident: u64,
+        capacity: u64,
+    },
     AtRest,
     /// The flush confirmed, carrying both resident counts: the SPU is the
     /// one authority on either number, and the harness authors the

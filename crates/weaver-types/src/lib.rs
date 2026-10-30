@@ -123,12 +123,12 @@ pub use identity::{
 };
 pub use wire::{
     AgentName, AgentState, Branch, CallGrammar, Candidate, Composer, DECODE_MESSAGE_BOUND,
-    EnterBinding, EnterPayload, ExchangeId, FaultCase, FaultReport, Finish, Generation,
-    InputRefusal, KillCause, LEAVE_BOUND_MS, LOWER_BOUND_MS, LOWER_SETTLE_MARGIN_MS, LabelAnswer,
-    LabelDirective, LabelRefusal, LifecycleAnswer, LifecycleAsk, LifecycleDirective,
-    LifecycleRefusal, Lineage, LoadFacts, MAX_ENVELOPE_BYTES, Opened, Opener, OrganEnvelope,
-    Payload, Position, RefusalRecord, RefusingOrgan, Reset, ResetReason, RunId, SavePointLeg,
-    SavePointReport, ScoredLabel, SegmentPreamble, SessionId, TokenAnswer, TokenAsk,
-    TokenDirective, TokenRefusal, ToolExecution, ToolOutcome, TurnFrame, TurnKey, TurnRequest,
-    UnrecoveredCall, UnrecoveredReason,
+    DIAGNOSTIC_CANCEL_BOUND_MS, EnterBinding, EnterPayload, ExchangeId, FaultCase, FaultReport,
+    Finish, Generation, InputRefusal, KillCause, LEAVE_BOUND_MS, LOWER_BOUND_MS,
+    LOWER_SETTLE_MARGIN_MS, LabelAnswer, LabelDirective, LabelRefusal, LifecycleAnswer,
+    LifecycleAsk, LifecycleDirective, LifecycleRefusal, Lineage, LoadFacts, MAX_ENVELOPE_BYTES,
+    Opened, Opener, OrganEnvelope, Payload, Position, RefusalRecord, RefusingOrgan, Reset,
+    ResetReason, RunId, SavePointLeg, SavePointReport, ScoredLabel, SegmentPreamble, SessionId,
+    TokenAnswer, TokenAsk, TokenDirective, TokenRefusal, ToolExecution, ToolOutcome, TurnFrame,
+    TurnKey, TurnRequest, UnrecoveredCall, UnrecoveredReason,
 };

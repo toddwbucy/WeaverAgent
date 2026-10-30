@@ -595,6 +595,7 @@ fn active_decode_refuses_measurement_without_cancelling_or_queuing_it() {
     // This is the same poll used by active generation and diagnostic re-feed.
     let mut poll = SeamCancel {
         socket: &server,
+        refeed_turn: None,
         cancelled: false,
         fatal: false,
     };

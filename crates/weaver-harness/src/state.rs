@@ -461,21 +461,28 @@ impl StateSeam {
     /// retires the serve direction, a late answer otherwise reading as the
     /// next ask's.
     pub(crate) fn ask_replay(&mut self, bound_ms: u64) -> Option<Vec<Recalled>> {
+        self.ask_replay_managed(bound_ms, &mut Self::readable_until)
+    }
+
+    /// Retain the same parked replay ask while the entered owner services
+    /// management. A cancelled wait retires this direction as any other miss.
+    pub(crate) fn ask_replay_managed(
+        &mut self,
+        bound_ms: u64,
+        wait: &mut dyn FnMut(std::os::fd::BorrowedFd<'_>, std::time::Instant) -> bool,
+    ) -> Option<Vec<Recalled>> {
         if self.dead {
             return None;
         }
-        let answered = self.replay_exchange(bound_ms);
+        let answered = if self.send(b"{\"ask\":{\"replay\":{}}}\n") {
+            self.await_answer_managed(bound_ms, parse_replay_answer, wait)
+        } else {
+            None
+        };
         if answered.is_none() {
             self.dead = true;
         }
         answered
-    }
-
-    fn replay_exchange(&mut self, bound_ms: u64) -> Option<Vec<Recalled>> {
-        if !self.send(b"{\"ask\":{\"replay\":{}}}\n") {
-            return None;
-        }
-        self.await_answer(bound_ms, parse_replay_answer)
     }
 
     fn recall_exchange(&mut self, last_turns: Option<u64>, bound_ms: u64) -> Option<Vec<Recalled>> {
