@@ -267,6 +267,10 @@ impl ClosureReceipt {
         );
         Self { account }
     }
+    /// Only this run's context consumes the receipt.
+    pub(in crate::flow) fn belongs_to(&self, context: &RecordingContext) -> bool {
+        Arc::ptr_eq(&self.account.work.origin, &context.read_origin)
+    }
     /// The revision close committed against. A close changes no revision.
     pub fn plan(&self) -> &s::PlanRef {
         self.account.work.request.expected()

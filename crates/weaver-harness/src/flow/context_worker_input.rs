@@ -26,6 +26,8 @@ pub(in crate::flow::context::worker_startup) mod graceful;
 
 #[path = "context_worker_flags.rs"]
 pub(crate) mod flags;
+#[path = "context_worker_next_ready.rs"]
+pub(crate) mod next_ready;
 
 #[path = "context_worker_plan_ports.rs"]
 pub(crate) mod plan_ports;
@@ -289,6 +291,10 @@ impl<'a> FoundationInput<'a> {
                 if self.flags_pending() {
                     self.advance_flags(None, io)?;
                     // Yield the completed sample before any unrelated idle wait.
+                    return Ok(());
+                }
+                if self.next_ready_pending() {
+                    self.advance_next_ready(None, io)?;
                     return Ok(());
                 }
                 let plan_was_pending = self.plan_pending();

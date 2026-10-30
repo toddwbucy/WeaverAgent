@@ -606,6 +606,16 @@ impl<'a> FoundationManagement<'a> {
                     return Ok(());
                 }
             }
+            // A next_ready observation has no cancel: its ticket settles first.
+            if self.input.next_ready_pending() {
+                let progress = self
+                    .input
+                    .advance_next_ready((!self.peer_unavailable).then_some(&mut self.peer), io);
+                self.keep_dial_failure(progress)?;
+                if self.input.next_ready_pending() {
+                    return Ok(());
+                }
+            }
             let envelope = &self
                 .peer
                 .held()

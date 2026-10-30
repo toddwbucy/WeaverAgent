@@ -8,6 +8,8 @@ use crate::flow::templates::{CompiledInventory, TemplateCertificate};
 
 const PREVIEW: &[u8] = include_bytes!("fixtures/work-preview.json");
 
+#[path = "context_next_ready_tests.rs"]
+mod next_ready_tests;
 #[path = "context_step_instruction_tests.rs"]
 mod step_instruction_tests;
 

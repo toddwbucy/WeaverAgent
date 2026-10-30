@@ -34,6 +34,7 @@ pub struct FoundationFailedHandoff {
     _save_request: Option<super::super::save::FailedSaveRequest>,
     _plan: Option<Box<super::super::plan::PendingPlan>>,
     _flags: Option<Box<super::super::flags::FoundationFlags>>,
+    _next_ready: Option<Box<super::super::next_ready::PendingNextReady>>,
     _plan_operation: Option<Box<super::super::plan_ports::PendingPlanOperation>>,
     gate: Option<OrganPort>,
     gate_child: OwnedChild,
@@ -133,6 +134,7 @@ impl FoundationHalt<'_> {
             save,
             plan,
             flags,
+            next_ready,
             plan_operation,
         } = serving;
         let crate::flow::context::boot_composition::gate_startup::ready::EnteredServing {
@@ -180,6 +182,7 @@ impl FoundationHalt<'_> {
             _save_request: save_request,
             _plan: plan.map(|plan| plan.retire_failed()),
             _flags: flags,
+            _next_ready: next_ready,
             _plan_operation: plan_operation,
             input: FailedInput {
                 received: original,

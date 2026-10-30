@@ -54,7 +54,15 @@ pub struct FoundationStepRefusal {
 ///
 /// ```compile_fail,E0451
 /// fn forged() -> weaver_harness::StepPlacementReceipt {
-///     weaver_harness::StepPlacementReceipt { origin: todo!() }
+///     weaver_harness::StepPlacementReceipt {
+///         origin: todo!(),
+///         meta: todo!(),
+///         source: todo!(),
+///         placement: todo!(),
+///         assembly_id: todo!(),
+///         ended_ns: todo!(),
+///         unit: todo!(),
+///     }
 /// }
 /// ```
 pub struct StepPlacementReceipt {
@@ -64,6 +72,8 @@ pub struct StepPlacementReceipt {
     pub(in crate::flow) placement: Sequence,
     pub(in crate::flow) assembly_id: DecimalU64,
     pub(in crate::flow) ended_ns: u64,
+    /// The placed instruction unit, the grant's last selected unit.
+    pub(in crate::flow) unit: Arc<SelectedUnit>,
 }
 impl StepPlacementReceipt {
     pub fn plan(&self) -> &PlanRef {
@@ -420,6 +430,7 @@ impl EngineWork {
         if !placed_step_unit(&grant.units, &source, context) || grant.turn != meta.turn {
             return Err("step placement does not hold its filed instruction unit");
         }
+        let unit = Arc::clone(grant.units.last().expect("checked instruction unit"));
         self.step_receipt = Some(StepPlacementReceipt {
             origin: Arc::clone(&grant.origin),
             meta,
@@ -427,6 +438,7 @@ impl EngineWork {
             placement: grant.placement_sequence(),
             assembly_id: grant.assembly_id(),
             ended_ns,
+            unit,
         });
         Ok(())
     }

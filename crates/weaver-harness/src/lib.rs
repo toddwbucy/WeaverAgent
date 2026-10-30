@@ -162,6 +162,9 @@ pub use flow::context::worker_startup::input::halt::{FoundationHalt, FoundationH
 pub use flow::context::worker_startup::input::management::{
     FoundationManagement, FoundationManagementProgress,
 };
+pub use flow::context::worker_startup::input::next_ready::{
+    FoundationNextReadyError, FoundationNextReadyRefusal, FoundationNextReadyStart,
+};
 pub use flow::context::worker_startup::input::plan_ports::{
     CheckedStepSuccessor, CheckedWork, ClosureEvidence, ClosureReceipt,
     FoundationPlanAdmissionRefusal, FoundationPlanOperation, FoundationPlanOperationError,
