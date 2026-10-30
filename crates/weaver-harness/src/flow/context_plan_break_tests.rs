@@ -199,7 +199,7 @@ fn plan_break_without_locked_plan_records_original_metadata_without_effect_or_re
     begin(&mut fx, req);
     let result = finish(&mut fx);
     assert!(matches!(result, PlanPortCompletion::BreakRecorded(_)));
-    assert!(result.break_snapshot().is_none());
+    assert!(result.current_snapshot().is_none());
     let rows = fx.records(Kind::PlanBreak);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["payload"], expected);
@@ -284,7 +284,7 @@ fn plan_break_committed_effect_refreshes_and_reports_even_after_cancellation() {
             let result = finish(&mut fx);
             if cancel_at == "none" {
                 assert!(matches!(result, PlanPortCompletion::BreakRecorded(_)));
-                assert_eq!(result.break_snapshot(), Some(&snapshot));
+                assert_eq!(result.current_snapshot(), Some(&snapshot));
             } else {
                 assert!(matches!(result, PlanPortCompletion::Cancelled(_)));
             }
@@ -443,7 +443,7 @@ fn plan_break_authorized_plan_records_only_report_and_preserves_actual_snapshot(
     begin(&mut fx, req);
     let result = finish(&mut fx);
     assert!(matches!(result, PlanPortCompletion::BreakRecorded(_)));
-    assert_eq!(result.break_snapshot(), Some(&before));
+    assert_eq!(result.current_snapshot(), Some(&before));
     assert_eq!(
         fx.run().context.committed_plan_summary().unwrap(),
         before_summary.as_ref()

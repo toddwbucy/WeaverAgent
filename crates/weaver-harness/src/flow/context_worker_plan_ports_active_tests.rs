@@ -367,11 +367,16 @@ pub(super) fn exercise(
     });
     let rows = management::tests::trace(reader);
     if mode.ends_with("-close-raced") {
-        // The source was authored before the store refused it; no operation
-        // refusal follows a halt, and no closure is recorded as committed.
-        let outcomes = rows.iter().filter(|row| row["kind"] == "step.outcome");
-        assert_eq!(outcomes.count(), 1);
-        assert!(rows.iter().all(|row| row["kind"] != "refusal"));
+        // A local refusal under close, before any step.outcome is authored.
+        assert!(rows.iter().all(|row| row["kind"] != "step.outcome"));
+        let refusals: Vec<_> = rows.iter().filter(|row| row["kind"] == "refusal").collect();
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(refusals[0]["payload"]["operation"], "close");
+        assert_eq!(refusals[0]["payload"]["refusal"]["case"], "invalid_target");
+        assert_eq!(
+            refusals[0]["payload"]["refusal"]["read_code"],
+            serde_json::Value::Null
+        );
         return;
     }
     if mode.ends_with("-close") {
@@ -576,10 +581,12 @@ fn interrupt_completed(guard: &mut Guard<'_>, socket: &Path, leave: bool) {
 /// WorkRef, attest_closure grants the evidence, the caller allocates the
 /// outcome span through outcome_span, and the store accepts the close.
 ///
-/// Raced, the caller's span is one past the held catalog's: the next span the
-/// store would see had another allocation landed after the read. The local
-/// check admits it, the store's consecutive-span guard rejects the filing,
-/// and the member's plan and marks stay as they were.
+/// Raced, the caller's span is one past its allocation, as if taken from a
+/// stale catalog. close's own Marks read refuses it locally (invalid_target,
+/// null read_code) before any effect, and the member's plan and marks stay
+/// as they were. A true race, an allocation between close's Marks read and
+/// its filing, has no path here: the admitted plan port excludes every other
+/// allocator in the run, and the member serves only this worker.
 fn close(
     input: &mut FoundationInput<'_>,
     successor: &s::StepQueryRef,
@@ -627,6 +634,8 @@ fn close(
     if raced {
         outcome.local_id = (outcome.local_id.0 + 1).into();
     }
+    let catalog = read(input, s::ReadSelector::Marks {});
+    let plan_before = read(input, s::ReadSelector::PlanCurrent {});
     let bound = AbsoluteBound::after(MonotonicIo.now().unwrap(), 5_000_000_000).unwrap();
     input
         .serving
@@ -643,29 +652,44 @@ fn close(
             TurnKey(TURN.into()),
         )
         .unwrap();
+    let result = complete_operation(input);
     if raced {
-        // Today a store guard refusal of the filed effect halts the run as
-        // FilingRefused; the store's own D1 test pins its bytes unchanged.
-        let end = Instant::now() + Duration::from_secs(5);
-        while input.advance() != FoundationInputProgress::Stopped {
-            assert!(Instant::now() < end, "the refused filing must stop the run");
-        }
-        let failure = input.serving.owner.context.failure().unwrap();
-        assert!(
-            matches!(
-                failure,
-                RunFailure::Flow {
-                    reason: FlowHaltReason::FilingRefused,
-                    detail,
-                    ..
-                } if detail.contains("span allocation is not consecutive")
-            ),
-            "{failure:?}"
+        let FoundationPlanOutcome::Refused(refusal) = result.outcome() else {
+            panic!("a span that is not the next allocation must refuse: {result:?}")
+        };
+        assert_eq!(refusal.case, s::PlanOperationCase::InvalidTarget);
+        assert_eq!(refusal.read_code, None);
+        assert!(input.serving.owner.context.failure().is_none());
+        let plan_after = read(input, s::ReadSelector::PlanCurrent {});
+        assert_eq!(plan_after.raw_bytes(), plan_before.raw_bytes());
+        let s::QueryResult::PlanCurrent {
+            current: Some(plan),
+            ..
+        } = plan_after.result()
+        else {
+            panic!("member plan")
+        };
+        let step = plan
+            .steps
+            .iter()
+            .find(|step| step.step_id == successor.step_id)
+            .unwrap();
+        assert_eq!(step.status, s::StepStatus::Active);
+        assert_eq!(step.outcome_span, None);
+        assert_eq!(
+            read(input, s::ReadSelector::Marks {}).raw_bytes(),
+            catalog.raw_bytes()
         );
-        assert!(input.take_plan_operation().is_none());
+        assert_eq!(
+            input
+                .serving
+                .owner
+                .context
+                .complete_wait(PumpDeadline::Decision),
+            Some(bound)
+        );
         return;
     }
-    let result = complete_operation(input);
     let FoundationPlanOutcome::Closed(current) = result.outcome() else {
         panic!("close must return its committed snapshot: {result:?}")
     };

@@ -46,8 +46,7 @@ pub enum FoundationPlanOutcome<'a> {
     Work(&'a WorkRef),
     /// attest_closure granted unreviewed ClosureEvidence for this work.
     Attested(&'a WorkRef),
-    /// outcome_span's next unallocated span. The owner holds its read for
-    /// the next close; a later outcome_span replaces it.
+    /// outcome_span's next unallocated span from a fresh Marks read.
     OutcomeSpan(&'a SpanRef),
     /// close committed this snapshot, as its mandatory refresh adopted it.
     Closed(&'a weaver_types::state_flow::PlanSnapshot),
@@ -105,7 +104,7 @@ impl FoundationPlanOperation {
             }
             PlanPortCompletion::Activated(step) => FoundationPlanOutcome::Activated(step.step()),
             PlanPortCompletion::BreakRecorded(_) => FoundationPlanOutcome::BreakRecorded {
-                current: self.completion.break_snapshot(),
+                current: self.completion.current_snapshot(),
             },
             PlanPortCompletion::Allowed(_) => FoundationPlanOutcome::Allowed,
             PlanPortCompletion::Work(work) => FoundationPlanOutcome::Work(work.reference()),
@@ -119,7 +118,7 @@ impl FoundationPlanOperation {
             ),
             PlanPortCompletion::Closed(_) => FoundationPlanOutcome::Closed(
                 self.completion
-                    .closed_snapshot()
+                    .current_snapshot()
                     .expect("a committed close retains its refreshed plan"),
             ),
             PlanPortCompletion::Refused { refusal, .. } => FoundationPlanOutcome::Refused(refusal),
@@ -274,10 +273,9 @@ impl FoundationInput<'_> {
         )
     }
 
-    /// Allocate close's outcome_span: one recorded Marks read through the
-    /// plan port. The outcome shows the next unallocated span, and this owner
-    /// keeps the read for the next close, replacing any older one. It files
-    /// nothing; a refused read keeps its read outcome and holds no read.
+    /// Allocate close's outcome_span: one fresh recorded Marks read through
+    /// the plan port, whose outcome shows the next unallocated span. It holds
+    /// nothing for close and files nothing; a refused read keeps its outcome.
     #[allow(clippy::result_large_err)]
     pub fn outcome_span(
         &mut self,
@@ -291,12 +289,11 @@ impl FoundationInput<'_> {
         )
     }
 
-    /// Close the active step with this consumed grant. outcome_span comes
-    /// from [`Self::outcome_span`], whose read this owner holds. Admitted,
-    /// close takes that read once: with none held for this run and revision,
-    /// or a seed or revision not that catalog's, it refuses before any read.
-    /// The original Decision bounds the reread, step.outcome, refresh and
-    /// adoption.
+    /// Close the active step with this consumed grant. After the work reread
+    /// close takes its own Marks read, and refuses invalid_target unless
+    /// outcome_span is that read's next allocation exactly (as from
+    /// [`Self::outcome_span`]). The original Decision bounds both reads, the
+    /// step.outcome, its refresh and native adoption.
     ///
     /// The loop cannot supply a Marks read: the request has no such field,
     /// and no read or grant type for one is public.

@@ -53,11 +53,12 @@ pub enum PlanRequest {
         work: CheckedWork,
     },
     /// The caller's outcome_span allocation for close: a standalone Marks
-    /// read that keeps its read outcome, records no refusal and creates no
-    /// effect. The owner holds its recorded catalog for the next close.
+    /// read that keeps its read outcome, records no refusal, creates no
+    /// effect and holds nothing for close.
     OutcomeSpan { expected: s::PlanRef },
-    /// outcome_span is the caller's allocation from the owner's held Marks
-    /// read. The store still requires it to be the next span below the step.
+    /// close rereads its work, then takes its own Marks read; outcome_span
+    /// must be that read's next allocation exactly. The store still requires
+    /// it to be the next span below the step when the effect files.
     Close {
         expected: s::PlanRef,
         step_id: s::StepId,
