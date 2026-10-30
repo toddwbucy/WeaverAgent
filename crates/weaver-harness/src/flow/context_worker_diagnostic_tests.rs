@@ -16,6 +16,12 @@ pub(super) fn prepare(program: &mut FoundationProgram, root: &std::path::Path) {
         quote(root.to_str().unwrap()), quote(std::env::current_exe().unwrap().to_str().unwrap()),
     )).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    if std::env::var("WEAVER_WORKER_STARTUP_CASE")
+        .unwrap_or_default()
+        .contains("-real-model-")
+    {
+        real_model::prepare(root, &path);
+    }
     program.organs.spu = path;
     for binary in [
         &program.organs.gate,
@@ -54,6 +60,14 @@ macro_rules! take {
 #[path = "context_worker_diagnostic_arm_tests.rs"]
 mod setup_arms;
 
+#[path = "context_worker_diagnostic_interrupt_tests.rs"]
+mod interrupt;
+
+#[path = "context_worker_diagnostic_member_tests.rs"]
+mod real_member;
+#[path = "context_worker_diagnostic_model_tests.rs"]
+mod real_model;
+
 #[test]
 fn diagnostic_spu_child() {
     let Ok(root) = std::env::var("WEAVER_DIAGNOSTIC_CHILD") else {
@@ -75,6 +89,12 @@ fn diagnostic_spu_child() {
     };
     assert!(instruction.classify.is_none());
     assert!(instruction.decoder.refeed_permission);
+    let column_expected = mode.ends_with("-record-pressure") || mode.ends_with("-record-failure");
+    assert_eq!(
+        instruction.decoder.residual_readout_election,
+        column_expected
+    );
+    assert_eq!(instruction.decoder.column_permission, column_expected);
     if mode.ends_with("refused-admit") {
         packet!(
             lifecycle.as_raw_fd(),
@@ -99,12 +119,15 @@ fn diagnostic_spu_child() {
         },
     );
     let TokenDirective::Open {
-        session, messages, ..
+        session,
+        messages,
+        column_ask,
     } = take!(decode.as_raw_fd())
     else {
         panic!("Open follows Admit")
     };
     assert_eq!(messages.len(), 1);
+    assert_eq!(column_ask, column_expected);
     if mode.ends_with("refused-open") {
         packet!(decode.as_raw_fd(), &weaver_types::TokenRefusal::OutOfOrder);
         finish_refused_enter(&root, &lifecycle, &decode);
@@ -123,6 +146,10 @@ fn diagnostic_spu_child() {
     }));
     if mode.ends_with("invalid-open") {
         finish_refused_enter(&root, &lifecycle, &decode);
+        return;
+    }
+    if mode.contains("-interrupt-") {
+        interrupt::spu(&root, &mode, &lifecycle, &decode);
         return;
     }
     let TokenDirective::ReFeed {
@@ -314,7 +341,27 @@ pub(super) fn control(
     }
     payload.spu_instruction.decoder.refeed_permission = true;
     payload.spu_instruction.decoder.model_binding.artifact.0 = "art".into();
+    if mode.ends_with("-real-member") || mode.contains("-real-model-") {
+        real_member::control(
+            root, mode, child, envelope, sink, state, reader, member, end,
+        );
+        return;
+    }
     let wire = envelope.encode().unwrap();
+    if mode.contains("-interrupt-") {
+        let EnterContent::Directive(EnterDirective::Enter { payload }) = &mut envelope.payload;
+        payload.drain_bound = mode.ends_with("-drain-expiry").then_some(1);
+        if mode.ends_with("-record-pressure") || mode.ends_with("-record-failure") {
+            payload.spu_instruction.decoder.residual_readout_election = true;
+            payload.spu_instruction.decoder.column_permission = true;
+            payload.spu_instruction.decoder.field_election =
+                Some(weaver_types::FieldElection { depth: 40 });
+        }
+        interrupt::control(
+            root, mode, child, &envelope, sink, state, reader, member, end,
+        );
+        return;
+    }
     if mode.contains("-setup-arm-") {
         setup_arms::control(
             root, mode, child, &envelope, sink, state, reader, member, end,

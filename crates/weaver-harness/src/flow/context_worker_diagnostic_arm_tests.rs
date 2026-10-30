@@ -4,6 +4,9 @@ use super::*;
 #[path = "context_worker_diagnostic_pressure_tests.rs"]
 mod pressure;
 
+#[path = "context_worker_diagnostic_ready_tests.rs"]
+mod ready;
+
 pub(super) fn prepare(program: &mut FoundationProgram, root: &std::path::Path) {
     if !std::env::var("WEAVER_WORKER_STARTUP_CASE")
         .is_ok_and(|mode| mode.contains("-setup-arm-classifier"))
@@ -168,6 +171,11 @@ pub(super) fn spu(root: &std::path::Path, mode: &str, lifecycle: &OwnedFd, decod
     wait_marker(root, "diagnostic-setup-settle", || {
         no_packet(lifecycle.as_raw_fd())
     });
+    if mode.ends_with("-release-eof") {
+        // No Release answer at all. The entered-run rule retains an
+        // unconfirmed release and still reaps before completing Leave.
+        return;
+    }
     let mut exchange = release.exchange;
     if mode.ends_with("-release-wrong") {
         exchange.ordinal += 1;
@@ -177,7 +185,11 @@ pub(super) fn spu(root: &std::path::Path, mode: &str, lifecycle: &OwnedFd, decod
         &OrganEnvelope {
             exchange,
             position: Position::Close,
-            payload: Payload::Answer(LifecycleAnswer::Released),
+            payload: if mode.ends_with("-release-refused") {
+                Payload::Refusal(LifecycleRefusal::DeviceCannotAdmit)
+            } else {
+                Payload::Answer(LifecycleAnswer::Released)
+            },
         }
     );
     if mode.ends_with("-reap-held") {
@@ -197,6 +209,13 @@ fn diagnostic_classifier_child() {
     let channel = unsafe { OwnedFd::from_raw_fd(3) };
     marker(&root, "diagnostic-setup-classifier-pid");
     marker(&root, "diagnostic-setup-held");
+    if std::env::var("WEAVER_WORKER_STARTUP_CASE")
+        .unwrap()
+        .contains("-ready-")
+    {
+        wait_marker(&root, "diagnostic-setup-ready", || {});
+        packet!(channel.as_raw_fd(), &weaver_types::LabelAnswer::Ready);
+    }
     eof(channel.as_raw_fd());
     marker(&root, "diagnostic-setup-classifier-closed");
 }
@@ -263,6 +282,19 @@ pub(super) fn control(
     wait_marker(root, "diagnostic-setup-held", || {
         assert!(child.try_wait().unwrap().is_none())
     });
+    if mode.contains("-ready-") {
+        ready::control(
+            root,
+            mode,
+            child,
+            source,
+            original.as_ref().unwrap(),
+            reader,
+            member,
+            end,
+        );
+        return;
+    }
     no_bytes(reader);
     if mode.ends_with("-pressure") {
         pressure::fill(original.as_ref().unwrap(), root, end);
@@ -270,6 +302,7 @@ pub(super) fn control(
     if mode.ends_with("-eof") {
         drop(original.take());
     }
+    let silent_began = Instant::now();
     let silent = dial(&root.join("admin.sock"));
     let probe = dial(&root.join("admin.sock"));
     transition(&probe, 970, end);
@@ -360,7 +393,11 @@ pub(super) fn control(
         no_packet(rollback.as_raw_fd());
         marker(root, "diagnostic-setup-exit");
     }
-    if mode.ends_with("-release-wrong") || mode.ends_with("-deadline") {
+    if mode.ends_with("-release-wrong")
+        || mode.ends_with("-release-refused")
+        || mode.ends_with("-release-eof")
+        || mode.ends_with("-deadline")
+    {
         let cap = if mode.ends_with("-deadline") {
             accepted_by
                 + Duration::from_millis(weaver_types::LEAVE_BOUND_MS)
@@ -392,12 +429,29 @@ pub(super) fn control(
         // was blocked. Retained replies now drain exactly once.
         pressure::drain(original.as_ref().unwrap(), source, end);
     }
+    if mode.ends_with("-silent-before-leave") {
+        // This root peer was accepted before rollback. Keep it connected
+        // until the worker retires it, then require successful completion
+        // without donating another 150 seconds to answer delivery.
+        let cap = silent_began
+            + Duration::from_millis(crate::state::ANSWER_BOUND_MS)
+            + Duration::from_secs(2);
+        crate::flow::fixture_eof::await_eof_until(silent.as_raw_fd(), cap, || {});
+        let (status, expired) = crate::test_child::wait_until(child, cap).unwrap();
+        assert!(
+            !expired && status.success(),
+            "a pre-rollback silent peer must not hold completed Left"
+        );
+    }
     drop(silent);
     let (status, expired) = crate::test_child::wait_until(child, end).unwrap();
     assert!(!expired, "setup rollback did not finish");
     assert_eq!(
         status.success(),
-        !mode.ends_with("-release-wrong") && !mode.ends_with("-deadline")
+        !mode.ends_with("-release-wrong")
+            && !mode.ends_with("-release-refused")
+            && !mode.ends_with("-release-eof")
+            && !mode.ends_with("-deadline")
     );
     let pid = std::fs::read_to_string(root.join("diagnostic-setup-spu-pid")).unwrap();
     assert!(

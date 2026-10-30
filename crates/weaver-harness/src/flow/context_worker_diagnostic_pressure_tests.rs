@@ -119,6 +119,20 @@ fn peek_offset(peer: &OwnedFd, value: i32) {
 }
 
 pub(super) fn drain(peer: &OwnedFd, source: &EnterEnvelope, end: Instant) {
+    drain_outcome(
+        peer,
+        source,
+        end,
+        Payload::Refusal(LifecycleRefusal::NoResidency),
+    );
+}
+
+pub(super) fn drain_outcome(
+    peer: &OwnedFd,
+    source: &EnterEnvelope,
+    end: Instant,
+    outcome: Payload,
+) {
     let mut seen = std::collections::BTreeSet::new();
     let mut enter = false;
     for _ in 0..=COUNT {
@@ -128,10 +142,7 @@ pub(super) fn drain(peer: &OwnedFd, source: &EnterEnvelope, end: Instant) {
         assert_eq!(reply.exchange.opener, Opener::Admin);
         if reply.exchange == source.exchange {
             assert!(!enter);
-            assert_eq!(
-                reply.payload,
-                Payload::Refusal(LifecycleRefusal::NoResidency)
-            );
+            assert_eq!(reply.payload, outcome);
             enter = true;
         } else {
             let reply = ObservationEnvelope::decode(&bytes).unwrap();
