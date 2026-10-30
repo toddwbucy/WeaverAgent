@@ -240,10 +240,17 @@ pub(in crate::flow::context::worker_startup) fn scenario(name: &str, mode: &str)
         drop(write);
         read
     });
-    // This one instrument uses the actual 150-second rollback interval, then
-    // rejects a renewed cleanup cap. The runtime bound is never shortened.
-    let watchdog = if mode.ends_with("-setup-arm-admit-deadline") {
+    // These instruments spend actual lifecycle intervals. The outer fixture
+    // watch permits that evidence and never shortens a production bound.
+    let watchdog = if mode.contains("-real-model-")
+        || mode.ends_with("-setup-arm-admit-deadline")
+        || mode.ends_with("-ready-bystander-expiry")
+    {
         200
+    } else if mode.contains("-interrupt-")
+        && (mode.ends_with("-silent") || mode.ends_with("-no-rest"))
+    {
+        180
     } else {
         35
     };

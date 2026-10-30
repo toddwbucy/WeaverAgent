@@ -43,6 +43,25 @@ impl OrganChannel {
 }
 
 impl DecodeChannel {
+    /// The entered replay can abandon an unsent request, but a segment series
+    /// whose first packet crossed must finish before a matching Cancel follows.
+    pub(crate) fn send_replay_managed(
+        &self,
+        directive: &weaver_types::TokenDirective,
+        wait: &mut dyn FnMut(BorrowedFd<'_>, PollFlags, bool) -> Result<(), ChannelFault>,
+    ) -> Result<(), ChannelFault> {
+        let mut started = false;
+        send_decode(directive, |bytes| {
+            loop {
+                wait(self.end.as_fd(), PollFlags::POLLOUT, started)?;
+                if try_send(self.end.as_fd(), bytes)? {
+                    started = true;
+                    return Ok(());
+                }
+            }
+        })
+    }
+
     pub(crate) fn send_managed(
         &self,
         directive: &weaver_types::TokenDirective,

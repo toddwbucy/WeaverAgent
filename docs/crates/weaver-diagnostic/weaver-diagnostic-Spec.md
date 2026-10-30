@@ -612,7 +612,23 @@ Spec's section 9 item settles with it.
         ) -> Result<Recorder, Failure>;
 
         pub fn submit(&mut self, event: Event) -> Result<Sequence, Failure>;
+
+        pub fn submit_managed(
+            &mut self,
+            event: Event,
+            wait: &mut dyn FnMut(BorrowedFd<'_>) -> std::io::Result<()>,
+        ) -> Result<Sequence, Failure>;
     }
+
+The managed form serves harness Spec section 6.2's interruption requirement
+without changing admission or acknowledgment. The harness supplies a nonblocking
+sink and services management and its original deadlines at the wait callback
+before each write attempt. The recorder retains one canonical rendering and its
+remaining offset inside the same submission. It never exposes the event or admits
+a second event during that call. A refusal calls no wait, consumes no sequence
+and touches no sink. A wait or write failure latches the existing WriteFailed.
+The sequence returns only after the whole line is written. The ordinary submit
+keeps its existing failure behavior, including a sink that would block.
 
 **Mirroring is what lets one call site serve both mechanisms**, which is the
 election's whole argument: the harness holds the two recorders under one shape and

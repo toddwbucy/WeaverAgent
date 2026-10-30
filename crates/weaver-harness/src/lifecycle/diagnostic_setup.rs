@@ -11,11 +11,18 @@ use std::time::{Duration, Instant};
 #[path = "diagnostic_setup_tests.rs"]
 mod tests;
 
+#[path = "diagnostic_replay.rs"]
+mod replay;
+
+#[path = "diagnostic_idle.rs"]
+mod idle;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Phase {
     Setup,
     Admit,
     Cleanup,
+    Replay,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -45,7 +52,8 @@ pub(super) struct Leaving {
     pub(super) cause: weaver_types::Cause,
     pub(super) forced: bool,
     rollback: bool,
-    pub(super) deadline: Instant,
+    pub(super) deadline: Option<Instant>,
+    joinable: bool,
     joins: Vec<(usize, ExchangeId, weaver_types::Cause)>,
 }
 
@@ -61,6 +69,7 @@ pub(super) struct Setup<'a> {
     pub(super) leaving: Option<Leaving>,
     admission: Admission,
     pub(super) load: Option<Box<weaver_types::LoadFacts>>,
+    replay: Option<replay::Control>,
 }
 
 impl<'a> Setup<'a> {
@@ -86,6 +95,7 @@ impl<'a> Setup<'a> {
             leaving: None,
             admission: Admission::Unsent,
             load: None,
+            replay: None,
         })
     }
 
@@ -180,8 +190,18 @@ impl<'a> Setup<'a> {
                 let weaver_types::Payload::Directive(directive) = envelope.payload else {
                     unreachable!("validated management directive")
                 };
+                if self.phase == Phase::Replay {
+                    return self.replay_directive(peer, envelope.exchange, directive);
+                }
                 let result = match directive {
-                    LifecycleDirective::Observe => Ok(if !self.ready || self.leaving.is_some() {
+                    LifecycleDirective::Observe => Ok(if self.left.is_some() {
+                        LifecycleAnswer::State {
+                            state: weaver_types::AgentState::Unloaded,
+                            load: None,
+                            plan: None,
+                            constituents: Vec::new(),
+                        }
+                    } else if !self.ready || self.leaving.is_some() {
                         LifecycleAnswer::InTransition {
                             constituents: Vec::new(),
                         }
@@ -209,7 +229,8 @@ impl<'a> Setup<'a> {
                             cause,
                             forced: forced || rollback,
                             rollback,
-                            deadline,
+                            deadline: Some(deadline),
+                            joinable: !forced && !rollback,
                             joins: Vec::new(),
                         });
                         if !self.ready {
@@ -219,7 +240,10 @@ impl<'a> Setup<'a> {
                     }
                     LifecycleDirective::JoinLeave { cause }
                         if self.ready
-                            && self.leaving.as_ref().is_some_and(|leave| !leave.rollback) =>
+                            && self
+                                .leaving
+                                .as_ref()
+                                .is_some_and(|leave| leave.joinable && !leave.rollback) =>
                     {
                         if let Some(answer) = &self.left {
                             return self.queue(
@@ -257,7 +281,22 @@ impl<'a> Setup<'a> {
     }
 
     pub(super) fn deadline(&self, phase: Option<Instant>) -> Option<Instant> {
-        match (phase, self.leaving.as_ref().map(|leave| leave.deadline)) {
+        let enclosing = self.leaving.as_ref().and_then(|leave| leave.deadline);
+        let enclosing = match (
+            enclosing,
+            self.replay.as_ref().and_then(|r| r.cancel_deadline),
+        ) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let enclosing = match (
+            enclosing,
+            self.replay.as_ref().and_then(|r| r.failure_deadline),
+        ) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        match (phase, enclosing) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         }
@@ -283,6 +322,18 @@ impl<'a> Setup<'a> {
         deadline: Option<Instant>,
         maximum: Option<Duration>,
     ) -> Result<(bool, bool), ChannelFault> {
+        self.poll_with_observer(extra, None, deadline, maximum)
+            .map(|(ready, progress, _)| (ready, progress))
+    }
+
+    fn poll_with_observer(
+        &mut self,
+        extra: Option<(BorrowedFd<'_>, PollFlags)>,
+        observer: Option<BorrowedFd<'_>>,
+        deadline: Option<Instant>,
+        maximum: Option<Duration>,
+    ) -> Result<(bool, bool, bool), ChannelFault> {
+        self.replay_tick()?;
         self.live(deadline)?;
         let deadline = self.deadline(deadline);
         let first_request = self
@@ -291,6 +342,13 @@ impl<'a> Setup<'a> {
             .filter(|peer| peer.channel.is_some())
             .filter_map(|peer| peer.first_request_deadline)
             .min();
+        let first_request = match (
+            first_request,
+            self.replay.as_ref().and_then(|r| r.drain_deadline),
+        ) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         // A silent dial heard during Leave has the existing answer bound.
         // Its expiry retires that peer, never the operation or its deadline.
         let wake = match (deadline, first_request) {
@@ -325,9 +383,13 @@ impl<'a> Setup<'a> {
             fds.push(PollFd::new(fd, events));
             fds.len() - 1
         });
+        let observer_index = observer.map(|fd| {
+            fds.push(PollFd::new(fd, PollFlags::POLLIN));
+            fds.len() - 1
+        });
         match poll(&mut fds, timeout) {
             Ok(_) => (),
-            Err(nix::errno::Errno::EINTR) => return Ok((false, true)),
+            Err(nix::errno::Errno::EINTR) => return Ok((false, true, false)),
             Err(_) => return Err(ChannelFault::Closed),
         }
         let ready: Vec<_> = fds
@@ -335,6 +397,7 @@ impl<'a> Setup<'a> {
             .map(|fd| fd.revents().unwrap_or(PollFlags::empty()))
             .collect();
         drop(fds);
+        self.replay_tick()?;
         self.live(deadline)?;
         let mut progress = false;
         if !ready[0].is_empty() {
@@ -390,6 +453,7 @@ impl<'a> Setup<'a> {
         Ok((
             extra_index.is_some_and(|index| !ready[index].is_empty()),
             progress,
+            observer_index.is_some_and(|index| !ready[index].is_empty()),
         ))
     }
 
@@ -508,10 +572,7 @@ impl<'a> Setup<'a> {
             if self.leaving.is_some() {
                 self.cleanup(run)?;
                 self.queue_left()?;
-                while !self.replies_done() {
-                    self.poll(None, None, None)?;
-                }
-                self.live(None)?;
+                self.deliver_left()?;
                 return Ok(true);
             }
             if self.ready && self.replies_done() {
@@ -549,27 +610,12 @@ impl<'a> Setup<'a> {
         self.phase = Phase::Cleanup;
         // No state answer after acceptance can start a new setup step.
         drop(run.state.take());
-        if self.ready {
-            // Ready commits at selection, even if its reply cannot yet cross.
-            // A later rollback is the entered run's Leave: an unconfirmed SPU
-            // release still closes/reaps the child and does not undo residency.
-            let leave = self.leaving.as_ref().expect("accepted Leave");
-            return leave_after(
-                run,
-                Some(leave.cause),
-                leave.forced,
-                None,
-                None,
-                Some(leave.deadline),
-            )
-            .map_err(|_| ChannelFault::Closed);
-        }
         let mut children = Children::default();
         if let Some(arm) = run.classify.take() {
             children.0.push(arm.pid);
             drop(arm.channel);
         }
-        let release = if let Some(spu) = run.spu.take() {
+        let (release, release_lost) = if let Some(spu) = run.spu.take() {
             children.0.push(spu.pid);
             drop(spu.decode);
             let released = if self.admission == Admission::Admitted {
@@ -578,23 +624,48 @@ impl<'a> Setup<'a> {
             } else {
                 Ok(())
             };
+            // A typed refusal or foreign answer is not evidence of a death.
+            // Record only an observed lost release channel, never a timeout
+            // or unrelated management failure in the same wait.
+            let lost =
+                matches!(released, Err(ChannelFault::Closed)) && hung_up(spu.lifecycle.as_fd());
             drop(spu.lifecycle);
-            released
+            (released, lost)
         } else {
-            Ok(())
+            (Ok(()), false)
         };
         if release.is_err() {
+            // The final termination mode includes this owned kill, even when
+            // the accepted Leave began graceful (admin Spec 3, I2).
+            self.leaving.as_mut().expect("cleanup has a Leave").forced = true;
             children.kill();
         }
+        if release_lost && self.replay.as_ref().is_some_and(|control| control.opened) {
+            // Diagnostic has no unload event. Its existing fault still names
+            // a death after ReplayOpened, and must record before Left.
+            self.idle_report(
+                run,
+                Subsystem::Harness,
+                &crate::authorship::harness_report(
+                    weaver_types::FaultCase::OrganDeathObserved,
+                    "{\"organ\":\"spu\",\"death\":\"lifecycle channel closed during release\"}",
+                ),
+            )?;
+        }
         let reaped = children.reap(self);
-        release?;
+        // An entered run retains the existing Unconfirmed release rule.
+        // Before Ready, an exact Released is still required for rollback.
+        if !self.ready {
+            release?;
+        }
         reaped?;
         self.live(None)?;
         let deadline = self
             .leaving
             .as_ref()
             .expect("cleanup has an accepted leave")
-            .deadline;
+            .deadline
+            .expect("cleanup interval started");
         if run.recorder.failed()
             || !matches!(
                 run.recorder.drain_by(deadline),
@@ -604,6 +675,22 @@ impl<'a> Setup<'a> {
             return Err(ChannelFault::Closed);
         }
         self.live(None)
+    }
+
+    fn deliver_left(&mut self) -> Result<(), ChannelFault> {
+        // Cleanup has completed and fixed Left. Delivery loss or its original
+        // deadline cannot undo it (the existing N4 failed-answer rule).
+        while !self.replies_done() {
+            if let Err(fault) = self.poll(None, None, None) {
+                if self.live(None).is_ok() {
+                    return Err(fault);
+                }
+                for peer in 0..self.peers.len() {
+                    self.retire(peer);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn queue_left(&mut self) -> Result<(), ChannelFault> {
@@ -763,19 +850,21 @@ impl Harness {
                     setup.enter_outcome(Ok(LifecycleAnswer::Ready))?;
                 }
             }
-            setup.await_disposition(&mut run)
+            if setup.ready {
+                // Ready selects the entered owner. Its retained reply queue
+                // must not delay replay or discard any accepted first request.
+                setup.run_replay(&mut run)?;
+            } else {
+                setup.await_disposition(&mut run)?;
+            }
+            Ok(())
         })();
         if driven.is_err() {
             setup.fail(&mut run);
         }
         drop(setup);
         match driven {
-            Ok(false) => {
-                run.diagnostic.as_mut().expect("Diagnostic run").admitted = true;
-                self.state = ChannelState::Entered(Box::new(run));
-                Ok(None)
-            }
-            Ok(true) => {
+            Ok(()) => {
                 self.coordination.unlink();
                 self.state = ChannelState::Left;
                 Ok(Some(Outcome::Left))

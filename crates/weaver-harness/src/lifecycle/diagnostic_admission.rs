@@ -72,17 +72,8 @@ impl Harness {
                 peer: connection,
             };
         }
-        let mut pending = Some(connection);
-        if let Err(fault) = self.serve_replay(&mut pending) {
-            self.unwind_if_entered(weaver_types::FaultCase::OrganDeathObserved, &fault);
-            return DiagnosticService::Finished(Err(fault));
-        }
-        // No gate stands under a Diagnostic binding, so no frame can grant a
-        // serving seat. A violation still returns a channel fault, never a loop.
-        DiagnosticService::Finished(self.serve_loop(
-            "",
-            |_, _| Err(crate::engine::TurnError::ChannelLost),
-            pending,
-        ))
+        // An admitted Diagnostic run is driven through replay and Leave by
+        // enter_diagnostic_managed. Only a before-load refusal returns a seat.
+        DiagnosticService::Finished(Err(ChannelFault::Undecodable))
     }
 }

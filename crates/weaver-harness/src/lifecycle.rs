@@ -742,17 +742,6 @@ impl Harness {
                             return Err(fault);
                         }
                     }
-                    // **The Gateless seat, granted once at the run's
-                    // opening**, per `weaver-harness-Spec` section 6.2's
-                    // second criterion: a diagnostic enter that just
-                    // answered ready is the run arriving as the work, so
-                    // the replay runs here, after the answer crossed and
-                    // before the wait resumes. A serving run, and a
-                    // diagnostic run already replayed, pass through.
-                    if let Err(fault) = self.serve_replay(&mut pending) {
-                        self.unwind_if_entered(weaver_types::FaultCase::OrganDeathObserved, &fault);
-                        return Err(fault);
-                    }
                 }
                 Ok(Wake::Gate) => {
                     if let Err(fault) = self.serve_gate_wake(identity, &mut entry, &mut pending) {
@@ -875,59 +864,6 @@ impl Harness {
                     return Ok(*wake);
                 }
             }
-        }
-    }
-
-    /// The diagnostic seat's one grant, per `weaver-harness-Spec` section
-    /// 6.2: under a diagnostic binding the seat is granted once, at the
-    /// run's opening, on the run itself as the work - the operator's
-    /// sealed preload is what arrived owed an answer and the certification
-    /// is the answer it is owed. No frame ever grants this seat, and a
-    /// serving run never reaches the entry. Every outcome of the replay
-    /// itself lands in the diagnostic-trace: only a channel-level loss
-    /// surfaces here, ending service the way a serving turn's loss does.
-    fn serve_replay(&mut self, pending: &mut Option<OrganChannel>) -> Result<(), ChannelFault> {
-        let ChannelState::Entered(run) = &mut self.state else {
-            return Ok(());
-        };
-        let Some(seat) = run.diagnostic.as_mut() else {
-            return Ok(());
-        };
-        if !seat.admitted || seat.replayed {
-            return Ok(());
-        }
-        seat.replayed = true;
-        let reader_elected = seat.reader_elected;
-        let artifact = seat.artifact.clone();
-        let Some(spu) = run.spu.as_ref() else {
-            return Ok(());
-        };
-        let mut ports = crate::engine::Ports::grant(
-            &spu.decode,
-            &run.author,
-            &mut run.recorder,
-            &mut run.turn_ordinal,
-            &mut run.turn_in_flight,
-            &run.load,
-            // No frame, no prompt: the replay feeds the record's rendered
-            // forms and assembles nothing.
-            None,
-            &self.coordination,
-            Some(pending),
-            // No Gate stands under this binding, by construction.
-            None,
-            run.state.as_mut(),
-            run.classify.as_ref().map(|arm| &arm.channel),
-            &mut run.fullness,
-            &mut run.pressure_reported,
-        );
-        match crate::replay::drive(&mut ports, reader_elected, &artifact) {
-            Ok(()) => Ok(()),
-            Err(crate::engine::TurnError::ChannelLost) => Err(ChannelFault::Closed),
-            // Refusals and faults are already the record's, authored
-            // inside the pass, and the run stands for the operator's
-            // leave.
-            Err(_) => Ok(()),
         }
     }
 
