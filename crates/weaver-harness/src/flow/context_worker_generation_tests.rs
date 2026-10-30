@@ -55,6 +55,9 @@ pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
         // The actual child keeps stderr and residency open until Release.
         return;
     }
+    if mode.contains("-activation-next-ready-") {
+        return super::super::plan_ports::tests::next_ready::spu(mode, fd);
+    }
     if mode.contains("-session-") {
         return super::session_tests::spu(mode, fd);
     }

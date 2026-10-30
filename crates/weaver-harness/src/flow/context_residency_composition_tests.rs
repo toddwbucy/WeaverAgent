@@ -311,7 +311,7 @@ fn residency_peer(
                     request: serde_json::value::to_raw_value(&serde_json::json!({"rendered":rendered,"template":"fixture"})).unwrap(),
                     measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap() });
                 packet!(decode.as_raw_fd(), &answer);
-                if mode.contains("generation") {
+                if mode.contains("generation") || mode.contains("-activation-next-ready-") {
                     super::super::worker_startup::input::generation::tests::spu_after_open(
                         mode,
                         decode.as_raw_fd(),

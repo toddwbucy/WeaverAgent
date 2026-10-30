@@ -285,7 +285,7 @@ impl Files {
                     "WEAVER_RESIDENCY_COMPOSITION_CHILD",
                     if mode.contains("-session-ready-rollback") || mode.contains("-session-forced-save") {
                         "cleanup-ready"
-                    } else if mode.contains("generation") {
+                    } else if mode.contains("generation") || mode.contains("-activation-next-ready-") {
                         mode
                     } else if mode.starts_with("failed-startup-") {
                         "failed-startup"
@@ -345,6 +345,8 @@ impl Files {
             composer: LoopIdentity::compiled("worker"),
             templates: if mode.ends_with("-task-author") {
                 super::input::generation::tests::templates()
+            } else if mode.contains("-activation-next-ready-") {
+                super::input::plan::tests::next_ready_templates()
             } else if mode.starts_with("input-worker-plan-") {
                 super::input::plan::tests::templates()
             } else if mode.contains("emission") {
@@ -2552,6 +2554,14 @@ scenario!(
 scenario!(
     worker_plan_port_activation_failed,
     "input-worker-plan-save-sqlite-port-activation-failed"
+);
+scenario!(
+    worker_plan_port_next_ready_stop,
+    "input-worker-plan-save-sqlite-port-activation-next-ready-stop"
+);
+scenario!(
+    worker_plan_port_next_ready_pending_stop,
+    "input-worker-plan-save-sqlite-port-activation-next-ready-pending-stop"
 );
 scenario!(
     worker_plan_port_close_stop,

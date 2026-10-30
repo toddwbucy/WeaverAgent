@@ -3,7 +3,7 @@
 use super::*;
 use crate::flow::context::worker_startup::input::plan::tests as root_plan;
 
-fn step(input: &mut FoundationInput<'_>, member: &mut Member) {
+pub(super) fn step(input: &mut FoundationInput<'_>, member: &mut Member) {
     assert_ne!(
         input.advance_with_io(&mut NonblockingIo { waits: 0 }),
         FoundationInputProgress::Stopped,
@@ -14,7 +14,10 @@ fn step(input: &mut FoundationInput<'_>, member: &mut Member) {
     std::thread::sleep(Duration::from_millis(1));
 }
 
-fn complete(input: &mut FoundationInput<'_>, member: &mut Member) -> FoundationPlanOperation {
+pub(super) fn complete(
+    input: &mut FoundationInput<'_>,
+    member: &mut Member,
+) -> FoundationPlanOperation {
     let end = Instant::now() + Duration::from_secs(5);
     assert_eq!(input.progress(), FoundationInputProgress::Pending);
     while input.plan_operation_pending() {
@@ -439,7 +442,7 @@ pub(super) fn exercise(
     None
 }
 
-fn attest(
+pub(super) fn attest(
     input: &mut FoundationInput<'_>,
     member: &mut Member,
     plan: &s::PlanRef,
