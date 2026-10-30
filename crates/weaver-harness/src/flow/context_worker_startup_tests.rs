@@ -2642,6 +2642,10 @@ scenario!(
     "input-worker-plan-refusal-queued-save-author"
 );
 scenario!(
+    worker_plan_refusal_queued_save_window_latches,
+    "input-worker-plan-refusal-queued-save-window"
+);
+scenario!(
     worker_plan_refusal_prior_flags_author,
     "input-worker-plan-save-sqlite-flags-prior-author"
 );

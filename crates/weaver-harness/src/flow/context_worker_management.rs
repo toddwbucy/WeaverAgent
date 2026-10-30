@@ -301,7 +301,36 @@ impl<'a> FoundationManagement<'a> {
                     // Its original owner reduces the due cleanup in place.
                     match self.input.advance_save(io, false) {
                         Ok(_) => return self.progress,
-                        Err(error) => {
+                        Err(mut error) => {
+                            // Stop as the input owner's tail does: latch an
+                            // expired save window and any transport failure.
+                            if self.input.serving.save.is_some()
+                                && matches!(
+                                    error,
+                                    RunFailure::Wait {
+                                        key: PumpDeadline::CaptureWindow,
+                                        ..
+                                    }
+                                )
+                            {
+                                let detail = format!(
+                                    "serving save did not complete within its original capture window: {error:?}"
+                                );
+                                error = self.input.serving.owner.context.fail(
+                                    io,
+                                    FlowHaltReason::ProtocolFailed,
+                                    HaltPoint::Barrier,
+                                    detail,
+                                );
+                            }
+                            if matches!(error, RunFailure::Transport { .. }) {
+                                self.input.serving.owner.context.fail(
+                                    io,
+                                    FlowHaltReason::ProtocolFailed,
+                                    HaltPoint::Barrier,
+                                    format!("serving save transport: {error:?}"),
+                                );
+                            }
                             self.input.failure = Some(error.clone());
                             self.input.stage = Stage::Stopped;
                             self.progress = FoundationManagementProgress::Stopped;

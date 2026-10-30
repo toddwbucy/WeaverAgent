@@ -125,6 +125,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
             mode.ends_with("-queued-save-author"),
         );
     }
+    if mode.ends_with("-queued-save-window") {
+        return prior::save_window(serving, member, reader, socket);
+    }
     if mode.ends_with("-quiesce-author") {
         return prior::quiesce(serving, member, reader, socket);
     }

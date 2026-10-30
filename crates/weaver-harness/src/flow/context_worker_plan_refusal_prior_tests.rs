@@ -522,3 +522,93 @@ pub(in crate::flow::context::worker_startup) fn management_author(
         }
     });
 }
+
+/// Hold a root refusal while a queued save remains with its original owner,
+/// then let an unrelated capture window expire. Management reduces the save
+/// in place, and the stop it reports must latch the run's own failure.
+pub(in crate::flow::context::worker_startup) fn save_window(
+    serving: FoundationServing<'_>,
+    member: &mut Member,
+    reader: &mut UnixStream,
+    socket: &Path,
+) {
+    reader.set_nonblocking(true).unwrap();
+    let mut guard = Guard {
+        input: Some(serving.input()),
+        management: None,
+    };
+    pressure::fill(guard.input.as_mut().unwrap().serving.owner.context);
+    let done = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let end = Instant::now() + Duration::from_secs(10);
+            while !done.load(Ordering::SeqCst) && Instant::now() < end {
+                member.step_live("ready");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        let _done = Done(&done);
+        let (_save_peer, save_bound) = queue_save(&mut guard, socket);
+        hold(guard.input.as_mut().unwrap(), false);
+        let (_peer, _bytes) = request(socket, 0);
+        let watch = Instant::now() + Duration::from_secs(5);
+        while guard.input.as_mut().unwrap().advance() != FoundationInputProgress::ManagementPending
+        {
+            assert!(
+                Instant::now() < watch,
+                "earlier author did not yield management"
+            );
+        }
+        guard.management = Some(guard.input.take().unwrap().management().ok().unwrap());
+        let owner = guard.management.as_mut().unwrap();
+        while owner.plan_refusal.is_none() {
+            assert_eq!(
+                owner.advance_with_io(&mut NonblockingIo { waits: 0 }),
+                FoundationManagementProgress::Pending,
+                "{:?}",
+                owner.detail()
+            );
+            assert!(Instant::now() < watch, "busy opener was not refused");
+        }
+        assert!(owner.input.serving.save.is_some());
+        assert!(owner.input.serving.owner.context.failure().is_none());
+        // A capture window that is not the queued save's own: the save cannot
+        // retain its expiry, so the management owner must stop the run.
+        let foreign = AbsoluteBound::after(MonotonicIo.now().unwrap(), 1).unwrap();
+        assert_ne!(foreign, save_bound);
+        owner
+            .input
+            .serving
+            .owner
+            .context
+            .arm(PumpDeadline::CaptureWindow, foreign, &mut MonotonicIo)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(1));
+        while owner.advance_with_io(&mut NonblockingIo { waits: 0 })
+            == FoundationManagementProgress::Pending
+        {
+            assert!(Instant::now() < watch, "expired window was not reduced");
+        }
+        assert_eq!(
+            owner.progress(),
+            FoundationManagementProgress::Stopped,
+            "{:?}",
+            owner.detail()
+        );
+        assert!(owner.plan_refusal.is_some());
+        assert!(owner.input.serving.save.is_some());
+        match owner.input.serving.owner.context.failure() {
+            Some(RunFailure::Flow {
+                reason: FlowHaltReason::ProtocolFailed,
+                point: HaltPoint::Barrier,
+                detail,
+            }) => assert!(
+                detail.starts_with(
+                    "serving save did not complete within its original capture window"
+                ) && detail.contains("CaptureWindow"),
+                "{detail}"
+            ),
+            other => panic!("stopped owner did not latch the expired window: {other:?}"),
+        }
+    });
+}
