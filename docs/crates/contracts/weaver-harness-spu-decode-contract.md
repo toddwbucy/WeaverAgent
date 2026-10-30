@@ -11,7 +11,7 @@ and neither document restates the other.
 **Document ID:** `weaver-harness-spu-decode-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #393
+**Landing PR:** #417
 
 ---
 
@@ -283,7 +283,9 @@ tokens appended and the session's fullness. It carries no completed-path emissio
 measurement. Earlier field and column observations stand. The interrupted answer
 closes the re-feed first, then the cancel answers at rest. No later recorded-path
 position is read or appended. A completed re-feed that wins the race retains its
-ordinary answer, and the subsequent cancel answers at rest. The harness drains both
+ordinary answer, and the subsequent cancel answers at rest. A refusal of the re-feed
+that wins the race is likewise its terminal, and the subsequent cancel answers at
+rest. The harness drains both
 exchanges before starting another decode ask or claiming a completed stop. A fault in
 the engine or stream cannot be replaced by the interrupted answer.
 

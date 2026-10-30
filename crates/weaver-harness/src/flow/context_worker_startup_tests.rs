@@ -2241,6 +2241,12 @@ fn scenario(name: &str, mode: &str) {
         circuit(mode);
         return;
     }
+    if mode.contains("-real-model-")
+        && admission_process::diagnostic::real_model::artifact(mode).is_none()
+    {
+        eprintln!("SKIP {name}: no implicit model fixture");
+        return;
+    }
     if leave_joint::is_mode(mode) {
         leave_joint::scenario(name, mode);
         return;
@@ -2471,6 +2477,10 @@ scenario!(
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-duplicate"
 );
 scenario!(
+    worker_diagnostic_interruption_refeed_refused,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-refeed-refused"
+);
+scenario!(
     worker_diagnostic_interruption_fail_cancel_refused,
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-interrupt-fail-cancel-refused"
 );
@@ -2634,6 +2644,10 @@ scenario!(
 scenario!(
     worker_plan_refusal_prior_save_author,
     "input-worker-plan-refusal-queued-save-author"
+);
+scenario!(
+    worker_plan_refusal_queued_save_window_latches,
+    "input-worker-plan-refusal-queued-save-window"
 );
 scenario!(
     worker_plan_refusal_prior_flags_author,

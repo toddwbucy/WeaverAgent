@@ -41,6 +41,9 @@ pub(super) fn spu(mode: &str, turn: &weaver_types::TurnKey, decode: &OwnedFd) ->
     } else if mode.ends_with("-early-rest") {
         packet!(decode.as_raw_fd(), &TokenAnswer::AtRest);
     } else if mode.ends_with("-cancel-refused") {
+        // After the ReFeed's own terminal, a refusal can answer only the
+        // matching Cancel. Before it, the refusal would be the ReFeed's.
+        packet!(decode.as_raw_fd(), &terminal);
         packet!(decode.as_raw_fd(), &weaver_types::TokenRefusal::OutOfOrder);
     } else if mode.ends_with("-malformed") {
         let bytes = b"{not-a-terminal";

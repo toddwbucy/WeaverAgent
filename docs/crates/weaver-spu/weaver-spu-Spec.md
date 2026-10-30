@@ -7,7 +7,7 @@ Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-spu-Spec`
 **Parent:** `weaver-spu-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #393
+**Landing PR:** #417
 
 ---
 
@@ -1383,6 +1383,8 @@ are retained, but no ReFed, emission parse or completed-path measurement is inve
 
 If the whole recorded path completed before the cancel was polled, the normal ReFed
 stands and the cancel is handled at rest. There is no second terminal for the re-feed.
+A refused re-feed starts no drive, so a cancel that crosses the refusal is likewise
+handled at rest and answers AtRest; the refusal is the re-feed's terminal.
 A prefill, token or terminator failure, a malformed seam or a failed intermediate send
 remains a fault and cannot become RefeedInterrupted. Token-boundary polling makes no
 wall-time promise about a stuck prefill or kernel. Once cancellation is accepted, the
