@@ -355,3 +355,274 @@ fn diagnostic_replay_retains_the_exact_interrupted_terminal_until_recorded_close
         });
     });
 }
+
+fn take_directive(spu: &OrganChannel) -> TokenDirective {
+    let mut fds = [PollFd::new(spu.as_fd(), PollFlags::POLLIN)];
+    poll(&mut fds, 2000_u16).unwrap();
+    assert!(fds[0].revents().unwrap().contains(PollFlags::POLLIN));
+    let mut bytes = vec![0; 4096];
+    let n = recv(spu.as_fd().as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT).unwrap();
+    serde_json::from_slice::<TokenDirective>(&bytes[..n]).unwrap()
+}
+
+fn spu_sends(spu: &OrganChannel, frame: Vec<u8>) {
+    assert!(crate::channel::managed::try_send(spu.as_fd(), &frame).unwrap());
+}
+
+fn stop(far: &OrganChannel, ordinal: u64) {
+    far.send(&OrganEnvelope {
+        exchange: exchange(ordinal),
+        position: Position::Open,
+        payload: weaver_types::Payload::Directive(LifecycleDirective::Stop {
+            cause: weaver_types::Cause { uid: 41 },
+        }),
+    })
+    .unwrap();
+}
+
+fn recorder(sink: std::os::unix::net::UnixStream) -> crate::record::Record {
+    crate::record::Record::from(
+        weaver_diagnostic::Recorder::receive(
+            sink.into(),
+            weaver_diagnostic::RunRef("r".into()),
+            weaver_diagnostic::SessionRef("s".into()),
+        )
+        .unwrap(),
+    )
+}
+
+fn delivered(owner: &mut Setup<'_>, far: &OrganChannel) -> OrganEnvelope {
+    owner.checkpoint().unwrap();
+    let mut fds = [PollFd::new(far.as_fd(), PollFlags::POLLIN)];
+    poll(&mut fds, 2000_u16).unwrap();
+    assert!(fds[0].revents().unwrap().contains(PollFlags::POLLIN));
+    far.recv().unwrap()
+}
+
+/// A ReFeed refusal that crosses an already-sent Cancel is the ReFeed's owed
+/// terminal: it is recorded, the Cancel's AtRest is drained, and the Stop is
+/// settled rather than the run ending as a protocol failure.
+#[test]
+fn diagnostic_replay_refusal_crossing_a_sent_cancel_settles_the_stop() {
+    use std::os::unix::net::UnixStream;
+    fixture("refusal-race", |owner, far| {
+        let turn = TurnKey("original-turn".into());
+        owner.replay.as_mut().unwrap().turn = Some(turn.clone());
+        let (decode, spu) = DecodeChannel::pair().unwrap();
+        let spu = spu.into_channel();
+        let (sink, _reader) = UnixStream::pair().unwrap();
+        let mut recorder = recorder(sink);
+        let author = Author::new(&SessionId("s".into()), &weaver_types::RunId("r".into()));
+        let overflow = weaver_types::TokenRefusal::Overflow {
+            resident: 60,
+            requested: 9,
+            capacity: 64,
+        };
+        std::thread::scope(|scope| {
+            let expected = turn.clone();
+            let refusal = overflow.clone();
+            let peer = scope.spawn(move || {
+                assert!(matches!(
+                    take_directive(&spu),
+                    TokenDirective::ReFeed { .. }
+                ));
+                stop(far, 2);
+                assert_eq!(
+                    take_directive(&spu),
+                    TokenDirective::Cancel { turn: expected }
+                );
+                // The real SPU refuses before its cancel poll, then answers the
+                // Cancel at rest: the refusal is already written when it hears it.
+                spu_sends(&spu, serde_json::to_vec(&refusal).unwrap());
+                spu_sends(&spu, serde_json::to_vec(&TokenAnswer::AtRest).unwrap());
+                spu
+            });
+            let mut ports = ReplayPorts {
+                management: owner,
+                decode: &decode,
+                author: &author,
+                recorder: &mut recorder,
+                state: None,
+                failed: false,
+            };
+            let refused = ports.refeed(&turn, "rendered".into(), vec![3, 4, 5]);
+            let spu = peer.join().unwrap();
+            match refused {
+                Err(TurnError::Refused {
+                    turn: named,
+                    refusal,
+                }) => {
+                    assert_eq!(named, turn);
+                    assert_eq!(refusal, overflow);
+                }
+                other => panic!("the refusal is the ReFeed's terminal, got {other:?}"),
+            }
+            assert!(!ports.failed);
+            let control = ports.management.replay.as_ref().unwrap();
+            assert!(control.decode_settled && !control.decode_busy && !control.active);
+            assert!(control.stop.is_some());
+            let mut bytes = [0; 64];
+            assert_eq!(
+                recv(spu.as_fd().as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT),
+                Err(nix::errno::Errno::EAGAIN),
+                "the harness sent nothing after the Cancel"
+            );
+            assert_eq!(
+                recv(
+                    decode.as_fd().as_raw_fd(),
+                    &mut bytes,
+                    MsgFlags::MSG_DONTWAIT
+                ),
+                Err(nix::errno::Errno::EAGAIN),
+                "the Cancel's AtRest was drained"
+            );
+            ports
+                .close(
+                    &turn,
+                    TurnClose::Stopped {
+                        reason: StopReason::Refused,
+                        cause: None,
+                    },
+                )
+                .unwrap();
+            let answer = delivered(ports.management, far);
+            assert_eq!(answer.exchange, exchange(2));
+            assert_eq!(
+                answer.payload,
+                weaver_types::Payload::Answer(LifecycleAnswer::TurnAborted { turn })
+            );
+        });
+    });
+}
+
+/// An SPU Fault on a ReFeed with no Cancel sent ends the pass, not the run:
+/// the caller closes the bracket stopped and the run stands for Leave, and the
+/// bound taken for the fault's record does not outlive it.
+#[test]
+fn diagnostic_replay_uninterrupted_fault_stands_for_leave() {
+    use std::os::unix::net::UnixStream;
+    fixture("fault", |owner, _| {
+        let turn = TurnKey("original-turn".into());
+        owner.replay.as_mut().unwrap().turn = Some(turn.clone());
+        let (decode, spu) = DecodeChannel::pair().unwrap();
+        let spu = spu.into_channel();
+        let (sink, _reader) = UnixStream::pair().unwrap();
+        let mut recorder = recorder(sink);
+        let author = Author::new(&SessionId("s".into()), &weaver_types::RunId("r".into()));
+        let report = crate::authorship::harness_report(
+            weaver_types::FaultCase::DeviceFaultDuringGeneration,
+            "{\"refeed\":true}",
+        );
+        std::thread::scope(|scope| {
+            let sent = report.clone();
+            let peer = scope.spawn(move || {
+                assert!(matches!(
+                    take_directive(&spu),
+                    TokenDirective::ReFeed { .. }
+                ));
+                spu_sends(&spu, serde_json::to_vec(&TokenAnswer::Fault(sent)).unwrap());
+            });
+            let mut ports = ReplayPorts {
+                management: owner,
+                decode: &decode,
+                author: &author,
+                recorder: &mut recorder,
+                state: None,
+                failed: false,
+            };
+            let faulted = ports.refeed(&turn, "rendered".into(), vec![3, 4, 5]);
+            peer.join().unwrap();
+            match faulted {
+                Err(TurnError::Faulted {
+                    turn: named,
+                    report: carried,
+                }) => {
+                    assert_eq!(named, turn);
+                    assert_eq!(carried, report);
+                }
+                other => panic!("an uninterrupted fault is Faulted, got {other:?}"),
+            }
+            assert!(!ports.failed);
+            let control = ports.management.replay.as_ref().unwrap();
+            assert!(!control.active && !control.decode_busy);
+            assert!(
+                control.failure_deadline.is_none(),
+                "the fault's record bound must not cap the standing run"
+            );
+            ports
+                .close(
+                    &turn,
+                    TurnClose::Stopped {
+                        reason: StopReason::Fault,
+                        cause: None,
+                    },
+                )
+                .unwrap();
+            assert!(ports.management.replay.as_ref().unwrap().turn.is_none());
+        });
+    });
+}
+
+/// A Stop heard while a clean turn.closed is still being written answers
+/// AtRest after that close and leaves the pass running (Spec section 6.2).
+#[test]
+fn diagnostic_replay_stop_during_a_clean_close_keeps_the_pass() {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+    fixture("closing-stop", |owner, far| {
+        let turn = TurnKey("original-turn".into());
+        owner.replay.as_mut().unwrap().turn = Some(turn.clone());
+        let (decode, _spu) = DecodeChannel::pair().unwrap();
+        let (mut sink, mut reader) = UnixStream::pair().unwrap();
+        sink.set_nonblocking(true).unwrap();
+        loop {
+            match sink.write(&[b'x'; 16_384]) {
+                Ok(n) => assert!(n > 0),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                other => panic!("fill the real record sink: {other:?}"),
+            }
+        }
+        let mut recorder = recorder(sink);
+        let author = Author::new(&SessionId("s".into()), &weaver_types::RunId("r".into()));
+        std::thread::scope(|scope| {
+            let drain = scope.spawn(move || {
+                // The close is blocked on the full sink when the Stop lands.
+                stop(far, 2);
+                std::thread::sleep(Duration::from_millis(100));
+                reader
+                    .set_read_timeout(Some(Duration::from_millis(300)))
+                    .unwrap();
+                let mut bytes = [0; 16_384];
+                while reader.read(&mut bytes).is_ok_and(|n| n > 0) {}
+            });
+            let mut ports = ReplayPorts {
+                management: owner,
+                decode: &decode,
+                author: &author,
+                recorder: &mut recorder,
+                state: None,
+                failed: false,
+            };
+            ports.close(&turn, TurnClose::Clean).unwrap();
+            drain.join().unwrap();
+            let control = ports.management.replay.as_ref().unwrap();
+            assert!(control.turn.is_none());
+            assert!(
+                !control.interrupted,
+                "a Stop between turns does not cancel the pass"
+            );
+            assert!(control.cancel_deadline.is_none());
+            assert!(
+                control.stop.is_none(),
+                "the Stop was answered after the close"
+            );
+            assert!(ports.checkpoint().unwrap(), "the pass continues");
+            let answer = delivered(ports.management, far);
+            assert_eq!(answer.exchange, exchange(2));
+            assert_eq!(
+                answer.payload,
+                weaver_types::Payload::Answer(LifecycleAnswer::AtRest)
+            );
+        });
+    });
+}

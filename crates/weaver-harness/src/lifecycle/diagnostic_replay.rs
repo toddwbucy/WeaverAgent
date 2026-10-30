@@ -171,13 +171,24 @@ impl Setup<'_> {
             {
                 if control.turn.is_none() {
                     Ok(LifecycleAnswer::AtRest)
+                } else if control.closing {
+                    // Spec section 6.2: a Stop between turns answers AtRest
+                    // and does not cancel the pass. The close in flight keeps
+                    // its own wait, and the answer follows its Recorded.
+                    control.stop = Some(Stop {
+                        peer,
+                        exchange,
+                        cause,
+                        aborted: false,
+                    });
+                    return Ok(());
                 } else {
                     control.cancel()?;
                     control.stop = Some(Stop {
                         peer,
                         exchange,
                         cause,
-                        aborted: !control.closing,
+                        aborted: true,
                     });
                     return Ok(());
                 }
@@ -676,13 +687,17 @@ impl ReplayPorts<'_, '_> {
         control.cancel_sent = false;
         control.decode_settled = false;
         let mut terminal = None;
+        // A refusal that crosses a sent Cancel is still the ReFeed's owed
+        // answer. It closes the ReFeed, and the Cancel's AtRest follows.
+        let mut refused = None;
         loop {
+            let open = terminal.is_none() && refused.is_none();
             match self.receive()?.ok_or(TurnError::ChannelLost)? {
                 DecodeReply::Answer(TokenAnswer::Field {
                     position,
                     ranked,
                     realized,
-                }) if terminal.is_none() => {
+                }) if open => {
                     self.event(
                         Kind::ModelField,
                         Subsystem::SpuDecoder,
@@ -700,9 +715,7 @@ impl ReplayPorts<'_, '_> {
                         })),
                     )?;
                 }
-                DecodeReply::Answer(TokenAnswer::Column { position, layers })
-                    if terminal.is_none() =>
-                {
+                DecodeReply::Answer(TokenAnswer::Column { position, layers }) if open => {
                     let column = weaver_diagnostic::ResidualColumn {
                         position,
                         layers: layers.len() as u32,
@@ -715,7 +728,7 @@ impl ReplayPorts<'_, '_> {
                         weaver_diagnostic::Payload::ResidualColumn(column),
                     )?;
                 }
-                DecodeReply::Answer(TokenAnswer::ReFed(generation)) if terminal.is_none() => {
+                DecodeReply::Answer(TokenAnswer::ReFed(generation)) if open => {
                     self.management.replay.as_mut().unwrap().active = false;
                     terminal = Some(TokenAnswer::ReFed(generation));
                 }
@@ -724,9 +737,7 @@ impl ReplayPorts<'_, '_> {
                     consumed,
                     resident,
                     capacity,
-                }) if terminal.is_none()
-                    && self.management.replay.as_ref().unwrap().cancel_sent =>
-                {
+                }) if open && self.management.replay.as_ref().unwrap().cancel_sent => {
                     if &received != turn
                         || consumed >= path_len
                         || resident > capacity
@@ -745,15 +756,17 @@ impl ReplayPorts<'_, '_> {
                     });
                 }
                 DecodeReply::Answer(TokenAnswer::AtRest)
-                    if terminal.is_some()
-                        && self.management.replay.as_ref().unwrap().cancel_sent =>
+                    if !open && self.management.replay.as_ref().unwrap().cancel_sent =>
                 {
                     break;
                 }
-                DecodeReply::Refusal(refusal)
-                    if !self.management.replay.as_ref().unwrap().cancel_sent =>
-                {
+                DecodeReply::Refusal(refusal) if open => {
                     self.management.replay.as_mut().unwrap().active = false;
+                    if self.management.replay.as_ref().unwrap().cancel_sent {
+                        self.refusal(weaver_types::TokenAsk::ReFeed, refusal.clone(), Some(turn))?;
+                        refused = Some(refusal);
+                        continue;
+                    }
                     self.management.replay.as_mut().unwrap().decode_busy = false;
                     self.refusal(weaver_types::TokenAsk::ReFeed, refusal.clone(), Some(turn))?;
                     return Err(TurnError::Refused {
@@ -764,14 +777,11 @@ impl ReplayPorts<'_, '_> {
                 DecodeReply::Answer(TokenAnswer::Fault(report)) => {
                     // Bound best-effort fault accounting before touching a
                     // possibly blocked sink. Keep an earlier interval intact.
-                    self.management
-                        .replay
-                        .as_mut()
-                        .unwrap()
-                        .failure_deadline
-                        .get_or_insert_with(|| {
-                            shared_deadline(Instant::now()).expect("representable cleanup bound")
-                        });
+                    let control = self.management.replay.as_mut().unwrap();
+                    let earlier = control.failure_deadline.is_some();
+                    control.failure_deadline.get_or_insert_with(|| {
+                        shared_deadline(Instant::now()).expect("representable cleanup bound")
+                    });
                     let raw = serde_json::to_string(&report)
                         .ok()
                         .and_then(|text| weaver_trace::raw_payload(&text))
@@ -782,7 +792,22 @@ impl ReplayPorts<'_, '_> {
                         Some(turn),
                         Some(Payload::Fault(raw)),
                     )?;
-                    return Err(TurnError::ChannelLost);
+                    let control = self.management.replay.as_mut().unwrap();
+                    if control.cancel_sent {
+                        return Err(TurnError::ChannelLost);
+                    }
+                    // An uninterrupted fault ends the pass, not the run: the
+                    // bracket closes stopped and the run stands for Leave. The
+                    // bound covered only this fault's record.
+                    control.active = false;
+                    control.decode_busy = false;
+                    if !earlier {
+                        control.failure_deadline = None;
+                    }
+                    return Err(TurnError::Faulted {
+                        turn: turn.clone(),
+                        report,
+                    });
                 }
                 _ => return Err(TurnError::ChannelLost),
             }
@@ -792,6 +817,12 @@ impl ReplayPorts<'_, '_> {
         }
         self.management.replay.as_mut().unwrap().decode_settled = true;
         self.management.replay.as_mut().unwrap().decode_busy = false;
+        if let Some(refusal) = refused {
+            return Err(TurnError::Refused {
+                turn: turn.clone(),
+                refusal,
+            });
+        }
         let terminal = terminal.expect("a terminal precedes completion");
         let recorded = match &terminal {
             TokenAnswer::ReFed(generation) => self.generation(turn, generation),
