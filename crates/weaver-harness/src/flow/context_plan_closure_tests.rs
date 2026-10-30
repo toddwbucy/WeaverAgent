@@ -1180,3 +1180,83 @@ fn closure_close_marks_read_refusal_keeps_its_code_or_faults() {
     assert!(fx.records(Kind::Refusal).is_empty());
     assert!(fx.records(Kind::StepOutcome).is_empty());
 }
+
+const _: fn() = || {
+    trait NotClone<M> {
+        fn pin() {}
+    }
+    impl<T: ?Sized> NotClone<()> for T {}
+    impl<T: Clone> NotClone<u8> for T {}
+    let _ = <crate::flow::context::plan_port_driver::ClosureReceipt as NotClone<_>>::pin;
+};
+
+#[test]
+fn closure_receipt_names_the_committed_closure_and_only_an_uncancelled_close_grants_it() {
+    for cancel_at in ["none", "source", "receipt"] {
+        let (mut fx, certificate) = closure_fixture(false, true);
+        let evidence = evidence(&mut fx);
+        begin_close(&mut fx, evidence);
+        serve(&mut fx, PREVIEW, PREVIEW.len());
+        let outcome = serve_marks(&mut fx, 4);
+        effect_ready(&mut fx);
+        let run = fx.run();
+        run.context
+            .begin_plan_effect(&certificate, &mut run.clock)
+            .unwrap();
+        let source = committed(&mut fx, cancel_at == "source");
+        if cancel_at == "receipt" {
+            fx.run().context.cancel_plan_operation();
+        }
+        let snapshot = closed_snapshot(&mut fx, &source, &outcome);
+        release_summary(&mut fx, snapshot);
+        let result = finish(&mut fx);
+        if cancel_at == "none" {
+            let receipt = result
+                .into_closure_receipt()
+                .unwrap_or_else(|_| panic!("a committed close grants its receipt"));
+            // The filed step.outcome is the closure the refreshed revision holds.
+            let outcomes = fx.records(Kind::StepOutcome);
+            assert_eq!(outcomes.len(), 1);
+            assert_eq!(receipt.closed(), &source.block_id);
+            assert_eq!(receipt.plan(), &pinned().plan);
+            assert_eq!(receipt.previous_step(), &pinned().step_id);
+            assert!(format!("{receipt:?}").contains("ClosureReceipt"));
+        } else {
+            // Cancellation revokes the grant, not the committed effect.
+            let Err(whole) = result.into_closure_receipt() else {
+                panic!("a cancelled close must not grant a receipt: {cancel_at}")
+            };
+            assert!(matches!(whole, PlanPortCompletion::Cancelled(_)));
+        }
+    }
+}
+
+#[test]
+fn closure_receipt_is_not_granted_by_a_refused_close_or_by_closure_evidence() {
+    let (mut fx, _) = closure_fixture(false, false);
+    let work = checked_work(&mut fx, PREVIEW.len());
+    let Err(attested) = attest(&mut fx, work).into_closure_receipt() else {
+        panic!("closure evidence is not a closure receipt")
+    };
+    let Ok(evidence) = attested.into_closure_evidence() else {
+        panic!("the attestation returns whole")
+    };
+    begin_close(&mut fx, evidence);
+    let mut changed = PREVIEW.to_vec();
+    let at = changed.iter().position(|&b| b == b'z').unwrap();
+    changed[at] = b'y';
+    serve(&mut fx, &changed, 500);
+    let Err(whole) = finish(&mut fx).into_closure_receipt() else {
+        panic!("a refused close must not grant a receipt")
+    };
+    assert!(matches!(
+        whole,
+        PlanPortCompletion::Refused {
+            refusal: s::PlanOperationRefused {
+                case: s::PlanOperationCase::WorkChanged,
+                ..
+            },
+            ..
+        }
+    ));
+}

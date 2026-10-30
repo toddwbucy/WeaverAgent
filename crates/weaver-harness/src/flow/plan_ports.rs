@@ -13,7 +13,7 @@ pub(in crate::flow) mod break_plan;
 pub(in crate::flow) mod closure;
 #[path = "plan_port_effect.rs"]
 pub(in crate::flow) mod effect;
-pub use crate::flow::context::plan_port_driver::{CheckedWork, ClosureEvidence};
+pub use crate::flow::context::plan_port_driver::{CheckedWork, ClosureEvidence, ClosureReceipt};
 
 #[derive(Debug)]
 pub enum PlanRequest {

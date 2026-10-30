@@ -228,6 +228,80 @@ impl std::fmt::Debug for ClosureEvidence {
     }
 }
 
+/// PLAN-OBSERVATION's same-session closure receipt: a private, single-use,
+/// run-bound account of one committed close. Only a settled close that was
+/// not cancelled constructs it, after its mandatory refresh adopted the
+/// closure. It retains the whole close account. Metadata cannot rebuild it.
+///
+/// ```compile_fail,E0277
+/// fn cloned<T: Clone>() {}
+/// cloned::<weaver_harness::ClosureReceipt>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn serialized(receipt: &weaver_harness::ClosureReceipt) {
+///     let _ = serde_json::to_vec(receipt);
+/// }
+/// ```
+///
+/// ```compile_fail,E0277
+/// let _ = serde_json::from_str::<weaver_harness::ClosureReceipt>("{}");
+/// ```
+///
+/// ```compile_fail,E0451
+/// fn forged() -> weaver_harness::ClosureReceipt {
+///     weaver_harness::ClosureReceipt { account: todo!() }
+/// }
+/// ```
+pub struct ClosureReceipt {
+    account: PlanPortAccount,
+}
+impl ClosureReceipt {
+    fn from_close(account: PlanPortAccount) -> Self {
+        assert!(
+            matches!(account.work.request, PlanRequest::Close { .. })
+                && account.work.stage == Stage::Complete
+                && account.work.refusal.is_none()
+                && !account.work.cancelled,
+            "only a settled close grants a closure receipt"
+        );
+        Self { account }
+    }
+    /// The revision close committed against. A close changes no revision.
+    pub fn plan(&self) -> &s::PlanRef {
+        self.account.work.request.expected()
+    }
+    /// The closed step, the successor query's previous step.
+    pub fn previous_step(&self) -> &s::StepId {
+        self.account.work.request.step_id().unwrap()
+    }
+    /// The step.outcome source the refreshed revision holds as this closure.
+    pub fn closed(&self) -> &s::SourceBlockId {
+        let s::QueryResult::PlanCurrent {
+            current: Some(snapshot),
+            ..
+        } = self.account.work.current.as_ref().unwrap().read().result()
+        else {
+            unreachable!("a committed close retains its refreshed plan")
+        };
+        snapshot
+            .steps
+            .iter()
+            .find(|step| &step.step_id == self.previous_step())
+            .and_then(|step| step.closure_source.as_ref())
+            .expect("the close refresh checked this closure source")
+    }
+}
+impl std::fmt::Debug for ClosureReceipt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClosureReceipt")
+            .field("plan", self.plan())
+            .field("previous_step", self.previous_step())
+            .field("closed", self.closed())
+            .finish()
+    }
+}
+
 pub(in crate::flow) struct ActivatedStep {
     account: PlanPortAccount,
 }
@@ -287,6 +361,15 @@ impl PlanPortCompletion {
     pub(in crate::flow) fn into_closure_evidence(self) -> Result<ClosureEvidence, Self> {
         match self {
             Self::Attested(evidence) => Ok(evidence),
+            other => Err(other),
+        }
+    }
+
+    /// Move a committed close's receipt out. Any other result, including a
+    /// cancelled close whose effect committed, returns whole.
+    pub(in crate::flow) fn into_closure_receipt(self) -> Result<ClosureReceipt, Self> {
+        match self {
+            Self::Closed(account) => Ok(ClosureReceipt::from_close(account)),
             other => Err(other),
         }
     }

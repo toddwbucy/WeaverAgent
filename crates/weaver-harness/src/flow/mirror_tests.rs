@@ -561,3 +561,90 @@ fn abandoned_at_load_preserves_the_complete_start_identity_and_its_optional_posi
         }
     }
 }
+
+fn plan_measured(event: shared::PlanMeasureEvent) -> shared::PlanMeasurement {
+    shared::PlanMeasurement {
+        instrument_version: "plan-observation/1".into(),
+        plan: shared::PlanRef {
+            plan_id: shared::PlanId {
+                seed_id: "seed-雪".into(),
+                local_id: (u64::MAX - 3).into(),
+            },
+            revision: 7.into(),
+        },
+        event,
+    }
+}
+
+fn plan_step(local_id: u64) -> shared::StepId {
+    shared::StepId {
+        seed_id: "seed-雪".into(),
+        local_id: local_id.into(),
+    }
+}
+
+#[test]
+fn next_ready_keeps_both_steps_its_assembly_and_every_distinct_clock_reading() {
+    let value = plan_measured(shared::PlanMeasureEvent::NextReady {
+        closed: source_id(),
+        previous_step: plan_step(4),
+        step_id: plan_step(5),
+        assembly_id: 9.into(),
+        began_ns: (u64::MAX - 40).into(),
+        ended_ns: (u64::MAX - 12).into(),
+        closure_to_next_ns: 28.into(),
+    });
+    let mirrored = serde_json::to_value(plan_measurement(&value)).unwrap();
+    assert_eq!(mirrored, serde_json::to_value(&value).unwrap());
+    assert_eq!(
+        serde_json::to_vec(&plan_measurement(&value)).unwrap(),
+        serde_json::to_vec(&value).unwrap(),
+        "the trace mirror must preserve every field and decimal spelling",
+    );
+    assert_eq!(
+        mirrored["event"]["next_ready"]["previous_step"]["local_id"],
+        "4"
+    );
+    assert_eq!(
+        mirrored["event"]["next_ready"]["began_ns"],
+        (u64::MAX - 40).to_string()
+    );
+}
+
+#[test]
+fn flag_readings_keep_their_measured_snapshot_or_typed_unavailability() {
+    let measured = shared::PlanFlagSnapshot {
+        plan: plan_measured(shared::PlanMeasureEvent::Flags {
+            after: source_id(),
+            request_id: 1.into(),
+            observation: shared::PlanFlagObservation::Unavailable {
+                code: shared::ReadRefusalCode::ReadBusy,
+            },
+        })
+        .plan,
+        after: source_id(),
+        through: shared::SourcePosition {
+            block_id: source_id(),
+            turn: None,
+        },
+        total_flags: 5.into(),
+        matched_flags: 2.into(),
+        unmatched_flags: 3.into(),
+    };
+    for observation in [
+        shared::PlanFlagObservation::Measured { snapshot: measured },
+        shared::PlanFlagObservation::Unavailable {
+            code: shared::ReadRefusalCode::AnswerTooLarge,
+        },
+    ] {
+        let value = plan_measured(shared::PlanMeasureEvent::Flags {
+            after: source_id(),
+            request_id: (u64::MAX - 8).into(),
+            observation,
+        });
+        assert_eq!(
+            serde_json::to_vec(&plan_measurement(&value)).unwrap(),
+            serde_json::to_vec(&value).unwrap(),
+        );
+    }
+}

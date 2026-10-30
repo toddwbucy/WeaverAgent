@@ -645,6 +645,12 @@ fn close(
         closed.closure_source.as_ref(),
         Some(&current.last_source.block_id)
     );
+    // The member's committed closure is the receipt's closed source.
+    let closure_source = closed.closure_source.clone().unwrap();
+    let receipt = result.into_closure_receipt().unwrap();
+    assert_eq!(receipt.closed(), &closure_source);
+    assert_eq!(receipt.plan(), &successor.plan);
+    assert_eq!(receipt.previous_step(), &successor.step_id);
     assert!(input.serving.owner.context.native_place_cache_ready());
     // The member's own marks show the outcome opened and closed below the step.
     let marks = read(input, s::ReadSelector::Marks {});

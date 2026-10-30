@@ -10,7 +10,8 @@ use weaver_types::state_flow::{
 };
 
 pub use crate::flow::plan::ports::{
-    CheckedStepSuccessor, CheckedWork, ClosureEvidence, PlanRequest as FoundationPlanRequest,
+    CheckedStepSuccessor, CheckedWork, ClosureEvidence, ClosureReceipt,
+    PlanRequest as FoundationPlanRequest,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +86,14 @@ impl FoundationPlanOperation {
     pub fn into_closure_evidence(self) -> Result<ClosureEvidence, Self> {
         self.completion
             .into_closure_evidence()
+            .map_err(|completion| Self { completion })
+    }
+
+    /// Move a committed close's receipt out. Refusal, cancellation or any
+    /// other result returns the entire original operation.
+    pub fn into_closure_receipt(self) -> Result<ClosureReceipt, Self> {
+        self.completion
+            .into_closure_receipt()
             .map_err(|completion| Self { completion })
     }
 
