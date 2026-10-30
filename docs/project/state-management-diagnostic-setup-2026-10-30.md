@@ -1,6 +1,6 @@
 # Diagnostic setup and rollback composition
 
-**Version:** 0.3, 2026-10-30.
+**Version:** 0.4, 2026-10-30.
 **Parent:** Issue 146, state management implementation.
 
 Implements: weaver-harness-Spec section 6.1.1 DIAGNOSTIC-SETUP-ROLLBACK,
@@ -21,10 +21,10 @@ selected. Do not select the foundation dispatcher or deploy from this slice.
 Diagnostic setup retains management service while identity, Admit, Open or
 elected classifier readiness is pending. Each peer owns its exact encoded
 replies. A silent peer or a blocked reply does not hold the listener or another
-peer's rollback. A new connection accepted during Leave has the existing
-two-second first-directive bound. Expiry closes only that silent connection,
-without changing the rollback deadline. Observe answers InTransition before
-Ready and while rollback is pending. Stop and JoinLeave refuse OutOfOrder
+peer's rollback. Every new accepted connection has the existing
+two-second first-directive bound, including before rollback. Expiry closes
+only that silent connection, without changing the rollback deadline. Observe
+answers InTransition before Ready and while rollback is pending. Stop and JoinLeave refuse OutOfOrder
 during setup rollback.
 
 A forced rollback accepted before Ready selects NoResidency for the original
@@ -94,13 +94,15 @@ The first poll accepts that peer and delivers Ready, but cannot yet read the
 new descriptor. The next poll must retain and hear that exact rollback.
 
 B5's three gaps now have tests: forced Leave without rollback before Ready,
-JoinLeave during rollback, and a refused Release. The first two exercise both
-wire formats. The Release refusal uses the actual worker and remains fatal
-before Ready. Removing each guard fails its test.
+JoinLeave before Ready during rollback, and a refused Release. The first two
+exercise both wire formats. The Release refusal uses the actual worker and
+remains fatal before Ready. The JoinLeave control removes the combined Ready
+and rollback condition. It does not independently pin the rollback check after
+Ready. That narrower guard is covered by the B7 correction below.
 
 Seven independent compiled controls are caught: restoring setup cleanup after
 Ready, ignoring accepted rollback at checkpoint, dropping the handoff guard,
-accepting force without rollback, accepting JoinLeave during rollback,
+accepting force without rollback, accepting JoinLeave before Ready,
 accepting a refused Release, and omitting first-request custody at real accept.
 The first six are on one restored source cohort. The seventh adds only the
 root listener test, with identical production source and earlier test bodies.
@@ -136,6 +138,65 @@ The correction evidence is deposited separately under the approved root in
 diagnostic-setup-review-20261030. It includes the failed fixture run, both
 control cohorts, final gates, listener proof, exact source hashes and published
 archive. This author check does not replace the Planner's regrade.
+
+## Silent-peer correction and review evidence
+
+Planner regrade 5708184494 at 3c545b50 accepts FX1 and FX2 and identifies FX3.
+The first-request custody guard exposed an unbounded silent peer accepted
+before rollback. The accept site now arms the existing ANSWER_BOUND_MS for
+every new peer. The original Enter peer has already sent its request and
+retains no first-request deadline. No operation interval changes.
+
+The real-worker case keeps the pre-rollback silent peer connected after Left.
+The worker must retire it and exit successfully inside the two-second receive
+interval plus fixture margin. A separate root listener case holds that peer
+across Ready delivery and proves it cannot hold the handoff. Both fail against
+the old runtime and pass after the correction. Restoring the leaving-only
+condition is independently compiled and catches both assertions.
+
+B7 now has a post-Ready rollback JoinLeave case under both management wire
+formats. It requires OutOfOrder and retains the first rollback's exchange,
+cause, deadline and empty join set. A separate compiled control removes only
+the rollback check while keeping the Ready guard. It fails the bounded
+refusal assertion. B8 is addressed by narrowing the earlier control claim
+above. These two controls are separate from the prior seven-control cohort.
+
+| Site | FX3 review |
+| --- | --- |
+| Original Enter peer | Its request was received before Setup, so no first-request wait is owed. |
+| poll accept | Every new peer starts the same existing two-second first-request interval. |
+| poll wake and expiry | The earliest live peer deadline wakes the owner and retires only that peer. |
+| hear | Receiving a first request clears its interval and pending duty. |
+| retire and replies_done | A retired peer cannot hold reply drainage or the Ready handoff. |
+| Ready/Leave outcomes | The selected outcome, accepted resource duties and original operation interval remain fixed. |
+
+Final author gates pass 2,295 ordinary harness tests/doctests: 2,211 library,
+eight worker, 43 integration and 33 doctests. The suite reports 1,002 ignored
+and skips known #331. All 28 setup worker cases and seven existing Diagnostic
+cases pass. Seven owner tests, including both ignored root listener cases,
+pass in the explicit control lane. Strict harness lint, lock, format, diff
+and three DocsMirror checks pass. Source hashes restore after both controls.
+The private target is unchanged. Final full gates use /var/tmp/wd146s as TMPDIR.
+
+The first full run failed the unchanged classifier-child EOF test with phase
+Entered instead of Failed. Three isolated reruns and the repeated full suite
+pass on identical source. That first failure remains in the evidence and is
+not diagnosed or claimed fixed by this correction. A first fixture compile
+also failed because it reached a private test module. The corrected listener
+case checks its already-retired socket directly. Neither failed attempt is
+counted as a pass.
+
+R1/R2 of #412 remain open. This correction removes their silent-first-request
+trigger. A peer that sends requests but does not read its replies is still the
+entered replay consumer's work. The consumer has separate unpublished evidence
+for Ready independence and the full 150-second completed-Left delivery case.
+Those results do not close #412 from this parent PR.
+
+The immutable evidence is under the approved root in diagnostic-setup-fx3-20261030,
+including both red-test attempts, controls, both full-gate attempts, source
+hashes and the published archive. Only this record changes after final code
+gates. These are author results awaiting Planner regrade, not a security
+review or production qualification.
 
 ## Validation and source scope
 
@@ -261,3 +322,7 @@ that remains protective from a removed blocking-wait mechanism.
 The contract sweep must include shared lifecycle wait rules as well as the
 new setup section. A peer's receive deadline is a separate retirement duty
 from the operation deadline, and the tests must check both together.
+
+Test a silent peer accepted before a phase transition, not only one accepted
+inside the phase. Preserve each earlier control's exact guard scope when
+reporting a review result, and isolate the disputed guard in the next control.
