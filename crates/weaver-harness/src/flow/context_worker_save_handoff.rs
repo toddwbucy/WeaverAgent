@@ -22,6 +22,9 @@ impl<'a> FoundationManagement<'a> {
             || self.read_armed
             || self.input.has_graceful_leave()
             || self.input.serving.save.is_some()
+            // Queueing may retain a save behind a non-root state owner. The
+            // capture boundary, not this handoff, requires plan_work_pending
+            // to clear. Root plan exchanges already own the shared peer lane.
             || self.input.plan_pending()
             || !self.input.rollback_admissible()
         {

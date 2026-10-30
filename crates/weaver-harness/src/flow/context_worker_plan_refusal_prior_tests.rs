@@ -48,7 +48,12 @@ fn hold(input: &mut FoundationInput<'_>, flags: bool) -> u64 {
         .ticket
 }
 
-fn refuse(guard: &mut Guard<'_>, reader: &mut UnixStream, socket: &Path, ticket: u64) {
+pub(in crate::flow::context::worker_startup) fn refuse(
+    guard: &mut Guard<'_>,
+    reader: &mut UnixStream,
+    socket: &Path,
+    ticket: u64,
+) {
     let earlier_plan = guard.owned_input().plan_pending();
     let earlier = format!(
         "{:?}",
@@ -311,7 +316,10 @@ pub(in crate::flow::context::worker_startup) fn flags(
     });
 }
 
-fn queue_save(guard: &mut Guard<'_>, socket: &Path) -> (OwnedFd, AbsoluteBound) {
+pub(in crate::flow::context::worker_startup) fn queue_save(
+    guard: &mut Guard<'_>,
+    socket: &Path,
+) -> (OwnedFd, AbsoluteBound) {
     use weaver_types::state_flow::capture::{CaptureDirective, CaptureEnvelope, CapturePayload};
     let peer = dial(socket);
     let began = MonotonicIo.now().unwrap();

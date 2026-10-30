@@ -17,6 +17,21 @@ fn ready_with_inventory(
     BootPlanSummary,
     crate::flow::templates::TemplateCertificate,
 ) {
+    let mut fx = unbooted_with_inventory(inventory);
+    let boot = fx.boot(None);
+    let run = fx.run();
+    let certificate = run
+        .context
+        .take_template_certificate(&mut run.clock)
+        .unwrap()
+        .unwrap();
+    assert!(run.context.complete_wait(PumpDeadline::Enter).is_some());
+    (fx, boot, certificate)
+}
+
+pub(super) fn unbooted_with_inventory(
+    inventory: crate::flow::templates::CompiledInventory,
+) -> SummaryFixture {
     let seed: s::SeedRequest = s::decode_strict(include_str!("fixtures/seed.json")).unwrap();
     let mut scheme: serde_json::Value = serde_json::from_str(&seed.ste100_scheme).unwrap();
     scheme["technical_names"] = serde_json::json!([
@@ -87,21 +102,7 @@ fn ready_with_inventory(
         decode: DecodePort::from_channel(decode).unwrap(),
         peer,
     };
-    let mut fx = SummaryFixture::from_open(open, vec![]);
-    let boot = fx.boot(None);
-    let run = fx.run();
-    let certificate = run
-        .context
-        .take_template_certificate(&mut run.clock)
-        .unwrap()
-        .unwrap();
-    assert!(
-        fx.run()
-            .context
-            .complete_wait(PumpDeadline::Enter)
-            .is_some()
-    );
-    (fx, boot, certificate)
+    SummaryFixture::from_open(open, vec![])
 }
 fn begin(fx: &mut SummaryFixture) {
     let run = fx.run();

@@ -296,7 +296,7 @@ impl FoundationInput<'_> {
         // Requested can become QueueBoundary in this same advance call, so
         // permission must reach the boundary election, not just entry here.
         let at_boundary = organs_settled
-            && !self.flags_pending()
+            && !self.plan_work_pending()
             && matches!(
                 self.stage,
                 Stage::Waiting | Stage::Completed | Stage::Refused | Stage::Aborted

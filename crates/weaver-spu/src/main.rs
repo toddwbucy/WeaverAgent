@@ -51,6 +51,8 @@ use placement::{OpenedSession, PlacementFailure, PreparedDelta};
 mod open_evidence_tests;
 #[cfg(test)]
 mod placement_tests;
+#[cfg(test)]
+mod refeed_tests;
 
 /// The headroom the worker's composition root supplies. A deployment fact
 /// rather than an operator election, per Spec section 3, and a number a builder
@@ -310,6 +312,9 @@ fn decode_fault_line(fault: &DecodeFault) -> String {
 /// just faulted would be a promise the channel cannot keep.
 struct SeamCancel<'a> {
     socket: &'a DecodeSocket,
+    /// ReFeed accepts cancellation only for its retained turn. Ordinary
+    /// generation keeps its existing cancellation policy.
+    refeed_turn: Option<&'a weaver_types::TurnKey>,
     cancelled: bool,
     fatal: bool,
 }
@@ -320,7 +325,9 @@ impl CancelPoll for SeamCancel<'_> {
             match self.socket.try_recv_octets() {
                 Ok(None) => return false,
                 Ok(Some(frame)) => match serde_json::from_slice::<TokenDirective>(&frame) {
-                    Ok(TokenDirective::Cancel { .. }) => {
+                    Ok(TokenDirective::Cancel { turn })
+                        if self.refeed_turn.is_none_or(|active| *active == turn) =>
+                    {
                         self.cancelled = true;
                         return true;
                     }
@@ -342,6 +349,36 @@ impl CancelPoll for SeamCancel<'_> {
             }
         }
     }
+}
+
+/// Settle the interrupted result before its Cancel. A complete path returns
+/// to the caller's Generation construction. Engine errors never reach this
+/// function, and a failed stream or cancel poll remains a channel failure.
+fn finish_refeed(
+    decode: &DecodeSocket,
+    turn: &weaver_types::TurnKey,
+    session: &weaver_spu::decoder::session::Session<'_>,
+    generated: &weaver_spu::decoder::session::Generated,
+    cancel: &SeamCancel<'_>,
+    stream_failed: bool,
+) -> Result<bool, ()> {
+    if cancel.fatal || stream_failed {
+        eprintln!("{}", fault_line(&ChannelFault::Undecodable));
+        return Err(());
+    }
+    if !cancel.cancelled {
+        return Ok(false);
+    }
+    let answer = TokenAnswer::RefeedInterrupted {
+        turn: turn.clone(),
+        consumed: generated.tokens.len() as u64,
+        resident: session.resident_len() as u64,
+        capacity: session.capacity() as u64,
+    };
+    if send_answer(decode, &answer).is_err() || send_answer(decode, &TokenAnswer::AtRest).is_err() {
+        return Err(());
+    }
+    Ok(true)
 }
 
 /// The measurement, rendered by this organ to the shape the trace's model
@@ -605,6 +642,7 @@ fn serve_decode(
                 };
                 let mut cancel = SeamCancel {
                     socket: decode,
+                    refeed_turn: None,
                     cancelled: false,
                     fatal: false,
                 };
@@ -903,6 +941,7 @@ fn serve_decode(
                 let path_tokens: Vec<TokenId> = path.iter().map(|t| TokenId(*t)).collect();
                 let mut cancel = SeamCancel {
                     socket: decode,
+                    refeed_turn: Some(&turn),
                     cancelled: false,
                     fatal: false,
                 };
@@ -1002,42 +1041,18 @@ fn serve_decode(
                         return Err(());
                     }
                 };
-                // **A cancelled re-feed certifies nothing and faults.** The
-                // drive is handed the whole path upfront, so the text it owes
-                // is the record's while the measurement is the run's, and a
-                // cancel parts them: a part-way stop could only certify a
-                // prefix, and a prefix is the nothing the empty-path arm
-                // above already refuses as an exchange asking to certify
-                // nothing. Comparability against the source record is the
-                // whole of this drive's purpose, so a partial certificate is
-                // worth less than an absence and reads like more.
-                //
-                // **Unreachable through the harness and refused anyway.** The
-                // decode socket is an inherited descriptor from a socketpair
-                // the harness made, so its peer is that harness by
-                // possession, and the harness refuses every directive during
-                // this drive rather than cancelling it. Nothing can produce
-                // this today. It is answered rather than assumed away because
-                // the alternative is a branch that decides what a run means
-                // by accident the first time someone wires a stop to it.
-                //
-                // **What it withholds is the certificate, not every frame.**
-                // An elected field or column streams from the sinks above as
-                // each position lands, per `weaver-harness-Spec` section 6 and
-                // `weaver-diagnostic-Spec` section 3.2, so a cancel at K has
-                // already sent the intermediates for the K positions that
-                // became resident. Those are true of what ran and are not
-                // retracted. What never crosses is the `ReFed` answer, which
-                // is the thing that would have claimed the path was certified.
-                if cancel.cancelled || cancel.fatal || stream_fatal.get() {
-                    eprintln!("{}", fault_line(&ChannelFault::Undecodable));
-                    return Err(());
+                if finish_refeed(
+                    decode,
+                    &turn,
+                    &standing.session,
+                    &generated,
+                    &cancel,
+                    stream_fatal.get(),
+                )? {
+                    continue;
                 }
-                // **The emission is the recorded path's text**: what became
-                // resident is what the answer reports as said, and the
-                // recomputed draws ride the measurement's output slots,
-                // where the comparison reads them against the record. Whole,
-                // because the only stop that could shorten it faults above.
+                // Only a complete path reaches emission parsing and measured
+                // generation construction. A later Cancel answers at rest.
                 let emission = match resident.detokenize(&path_tokens) {
                     Ok(text) => text,
                     Err(fault) => {
@@ -1122,9 +1137,6 @@ fn serve_decode(
                     capacity: standing.session.capacity() as u64,
                 });
                 if send_answer(decode, &answer).is_err() {
-                    return Err(());
-                }
-                if cancel.cancelled && send_answer(decode, &TokenAnswer::AtRest).is_err() {
                     return Err(());
                 }
             }

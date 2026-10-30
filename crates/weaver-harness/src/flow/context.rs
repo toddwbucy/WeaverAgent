@@ -236,6 +236,7 @@ enum AuthorClaim {
     ServingObservation(std::sync::Arc<serving_observation::ServingObservationAuthor>),
     EnterRefusal(std::sync::Arc<()>),
     RootPlan(std::sync::Arc<()>),
+    PlanPort(std::sync::Arc<()>),
     PairRejection(std::sync::Arc<()>),
     RollbackGate(std::sync::Arc<worker_startup::expired::gate::RollbackGateAuthor>),
 }
@@ -247,6 +248,7 @@ impl AuthorClaim {
             | (Self::Measurement(a), Self::Measurement(b))
             | (Self::EnterRefusal(a), Self::EnterRefusal(b))
             | (Self::RootPlan(a), Self::RootPlan(b))
+            | (Self::PlanPort(a), Self::PlanPort(b))
             | (Self::PairRejection(a), Self::PairRejection(b)) => std::sync::Arc::ptr_eq(a, b),
             (Self::ServingObservation(a), Self::ServingObservation(b)) => {
                 std::sync::Arc::ptr_eq(a, b)
@@ -1412,6 +1414,7 @@ impl RecordingContext {
         }
         if self
             .root_plan_author_claim()
+            .or_else(|| self.plan_port_author_claim())
             .is_some_and(|actual| !claim.as_ref().is_some_and(|claim| actual.matches(claim)))
         {
             return Err(RunFailure::MarksOwned.into());
@@ -1436,7 +1439,7 @@ impl RecordingContext {
         if claim.is_some() && !claim_phase {
             return Err((match claim {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
-                Some(AuthorClaim::RootPlan(_)) => RunFailure::MarksOwned,
+                Some(AuthorClaim::RootPlan(_) | AuthorClaim::PlanPort(_)) => RunFailure::MarksOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 Some(AuthorClaim::PairRejection(_)) => RunFailure::PairOwned,
                 Some(AuthorClaim::RollbackGate(_) | AuthorClaim::ServingObservation(_)) => {
@@ -1463,7 +1466,7 @@ impl RecordingContext {
         if claim.is_some() && std::mem::take(&mut self.pause_claim_queue_for_test) {
             return Err((match claim {
                 Some(AuthorClaim::Placement(_)) => RunFailure::PlaceOwned,
-                Some(AuthorClaim::RootPlan(_)) => RunFailure::MarksOwned,
+                Some(AuthorClaim::RootPlan(_) | AuthorClaim::PlanPort(_)) => RunFailure::MarksOwned,
                 Some(AuthorClaim::EnterRefusal(_)) => RunFailure::EnterRefusalOwned,
                 Some(AuthorClaim::PairRejection(_)) => RunFailure::PairOwned,
                 Some(AuthorClaim::RollbackGate(_) | AuthorClaim::ServingObservation(_)) => {
@@ -1565,6 +1568,9 @@ impl RecordingContext {
                             .is_some_and(|owner| owner.claim(&identity, ticket)),
                         AuthorClaim::Measurement(identity) => {
                             self.claim_measure_author_ticket(&identity, ticket)
+                        }
+                        AuthorClaim::PlanPort(identity) => {
+                            self.claim_plan_port_author_ticket(&identity, ticket)
                         }
                         AuthorClaim::RootPlan(identity) => {
                             self.claim_root_plan_author_ticket(&identity, ticket)
@@ -1690,6 +1696,7 @@ impl RecordingContext {
         }
         if self
             .root_plan_author_claim()
+            .or_else(|| self.plan_port_author_claim())
             .is_some_and(|actual| !claim.as_ref().is_some_and(|claim| actual.matches(claim)))
         {
             return Err(RunFailure::MarksOwned.into());
@@ -1785,6 +1792,7 @@ impl RecordingContext {
             self.bind_place_author(sequence);
             self.bind_enter_refusal_author(sequence);
             self.bind_root_plan_author(sequence);
+            self.bind_plan_port_author(sequence);
             self.bind_rejected_author(sequence);
             self.bind_rollback_gate_author(sequence);
             self.bind_serving_observation_author(sequence);
@@ -1818,6 +1826,7 @@ impl RecordingContext {
                 self.bind_place_author(sequence);
                 self.bind_enter_refusal_author(sequence);
                 self.bind_root_plan_author(sequence);
+                self.bind_plan_port_author(sequence);
                 self.bind_rejected_author(sequence);
                 self.bind_rollback_gate_author(sequence);
                 self.bind_serving_observation_author(sequence);
@@ -1835,6 +1844,7 @@ impl RecordingContext {
                 self.bind_place_author(*sequence);
                 self.bind_enter_refusal_author(*sequence);
                 self.bind_root_plan_author(*sequence);
+                self.bind_plan_port_author(*sequence);
                 self.bind_rejected_author(*sequence);
                 self.bind_rollback_gate_author(*sequence);
                 self.bind_serving_observation_author(*sequence);
@@ -2933,6 +2943,8 @@ pub(super) mod expired_read_driver;
 #[path = "context_read.rs"]
 mod read_driver;
 
+#[path = "context_plan_ports.rs"]
+pub(in crate::flow) mod plan_port_driver;
 #[path = "context_plan_update.rs"]
 pub(super) mod plan_update_driver;
 #[allow(unused_imports)] // Composed by dependent boot, recall and placement primitives.

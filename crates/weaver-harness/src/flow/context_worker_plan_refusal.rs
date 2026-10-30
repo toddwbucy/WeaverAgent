@@ -194,7 +194,9 @@ impl FoundationManagement<'_> {
                 // Its own continuation consumes its receipt; this refusal never
                 // resumes or takes another caller's author ticket.
                 let peer = (!self.peer_unavailable).then_some(&mut self.peer);
-                if self.input.flags_pending() {
+                if self.input.plan_operation_pending() {
+                    self.input.advance_plan_operation(peer, io)?;
+                } else if self.input.flags_pending() {
                     self.input.advance_flags(peer, io)?;
                 } else if self.input.plan_pending() {
                     self.input.advance_plan(peer, io)?;

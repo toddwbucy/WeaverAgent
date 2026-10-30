@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 #[path = "plan_document.rs"]
 mod document;
 
+#[path = "plan_port.rs"]
+mod port;
+pub use port::{PlanOperationCase, PlanOperationRefused, PlanPortOperation};
+
 use super::{
     CallId, DecimalU64, Digest, ReadRefusalCode, SourceBlockId, SourcePosition, SpanRef,
     StatementRef, StepQueryRef, TaskScopeRef,
@@ -80,7 +84,7 @@ pub enum StepStatus {
     Retired,
 }
 
-/// Closed causes of a plan operation refusal or break.
+/// Closed causes of a durable plan break. Resource refusals cannot break a plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanBreakCase {
@@ -446,14 +450,6 @@ super::codec::closed_object! {
         pub document_sha256: Digest,
         pub last_source: SourcePosition,
     }
-}
-
-/// An ordinary plan operation refusal, never a component halt.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanOperationRefused {
-    pub case: PlanBreakCase,
-    pub detail: String,
 }
 
 /// A root plan-update refusal and its rejected source indices.

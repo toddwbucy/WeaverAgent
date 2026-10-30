@@ -567,41 +567,13 @@ fn the_distribution_is_read_before_the_draw_at_every_step() {
     assert_eq!(order.len() / 2, 3, "three draws, the stop token among them");
 }
 
-/// A cancel mid-path stops the re-feed where the poll saw it, and the
-/// session is left well framed: the recorded prefix that landed, the
-/// terminator after it, and one recomputed draw and one measurement per
-/// landed position. This is what the caller reads to know that a cancelled
-/// re-feed certifies a prefix rather than the path it was handed.
-///
-/// **The caller faults on it rather than answering.** The drive is given
-/// the whole path upfront, so the text it owes is the record's while the
-/// measurement is the run's, and a cancel parts them. A part-way answer
-/// could only certify a prefix, which is the nothing the empty-path arm
-/// refuses, so `main.rs` treats a cancelled re-feed as a fault. This test
-/// pins what the session does under the cancel, not what the binary
-/// decides about it.
-///
-/// **The whole decode log is asserted, positions included**, the way the
-/// sibling above asserts it. A value-only reading cannot see a recorded
-/// token landed at the wrong absolute position, which the append-only
-/// discipline this module pins forbids, and it drops the terminator
-/// entirely because the terminator is in no path.
-///
-/// Perturbations watched, each run under exactly the change named. Land
-/// the recorded token before honouring the cancel and the log carries
-/// three recorded positions against two draws. Return from the cancel arm
-/// without landing the terminator and the log ends at the last recorded
-/// token, which `spu-terminator-on-every-path` forbids. Move the signals
-/// record above the cancel check and the step count runs one past the
-/// draws it is paired with.
-///
-/// **What this does not watch.** The caller's fault is taken in `main.rs`,
-/// which is the binary, so nothing here would go red if that branch were
-/// dropped and a cancelled re-feed answered instead. A seam-level
-/// cancelled re-feed would catch it and there is none, which is bounded
-/// by the fact that nothing can produce one: the decode socket's peer is
-/// the harness by descriptor possession, and the harness refuses every
-/// directive during this drive rather than cancelling it.
+/// A cancel retains the exact recorded prefix, with one terminator after it
+/// and one draw/measurement per appended token. SPU Spec section 4.6 and the
+/// paired wire now carry that prefix as RefeedInterrupted, never Generation.
+/// This backend instrument pins exact tokens and absolute positions. The
+/// binary's refeed_tests and loaded suite pin its terminal and Cancel order.
+/// Removing the boundary poll, terminator or positional agreement must fail
+/// this case independently of the seam sender's checks.
 #[test]
 fn a_cancelled_refeed_lands_only_the_prefix_its_draws_count() {
     let log = Rc::new(RefCell::new(Log {

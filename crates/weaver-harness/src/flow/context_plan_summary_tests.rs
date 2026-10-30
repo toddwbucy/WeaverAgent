@@ -11,6 +11,8 @@ use crate::flow::ste100_channel::{Receive, Tag};
 use weaver_trace::serving::payloads as t;
 use weaver_traits::{ContentBlock, Message, Role};
 
+#[path = "context_plan_ports_tests.rs"]
+mod plan_port_tests;
 #[path = "context_plan_update_tests.rs"]
 mod root_update_tests;
 

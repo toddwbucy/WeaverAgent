@@ -224,7 +224,8 @@ impl RecordingContext {
         {
             Some(PlaceError::WrongPhase)
         } else if self.native_marks.is_some()
-            || self.place_owners_busy_except_reload()
+            || self.place_owners_busy_except_allocator()
+            || (self.marks.is_some() && !self.plan_port_native_allowed(&prerequisite))
             || (self
                 .reload
                 .as_ref()

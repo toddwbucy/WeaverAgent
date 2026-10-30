@@ -742,17 +742,6 @@ impl Harness {
                             return Err(fault);
                         }
                     }
-                    // **The Gateless seat, granted once at the run's
-                    // opening**, per `weaver-harness-Spec` section 6.2's
-                    // second criterion: a diagnostic enter that just
-                    // answered ready is the run arriving as the work, so
-                    // the replay runs here, after the answer crossed and
-                    // before the wait resumes. A serving run, and a
-                    // diagnostic run already replayed, pass through.
-                    if let Err(fault) = self.serve_replay(&mut pending) {
-                        self.unwind_if_entered(weaver_types::FaultCase::OrganDeathObserved, &fault);
-                        return Err(fault);
-                    }
                 }
                 Ok(Wake::Gate) => {
                     if let Err(fault) = self.serve_gate_wake(identity, &mut entry, &mut pending) {
@@ -875,59 +864,6 @@ impl Harness {
                     return Ok(*wake);
                 }
             }
-        }
-    }
-
-    /// The diagnostic seat's one grant, per `weaver-harness-Spec` section
-    /// 6.2: under a diagnostic binding the seat is granted once, at the
-    /// run's opening, on the run itself as the work - the operator's
-    /// sealed preload is what arrived owed an answer and the certification
-    /// is the answer it is owed. No frame ever grants this seat, and a
-    /// serving run never reaches the entry. Every outcome of the replay
-    /// itself lands in the diagnostic-trace: only a channel-level loss
-    /// surfaces here, ending service the way a serving turn's loss does.
-    fn serve_replay(&mut self, pending: &mut Option<OrganChannel>) -> Result<(), ChannelFault> {
-        let ChannelState::Entered(run) = &mut self.state else {
-            return Ok(());
-        };
-        let Some(seat) = run.diagnostic.as_mut() else {
-            return Ok(());
-        };
-        if !seat.admitted || seat.replayed {
-            return Ok(());
-        }
-        seat.replayed = true;
-        let reader_elected = seat.reader_elected;
-        let artifact = seat.artifact.clone();
-        let Some(spu) = run.spu.as_ref() else {
-            return Ok(());
-        };
-        let mut ports = crate::engine::Ports::grant(
-            &spu.decode,
-            &run.author,
-            &mut run.recorder,
-            &mut run.turn_ordinal,
-            &mut run.turn_in_flight,
-            &run.load,
-            // No frame, no prompt: the replay feeds the record's rendered
-            // forms and assembles nothing.
-            None,
-            &self.coordination,
-            Some(pending),
-            // No Gate stands under this binding, by construction.
-            None,
-            run.state.as_mut(),
-            run.classify.as_ref().map(|arm| &arm.channel),
-            &mut run.fullness,
-            &mut run.pressure_reported,
-        );
-        match crate::replay::drive(&mut ports, reader_elected, &artifact) {
-            Ok(()) => Ok(()),
-            Err(crate::engine::TurnError::ChannelLost) => Err(ChannelFault::Closed),
-            // Refusals and faults are already the record's, authored
-            // inside the pass, and the run stands for the operator's
-            // leave.
-            Err(_) => Ok(()),
         }
     }
 
@@ -1845,6 +1781,10 @@ impl Harness {
     ) -> Result<Option<Outcome>, ChannelFault> {
         match (&mut self.state, directive) {
             (ChannelState::BeforeEnter, LifecycleDirective::Enter { payload }) => {
+                if matches!(payload.binding, weaver_types::EnterBinding::Diagnostic) {
+                    return self
+                        .enter_diagnostic_managed(connection, exchange, *payload, sink, state_end);
+                }
                 match self.enter(*payload, sink, state_end) {
                     Ok(mut run) => {
                         if let Some(seat) = run.diagnostic.as_mut() {
@@ -2044,6 +1984,16 @@ impl Harness {
         payload: weaver_types::EnterPayload,
         sink: Option<OwnedFd>,
         state_end: Option<OwnedFd>,
+    ) -> Result<Run, EnterFailure> {
+        self.enter_with_setup(payload, sink, state_end, None)
+    }
+
+    fn enter_with_setup(
+        &self,
+        payload: weaver_types::EnterPayload,
+        sink: Option<OwnedFd>,
+        state_end: Option<OwnedFd>,
+        mut setup: Option<&mut diagnostic_setup::Setup<'_>>,
     ) -> Result<Run, EnterFailure> {
         let state_member = state_end.is_some();
         // The sink descriptor arrives on the directive's own message, the
@@ -2421,6 +2371,13 @@ impl Harness {
             };
         }
 
+        if let Some(setup) = setup.as_deref_mut() {
+            setup.load = Some(Box::new(run.load.clone()));
+            if setup.checkpoint().is_err() {
+                after_load!(run, LifecycleRefusal::NoResidency);
+            }
+        }
+
         // **The identity's one source is the member, under both bindings**,
         // per `weaver-harness-Spec` section 6.1 on the operator's ruling of
         // 2026-10-06 (#1) that the system prompt is state: the open seats the
@@ -2462,7 +2419,15 @@ impl Harness {
             // made, which is the miss and not the first load.
             None if state_member => after_load!(run, LifecycleRefusal::DescriptorsUnusable),
             None => Vec::new(),
-            Some(seam) => match seam.ask_identity_within(ask_bound) {
+            Some(seam) => match if let Some(setup) = setup.as_deref_mut() {
+                seam.ask_identity_managed(ask_bound, &mut |fd, deadline| {
+                    setup
+                        .wait(fd, nix::poll::PollFlags::POLLIN, Some(deadline))
+                        .is_ok()
+                })
+            } else {
+                seam.ask_identity_within(ask_bound)
+            } {
                 None => after_load!(run, LifecycleRefusal::DescriptorsUnusable),
                 Some(answered) => {
                     if !diagnostic && !answered.is_empty() {
@@ -2489,6 +2454,11 @@ impl Harness {
         // identity, prefix material permanent for the residency, per Spec
         // section 6.1.
         let opening = identity.clone();
+        if let Some(setup) = setup.as_deref_mut()
+            && setup.checkpoint().is_err()
+        {
+            after_load!(run, LifecycleRefusal::NoResidency);
+        }
         // The residency and decode pairs are created in one act before the SPU
         // fork: a socket with no address cannot be reached later by resolving
         // one, so the only moment it can reach a child is before that child
@@ -2535,26 +2505,43 @@ impl Harness {
         run.spu_ordinal += 1;
         let ordinal = run.spu_ordinal;
         let spu = run.spu.as_ref().expect("the arm just stood up");
-        if let Err(refusal) = exchange(
-            &spu.lifecycle,
-            Opener::Harness,
-            ordinal,
-            weaver_types::RefusingOrgan::Spu,
-            LifecycleDirective::Admit {
-                instruction: payload.spu_instruction.clone(),
-            },
-        ) {
+        let admit = if let Some(setup) = setup.as_deref_mut() {
+            setup.admit(&spu.lifecycle, ordinal, payload.spu_instruction.clone())
+        } else {
+            exchange(
+                &spu.lifecycle,
+                Opener::Harness,
+                ordinal,
+                weaver_types::RefusingOrgan::Spu,
+                LifecycleDirective::Admit {
+                    instruction: payload.spu_instruction.clone(),
+                },
+            )
+            .map(|_| ())
+        };
+        if let Err(refusal) = admit {
             // A closed channel means the organ is gone: its exit status says
             // whether the placement or the exec failed, which the exchange
             // itself could only report as an absent residency.
             let refusal = match refusal {
                 LifecycleRefusal::NoResidency => {
                     let pid = run.spu.as_ref().expect("the arm stood up").pid;
-                    classify_organ_death(pid).unwrap_or(LifecycleRefusal::NoResidency)
+                    let death = if setup.is_some() {
+                        diagnostic_setup::classify_death(pid)
+                    } else {
+                        classify_organ_death(pid)
+                    };
+                    death.unwrap_or(LifecycleRefusal::NoResidency)
                 }
                 other => other,
             };
             after_load!(run, refusal);
+        }
+
+        if let Some(setup) = setup.as_deref_mut()
+            && setup.checkpoint().is_err()
+        {
+            after_load!(run, LifecycleRefusal::NoResidency);
         }
 
         // **The decode session opens once residency confirms**, per
@@ -2575,13 +2562,29 @@ impl Harness {
             run.diagnostic.is_some(),
             payload.spu_instruction.decoder.residual_readout_election,
         );
-        if let Err(refusal) = open_session(
-            &spu.decode,
-            SessionId(run.session.0.clone()),
-            opening,
-            column_ask,
-        ) {
+        let opened = if let Some(setup) = setup.as_deref_mut() {
+            setup.open(
+                &spu.decode,
+                SessionId(run.session.0.clone()),
+                opening,
+                column_ask,
+            )
+        } else {
+            open_session(
+                &spu.decode,
+                SessionId(run.session.0.clone()),
+                opening,
+                column_ask,
+            )
+        };
+        if let Err(refusal) = opened {
             after_load!(run, refusal);
+        }
+
+        if let Some(setup) = setup.as_deref_mut()
+            && setup.checkpoint().is_err()
+        {
+            after_load!(run, LifecycleRefusal::NoResidency);
         }
 
         // The classify arm, per `weaver-harness-Spec` section 6 and
@@ -2648,11 +2651,23 @@ impl Harness {
             // otherwise hold the load forever, and the expiry path kills
             // before it reaps: a process still loading weights does not
             // exit on a channel it has not read yet.
-            match arm.channel.recv_reply_within(CLASSIFY_READY_BOUND_MS) {
+            let ready = if let Some(setup) = setup.as_deref_mut() {
+                let deadline = std::time::Instant::now()
+                    + std::time::Duration::from_millis(CLASSIFY_READY_BOUND_MS);
+                arm.channel
+                    .recv_managed(&mut |fd, events| setup.wait(fd, events, Some(deadline)))
+            } else {
+                arm.channel.recv_reply_within(CLASSIFY_READY_BOUND_MS)
+            };
+            match ready {
                 Ok(crate::channel::ClassifyReply::Answer(weaver_types::LabelAnswer::Ready)) => {
                     run.classify = Some(arm);
                 }
                 _ => {
+                    if setup.is_some() {
+                        run.classify = Some(arm);
+                        after_load!(run, LifecycleRefusal::NoResidency);
+                    }
                     drop(arm.channel);
                     let _ = nix::sys::signal::kill(arm.pid, nix::sys::signal::Signal::SIGKILL);
                     reap(arm.pid);
@@ -3385,12 +3400,20 @@ fn open_session_with_diagnostic(
             column_ask,
         })
         .map_err(|_| LifecycleRefusal::NoResidency)?;
-    match decode.recv_reply() {
+    judge_open_reply(decode.recv_reply(), &session, diagnostic)
+}
+
+fn judge_open_reply(
+    reply: Result<crate::channel::DecodeReply, ChannelFault>,
+    session: &SessionId,
+    diagnostic: &mut impl std::io::Write,
+) -> Result<(), LifecycleRefusal> {
+    match reply {
         // Diagnostic and retiring serving callers consume the paired wire too.
         // They validate its exact echo and evidence without authoring a new
         // diagnostic event or manufacturing foundation boot/place readiness.
         Ok(crate::channel::DecodeReply::Answer(TokenAnswer::Opened(opened))) => {
-            crate::open_evidence::validate(&opened, &session)
+            crate::open_evidence::validate(&opened, session)
                 .map_err(|cause| open_evidence_refusal(cause, diagnostic))
         }
         // The emission, matched by name: a fault at open is the residency
@@ -3429,16 +3452,22 @@ fn classify_organ_death(pid: nix::unistd::Pid) -> Option<LifecycleRefusal> {
     // a worse failure than the misreport this classification exists to
     // prevent. A child still running, or a status this call cannot read,
     // yields nothing and the caller keeps the refusal the exchange produced.
-    match nix::sys::wait::waitpid(pid, Some(nix::sys::wait::WaitPidFlag::WNOHANG)) {
-        Ok(nix::sys::wait::WaitStatus::Exited(_, crate::spawn::PLACEMENT_FAILED)) => {
+    organ_death_refusal(
+        nix::sys::wait::waitpid(pid, Some(nix::sys::wait::WaitPidFlag::WNOHANG)).ok()?,
+    )
+}
+
+fn organ_death_refusal(status: nix::sys::wait::WaitStatus) -> Option<LifecycleRefusal> {
+    match status {
+        nix::sys::wait::WaitStatus::Exited(_, crate::spawn::PLACEMENT_FAILED) => {
             // The ends this organ was owed never reached descriptor 3, which
             // is a descriptor fault and not a residency one.
             Some(LifecycleRefusal::DescriptorsUnusable)
         }
-        Ok(nix::sys::wait::WaitStatus::Exited(
+        nix::sys::wait::WaitStatus::Exited(
             _,
             crate::spawn::EXEC_FAILED | crate::spawn::DEATH_SIGNAL_REFUSED,
-        )) => {
+        ) => {
             // The organ binary never ran, its exec failing or the kernel
             // refusing the death signal that binds it to the worker, so
             // nothing it was asked to stand up could have stood up.
@@ -4406,5 +4435,8 @@ mod tests;
 
 #[path = "lifecycle/diagnostic_admission.rs"]
 pub(crate) mod diagnostic_admission;
+
+#[path = "lifecycle/diagnostic_setup.rs"]
+mod diagnostic_setup;
 
 pub(crate) use diagnostic_admission::receive_entered;

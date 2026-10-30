@@ -95,7 +95,9 @@ fn worker_input_gate_child() {
         && !mode.ends_with("-source-author")
         && !mode.ends_with("-task-author")
     {
-        let flags_turn = mode.contains("-flags-turn-boundary");
+        let flags_turn = mode.contains("-flags-turn-boundary")
+            || mode.contains("-port-activation-")
+            || mode.contains("-port-break-");
         if flags_turn {
             let end = Instant::now() + Duration::from_secs(15);
             while !root.join("flags-turn-request").exists() {
@@ -130,7 +132,12 @@ fn worker_input_gate_child() {
                         assert!(matches!(request.payload, Payload::Frame(_)));
                     }
                 }
-                Ok(n) if flags_turn && (mode.ends_with("-stop") || mode.ends_with("-leave")) => {
+                Ok(n)
+                    if flags_turn
+                        && (mode.ends_with("-stop")
+                            || mode.ends_with("-leave")
+                            || mode.ends_with("-failed")) =>
+                {
                     let answer: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
                     if mode.ends_with("-stop")
                         && answer.exchange.ordinal == u64::MAX
@@ -150,6 +157,9 @@ fn worker_input_gate_child() {
                         // disposition. Record even an erroneous Stop Lower so
                         // the parent, rather than this child alone, rejects it.
                         std::fs::write(root.join("flags-turn-lowered"), b"lower\n").unwrap();
+                        if mode.contains("-port-activation-") || mode.contains("-port-break-") {
+                            std::fs::write(root.join("plan-port-lowered"), b"lower\n").unwrap();
+                        }
                         packet(
                             port.as_raw_fd(),
                             &OrganEnvelope {
@@ -179,10 +189,15 @@ fn worker_input_gate_child() {
                         || mode.ends_with("-failed-read")
                         || mode.ends_with("-flags-leave")
                         || mode.ends_with("-flags-failed")
-                        || mode.ends_with("-flags-recorded-failed") =>
+                        || mode.ends_with("-flags-recorded-failed")
+                        || mode.ends_with("-port-leave")
+                        || mode.ends_with("-port-failed") =>
                 {
                     let lower: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
                     assert_eq!(lower.payload, Payload::Directive(LifecycleDirective::Lower));
+                    if mode.contains("-port-") {
+                        std::fs::write(root.join("plan-port-lowered"), b"lower\n").unwrap();
+                    }
                     packet(
                         port.as_raw_fd(),
                         &OrganEnvelope {
