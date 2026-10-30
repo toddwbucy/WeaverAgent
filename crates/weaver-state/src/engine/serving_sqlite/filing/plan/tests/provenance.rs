@@ -3,6 +3,7 @@ use crate::engine::serving_sqlite::{OpenFault, image};
 
 mod internal_view;
 mod summary;
+mod work_bytes;
 
 struct Fixture {
     store: ServingSqlite,
