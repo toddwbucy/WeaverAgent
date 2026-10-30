@@ -66,7 +66,7 @@ mod interrupt;
 #[path = "context_worker_diagnostic_member_tests.rs"]
 mod real_member;
 #[path = "context_worker_diagnostic_model_tests.rs"]
-mod real_model;
+pub(in super::super) mod real_model;
 
 #[test]
 fn diagnostic_spu_child() {

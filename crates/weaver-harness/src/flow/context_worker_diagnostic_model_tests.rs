@@ -33,6 +33,45 @@ pub(super) fn prepare(root: &std::path::Path, path: &std::path::Path) {
     )
     .unwrap();
 }
+/// The scenario's model, by the SPU tests' fixture convention (SPU Spec 1.2):
+/// `WEAVER_ARTIFACT_QWEN25_SAFETENSORS` names the native directory and
+/// `WEAVER_TEST_GGUF` the GGUF file. Unset and absent skips; named and absent
+/// fails, so a runner that asked for the real model is told it did not run.
+pub(crate) fn artifact(mode: &str) -> Option<PathBuf> {
+    let (variable, fallback, native) = if mode.ends_with("-native") {
+        (
+            "WEAVER_ARTIFACT_QWEN25_SAFETENSORS",
+            "/bulk-store/models/Qwen--Qwen2.5-0.5B-Instruct",
+            true,
+        )
+    } else {
+        (
+            "WEAVER_TEST_GGUF",
+            "/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf",
+            false,
+        )
+    };
+    let resolve = |path: PathBuf| {
+        let file = if native {
+            path.join("model.safetensors")
+        } else {
+            path
+        };
+        file.is_file().then_some(file)
+    };
+    match std::env::var_os(variable) {
+        Some(named) => {
+            let found = resolve(PathBuf::from(&named));
+            assert!(
+                found.is_some(),
+                "{variable} names an unavailable artifact: {}",
+                PathBuf::from(named).display()
+            );
+            found
+        }
+        None => resolve(PathBuf::from(fallback)),
+    }
+}
 pub(super) fn source(
     root: &std::path::Path,
     mode: &str,
@@ -41,12 +80,11 @@ pub(super) fn source(
 ) -> (serde_json::Value, serde_json::Value) {
     instruction.decoder.model_binding = weaver_types::ModelBinding {
         artifact: weaver_types::ArtifactRef(
-            if mode.ends_with("-native") {
-                "/bulk-store/models/Qwen--Qwen2.5-0.5B-Instruct/model.safetensors"
-            } else {
-                "/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf"
-            }
-            .into(),
+            artifact(mode)
+                .expect("the scenario skips before spawning without its fixture")
+                .to_str()
+                .unwrap()
+                .into(),
         ),
         devices: vec![weaver_types::DeviceOrdinal(0)],
     };

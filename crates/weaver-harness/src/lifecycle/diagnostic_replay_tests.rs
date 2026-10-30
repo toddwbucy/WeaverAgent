@@ -594,6 +594,8 @@ fn diagnostic_replay_stop_during_a_clean_close_keeps_the_pass() {
                     .unwrap();
                 let mut bytes = [0; 16_384];
                 while reader.read(&mut bytes).is_ok_and(|n| n > 0) {}
+                // Kept open: the next turn's record lands on the same sink.
+                reader
             });
             let mut ports = ReplayPorts {
                 management: owner,
@@ -604,7 +606,7 @@ fn diagnostic_replay_stop_during_a_clean_close_keeps_the_pass() {
                 failed: false,
             };
             ports.close(&turn, TurnClose::Clean).unwrap();
-            drain.join().unwrap();
+            let _reader = drain.join().unwrap();
             let control = ports.management.replay.as_ref().unwrap();
             assert!(control.turn.is_none());
             assert!(
@@ -617,7 +619,13 @@ fn diagnostic_replay_stop_during_a_clean_close_keeps_the_pass() {
                 "the Stop was answered after the close"
             );
             assert!(ports.checkpoint().unwrap(), "the pass continues");
-            let answer = delivered(ports.management, far);
+            let next = TurnKey("next-turn".into());
+            assert!(
+                crate::replay::ReplaySeat::replay_turn_started(&mut ports, &next).unwrap(),
+                "the next turn replays"
+            );
+            assert_eq!(ports.management.replay.as_ref().unwrap().turn, Some(next));
+            let answer = delivered(&mut *ports.management, far);
             assert_eq!(answer.exchange, exchange(2));
             assert_eq!(
                 answer.payload,

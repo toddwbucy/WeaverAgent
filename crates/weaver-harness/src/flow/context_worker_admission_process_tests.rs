@@ -9,7 +9,7 @@ use weaver_types::{
 };
 
 #[path = "context_worker_diagnostic_tests.rs"]
-mod diagnostic;
+pub(super) mod diagnostic;
 
 pub(in crate::flow::context::worker_startup) fn is_mode(mode: &str) -> bool {
     mode.contains("-admission-") && mode.contains("-dispatch-")

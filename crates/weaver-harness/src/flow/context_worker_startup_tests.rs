@@ -2241,6 +2241,12 @@ fn scenario(name: &str, mode: &str) {
         circuit(mode);
         return;
     }
+    if mode.contains("-real-model-")
+        && admission_process::diagnostic::real_model::artifact(mode).is_none()
+    {
+        eprintln!("SKIP {name}: no implicit model fixture");
+        return;
+    }
     if leave_joint::is_mode(mode) {
         leave_joint::scenario(name, mode);
         return;
