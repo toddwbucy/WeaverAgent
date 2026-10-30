@@ -606,6 +606,23 @@ fn next_ready_refuses_an_activation_that_does_not_follow_this_closure() {
 }
 
 #[test]
+fn next_ready_takes_only_this_runs_closure_receipt_and_placed_unit() {
+    let (mut other, certificate) = closure_fixture(false, true);
+    let foreign = closed(&mut other, &certificate);
+    let mut chain = chain();
+    assert_eq!(foreign.closed(), chain.start.receipt.closed());
+    chain.start.receipt = foreign;
+    assert_eq!(refusal(&mut chain), NextReadyRefusal::CrossRun);
+    // An identical chain's placed instruction unit, from another run.
+    let activation = activate(&mut other, &certificate, &step_id(2));
+    let (_, source, unit) = filed_instruction(&mut other, &certificate, &activation, false);
+    let mut chain = self::chain();
+    assert_eq!(&source, chain.placed.source());
+    chain.placed.unit = Arc::new(unit);
+    assert_eq!(refusal(&mut chain), NextReadyRefusal::CrossRun);
+}
+
+#[test]
 fn next_ready_takes_only_this_runs_activation_receipt() {
     // An identical chain's activation, taken by another run's context.
     let mut chain = chain();
@@ -616,6 +633,29 @@ fn next_ready_takes_only_this_runs_activation_receipt() {
     assert_eq!(foreign.activated(), chain.activation.activated());
     chain.activation = foreign;
     assert_eq!(refusal(&mut chain), NextReadyRefusal::CrossRun);
+}
+
+#[test]
+fn next_ready_interval_is_the_exact_difference_of_its_two_readings() {
+    // Equal readings are a genuine zero interval, not clamped or invented.
+    for gap in [0, 7] {
+        let mut chain = chain();
+        chain.placed.ended_ns = chain.start.began_ns + gap;
+        let event = chain
+            .fx
+            .run()
+            .context
+            .next_ready_event(&chain.start, &chain.activation, &chain.placed)
+            .unwrap();
+        let Some(Payload::PlanMeasurement(measurement)) = &event.payload else {
+            panic!("a plan measurement")
+        };
+        let value = serde_json::to_value(measurement).unwrap();
+        assert_eq!(
+            value["event"]["next_ready"]["closure_to_next_ns"],
+            gap.to_string()
+        );
+    }
 }
 
 #[test]
@@ -668,6 +708,11 @@ fn next_ready_does_not_bridge_a_replacement_between_closure_and_placement() {
         plan.plan.revision = (plan.plan.revision.0 + 1).into()
     });
     assert_eq!(refusal(&mut chain), NextReadyRefusal::Replaced);
+    // The same revision, no longer locked.
+    let mut chain = self::chain();
+    settle(&mut chain);
+    swap_current(&mut chain.fx, |plan| plan.status = s::PlanStatus::Broken);
+    assert_eq!(refusal(&mut chain), NextReadyRefusal::Replaced);
     let mut chain = self::chain();
     chain.placed.meta.plan.revision = (chain.placed.meta.plan.revision.0 + 1).into();
     assert_eq!(refusal(&mut chain), NextReadyRefusal::Replaced);
@@ -677,6 +722,17 @@ fn next_ready_does_not_bridge_a_replacement_between_closure_and_placement() {
 fn next_ready_does_not_bridge_a_missing_endpoint() {
     // The closure is gone from the committed revision.
     let mut chain = chain_with(|fx| swap_current(fx, |plan| plan.steps[0].closure_source = None));
+    assert_eq!(refusal(&mut chain), NextReadyRefusal::MissingEndpoint);
+    // The receipt's closed step is gone, though its closure is held by
+    // another step id.
+    let mut chain = chain_with(|fx| {
+        swap_current(fx, |plan| {
+            plan.steps[0].step_id.local_id = 7.into();
+            if let Some(work) = plan.steps[0].work.as_mut() {
+                work.step_id.local_id = 7.into();
+            }
+        })
+    });
     assert_eq!(refusal(&mut chain), NextReadyRefusal::MissingEndpoint);
     // The activated step is no longer active.
     let mut chain =
