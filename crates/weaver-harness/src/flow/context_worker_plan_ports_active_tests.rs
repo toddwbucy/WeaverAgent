@@ -82,7 +82,12 @@ fn complete_operation(input: &mut FoundationInput<'_>) -> FoundationPlanOperatio
         .expect("one completed operation")
 }
 
-fn activate(input: &mut FoundationInput<'_>) -> (s::StepQueryRef, s::SpanRef, s::SourcePosition) {
+/// Activate the first waiting step after `previous`, the closed step the
+/// successor query follows, or the plan's first step when it is None.
+fn activate(
+    input: &mut FoundationInput<'_>,
+    previous: Option<s::StepId>,
+) -> (s::StepQueryRef, s::SpanRef, s::SourcePosition) {
     let context = &mut input.serving.owner.context;
     let bound = AbsoluteBound::after(MonotonicIo.now().unwrap(), 5_000_000_000).unwrap();
     context
@@ -111,7 +116,7 @@ fn activate(input: &mut FoundationInput<'_>) -> (s::StepQueryRef, s::SpanRef, s:
         .plan
         .clone();
     input
-        .step_successor(plan, None, Some(TurnKey(TURN.into())))
+        .step_successor(plan, previous, Some(TurnKey(TURN.into())))
         .unwrap();
     let checked = complete_operation(input).into_successor().unwrap();
     let successor = checked.reference().clone();
@@ -180,7 +185,7 @@ pub(super) fn exercise(
         });
         let _done = Done(&done);
         let input = guard.input.as_mut().unwrap();
-        let (successor, span, through) = activate(input);
+        let (successor, span, through) = activate(input, None);
         let before = input
             .serving
             .owner
@@ -207,6 +212,15 @@ pub(super) fn exercise(
         let before_steps = before_snapshot.steps.clone();
         if mode.ends_with("-close") {
             close(input, &successor, span, through);
+            return;
+        }
+        if mode.ends_with("-close-next") {
+            // The second step closes behind the first one's closure: the
+            // receipt must name the second step and its own closure source.
+            close(input, &successor, span, through);
+            let (next, span, through) = activate(input, Some(successor.step_id.clone()));
+            assert_ne!(next.step_id, successor.step_id);
+            close(input, &next, span, through);
             return;
         }
         let expected_digest = if mode.ends_with("-work") {
@@ -366,6 +380,22 @@ pub(super) fn exercise(
         );
     });
     let rows = management::tests::trace(reader);
+    if mode.ends_with("-close-next") {
+        let outcomes = rows
+            .iter()
+            .filter(|row| row["kind"] == "step.outcome")
+            .count();
+        assert_eq!(outcomes, 2, "each close certifies its own closed outcome");
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row["kind"] == "plan.event")
+                .count(),
+            2,
+            "only the two activations write plan events"
+        );
+        assert!(rows.iter().all(|row| row["kind"] != "refusal"));
+        return;
+    }
     if mode.ends_with("-close") {
         let outcomes: Vec<_> = rows
             .iter()
