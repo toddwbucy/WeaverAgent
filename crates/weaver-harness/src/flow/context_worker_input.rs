@@ -27,6 +27,9 @@ pub(in crate::flow::context::worker_startup) mod graceful;
 #[path = "context_worker_flags.rs"]
 pub(crate) mod flags;
 
+#[path = "context_worker_plan_ports.rs"]
+pub(crate) mod plan_ports;
+
 #[path = "context_worker_plan.rs"]
 pub(in crate::flow::context::worker_startup) mod plan;
 
@@ -188,7 +191,7 @@ impl<'a> FoundationInput<'a> {
         if self.serving.owner.listener.held().is_some() {
             return FoundationInputProgress::ManagementPending;
         }
-        if self.save_blocks_turn() || self.plan_pending() || self.flags_pending() {
+        if self.save_blocks_turn() || self.plan_work_pending() {
             return FoundationInputProgress::Pending;
         }
         if let Some(progress) = self.wind_down_input_progress() {
@@ -279,6 +282,10 @@ impl<'a> FoundationInput<'a> {
                 // still lets its original owner run, without granting a boundary
                 // when that owner finishes in this same call.
                 let settled = matches!(observation, ObservationProgress::Complete);
+                if self.plan_operation_pending() {
+                    self.advance_plan_operation(None, io)?;
+                    return Ok(());
+                }
                 if self.flags_pending() {
                     self.advance_flags(None, io)?;
                     // Yield the completed sample before any unrelated idle wait.
@@ -575,6 +582,14 @@ impl<'a> FoundationInput<'a> {
     }
 
     fn step(&mut self, io: &mut impl PumpIo) -> Result<(), RunFailure> {
+        self.step_with_peer(None, io)
+    }
+
+    fn step_with_peer(
+        &mut self,
+        peer: Option<&mut LifecyclePeer>,
+        io: &mut impl PumpIo,
+    ) -> Result<(), RunFailure> {
         if self.progress() == FoundationInputProgress::WindDown {
             return self.advance_wind_down(io);
         }
@@ -582,13 +597,14 @@ impl<'a> FoundationInput<'a> {
             return self.advance_quiesce(io);
         }
         if self.stage == Stage::Engine {
-            return self.advance_engine(None, io);
+            return self.advance_engine(peer, io);
         }
         let owner = &mut self.serving.owner;
         owner.context.live(io)?;
         let mut ports = PumpPorts {
             lifecycle: LifecyclePorts {
                 listener: Some(&mut owner.listener),
+                dial: peer,
                 residency: Some(owner.resident.residency),
                 leave_peer: plan::retained_port(&mut self.serving.plan, &mut self.serving.save),
                 ..Default::default()

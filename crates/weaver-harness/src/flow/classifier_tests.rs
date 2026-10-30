@@ -286,7 +286,11 @@ fn scripted_port_distinguishes_peer_loss_from_malformed_reply() {
     ] {
         let (mut port, mut peer) = ScriptedPort::fixture([step]).unwrap();
         port.submit(request(1, 0)).unwrap();
-        peer.advance().unwrap();
+        assert!(peer.advance().unwrap());
+        if expected == Ste100ComponentCode::Crashed {
+            // Use the same kernel precondition as the held-result tests.
+            await_terminal(port.readiness(), libc::POLLHUP | libc::POLLRDHUP);
+        }
         let failure = port.try_result().unwrap_err();
         assert_eq!(failure.kind, PortFailureKind::Component(expected));
         assert_eq!(port.try_result(), Err(failure.clone()));

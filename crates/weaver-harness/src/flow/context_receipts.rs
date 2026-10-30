@@ -87,6 +87,7 @@ pub(super) enum FilingOwner {
     Outbound,
     Marks,
     RootPlan,
+    PlanPort,
     BootPairs,
 }
 
@@ -227,14 +228,18 @@ impl RecordingContext {
             }),
             FilingOwner::Marks => self.marks_filing_allowed(key),
             FilingOwner::RootPlan => self.root_plan_filing_allowed(key),
+            FilingOwner::PlanPort => self.plan_port_filing_allowed(key),
             FilingOwner::BootPairs => self.boot_pairs_filing_allowed(),
             FilingOwner::Ordinary | FilingOwner::Outbound => false,
         };
         if (plan_effect && (!self.plan_cache.boot_started || self.plan_cache.committed.is_none()))
             || (owner == FilingOwner::RootPlan && !self.root_plan_filing_allowed(key))
+            || (owner == FilingOwner::PlanPort && !self.plan_port_filing_allowed(key))
             || (self.marks.is_some()
-                && !(matches!(owner, FilingOwner::Marks | FilingOwner::RootPlan)
-                    && owned_continuation))
+                && !(matches!(
+                    owner,
+                    FilingOwner::Marks | FilingOwner::RootPlan | FilingOwner::PlanPort
+                ) && owned_continuation))
             || (self.boot_pairs.is_some() && owner != FilingOwner::BootPairs)
             || (owner == FilingOwner::BootPairs && !self.boot_pairs_filing_allowed())
             || self.output.is_some()
@@ -450,7 +455,10 @@ impl RecordingContext {
         owner: FilingOwner,
         ports: &mut PumpPorts<'_, I>,
     ) -> Result<FilingProgress, RunFailure> {
-        if owner == FilingOwner::RootPlan && !self.root_plan_filing_allowed(PumpDeadline::Decision)
+        if (owner == FilingOwner::RootPlan
+            && !self.root_plan_filing_allowed(PumpDeadline::Decision))
+            || (owner == FilingOwner::PlanPort
+                && !self.plan_port_filing_allowed(PumpDeadline::Decision))
         {
             return Err(RunFailure::MarksOwned);
         }
@@ -571,7 +579,10 @@ impl RecordingContext {
         owner: FilingOwner,
         io: &mut impl PumpIo,
     ) -> Result<Option<FilingCompletion>, RunFailure> {
-        if owner == FilingOwner::RootPlan && !self.root_plan_filing_allowed(PumpDeadline::Decision)
+        if (owner == FilingOwner::RootPlan
+            && !self.root_plan_filing_allowed(PumpDeadline::Decision))
+            || (owner == FilingOwner::PlanPort
+                && !self.plan_port_filing_allowed(PumpDeadline::Decision))
         {
             return Err(RunFailure::MarksOwned);
         }
@@ -645,7 +656,10 @@ impl RecordingContext {
         self.withdraw_unstarted_owned(FilingOwner::RootPlan)
     }
 
-    fn withdraw_unstarted_owned(&mut self, expected: FilingOwner) -> Option<AuthoredEvent> {
+    pub(super) fn withdraw_unstarted_owned(
+        &mut self,
+        expected: FilingOwner,
+    ) -> Option<AuthoredEvent> {
         let owner = self.filing.as_ref()?;
         if owner.owner != expected
             || owner.sequence.is_some()

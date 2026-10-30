@@ -254,6 +254,23 @@ pub(in crate::flow::context::worker_startup) fn retain(
     HANDOFF.with(|slot| assert!(slot.borrow_mut().replace((handoff, rows)).is_none()));
 }
 
+pub(in crate::flow::context::worker_startup::input) fn check_management_handoff(
+    mut handoff: Box<FoundationFailedHandoff>,
+    first: &RunFailure,
+    check: impl FnOnce(&super::super::super::management::FailedManagement),
+) {
+    assert_eq!(handoff.input._failure.as_ref(), Some(first));
+    // The enclosing run still owns the other organs. This fixture checks the
+    // complete move-owned handoff, then reaps its actual gate child.
+    reap(&mut handoff.gate_child);
+    check(
+        handoff
+            .management
+            .as_ref()
+            .expect("failed management custody survived"),
+    );
+}
+
 struct Guard(Option<Box<FoundationFailedExit>>);
 impl Drop for Guard {
     fn drop(&mut self) {

@@ -7,7 +7,7 @@ Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-spu-Spec`
 **Parent:** `weaver-spu-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #393
+**Landing PR:** #417
 
 ---
 
@@ -453,7 +453,7 @@ Process section 6 names the two invocations that reach them.
 | `markers.rs` | `gguf` | `WEAVER_VOCAB_<FAMILY>`, one per registry entry |
 | `selection.rs` | `gguf` | `WEAVER_ARTIFACT_GEMMA4`, `WEAVER_ARTIFACT_MISTRAL_SMALL`, `WEAVER_ARTIFACT_PHI4`, `WEAVER_ARTIFACT_PHI4_MINI`, `WEAVER_ARTIFACT_SMOLLM2` |
 | `native_loaded.rs` | `cuda` | `WEAVER_ARTIFACT_QWEN25_SAFETENSORS`, `WEAVER_ARTIFACT_QWEN25_32B`, `WEAVER_MEASURE_PACE` |
-| `loaded.rs` | `cuda` and `gguf` | `WEAVER_TEST_GGUF`, `WEAVER_ARTIFACT_COLUMN_LAYERS`, `WEAVER_ARTIFACT_COLUMN_WIDTH` |
+| `loaded.rs` | `cuda` and `gguf` | `WEAVER_TEST_GGUF`, `WEAVER_ARTIFACT_QWEN25_SAFETENSORS`, `WEAVER_ARTIFACT_COLUMN_LAYERS`, `WEAVER_ARTIFACT_COLUMN_WIDTH` |
 | `two_card.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_TWO_CARD`, `WEAVER_ARTIFACT_SPLIT` |
 | `readout_neutral.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_READOUT`, `WEAVER_ARTIFACT_READOUT_LAYERS` |
 
@@ -1383,6 +1383,8 @@ are retained, but no ReFed, emission parse or completed-path measurement is inve
 
 If the whole recorded path completed before the cancel was polled, the normal ReFed
 stands and the cancel is handled at rest. There is no second terminal for the re-feed.
+A refused re-feed starts no drive, so a cancel that crosses the refusal is likewise
+handled at rest and answers AtRest; the refusal is the re-feed's terminal.
 A prefill, token or terminator failure, a malformed seam or a failed intermediate send
 remains a fault and cannot become RefeedInterrupted. Token-boundary polling makes no
 wall-time promise about a stuck prefill or kernel. Once cancellation is accepted, the

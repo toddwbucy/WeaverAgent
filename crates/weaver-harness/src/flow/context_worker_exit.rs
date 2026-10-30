@@ -34,6 +34,7 @@ pub struct FoundationFailedHandoff {
     _save_request: Option<super::super::save::FailedSaveRequest>,
     _plan: Option<Box<super::super::plan::PendingPlan>>,
     _flags: Option<Box<super::super::flags::FoundationFlags>>,
+    _plan_operation: Option<Box<super::super::plan_ports::PendingPlanOperation>>,
     gate: Option<OrganPort>,
     gate_child: OwnedChild,
     tools: Option<ToolsCgroup>,
@@ -132,6 +133,7 @@ impl FoundationHalt<'_> {
             save,
             plan,
             flags,
+            plan_operation,
         } = serving;
         let crate::flow::context::boot_composition::gate_startup::ready::EnteredServing {
             context,
@@ -178,6 +180,7 @@ impl FoundationHalt<'_> {
             _save_request: save_request,
             _plan: plan.map(|plan| plan.retire_failed()),
             _flags: flags,
+            _plan_operation: plan_operation,
             input: FailedInput {
                 received: original,
                 turn,
@@ -943,3 +946,7 @@ pub(in crate::flow::context::worker_startup) mod plan_tests;
 #[cfg(test)]
 #[path = "context_worker_flags_cleanup_tests.rs"]
 pub(in crate::flow::context::worker_startup) mod flags_tests;
+
+#[cfg(test)]
+#[path = "context_worker_plan_ports_failed_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod plan_port_tests;

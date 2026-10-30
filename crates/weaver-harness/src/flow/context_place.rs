@@ -679,6 +679,9 @@ impl RecordingContext {
             || self.reload.as_ref().is_some_and(|w| w.bound.is_some())
     }
     fn place_owners_busy_except_reload(&self) -> bool {
+        self.marks.is_some() || self.place_owners_busy_except_allocator()
+    }
+    fn place_owners_busy_except_allocator(&self) -> bool {
         self.place_notice.is_some()
             || self.native_marks.is_some()
             || self.place_close.is_some()
@@ -690,7 +693,6 @@ impl RecordingContext {
             || self.pair_work.is_some()
             || self.read.is_some()
             || self.inspection.is_some()
-            || self.marks.is_some()
             || self.member_capture.is_some()
             || self.freshness.is_some()
             || self.repair_blocks_external()

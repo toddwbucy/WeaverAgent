@@ -59,3 +59,43 @@ pub(super) fn ask<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<(
     let _: Fields = deserialize_object(deserializer)?;
     Ok(())
 }
+
+type OperationRefusalFields = (
+    crate::state_flow::PlanPortOperation,
+    PlanRef,
+    Option<crate::state_flow::StepId>,
+    crate::state_flow::PlanOperationRefused,
+);
+
+pub(super) fn operation_refusal<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<OperationRefusalFields, D::Error> {
+    use crate::state_flow::{PlanOperationRefused, PlanPortOperation, StepId};
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Fields {
+        #[serde(deserialize_with = "operation_code")]
+        operation: PlanPortOperation,
+        expected: PlanRef,
+        #[serde(deserialize_with = "crate::state_flow::required_option")]
+        step_id: Option<StepId>,
+        refusal: PlanOperationRefused,
+    }
+    fn operation_code<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<PlanPortOperation, D::Error> {
+        PlanPortOperation::deserialize(serde::de::value::StringDeserializer::<D::Error>::new(
+            String::deserialize(deserializer)?,
+        ))
+    }
+    let fields: Fields = deserialize_object(deserializer)?;
+    if fields.operation != PlanPortOperation::RecordBreak && fields.step_id.is_none() {
+        return Err(serde::de::Error::custom("plan operation requires step_id"));
+    }
+    Ok((
+        fields.operation,
+        fields.expected,
+        fields.step_id,
+        fields.refusal,
+    ))
+}

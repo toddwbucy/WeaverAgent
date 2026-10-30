@@ -90,8 +90,14 @@ fn worker_input_gate_child() {
             payload: Payload::Answer(LifecycleAnswer::GateReady),
         },
     );
-    if mode.starts_with("input-worker-plan-") && !mode.ends_with("-open-turn") {
-        let flags_turn = mode.contains("-flags-turn-boundary");
+    if mode.starts_with("input-worker-plan-")
+        && !mode.ends_with("-open-turn")
+        && !mode.ends_with("-source-author")
+        && !mode.ends_with("-task-author")
+    {
+        let flags_turn = mode.contains("-flags-turn-boundary")
+            || mode.contains("-port-activation-")
+            || mode.contains("-port-break-");
         if flags_turn {
             let end = Instant::now() + Duration::from_secs(15);
             while !root.join("flags-turn-request").exists() {
@@ -108,7 +114,30 @@ fn worker_input_gate_child() {
         loop {
             match recv(port.as_raw_fd(), &mut bytes, MsgFlags::empty()) {
                 Ok(0) => return,
-                Ok(n) if flags_turn && (mode.ends_with("-stop") || mode.ends_with("-leave")) => {
+                Ok(n) if mode.ends_with("-quiesce-author") => {
+                    let request: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
+                    if request.payload == Payload::Directive(LifecycleDirective::Quiesce) {
+                        packet(port.as_raw_fd(), &frame(&mode, 101));
+                        packet(
+                            port.as_raw_fd(),
+                            &OrganEnvelope {
+                                exchange: request.exchange,
+                                position: Position::Close,
+                                payload: Payload::Answer(LifecycleAnswer::GateQuiesced),
+                            },
+                        );
+                    } else {
+                        assert_eq!(request.exchange, frame(&mode, 101).exchange);
+                        assert_eq!(request.position, Position::Close);
+                        assert!(matches!(request.payload, Payload::Frame(_)));
+                    }
+                }
+                Ok(n)
+                    if flags_turn
+                        && (mode.ends_with("-stop")
+                            || mode.ends_with("-leave")
+                            || mode.ends_with("-failed")) =>
+                {
                     let answer: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
                     if mode.ends_with("-stop")
                         && answer.exchange.ordinal == u64::MAX
@@ -128,6 +157,9 @@ fn worker_input_gate_child() {
                         // disposition. Record even an erroneous Stop Lower so
                         // the parent, rather than this child alone, rejects it.
                         std::fs::write(root.join("flags-turn-lowered"), b"lower\n").unwrap();
+                        if mode.contains("-port-activation-") || mode.contains("-port-break-") {
+                            std::fs::write(root.join("plan-port-lowered"), b"lower\n").unwrap();
+                        }
                         packet(
                             port.as_raw_fd(),
                             &OrganEnvelope {
@@ -157,10 +189,15 @@ fn worker_input_gate_child() {
                         || mode.ends_with("-failed-read")
                         || mode.ends_with("-flags-leave")
                         || mode.ends_with("-flags-failed")
-                        || mode.ends_with("-flags-recorded-failed") =>
+                        || mode.ends_with("-flags-recorded-failed")
+                        || mode.ends_with("-port-leave")
+                        || mode.ends_with("-port-failed") =>
                 {
                     let lower: OrganEnvelope = serde_json::from_slice(&bytes[..n]).unwrap();
                     assert_eq!(lower.payload, Payload::Directive(LifecycleDirective::Lower));
+                    if mode.contains("-port-") {
+                        std::fs::write(root.join("plan-port-lowered"), b"lower\n").unwrap();
+                    }
                     packet(
                         port.as_raw_fd(),
                         &OrganEnvelope {

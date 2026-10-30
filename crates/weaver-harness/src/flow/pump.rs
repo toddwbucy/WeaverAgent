@@ -55,6 +55,8 @@ pub(super) enum PumpDeadline {
     AdminRead,
     /// Delivery uses only the remainder of the accepted root update window.
     PlanAnswer,
+    /// A rejected root opener's trace and answer share its original window.
+    PlanRefusal,
     /// Snapshot/finished missing results require cleanup, not immediate halt.
     CaptureResult,
     /// The unchanged publication window, retained separately from leg waits.

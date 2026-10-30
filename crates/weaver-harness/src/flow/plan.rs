@@ -7,6 +7,8 @@ use super::pump::PumpDeadline;
 use std::sync::Arc;
 #[path = "plan_input.rs"]
 mod input;
+#[path = "plan_ports.rs"]
+pub(super) mod ports;
 pub(super) use input::{AcceptedPlanUpdate, ManagementInput, PreparedRootEffect, RootPlanEvidence};
 use weaver_types::state_flow::{
     Digest, PlanEffect, PlanRef, PlanSummary, QueryResult, ReadSelector, SourcePathPart,

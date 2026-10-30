@@ -7,7 +7,7 @@ floor. Code is written against it under the gates of Working Process section 6.
 **Document ID:** `weaver-harness-Spec`
 **Parent:** `weaver-harness-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #398
+**Landing PR:** #417
 
 ---
 
@@ -2948,11 +2948,14 @@ to the owner's matching Cancel or a malformed terminal naming a foreign turn.
 | Entered, no turn open | Leave or rollback | Stop admitting replay work and hand the original request to lifecycle cleanup, without a new turn or certification |
 | Turn open, ReFeed active | Stop | Retain opener/cause, start the cancellation interval, send one matching Cancel, settle both decode exchanges |
 | Turn open, no decode ask outstanding | Stop or forced interruption | Start the same interval, admit no further decode ask, close the turn without inventing Cancel or AtRest |
+| Turn open, its turn.closed being written | Stop | Retain opener/cause without starting a cancellation interval, keep the close's own wait, answer AtRest once the close is Recorded, and continue the pass |
+| Turn open, ReFeed active, no Cancel sent | Fault | Record the fault in the turn under a bound that covers only that record, close the turn stopped for the fault, and stand for the operator's Leave without certification |
 | Turn open | Graceful Leave | Retain Leave and original drain origin, finish only the current turn, then give back the seat without certification. With no declared drain bound, keep the drain unbounded and management responsive until that turn finishes or a joining force arrives |
 | Turn open | Forced Leave, rollback, joining force or drain expiry | Preserve earlier obligations, start cancellation only if none is already owed, settle the same turn and return the seat |
 | Cancel outstanding | RefeedInterrupted | Validate original turn, consumed less than path length and checked consumed + 1 no greater than resident no greater than capacity, retain the terminal and await AtRest |
 | Cancel outstanding | ReFed wins the race | Retain and record its truthful complete-generation facts, await AtRest, permit no next replay work or certification |
-| Cancel outstanding for the retained active turn | OutOfOrder for that matching Cancel, AtRest before a ReFeed terminal, a terminal carrying a foreign turn, impossible counts or duplicate terminal | Existing protocol-failure path, no completed Stop or certification |
+| Cancel outstanding | A ReFeed refusal wins the race | Record the refusal in the turn as the ReFeed's terminal, await AtRest, then close the turn stopped and settle the Stop or Leave, with no next replay work or certification |
+| Cancel outstanding for the retained active turn | OutOfOrder for that matching Cancel after the ReFeed's terminal, AtRest before a ReFeed terminal, a ReFeed terminal after a refusal, a terminal carrying a foreign turn, impossible counts or duplicate terminal | Existing protocol-failure path, no completed Stop or certification |
 | Interrupted turn, every owed decode exchange settled | Pending close can be Recorded | Close the original turn once, stopped for the accepted Stop or unload cause under section 3's precedence, then answer Stop or continue Leave |
 | Graceful drain | Current turn finishes normally | Preserve its clean turn close and hand the original Leave to cleanup, with no next replay work or new certification |
 | Any retained operation | Requester EOF | Keep accepted duties, original causes and deadlines, retire only answer delivery |

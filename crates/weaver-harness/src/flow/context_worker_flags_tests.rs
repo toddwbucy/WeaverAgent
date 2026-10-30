@@ -49,6 +49,12 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     if mode.ends_with("unavailable") {
         after.sequence.0 += 1;
     }
+    if mode.ends_with("-prior-author") {
+        crate::flow::context::worker_startup::input::management::plan_refusal::composition_tests::prior::flags(
+            &mut guard, member, reader, socket, plan, after,
+        );
+        return None;
+    }
     let input = guard.input.as_mut().unwrap();
     assert!(input.take_observed_flags().is_none());
     input.observe_flags(plan.clone(), after.clone()).unwrap();
@@ -97,8 +103,50 @@ pub(in crate::flow::context::worker_startup) fn exercise(
         return Some(Cleanup::Failed(failed::begin(guard, member, false)));
     }
     let queued_save = mode
-        .ends_with("queued-save")
+        .contains("queued-save")
         .then(|| queue_save(&mut guard, socket));
+    if mode.ends_with("plan-refused") {
+        let rejected = request(socket, "{ this refused plan must never be parsed }");
+        let answer: OrganEnvelope =
+            serde_json::from_slice(&management_answer(&mut guard, &rejected)).unwrap();
+        assert_eq!(
+            answer.payload,
+            Payload::Refusal(LifecycleRefusal::OutOfOrder)
+        );
+        assert!(read_packet(&rejected).is_none());
+        let input = guard.input.as_ref().unwrap();
+        assert!(
+            input.flags_pending(),
+            "refusal cannot consume the original flag observation"
+        );
+        assert!(input.serving.flags.is_none());
+        assert!(!input.plan_pending());
+        assert!(input.serving.owner.context.root_plan_work().is_none());
+        assert_eq!(
+            input
+                .serving
+                .owner
+                .context
+                .deadlines
+                .get(PumpDeadline::StateControl),
+            Some(bound)
+        );
+        if let Some((_, window)) = &queued_save {
+            assert!(
+                input.serving.save.is_some(),
+                "refusal must preserve queued save custody"
+            );
+            let held = input
+                .serving
+                .owner
+                .context
+                .deadlines
+                .get(PumpDeadline::SaveQueued)
+                .unwrap();
+            assert_eq!(held.began_ns(), window.began_ns.0);
+            assert_eq!(held.deadline_ns(), window.deadline_ns.0);
+        }
+    }
     let stop = mode.ends_with("stop");
     let leave = mode.ends_with("leave");
     let disconnect = mode.ends_with("disconnect-stop");
@@ -545,7 +593,11 @@ pub(in crate::flow::context::worker_startup) fn finish(
     );
 }
 
-fn prepare_checked_turn(guard: &mut Guard<'_>, member: &mut Member, socket: &Path) {
+pub(in crate::flow::context::worker_startup) fn prepare_checked_turn(
+    guard: &mut Guard<'_>,
+    member: &mut Member,
+    socket: &Path,
+) {
     std::fs::write(
         socket.parent().unwrap().join("flags-turn-request"),
         b"offer\n",

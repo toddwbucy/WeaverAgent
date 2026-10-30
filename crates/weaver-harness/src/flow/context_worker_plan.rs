@@ -260,13 +260,17 @@ impl FoundationInput<'_> {
     pub(super) fn plan_pending(&self) -> bool {
         self.serving.plan.as_ref().is_some_and(|plan| plan.active())
     }
+    /// State-owner work excludes new input, effects and capture boundaries.
+    /// Completed untaken results retain custody but have no pending I/O duty.
+    pub(super) fn plan_work_pending(&self) -> bool {
+        self.plan_pending() || self.flags_pending() || self.plan_operation_pending()
+    }
     pub(super) fn plan_at_rest(&self) -> bool {
         self.stage == Stage::Waiting
             && self.received.is_none()
             && self.token.is_none()
             && self.report.is_none()
-            && !self.plan_pending()
-            && !self.flags_pending()
+            && !self.plan_work_pending()
             && self.serving.save.is_none()
             && !self.has_graceful_leave()
     }

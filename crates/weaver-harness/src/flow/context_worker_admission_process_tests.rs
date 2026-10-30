@@ -9,7 +9,7 @@ use weaver_types::{
 };
 
 #[path = "context_worker_diagnostic_tests.rs"]
-mod diagnostic;
+pub(super) mod diagnostic;
 
 pub(in crate::flow::context::worker_startup) fn is_mode(mode: &str) -> bool {
     mode.contains("-admission-") && mode.contains("-dispatch-")
@@ -147,15 +147,15 @@ fn receive(peer: &OwnedFd, end: Instant) -> Vec<u8> {
     let mut bytes = vec![0; weaver_types::MAX_ENVELOPE_BYTES];
     loop {
         match recv(peer.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
-            Ok(0) => panic!("before-Enter peer closed before its owed answer"),
+            Ok(0) => panic!("coordination peer closed before its owed answer"),
             Ok(n) => {
                 bytes.truncate(n);
                 return bytes;
             }
             Err(nix::errno::Errno::EAGAIN) => (),
-            Err(error) => panic!("before-Enter receive: {error}"),
+            Err(error) => panic!("coordination receive: {error}"),
         }
-        assert!(Instant::now() < end, "before-Enter reply watchdog");
+        assert!(Instant::now() < end, "coordination reply watchdog");
         std::thread::sleep(Duration::from_millis(1));
     }
 }

@@ -8,10 +8,32 @@ pub(in crate::flow) struct RootPlanPacket {
     wire: Vec<u8>,
 }
 
+/// Exact refused opener, with no authority to start a root plan operation.
+/// A judged PlanUpdate carries no descriptors, including after peer EOF.
+pub(in crate::flow) struct RefusedPlanPacket {
+    message: LifecycleMessage,
+    _wire: Vec<u8>,
+}
+impl RefusedPlanPacket {
+    pub(in crate::flow) fn envelope(&self) -> &OrganEnvelope {
+        &self.message.envelope
+    }
+    #[cfg(test)]
+    pub(in crate::flow) fn wire(&self) -> &[u8] {
+        &self._wire
+    }
+}
+
 #[cfg(test)]
 #[path = "pump_plan_tests.rs"]
 pub(in crate::flow) mod tests;
 impl RootPlanPacket {
+    pub(in crate::flow) fn into_refused(self) -> RefusedPlanPacket {
+        RefusedPlanPacket {
+            message: self.message,
+            _wire: self.wire,
+        }
+    }
     pub(in crate::flow) fn envelope(&self) -> &OrganEnvelope {
         &self.message.envelope
     }
@@ -40,6 +62,35 @@ pub(in crate::flow) enum PlanReceiveError {
 }
 
 impl LifecyclePeer {
+    /// Retaining a rejected request does not authenticate its cause or grant
+    /// plan admission. It keeps the received bytes beside the decoded value.
+    pub(in crate::flow) fn take_refused_plan_update(
+        &mut self,
+    ) -> Result<Option<RefusedPlanPacket>, Failure> {
+        let Some(held) = &self.held else {
+            self.live()?;
+            return Ok(None);
+        };
+        if self.projection != LifecycleProjection::ServingOpener
+            || held.envelope.exchange.opener != Opener::Admin
+            || held.envelope.position != Position::Open
+            || held.sink.is_some()
+            || held.state.is_some()
+            || !matches!(
+                held.envelope.payload,
+                Payload::Directive(LifecycleDirective::PlanUpdate { .. })
+            )
+        {
+            return Err(invalid_failure(
+                "refused plan requires a judged PlanUpdate opener",
+            ));
+        }
+        Ok(Some(RefusedPlanPacket {
+            message: self.held.take().unwrap(),
+            _wire: self.wire.take().expect("received plan retains exact wire"),
+        }))
+    }
+
     /// A failed judgment leaves the original packet and handles in this slot.
     /// A complete accepted packet survives a subsequent peer EOF.
     pub(in crate::flow) fn take_root_plan_update(

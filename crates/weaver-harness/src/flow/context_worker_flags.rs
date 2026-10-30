@@ -84,7 +84,7 @@ impl FoundationInput<'_> {
         }
         if self.serving.flags.is_some()
             || self.serving.owner.listener.held().is_some()
-            || self.plan_pending()
+            || self.plan_work_pending()
             || self.serving.save.is_some()
             || self.has_graceful_leave()
             || self.report.is_some()

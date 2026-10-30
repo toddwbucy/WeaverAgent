@@ -113,13 +113,24 @@ pub(super) fn open_turn(
                 .iter()
                 .any(|row| row["kind"] == "plan.event" || row["kind"] == "turn.closed")
         );
-        // This fixture pins admission and custody. The existing pre-admission
-        // path currently omits the refusal trace; retain that observation as
-        // an activation finding, without pinning its absence as desired behavior.
-        eprintln!(
-            "plan admission refusal records observed: {}",
-            after.iter().filter(|row| row["kind"] == "refusal").count()
-        );
+        let refusals: Vec<_> = after
+            .iter()
+            .filter(|row| row["kind"] == "refusal")
+            .collect();
+        assert_eq!(refusals.len(), 2);
+        for row in refusals {
+            assert_eq!(row["payload"]["seam"], "lifecycle");
+            assert_eq!(
+                row["payload"]["asked"],
+                serde_json::json!({"ask":"plan_update"})
+            );
+            assert_eq!(
+                row["payload"]["refusal"],
+                serde_json::json!({"kind":"out_of_order"})
+            );
+            assert!(row.get("turn").is_none());
+            assert!(row.get("causal_parent").is_none());
+        }
         done.store(true, Ordering::SeqCst);
         responder.join().unwrap();
     });
