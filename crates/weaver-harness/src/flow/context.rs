@@ -2947,6 +2947,8 @@ mod read_driver;
 pub(in crate::flow) mod plan_port_driver;
 #[path = "context_plan_update.rs"]
 pub(super) mod plan_update_driver;
+#[path = "context_step_instruction.rs"]
+pub(in crate::flow) mod step_instruction;
 #[allow(unused_imports)] // Composed by dependent boot, recall and placement primitives.
 pub(super) use read_driver::{
     BootHead, BootReadBeginError, BootReadBeginRefusal, BootReadCompletion, CancelledRead,

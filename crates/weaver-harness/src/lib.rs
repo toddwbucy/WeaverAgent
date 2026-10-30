@@ -152,6 +152,9 @@ pub use flow::context::worker_startup::input::generation::FoundationGeneration;
 pub use flow::context::worker_startup::input::generation::emission::{
     FoundationEmission, FoundationOutbound, FoundationRepairAdmission, FoundationRestatement,
 };
+pub use flow::context::worker_startup::input::generation::step_instruction::{
+    FoundationStepRefusal, StepPlacementReceipt,
+};
 pub use flow::context::worker_startup::input::halt::exit::{
     FoundationExitProgress, FoundationFailedExit, FoundationFailedHandoff,
 };

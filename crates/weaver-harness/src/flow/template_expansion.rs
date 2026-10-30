@@ -126,6 +126,23 @@ pub(in crate::flow) fn expand_wind_down(
     expand(certificate, identity, "wind_down", "loop.instruction", None)
 }
 
+/// The step variant's family. Its plan, step, instruction and span stay in
+/// LoopInstructionMeta. A step_id slot is refused as unsupported: no clause
+/// gives the scheme token text a StepId substitutes, so only a literal
+/// family expands.
+pub(in crate::flow) fn expand_step_instruction(
+    certificate: &TemplateCertificate,
+    identity: ExpansionIdentity<'_>,
+) -> Result<TemplateExpansion, ExpansionRefusal> {
+    expand(
+        certificate,
+        identity,
+        "step.instruction",
+        "loop.instruction",
+        None,
+    )
+}
+
 /// Closed outbound criterion; no runtime string can become a substitution.
 pub(in crate::flow) fn expand_outbound(
     certificate: &TemplateCertificate,

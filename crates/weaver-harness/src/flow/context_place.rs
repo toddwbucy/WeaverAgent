@@ -838,7 +838,8 @@ impl RecordingContext {
             || request.tool_schemas != self.place_engine.as_ref().unwrap().schemas
             || !(self.place_instruction_valid(&request.context)
                 || self.restatement_instruction_valid(&request)
-                || self.wind_down_instruction_valid(&request))
+                || self.wind_down_instruction_valid(&request)
+                || self.step_instruction_valid(&request))
         {
             Some(PlaceError::InvalidContext)
         } else if self.caller_author_held() {
@@ -1272,6 +1273,18 @@ impl RecordingContext {
         };
         self.place_instructions.iter().any(|proof|proof.belongs_to(self)&&proof.receipts().dispositions().any(|d|match d {
             crate::flow::ledger::SourceDisposition::Committed(c)=>matches!(c.file(),crate::flow::ledger::LedgerFile::Statement(file) if &file.block_id==source && file.source.kind=="loop.instruction" && file.source.origin=="loop"),_=>false}))
+    }
+    /// A step instruction is the last selected unit: Spec 08's instruction
+    /// unit for exactly the filed loop.instruction the context names.
+    fn step_instruction_valid(&self, request: &PlaceRequest) -> bool {
+        let Some(source) = &request.context.instruction else {
+            return false;
+        };
+        request.prefix.cut.is_none()
+            && request
+                .selection
+                .last()
+                .is_some_and(|unit| crate::flow::material::is_instruction_unit(unit, source, self))
     }
     fn wind_down_instruction_valid(&self, request: &PlaceRequest) -> bool {
         let Some((turn, Some(source))) = &self.wind_down else {

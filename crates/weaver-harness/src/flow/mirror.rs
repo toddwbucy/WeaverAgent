@@ -11,6 +11,7 @@ use weaver_types::state_flow as shared;
 mod plan;
 pub(super) use plan::{
     closed_outcome, execution_effect, plan_break, plan_input, plan_measurement, root_plan_effect,
+    step_instruction,
 };
 
 pub(super) fn ste100(value: &shared::Ste100Reply) -> trace::Ste100Reply {

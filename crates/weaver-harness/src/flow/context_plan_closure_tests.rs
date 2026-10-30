@@ -8,6 +8,9 @@ use crate::flow::templates::{CompiledInventory, TemplateCertificate};
 
 const PREVIEW: &[u8] = include_bytes!("fixtures/work-preview.json");
 
+#[path = "context_step_instruction_tests.rs"]
+mod step_instruction_tests;
+
 const _: fn() = || {
     trait NotClone<M> {
         fn pin() {}
@@ -37,11 +40,18 @@ fn closure_fixture(review_required: bool, effect: bool) -> (SummaryFixture, Temp
     static SPECS: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     let mut fx = if effect {
         let inventory = CompiledInventory::new(SPECS.get_or_init(|| {
-            vec![s::TemplateSpec {
-                template_id: "step.closed".into(),
-                kind: "step.outcome".into(),
-                parts: vec![s::TemplatePart::Literal("Read plan.".into())],
-            }]
+            vec![
+                s::TemplateSpec {
+                    template_id: "step.closed".into(),
+                    kind: "step.outcome".into(),
+                    parts: vec![s::TemplatePart::Literal("Read plan.".into())],
+                },
+                s::TemplateSpec {
+                    template_id: "step.instruction".into(),
+                    kind: "loop.instruction".into(),
+                    parts: vec![s::TemplatePart::Literal("Read plan.".into())],
+                },
+            ]
         }))
         .unwrap();
         super::super::root_update_tests::unbooted_with_inventory(inventory)

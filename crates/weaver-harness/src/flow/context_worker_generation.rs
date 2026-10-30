@@ -44,6 +44,9 @@ pub(crate) mod emission;
 #[path = "context_worker_final.rs"]
 mod answer;
 
+#[path = "context_worker_step_instruction.rs"]
+pub(crate) mod step_instruction;
+
 #[cfg(test)]
 #[path = "context_worker_final_tests.rs"]
 pub(in crate::flow::context) mod final_tests;
@@ -72,6 +75,9 @@ enum EngineStage {
     Cancelled,
     Closing,
     Answer,
+    StepInstruction,
+    StepFiling,
+    StepRefusal,
 }
 
 pub(super) struct EngineWork {
@@ -90,6 +96,11 @@ pub(super) struct EngineWork {
     return_units: Option<Vec<crate::flow::material::SelectedUnit>>,
     rounds: Vec<RetainedRound>,
     answer: Option<super::close::WorldClose>,
+    step: Option<Box<step_instruction::StepWork>>,
+    step_calls: Vec<weaver_types::state_flow::CallId>,
+    step_units: Option<Vec<crate::flow::material::SelectedUnit>>,
+    step_refusal: Option<step_instruction::FoundationStepRefusal>,
+    step_receipt: Option<step_instruction::StepPlacementReceipt>,
 }
 // A later model pass does not discard the decoder, repair, sort and pair
 // evidence of its predecessor. The service owner retains the whole chain.
@@ -205,7 +216,11 @@ impl EngineWork {
         }
         if !matches!(
             self.stage,
-            EngineStage::Task | EngineStage::Place | EngineStage::Generation
+            EngineStage::Task
+                | EngineStage::Place
+                | EngineStage::Generation
+                | EngineStage::StepFiling
+                | EngineStage::StepRefusal
         ) {
             context.complete_wait(PumpDeadline::Decision);
             self.stage = EngineStage::Cancelled;
@@ -244,6 +259,9 @@ impl EngineWork {
                 } else {
                     context.pump_once(ports)?;
                 }
+            }
+            EngineStage::StepFiling | EngineStage::StepRefusal => {
+                self.advance_step(certificate, context, ports)?;
             }
             EngineStage::Place => {
                 context.advance_place(ports)?;
@@ -343,6 +361,11 @@ impl<'a> FoundationInput<'a> {
             return_units: None,
             rounds: vec![],
             answer: None,
+            step: None,
+            step_calls: vec![],
+            step_units: None,
+            step_refusal: None,
+            step_receipt: None,
         }));
         Ok(())
     }
@@ -611,9 +634,12 @@ impl<'a> FoundationInput<'a> {
                     context.pump_once(&mut ports)?;
                 }
             }
+            EngineStage::StepInstruction | EngineStage::StepFiling | EngineStage::StepRefusal => {
+                work.advance_step(&owner.certificate, context, &mut ports)?;
+            }
             EngineStage::Prepare => {
                 decision(context, ports.io)?;
-                if work.return_calls.is_empty() && work.material.is_none() && work.request.is_none()
+                if work.return_units.is_none() && work.material.is_none() && work.request.is_none()
                 {
                     let Some(TaskCompletion::Begun(task)) = work.task.take() else {
                         unreachable!("only a begun task grants selection")
@@ -648,17 +674,22 @@ impl<'a> FoundationInput<'a> {
                             ));
                         }
                     };
+                    let mut selection = match work.return_units.take() {
+                        Some(units) => units,
+                        None => work.material.take().unwrap().into_units(),
+                    };
+                    // A step instruction follows the task input or results.
+                    let instruction = work.step.as_mut().and_then(|step| {
+                        selection.push(step.unit.take()?);
+                        step.source.clone()
+                    });
                     work.request = Some(PlaceRequest {
                         prefix,
-                        selection: if work.return_calls.is_empty() {
-                            work.material.take().unwrap().into_units()
-                        } else {
-                            work.return_units.take().unwrap()
-                        },
+                        selection,
                         tool_schemas: context.loaded_place_schemas().unwrap().to_vec(),
                         context: PlacementContext {
                             label: label.clone(),
-                            instruction: None,
+                            instruction,
                         },
                     });
                 }
@@ -696,6 +727,15 @@ impl<'a> FoundationInput<'a> {
                         PlacementCompletion::Cancelled(_) => EngineStage::Cancelled,
                     };
                     work.placement = Some(done);
+                    // ended_ns: the successor placement's Recorded receipt,
+                    // before any generation request transport or decode.
+                    if work.step.is_some() {
+                        let ended = ports.io.now().map_err(|error| {
+                            fault(context, ports.io, format!("step placement clock: {error}"))
+                        })?;
+                        work.keep_step_placement(context, ended)
+                            .map_err(|detail| fault(context, ports.io, detail.into()))?;
+                    }
                 }
             }
             EngineStage::StartGeneration => {
