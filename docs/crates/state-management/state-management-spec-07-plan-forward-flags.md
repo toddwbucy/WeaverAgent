@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #408
+**Landing PR:** #420
 
 **Version:** 0.20 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
@@ -637,14 +637,17 @@ review pair and setup. [PLAN-2, CAP-1, R20-12, R20-17]
 
 **CLOSURE.** close consumes ClosureEvidence. After its work reread, close takes its own
 Marks read and allocates outcome_span as that read's next span, with the same allocator
-as activate. No caller supplies outcome_span. close then authors the certified
-step.outcome with the closed label and exact plan close effect. The event takes the
-trace, partition, classifier and store path. The store commits the effect, outcome span
-and closing marks atomically. The loop records a failed assessment as PLAN-TRACE's
-step.outcome with the failed label and null context, through the ordinary trace,
-partition, classifier and store path. That record writes no plan effect and consumes no
-ClosureEvidence, so observe_review still leaves the step and plan unchanged. Sort writes
-nothing. [SERVE-3, SORT-4, PLAN-2, MARK-1, FLOW-8]
+as activate. No caller supplies outcome_span. That read is this run's Marks read, its
+catalog is coherent with the plan's task as its current task, and its open path is
+exactly the active step's: the task, the group's Subtask span when the group has one,
+then the step's span. Any other read is a foundation fault before any effect. close then
+authors the certified step.outcome with the closed label and exact plan close effect.
+The event takes the trace, partition, classifier and store path. The store commits the
+effect, outcome span and closing marks atomically. The loop records a failed assessment
+as PLAN-TRACE's step.outcome with the failed label and null context, through the
+ordinary trace, partition, classifier and store path. That record writes no plan effect
+and consumes no ClosureEvidence, so observe_review still leaves the step and plan
+unchanged. Sort writes nothing. [SERVE-3, SORT-4, PLAN-2, MARK-1, FLOW-8]
 
 The store opens and closes outcome_span below the active step, closes that step, and
 closes complete ancestors from their held membership. The pair and frontier guards

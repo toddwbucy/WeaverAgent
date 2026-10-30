@@ -769,12 +769,14 @@ fn closure_close_store_guard_refusal_halts_without_closure_or_refresh() {
     let evidence = evidence(&mut fx);
     // The operator's ruling of 2026-10-30: any store-guard refusal of close
     // after the local rechecks pass is a foundation fault, not a
-    // PlanOperationRefused. The scripted member refuses a coherent close; no
-    // harness path makes the real store's guard bite.
+    // PlanOperationRefused. The scripted member stands in for the store's
+    // defence firing on a coherent close: close's allocation is serialized
+    // with every other allocator in the run, so no harness path makes the
+    // real store's guard bite.
     let before = fx.run().context.committed_plan_summary().unwrap().cloned();
     begin_close(&mut fx, evidence);
     serve(&mut fx, PREVIEW, PREVIEW.len());
-    let raced = serve_marks(&mut fx, 4);
+    let allocated = serve_marks(&mut fx, 4);
     effect_ready(&mut fx);
     let run = fx.run();
     run.context
@@ -791,7 +793,7 @@ fn closure_close_store_guard_refusal_halts_without_closure_or_refresh() {
             Ok(_) => assert!(take(&mut fx).is_none(), "a refused filing grants nothing"),
         }
         fx.classifier(false);
-        refused |= refuse_filing(&mut fx, "span allocation is not consecutive");
+        refused |= refuse_filing(&mut fx, "store guard refused the close effect");
     }
     assert!(refused, "the close effect reached the store");
     let failure = failure.expect("a refused statement filing halts the run");
@@ -802,7 +804,7 @@ fn closure_close_store_guard_refusal_halts_without_closure_or_refresh() {
                 reason: FlowHaltReason::FilingRefused,
                 detail,
                 ..
-            } if detail.contains("span allocation is not consecutive")
+            } if detail.contains("store guard refused the close effect")
         ),
         "{failure:?}"
     );
@@ -812,7 +814,7 @@ fn closure_close_store_guard_refusal_halts_without_closure_or_refresh() {
     assert!(matches!(
         &fx.files[0].effect,
         Some(s::StatementEffect::Plan(effect))
-            if matches!(&**effect, s::PlanEffect::Close { outcome_span, .. } if outcome_span == &raced)
+            if matches!(&**effect, s::PlanEffect::Close { outcome_span, .. } if outcome_span == &allocated)
     ));
     assert!(fx.records(Kind::Refusal).is_empty());
     assert!(fx.run().context.plan_cache.required.is_none());
@@ -1064,13 +1066,22 @@ fn closure_close_rechecks_required_review() {
 }
 
 #[test]
-fn closure_close_incoherent_marks_catalog_faults_before_any_effect() {
-    for case in ["no-task", "no-step-scope", "next-below-step"] {
+fn closure_close_marks_off_the_active_step_path_fault_before_any_effect() {
+    // Each case serves close a Marks catalog that is incoherent or open on
+    // another path than the active step's, and names the check that faults.
+    let catalog = "plan task disagrees with its open marks path";
+    let path = "close marks differ from its active step path";
+    for (case, detail) in [
+        ("no-task", catalog),
+        ("no-step-scope", path),
+        ("next-not-above-step", catalog),
+        ("other-current-task", catalog),
+        ("plan-prompt-differs", catalog),
+        ("missing-group-scope", path),
+    ] {
         let (mut fx, _) = closure_fixture(false, true);
         let evidence = evidence(&mut fx);
-        let before = fx.run().context.committed_plan_summary().unwrap().cloned();
-        begin_close(&mut fx, evidence);
-        serve(&mut fx, PREVIEW, PREVIEW.len());
+        // The served catalog is the coherent one for the original plan.
         let mut result = coherent_marks(&mut fx, 4);
         let s::QueryResult::Marks {
             next_span_id,
@@ -1088,24 +1099,55 @@ fn closure_close_incoherent_marks_catalog_faults_before_any_effect() {
             "no-step-scope" => {
                 open_scopes.pop();
             }
-            _ => {
-                // The step span opened at 3, yet the catalog names 3 as next.
-                open_scopes.pop();
+            "next-not-above-step" => {
+                // The step scope stays last, yet the catalog names its span,
+                // 3, as the next allocation.
                 *next_span_id = 3.into();
             }
+            "other-current-task" => {
+                // The step scope stays last under the plan's task scope, but
+                // the catalog's current task is another one.
+                let task = current_task.as_mut().unwrap();
+                task.task.local_id = 4.into();
+                task.prompt.local_id = 5.into();
+                *next_span_id = 6.into();
+            }
+            "plan-prompt-differs" => {
+                // The open path is the plan's, but the plan's task names
+                // another prompt than the catalog's current task.
+                swap_current(&mut fx, |plan| plan.task.prompt.local_id = 7.into());
+            }
+            _ => {
+                // The step's group has a Subtask span, so the open path must
+                // run task, Subtask, step; the served path omits only the
+                // middle scope and still ends at the step.
+                swap_current(&mut fx, |plan| {
+                    let mut span = plan.task.task.clone();
+                    span.local_id = 9.into();
+                    plan.steps[0].group = Some("group".into());
+                    plan.groups = vec![s::PlanGroup {
+                        id: "group".into(),
+                        step_ids: vec![plan.steps[0].step_id.clone()],
+                        span: Some(span),
+                    }];
+                });
+            }
         }
+        let before = fx.run().context.committed_plan_summary().unwrap().cloned();
+        begin_close(&mut fx, evidence);
+        serve(&mut fx, PREVIEW, PREVIEW.len());
         serve_marks_result(&mut fx, &result);
         let failure = (0..128)
             .find_map(|_| advance(&mut fx).err())
-            .expect("an incoherent close catalog is no ordinary refusal");
+            .expect("a close catalog off its step path is no ordinary refusal");
         assert!(
             matches!(
-                failure,
+                &failure,
                 RunFailure::Flow {
                     reason: FlowHaltReason::ProtocolFailed,
                     ..
                 }
-            ),
+            ) && format!("{failure:?}").contains(detail),
             "{case}: {failure:?}"
         );
         assert!(fx.records(Kind::StepOutcome).is_empty(), "{case}");
@@ -1130,6 +1172,43 @@ fn closure_close_incoherent_marks_catalog_faults_before_any_effect() {
         assert_eq!(plan.steps[0].status, s::StepStatus::Active, "{case}");
         assert_eq!(&plan.plan, &before.unwrap().plan);
     }
+}
+
+#[test]
+fn closure_close_foreign_marks_proof_is_a_custody_fault() {
+    // A Marks read recorded by another run reaches prepare_close directly:
+    // its run binding is checked before its catalog is inspected.
+    let (mut fx, _) = closure_fixture(false, false);
+    let (mut other, _) = closure_fixture(false, false);
+    let evidence = evidence(&mut fx);
+    let marks = coherent_marks(&mut fx, 4);
+    let preview = recorded_preview(&mut fx);
+    let foreign = plain_read(
+        &mut other,
+        s::ReadSelector::Marks {},
+        &serde_json::to_vec(&marks).unwrap(),
+    );
+    let work = pinned();
+    let request = PlanRequest::Close {
+        expected: work.plan,
+        step_id: work.step_id,
+        evidence,
+    };
+    let run = fx.run();
+    let current = std::sync::Arc::clone(run.context.plan_cache.committed.as_ref().unwrap());
+    let result = crate::flow::plan::ports::closure::prepare_close(
+        &request,
+        &run.context,
+        &current,
+        &preview,
+        &foreign,
+        TurnRef("closure".into()),
+        AbsoluteBound::after(run.clock.now().unwrap(), 5_000_000_000).unwrap(),
+    );
+    let Err(crate::flow::plan::ports::PlanCheckFailure::Protocol(detail)) = result else {
+        panic!("a foreign marks proof must not prepare close")
+    };
+    assert_eq!(detail, "close has a foreign marks proof");
 }
 
 #[test]
