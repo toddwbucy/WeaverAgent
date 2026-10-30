@@ -561,3 +561,122 @@ fn abandoned_at_load_preserves_the_complete_start_identity_and_its_optional_posi
         }
     }
 }
+
+fn plan_measured(event: shared::PlanMeasureEvent) -> shared::PlanMeasurement {
+    shared::PlanMeasurement {
+        instrument_version: "plan-observation/1".into(),
+        plan: shared::PlanRef {
+            plan_id: shared::PlanId {
+                seed_id: "seed-plan".into(),
+                local_id: (u64::MAX - 3).into(),
+            },
+            revision: 7.into(),
+        },
+        event,
+    }
+}
+
+fn plan_step(local_id: u64) -> shared::StepId {
+    shared::StepId {
+        seed_id: "seed-plan".into(),
+        local_id: local_id.into(),
+    }
+}
+
+#[test]
+fn next_ready_keeps_both_steps_its_assembly_and_every_distinct_clock_reading() {
+    let value = plan_measured(shared::PlanMeasureEvent::NextReady {
+        closed: source_id(),
+        previous_step: plan_step(4),
+        step_id: plan_step(5),
+        assembly_id: 9.into(),
+        began_ns: (u64::MAX - 40).into(),
+        ended_ns: (u64::MAX - 12).into(),
+        closure_to_next_ns: 28.into(),
+    });
+    let mirrored = serde_json::to_value(plan_measurement(&value)).unwrap();
+    assert_eq!(
+        serde_json::to_vec(&plan_measurement(&value)).unwrap(),
+        serde_json::to_vec(&value).unwrap(),
+        "the trace mirror must preserve every field and decimal spelling",
+    );
+    assert_eq!(
+        mirrored["event"]["next_ready"]["previous_step"]["local_id"],
+        "4"
+    );
+    assert_eq!(
+        mirrored["event"]["next_ready"]["began_ns"],
+        (u64::MAX - 40).to_string()
+    );
+}
+
+#[test]
+fn fit_refused_keeps_every_stage_and_code_its_step_assembly_and_refusal_count() {
+    for (stage, stage_name) in [
+        (shared::PlanFitStage::MandatoryProbe, "mandatory_probe"),
+        (shared::PlanFitStage::PlaceBackstop, "place_backstop"),
+    ] {
+        for (code, code_name) in [
+            (shared::PlanFitCode::TailOverCapacity, "tail_over_capacity"),
+            (shared::PlanFitCode::GenerationRoom, "generation_room"),
+        ] {
+            let value = plan_measured(shared::PlanMeasureEvent::FitRefused {
+                step_id: plan_step(6),
+                assembly_id: (u64::MAX - 2).into(),
+                stage,
+                code,
+                mandatory_fit_refusals: 3.into(),
+            });
+            let mirrored = serde_json::to_value(plan_measurement(&value)).unwrap();
+            assert_eq!(
+                serde_json::to_vec(&plan_measurement(&value)).unwrap(),
+                serde_json::to_vec(&value).unwrap(),
+                "{stage_name}/{code_name}",
+            );
+            let event = &mirrored["event"]["fit_refused"];
+            assert_eq!(event["stage"], stage_name);
+            assert_eq!(event["code"], code_name);
+            assert_eq!(event["step_id"]["local_id"], "6");
+            assert_eq!(event["assembly_id"], (u64::MAX - 2).to_string());
+            assert_eq!(event["mandatory_fit_refusals"], "3");
+        }
+    }
+}
+
+#[test]
+fn flag_readings_keep_their_measured_snapshot_or_typed_unavailability() {
+    let measured = shared::PlanFlagSnapshot {
+        plan: plan_measured(shared::PlanMeasureEvent::Flags {
+            after: source_id(),
+            request_id: 1.into(),
+            observation: shared::PlanFlagObservation::Unavailable {
+                code: shared::ReadRefusalCode::ReadBusy,
+            },
+        })
+        .plan,
+        after: source_id(),
+        through: shared::SourcePosition {
+            block_id: source_id(),
+            turn: None,
+        },
+        total_flags: 5.into(),
+        matched_flags: 2.into(),
+        unmatched_flags: 3.into(),
+    };
+    for observation in [
+        shared::PlanFlagObservation::Measured { snapshot: measured },
+        shared::PlanFlagObservation::Unavailable {
+            code: shared::ReadRefusalCode::AnswerTooLarge,
+        },
+    ] {
+        let value = plan_measured(shared::PlanMeasureEvent::Flags {
+            after: source_id(),
+            request_id: (u64::MAX - 8).into(),
+            observation,
+        });
+        assert_eq!(
+            serde_json::to_vec(&plan_measurement(&value)).unwrap(),
+            serde_json::to_vec(&value).unwrap(),
+        );
+    }
+}

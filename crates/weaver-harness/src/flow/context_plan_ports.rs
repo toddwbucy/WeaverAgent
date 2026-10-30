@@ -73,7 +73,6 @@ pub(super) struct PlanPortTransaction {
     break_report: Option<s::PlanBreakReport>,
     successor: Option<checked::CheckedStepSuccessor>,
     setup: Option<s::ReviewSetupRef>,
-    outcome_span: Option<s::SpanRef>,
     /// close's own Marks read, taken after its checked work reread.
     marks_read: Option<read_driver::RetainedReadCompletion>,
     cancelled: bool,
@@ -94,6 +93,15 @@ impl PlanPortTransaction {
 /// retained after refusal or cancellation and through later teardown.
 pub(in crate::flow) struct PlanPortAccount {
     work: Box<PlanPortTransaction>,
+}
+impl PlanPortAccount {
+    /// The current plan this account's committed read holds, if any.
+    fn current_plan(&self) -> Option<&s::PlanSnapshot> {
+        match self.work.current.as_ref()?.read().result() {
+            s::QueryResult::PlanCurrent { current, .. } => current.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 /// Only the checked predicate creates this grant, with its actual proofs.
@@ -229,6 +237,100 @@ impl std::fmt::Debug for ClosureEvidence {
     }
 }
 
+/// PLAN-OBSERVATION's same-session closure receipt: a private, single-use,
+/// run-bound account of one committed close. Only a settled close that was
+/// not cancelled constructs it, after its mandatory refresh adopted the
+/// closure. It keeps only its run binding and the closure it names, captured
+/// once from the close account. Metadata cannot rebuild it.
+///
+/// ```compile_fail,E0277
+/// fn cloned<T: Clone>() {}
+/// cloned::<weaver_harness::ClosureReceipt>();
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn serialized(receipt: &weaver_harness::ClosureReceipt) {
+///     let _ = serde_json::to_vec(receipt);
+/// }
+/// ```
+///
+/// ```compile_fail,E0277
+/// let _ = serde_json::from_str::<weaver_harness::ClosureReceipt>("{}");
+/// ```
+///
+/// ```compile_fail,E0451
+/// fn forged() -> weaver_harness::ClosureReceipt {
+///     weaver_harness::ClosureReceipt {
+///         origin: todo!(),
+///         plan: todo!(),
+///         previous_step: todo!(),
+///         closed: todo!(),
+///     }
+/// }
+/// ```
+pub struct ClosureReceipt {
+    origin: Arc<()>,
+    plan: s::PlanRef,
+    previous_step: s::StepId,
+    closed: s::SourceBlockId,
+}
+impl ClosureReceipt {
+    /// Capture the receipt from a settled close. The refreshed revision must
+    /// hold this step's closure source, or the account returns whole.
+    fn from_close(account: PlanPortAccount) -> Result<Self, PlanPortAccount> {
+        assert!(
+            matches!(account.work.request, PlanRequest::Close { .. })
+                && account.work.stage == Stage::Complete
+                && account.work.refusal.is_none()
+                && !account.work.cancelled,
+            "only a settled close grants a closure receipt"
+        );
+        let request = &account.work.request;
+        let closed = request.step_id().and_then(|step_id| {
+            account
+                .current_plan()?
+                .steps
+                .iter()
+                .find(|step| &step.step_id == step_id)?
+                .closure_source
+                .clone()
+        });
+        let (Some(previous_step), Some(closed)) = (request.step_id().cloned(), closed) else {
+            return Err(account);
+        };
+        Ok(Self {
+            origin: Arc::clone(&account.work.origin),
+            plan: request.expected().clone(),
+            previous_step,
+            closed,
+        })
+    }
+    /// The revision close committed against. A close changes no revision.
+    pub fn plan(&self) -> &s::PlanRef {
+        &self.plan
+    }
+    /// The closed step, the successor query's previous step.
+    pub fn previous_step(&self) -> &s::StepId {
+        &self.previous_step
+    }
+    /// The step.outcome source the refreshed revision holds as this closure.
+    pub fn closed(&self) -> &s::SourceBlockId {
+        &self.closed
+    }
+    pub(in crate::flow) fn belongs_to(&self, context: &RecordingContext) -> bool {
+        Arc::ptr_eq(&self.origin, &context.read_origin)
+    }
+}
+impl std::fmt::Debug for ClosureReceipt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClosureReceipt")
+            .field("plan", &self.plan)
+            .field("previous_step", &self.previous_step)
+            .field("closed", &self.closed)
+            .finish()
+    }
+}
+
 pub(in crate::flow) struct ActivatedStep {
     account: PlanPortAccount,
 }
@@ -253,7 +355,6 @@ pub(in crate::flow) enum PlanPortCompletion {
     Allowed(AllowedAct),
     Work(CheckedWork),
     Attested(ClosureEvidence),
-    OutcomeSpan(PlanPortAccount),
     Closed(PlanPortAccount),
     Refused {
         refusal: s::PlanOperationRefused,
@@ -269,20 +370,7 @@ impl PlanPortCompletion {
         let (Self::BreakRecorded(account) | Self::Closed(account)) = self else {
             return None;
         };
-        let s::QueryResult::PlanCurrent { current, .. } =
-            account.work.current.as_ref().unwrap().read().result()
-        else {
-            unreachable!()
-        };
-        current.as_ref()
-    }
-
-    /// outcome_span's allocation: a fresh read's next span. Nothing is held.
-    pub(in crate::flow) fn outcome_span(&self) -> Option<&s::SpanRef> {
-        match self {
-            Self::OutcomeSpan(account) => account.work.outcome_span.as_ref(),
-            _ => None,
-        }
+        account.current_plan()
     }
 
     /// Move the checked work into attest_closure. Any other result returns whole.
@@ -297,6 +385,16 @@ impl PlanPortCompletion {
     pub(in crate::flow) fn into_closure_evidence(self) -> Result<ClosureEvidence, Self> {
         match self {
             Self::Attested(evidence) => Ok(evidence),
+            other => Err(other),
+        }
+    }
+
+    /// Move a committed close's receipt out. Any other result, including a
+    /// cancelled close whose effect committed or a close whose refreshed
+    /// revision lacks its closure source, returns whole.
+    pub(in crate::flow) fn into_closure_receipt(self) -> Result<ClosureReceipt, Self> {
+        match self {
+            Self::Closed(account) => ClosureReceipt::from_close(account).map_err(Self::Closed),
             other => Err(other),
         }
     }
@@ -333,7 +431,6 @@ impl PlanPortCompletion {
             Self::Attested(evidence) => &evidence.account,
             Self::BreakRecorded(account)
             | Self::Closed(account)
-            | Self::OutcomeSpan(account)
             | Self::Successor(account)
             | Self::QueryRefused(account)
             | Self::Refused { account, .. }
@@ -354,7 +451,6 @@ impl PlanPortCompletion {
             Self::Attested(evidence) => evidence.account,
             Self::BreakRecorded(account)
             | Self::Closed(account)
-            | Self::OutcomeSpan(account)
             | Self::Successor(account)
             | Self::QueryRefused(account)
             | Self::Refused { account, .. }
@@ -391,10 +487,7 @@ impl RecordingContext {
                 && !work.cancelled
                 && work.stage == Stage::Read
                 && (work.current.is_some()
-                    || matches!(
-                        work.request,
-                        PlanRequest::StepSuccessor { .. } | PlanRequest::OutcomeSpan { .. }
-                    ))
+                    || matches!(work.request, PlanRequest::StepSuccessor { .. }))
                 && &work.read_selector() == selector
                 && work.turn.as_ref() == turn
                 && self.deadlines.get(PumpDeadline::Decision) == Some(work.bound)
@@ -515,7 +608,6 @@ impl RecordingContext {
             break_report: None,
             successor: None,
             setup: None,
-            outcome_span: None,
             marks_read: None,
             cancelled: false,
         })));
@@ -554,10 +646,7 @@ impl RecordingContext {
         }
         match work.stage {
             Stage::Validate => {
-                if matches!(
-                    work.request,
-                    PlanRequest::StepSuccessor { .. } | PlanRequest::OutcomeSpan { .. }
-                ) {
+                if matches!(work.request, PlanRequest::StepSuccessor { .. }) {
                     self.plan_port_work_mut().unwrap().stage = Stage::Read;
                     return Ok(PlanPortProgress::Progress);
                 }
@@ -680,9 +769,6 @@ impl RecordingContext {
         if matches!(work.request, PlanRequest::StepSuccessor { .. }) {
             return self.finish_step_successor_read(ports.io);
         }
-        if matches!(work.request, PlanRequest::OutcomeSpan { .. }) {
-            return self.finish_outcome_span_read(ports.io);
-        }
         let retained = if marks_leg {
             work.marks_read.as_ref().unwrap()
         } else {
@@ -726,6 +812,7 @@ impl RecordingContext {
                 checked::closure::prepare_close(
                     &work.request,
                     self,
+                    current,
                     preview,
                     proof,
                     turn,
@@ -750,7 +837,6 @@ impl RecordingContext {
             | PlanRequest::Activate { .. }
             | PlanRequest::Close { .. }
             | PlanRequest::AttestClosure { .. }
-            | PlanRequest::OutcomeSpan { .. }
             | PlanRequest::StepSuccessor { .. } => unreachable!(),
             PlanRequest::AssessAct { .. } => checked::assess(
                 &work.request,
@@ -807,40 +893,6 @@ impl RecordingContext {
             _ => {
                 self.plan_port_work_mut().unwrap().read = Some(retained);
                 return Err(self.plan_port_fault(io, "step query lacks its complete read outcome"));
-            }
-        }
-        self.plan_port_work_mut().unwrap().stage = Stage::Complete;
-        Ok(PlanPortProgress::Complete)
-    }
-
-    /// outcome_span allocates from its recorded catalog with the one span
-    /// allocator, under the loaded seed. A refused read keeps its outcome.
-    fn finish_outcome_span_read(
-        &mut self,
-        io: &mut impl PumpIo,
-    ) -> Result<PlanPortProgress, RunFailure> {
-        let retained = self.plan_port_work().unwrap().read.as_ref().unwrap();
-        match &retained.completion {
-            ReadCompletion::Recorded(read) => {
-                let seed = &self.open_start.as_ref().unwrap().seed_id;
-                match checked::activation::SpanAllocator::from_marks(self, read, seed) {
-                    Ok(spans) => {
-                        let span = spans.peek();
-                        self.plan_port_work_mut().unwrap().outcome_span = Some(span);
-                    }
-                    Err(_) => {
-                        return Err(
-                            self.plan_port_fault(io, "outcome span read has no marks catalog")
-                        );
-                    }
-                }
-            }
-            ReadCompletion::Refused(crate::flow::read::ReadFailure::Refused { .. })
-                if retained.refusal.is_some() => {}
-            _ => {
-                return Err(
-                    self.plan_port_fault(io, "outcome span lacks its complete read outcome")
-                );
             }
         }
         self.plan_port_work_mut().unwrap().stage = Stage::Complete;
@@ -932,10 +984,7 @@ impl RecordingContext {
         }
         if !work.cancelled
             && work.refusal.is_none()
-            && !matches!(
-                work.request,
-                PlanRequest::StepSuccessor { .. } | PlanRequest::OutcomeSpan { .. }
-            )
+            && !matches!(work.request, PlanRequest::StepSuccessor { .. })
             && !self.plan_cache.committed.as_ref().is_some_and(|current| {
                 work.current
                     .as_ref()
@@ -956,12 +1005,6 @@ impl RecordingContext {
         } else if matches!(account.work.request, PlanRequest::StepSuccessor { .. }) {
             if account.work.successor.is_some() {
                 PlanPortCompletion::Successor(account)
-            } else {
-                PlanPortCompletion::QueryRefused(account)
-            }
-        } else if matches!(account.work.request, PlanRequest::OutcomeSpan { .. }) {
-            if account.work.outcome_span.is_some() {
-                PlanPortCompletion::OutcomeSpan(account)
             } else {
                 PlanPortCompletion::QueryRefused(account)
             }

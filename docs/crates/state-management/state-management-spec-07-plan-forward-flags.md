@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #408
+**Landing PR:** #420
 
-**Version:** 0.19 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
+**Version:** 0.20 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -444,10 +444,11 @@ component-failure rule. [STORE-5, FLOW-4, COST-4]
 
 ## 3. Transition ports and closure evidence
 
-**PLAN-PORT.** flow/plan.rs exposes activate(expected,step_id,successor),
+**PLAN-PORT.** The worker's FoundationInput (weaver-harness
+flow/context_worker_plan_ports.rs) exposes activate(expected,step_id,successor),
 assess_act(expected,step_id,statement,act), work_reference(expected,step_id,span,through),
 observe_review(expected,step_id,pair,work,assessment),
-attest_closure(expected,step_id,work), close(expected,step_id,evidence,outcome_span),
+attest_closure(expected,step_id,work), close(expected,step_id,evidence),
 and record_break(expected,step_id,case,proposed_source). IDs have PLAN-TYPES' types.
 statement is StatementRef, act is PlanAct, span is SpanRef, through is SourcePosition,
 pair is Spec 05's private CompletedPair, work is WorkRef, and proposed_source is
@@ -634,19 +635,27 @@ to invoke these ports. The primitive prescribes no report grammar or review sche
 Its durable account is the WorkRef, category, outcome source and, when present, the held
 review pair and setup. [PLAN-2, CAP-1, R20-12, R20-17]
 
-**CLOSURE.** close consumes ClosureEvidence and authors the certified step.outcome with
-the closed label and exact plan close effect. The event takes the trace, partition,
-classifier and store path. The store commits the effect, outcome span and closing marks
-atomically. The loop records a failed assessment as PLAN-TRACE's step.outcome with the
-failed label and null context, through the ordinary trace, partition, classifier and
-store path. That record writes no plan effect and consumes no ClosureEvidence, so
-observe_review still leaves the step and plan unchanged. Sort writes nothing. [SERVE-3,
-SORT-4, PLAN-2, MARK-1, FLOW-8]
+**CLOSURE.** close consumes ClosureEvidence. After its work reread, close takes its own
+Marks read and allocates outcome_span as that read's next span, with the same allocator
+as activate. No caller supplies outcome_span. That read is this run's Marks read, its
+catalog is coherent with the plan's task as its current task, and its open path is
+exactly the active step's: the task, the group's Subtask span when the group has one,
+then the step's span. Any other read is a foundation fault before any effect. close then
+authors the certified step.outcome with the closed label and exact plan close effect.
+The event takes the trace, partition, classifier and store path. The store commits the
+effect, outcome span and closing marks atomically. The loop records a failed assessment
+as PLAN-TRACE's step.outcome with the failed label and null context, through the
+ordinary trace, partition, classifier and store path. That record writes no plan effect
+and consumes no ClosureEvidence, so observe_review still leaves the step and plan
+unchanged. Sort writes nothing. [SERVE-3, SORT-4, PLAN-2, MARK-1, FLOW-8]
 
 The store opens and closes outcome_span below the active step, closes that step, and
 closes complete ancestors from their held membership. The pair and frontier guards
 remain STATE-PLAN-FILE's. No caller supplies an arbitrary ancestor list. A close receipt
-changes no argument and fires no successor. [PLAN-2, MARK-1, MARK-5, R20-12]
+changes no argument and fires no successor. Any store-guard refusal of close after the
+local rechecks pass is a foundation fault, not a PlanOperationRefused (the operator's
+ruling of 2026-10-30). The guard is a defence: close's allocation is serialized with
+every other allocator in the run. [PLAN-2, MARK-1, MARK-5, R20-12]
 
 ## 4. Flags and locked-plan predicates
 

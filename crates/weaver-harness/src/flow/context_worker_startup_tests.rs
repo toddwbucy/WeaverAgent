@@ -2582,8 +2582,8 @@ scenario!(
     "input-worker-plan-save-sqlite-port-active-close"
 );
 scenario!(
-    worker_plan_port_active_close_raced,
-    "input-worker-plan-save-sqlite-port-active-close-raced"
+    worker_plan_port_active_close_next,
+    "input-worker-plan-save-sqlite-port-active-close-next"
 );
 scenario!(
     worker_plan_port_active_wrong_category,
