@@ -301,6 +301,7 @@ pub(super) fn control(
     if mode.ends_with("-eof") {
         drop(original.take());
     }
+    let silent_began = Instant::now();
     let silent = dial(&root.join("admin.sock"));
     let probe = dial(&root.join("admin.sock"));
     transition(&probe, 970, end);
@@ -425,6 +426,20 @@ pub(super) fn control(
         // Left has already arrived on the other peer while the Enter reply
         // was blocked. Retained replies now drain exactly once.
         pressure::drain(original.as_ref().unwrap(), source, end);
+    }
+    if mode.ends_with("-silent-before-leave") {
+        // This root peer was accepted before rollback. Keep it connected
+        // until the worker retires it, then require successful completion
+        // without donating another 150 seconds to answer delivery.
+        let cap = silent_began
+            + Duration::from_millis(crate::state::ANSWER_BOUND_MS)
+            + Duration::from_secs(2);
+        crate::flow::fixture_eof::await_eof_until(silent.as_raw_fd(), cap, || {});
+        let (status, expired) = crate::test_child::wait_until(child, cap).unwrap();
+        assert!(
+            !expired && status.success(),
+            "a pre-rollback silent peer must not hold completed Left"
+        );
     }
     drop(silent);
     let (status, expired) = crate::test_child::wait_until(child, end).unwrap();

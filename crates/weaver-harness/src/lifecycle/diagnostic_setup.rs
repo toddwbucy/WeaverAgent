@@ -343,9 +343,9 @@ impl<'a> Setup<'a> {
                     self.peers.push(Peer {
                         channel: Some(channel),
                         replies: VecDeque::new(),
-                        first_request_deadline: self.leaving.as_ref().map(|_| {
-                            Instant::now() + Duration::from_millis(crate::state::ANSWER_BOUND_MS)
-                        }),
+                        first_request_deadline: Some(
+                            Instant::now() + Duration::from_millis(crate::state::ANSWER_BOUND_MS),
+                        ),
                         first_request_pending: true,
                     });
                     progress = true;
