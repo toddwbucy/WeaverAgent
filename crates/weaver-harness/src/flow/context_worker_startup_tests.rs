@@ -2681,6 +2681,18 @@ scenario!(
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-release-wrong"
 );
 scenario!(
+    worker_diagnostic_setup_release_refused,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-release-refused"
+);
+scenario!(
+    worker_diagnostic_setup_ready_rollback_unconfirmed_release,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-classifier-ready-release-wrong"
+);
+scenario!(
+    worker_diagnostic_setup_ready_rollback_release_eof,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-classifier-ready-release-eof"
+);
+scenario!(
     worker_diagnostic_setup_reap_pending,
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-reap-held"
 );
