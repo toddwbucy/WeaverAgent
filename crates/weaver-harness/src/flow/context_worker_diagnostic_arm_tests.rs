@@ -328,6 +328,21 @@ pub(super) fn control(
         Payload::Refusal(LifecycleRefusal::OutOfOrder)
     );
     no_packet(rollback.as_raw_fd());
+    if mode.ends_with("-silent-leave") {
+        // A new silent dial during the pending rollback must expire without
+        // holding cleanup or borrowing a fresh operation interval.
+        let silent_leave = dial(&root.join("admin.sock"));
+        crate::flow::fixture_eof::await_eof_until(
+            silent_leave.as_raw_fd(),
+            Instant::now()
+                + Duration::from_millis(crate::state::ANSWER_BOUND_MS)
+                + Duration::from_secs(2),
+            || {},
+        );
+        transition(&probe, 978, end);
+        no_packet(rollback.as_raw_fd());
+        assert!(child.try_wait().unwrap().is_none());
+    }
     let accepted_by = Instant::now();
     if mode.ends_with("-deadline") {
         while accepted_by.elapsed() < Duration::from_secs(20) {

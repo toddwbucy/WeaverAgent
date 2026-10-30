@@ -2693,6 +2693,10 @@ scenario!(
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-admit-deadline"
 );
 scenario!(
+    worker_diagnostic_setup_silent_peer_during_leave,
+    "input-worker-generation-emission-session-graceful-save-dispatch-admission-diagnostic-run-setup-arm-open-silent-leave"
+);
+scenario!(
     worker_admission_composition_unified_serving,
     "input-worker-generation-emission-session-graceful-save-dispatch-admission-unified-two"
 );

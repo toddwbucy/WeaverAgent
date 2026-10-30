@@ -1,10 +1,10 @@
 # Diagnostic setup and rollback composition
 
-**Version:** 0.1, 2026-10-30.
+**Version:** 0.2, 2026-10-30.
 **Parent:** Issue 146, state management implementation.
 
 Implements: weaver-harness-Spec section 6.1.1 DIAGNOSTIC-SETUP-ROLLBACK,
-section 6.1's Diagnostic aggregate and section 6's terminal kill/reap rule,
+section 6.1's Diagnostic aggregate and section 6's silent-dial and kill/reap rules,
 with weaver-admin-harness-contract section 4's pending rollback behavior.
 The channel and state changes preserve the existing organ, decode, classify
 and harness-state contracts.
@@ -21,8 +21,11 @@ selected. Do not select the foundation dispatcher or deploy from this slice.
 Diagnostic setup retains management service while identity, Admit, Open or
 elected classifier readiness is pending. Each peer owns its exact encoded
 replies. A silent peer or a blocked reply does not hold the listener or another
-peer's rollback. Observe answers InTransition before Ready and while rollback
-is pending. Stop and JoinLeave refuse OutOfOrder during setup rollback.
+peer's rollback. A new connection accepted during Leave has the existing
+two-second first-directive bound. Expiry closes only that silent connection,
+without changing the rollback deadline. Observe answers InTransition before
+Ready and while rollback is pending. Stop and JoinLeave refuse OutOfOrder
+during setup rollback.
 
 A forced rollback accepted before Ready selects NoResidency for the original
 Enter exchange. An established refusal or Ready keeps its original outcome.
@@ -61,11 +64,12 @@ replay interruption owner remains separate work under #393.
 
 ## Validation and source scope
 
-The actual worker matrix has 23 cases. It holds identity, Admit, Open and
+The actual worker matrix has 24 cases. It holds identity, Admit, Open and
 classifier readiness in turn, crossing same/new peers and original requester
 EOF. It checks refused/lost Admit and wrong opener, ordinal, position and
 payload. Other cases cover partial decode segments, failed Release, a child
-held alive after Released, reply pressure and the original deadline.
+held alive after Released, reply pressure, silent-peer expiry during Leave
+and the original deadline.
 
 The pressure case consumes 1,024 management requests without consuming their
 replies. A stable partial reply queue across independent Observe cycles proves
@@ -77,10 +81,10 @@ An additional transport test fills the actual Admit socket to EAGAIN and pins
 rollback before any Admit send for both wire formats. It does not claim a
 worker child in that lower-level test.
 
-The joined source passes 2,291 ordinary harness tests/doctests, 23 setup
+The joined source passes 2,291 ordinary harness tests/doctests, 24 setup
 process cases and seven existing Diagnostic admission/replay cases. Strict
 all-target harness lint, lock, formatting, diff and three DocsMirror checks
-pass. The ordinary suite reports 995 ignored cases and explicitly skips known
+pass. The ordinary suite reports 996 ignored cases and explicitly skips known
 #331's a_real_pending_trace_author_does_not_reduce_or_replace_packet_completions.
 Counts exclude nested child summaries. The total is 2,207 library tests,
 8 worker tests, 43 integration tests and 33 doctests.
@@ -95,14 +99,27 @@ Counts exclude nested child summaries. The total is 2,207 library tests,
 | D6, skip reap before completion | Held-child case detects premature worker completion. |
 | D7b, replace queued replies with a blocking send | The worker stops receiving requests under reply pressure. |
 | D8, renew the deadline on entry to cleanup | The actual interval case fails at its original deadline watchdog. |
+| D9, omit a silent Leave peer's receive timer | The actual worker fails to close the new silent peer within the fixture bound. |
 
-These eight controls compile independently and fail their process assertions.
-A ninth, D7, removes MSG_DONTWAIT alone and survives: the retained POLLOUT check
-still prevents a blocked send in this fixture. It is not counted as caught or
-as proof of the flag alone. D7b removes the queued-delivery mechanism itself.
-Both results remain in the evidence.
-The original source restores byte-for-byte. The restored
-transport test and all 23 setup process cases pass again.
+The first eight controls compile independently and fail their process assertions
+at 59034ba9. D7 removes MSG_DONTWAIT alone and survives: the retained POLLOUT
+check still prevents a blocked send in this fixture. It is not counted as
+caught or as proof of the flag alone. D7b removes the queued-delivery mechanism
+itself. Both results remain in the evidence. The first source restores
+byte-for-byte and its transport test and 23 setup cases pass again.
+
+The final contract sweep found the inherited two-second first-directive bound
+for new silent peers accepted during Leave. The correction retains that
+per-peer deadline, includes it in poll's earliest wake, clears it on the first
+request and excludes retired peers. Expiry drops only that peer. The original
+Enter peer has no new deadline. Both peer constructors and the request,
+retirement and wait paths are included in the caller census.
+
+D9 removes the new peer's timer and fails the actual worker's four-second EOF
+watchdog. D8 is compiled and caught again against the corrected source. The
+restored transport test and all 24 setup cases pass. Earlier controls remain
+scoped to 59034ba9, not claimed rerun against this correction. All 1,191 tested
+file hashes restore, and only this record changes after the final gates.
 
 The gate uses pinned nightly-2026-02-13, CARGO_INCREMENTAL=0, --locked and
 the private target /var/tmp/weaver-state-diagnostic-setup-target. The normal
@@ -111,14 +128,20 @@ transient scopes and the independently built admin test binary. The SPU,
 classifier and preload responders are scripted test peers, not production
 models or artifacts.
 
-The source archive has 1,190 files before this record. The record is the only
-addition after gates. Source checksums, command arrays, failed checks
-and controls are retained with the deposit. Final archive/commit reconciliation
-is stated in the PR body.
+The first archive has 1,191 committed files at 59034ba9, with this record added
+after its 1,190-file gate snapshot. The correction tests all 1,191 files and
+changes only this record afterward. Source checksums, command arrays, failed
+checks and controls are retained with each separate deposit. Final
+archive/commit reconciliation is stated in the PR body.
 
-Evidence deposit:
+First evidence deposit, scoped to 59034ba9:
 ```text
 /bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/diagnostic-setup-20261030
+```
+
+Final correction evidence:
+```text
+/bulk-store/weaver-testing/state-management-146-olympus-2026-10-22/diagnostic-setup-silent-peer-20261030
 ```
 
 ## Review and limits
@@ -150,9 +173,16 @@ The correction uses its existing bounded terminal precondition before the
 original single-call failure assertion, covering concurrent fork inheritance.
 A later run lacked the normal member binary in the new private target. The
 runner now builds that prerequisite. Strict lint also caught a clone of a Copy
-cause, which was removed. Each failed run remains in the evidence.
+cause, which was removed. The silent-peer correction first named the answer
+bound in the floor crate rather than its existing state-seam definition. That
+compile failure and its corrected rerun remain in the separate deposit. Each
+failed run remains in the evidence.
 
 Use the actual declaration and kernel preconditions in fixtures, and build
 the normal member before a fresh target's integration suite. Keep failed and
 restored checks tied to their exact source, and distinguish a readiness check
 that remains protective from a removed blocking-wait mechanism.
+
+The contract sweep must include shared lifecycle wait rules as well as the
+new setup section. A peer's receive deadline is a separate retirement duty
+from the operation deadline, and the tests must check both together.

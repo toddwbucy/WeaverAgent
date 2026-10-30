@@ -35,6 +35,7 @@ struct Reply {
 struct Peer {
     channel: Option<OrganChannel>,
     replies: VecDeque<Reply>,
+    first_request_deadline: Option<Instant>,
 }
 
 pub(super) struct Leaving {
@@ -72,6 +73,7 @@ impl<'a> Setup<'a> {
             peers: vec![Peer {
                 channel: Some(connection.try_clone()?),
                 replies: VecDeque::new(),
+                first_request_deadline: None,
             }],
             exchange,
             enter_selected: false,
@@ -139,6 +141,7 @@ impl<'a> Setup<'a> {
     }
 
     fn hear(&mut self, peer: usize) -> Result<(), ChannelFault> {
+        self.peers[peer].first_request_deadline = None;
         let channel = self.peers[peer].channel.as_ref().unwrap();
         let incoming = if channel.is_diagnostic_wire() {
             channel.recv_diagnostic()
@@ -279,7 +282,19 @@ impl<'a> Setup<'a> {
     ) -> Result<(bool, bool), ChannelFault> {
         self.live(deadline)?;
         let deadline = self.deadline(deadline);
-        let remaining = deadline.map(|end| end.saturating_duration_since(Instant::now()));
+        let first_request = self
+            .peers
+            .iter()
+            .filter(|peer| peer.channel.is_some())
+            .filter_map(|peer| peer.first_request_deadline)
+            .min();
+        // A silent dial heard during Leave has the existing answer bound.
+        // Its expiry retires that peer, never the operation or its deadline.
+        let wake = match (deadline, first_request) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let remaining = wake.map(|end| end.saturating_duration_since(Instant::now()));
         let duration = match (remaining, maximum) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
@@ -325,6 +340,9 @@ impl<'a> Setup<'a> {
                     self.peers.push(Peer {
                         channel: Some(channel),
                         replies: VecDeque::new(),
+                        first_request_deadline: self.leaving.as_ref().map(|_| {
+                            Instant::now() + Duration::from_millis(crate::state::ANSWER_BOUND_MS)
+                        }),
                     });
                     progress = true;
                 }
@@ -334,6 +352,14 @@ impl<'a> Setup<'a> {
         }
         for (slot, peer) in indices.into_iter().enumerate().skip(1) {
             let peer = peer.unwrap();
+            if self.peers[peer]
+                .first_request_deadline
+                .is_some_and(|end| Instant::now() >= end)
+            {
+                self.retire(peer);
+                progress = true;
+                continue;
+            }
             if ready[slot].intersects(PollFlags::POLLIN | PollFlags::POLLHUP | PollFlags::POLLERR) {
                 self.hear(peer)?;
                 progress = true;
