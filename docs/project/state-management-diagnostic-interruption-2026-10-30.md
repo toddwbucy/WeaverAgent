@@ -10,7 +10,7 @@ weaver-harness-spu-decode-contract sections 2, 3 and 5's consumer duties.
 Merged #393 and #398 supply authority. Admin Spec section 3 and the
 admin-harness contract supply existing cleanup, cause and deadline rules.
 
-The branch code/state-diagnostic-interruption stacks on exact #411
+Draft PR #415, branch code/state-diagnostic-interruption, stacks on exact #411
 3fd316de01782fa125707bbcf3ba150d3b1ef97a. Merge a59b32f4 retains corrected
 #410 at 610cd986d508f2697cc1218f95958977df200a54. It does not squash away
 that parent. #408's merged WorkRef election remains inherited through main.
