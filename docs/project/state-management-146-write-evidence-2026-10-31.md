@@ -106,7 +106,7 @@ before its transaction, so its name overclaims. #429 renamed it
 `pair_lane_request_mismatch_refuses_before_writing_its_source` (on `main` at `7c3cd266`); the rows above keep its
 name at `ea5d27e9`.
 
-Every gap is closed, accepted or moved: gap 1 by the runs above, gaps 2, 4, 10 and 12 on `main` at `7c3cd266`, gaps 3 and 6 to 9 to #423 and #424. This table is #146's closing evidence.
+Every gap is closed, accepted or moved: gap 1 by the runs above, gaps 2, 4, 10 and 12 on `main` at `7c3cd266`, gaps 5 and 11 accepted, gaps 3 and 6 to 9 to #423 and #424. This table is #146's closing evidence.
 
 ## Not settled
 
