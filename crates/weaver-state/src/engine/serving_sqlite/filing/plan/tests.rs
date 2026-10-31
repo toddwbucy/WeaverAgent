@@ -109,6 +109,14 @@ fn snapshot(store: &ServingSqlite) -> PlanSnapshot {
         .unwrap()
 }
 fn unchanged(store: &mut ServingSqlite, filing: &StatementFile) {
+    refuse_unchanged(store, filing);
+}
+/// unchanged, and the refusal is the named one.
+fn unchanged_because(store: &mut ServingSqlite, filing: &StatementFile, detail: &str) {
+    let error = refuse_unchanged(store, filing);
+    assert_eq!(error.detail, detail, "{error}");
+}
+fn refuse_unchanged(store: &mut ServingSqlite, filing: &StatementFile) -> FileFault {
     let before = store
         .connection
         .serialize(rusqlite::MAIN_DB)
@@ -118,6 +126,7 @@ fn unchanged(store: &mut ServingSqlite, filing: &StatementFile) {
     assert_eq!(error.code, StateRefusalCode::InvalidEffect, "{error}");
     let after = store.connection.serialize(rusqlite::MAIN_DB).unwrap();
     assert_eq!(&*after, before.as_slice());
+    error
 }
 fn create(store: &mut ServingSqlite, count: u64, review: bool, group: bool) {
     let groups = if group {
@@ -1469,86 +1478,104 @@ fn a_filing_past_the_last_span_refuses_counter_exhausted_without_writing() {
     assert_eq!(&*after, before.as_slice());
 }
 
-#[test]
-fn answer_break_replaces_a_broken_plan_whole_and_refuses_an_unbroken_one() {
-    for broken in [true, false] {
-        let mut store = store();
-        create(&mut store, 1, false, false);
-        activate(&mut store, 3, 1, 3, None);
-        if broken {
-            store
-                .file(&effect(
-                    4,
-                    PlanEffect::Break {
-                        expected: plan(1),
-                        step_id: Some(step(1)),
-                        case: PlanBreakCase::WrongCategory,
-                        proposed_source: None,
-                    },
-                ))
-                .unwrap();
-        }
-        let ctx = context(
-            PlanInputOperation::AnswerBreak {
-                replacement: PlanInputReplacement {
-                    task: None,
-                    steps: vec![PlanInputStep {
-                        id: None,
-                        block: 0.into(),
-                    }],
-                    categories: categories(false),
-                    groups: vec![],
-                    review: setup(),
-                    preserved_closures: vec![],
+/// A one-step plan with its step active and, when `broken`, a filed Break;
+/// then an answer_break input and the Replace effect that answers it.
+fn answer_break_on(broken: bool) -> (ServingSqlite, StatementFile) {
+    let mut store = store();
+    create(&mut store, 1, false, false);
+    activate(&mut store, 3, 1, 3, None);
+    if broken {
+        store
+            .file(&effect(
+                4,
+                PlanEffect::Break {
+                    expected: plan(1),
+                    step_id: Some(step(1)),
+                    case: PlanBreakCase::WrongCategory,
+                    proposed_source: None,
                 },
-            },
-            Some(plan(1)),
-        );
-        store.file(&input(5, 0, &ctx)).unwrap();
-        let replace = effect(
-            6,
-            PlanEffect::Replace {
-                expected: plan(1),
-                next: plan(2),
-                source: block(5, 0),
-                task: TaskScopeRef {
-                    task: span(1),
-                    prompt: span(2),
-                },
-                steps: vec![PlanStepInit {
-                    step_id: step(2),
-                    instruction: reference(5, 0),
-                }],
-                review: setup(),
-            },
-        );
-        if !broken {
-            // answer_break answers a break: on an unbroken plan the whole
-            // filing refuses and the image is byte-identical.
-            unchanged(&mut store, &replace);
-            assert_eq!(snapshot(&store).plan, plan(1));
-            continue;
-        }
-        store.file(&replace).unwrap();
-        let old =
-            reads::plan_snapshot(&store.connection, &store.context.seed_id, &plan(1)).unwrap();
-        assert_eq!(old.status, PlanStatus::Superseded);
-        assert_eq!(old.steps[0].status, StepStatus::Retired);
-        let current = snapshot(&store);
-        assert_eq!(current.plan, plan(2));
-        assert_eq!(current.status, PlanStatus::Locked);
-        assert_eq!(current.steps.len(), 1);
-        assert_eq!(current.steps[0].step_id, step(2));
-        assert_eq!(current.steps[0].status, StepStatus::Waiting);
-        verify_image_plan(
-            &store.connection,
-            &store.context.seed_id,
-            &store.read_limits,
-        )
-        .unwrap();
+            ))
+            .unwrap();
     }
+    let ctx = context(
+        PlanInputOperation::AnswerBreak {
+            replacement: PlanInputReplacement {
+                task: None,
+                steps: vec![PlanInputStep {
+                    id: None,
+                    block: 0.into(),
+                }],
+                categories: categories(false),
+                groups: vec![],
+                review: setup(),
+                preserved_closures: vec![],
+            },
+        },
+        Some(plan(1)),
+    );
+    store.file(&input(5, 0, &ctx)).unwrap();
+    let replace = effect(
+        6,
+        PlanEffect::Replace {
+            expected: plan(1),
+            next: plan(2),
+            source: block(5, 0),
+            task: TaskScopeRef {
+                task: span(1),
+                prompt: span(2),
+            },
+            steps: vec![PlanStepInit {
+                step_id: step(2),
+                instruction: reference(5, 0),
+            }],
+            review: setup(),
+        },
+    );
+    (store, replace)
 }
 
+#[test]
+fn answer_break_replaces_a_broken_plan_whole() {
+    let (mut store, replace) = answer_break_on(true);
+    store.file(&replace).unwrap();
+    let old = reads::plan_snapshot(&store.connection, &store.context.seed_id, &plan(1)).unwrap();
+    assert_eq!(old.status, PlanStatus::Superseded);
+    assert_eq!(old.steps[0].status, StepStatus::Retired);
+    let current = snapshot(&store);
+    assert_eq!(current.plan, plan(2));
+    assert_eq!(current.status, PlanStatus::Locked);
+    assert_eq!(current.steps.len(), 1);
+    assert_eq!(current.steps[0].step_id, step(2));
+    assert_eq!(current.steps[0].status, StepStatus::Waiting);
+    // The open task keeps its scope, and the retired step's span 3 is no
+    // longer open.
+    assert_eq!(
+        current.task,
+        TaskScopeRef {
+            task: span(1),
+            prompt: span(2),
+        }
+    );
+    let QueryResult::Marks { open_scopes, .. } =
+        reads::query(&store, &weaver_types::state_flow::ReadSelector::Marks {}).unwrap()
+    else {
+        unreachable!()
+    };
+    let open: Vec<_> = open_scopes.iter().map(|scope| scope.span.clone()).collect();
+    assert_eq!(open, vec![span(1)]);
+    verify_image_plan(
+        &store.connection,
+        &store.context.seed_id,
+        &store.read_limits,
+    )
+    .unwrap();
+}
+
+#[test]
+fn answer_break_refuses_an_unbroken_plan_without_writing() {
+    let (mut store, replace) = answer_break_on(false);
+    unchanged_because(&mut store, &replace, "answer_break requires a broken plan");
+}
 #[test]
 fn refused_authorize_leaves_the_image_byte_identical() {
     let mut store = store();
@@ -1563,11 +1590,8 @@ fn refused_authorize_leaves_the_image_byte_identical() {
     );
     store.file(&input(1, 0, &ctx)).unwrap();
     // The effect names another review setup than its operator input.
-    let mut other = setup();
-    other.setup_id = "different".into();
-    unchanged(
-        &mut store,
-        &effect(
+    let authorize = |review| {
+        effect(
             2,
             PlanEffect::Authorize {
                 plan: plan(1),
@@ -1576,10 +1600,19 @@ fn refused_authorize_leaves_the_image_byte_identical() {
                     task: span(1),
                     prompt: span(2),
                 },
-                review: other,
+                review,
             },
-        ),
+        )
+    };
+    let mut other = setup();
+    other.setup_id = "different".into();
+    unchanged_because(
+        &mut store,
+        &authorize(other),
+        "authorize does not match operator input",
     );
+    // Positive control: the matching setup authorizes.
+    store.file(&authorize(setup())).unwrap();
 }
 
 #[test]
@@ -1588,6 +1621,12 @@ fn refused_activate_leaves_the_image_byte_identical() {
     create(&mut store, 1, false, false);
     // The step span skips the next allocatable span.
     let skipped = activation(&store, 1, 9, None);
-    unchanged(&mut store, &effect(3, skipped));
-    assert_eq!(snapshot(&store).steps[0].status, StepStatus::Waiting);
+    unchanged_because(
+        &mut store,
+        &effect(3, skipped),
+        "span allocation is not consecutive",
+    );
+    // Positive control: the next span activates.
+    let next = activation(&store, 1, 3, None);
+    store.file(&effect(3, next)).unwrap();
 }
