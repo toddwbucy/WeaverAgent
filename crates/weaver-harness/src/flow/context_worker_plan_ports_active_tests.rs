@@ -82,7 +82,12 @@ fn complete_operation(input: &mut FoundationInput<'_>) -> FoundationPlanOperatio
         .expect("one completed operation")
 }
 
-fn activate(input: &mut FoundationInput<'_>) -> (s::StepQueryRef, s::SpanRef, s::SourcePosition) {
+/// Activate the first waiting step after `previous`, the closed step the
+/// successor query follows, or the plan's first step when it is None.
+fn activate(
+    input: &mut FoundationInput<'_>,
+    previous: Option<s::StepId>,
+) -> (s::StepQueryRef, s::SpanRef, s::SourcePosition) {
     let context = &mut input.serving.owner.context;
     let bound = AbsoluteBound::after(MonotonicIo.now().unwrap(), 5_000_000_000).unwrap();
     context
@@ -111,7 +116,7 @@ fn activate(input: &mut FoundationInput<'_>) -> (s::StepQueryRef, s::SpanRef, s:
         .plan
         .clone();
     input
-        .step_successor(plan, None, Some(TurnKey(TURN.into())))
+        .step_successor(plan, previous, Some(TurnKey(TURN.into())))
         .unwrap();
     let checked = complete_operation(input).into_successor().unwrap();
     let successor = checked.reference().clone();
@@ -180,7 +185,7 @@ pub(super) fn exercise(
         });
         let _done = Done(&done);
         let input = guard.input.as_mut().unwrap();
-        let (successor, span, through) = activate(input);
+        let (successor, span, through) = activate(input, None);
         let before = input
             .serving
             .owner
@@ -205,6 +210,19 @@ pub(super) fn exercise(
             panic!("actual committed plan snapshot")
         };
         let before_steps = before_snapshot.steps.clone();
+        if mode.ends_with("-close") {
+            close(input, &successor, span, through);
+            return;
+        }
+        if mode.ends_with("-close-next") {
+            // The second step closes behind the first one's closure: the
+            // receipt must name the second step and its own closure source.
+            close(input, &successor, span, through);
+            let (next, span, through) = activate(input, Some(successor.step_id.clone()));
+            assert_ne!(next.step_id, successor.step_id);
+            close(input, &next, span, through);
+            return;
+        }
         let expected_digest = if mode.ends_with("-work") {
             let preview = read(
                 input,
@@ -362,6 +380,42 @@ pub(super) fn exercise(
         );
     });
     let rows = management::tests::trace(reader);
+    if mode.ends_with("-close-next") {
+        let outcomes = rows
+            .iter()
+            .filter(|row| row["kind"] == "step.outcome")
+            .count();
+        assert_eq!(outcomes, 2, "each close certifies its own closed outcome");
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row["kind"] == "plan.event")
+                .count(),
+            2,
+            "only the two activations write plan events"
+        );
+        assert!(rows.iter().all(|row| row["kind"] != "refusal"));
+        return;
+    }
+    if mode.ends_with("-close") {
+        let outcomes: Vec<_> = rows
+            .iter()
+            .filter(|row| row["kind"] == "step.outcome")
+            .collect();
+        assert_eq!(outcomes.len(), 1, "one certified closed outcome");
+        assert_eq!(outcomes[0]["payload"]["template_id"], "step.closed");
+        assert_eq!(
+            outcomes[0]["payload"]["outcome"],
+            serde_json::json!({"closed": {}})
+        );
+        assert_eq!(outcomes[0]["turn"], TURN);
+        assert!(rows.iter().all(|row| row["kind"] != "refusal"));
+        assert!(
+            rows.iter()
+                .all(|row| row["kind"] != "tool.call.started" && row["kind"] != "model.request"),
+            "closure invokes no reviewer and starts no generation"
+        );
+        return;
+    }
     assert_eq!(
         rows.iter()
             .filter(|row| row["kind"] == "plan.event")
@@ -538,4 +592,128 @@ fn interrupt_completed(guard: &mut Guard<'_>, socket: &Path, leave: bool) {
     assert_eq!(format!("{:?}", result.request()), request);
     // The caller must observe revocation through the public take below, after
     // management has returned the input. Do not cancel from this fixture.
+}
+
+/// D1 against the actual member: its served preview becomes the harness
+/// WorkRef, attest_closure grants the evidence, close allocates its outcome
+/// span from its own Marks read, and the store accepts the close.
+fn close(
+    input: &mut FoundationInput<'_>,
+    successor: &s::StepQueryRef,
+    span: s::SpanRef,
+    through: s::SourcePosition,
+) {
+    let preview = read(
+        input,
+        s::ReadSelector::SpanPreview {
+            span: span.clone(),
+            through: through.clone(),
+        },
+    );
+    let digest = format!("{:x}", Sha256::digest(preview.raw_bytes()));
+    input
+        .work_reference(
+            successor.plan.clone(),
+            successor.step_id.clone(),
+            span.clone(),
+            through,
+            Some(TurnKey(TURN.into())),
+        )
+        .unwrap();
+    let work = complete_operation(input).into_checked_work().unwrap();
+    assert_eq!(work.reference().content_sha256.as_str(), digest);
+    let reference = work.reference().clone();
+    input
+        .attest_closure(
+            successor.plan.clone(),
+            successor.step_id.clone(),
+            work,
+            Some(TurnKey(TURN.into())),
+        )
+        .unwrap();
+    let evidence = complete_operation(input).into_closure_evidence().unwrap();
+    // The span close must allocate, stated from the member's catalog
+    // independently of the allocator: next_span_id at revision one.
+    let catalog = read(input, s::ReadSelector::Marks {});
+    let s::QueryResult::Marks { next_span_id, .. } = catalog.result() else {
+        panic!("member marks")
+    };
+    let outcome = s::SpanRef {
+        seed_id: successor.plan.plan_id.seed_id.clone(),
+        local_id: *next_span_id,
+        revision: 1.into(),
+    };
+    let bound = AbsoluteBound::after(MonotonicIo.now().unwrap(), 5_000_000_000).unwrap();
+    input
+        .serving
+        .owner
+        .context
+        .arm(PumpDeadline::Decision, bound, &mut MonotonicIo)
+        .unwrap();
+    input
+        .close(
+            successor.plan.clone(),
+            successor.step_id.clone(),
+            evidence,
+            TurnKey(TURN.into()),
+        )
+        .unwrap();
+    let result = complete_operation(input);
+    let FoundationPlanOutcome::Closed(current) = result.outcome() else {
+        panic!("close must return its committed snapshot: {result:?}")
+    };
+    let closed = current
+        .steps
+        .iter()
+        .find(|step| step.step_id == successor.step_id)
+        .unwrap();
+    assert_eq!(closed.status, s::StepStatus::Closed);
+    assert_eq!(closed.outcome_span.as_ref(), Some(&outcome));
+    assert_eq!(closed.work.as_ref(), Some(&reference));
+    assert_eq!(closed.review_call, None);
+    assert_eq!(
+        closed.closure_source.as_ref(),
+        Some(&current.last_source.block_id)
+    );
+    let receipt = result.into_closure_receipt().unwrap();
+    assert!(receipt.belongs_to(input.serving.owner.context));
+    // The receipt's closed source is the closure the member committed, read
+    // afresh from the member rather than from the snapshot the receipt kept.
+    let committed = read(input, s::ReadSelector::PlanCurrent {});
+    let s::QueryResult::PlanCurrent {
+        current: Some(committed),
+        ..
+    } = committed.result()
+    else {
+        panic!("member current plan")
+    };
+    let member_closure = committed
+        .steps
+        .iter()
+        .find(|step| step.step_id == successor.step_id)
+        .and_then(|step| step.closure_source.as_ref())
+        .expect("the member holds the closure");
+    assert_eq!(receipt.closed(), member_closure);
+    assert_ne!(receipt.closed(), &reference.through.block_id);
+    assert_eq!(receipt.plan(), &successor.plan);
+    assert_eq!(receipt.previous_step(), &successor.step_id);
+    assert!(input.serving.owner.context.native_place_cache_ready());
+    // The member's own marks show the outcome opened and closed below the step.
+    let marks = read(input, s::ReadSelector::Marks {});
+    let s::QueryResult::Marks { open_scopes, .. } = marks.result() else {
+        panic!()
+    };
+    assert!(
+        open_scopes
+            .iter()
+            .all(|scope| scope.span != span && scope.span != outcome)
+    );
+    assert_eq!(
+        input
+            .serving
+            .owner
+            .context
+            .complete_wait(PumpDeadline::Decision),
+        Some(bound)
+    );
 }

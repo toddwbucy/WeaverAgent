@@ -3,8 +3,10 @@
 use super::*;
 use crate::flow::author::AuthoredSource;
 use crate::flow::mirror;
-use weaver_trace::serving::payloads as trace;
-use weaver_types::state_flow::{PlanFlagSnapshot, PlanRef, ReadRefusalCode, SourceBlockId};
+use weaver_types::state_flow::{
+    PlanFlagObservation, PlanFlagSnapshot, PlanMeasureEvent, PlanMeasurement, PlanRef,
+    ReadRefusalCode, SourceBlockId,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::flow) enum FlagObservation {
@@ -219,22 +221,22 @@ impl RecordingContext {
             }
             _ => return Err(RunFailure::ReadOwned),
         };
-        let payload = trace::PlanMeasurement {
+        let payload = mirror::plan_measurement(&PlanMeasurement {
             instrument_version: "plan-observation/1".into(),
-            plan: mirror::plan_ref(plan),
-            event: trace::PlanMeasureEvent::Flags {
-                after: mirror::source(after),
-                request_id: trace::DecimalU64(request_id.0),
+            plan: plan.clone(),
+            event: PlanMeasureEvent::Flags {
+                after: after.clone(),
+                request_id,
                 observation: match &observation {
-                    FlagObservation::Measured(snapshot) => trace::PlanFlagObservation::Measured {
-                        snapshot: mirror::plan_flags(snapshot),
+                    FlagObservation::Measured(snapshot) => PlanFlagObservation::Measured {
+                        snapshot: snapshot.clone(),
                     },
-                    FlagObservation::Unavailable(code) => trace::PlanFlagObservation::Unavailable {
-                        code: mirror::read_refusal(*code),
-                    },
+                    FlagObservation::Unavailable(code) => {
+                        PlanFlagObservation::Unavailable { code: *code }
+                    }
                 },
             },
-        };
+        });
         let flags = self.flags_mut().unwrap();
         flags.observation = Some(observation);
         flags.event = Some(AuthoredEvent {

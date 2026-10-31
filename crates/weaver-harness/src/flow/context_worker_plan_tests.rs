@@ -49,6 +49,11 @@ pub(in crate::flow::context) fn templates() -> &'static [s::TemplateSpec] {
                 parts: vec![s::TemplatePart::Literal("Read plan.".into())],
             }),
         );
+        all.push(s::TemplateSpec {
+            template_id: "step.closed".into(),
+            kind: "step.outcome".into(),
+            parts: vec![s::TemplatePart::Literal("Read plan.".into())],
+        });
         all
     })
 }

@@ -2,7 +2,6 @@
 //! create no effect, and never classify a held statement again.
 use super::CommittedPlanSummary;
 use crate::flow::context::{RecordedRead, RecordedReadRefusal, RecordingContext};
-use sha2::{Digest as _, Sha256};
 use weaver_types::state_flow as s;
 
 #[path = "plan_activation.rs"]
@@ -10,8 +9,11 @@ pub(in crate::flow) mod activation;
 pub use activation::CheckedStepSuccessor;
 #[path = "plan_break.rs"]
 pub(in crate::flow) mod break_plan;
+#[path = "plan_closure.rs"]
+pub(in crate::flow) mod closure;
 #[path = "plan_port_effect.rs"]
 pub(in crate::flow) mod effect;
+pub use crate::flow::context::plan_port_driver::{CheckedWork, ClosureEvidence, ClosureReceipt};
 
 #[derive(Debug)]
 pub enum PlanRequest {
@@ -43,6 +45,21 @@ pub enum PlanRequest {
         span: s::SpanRef,
         through: s::SourcePosition,
     },
+    /// Unreviewed closure under the operator's category. The checked work is
+    /// moved in, so one held preview supplies at most one attestation.
+    AttestClosure {
+        expected: s::PlanRef,
+        step_id: s::StepId,
+        work: CheckedWork,
+    },
+    /// close rereads its work, then takes its own Marks read and allocates
+    /// the outcome span there, as activate allocates its step span. The
+    /// store still requires it to be the next span below the step at filing.
+    Close {
+        expected: s::PlanRef,
+        step_id: s::StepId,
+        evidence: ClosureEvidence,
+    },
 }
 
 impl PlanRequest {
@@ -52,7 +69,9 @@ impl PlanRequest {
             | Self::Activate { expected, .. }
             | Self::RecordBreak { expected, .. }
             | Self::AssessAct { expected, .. }
-            | Self::WorkReference { expected, .. } => expected,
+            | Self::WorkReference { expected, .. }
+            | Self::AttestClosure { expected, .. }
+            | Self::Close { expected, .. } => expected,
         }
     }
     pub(in crate::flow) fn step_id(&self) -> Option<&s::StepId> {
@@ -61,7 +80,9 @@ impl PlanRequest {
             Self::RecordBreak { step_id, .. } => step_id.as_ref(),
             Self::Activate { step_id, .. }
             | Self::AssessAct { step_id, .. }
-            | Self::WorkReference { step_id, .. } => Some(step_id),
+            | Self::WorkReference { step_id, .. }
+            | Self::AttestClosure { step_id, .. }
+            | Self::Close { step_id, .. } => Some(step_id),
         }
     }
     pub(in crate::flow) fn operation(&self) -> Option<s::PlanPortOperation> {
@@ -71,6 +92,8 @@ impl PlanRequest {
             Self::RecordBreak { .. } => s::PlanPortOperation::RecordBreak,
             Self::AssessAct { .. } => s::PlanPortOperation::AssessAct,
             Self::WorkReference { .. } => s::PlanPortOperation::WorkReference,
+            Self::AttestClosure { .. } => s::PlanPortOperation::AttestClosure,
+            Self::Close { .. } => s::PlanPortOperation::Close,
         })
     }
     pub(in crate::flow) fn local_refusal(&self, seed: &str) -> Option<s::PlanOperationRefused> {
@@ -101,6 +124,12 @@ impl PlanRequest {
             Self::WorkReference { span, through, .. } => s::ReadSelector::SpanPreview {
                 span: span.clone(),
                 through: through.clone(),
+            },
+            Self::AttestClosure { .. } => unreachable!("attestation consumes held proofs"),
+            // close rereads the exact held work selector to recheck its bytes.
+            Self::Close { evidence, .. } => s::ReadSelector::SpanPreview {
+                span: evidence.work().span.clone(),
+                through: evidence.work().through.clone(),
             },
         }
     }
@@ -229,11 +258,7 @@ pub(in crate::flow) fn assess(
             "statement proof changed its requested identity",
         ));
     }
-    let category = plan
-        .categories
-        .iter()
-        .find(|category| category.id == step.category)
-        .ok_or(PlanCheckFailure::Protocol("active step category is absent"))?;
+    let category = closure::category(plan, step)?;
     if let s::PlanAct::ExternalTool { name } = act
         && (name != "sh" || loaded_tools.sh.is_none())
     {
@@ -284,13 +309,7 @@ pub(in crate::flow) fn work_reference(
             "work preview has another result family",
         ));
     };
-    if actual != span
-        || frontier != through
-        || entries
-            .iter()
-            .flat_map(|entry| &entry.pairs)
-            .any(|pair| pair.fate == s::PairFate::Opened)
-    {
+    if actual != span || frontier != through || closure::open_pair(entries) {
         return Err(PlanCheckFailure::Protocol(
             "work preview changed its frontier or retained an open pair",
         ));
@@ -300,8 +319,7 @@ pub(in crate::flow) fn work_reference(
         step_id: step_id.clone(),
         span: span.clone(),
         through: through.clone(),
-        content_sha256: s::Digest::new(format!("{:x}", Sha256::digest(preview.raw_bytes())))
-            .expect("SHA-256 has the digest shape"),
+        content_sha256: closure::digest(preview.raw_bytes()),
     })
 }
 

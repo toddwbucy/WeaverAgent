@@ -18,6 +18,22 @@ pub(in crate::flow) fn execution_effect(
             proposed_source: proposed_source.as_ref().map(source),
         });
     }
+    if let shared::PlanEffect::Close {
+        expected,
+        step_id: step,
+        review_call,
+        work,
+        outcome_span,
+    } = value
+    {
+        return Ok(trace::PlanEffect::Close {
+            expected: plan_ref(expected),
+            step_id: step_id(step),
+            review_call: review_call.as_ref().map(call_id),
+            work: work_ref(work),
+            outcome_span: span_ref(outcome_span),
+        });
+    }
     let shared::PlanEffect::Activate {
         expected,
         step_id: step,
@@ -26,7 +42,7 @@ pub(in crate::flow) fn execution_effect(
         successor,
     } = value
     else {
-        return Err("activation grant has another effect");
+        return Err("execution grant has another effect");
     };
     Ok(trace::PlanEffect::Activate {
         expected: plan_ref(expected),
@@ -39,6 +55,35 @@ pub(in crate::flow) fn execution_effect(
             step_id: step_id(&successor.step_id),
             instruction: statement(&successor.instruction),
         },
+    })
+}
+
+/// PLAN-TRACE's closed step.outcome. Its outer identities are copied from
+/// the exact close effect, so the record cannot name another step or work.
+pub(in crate::flow) fn closed_outcome(
+    value: &shared::PlanEffect,
+    message: Box<serde_json::value::RawValue>,
+    template_id: String,
+) -> Result<trace::StepOutcomeRecord, &'static str> {
+    let shared::PlanEffect::Close {
+        expected,
+        step_id: step,
+        review_call,
+        work,
+        ..
+    } = value
+    else {
+        return Err("closed outcome requires its close effect");
+    };
+    Ok(trace::StepOutcomeRecord {
+        message,
+        template_id,
+        context: Some(execution_effect(value)?),
+        plan: plan_ref(expected),
+        step_id: step_id(step),
+        review_call: review_call.as_ref().map(call_id),
+        work: work_ref(work),
+        outcome: trace::ReviewOutcome::Closed {},
     })
 }
 
@@ -159,7 +204,7 @@ pub(in crate::flow) fn plan_input(value: &shared::PlanInputContext) -> trace::Pl
         },
     }
 }
-pub(in crate::flow) fn plan_ref(value: &shared::PlanRef) -> trace::PlanRef {
+fn plan_ref(value: &shared::PlanRef) -> trace::PlanRef {
     let shared::PlanRef {
         plan_id: shared::PlanId { seed_id, local_id },
         revision,
@@ -172,7 +217,7 @@ pub(in crate::flow) fn plan_ref(value: &shared::PlanRef) -> trace::PlanRef {
         revision: number(*revision),
     }
 }
-pub(in crate::flow) fn plan_flags(value: &shared::PlanFlagSnapshot) -> trace::PlanFlagSnapshot {
+fn plan_flags(value: &shared::PlanFlagSnapshot) -> trace::PlanFlagSnapshot {
     let shared::PlanFlagSnapshot {
         plan,
         after,
@@ -190,7 +235,7 @@ pub(in crate::flow) fn plan_flags(value: &shared::PlanFlagSnapshot) -> trace::Pl
         unmatched_flags: number(*unmatched_flags),
     }
 }
-pub(in crate::flow) fn read_refusal(value: shared::ReadRefusalCode) -> trace::ReadRefusalCode {
+fn read_refusal(value: shared::ReadRefusalCode) -> trace::ReadRefusalCode {
     use shared::ReadRefusalCode as S;
     use trace::ReadRefusalCode as T;
     match value {
@@ -308,5 +353,77 @@ pub(in crate::flow) fn plan_break(value: &shared::PlanBreakReport) -> trace::Pla
         step_id: step.as_ref().map(step_id),
         proposed_source: proposed_source.as_ref().map(source),
         case: plan_break_case(*case),
+    }
+}
+
+/// PLAN-OBSERVATION's three readings. The floor type is the producer's
+/// value; this conversion neither samples a clock nor invents a count.
+pub(in crate::flow) fn plan_measurement(value: &shared::PlanMeasurement) -> trace::PlanMeasurement {
+    let shared::PlanMeasurement {
+        instrument_version,
+        plan,
+        event,
+    } = value;
+    trace::PlanMeasurement {
+        instrument_version: instrument_version.clone(),
+        plan: plan_ref(plan),
+        event: match event {
+            shared::PlanMeasureEvent::Flags {
+                after,
+                request_id,
+                observation,
+            } => trace::PlanMeasureEvent::Flags {
+                after: source(after),
+                request_id: number(*request_id),
+                observation: match observation {
+                    shared::PlanFlagObservation::Measured { snapshot } => {
+                        trace::PlanFlagObservation::Measured {
+                            snapshot: plan_flags(snapshot),
+                        }
+                    }
+                    shared::PlanFlagObservation::Unavailable { code } => {
+                        trace::PlanFlagObservation::Unavailable {
+                            code: read_refusal(*code),
+                        }
+                    }
+                },
+            },
+            shared::PlanMeasureEvent::NextReady {
+                closed,
+                previous_step,
+                step_id: step,
+                assembly_id,
+                began_ns,
+                ended_ns,
+                closure_to_next_ns,
+            } => trace::PlanMeasureEvent::NextReady {
+                closed: source(closed),
+                previous_step: step_id(previous_step),
+                step_id: step_id(step),
+                assembly_id: number(*assembly_id),
+                began_ns: number(*began_ns),
+                ended_ns: number(*ended_ns),
+                closure_to_next_ns: number(*closure_to_next_ns),
+            },
+            shared::PlanMeasureEvent::FitRefused {
+                step_id: step,
+                assembly_id,
+                stage,
+                code,
+                mandatory_fit_refusals,
+            } => trace::PlanMeasureEvent::FitRefused {
+                step_id: step_id(step),
+                assembly_id: number(*assembly_id),
+                stage: match stage {
+                    shared::PlanFitStage::MandatoryProbe => trace::PlanFitStage::MandatoryProbe,
+                    shared::PlanFitStage::PlaceBackstop => trace::PlanFitStage::PlaceBackstop,
+                },
+                code: match code {
+                    shared::PlanFitCode::TailOverCapacity => trace::PlanFitCode::TailOverCapacity,
+                    shared::PlanFitCode::GenerationRoom => trace::PlanFitCode::GenerationRoom,
+                },
+                mandatory_fit_refusals: number(*mandatory_fit_refusals),
+            },
+        },
     }
 }

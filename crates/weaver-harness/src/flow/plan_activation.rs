@@ -128,31 +128,7 @@ pub(in crate::flow) fn prepare(
             "activation lost its ordered marks proof or turn",
         ));
     }
-    let s::QueryResult::Marks {
-        next_span_id,
-        current_task,
-        open_scopes,
-    } = marks.result()
-    else {
-        return Err(PlanCheckFailure::Protocol(
-            "activation has no marks catalog",
-        ));
-    };
-    let seed = &plan.plan.plan_id.seed_id;
-    if !matches!(crate::flow::marks::catalog(marks.result(), seed),
-        Ok(crate::flow::marks::TaskCatalog::Existing(task)) if task == plan.task)
-        || current_task.as_ref() != Some(&plan.task)
-    {
-        return Err(PlanCheckFailure::Protocol(
-            "plan task disagrees with its open marks path",
-        ));
-    }
-    let span = |id| s::SpanRef {
-        seed_id: seed.clone(),
-        local_id: id,
-        revision: 1.into(),
-    };
-    let mut next = *next_span_id;
+    let (open_scopes, mut spans) = task_catalog(marks, plan)?;
     let group_span = match &step.group {
         None => None,
         Some(id) => {
@@ -166,37 +142,11 @@ pub(in crate::flow) fn prepare(
             }
             Some(match &group.span {
                 Some(existing) => existing.clone(),
-                None => {
-                    let allocated = span(next);
-                    next = next
-                        .0
-                        .checked_add(1)
-                        .ok_or_else(|| {
-                            refuse(
-                                s::PlanOperationCase::CounterExhausted,
-                                "activation step counter exhausted",
-                            )
-                        })?
-                        .into();
-                    allocated
-                }
+                None => spans.take("activation step counter exhausted")?,
             })
         }
     };
-    let existing_group = step
-        .group
-        .as_ref()
-        .and_then(|id| plan.groups.iter().find(|group| &group.id == id))
-        .and_then(|group| group.span.as_ref());
-    let expected_scopes: Vec<_> = std::iter::once((&plan.task.task, s::SpanKind::Task))
-        .chain(existing_group.map(|span| (span, s::SpanKind::Subtask)))
-        .collect();
-    if open_scopes.len() != expected_scopes.len()
-        || open_scopes
-            .iter()
-            .zip(expected_scopes)
-            .any(|(actual, (span, kind))| &actual.span != span || actual.kind != kind)
-    {
+    if !path_matches(open_scopes, &step_path(plan, step)) {
         return Err(PlanCheckFailure::Protocol(
             "activation marks differ from its task/group scopes",
         ));
@@ -206,7 +156,7 @@ pub(in crate::flow) fn prepare(
         effect: s::PlanEffect::Activate {
             expected: plan.plan.clone(),
             step_id: step.step_id.clone(),
-            step_span: span(next),
+            step_span: spans.peek(),
             group_span,
             successor: successor.reference().clone(),
         },
@@ -214,4 +164,98 @@ pub(in crate::flow) fn prepare(
         turn: Some(turn),
         bound,
     })
+}
+
+/// The catalog activation and close allocate from: a coherent Marks result
+/// whose open task is the plan's own. It returns the open scopes and the
+/// allocator at the catalog's next span. Callers check the proof's run
+/// binding and selector first.
+pub(in crate::flow) fn task_catalog<'a>(
+    marks: &'a RecordedRead,
+    plan: &s::PlanSnapshot,
+) -> Result<(&'a [s::SpanInfo], SpanAllocator), PlanCheckFailure> {
+    let s::QueryResult::Marks {
+        next_span_id,
+        open_scopes,
+        ..
+    } = marks.result()
+    else {
+        return Err(PlanCheckFailure::Protocol("marks read has no catalog"));
+    };
+    let seed = &plan.plan.plan_id.seed_id;
+    // catalog() returns the read's own current_task as Existing, so this one
+    // comparison is the current_task == plan.task check.
+    if !matches!(crate::flow::marks::catalog(marks.result(), seed),
+        Ok(crate::flow::marks::TaskCatalog::Existing(task)) if task == plan.task)
+    {
+        return Err(PlanCheckFailure::Protocol(
+            "plan task disagrees with its open marks path",
+        ));
+    }
+    Ok((
+        open_scopes,
+        SpanAllocator {
+            seed: seed.clone(),
+            next: *next_span_id,
+        },
+    ))
+}
+
+/// The open marks path above a step: its plan's task, then its group's
+/// Subtask span once the group has one.
+pub(in crate::flow) fn step_path<'a>(
+    plan: &'a s::PlanSnapshot,
+    step: &s::PlanStep,
+) -> Vec<(&'a s::SpanRef, s::SpanKind)> {
+    let group = step
+        .group
+        .as_ref()
+        .and_then(|id| plan.groups.iter().find(|group| &group.id == id))
+        .and_then(|group| group.span.as_ref());
+    std::iter::once((&plan.task.task, s::SpanKind::Task))
+        .chain(group.map(|span| (span, s::SpanKind::Subtask)))
+        .collect()
+}
+
+/// The open scopes are exactly this path, in order.
+pub(in crate::flow) fn path_matches(
+    open_scopes: &[s::SpanInfo],
+    expected: &[(&s::SpanRef, s::SpanKind)],
+) -> bool {
+    open_scopes.len() == expected.len()
+        && open_scopes
+            .iter()
+            .zip(expected)
+            .all(|(actual, (span, kind))| &actual.span == *span && actual.kind == *kind)
+}
+
+/// The span allocator over a checked marks catalog. Activation and close
+/// allocate their new span IDs through it.
+/// The store still requires each opened span to be its exact next ID.
+pub(in crate::flow) struct SpanAllocator {
+    seed: String,
+    next: s::DecimalU64,
+}
+
+impl SpanAllocator {
+    /// The next unallocated span. It does not advance the catalog.
+    pub(in crate::flow) fn peek(&self) -> s::SpanRef {
+        s::SpanRef {
+            seed_id: self.seed.clone(),
+            local_id: self.next,
+            revision: 1.into(),
+        }
+    }
+
+    /// Allocate one span before a later one in the same effect.
+    pub(in crate::flow) fn take(&mut self, detail: &str) -> Result<s::SpanRef, PlanCheckFailure> {
+        let allocated = self.peek();
+        self.next = self
+            .next
+            .0
+            .checked_add(1)
+            .ok_or_else(|| refuse(s::PlanOperationCase::CounterExhausted, detail))?
+            .into();
+        Ok(allocated)
+    }
 }

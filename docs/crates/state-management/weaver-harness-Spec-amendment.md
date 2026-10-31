@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #408
+**Landing PR:** #420
 
-**Version:** 0.43 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.44 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -1688,8 +1688,9 @@ mark results cannot supply CutReady. [PLACE-4, PLACE-5, MARK-6, FALS-4]
 This addition applies at the [foundation cutover][cutover]. Until then, the previous
 serving contract remains applicable.
 
-**HARNESS-PLAN.** flow/plan.rs owns the private grants AcceptedPlanUpdate,
-AuthorizedProposal and ClosureEvidence. It shares HARNESS-MARKS' one allocator and
+**HARNESS-PLAN.** The harness flow module owns the private grants
+AcceptedPlanUpdate (flow/plan_input.rs), ClosureEvidence (flow/context_plan_ports.rs)
+and AuthorizedProposal. It shares HARNESS-MARKS' one allocator and
 HARNESS-OWNERS' pump, not a second store writer or thread. Runtime trace attribution
 adds ManagementInput(Cause), constructible only from the verified root coordination
 handler. It licenses plan.event/input/operator with cause uid zero. Runtime loop
@@ -1796,8 +1797,10 @@ authors while pending. Correct conformance results are operation outcomes, never
 component faults. The table extends the serialized lifecycle reducer, not admin Spec
 3.0's definition of a run's state. [CLASS-8, PLAN-6]
 
-**HARNESS-PLAN-PORTS.** Implement Spec 07 PLAN-PORT in flow/plan.rs. Its public
-operations request activation, predicate checking, work-reference construction, review
+**HARNESS-PLAN-PORTS.** Implement Spec 07 PLAN-PORT on the worker's FoundationInput
+(flow/context_worker_plan_ports.rs), with its checked predicates in flow/plan_ports.rs
+and the plan_*.rs modules beside it. Its public operations request activation,
+predicate checking, work-reference construction, review
 assessment binding, category-authorized attest_closure, closure and break recording.
 work_reference(expected,step_id,span,through) is Spec 07 WORK-REFERENCE's constructor
 and returns its checked WorkRef or the recorded PlanOperationRefused. Hash the complete
