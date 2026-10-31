@@ -4,7 +4,7 @@
 
 **Landing PR:** #260
 
-**Version:** 0.13 **Date filed:** 2026-10-21 **Document ID:** `state-management-spec-06`
+**Version:** 0.14 **Date filed:** 2026-10-21 **Document ID:** `state-management-spec-06`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -104,7 +104,7 @@ filing or mislabel its provenance. [MARK-3, MARK-6, STORE-3, R20-10]
 **BOUNDARIES.** Boundary operations are requested at typed ports. The seed creates and
 ends the system span. begin_task creates a task and its ended prompt child. Plan
 activation can open a subtask and step with the held instruction prefix. A valid close
-creates an ended outcome span and closes the reviewed step and complete ancestors. These
+creates an ended outcome span and closes the active step and complete ancestors. These
 are atomic effects, not a schedule for invoking them. Model prose alone changes none of
 these states. TaskScopeRef is {task:SpanRef,prompt:SpanRef}. A replacement retires the
 old path before creating its replacement. The caller supplies the already-filed task

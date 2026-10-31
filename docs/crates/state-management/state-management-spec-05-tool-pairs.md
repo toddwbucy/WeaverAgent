@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Version:** 0.12 **Date filed:** 2026-10-20 **Document ID:** state-management-spec-05
+**Version:** 0.13 **Date filed:** 2026-10-20 **Document ID:** state-management-spec-05
 **Parent:** state-management-primitives-PRD
 **Landing PR:** #312
 
@@ -276,8 +276,9 @@ StateFrame::Filed and its recorded observation. It is not another wire frame. On
 pair coordinator can construct it, after matching both commits and the terminal mapping.
 A gate response, model text or read record cannot mint this grant. When closure uses a
 review pair, it additionally requires lane review, completed fate and
-ToolOutcome::Result under Spec 07. A category permitting closure without review uses
-attest_closure instead, never a fabricated pair. [R20-17] [PAIR-1, PAIR-3, PLAN-2]
+ToolOutcome::Result under Spec 07. Closure without a review pair uses attest_closure
+under either category value, never a fabricated pair; no primitive enforces
+review_required (#423). [R20-17] [PAIR-1, PAIR-3, PLAN-2]
 
 For a forbidden correction, Spec 02 CANCELLED-CORRECTION uses this same completion
 proof. A Recorded terminal whose Filed receipt or required opening commit is still

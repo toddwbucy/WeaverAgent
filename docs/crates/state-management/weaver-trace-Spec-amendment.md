@@ -4,7 +4,7 @@
 
 **Landing PR:** #387
 
-**Version:** 0.33 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
+**Version:** 0.34 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
 
 ## 0. What this document is
 
@@ -239,23 +239,24 @@ save_point, message.restored, message.system, input.offered, ste100.result, reca
 state.placement, state.mark.position, state.sort.measurement, plan.break,
 state.plan.measurement, message.tool_result or tool.return_rejected. It also requires
 all loop.instruction/internal/loop Text, with no context projection, so every authorized
-review send can be filed. Category.review_required chooses whether closure needs that
-send under R20-17. Coverage supports both category modes because a later root plan
-update can change the category without changing the partition. It requires all assistant
-Text blocks and the complete pair projection for the enabled serving call paths. It
-requires message.user/input/operator and message.user/input/external Text coverage, and
-state.mark/internal/loop block-zero coverage with its context. It requires
-plan.event/input/operator wildcard Text plus context, and plan.event/internal/loop and
-step.outcome/internal/loop one-Text coverage plus context. Single-Text records must name
-only block zero or the one-Text wildcard. An unsupported, missing or extraneous context
-projection refuses invalid_projection at load. Required pair tuples are
-tool.call.started/tool/model and tool.call.completed/tool/tool plus
-tool.call.completed/tool/loop, and tool.call.started/tool/loop for Spec 07's available
-review path. A no-review closure uses step.outcome and its typed null review_call, never
-a fabricated pair. No payload or fate predicate is allowed. The validator proves
-coverage over these finite envelope tuples before constructing ValidatedPartition. The
-tee then applies only that declaration. Reason: an unfiled request or closure cannot
-become an invisible partial pair. [TAP-1, TAP-2, TAP-3, PAIR-1, PAIR-3]
+review send can be filed. A reviewed closure cites that send whatever the category's
+review_required declares, which no primitive enforces (#423), and a later root plan
+update can change the category without changing the partition, so coverage holds it
+under both values. It requires all assistant Text blocks and the complete pair
+projection for the enabled serving call paths. It requires message.user/input/operator
+and message.user/input/external Text coverage, and state.mark/internal/loop block-zero
+coverage with its context. It requires plan.event/input/operator wildcard Text plus
+context, and plan.event/internal/loop and step.outcome/internal/loop one-Text coverage
+plus context. Single-Text records must name only block zero or the one-Text wildcard. An
+unsupported, missing or extraneous context projection refuses invalid_projection at
+load. Required pair tuples are tool.call.started/tool/model and
+tool.call.completed/tool/tool plus tool.call.completed/tool/loop, and
+tool.call.started/tool/loop for Spec 07's available review path. A no-review closure
+uses step.outcome and its typed null review_call, never a fabricated pair. No payload or
+fate predicate is allowed. The validator proves coverage over these finite envelope
+tuples before constructing ValidatedPartition. The tee then applies only that
+declaration. Reason: an unfiled request or closure cannot become an invisible partial
+pair. [TAP-1, TAP-2, TAP-3, PAIR-1, PAIR-3]
 
 ## 3. Submission and capacity, destinations sections 5, 6, and 9
 

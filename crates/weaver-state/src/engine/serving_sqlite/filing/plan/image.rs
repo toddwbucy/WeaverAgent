@@ -661,33 +661,27 @@ fn verify_closed(
         return Err(invalid_effect("stored closure work digest changed"));
     }
     let mut allowed = vec![closure_id];
-    match &step.review_call {
-        None => {
-            if category.review_required {
-                return Err(invalid_effect("required review is missing"));
-            }
+    // review_required is held operator data the store does not enforce.
+    if let Some(call) = &step.review_call {
+        let (lane,fate,request,request_id,opened,terminal,raw):(String,String,String,i64,i64,i64,String)=db.query_row("SELECT t.lane,t.fate,t.request,s.block_id,t.opened_event,t.terminal_event,b.raw_block FROM tool_pair t JOIN statement_binding s ON s.id=t.statement_id JOIN content_block b ON b.id=t.terminal_event WHERE t.run=?1 AND t.sequence=?2 AND t.call=?3",params![call.run,blob(call.sequence.0),blob(call.call.0)],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?)))?;
+        let request: PairRequest =
+            decode_strict(&request).map_err(|_| invalid_effect("invalid stored review request"))?;
+        let ended: PairEnded =
+            decode_strict(&raw).map_err(|_| invalid_effect("invalid stored review outcome"))?;
+        if lane != "review"
+            || fate != "completed"
+            || request_id <= frontier
+            || terminal >= closure_id
+            || ended.call_id != *call
+            || !matches!(
+                ended.outcome,
+                Some(weaver_types::ToolOutcome::Result { .. })
+            )
+            || !matches!(request,PairRequest::Review{ref setup,work:ref requested,..} if setup==&p.review && requested.as_ref()==work)
+        {
+            return Err(invalid_effect("stored review evidence changed"));
         }
-        Some(call) => {
-            let (lane,fate,request,request_id,opened,terminal,raw):(String,String,String,i64,i64,i64,String)=db.query_row("SELECT t.lane,t.fate,t.request,s.block_id,t.opened_event,t.terminal_event,b.raw_block FROM tool_pair t JOIN statement_binding s ON s.id=t.statement_id JOIN content_block b ON b.id=t.terminal_event WHERE t.run=?1 AND t.sequence=?2 AND t.call=?3",params![call.run,blob(call.sequence.0),blob(call.call.0)],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?)))?;
-            let request: PairRequest = decode_strict(&request)
-                .map_err(|_| invalid_effect("invalid stored review request"))?;
-            let ended: PairEnded =
-                decode_strict(&raw).map_err(|_| invalid_effect("invalid stored review outcome"))?;
-            if lane != "review"
-                || fate != "completed"
-                || request_id <= frontier
-                || terminal >= closure_id
-                || ended.call_id != *call
-                || !matches!(
-                    ended.outcome,
-                    Some(weaver_types::ToolOutcome::Result { .. })
-                )
-                || !matches!(request,PairRequest::Review{ref setup,work:ref requested,..} if setup==&p.review && requested.as_ref()==work)
-            {
-                return Err(invalid_effect("stored review evidence changed"));
-            }
-            allowed.extend([request_id, opened, terminal]);
-        }
+        allowed.extend([request_id, opened, terminal]);
     }
     let mut statement =
         db.prepare("SELECT id FROM content_block WHERE source_kind='event' AND id>?1 AND id<=?2")?;

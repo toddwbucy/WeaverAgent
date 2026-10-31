@@ -254,8 +254,9 @@ impl FoundationInput<'_> {
         )
     }
 
-    /// Attest unreviewed closure for this moved checked work under the
-    /// operator's category. It reads nothing and files nothing.
+    /// Attest unreviewed closure for this moved checked work, whatever the
+    /// category's review_required, which no plan port enforces (#423). It
+    /// reads nothing and files nothing.
     #[allow(clippy::result_large_err)]
     pub fn attest_closure(
         &mut self,

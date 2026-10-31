@@ -134,18 +134,16 @@ impl Operation<'_, '_> {
             .span
             .as_ref()
             .ok_or_else(|| invalid_effect("active step has no span"))?;
-        let category = current
+        // The category must be held. Its review_required is held operator
+        // data the store does not enforce (#423).
+        current
             .categories
             .iter()
             .find(|c| c.id == step.category)
             .ok_or_else(|| invalid_effect("step category is absent"))?;
-        if work.plan != *expected
-            || work.step_id != *step_id
-            || work.span != *span
-            || (review_call.is_none() && category.review_required)
-        {
+        if work.plan != *expected || work.step_id != *step_id || work.span != *span {
             return Err(invalid_effect(
-                "closure evidence does not match the active step or review rule",
+                "closure evidence does not match the active step",
             ));
         }
         let frontier = self.held_source(&work.through.block_id)?;
@@ -267,7 +265,7 @@ impl Operation<'_, '_> {
         let review_call = review.map(|call| blob(call.call.0));
         let work_json = serde_json::to_string(work).map_err(json_fault)?;
         checked_one(self.tx.execute(
-            "UPDATE plan_step AS s SET status='closed',outcome_id=:outcome_id,outcome_revision=:outcome_revision,review_run=:review_run,review_sequence=:review_sequence,review_call=:review_call,work=:work,closure_source=:source_id WHERE s.plan_id=:plan_id AND s.revision=:revision AND s.step_id=:step_id AND s.status='active' AND EXISTS(SELECT 1 FROM plan_revision p WHERE p.plan_id=s.plan_id AND p.revision=s.revision AND p.status='locked') AND EXISTS(SELECT 1 FROM plan_category c WHERE c.plan_id=s.plan_id AND c.revision=s.revision AND c.category_id=s.category_id AND ((json_extract(c.category,'$.review_required')=0 AND :review_run IS NULL AND :review_sequence IS NULL AND :review_call IS NULL) OR (:review_run IS NOT NULL AND :review_sequence IS NOT NULL AND :review_call IS NOT NULL AND EXISTS(SELECT 1 FROM tool_pair t WHERE t.run=:review_run AND t.sequence=:review_sequence AND t.call=:review_call AND t.lane='review' AND t.fate='completed'))))",
+            "UPDATE plan_step AS s SET status='closed',outcome_id=:outcome_id,outcome_revision=:outcome_revision,review_run=:review_run,review_sequence=:review_sequence,review_call=:review_call,work=:work,closure_source=:source_id WHERE s.plan_id=:plan_id AND s.revision=:revision AND s.step_id=:step_id AND s.status='active' AND EXISTS(SELECT 1 FROM plan_revision p WHERE p.plan_id=s.plan_id AND p.revision=s.revision AND p.status='locked') AND EXISTS(SELECT 1 FROM plan_category c WHERE c.plan_id=s.plan_id AND c.revision=s.revision AND c.category_id=s.category_id) AND ((:review_run IS NULL AND :review_sequence IS NULL AND :review_call IS NULL) OR (:review_run IS NOT NULL AND :review_sequence IS NOT NULL AND :review_call IS NOT NULL AND EXISTS(SELECT 1 FROM tool_pair t WHERE t.run=:review_run AND t.sequence=:review_sequence AND t.call=:review_call AND t.lane='review' AND t.fate='completed')))",
             named_params!{":outcome_id":blob(outcome.local_id.0),":outcome_revision":blob(outcome.revision.0),":review_run":review_run,":review_sequence":review_sequence,":review_call":review_call,":work":work_json,":source_id":self.source,":plan_id":blob(current.plan.plan_id.local_id.0),":revision":blob(current.plan.revision.0),":step_id":blob(step.step_id.local_id.0)},
         )?)?;
         if let Some(group_id) = &step.group {

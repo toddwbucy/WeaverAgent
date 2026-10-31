@@ -410,30 +410,17 @@ fn replacement_preserves_a_later_closed_step_without_hiding_the_new_first_step()
 }
 
 #[test]
-fn closure_refuses_changed_work_digest_and_missing_required_review_without_mutation() {
+fn closure_refuses_changed_work_digest_and_closes_a_review_required_step_unreviewed() {
     let mut store = store();
     create(&mut store, 1, true, false);
     activate(&mut store, 3, 1, 3, None);
     let work = work_ref(&store, 3);
-    unchanged(
-        &mut store,
-        &effect(
-            4,
-            PlanEffect::Close {
-                expected: plan(1),
-                step_id: step(1),
-                review_call: None,
-                work: work.clone(),
-                outcome_span: span(4),
-            },
-        ),
-    );
-    let mut bad = work;
+    let mut bad = work.clone();
     bad.content_sha256 = Digest::new("f".repeat(64)).unwrap();
     unchanged(
         &mut store,
         &effect(
-            5,
+            4,
             PlanEffect::Close {
                 expected: plan(1),
                 step_id: step(1),
@@ -447,6 +434,21 @@ fn closure_refuses_changed_work_digest_and_missing_required_review_without_mutat
             },
         ),
     );
+    // review_required is held operator data the store returns and does not
+    // enforce (#423): an unreviewed close of that step files and verifies.
+    // The refused filing above held sequence 4 and was not committed; this
+    // close takes a fresh sequence.
+    close(&mut store, 5, 4, work, None);
+    let closed = snapshot(&store);
+    assert!(closed.categories[0].review_required);
+    assert_eq!(closed.steps[0].review_call, None);
+    assert_eq!(closed.status, PlanStatus::Complete);
+    verify_image_plan(
+        &store.connection,
+        &store.context.seed_id,
+        &store.read_limits,
+    )
+    .unwrap();
 }
 
 #[test]

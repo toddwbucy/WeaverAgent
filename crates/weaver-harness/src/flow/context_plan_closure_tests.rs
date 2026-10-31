@@ -394,32 +394,20 @@ fn closure_d1_page_capacity_sweep_yields_the_store_accepted_work_reference() {
 }
 
 #[test]
-fn closure_attest_review_required_refuses_and_records_without_effect() {
+fn closure_attest_review_required_category_grants_evidence_without_read_or_effect() {
+    // review_required is held operator data no plan port enforces (#423):
+    // a category that requires review still attests unreviewed closure.
     let (mut fx, _) = closure_fixture(true, false);
     let work = checked_work(&mut fx, PREVIEW.len());
-    let preview_parent = fx.records(Kind::Recall).last().unwrap()["sequence"].clone();
-    let PlanPortCompletion::Refused { refusal, .. } = attest(&mut fx, work) else {
-        panic!("required review must refuse unreviewed closure")
+    let Ok(evidence) = attest(&mut fx, work).into_closure_evidence() else {
+        panic!("a review_required category must still attest")
     };
-    assert_eq!(refusal.case, s::PlanOperationCase::ReviewRequired);
-    assert_eq!(refusal.read_code, None);
-    let rows = fx.records(Kind::Refusal);
-    assert_eq!(rows.len(), 1);
-    let work = pinned();
-    assert_eq!(
-        rows[0]["payload"],
-        serde_json::to_value(weaver_types::RefusalRecord::PlanOperation {
-            operation: s::PlanPortOperation::AttestClosure,
-            expected: work.plan,
-            step_id: Some(work.step_id),
-            refusal,
-        })
-        .unwrap()
-    );
-    assert_eq!(rows[0]["causal_parent"], preview_parent);
+    assert_eq!(evidence.work(), &pinned());
+    assert_eq!(evidence.review_call(), None);
+    fx.boot.member.no_request();
+    assert!(fx.records(Kind::Refusal).is_empty());
     assert!(fx.records(Kind::PlanEvent).is_empty());
     assert!(fx.records(Kind::StepOutcome).is_empty());
-    fx.boot.member.no_request();
 }
 
 #[test]
@@ -641,8 +629,14 @@ fn release_summary(fx: &mut SummaryFixture, snapshot: s::PlanSnapshot) {
 
 #[test]
 fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
-    for cancel_at in ["none", "source", "receipt"] {
-        let (mut fx, certificate) = closure_fixture(false, true);
+    // close does not recheck review_required (#423): unreviewed evidence
+    // closes a category that requires review like any other.
+    for (review_required, cancel_at) in [false, true]
+        .into_iter()
+        .flat_map(|review| ["none", "source", "receipt"].map(|at| (review, at)))
+    {
+        let case = format!("review_required={review_required} cancel_at={cancel_at}");
+        let (mut fx, certificate) = closure_fixture(review_required, true);
         let bound = fx.run().context.deadlines.get(PumpDeadline::Decision);
         let evidence = evidence(&mut fx);
         begin_close(&mut fx, evidence);
@@ -663,12 +657,12 @@ fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
         release_summary(&mut fx, snapshot.clone());
         let result = finish(&mut fx);
         if cancel_at == "none" {
-            assert_eq!(result.current_snapshot(), Some(&snapshot));
+            assert_eq!(result.current_snapshot(), Some(&snapshot), "{case}");
         } else {
-            assert!(matches!(result, PlanPortCompletion::Cancelled(_)));
+            assert!(matches!(result, PlanPortCompletion::Cancelled(_)), "{case}");
         }
         // An admitted effect settles its refresh and adoption even when cancelled.
-        assert!(fx.run().context.native_place_cache_ready(), "{cancel_at}");
+        assert!(fx.run().context.native_place_cache_ready(), "{case}");
         assert_eq!(
             fx.run()
                 .context
@@ -676,12 +670,14 @@ fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
                 .unwrap()
                 .unwrap()
                 .last_source,
-            source
+            source,
+            "{case}"
         );
-        assert!(fx.run().context.plan_port_work().is_none());
+        assert!(fx.run().context.plan_port_work().is_none(), "{case}");
         assert_eq!(
             fx.run().context.deadlines.get(PumpDeadline::Decision),
-            bound
+            bound,
+            "{case}"
         );
 
         let effect = s::PlanEffect::Close {
@@ -692,28 +688,42 @@ fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
             outcome_span: outcome.clone(),
         };
         let outcomes = fx.records(Kind::StepOutcome);
-        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes.len(), 1, "{case}");
         let payload = &outcomes[0]["payload"];
-        assert_eq!(payload["context"], serde_json::to_value(&effect).unwrap());
-        assert_eq!(payload["template_id"], "step.closed");
-        assert_eq!(payload["outcome"], serde_json::json!({"closed": {}}));
-        assert_eq!(payload["review_call"], serde_json::Value::Null);
-        assert_eq!(payload["work"], serde_json::to_value(pinned()).unwrap());
+        assert_eq!(
+            payload["context"],
+            serde_json::to_value(&effect).unwrap(),
+            "{case}"
+        );
+        assert_eq!(payload["template_id"], "step.closed", "{case}");
+        assert_eq!(
+            payload["outcome"],
+            serde_json::json!({"closed": {}}),
+            "{case}"
+        );
+        assert_eq!(payload["review_call"], serde_json::Value::Null, "{case}");
+        assert_eq!(
+            payload["work"],
+            serde_json::to_value(pinned()).unwrap(),
+            "{case}"
+        );
         assert_eq!(
             payload["message"],
-            serde_json::json!({"role":"user","content":[{"type":"text","text":"Read plan."}]})
+            serde_json::json!({"role":"user","content":[{"type":"text","text":"Read plan."}]}),
+            "{case}"
         );
-        assert_eq!(outcomes[0]["channel"], "internal");
-        assert_eq!(outcomes[0]["origin"], "loop");
-        assert_eq!(outcomes[0]["turn"], "closure");
-        assert!(fx.records(Kind::PlanEvent).is_empty());
-        assert!(fx.records(Kind::Refusal).is_empty());
-        assert!(fx.records(Kind::ModelRequest).is_empty());
-        assert_eq!(fx.files.len(), 1);
-        assert_eq!(fx.files[0].source.kind, "step.outcome");
+        assert_eq!(outcomes[0]["channel"], "internal", "{case}");
+        assert_eq!(outcomes[0]["origin"], "loop", "{case}");
+        assert_eq!(outcomes[0]["turn"], "closure", "{case}");
+        assert!(fx.records(Kind::PlanEvent).is_empty(), "{case}");
+        assert!(fx.records(Kind::Refusal).is_empty(), "{case}");
+        assert!(fx.records(Kind::ModelRequest).is_empty(), "{case}");
+        assert_eq!(fx.files.len(), 1, "{case}");
+        assert_eq!(fx.files[0].source.kind, "step.outcome", "{case}");
         assert_eq!(
             fx.files[0].effect,
-            Some(s::StatementEffect::Plan(Box::new(effect)))
+            Some(s::StatementEffect::Plan(Box::new(effect))),
+            "{case}"
         );
     }
 }
@@ -1027,6 +1037,38 @@ fn closure_attest_foreign_checked_work_is_a_fault() {
     assert!(original.records(Kind::Refusal).is_empty());
 }
 
+#[test]
+fn closure_attest_and_close_fault_on_an_absent_active_step_category() {
+    let absent = |plan: &mut s::PlanSnapshot| plan.steps[0].category = "absent".into();
+    // attest reads nothing, so the fault comes before any read.
+    let (mut fx, _) = closure_fixture(false, false);
+    let work = checked_work(&mut fx, PREVIEW.len());
+    swap_current(&mut fx, absent);
+    let reference = work.reference().clone();
+    begin(
+        &mut fx,
+        PlanRequest::AttestClosure {
+            expected: reference.plan,
+            step_id: reference.step_id,
+            work,
+        },
+    );
+    let failure = advance(&mut fx).unwrap_err();
+    assert!(format!("{failure:?}").contains("active step category is absent"));
+    assert!(fx.records(Kind::Refusal).is_empty());
+    fx.boot.member.no_request();
+    // The close port faults on its own check, before its reread.
+    let (mut fx, _) = closure_fixture(false, false);
+    let evidence = evidence(&mut fx);
+    swap_current(&mut fx, absent);
+    begin_close(&mut fx, evidence);
+    let failure = advance(&mut fx).unwrap_err();
+    assert!(format!("{failure:?}").contains("active step category is absent"));
+    fx.boot.member.no_request();
+    assert!(fx.records(Kind::Refusal).is_empty());
+    assert!(fx.records(Kind::StepOutcome).is_empty());
+}
+
 /// close against a changed cache refuses before any read.
 fn close_against(
     change: impl FnOnce(&mut s::PlanSnapshot),
@@ -1096,13 +1138,6 @@ fn closure_close_refuses_work_held_for_another_span() {
 fn closure_close_refuses_a_changed_review_setup() {
     let refusal = close_against(|plan| plan.review.setup_id.push('x'), |_| ());
     assert_eq!(refusal.case, s::PlanOperationCase::ReviewSetupChanged);
-}
-
-#[test]
-fn closure_close_rechecks_required_review() {
-    // Unreachable in a run (a category changes only with a revision): defence.
-    let refusal = close_against(|plan| plan.categories[0].review_required = true, |_| ());
-    assert_eq!(refusal.case, s::PlanOperationCase::ReviewRequired);
 }
 
 #[test]
