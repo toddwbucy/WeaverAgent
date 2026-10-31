@@ -331,6 +331,79 @@ impl std::fmt::Debug for ClosureReceipt {
     }
 }
 
+/// The successor's activation receipt: a private, single-use, run-bound
+/// account of one committed activate. It names the step the activation
+/// actually activated from its checked step_successor result, so next_ready
+/// never infers the successor from snapshot order. Metadata cannot rebuild it.
+///
+/// ```compile_fail,E0277
+/// fn cloned<T: Clone>() {}
+/// cloned::<weaver_harness::ActivationReceipt>();
+/// ```
+///
+/// ```compile_fail,E0451
+/// fn forged() -> weaver_harness::ActivationReceipt {
+///     weaver_harness::ActivationReceipt { account: todo!() }
+/// }
+/// ```
+pub struct ActivationReceipt {
+    account: PlanPortAccount,
+}
+impl ActivationReceipt {
+    /// Only this run's context consumes the receipt.
+    pub(in crate::flow) fn belongs_to(&self, context: &RecordingContext) -> bool {
+        Arc::ptr_eq(&self.account.work.origin, &context.read_origin)
+    }
+    /// The revision activate committed against. Activation changes no revision.
+    pub fn plan(&self) -> &s::PlanRef {
+        self.account.work.request.expected()
+    }
+    /// The checked step_successor result activate consumed (Spec 06).
+    pub fn successor(&self) -> &s::StepQueryRef {
+        let PlanRequest::Activate { successor, .. } = &self.account.work.request else {
+            unreachable!("an activation receipt retains its activate request")
+        };
+        successor.reference()
+    }
+    /// The Recorded read of that successor query.
+    pub(in crate::flow) fn successor_sequence(&self) -> Sequence {
+        let PlanRequest::Activate { successor, .. } = &self.account.work.request else {
+            unreachable!("an activation receipt retains its activate request")
+        };
+        successor.sequence()
+    }
+    /// The committed active step, with its span.
+    pub fn step(&self) -> &s::PlanStep {
+        self.account
+            .work
+            .effect
+            .as_ref()
+            .unwrap()
+            .active
+            .as_ref()
+            .unwrap()
+    }
+    /// The plan.activate source the refreshed revision holds as its last.
+    pub fn activated(&self) -> &s::SourceBlockId {
+        let s::QueryResult::PlanCurrent {
+            current: Some(snapshot),
+            ..
+        } = self.account.work.current.as_ref().unwrap().read().result()
+        else {
+            unreachable!("a committed activation retains its refreshed plan")
+        };
+        &snapshot.last_source.block_id
+    }
+}
+impl std::fmt::Debug for ActivationReceipt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ActivationReceipt")
+            .field("successor", self.successor())
+            .field("activated", self.activated())
+            .finish()
+    }
+}
+
 pub(in crate::flow) struct ActivatedStep {
     account: PlanPortAccount,
 }
@@ -395,6 +468,14 @@ impl PlanPortCompletion {
     pub(in crate::flow) fn into_closure_receipt(self) -> Result<ClosureReceipt, Self> {
         match self {
             Self::Closed(account) => ClosureReceipt::from_close(account).map_err(Self::Closed),
+            other => Err(other),
+        }
+    }
+
+    /// Move a committed activation's receipt out. Any other result returns whole.
+    pub(in crate::flow) fn into_activation_receipt(self) -> Result<ActivationReceipt, Self> {
+        match self {
+            Self::Activated(ActivatedStep { account }) => Ok(ActivationReceipt { account }),
             other => Err(other),
         }
     }

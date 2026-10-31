@@ -104,21 +104,23 @@ impl<'a> FoundationInput<'a> {
         if self.progress() != FoundationInputProgress::ManagementPending {
             return Err(self);
         }
-        let read =
-            if self.has_graceful_leave() || self.serving.save.is_some() || self.plan_work_pending()
-            {
-                let Some(accepted) = self.serving.owner.listener.accepted_ns() else {
-                    return Err(self);
-                };
-                let Ok(bound) =
-                    AbsoluteBound::after(accepted, crate::state::ANSWER_BOUND_MS * 1_000_000)
-                else {
-                    return Err(self);
-                };
-                Some(bound)
-            } else {
-                None
+        let read = if self.has_graceful_leave()
+            || self.serving.save.is_some()
+            || self.plan_work_pending()
+            || self.next_ready_pending()
+        {
+            let Some(accepted) = self.serving.owner.listener.accepted_ns() else {
+                return Err(self);
             };
+            let Ok(bound) =
+                AbsoluteBound::after(accepted, crate::state::ANSWER_BOUND_MS * 1_000_000)
+            else {
+                return Err(self);
+            };
+            Some(bound)
+        } else {
+            None
+        };
         let mut peer = self
             .serving
             .owner
@@ -603,6 +605,34 @@ impl<'a> FoundationManagement<'a> {
                     .advance_flags((!self.peer_unavailable).then_some(&mut self.peer), io);
                 self.keep_dial_failure(progress)?;
                 if self.input.flags_pending() {
+                    return Ok(());
+                }
+            }
+            // An honored Stop or Leave discards an unadmitted next_ready
+            // observation, never fabricating it; an admitted ticket settles
+            // first. While a save or graceful leave runs, both are refused
+            // OutOfOrder below and the observation stays owed.
+            let leaving = self.input.has_graceful_leave() || self.input.serving.save.is_some();
+            let ending = !leaving
+                && matches!(
+                    self.peer
+                        .held()
+                        .expect("held directive survives flag settlement")
+                        .envelope
+                        .payload,
+                    Payload::Directive(
+                        LifecycleDirective::Stop { .. } | LifecycleDirective::Leave { .. }
+                    )
+                );
+            if ending
+                && self.input.next_ready_pending()
+                && !self.input.discard_unstarted_next_ready()
+            {
+                let progress = self
+                    .input
+                    .advance_next_ready((!self.peer_unavailable).then_some(&mut self.peer), io);
+                self.keep_dial_failure(progress)?;
+                if self.input.next_ready_pending() {
                     return Ok(());
                 }
             }

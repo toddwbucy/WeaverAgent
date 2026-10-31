@@ -421,6 +421,10 @@ pub(crate) struct RecordingContext {
     // observations. Capture uses the recorder's complete watermark instead.
     #[cfg(test)]
     last_author_sequence: Option<Sequence>,
+    // Counts the worker input's drives, so a test can pin that none ran
+    // between two caller steps.
+    #[cfg(test)]
+    pub(in crate::flow) input_drives: u64,
     author_turn: Option<(Kind, Option<weaver_trace::TurnRef>)>,
     open_turn: Option<weaver_trace::TurnRef>,
     // Set only by the retained graceful Leave after its exact Quiesce completes.
@@ -583,6 +587,8 @@ impl RecordingContext {
             repair_certificate: None,
             #[cfg(test)]
             last_author_sequence: None,
+            #[cfg(test)]
+            input_drives: 0,
             author_turn: None,
             open_turn: None,
             wind_down: None,
@@ -2943,10 +2949,14 @@ pub(super) mod expired_read_driver;
 #[path = "context_read.rs"]
 mod read_driver;
 
+#[path = "context_next_ready.rs"]
+pub(in crate::flow) mod next_ready;
 #[path = "context_plan_ports.rs"]
 pub(in crate::flow) mod plan_port_driver;
 #[path = "context_plan_update.rs"]
 pub(super) mod plan_update_driver;
+#[path = "context_step_instruction.rs"]
+pub(in crate::flow) mod step_instruction;
 #[allow(unused_imports)] // Composed by dependent boot, recall and placement primitives.
 pub(super) use read_driver::{
     BootHead, BootReadBeginError, BootReadBeginRefusal, BootReadCompletion, CancelledRead,

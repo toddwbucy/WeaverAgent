@@ -28,6 +28,9 @@ mod active;
 #[path = "context_worker_plan_activation_tests.rs"]
 mod activation;
 
+#[path = "context_worker_plan_next_ready_tests.rs"]
+pub(in crate::flow::context::worker_startup) mod next_ready;
+
 pub(in crate::flow::context::worker_startup) enum Cleanup {
     Leave(cleanup::Leave),
     Failed(failed::Failure),
@@ -78,6 +81,9 @@ pub(in crate::flow::context::worker_startup) fn exercise(
     socket: &Path,
     mode: &str,
 ) -> Option<Cleanup> {
+    if mode.contains("-activation-next-ready-") {
+        return next_ready::exercise(serving, member, reader, socket, mode);
+    }
     if mode.contains("-port-activation-") || mode.contains("-port-break-") {
         return activation::exercise(serving, member, reader, socket, mode);
     }

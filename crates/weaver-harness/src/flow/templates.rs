@@ -470,7 +470,7 @@ mod expansion;
 pub(super) use expansion::{
     ExpansionIdentity, ExpansionRefusal, RestatementTemplate, RootPlanTemplate, TemplateExpansion,
     expand_activate, expand_begin_task, expand_break, expand_outbound, expand_step_closed,
-    expand_wind_down,
+    expand_step_instruction, expand_wind_down,
 };
 
 #[cfg(test)]

@@ -8,6 +8,11 @@ use crate::flow::templates::{CompiledInventory, TemplateCertificate};
 
 const PREVIEW: &[u8] = include_bytes!("fixtures/work-preview.json");
 
+#[path = "context_next_ready_tests.rs"]
+mod next_ready_tests;
+#[path = "context_step_instruction_tests.rs"]
+mod step_instruction_tests;
+
 const _: fn() = || {
     trait NotClone<M> {
         fn pin() {}
@@ -35,24 +40,38 @@ fn work_request() -> PlanRequest {
 /// A locked plan whose first step is active over the pinned work span. With
 /// an effect certificate the native scopes are installed for adoption.
 fn closure_fixture(review_required: bool, effect: bool) -> (SummaryFixture, TemplateCertificate) {
-    closure_fixture_with(review_required, effect, false)
+    closure_fixture_with(review_required, effect, false, |_| {})
 }
 
 /// The closure fixture; with `prior_closed`, an earlier step ahead of the
-/// pinned one is already closed with its own closure source.
+/// pinned one is already closed with its own closure source. `edit` changes
+/// the booted plan last.
 fn closure_fixture_with(
     review_required: bool,
     effect: bool,
     prior_closed: bool,
+    edit: impl FnOnce(&mut s::PlanSnapshot),
 ) -> (SummaryFixture, TemplateCertificate) {
     static SPECS: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
     let mut fx = if effect {
         let inventory = CompiledInventory::new(SPECS.get_or_init(|| {
-            vec![s::TemplateSpec {
-                template_id: "step.closed".into(),
-                kind: "step.outcome".into(),
-                parts: vec![s::TemplatePart::Literal("Read plan.".into())],
-            }]
+            vec![
+                s::TemplateSpec {
+                    template_id: "step.closed".into(),
+                    kind: "step.outcome".into(),
+                    parts: vec![s::TemplatePart::Literal("Read plan.".into())],
+                },
+                s::TemplateSpec {
+                    template_id: "step.instruction".into(),
+                    kind: "loop.instruction".into(),
+                    parts: vec![s::TemplatePart::Literal("Read plan.".into())],
+                },
+                s::TemplateSpec {
+                    template_id: "plan.activate".into(),
+                    kind: "plan.event".into(),
+                    parts: vec![s::TemplatePart::Literal("Read plan.".into())],
+                },
+            ]
         }))
         .unwrap();
         super::super::root_update_tests::unbooted_with_inventory(inventory)
@@ -113,6 +132,7 @@ fn closure_fixture_with(
     } else {
         vec![step(1, 1, true), step(2, 2, false)]
     };
+    edit(&mut plan);
     let boot = fx.boot(Some(plan));
     let run = fx.run();
     run.context.install_place(boot, &mut run.clock).unwrap();
@@ -1369,7 +1389,7 @@ fn closure_receipt(
 fn closure_receipt_names_the_closed_step_behind_an_earlier_closure() {
     // The step ahead of the pinned one is already closed with its own
     // source; the receipt names the step this close closed and its source.
-    let (mut fx, certificate) = closure_fixture_with(false, true, true);
+    let (mut fx, certificate) = closure_fixture_with(false, true, true, |_| {});
     let (receipt, source) = closure_receipt(&mut fx, &certificate);
     assert_ne!(source, prior_closure());
     assert_eq!(receipt.closed(), &source);

@@ -427,3 +427,18 @@ pub(in crate::flow) fn plan_measurement(value: &shared::PlanMeasurement) -> trac
         },
     }
 }
+
+/// Spec 02 INSTRUCTION-METADATA's step variant, metadata only.
+pub(in crate::flow) fn step_instruction(
+    plan: &shared::PlanRef,
+    step: &shared::StepId,
+    instruction: &shared::StatementRef,
+    span: &shared::SpanRef,
+) -> trace::LoopInstructionMeta {
+    trace::LoopInstructionMeta::Step {
+        plan: plan_ref(plan),
+        step_id: step_id(step),
+        instruction: statement(instruction),
+        span: span_ref(span),
+    }
+}

@@ -176,6 +176,27 @@ fn startup_composition_child() {
                         } else {
                             super::super::input_tests::accepted(&request)
                         };
+                        if mode.contains("-next-ready-step-") && request.text == "Read step." {
+                            if mode.contains("-held") {
+                                // Hold the step instruction's classification
+                                // until the parent's Stop owns the circuit.
+                                let root = std::path::PathBuf::from(
+                                    std::env::var_os("WEAVER_WORKER_INPUT_ROOT").unwrap(),
+                                );
+                                std::fs::write(root.join("step-classify-held"), b"held").unwrap();
+                                while !root.join("release-step-classify").exists() {
+                                    assert!(Instant::now() < limit, "held step classification");
+                                    std::thread::sleep(Duration::from_millis(1));
+                                }
+                            }
+                            if mode.contains("-rejected") {
+                                reply.result = s::Ste100Result::NotSte100 {
+                                    code: s::Ste100DefectCode::NonSte100,
+                                    detail: "fixture step instruction refusal".into(),
+                                    spans: vec![],
+                                };
+                            }
+                        }
                         if mode.ends_with("wind-down-component") && request.text == "Read summary."
                         {
                             reply.result = s::Ste100Result::ComponentFailed {

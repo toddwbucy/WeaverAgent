@@ -297,6 +297,7 @@ impl FoundationInput<'_> {
         // permission must reach the boundary election, not just entry here.
         let at_boundary = organs_settled
             && !self.plan_work_pending()
+            && !self.next_ready_pending()
             && matches!(
                 self.stage,
                 Stage::Waiting | Stage::Completed | Stage::Refused | Stage::Aborted

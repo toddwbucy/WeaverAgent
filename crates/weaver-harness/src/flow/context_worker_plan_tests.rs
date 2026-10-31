@@ -58,6 +58,25 @@ pub(in crate::flow::context) fn templates() -> &'static [s::TemplateSpec] {
     })
 }
 
+/// The plan inventory with the task's begin mark and the step instruction.
+pub(in crate::flow::context) fn next_ready_templates() -> &'static [s::TemplateSpec] {
+    static ALL: std::sync::OnceLock<Vec<s::TemplateSpec>> = std::sync::OnceLock::new();
+    ALL.get_or_init(|| {
+        let mut all = templates().to_vec();
+        all.push(s::TemplateSpec {
+            template_id: "mark.begin_task".into(),
+            kind: "state.mark".into(),
+            parts: vec![s::TemplatePart::Literal("Read task.".into())],
+        });
+        all.push(s::TemplateSpec {
+            template_id: "step.instruction".into(),
+            kind: "loop.instruction".into(),
+            parts: vec![s::TemplatePart::Literal("Read step.".into())],
+        });
+        all
+    })
+}
+
 pub(in crate::flow::context) fn scheme(
     bootstrap: &mut s::Ste100Bootstrap,
     declaration: &mut s::SchemeDeclaration,
