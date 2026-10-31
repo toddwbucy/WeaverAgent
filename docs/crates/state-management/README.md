@@ -33,9 +33,9 @@ work remains at the deferred seams already named by the PRD and these Specs.
 | [State Management Primitives - PRD](state-management-primitives-prd-v0_6.md) | 0.6 |
 | [State management foundation - Spec](state-management-foundation-Spec.md) | 0.28 |
 | [State management Spec 02 - STE100 protocol, classifier and input check](state-management-spec-02-protocol-classifier-gate.md) | 0.18 |
-| [State management Spec 05 - Tool-call pairs](state-management-spec-05-tool-pairs.md) | 0.12 |
+| [State management Spec 05 - Tool-call pairs](state-management-spec-05-tool-pairs.md) | 0.13 |
 | [State Management Spec 06 - Marks, Place, and the Decode Boundary](state-management-spec-06-marks-renderer-engine.md) | 0.14 |
-| [State Management Spec 07 - Locked Plan and Forward Flags](state-management-spec-07-plan-forward-flags.md) | 0.21 |
+| [State Management Spec 07 - Locked Plan and Forward Flags](state-management-spec-07-plan-forward-flags.md) | 0.22 |
 | [State Management Spec 08 - Sort and Selection Primitives](state-management-spec-08-sort-selection.md) | 0.15 |
 | [State Management Spec 09 - Evidence and Qualification Boundary](state-management-spec-09-qualification-costs.md) | 0.13 |
 
