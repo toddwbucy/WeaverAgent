@@ -108,15 +108,9 @@ fn snapshot(store: &ServingSqlite) -> PlanSnapshot {
         .unwrap()
         .unwrap()
 }
-fn unchanged(store: &mut ServingSqlite, filing: &StatementFile) {
-    refuse_unchanged(store, filing);
-}
-/// unchanged, and the refusal is the named one.
-fn unchanged_because(store: &mut ServingSqlite, filing: &StatementFile, detail: &str) {
-    let error = refuse_unchanged(store, filing);
-    assert_eq!(error.detail, detail, "{error}");
-}
-fn refuse_unchanged(store: &mut ServingSqlite, filing: &StatementFile) -> FileFault {
+/// The filing refuses as an invalid effect and leaves the image
+/// byte-identical; the fault is returned for a caller naming its detail.
+fn unchanged(store: &mut ServingSqlite, filing: &StatementFile) -> FileFault {
     let before = store
         .connection
         .serialize(rusqlite::MAIN_DB)
@@ -127,6 +121,11 @@ fn refuse_unchanged(store: &mut ServingSqlite, filing: &StatementFile) -> FileFa
     let after = store.connection.serialize(rusqlite::MAIN_DB).unwrap();
     assert_eq!(&*after, before.as_slice());
     error
+}
+/// unchanged, and the refusal is the named one.
+fn unchanged_because(store: &mut ServingSqlite, filing: &StatementFile, detail: &str) {
+    let error = unchanged(store, filing);
+    assert_eq!(error.detail, detail, "{error}");
 }
 fn create(store: &mut ServingSqlite, count: u64, review: bool, group: bool) {
     let groups = if group {
@@ -1466,16 +1465,7 @@ fn a_filing_past_the_last_span_refuses_counter_exhausted_without_writing() {
             successor,
         },
     );
-    let before = store
-        .connection
-        .serialize(rusqlite::MAIN_DB)
-        .unwrap()
-        .to_vec();
-    let error = store.file(&filing).unwrap_err();
-    assert_eq!(error.code, StateRefusalCode::InvalidEffect, "{error}");
-    assert_eq!(error.detail, "span counter exhausted");
-    let after = store.connection.serialize(rusqlite::MAIN_DB).unwrap();
-    assert_eq!(&*after, before.as_slice());
+    unchanged_because(&mut store, &filing, "span counter exhausted");
 }
 
 /// A one-step plan with its step active and, when `broken`, a filed Break;
@@ -1578,18 +1568,9 @@ fn answer_break_refuses_an_unbroken_plan_without_writing() {
 }
 #[test]
 fn refused_authorize_leaves_the_image_byte_identical() {
-    let mut store = store();
-    let ctx = context(
-        PlanInputOperation::Authorize {
-            task: 0.into(),
-            categories: categories(false),
-            groups: vec![],
-            review: setup(),
-        },
-        None,
-    );
-    store.file(&input(1, 0, &ctx)).unwrap();
-    // The effect names another review setup than its operator input.
+    // "review": the effect names another review setup than its Authorize
+    // input. "operation": the setup matches, but the source is a Create
+    // input, not an Authorize one.
     let authorize = |review| {
         effect(
             2,
@@ -1604,15 +1585,52 @@ fn refused_authorize_leaves_the_image_byte_identical() {
             },
         )
     };
-    let mut other = setup();
-    other.setup_id = "different".into();
-    unchanged_because(
-        &mut store,
-        &authorize(other),
-        "authorize does not match operator input",
-    );
-    // Positive control: the matching setup authorizes.
-    store.file(&authorize(setup())).unwrap();
+    for case in ["review", "operation"] {
+        let mut store = store();
+        let operation = if case == "operation" {
+            PlanInputOperation::Create {
+                task: 0.into(),
+                steps: vec![PlanInputStep {
+                    id: None,
+                    block: 1.into(),
+                }],
+                categories: categories(false),
+                groups: vec![],
+                review: setup(),
+            }
+        } else {
+            PlanInputOperation::Authorize {
+                task: 0.into(),
+                categories: categories(false),
+                groups: vec![],
+                review: setup(),
+            }
+        };
+        let ctx = context(operation, None);
+        let blocks = if case == "operation" { 0..=1 } else { 0..=0 };
+        for index in blocks {
+            store.file(&input(1, index, &ctx)).unwrap();
+        }
+        let review = if case == "review" {
+            let mut other = setup();
+            other.setup_id = "different".into();
+            other
+        } else {
+            setup()
+        };
+        let refused = unchanged(&mut store, &authorize(review));
+        assert_eq!(
+            refused.detail, "authorize does not match operator input",
+            "{case}: {refused}"
+        );
+        if case == "review" {
+            // Positive control: the matching setup authorizes.
+            store.file(&authorize(setup())).unwrap();
+            let authorized = snapshot(&store);
+            assert_eq!(authorized.status, PlanStatus::Authorized);
+            assert_eq!(authorized.review, setup());
+        }
+    }
 }
 
 #[test]
@@ -1629,4 +1647,8 @@ fn refused_activate_leaves_the_image_byte_identical() {
     // Positive control: the next span activates.
     let next = activation(&store, 1, 3, None);
     store.file(&effect(3, next)).unwrap();
+    let active = snapshot(&store);
+    assert_eq!(active.steps[0].step_id, step(1));
+    assert_eq!(active.steps[0].status, StepStatus::Active);
+    assert_eq!(active.steps[0].span, Some(span(3)));
 }

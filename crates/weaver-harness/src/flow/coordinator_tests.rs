@@ -2166,8 +2166,9 @@ fn preflight_open_is_owned_before_load_and_released_only_after_its_real_record()
     }
     assert_eq!(records[0]["kind"], "load");
     assert_eq!(records[1]["kind"], "state.store.measurement");
-    // The open measurement: the member's open observation, with no request
-    // source, and the harness's own queue, send and receive times.
+    // The open measurement: an observation of the open operation for
+    // request 1, no request source, and the harness's own queue, send and
+    // receive times.
     let open = &records[1];
     assert_eq!(open["channel"], "measurement");
     assert_eq!(open["origin"], "runtime");
@@ -2181,9 +2182,9 @@ fn preflight_open_is_owned_before_load_and_released_only_after_its_real_record()
             .get("request_source")
             .is_some_and(serde_json::Value::is_null)
     );
-    // The fixture clock: FakePumpIo::new(100) in BootFixture::new is the queue
-    // time, and begin_and_answer_open advances it to 110 before the send and
-    // to 120 before the receive.
+    // The fixture clock: FakePumpIo::new(100) in BootFixture::with_scheme is
+    // the queue time, and begin_and_answer_open advances it to 110 before the
+    // send and to 120 before the receive.
     assert_eq!(payload["harness_queued_ns"], "100");
     assert_eq!(payload["harness_sent_ns"], "110");
     assert_eq!(payload["harness_received_ns"], "120");
