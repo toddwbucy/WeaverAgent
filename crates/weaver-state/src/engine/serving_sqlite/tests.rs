@@ -912,7 +912,7 @@ pub(super) mod filing {
     }
 
     #[test]
-    fn pair_lane_request_mismatch_refuses_and_rolls_back_its_source() {
+    fn pair_lane_request_mismatch_refuses_before_writing_its_source() {
         let mut store = store();
         let send = statement(1, "message.assistant");
         store.file(&send).unwrap();
