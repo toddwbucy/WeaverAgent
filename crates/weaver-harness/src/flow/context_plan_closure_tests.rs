@@ -629,8 +629,13 @@ fn release_summary(fx: &mut SummaryFixture, snapshot: s::PlanSnapshot) {
 
 #[test]
 fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
-    for cancel_at in ["none", "source", "receipt"] {
-        let (mut fx, certificate) = closure_fixture(false, true);
+    // close does not recheck review_required (#423): unreviewed evidence
+    // closes a category that requires review like any other.
+    for (review_required, cancel_at) in [false, true]
+        .into_iter()
+        .flat_map(|review| ["none", "source", "receipt"].map(|at| (review, at)))
+    {
+        let (mut fx, certificate) = closure_fixture(review_required, true);
         let bound = fx.run().context.deadlines.get(PumpDeadline::Decision);
         let evidence = evidence(&mut fx);
         begin_close(&mut fx, evidence);
@@ -1015,6 +1020,46 @@ fn closure_attest_foreign_checked_work_is_a_fault() {
     assert!(original.records(Kind::Refusal).is_empty());
 }
 
+#[test]
+fn closure_attest_and_close_fault_on_an_absent_active_step_category() {
+    let absent = |plan: &mut s::PlanSnapshot| plan.steps[0].category = "absent".into();
+    // attest reads nothing, so the fault comes before any read.
+    let (mut fx, _) = closure_fixture(false, false);
+    let work = checked_work(&mut fx, PREVIEW.len());
+    swap_current(&mut fx, absent);
+    let reference = work.reference().clone();
+    begin(
+        &mut fx,
+        PlanRequest::AttestClosure {
+            expected: reference.plan,
+            step_id: reference.step_id,
+            work,
+        },
+    );
+    let failure = advance(&mut fx).unwrap_err();
+    assert!(format!("{failure:?}").contains("active step category is absent"));
+    assert!(fx.records(Kind::Refusal).is_empty());
+    fx.boot.member.no_request();
+    // close's own check, before its reread.
+    let (mut fx, _) = closure_fixture(false, false);
+    let evidence = evidence(&mut fx);
+    swap_current(&mut fx, absent);
+    let work = pinned();
+    let request = PlanRequest::Close {
+        expected: work.plan,
+        step_id: work.step_id,
+        evidence,
+    };
+    let run = fx.run();
+    let current = std::sync::Arc::clone(run.context.plan_cache.committed.as_ref().unwrap());
+    let result =
+        crate::flow::plan::ports::closure::validate_close(&request, &run.context, &current);
+    let Err(crate::flow::plan::ports::PlanCheckFailure::Protocol(detail)) = result else {
+        panic!("an absent active step category must fault close")
+    };
+    assert_eq!(detail, "active step category is absent");
+}
+
 /// close against a changed cache refuses before any read.
 fn close_against(
     change: impl FnOnce(&mut s::PlanSnapshot),
@@ -1084,29 +1129,6 @@ fn closure_close_refuses_work_held_for_another_span() {
 fn closure_close_refuses_a_changed_review_setup() {
     let refusal = close_against(|plan| plan.review.setup_id.push('x'), |_| ());
     assert_eq!(refusal.case, s::PlanOperationCase::ReviewSetupChanged);
-}
-
-#[test]
-fn closure_close_review_required_category_closes_with_unreviewed_evidence() {
-    // close does not recheck review_required: unreviewed evidence for a
-    // category that requires review files its outcome like any other.
-    let (mut fx, certificate) = closure_fixture(true, true);
-    let evidence = evidence(&mut fx);
-    begin_close(&mut fx, evidence);
-    serve(&mut fx, PREVIEW, 333);
-    let outcome = serve_marks(&mut fx, 9);
-    effect_ready(&mut fx);
-    let run = fx.run();
-    run.context
-        .begin_plan_effect(&certificate, &mut run.clock)
-        .unwrap();
-    let source = committed(&mut fx, false);
-    let snapshot = closed_snapshot(&mut fx, &source, &outcome);
-    release_summary(&mut fx, snapshot.clone());
-    let result = finish(&mut fx);
-    assert_eq!(result.current_snapshot(), Some(&snapshot));
-    assert!(fx.records(Kind::Refusal).is_empty());
-    assert_eq!(fx.records(Kind::StepOutcome).len(), 1);
 }
 
 #[test]

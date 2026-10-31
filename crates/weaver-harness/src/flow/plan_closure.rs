@@ -51,7 +51,9 @@ pub(super) fn open_pair(entries: &[s::ReadEntry]) -> bool {
 }
 
 /// CLOSURE-EVIDENCE's attest_closure. It reads nothing: the committed cache
-/// supplies the plan and category, and the moved CheckedWork its released bytes.
+/// supplies the plan and the active step, whose category must be held, and the
+/// moved CheckedWork its released bytes. The category's review_required is
+/// held operator data no plan port enforces (#423).
 /// Run-binding and proof-consistency faults come before any ordinary refusal.
 pub(in crate::flow) fn attest(
     request: &PlanRequest,
@@ -96,7 +98,8 @@ pub(in crate::flow) fn attest(
             "held work retains an open pair",
         ));
     }
-    // review_required is held operator data no plan port enforces (#423).
+    // The category must be held; its review_required is not enforced (#423).
+    category(plan, step)?;
     Ok(plan.review.clone())
 }
 
@@ -123,8 +126,8 @@ pub(in crate::flow) fn validate_close<'a>(
             "closure evidence names another plan revision or step",
         ));
     }
-    // Defence: attest checked the same target, and a step's span or category
-    // changes only with a new revision, which the check above refuses first.
+    // Defence: attest checked the same target, and a step's span changes only
+    // with a new revision, which the check above refuses first.
     held_target(evidence.work(), plan, step)?;
     if evidence.setup() != &plan.review {
         return Err(refuse(
@@ -132,6 +135,8 @@ pub(in crate::flow) fn validate_close<'a>(
             "closure evidence names another review setup",
         ));
     }
+    // The category must be held; its review_required is not enforced (#423).
+    category(plan, step)?;
     Ok((plan, step))
 }
 
