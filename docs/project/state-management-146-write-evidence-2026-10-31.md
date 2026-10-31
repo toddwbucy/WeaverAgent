@@ -87,9 +87,9 @@ counted as built, with its hardening in #424.
 | # | Gap | Disposition |
 |---|---|---|
 | 1 | Plan create, authorize, replace and answer_break: every test that asserts the operator `plan.event` records is ignored, because it needs the root coordination peer. The default suite asserts none of these records. | The operator's ruling, pending: (a) one real-root run of those tests, recorded here, or (b) store atomicity accepted here and the trace leg left to #424 section 1. |
-| 2 | Plan answer_break: no store test files an `answer_break` input (P8 green). | #146 gap PR, stacked on #427. |
+| 2 | Plan answer_break: no store test files an `answer_break` input (P8 green). | #429 (stacked on #427): `answer_break_replaces_a_broken_plan_whole`, `answer_break_refuses_an_unbroken_plan_without_writing`. |
 | 3 | Plan model lock: no harness author exists on this tree, so no trace record exists. | #423 section 7: the author is driven by model output and waits for the trained model. Store atomicity is evidenced (`model_lock_accepts_unique_repaired_statements_from_multiple_emissions_once`, red under P1). |
-| 4 | Plan authorize and activate: no store test refuses either effect and compares the image. | #146 gap PR, with gap 2. |
+| 4 | Plan authorize and activate: no store test refuses either effect and compares the image. | #429: `refused_authorize_leaves_the_image_byte_identical`, `refused_activate_leaves_the_image_byte_identical`. |
 | 5 | Plan activate and break: the tests count the `plan.event` and do not assert its payload; only the runtime guard `check_filing` holds it. | Accepted, no work. P4 shows a changed recorded payload fails the run, which is evidence that the record equals the grant. |
 | 6 | Capture and seed: no test fails a room write after the part file exists (P5 green), and the seed path has no fallback cleanup. | #424 section 2. |
 | 7 | Seed: `M/seed.rs` has no test. | #424 section 2. |
@@ -97,12 +97,13 @@ counted as built, with its hardening in #424.
 | 9 | Restore: no default-run harness test was found that asserts the `load` record for a save-point start (a parent artifact and a position). | #424 section 2. |
 | 10 | Marks: the store pin for the last allocatable span is in #427, not on `main`. | Closes when #427 merges; the row is updated then. |
 | 11 | Output filing: no store rollback test uses a `message.assistant` source; coverage rests on the code path it shares with input. | Accepted, no work: `file` is kind-agnostic, and P1's red set covers the shared path. |
-| 12 | Store open: the open measurement's payload fields are not asserted, only its kind and order. | #146 gap PR, with gap 2. |
+| 12 | Store open: the open measurement's payload fields are not asserted, only its kind and order. | #429: `preflight_open_is_owned_before_load_and_released_only_after_its_real_record` now asserts the payload. |
 
 Police item: `pair_lane_request_mismatch_refuses_and_rolls_back_its_source` refuses
-before its transaction, so its name overclaims. It is renamed in the #146 gap PR.
+before its transaction, so its name overclaims. #429 renames it
+`pair_lane_request_mismatch_refuses_before_writing_its_source`; the rows above keep the name on `main`.
 
-Once the gap PR lands and gap 1 is ruled, this table is #146's closing evidence.
+Once #429 lands and gap 1 is ruled, this table is #146's closing evidence.
 
 ## Not settled
 
