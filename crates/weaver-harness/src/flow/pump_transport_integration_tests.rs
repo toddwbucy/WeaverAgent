@@ -237,9 +237,10 @@ fn trace_event(kind: Kind, payload: Payload) -> Event {
 }
 
 fn pressured_recorder() -> (Recorder, UnixStream) {
+    // No write timeout on the sink, as admin's blocking sink carries none: a
+    // filled queue blocks the writer until the test drains, and a timeout
+    // raced that wait into a commit failure under load (#416).
     let (sink, reader) = UnixStream::pair().unwrap();
-    sink.set_write_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
     reader
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
@@ -259,6 +260,9 @@ fn pressured_recorder() -> (Recorder, UnixStream) {
         panic!("empty recorder must admit load");
     };
     let mut recorder = recorder.activate(validate_partition(&fixture::partition()).unwrap());
+    // Rebound after the recorder so a panic in the fill drops the reader
+    // first: the blocked write then fails and the writer's join returns.
+    let reader = reader;
     let payload =
         serde_json::value::to_raw_value(&serde_json::json!({ "pressure": "x".repeat(32_768) }))
             .unwrap();
@@ -309,9 +313,11 @@ fn typed_completions_stay_whole_while_a_real_trace_ticket_waits() {
         send_bytes(fd, second);
     }
 
-    let (recorder, mut reader) = pressured_recorder();
+    let (recorder, reader) = pressured_recorder();
     let prior = recorder.structure().len();
     let mut barrier = RecordBarrier::new(recorder, "run".into());
+    // Rebound after the barrier so a panic drops the reader first (#416).
+    let mut reader = reader;
     let mut inbox = FlowInbox::new();
     let mut budget = RetentionBudget::new(FlowBacklog {
         max_pending_blocks: 2.into(),

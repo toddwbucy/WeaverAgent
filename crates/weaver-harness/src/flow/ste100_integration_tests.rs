@@ -249,9 +249,10 @@ fn classifier_event(reply: &Ste100Reply) -> Event {
 }
 
 fn recorder() -> (Recorder, UnixStream) {
+    // No write timeout on the sink, as admin's blocking sink carries none: a
+    // filled queue blocks the writer until the test drains, and a timeout
+    // raced that wait into a commit failure under load (#416).
     let (sink, reader) = UnixStream::pair().unwrap();
-    sink.set_write_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
     reader
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
@@ -409,6 +410,8 @@ fn socket_acceptance_waits_for_trace_capacity_before_it_can_be_reused() {
     fill_capacity(&mut recorder);
     let count = recorder.structure().len();
     let mut barrier = RecordBarrier::new(recorder, "run".into());
+    // Rebound after the barrier so a panic drops the reader first (#416).
+    let reader = reader;
     let mut inbox = FlowInbox::new();
     let mut budget = budget();
     assert!(matches!(

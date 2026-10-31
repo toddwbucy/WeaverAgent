@@ -63,9 +63,10 @@ fn event(kind: Kind, payload: Payload) -> Event {
 }
 
 fn recorder() -> (Recorder, UnixStream) {
+    // No write timeout on the sink, as admin's blocking sink carries none: a
+    // filled queue blocks the writer until the test drains, and a timeout
+    // raced that wait into a commit failure under load (#416).
     let (sink, reader) = UnixStream::pair().unwrap();
-    sink.set_write_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
     reader
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
@@ -605,6 +606,8 @@ fn classifier_completion_waits_for_real_capacity_then_releases_exactly_once() {
     fill_capacity(&mut recorder);
     let count = recorder.structure().len();
     let mut barrier = RecordBarrier::new(recorder, "run".into());
+    // Rebound after the barrier so a panic drops the reader first (#416).
+    let reader = reader;
     let mut inbox = FlowInbox::new();
     let mut budget = budget(1);
     assert!(matches!(
@@ -680,6 +683,8 @@ fn intake_failure_arriving_during_capacity_wait_prevents_pending_admission() {
     fill_capacity(&mut recorder);
     let count = recorder.structure().len();
     let mut barrier = RecordBarrier::new(recorder, "run".into());
+    // Rebound after the barrier so a panic drops the reader first (#416).
+    let reader = reader;
     let mut inbox = FlowInbox::new();
     let mut budget = budget(1);
     let pending = message("Read pending.");
@@ -729,6 +734,8 @@ fn second_author_during_capacity_wait_fails_and_preserves_both_exact_events() {
     fill_capacity(&mut recorder);
     let count = recorder.structure().len();
     let mut barrier = RecordBarrier::new(recorder, "run".into());
+    // Rebound after the barrier so a panic drops the reader first (#416).
+    let reader = reader;
     let mut inbox = FlowInbox::new();
     let mut budget = budget(1);
     let first = message("Read first pending author.");

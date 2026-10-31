@@ -459,9 +459,11 @@ fn an_observation_wake_keeps_real_interests_and_terminal_deadline_precedence() {
 }
 impl Fixture {
     fn new(pressure: bool) -> Self {
+        // The sink carries no write timeout, as admin's blocking sink carries
+        // none. Under pressure the writer blocks on the full socket from the
+        // eighth line until the test drains the reader, so a timeout raced the
+        // fill and its EAGAIN became a real commit failure (#416).
         let (sink, reader) = UnixStream::pair().unwrap();
-        sink.set_write_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
         reader
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
@@ -481,6 +483,9 @@ impl Fixture {
             panic!("empty recorder must admit load")
         };
         let mut recorder = recorder.activate(validate_partition(&fixture::partition()).unwrap());
+        // Rebound after the recorder so a panic in the fill drops the reader
+        // first: the blocked write then fails and the writer's join returns.
+        let reader = reader;
         if pressure {
             let payload = serde_json::value::to_raw_value(
                 &serde_json::json!({"pressure":"x".repeat(32_768)}),

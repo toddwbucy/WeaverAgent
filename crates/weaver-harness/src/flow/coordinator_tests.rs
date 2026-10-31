@@ -17,6 +17,9 @@ use weaver_types::state_flow as s;
 use crate::flow::recording_fixture as fixture;
 
 pub(in crate::flow) struct Fixture {
+    // First, so it drops before the barrier: a closed reader fails the
+    // writer's blocked write and the barrier's join returns (#416).
+    reader: Option<UnixStream>,
     pub(in crate::flow) flow: FlowCoordinator<ScriptedPort>,
     pub(in crate::flow) classifier: ScriptedPeer,
     pub(in crate::flow) state_peer: UnixStream,
@@ -29,7 +32,6 @@ pub(in crate::flow) struct Fixture {
     pub(in crate::flow) budget: RetentionBudget,
     pub(in crate::flow) author: ServingAuthor,
     pub(in crate::flow) clock: FakePumpIo,
-    reader: Option<UnixStream>,
 }
 
 fn authored(kind: Kind, source: AuthoredSource, payload: Payload, turn: bool) -> AuthoredEvent {
@@ -120,9 +122,10 @@ fn accepted(request: &s::Ste100Request) -> s::Ste100Reply {
 impl Fixture {
     pub(in crate::flow) fn new(max_blocks: u64) -> Self {
         let author = ServingAuthor::new("session".into(), "run".into(), 0, 100).unwrap();
+        // No write timeout on the sink, as admin's blocking sink carries none: a
+        // filled queue blocks the writer until the test drains, and a timeout
+        // raced that wait into a commit failure under load (#416).
         let (sink, reader) = UnixStream::pair().unwrap();
-        sink.set_write_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
         reader
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
@@ -1915,6 +1918,9 @@ fn interrupted_release_waits_for_a_later_external_author_without_recording_twice
 }
 
 struct BootFixture<P = ScriptedPort> {
+    // First, so it drops before the barrier: a closed reader fails the
+    // writer's blocked write and the barrier's join returns (#416).
+    reader: Option<UnixStream>,
     flow: FlowCoordinator<P>,
     peer: UnixStream,
     barrier: RecordBarrier,
@@ -1922,7 +1928,6 @@ struct BootFixture<P = ScriptedPort> {
     budget: RetentionBudget,
     author: ServingAuthor,
     clock: FakePumpIo,
-    reader: Option<UnixStream>,
 }
 
 impl BootFixture<ScriptedPort> {
@@ -1939,9 +1944,10 @@ impl BootFixture<ScriptedPort> {
 
 impl<P: Ste100Port> BootFixture<P> {
     fn with_scheme(scheme: s::SchemeDeclaration) -> Self {
+        // No write timeout on the sink, as admin's blocking sink carries none: a
+        // filled queue blocks the writer until the test drains, and a timeout
+        // raced that wait into a commit failure under load (#416).
         let (sink, reader) = UnixStream::pair().unwrap();
-        sink.set_write_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
         reader
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
