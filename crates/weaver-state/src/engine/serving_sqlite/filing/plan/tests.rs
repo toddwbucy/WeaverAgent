@@ -436,7 +436,9 @@ fn closure_refuses_changed_work_digest_and_closes_a_review_required_step_unrevie
     );
     // review_required is held operator data the store returns and does not
     // enforce (#423): an unreviewed close of that step files and verifies.
-    close(&mut store, 4, 4, work, None);
+    // The refused filing above held sequence 4 and was not committed; this
+    // close takes a fresh sequence.
+    close(&mut store, 5, 4, work, None);
     let closed = snapshot(&store);
     assert!(closed.categories[0].review_required);
     assert_eq!(closed.steps[0].review_call, None);
@@ -447,86 +449,6 @@ fn closure_refuses_changed_work_digest_and_closes_a_review_required_step_unrevie
         &store.read_limits,
     )
     .unwrap();
-}
-
-/// Dump the store's image and verify the plan rows of the loaded copy, as
-/// adoption does.
-fn verify_dumped_and_loaded(store: &ServingSqlite) {
-    let image = store
-        .connection
-        .serialize(rusqlite::MAIN_DB)
-        .unwrap()
-        .to_vec();
-    let mut loaded = rusqlite::Connection::open_in_memory().unwrap();
-    loaded
-        .deserialize_read_exact(rusqlite::MAIN_DB, image.as_slice(), image.len(), false)
-        .unwrap();
-    verify_image_plan(&loaded, &store.context.seed_id, &store.read_limits).unwrap();
-}
-
-#[test]
-fn unreviewed_close_of_a_review_required_step_survives_dump_load_and_preserving_replacement() {
-    // Spec 07 INSTRUMENTS' repeat: an unreviewed closure under
-    // review_required true holds after dump and load and after a
-    // replacement that preserves it.
-    let mut store = store();
-    create(&mut store, 2, true, false);
-    activate(&mut store, 3, 1, 3, None);
-    let work = work_ref(&store, 3);
-    close(&mut store, 4, 4, work, None);
-    verify_dumped_and_loaded(&store);
-    let ctx = context(
-        PlanInputOperation::Replace(PlanInputReplacement {
-            task: None,
-            steps: vec![
-                PlanInputStep {
-                    id: None,
-                    block: 0.into(),
-                },
-                PlanInputStep {
-                    id: Some(step(1)),
-                    block: 1.into(),
-                },
-            ],
-            categories: categories(true),
-            groups: vec![],
-            review: setup(),
-            preserved_closures: vec![step(1)],
-        }),
-        Some(plan(1)),
-    );
-    store.file(&input(5, 0, &ctx)).unwrap();
-    store.file(&input(5, 1, &ctx)).unwrap();
-    store
-        .file(&effect(
-            6,
-            PlanEffect::Replace {
-                expected: plan(1),
-                next: plan(2),
-                source: block(5, 0),
-                task: TaskScopeRef {
-                    task: span(1),
-                    prompt: span(2),
-                },
-                steps: vec![
-                    PlanStepInit {
-                        step_id: step(3),
-                        instruction: reference(5, 0),
-                    },
-                    PlanStepInit {
-                        step_id: step(1),
-                        instruction: reference(1, 1),
-                    },
-                ],
-                review: setup(),
-            },
-        ))
-        .unwrap();
-    let current = snapshot(&store);
-    assert!(current.categories[0].review_required);
-    assert_eq!(current.steps[1].status, StepStatus::Closed);
-    assert_eq!(current.steps[1].review_call, None);
-    verify_dumped_and_loaded(&store);
 }
 
 #[test]

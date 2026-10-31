@@ -53,10 +53,14 @@ impl Fixture {
     }
 
     fn begin(&mut self, authorize: bool) {
+        self.begin_with(authorize, false);
+    }
+
+    fn begin_with(&mut self, authorize: bool, review_required: bool) {
         let operation = if authorize {
             PlanInputOperation::Authorize {
                 task: 0.into(),
-                categories: categories(false),
+                categories: categories(review_required),
                 groups: vec![],
                 review: setup(),
             }
@@ -67,7 +71,7 @@ impl Fixture {
                     id: None,
                     block: 1.into(),
                 }],
-                categories: categories(false),
+                categories: categories(review_required),
                 groups: vec![],
                 review: setup(),
             }
@@ -309,4 +313,71 @@ fn adopted_model_lock_uses_authorized_task_without_allocating_a_prompt() {
         fixture.adopt(&fixture.store.image().unwrap()).is_err(),
         "a model lock may not become the task's opening source"
     );
+}
+
+#[test]
+fn unreviewed_close_of_a_review_required_step_survives_dump_load_and_preserving_replacement() {
+    // Spec 07 INSTRUMENTS' repeat: an unreviewed closure under
+    // review_required true holds after a real dump and adoption and after a
+    // replacement that preserves it.
+    let mut fixture = Fixture::new();
+    fixture.begin_with(false, true);
+    fixture.complete();
+    let loaded = fixture.adopt(&fixture.store.image().unwrap()).unwrap();
+    let closed = snapshot(&loaded);
+    assert!(closed.categories[0].review_required);
+    assert_eq!(closed.steps[0].status, StepStatus::Closed);
+    assert_eq!(closed.steps[0].review_call, None);
+    let ctx = context(
+        PlanInputOperation::Replace(PlanInputReplacement {
+            task: None,
+            steps: vec![
+                PlanInputStep {
+                    id: None,
+                    block: 0.into(),
+                },
+                PlanInputStep {
+                    id: Some(step(1)),
+                    block: 1.into(),
+                },
+            ],
+            categories: categories(true),
+            groups: vec![],
+            review: setup(),
+            preserved_closures: vec![step(1)],
+        }),
+        Some(plan(1)),
+    );
+    fixture.file(input(5, 0, &ctx));
+    fixture.file(input(5, 1, &ctx));
+    fixture.file(effect(
+        6,
+        PlanEffect::Replace {
+            expected: plan(1),
+            next: plan(2),
+            source: block(5, 0),
+            // The single closed step completed the plan and its task, so the
+            // replacement renews the task at the next spans.
+            task: TaskScopeRef {
+                task: span(5),
+                prompt: span(6),
+            },
+            steps: vec![
+                PlanStepInit {
+                    step_id: step(2),
+                    instruction: reference(5, 0),
+                },
+                PlanStepInit {
+                    step_id: step(1),
+                    instruction: reference(1, 1),
+                },
+            ],
+            review: setup(),
+        },
+    ));
+    let loaded = fixture.adopt(&fixture.store.image().unwrap()).unwrap();
+    let current = snapshot(&loaded);
+    assert!(current.categories[0].review_required);
+    assert_eq!(current.steps[1].status, StepStatus::Closed);
+    assert_eq!(current.steps[1].review_call, None);
 }

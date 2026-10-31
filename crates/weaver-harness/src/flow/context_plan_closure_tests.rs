@@ -635,6 +635,7 @@ fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
         .into_iter()
         .flat_map(|review| ["none", "source", "receipt"].map(|at| (review, at)))
     {
+        let case = format!("review_required={review_required} cancel_at={cancel_at}");
         let (mut fx, certificate) = closure_fixture(review_required, true);
         let bound = fx.run().context.deadlines.get(PumpDeadline::Decision);
         let evidence = evidence(&mut fx);
@@ -656,12 +657,12 @@ fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
         release_summary(&mut fx, snapshot.clone());
         let result = finish(&mut fx);
         if cancel_at == "none" {
-            assert_eq!(result.current_snapshot(), Some(&snapshot));
+            assert_eq!(result.current_snapshot(), Some(&snapshot), "{case}");
         } else {
-            assert!(matches!(result, PlanPortCompletion::Cancelled(_)));
+            assert!(matches!(result, PlanPortCompletion::Cancelled(_)), "{case}");
         }
         // An admitted effect settles its refresh and adoption even when cancelled.
-        assert!(fx.run().context.native_place_cache_ready(), "{cancel_at}");
+        assert!(fx.run().context.native_place_cache_ready(), "{case}");
         assert_eq!(
             fx.run()
                 .context
@@ -669,12 +670,14 @@ fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
                 .unwrap()
                 .unwrap()
                 .last_source,
-            source
+            source,
+            "{case}"
         );
-        assert!(fx.run().context.plan_port_work().is_none());
+        assert!(fx.run().context.plan_port_work().is_none(), "{case}");
         assert_eq!(
             fx.run().context.deadlines.get(PumpDeadline::Decision),
-            bound
+            bound,
+            "{case}"
         );
 
         let effect = s::PlanEffect::Close {
@@ -685,28 +688,42 @@ fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
             outcome_span: outcome.clone(),
         };
         let outcomes = fx.records(Kind::StepOutcome);
-        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes.len(), 1, "{case}");
         let payload = &outcomes[0]["payload"];
-        assert_eq!(payload["context"], serde_json::to_value(&effect).unwrap());
-        assert_eq!(payload["template_id"], "step.closed");
-        assert_eq!(payload["outcome"], serde_json::json!({"closed": {}}));
-        assert_eq!(payload["review_call"], serde_json::Value::Null);
-        assert_eq!(payload["work"], serde_json::to_value(pinned()).unwrap());
+        assert_eq!(
+            payload["context"],
+            serde_json::to_value(&effect).unwrap(),
+            "{case}"
+        );
+        assert_eq!(payload["template_id"], "step.closed", "{case}");
+        assert_eq!(
+            payload["outcome"],
+            serde_json::json!({"closed": {}}),
+            "{case}"
+        );
+        assert_eq!(payload["review_call"], serde_json::Value::Null, "{case}");
+        assert_eq!(
+            payload["work"],
+            serde_json::to_value(pinned()).unwrap(),
+            "{case}"
+        );
         assert_eq!(
             payload["message"],
-            serde_json::json!({"role":"user","content":[{"type":"text","text":"Read plan."}]})
+            serde_json::json!({"role":"user","content":[{"type":"text","text":"Read plan."}]}),
+            "{case}"
         );
-        assert_eq!(outcomes[0]["channel"], "internal");
-        assert_eq!(outcomes[0]["origin"], "loop");
-        assert_eq!(outcomes[0]["turn"], "closure");
-        assert!(fx.records(Kind::PlanEvent).is_empty());
-        assert!(fx.records(Kind::Refusal).is_empty());
-        assert!(fx.records(Kind::ModelRequest).is_empty());
-        assert_eq!(fx.files.len(), 1);
-        assert_eq!(fx.files[0].source.kind, "step.outcome");
+        assert_eq!(outcomes[0]["channel"], "internal", "{case}");
+        assert_eq!(outcomes[0]["origin"], "loop", "{case}");
+        assert_eq!(outcomes[0]["turn"], "closure", "{case}");
+        assert!(fx.records(Kind::PlanEvent).is_empty(), "{case}");
+        assert!(fx.records(Kind::Refusal).is_empty(), "{case}");
+        assert!(fx.records(Kind::ModelRequest).is_empty(), "{case}");
+        assert_eq!(fx.files.len(), 1, "{case}");
+        assert_eq!(fx.files[0].source.kind, "step.outcome", "{case}");
         assert_eq!(
             fx.files[0].effect,
-            Some(s::StatementEffect::Plan(Box::new(effect)))
+            Some(s::StatementEffect::Plan(Box::new(effect))),
+            "{case}"
         );
     }
 }
@@ -1040,24 +1057,16 @@ fn closure_attest_and_close_fault_on_an_absent_active_step_category() {
     assert!(format!("{failure:?}").contains("active step category is absent"));
     assert!(fx.records(Kind::Refusal).is_empty());
     fx.boot.member.no_request();
-    // close's own check, before its reread.
+    // The close port faults on its own check, before its reread.
     let (mut fx, _) = closure_fixture(false, false);
     let evidence = evidence(&mut fx);
     swap_current(&mut fx, absent);
-    let work = pinned();
-    let request = PlanRequest::Close {
-        expected: work.plan,
-        step_id: work.step_id,
-        evidence,
-    };
-    let run = fx.run();
-    let current = std::sync::Arc::clone(run.context.plan_cache.committed.as_ref().unwrap());
-    let result =
-        crate::flow::plan::ports::closure::validate_close(&request, &run.context, &current);
-    let Err(crate::flow::plan::ports::PlanCheckFailure::Protocol(detail)) = result else {
-        panic!("an absent active step category must fault close")
-    };
-    assert_eq!(detail, "active step category is absent");
+    begin_close(&mut fx, evidence);
+    let failure = advance(&mut fx).unwrap_err();
+    assert!(format!("{failure:?}").contains("active step category is absent"));
+    fx.boot.member.no_request();
+    assert!(fx.records(Kind::Refusal).is_empty());
+    assert!(fx.records(Kind::StepOutcome).is_empty());
 }
 
 /// close against a changed cache refuses before any read.

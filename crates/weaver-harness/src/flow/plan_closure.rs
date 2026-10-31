@@ -91,6 +91,8 @@ pub(in crate::flow) fn attest(
         ));
     }
     let (plan, step) = active(request, context, current)?;
+    // The category must be held; its review_required is not enforced (#423).
+    category(plan, step)?;
     held_target(reference, plan, step)?;
     if open_pair(entries) {
         return Err(refuse(
@@ -98,8 +100,6 @@ pub(in crate::flow) fn attest(
             "held work retains an open pair",
         ));
     }
-    // The category must be held; its review_required is not enforced (#423).
-    category(plan, step)?;
     Ok(plan.review.clone())
 }
 
@@ -120,6 +120,8 @@ pub(in crate::flow) fn validate_close<'a>(
         ));
     }
     let (plan, step) = active(request, context, current)?;
+    // The category must be held; its review_required is not enforced (#423).
+    category(plan, step)?;
     if evidence.plan() != &plan.plan || evidence.step_id() != &step.step_id {
         return Err(refuse(
             s::PlanOperationCase::InvalidTarget,
@@ -135,8 +137,6 @@ pub(in crate::flow) fn validate_close<'a>(
             "closure evidence names another review setup",
         ));
     }
-    // The category must be held; its review_required is not enforced (#423).
-    category(plan, step)?;
     Ok((plan, step))
 }
 
