@@ -1,7 +1,7 @@
 //! Spec 02's step loop.instruction against the committed active step, filed
 //! through the scripted classifier and member, and Spec 08's instruction unit.
 use super::*;
-use crate::flow::context::step_instruction::StepInstructionRefused;
+use crate::flow::context::step_instruction::{StepInstructionError, StepInstructionRefused};
 use crate::flow::ledger::SourceDisposition;
 use std::sync::Arc;
 
@@ -24,10 +24,10 @@ fn open_turn(fx: &mut SummaryFixture, turn: &str) -> TurnRef {
     turn
 }
 
-fn refused(result: Result<impl std::fmt::Debug, StepInstructionRefused>) -> StepInstructionRefused {
+fn refused(result: Result<impl std::fmt::Debug, StepInstructionError>) -> StepInstructionRefused {
     match result {
-        Err(refused) => refused,
-        Ok(draft) => panic!("step instruction must refuse: {draft:?}"),
+        Err(StepInstructionError::Refused(refused)) => refused,
+        other => panic!("step instruction must refuse: {other:?}"),
     }
 }
 
@@ -235,4 +235,39 @@ fn a_block_unit_of_the_same_filed_instruction_is_not_its_instruction_unit() {
         &block,
         &run.context
     ));
+}
+
+#[test]
+fn step_instruction_decides_nothing_while_the_committed_summary_settles() {
+    // A close's plan effect is in flight: the committed summary is pending,
+    // which is neither "not the active step" nor a recorded refusal.
+    let (mut fx, certificate) = closure_fixture(false, true);
+    let evidence = evidence(&mut fx);
+    begin_close(&mut fx, evidence);
+    serve(&mut fx, PREVIEW, PREVIEW.len());
+    serve_marks(&mut fx, 4);
+    effect_ready(&mut fx);
+    let run = fx.run();
+    run.context
+        .begin_plan_effect(&certificate, &mut run.clock)
+        .unwrap();
+    // Its effect is committed; the summary refresh is not yet released.
+    let _source = committed(&mut fx, false);
+    let run = fx.run();
+    assert_eq!(
+        run.context.committed_plan_summary().err(),
+        Some(crate::flow::plan::PlanSummaryUnavailable::Pending)
+    );
+    let work = pinned();
+    let result = run.context.step_instruction(
+        &work.plan,
+        &work.step_id,
+        &TurnRef("closure".into()),
+        &certificate,
+    );
+    assert!(
+        matches!(result, Err(StepInstructionError::Pending)),
+        "{result:?}"
+    );
+    assert!(fx.records(Kind::Refusal).is_empty());
 }

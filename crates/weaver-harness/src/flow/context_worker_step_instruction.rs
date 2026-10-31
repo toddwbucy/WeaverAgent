@@ -3,7 +3,7 @@
 //! and keep the Recorded placement as a private receipt. It chooses no step,
 //! starts no generation and is not a strategy.
 use super::*;
-use crate::flow::context::step_instruction::StepMeta;
+use crate::flow::context::step_instruction::{StepInstructionError, StepMeta};
 use crate::flow::context::{FilingCompletion, FilingProgress};
 use crate::flow::ledger::SourceDisposition;
 use crate::flow::material::SelectedUnit;
@@ -32,6 +32,10 @@ pub(super) struct StepWork {
     returned: crate::flow::context::StoppedAuthor,
     pub(super) source: Option<SourceBlockId>,
     pub(super) unit: Option<SelectedUnit>,
+    /// After results: the elected calls and their held result units, handed
+    /// to the return round once the instruction is filed.
+    calls: Vec<CallId>,
+    units: Option<Vec<SelectedUnit>>,
 }
 
 /// The step operation's refusal, after its record is Recorded. The engine
@@ -150,27 +154,14 @@ impl<'a> FoundationInput<'a> {
         {
             return Err(calls);
         }
-        let mut units = vec![];
-        if progress == FoundationInputProgress::PairsComplete {
-            for (index, call) in calls.iter().enumerate() {
-                if calls[..index].contains(call) {
-                    return Err(calls);
-                }
-                let Ok(unit) = self.serving.owner.context.hold_place_return(call) else {
-                    return Err(calls);
-                };
-                units.push(unit);
-            }
-            let Some(journal) = self.serving.owner.context.boot_journal.as_ref() else {
+        let units = if progress == FoundationInputProgress::PairsComplete {
+            let Some(units) = self.hold_results(&calls) else {
                 return Err(calls);
             };
-            if !journal
-                .project(None)
-                .is_ok_and(|prefix| journal.validate_selection(&prefix, &units).is_ok())
-            {
-                return Err(calls);
-            }
-        }
+            Some(units)
+        } else {
+            None
+        };
         let work = self.engine.as_mut().unwrap();
         let back = work.stage;
         work.step = Some(Box::new(StepWork {
@@ -188,12 +179,10 @@ impl<'a> FoundationInput<'a> {
             returned: Default::default(),
             source: None,
             unit: None,
+            calls: if units.is_some() { calls } else { vec![] },
+            units,
         }));
         work.step_refusal = None;
-        if back == EngineStage::Emission {
-            work.step_calls = calls;
-            work.step_units = Some(units);
-        }
         work.selection = Some((label, method));
         work.stage = EngineStage::StepInstruction;
         Ok(())
@@ -242,7 +231,21 @@ impl EngineWork {
                             step.expansion = Some(draft.expansion);
                             step.meta = Some(draft.step);
                         }
-                        Err(refused) => {
+                        // The committed summary is settling: decide nothing
+                        // and retry once its owner has run.
+                        Err(StepInstructionError::Pending) => {
+                            context.pump_once(ports)?;
+                            return Ok(());
+                        }
+                        Err(StepInstructionError::Failed) => {
+                            context.live(ports.io)?;
+                            return Err(fault(
+                                context,
+                                ports.io,
+                                "step instruction: failed plan summary".into(),
+                            ));
+                        }
+                        Err(StepInstructionError::Refused(refused)) => {
                             step.case = Some(refused.case);
                             step.refusal = Some(refused.event);
                         }
@@ -285,12 +288,10 @@ impl EngineWork {
                         return Ok(());
                     }
                 }
-                if self.cancelled.is_some() {
-                    self.stage = EngineStage::Cancelled;
-                    context.complete_wait(PumpDeadline::Decision);
-                    return Ok(());
-                }
                 let proof = step.filing.as_ref().unwrap();
+                // A correctly rejected expansion records its fault even under
+                // cancellation, as the wind-down pass does; StepRefusal then
+                // settles to Cancelled.
                 if let Some(rejected) = proof.receipts().dispositions().find_map(|d| match d {
                     SourceDisposition::CorrectlyRejected(rejected) => Some(rejected),
                     _ => None,
@@ -317,6 +318,11 @@ impl EngineWork {
                     self.stage = EngineStage::StepRefusal;
                     return Ok(());
                 }
+                if self.cancelled.is_some() {
+                    self.stage = EngineStage::Cancelled;
+                    context.complete_wait(PumpDeadline::Decision);
+                    return Ok(());
+                }
                 let expansion = step.expansion.as_ref().unwrap();
                 let sources: Vec<_> = proof.receipts().dispositions().collect();
                 let valid = proof.belongs_to(context)
@@ -328,11 +334,17 @@ impl EngineWork {
                                 && file.block_id.sequence.0 == proof.sequence().0
                                 && file.text == expansion.text()));
                 if !valid {
-                    return Err(fault(
-                        context,
-                        ports.io,
-                        "step instruction has no exact committed filing".into(),
-                    ));
+                    // As the wind-down pass: a refusal, and the run keeps serving.
+                    let refused = context.step_instruction_refusal(
+                        InstructionRefusal::InvalidContext,
+                        "step instruction has no exact committed filing",
+                    );
+                    step.filing = None;
+                    step.expansion = None;
+                    step.case = Some(refused.case);
+                    step.refusal = Some(refused.event);
+                    self.stage = EngineStage::StepRefusal;
+                    return Ok(());
                 }
                 let proof = step.filing.take().unwrap();
                 let Some(SourceDisposition::Committed(source)) =
@@ -354,15 +366,13 @@ impl EngineWork {
                     )
                 })?;
                 step.unit = Some(unit);
-                if step.back == EngineStage::TaskReady {
-                    self.step_calls.clear();
-                } else {
+                if let Some(units) = step.units.take() {
                     self.rounds.push(RetainedRound {
                         _generation: self.generation.take(),
                         _emission: self.emission.take(),
                     });
-                    self.return_calls = std::mem::take(&mut self.step_calls);
-                    self.return_units = self.step_units.take();
+                    self.return_calls = std::mem::take(&mut step.calls);
+                    self.return_units = Some(units);
                 }
                 self.stage = EngineStage::Prepare;
             }
@@ -403,8 +413,6 @@ impl EngineWork {
                     step.back
                 };
                 self.step = None;
-                self.step_calls.clear();
-                self.step_units = None;
                 self.selection = None;
             }
             _ => unreachable!("step stages only"),

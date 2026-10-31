@@ -262,13 +262,11 @@ impl FoundationInput<'_> {
     }
     /// State-owner work excludes new input, effects and capture boundaries.
     /// Completed untaken results retain custody but have no pending I/O duty.
+    /// An owed next_ready observation is not state-owner work: it waits for an
+    /// authorship window the input's placement and generation may hold, so it
+    /// must not exclude the input's progress. The sites it must block name
+    /// next_ready_pending themselves.
     pub(super) fn plan_work_pending(&self) -> bool {
-        self.plan_owner_pending() || self.next_ready_pending()
-    }
-    /// The owners that exclude the input's own progress. An owed next_ready
-    /// observation does not: it waits for an authorship window the input's
-    /// placement and generation may hold, and must not hold them in turn.
-    pub(super) fn plan_owner_pending(&self) -> bool {
         self.plan_pending() || self.flags_pending() || self.plan_operation_pending()
     }
     pub(super) fn plan_at_rest(&self) -> bool {
@@ -277,6 +275,7 @@ impl FoundationInput<'_> {
             && self.token.is_none()
             && self.report.is_none()
             && !self.plan_work_pending()
+            && !self.next_ready_pending()
             && self.serving.save.is_none()
             && !self.has_graceful_leave()
     }

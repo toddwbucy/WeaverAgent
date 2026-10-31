@@ -39,6 +39,23 @@ pub enum FoundationNextReadyRefusal {
     NotTheSuccessor,
     /// A reading is zero or reversed, or the chain's sources are out of order.
     ClockOrder,
+    /// The placement's turn is no longer open.
+    TurnClosed,
+}
+
+impl From<NextReadyRefusal> for FoundationNextReadyRefusal {
+    fn from(refusal: NextReadyRefusal) -> Self {
+        match refusal {
+            NextReadyRefusal::CrossRun => Self::CrossRun,
+            NextReadyRefusal::Replaced => Self::Replaced,
+            NextReadyRefusal::MissingEndpoint => Self::MissingEndpoint,
+            NextReadyRefusal::NotTheSuccessor => Self::NotTheSuccessor,
+            NextReadyRefusal::ClockOrder => Self::ClockOrder,
+            NextReadyRefusal::TurnClosed => Self::TurnClosed,
+            // A settling committed summary: retry, as for any busy owner.
+            NextReadyRefusal::Pending => Self::Busy,
+        }
+    }
 }
 
 /// A refusal authors nothing and returns every receipt unchanged.
@@ -58,7 +75,6 @@ pub(in crate::flow::context::worker_startup) struct PendingNextReady {
     _placed: StepPlacementReceipt,
     event: Option<AuthoredEvent>,
     started: bool,
-    discarded: bool,
     returned: crate::flow::context::StoppedAuthor,
     sequence: Option<Sequence>,
 }
@@ -139,18 +155,7 @@ impl FoundationInput<'_> {
             {
                 Ok(event) => event,
                 Err(refusal) => {
-                    let refusal = match refusal {
-                        NextReadyRefusal::CrossRun => FoundationNextReadyRefusal::CrossRun,
-                        NextReadyRefusal::Replaced => FoundationNextReadyRefusal::Replaced,
-                        NextReadyRefusal::MissingEndpoint => {
-                            FoundationNextReadyRefusal::MissingEndpoint
-                        }
-                        NextReadyRefusal::NotTheSuccessor => {
-                            FoundationNextReadyRefusal::NotTheSuccessor
-                        }
-                        NextReadyRefusal::ClockOrder => FoundationNextReadyRefusal::ClockOrder,
-                    };
-                    return refuse(start, activation, placed, refusal);
+                    return refuse(start, activation, placed, refusal.into());
                 }
             };
         self.serving.next_ready = Some(Box::new(PendingNextReady {
@@ -159,19 +164,18 @@ impl FoundationInput<'_> {
             _placed: placed,
             event: Some(event),
             started: false,
-            discarded: false,
             returned: Default::default(),
             sequence: None,
         }));
         Ok(())
     }
 
-    /// An observation still owed: checked, neither Recorded nor discarded.
+    /// An observation still owed: checked, not yet Recorded.
     pub fn next_ready_pending(&self) -> bool {
         self.serving
             .next_ready
             .as_ref()
-            .is_some_and(|work| work.sequence.is_none() && !work.discarded)
+            .is_some_and(|work| work.sequence.is_none())
     }
 
     /// Its original author ticket is admitted: only Recorded settles it.
@@ -182,25 +186,23 @@ impl FoundationInput<'_> {
             .is_some_and(|work| work.sequence.is_none() && work.started)
     }
 
-    /// Stop or Leave before the observation was admitted: discard its event,
-    /// keep its receipts, author nothing. An admitted ticket is not discarded;
-    /// it returns false and must settle.
+    /// An honored Stop or Leave before the observation was admitted: drop
+    /// it with its receipts and author nothing, freeing the slot for a later
+    /// observation. An admitted ticket is not discarded; it returns false and
+    /// must settle.
     pub(super) fn discard_unstarted_next_ready(&mut self) -> bool {
-        match self.serving.next_ready.as_mut() {
-            Some(work) if work.sequence.is_none() && !work.discarded => {
-                if work.started {
-                    return false;
-                }
-                work.event = None;
-                work.discarded = true;
+        match self.serving.next_ready.as_ref() {
+            Some(work) if work.sequence.is_none() && work.started => false,
+            Some(work) if work.sequence.is_none() => {
+                self.serving.next_ready = None;
                 true
             }
             _ => true,
         }
     }
 
-    /// The Recorded measurement's sequence, once. A pending, discarded or
-    /// failed owner yields nothing and keeps its receipts.
+    /// The Recorded measurement's sequence, once. A pending or failed owner
+    /// yields nothing and keeps its receipts.
     pub fn take_next_ready(&mut self) -> Option<Sequence> {
         if self.stage == Stage::Stopped || self.serving.owner.context.failure().is_some() {
             return None;
@@ -225,8 +227,17 @@ impl FoundationInput<'_> {
         }
         let work = self.serving.next_ready.as_mut().unwrap();
         let owner = &mut self.serving.owner;
-        if !work.started && owner.context.place_blocks_external() {
-            return Ok(false);
+        if !work.started {
+            // The measurement never lands after its turn's turn.closed: an
+            // unadmitted observation whose turn closed is dropped unauthored.
+            let turn = work.event.as_ref().and_then(|event| event.turn.as_ref());
+            if owner.context.open_turn.as_ref() != turn {
+                self.serving.next_ready = None;
+                return Ok(false);
+            }
+            if owner.context.place_blocks_external() {
+                return Ok(false);
+            }
         }
         let mut ports = PumpPorts {
             lifecycle: LifecyclePorts {

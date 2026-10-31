@@ -603,6 +603,17 @@ fn next_ready_refuses_an_activation_that_does_not_follow_this_closure() {
         })
     });
     assert_eq!(refusal(&mut chain), NextReadyRefusal::NotTheSuccessor);
+    // The closed step now orders after the successor: the activation does
+    // not follow it, though its named predecessor is still held before it.
+    let mut chain = preserved_chain(|fx| {
+        swap_current(fx, |plan| {
+            let mut closed = plan.steps.remove(0);
+            let last = plan.steps.last().unwrap().ordinal.0;
+            closed.ordinal = (last + 1).into();
+            plan.steps.push(closed);
+        })
+    });
+    assert_eq!(refusal(&mut chain), NextReadyRefusal::NotTheSuccessor);
 }
 
 #[test]
@@ -656,6 +667,62 @@ fn next_ready_interval_is_the_exact_difference_of_its_two_readings() {
             gap.to_string()
         );
     }
+}
+
+#[test]
+fn next_ready_refuses_a_placement_whose_turn_is_not_the_open_turn() {
+    // The turn closed after its placement: a measurement would follow its
+    // turn.closed.
+    let mut chain = chain();
+    chain.fx.run().context.open_turn = None;
+    assert_eq!(refusal(&mut chain), NextReadyRefusal::TurnClosed);
+    // Another turn is open.
+    let mut chain = self::chain();
+    chain.fx.run().context.open_turn = Some(TurnRef("later".into()));
+    assert_eq!(refusal(&mut chain), NextReadyRefusal::TurnClosed);
+}
+
+#[test]
+fn next_ready_retries_a_settling_summary_and_replaces_no_revision() {
+    use crate::flow::plan::PlanSummaryUnavailable as U;
+    // Pending is a retry; a revoked or absent committed revision is Replaced.
+    for (unavailable, expected) in [
+        (U::Pending, NextReadyRefusal::Pending),
+        (U::Revoked, NextReadyRefusal::Replaced),
+        (U::Uninitialized, NextReadyRefusal::Replaced),
+    ] {
+        let mut chain = chain();
+        chain.fx.run().context.plan_cache.unavailable = Some(unavailable);
+        assert_eq!(refusal(&mut chain), expected, "{unavailable:?}");
+    }
+}
+
+#[test]
+fn next_ready_reads_a_maximal_member_ordinal_without_overflow() {
+    // The successor's ordinal has no held predecessor (a gap below it), so
+    // the search reaches a member ordinal at u64::MAX; across a gap the
+    // activation's named predecessor is not the held one.
+    let mut chain = chain_over(
+        |_| {},
+        2,
+        1,
+        4,
+        |fx| {
+            swap_current(fx, |plan| {
+                let second = plan.steps[1].ordinal.0;
+                plan.steps[0].ordinal = second.checked_sub(2).unwrap().into();
+                let mut last = plan.steps[1].clone();
+                last.step_id.local_id = 9.into();
+                last.ordinal = u64::MAX.into();
+                last.instruction.block_id.block = 9.into();
+                last.status = s::StepStatus::Waiting;
+                last.span = None;
+                last.work = None;
+                plan.steps.push(last);
+            })
+        },
+    );
+    assert_eq!(refusal(&mut chain), NextReadyRefusal::NotTheSuccessor);
 }
 
 #[test]

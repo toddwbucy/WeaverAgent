@@ -351,6 +351,7 @@ impl FoundationInput<'_> {
         if self.serving.plan_operation.is_some()
             || self.serving.owner.listener.held().is_some()
             || self.plan_work_pending()
+            || self.next_ready_pending()
             || self.serving.save.is_some()
             || self.has_graceful_leave()
             || self.report.is_some()

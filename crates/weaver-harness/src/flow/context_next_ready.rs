@@ -36,6 +36,11 @@ pub(in crate::flow) enum NextReadyRefusal {
     /// A reading is zero or reversed, or the chain's sources are not one
     /// run's in order: closure, activation, step instruction, placement.
     ClockOrder,
+    /// The placement's turn is no longer the open turn: a measurement would
+    /// land after that turn's turn.closed.
+    TurnClosed,
+    /// The committed summary is settling. Nothing is decided; retry.
+    Pending,
 }
 
 impl RecordingContext {
@@ -93,10 +98,13 @@ impl RecordingContext {
         {
             return Err(R::CrossRun);
         }
+        if self.open_turn.as_ref() != Some(&placed.meta.turn) {
+            return Err(R::TurnClosed);
+        }
         if placed.plan() != receipt.plan() || activation.plan() != receipt.plan() {
             return Err(R::Replaced);
         }
-        let plan = self.committed_revision().ok_or(R::Replaced)?;
+        let plan = self.committed_revision()?;
         if &plan.plan != receipt.plan() || plan.status != s::PlanStatus::Locked {
             return Err(R::Replaced);
         }
@@ -141,11 +149,12 @@ impl RecordingContext {
                         source.run != closed.run || source.sequence.0 < closed.sequence.0
                     }))
         });
-        let predecessor = plan
-            .steps
-            .iter()
-            .find(|step| step.ordinal.0 + 1 == successor.ordinal.0)
-            .map(|step| &step.step_id);
+        let predecessor = successor.ordinal.0.checked_sub(1).and_then(|ordinal| {
+            plan.steps
+                .iter()
+                .find(|step| step.ordinal.0 == ordinal)
+                .map(|step| &step.step_id)
+        });
         let query = activation.successor();
         if successor.ordinal <= closed_step.ordinal
             || !between_preserved
@@ -181,16 +190,25 @@ impl RecordingContext {
         })
     }
 
-    /// The committed cache's current locked plan, if it holds one.
-    fn committed_revision(&mut self) -> Option<s::PlanSnapshot> {
-        self.committed_plan_summary().ok()??;
-        let s::QueryResult::PlanCurrent {
-            current: Some(plan),
-            ..
-        } = self.plan_cache.committed.as_ref()?.read().result()
-        else {
-            return None;
-        };
-        Some(plan.clone())
+    /// The committed cache's current plan. A settling summary is Pending, not
+    /// a replacement; no committed revision at all is Replaced.
+    fn committed_revision(&mut self) -> Result<s::PlanSnapshot, NextReadyRefusal> {
+        match self.committed_plan_summary() {
+            Ok(Some(_)) => {}
+            Err(PlanSummaryUnavailable::Pending) => return Err(NextReadyRefusal::Pending),
+            Ok(None) | Err(_) => return Err(NextReadyRefusal::Replaced),
+        }
+        match self
+            .plan_cache
+            .committed
+            .as_ref()
+            .map(|cache| cache.read().result())
+        {
+            Some(s::QueryResult::PlanCurrent {
+                current: Some(plan),
+                ..
+            }) => Ok(plan.clone()),
+            _ => Err(NextReadyRefusal::Replaced),
+        }
     }
 }

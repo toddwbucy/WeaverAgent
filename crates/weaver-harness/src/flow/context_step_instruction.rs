@@ -40,6 +40,21 @@ pub(in crate::flow) struct StepInstructionRefused {
     pub event: AuthoredEvent,
 }
 
+/// Why no draft: the committed summary is settling (retry, nothing is
+/// decided), the run has failed, or a recorded refusal.
+#[derive(Debug)]
+pub(in crate::flow) enum StepInstructionError {
+    Pending,
+    Failed,
+    Refused(StepInstructionRefused),
+}
+
+impl From<StepInstructionRefused> for StepInstructionError {
+    fn from(refused: StepInstructionRefused) -> Self {
+        Self::Refused(refused)
+    }
+}
+
 impl RecordingContext {
     /// Check the requested step against the committed revision and the
     /// caller's turn, then expand the certified family. It authors nothing.
@@ -50,18 +65,29 @@ impl RecordingContext {
         step_id: &s::StepId,
         turn: &TurnRef,
         certificate: &TemplateCertificate,
-    ) -> Result<StepInstructionDraft, StepInstructionRefused> {
+    ) -> Result<StepInstructionDraft, StepInstructionError> {
         if turn.0.is_empty() || self.open_turn.as_ref() != Some(turn) {
-            return Err(self.step_instruction_refusal(
-                s::InstructionRefusal::WrongTurn,
-                "step instruction is not for the current open turn",
-            ));
+            return Err(self
+                .step_instruction_refusal(
+                    s::InstructionRefusal::WrongTurn,
+                    "step instruction is not for the current open turn",
+                )
+                .into());
         }
-        let Some(active) = self.committed_active_step(expected, step_id) else {
-            return Err(self.step_instruction_refusal(
-                s::InstructionRefusal::InvalidContext,
-                "step is not the active step of the expected committed revision",
-            ));
+        let active = match self.committed_active_step(expected, step_id) {
+            Ok(Some(active)) => active,
+            Err(PlanSummaryUnavailable::Pending) => return Err(StepInstructionError::Pending),
+            Err(PlanSummaryUnavailable::Failed) => return Err(StepInstructionError::Failed),
+            // No committed revision, or not this step active in it.
+            Ok(None)
+            | Err(PlanSummaryUnavailable::Uninitialized | PlanSummaryUnavailable::Revoked) => {
+                return Err(self
+                    .step_instruction_refusal(
+                        s::InstructionRefusal::InvalidContext,
+                        "step is not the active step of the expected committed revision",
+                    )
+                    .into());
+            }
         };
         let expansion = self.load_duty.as_ref().and_then(|load| {
             if !self.repair_certificate_matches(certificate) {
@@ -81,10 +107,12 @@ impl RecordingContext {
                 .then_some(expansion)
         });
         let Some(expansion) = expansion else {
-            return Err(self.step_instruction_refusal(
-                s::InstructionRefusal::InvalidTemplate,
-                "step family is not in this run's certificate",
-            ));
+            return Err(self
+                .step_instruction_refusal(
+                    s::InstructionRefusal::InvalidTemplate,
+                    "step family is not in this run's certificate",
+                )
+                .into());
         };
         let step = StepMeta {
             plan: expected.clone(),
@@ -122,30 +150,37 @@ impl RecordingContext {
 
     /// The held instruction and span of the requested step, only when it is
     /// the active step of the expected locked revision in the committed cache.
+    /// A settling or failed summary is its own answer, never "not active".
     fn committed_active_step(
         &mut self,
         expected: &s::PlanRef,
         step_id: &s::StepId,
-    ) -> Option<(s::StatementRef, s::SpanRef)> {
-        self.committed_plan_summary().ok()??;
-        let s::QueryResult::PlanCurrent {
+    ) -> Result<Option<(s::StatementRef, s::SpanRef)>, PlanSummaryUnavailable> {
+        if self.committed_plan_summary()?.is_none() {
+            return Ok(None);
+        }
+        let Some(s::QueryResult::PlanCurrent {
             current: Some(plan),
             ..
-        } = self.plan_cache.committed.as_ref()?.read().result()
+        }) = self
+            .plan_cache
+            .committed
+            .as_ref()
+            .map(|cache| cache.read().result())
         else {
-            return None;
+            return Ok(None);
         };
         if &plan.plan != expected || plan.status != s::PlanStatus::Locked {
-            return None;
+            return Ok(None);
         }
-        let step = plan
+        Ok(plan
             .steps
             .iter()
-            .find(|step| &step.step_id == step_id && step.status == s::StepStatus::Active)?;
-        Some((step.instruction.clone(), step.span.clone()?))
+            .find(|step| &step.step_id == step_id && step.status == s::StepStatus::Active)
+            .and_then(|step| Some((step.instruction.clone(), step.span.clone()?))))
     }
 
-    fn step_instruction_refusal(
+    pub(in crate::flow) fn step_instruction_refusal(
         &self,
         case: s::InstructionRefusal,
         detail: &str,

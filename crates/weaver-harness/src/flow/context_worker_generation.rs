@@ -97,8 +97,6 @@ pub(super) struct EngineWork {
     rounds: Vec<RetainedRound>,
     answer: Option<super::close::WorldClose>,
     step: Option<Box<step_instruction::StepWork>>,
-    step_calls: Vec<weaver_types::state_flow::CallId>,
-    step_units: Option<Vec<crate::flow::material::SelectedUnit>>,
     step_refusal: Option<step_instruction::FoundationStepRefusal>,
     step_receipt: Option<step_instruction::StepPlacementReceipt>,
 }
@@ -362,8 +360,6 @@ impl<'a> FoundationInput<'a> {
             rounds: vec![],
             answer: None,
             step: None,
-            step_calls: vec![],
-            step_units: None,
             step_refusal: None,
             step_receipt: None,
         }));
@@ -410,33 +406,12 @@ impl<'a> FoundationInput<'a> {
         label: String,
         method: CutMethod,
     ) -> Result<(), Vec<weaver_types::state_flow::CallId>> {
-        if self.progress() != FoundationInputProgress::PairsComplete
-            || calls.is_empty()
-            || label.is_empty()
-        {
+        if self.progress() != FoundationInputProgress::PairsComplete || label.is_empty() {
             return Err(calls);
         }
-        let mut units = vec![];
-        for (index, call) in calls.iter().enumerate() {
-            if calls[..index].contains(call) {
-                return Err(calls);
-            }
-            let Ok(unit) = self.serving.owner.context.hold_place_return(call) else {
-                return Err(calls);
-            };
-            units.push(unit);
-        }
-        // A retained terminal is not permission to append an orphan result.
-        // Validate the unchanged journal before consuming this round's owners.
-        let Some(journal) = self.serving.owner.context.boot_journal.as_ref() else {
+        let Some(units) = self.hold_results(&calls) else {
             return Err(calls);
         };
-        if !journal
-            .project(None)
-            .is_ok_and(|prefix| journal.validate_selection(&prefix, &units).is_ok())
-        {
-            return Err(calls);
-        }
         let work = self.engine.as_mut().unwrap();
         work.rounds.push(RetainedRound {
             _generation: work.generation.take(),
@@ -447,6 +422,31 @@ impl<'a> FoundationInput<'a> {
         work.return_units = Some(units);
         work.stage = EngineStage::Prepare;
         Ok(())
+    }
+
+    /// The held units of a nonempty, duplicate-free list of complete results,
+    /// as one valid selection over the unchanged journal. A retained terminal
+    /// is not permission to append an orphan result. The one rule for
+    /// place_results and an after-results step instruction.
+    pub(super) fn hold_results(
+        &mut self,
+        calls: &[weaver_types::state_flow::CallId],
+    ) -> Option<Vec<crate::flow::material::SelectedUnit>> {
+        if calls.is_empty() {
+            return None;
+        }
+        let mut units = vec![];
+        for (index, call) in calls.iter().enumerate() {
+            if calls[..index].contains(call) {
+                return None;
+            }
+            units.push(self.serving.owner.context.hold_place_return(call).ok()?);
+        }
+        let journal = self.serving.owner.context.boot_journal.as_ref()?;
+        journal
+            .project(None)
+            .is_ok_and(|prefix| journal.validate_selection(&prefix, &units).is_ok())
+            .then_some(units)
     }
 
     pub fn operation_detail(&self) -> Option<&str> {
@@ -726,10 +726,16 @@ impl<'a> FoundationInput<'a> {
                         }
                         PlacementCompletion::Cancelled(_) => EngineStage::Cancelled,
                     };
+                    // ended_ns: read only for a Granted step placement, as
+                    // its Recorded grant is taken and before any generation
+                    // request transport or decode. A Refused or Cancelled
+                    // placement reads no clock.
+                    let granted = matches!(done, PlacementCompletion::Granted(_));
                     work.placement = Some(done);
-                    // ended_ns: the successor placement's Recorded receipt,
-                    // before any generation request transport or decode.
-                    if work.step.is_some() {
+                    if work.step.is_some() && !granted {
+                        // No receipt: the step's operation ends with it.
+                        work.step = None;
+                    } else if work.step.is_some() {
                         let ended = ports.io.now().map_err(|error| {
                             fault(context, ports.io, format!("step placement clock: {error}"))
                         })?;
