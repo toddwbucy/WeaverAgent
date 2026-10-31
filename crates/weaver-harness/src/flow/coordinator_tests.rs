@@ -122,10 +122,12 @@ fn accepted(request: &s::Ste100Request) -> s::Ste100Reply {
 impl Fixture {
     pub(in crate::flow) fn new(max_blocks: u64) -> Self {
         let author = ServingAuthor::new("session".into(), "run".into(), 0, 100).unwrap();
-        // No write timeout on the sink, as admin's blocking sink carries none: a
-        // filled queue blocks the writer until the test drains, and a timeout
-        // raced that wait into a commit failure under load (#416).
+        // The sink's write timeout is only a hang guard, far past any fill: a
+        // filled queue blocks the writer until the test drains, and a tight
+        // timeout raced that wait into a commit failure under load (#416).
         let (sink, reader) = UnixStream::pair().unwrap();
+        sink.set_write_timeout(Some(Duration::from_secs(120)))
+            .unwrap();
         reader
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
@@ -1944,10 +1946,12 @@ impl BootFixture<ScriptedPort> {
 
 impl<P: Ste100Port> BootFixture<P> {
     fn with_scheme(scheme: s::SchemeDeclaration) -> Self {
-        // No write timeout on the sink, as admin's blocking sink carries none: a
-        // filled queue blocks the writer until the test drains, and a timeout
-        // raced that wait into a commit failure under load (#416).
+        // The sink's write timeout is only a hang guard, far past any fill: a
+        // filled queue blocks the writer until the test drains, and a tight
+        // timeout raced that wait into a commit failure under load (#416).
         let (sink, reader) = UnixStream::pair().unwrap();
+        sink.set_write_timeout(Some(Duration::from_secs(120)))
+            .unwrap();
         reader
             .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();

@@ -249,10 +249,12 @@ fn classifier_event(reply: &Ste100Reply) -> Event {
 }
 
 fn recorder() -> (Recorder, UnixStream) {
-    // No write timeout on the sink, as admin's blocking sink carries none: a
-    // filled queue blocks the writer until the test drains, and a timeout
-    // raced that wait into a commit failure under load (#416).
+    // The sink's write timeout is only a hang guard, far past any fill: a
+    // filled queue blocks the writer until the test drains, and a tight
+    // timeout raced that wait into a commit failure under load (#416).
     let (sink, reader) = UnixStream::pair().unwrap();
+    sink.set_write_timeout(Some(Duration::from_secs(120)))
+        .unwrap();
     reader
         .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
