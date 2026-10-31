@@ -2564,6 +2564,18 @@ scenario!(
     "input-worker-plan-save-sqlite-port-activation-next-ready-pending-stop"
 );
 scenario!(
+    worker_plan_port_next_ready_step_rejected_stop,
+    "input-worker-plan-save-sqlite-port-activation-next-ready-step-rejected-stop"
+);
+scenario!(
+    worker_plan_port_next_ready_step_held_stop,
+    "input-worker-plan-save-sqlite-port-activation-next-ready-step-held-stop"
+);
+scenario!(
+    worker_plan_port_next_ready_step_held_rejected_stop,
+    "input-worker-plan-save-sqlite-port-activation-next-ready-step-held-rejected-stop"
+);
+scenario!(
     worker_plan_port_close_stop,
     "input-worker-plan-save-sqlite-port-activation-close-stop"
 );

@@ -71,7 +71,7 @@ pub(in crate::flow::context) fn next_ready_templates() -> &'static [s::TemplateS
         all.push(s::TemplateSpec {
             template_id: "step.instruction".into(),
             kind: "loop.instruction".into(),
-            parts: vec![s::TemplatePart::Literal("Read plan.".into())],
+            parts: vec![s::TemplatePart::Literal("Read step.".into())],
         });
         all
     })

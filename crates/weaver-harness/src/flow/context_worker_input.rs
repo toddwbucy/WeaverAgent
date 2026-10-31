@@ -249,6 +249,10 @@ impl<'a> FoundationInput<'a> {
     }
 
     fn drive_with_io(&mut self, io: &mut impl PumpIo, wait: bool) -> FoundationInputProgress {
+        #[cfg(test)]
+        {
+            self.serving.owner.context.input_drives += 1;
+        }
         if matches!(
             self.progress(),
             FoundationInputProgress::Stopped | FoundationInputProgress::ManagementPending

@@ -3,6 +3,8 @@
 //! consume its receipt, activate the member's successor, place its step
 //! loop.instruction, then observe and author next_ready. A Stop before the
 //! observation is admitted discards it; a pending admitted ticket resumes.
+//! The -step- modes stop at the step instruction: a recorded refusal, a
+//! template-rejected filing, and a Stop while its filing is held.
 use super::*;
 use crate::flow::context::worker_startup::input::plan::tests as root_plan;
 use weaver_types::{Finish, Generation, TokenAnswer, TokenDirective};
@@ -117,6 +119,115 @@ fn number(row: &serde_json::Value, field: &str) -> u64 {
     row[field].as_str().unwrap().parse().unwrap()
 }
 
+/// Stop the open turn through management; the classifier's held reply, if
+/// any, is released once management owns the circuit.
+fn stop_turn(
+    guard: &mut Guard<'_>,
+    member: &mut Member,
+    socket: &Path,
+    turn: &TurnKey,
+    release: Option<&Path>,
+) {
+    let peer = dial(socket);
+    let envelope = OrganEnvelope {
+        exchange: ExchangeId {
+            opener: Opener::Admin,
+            ordinal: 417,
+        },
+        position: Position::Open,
+        payload: Payload::Directive(LifecycleDirective::Stop {
+            cause: Cause { uid: 0 },
+        }),
+    };
+    let bytes = serde_json::to_vec(&envelope).unwrap();
+    assert_eq!(
+        send(peer.as_raw_fd(), &bytes, MsgFlags::MSG_NOSIGNAL).unwrap(),
+        bytes.len()
+    );
+    let end = Instant::now() + Duration::from_secs(10);
+    loop {
+        let input = guard.input.as_mut().unwrap();
+        let progress = input.advance_with_io(&mut NonblockingIo { waits: 0 });
+        assert_ne!(
+            progress,
+            FoundationInputProgress::Stopped,
+            "{:?}",
+            input.detail()
+        );
+        if progress == FoundationInputProgress::ManagementPending {
+            break;
+        }
+        member.step_live("ready");
+        assert!(Instant::now() < end, "Stop was not admitted");
+    }
+    guard.management = Some(guard.input.take().unwrap().management().ok().unwrap());
+    let mut released = release.is_none();
+    loop {
+        let owner = guard.management.as_mut().unwrap();
+        let progress = owner.advance_with_io(&mut NonblockingIo { waits: 0 });
+        assert_ne!(
+            progress,
+            FoundationManagementProgress::Stopped,
+            "{:?}",
+            owner.detail()
+        );
+        if progress == FoundationManagementProgress::Answered {
+            break;
+        }
+        if !released {
+            std::fs::write(release.unwrap(), b"release\n").unwrap();
+            released = true;
+        }
+        member.step_live("ready");
+        assert!(Instant::now() < end, "Stop did not settle");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let answer: OrganEnvelope = serde_json::from_slice(&read_packet(&peer).unwrap()).unwrap();
+    assert_eq!(answer.exchange, envelope.exchange);
+    assert_eq!(
+        answer.payload,
+        Payload::Answer(LifecycleAnswer::TurnAborted { turn: turn.clone() })
+    );
+    guard.input = Some(guard.management.take().unwrap().finish().ok().unwrap());
+}
+
+fn rows_through(
+    input: &mut FoundationInput<'_>,
+    reader: &mut UnixStream,
+    drained: Vec<u8>,
+) -> Vec<serde_json::Value> {
+    let through = input
+        .serving
+        .owner
+        .context
+        .barrier
+        .latest_recorded()
+        .unwrap();
+    trace_through(
+        reader,
+        drained,
+        through,
+        Instant::now() + Duration::from_secs(5),
+    )
+    .unwrap()
+}
+
+fn world_closed(socket: &Path, wire: &[u8]) {
+    let end = Instant::now() + Duration::from_secs(5);
+    let close_path = socket.parent().unwrap().join("flags-turn-close.json");
+    while !close_path.exists() {
+        assert!(
+            Instant::now() < end,
+            "actual gate did not receive the stopped world reply"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let close: OrganEnvelope = serde_json::from_slice(&std::fs::read(close_path).unwrap()).unwrap();
+    let original: OrganEnvelope = serde_json::from_slice(wire).unwrap();
+    assert_eq!(close.exchange, original.exchange);
+    assert_eq!(close.position, Position::Close);
+}
+
 pub(super) fn exercise(
     serving: FoundationServing<'_>,
     member: &mut Member,
@@ -168,11 +279,19 @@ pub(super) fn exercise(
     input
         .close(plan.clone(), first.clone(), evidence, turn.clone())
         .unwrap();
-    let receipt = complete(input, member)
+    let completed = complete(input, member);
+    // began_ns is read as the receipt is consumed, with no drive of the
+    // worker between the close's settlement and begin_next_ready.
+    let drives = input.serving.owner.context.input_drives;
+    let receipt = completed
         .into_closure_receipt()
         .unwrap_or_else(|_| panic!("a committed close grants its receipt"));
     let closed = receipt.closed().clone();
     let start = input.begin_next_ready(receipt).unwrap();
+    assert_eq!(
+        input.serving.owner.context.input_drives, drives,
+        "no drive between the close's settlement and its receipt's consumption"
+    );
     // The member's successor after the closed step, and its activation.
     input
         .step_successor(plan.clone(), Some(first.clone()), Some(turn.clone()))
@@ -189,8 +308,39 @@ pub(super) fn exercise(
     assert_eq!(activation.step().step_id, second);
     let step_span = activation.step().span.clone().unwrap();
     let instruction = activation.step().instruction.clone();
-    // Place its step loop.instruction through the engine's admission.
     assert_eq!(input.progress(), FoundationInputProgress::Task);
+    if mode.contains("-next-ready-step-") {
+        return step_outcome(
+            guard,
+            member,
+            reader,
+            socket,
+            mode,
+            (plan, second, turn, wire),
+        );
+    }
+    // A step instruction for the closed step is refused and recorded; the
+    // engine returns to its saved Task progress.
+    input
+        .place_step_instruction(
+            vec![],
+            plan.clone(),
+            first.clone(),
+            turn.clone(),
+            "next ready".into(),
+            s::CutMethod::Flush,
+        )
+        .unwrap();
+    let mut refused = None;
+    until(input, member, "step refusal", |input| {
+        assert!(input.take_step_placement().is_none());
+        refused = input.take_step_refusal();
+        refused.is_some()
+    });
+    let refused = refused.unwrap();
+    assert_eq!(refused.case, Some(s::InstructionRefusal::InvalidContext));
+    assert_eq!(input.progress(), FoundationInputProgress::Task);
+    // Place its step loop.instruction through the engine's admission.
     input
         .place_step_instruction(
             vec![],
@@ -271,80 +421,22 @@ pub(super) fn exercise(
             recorded.is_some()
         });
     }
-    // Stop the turn.
-    let peer = dial(socket);
-    let envelope = OrganEnvelope {
-        exchange: ExchangeId {
-            opener: Opener::Admin,
-            ordinal: 417,
-        },
-        position: Position::Open,
-        payload: Payload::Directive(LifecycleDirective::Stop {
-            cause: Cause { uid: 0 },
-        }),
-    };
-    let bytes = serde_json::to_vec(&envelope).unwrap();
-    assert_eq!(
-        send(peer.as_raw_fd(), &bytes, MsgFlags::MSG_NOSIGNAL).unwrap(),
-        bytes.len()
-    );
-    let end = Instant::now() + Duration::from_secs(10);
-    loop {
-        let input = guard.input.as_mut().unwrap();
-        let progress = input.advance_with_io(&mut NonblockingIo { waits: 0 });
-        assert_ne!(
-            progress,
-            FoundationInputProgress::Stopped,
-            "{:?}",
-            input.detail()
-        );
-        if progress == FoundationInputProgress::ManagementPending {
-            break;
-        }
-        member.step_live("ready");
-        assert!(Instant::now() < end, "Stop was not admitted");
-    }
-    guard.management = Some(guard.input.take().unwrap().management().ok().unwrap());
-    loop {
-        let owner = guard.management.as_mut().unwrap();
-        let progress = owner.advance_with_io(&mut NonblockingIo { waits: 0 });
-        assert_ne!(
-            progress,
-            FoundationManagementProgress::Stopped,
-            "{:?}",
-            owner.detail()
-        );
-        if progress == FoundationManagementProgress::Answered {
-            break;
-        }
-        member.step_live("ready");
-        assert!(Instant::now() < end, "Stop did not settle");
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    let answer: OrganEnvelope = serde_json::from_slice(&read_packet(&peer).unwrap()).unwrap();
-    assert_eq!(answer.exchange, envelope.exchange);
-    assert_eq!(
-        answer.payload,
-        Payload::Answer(LifecycleAnswer::TurnAborted { turn: turn.clone() })
-    );
-    guard.input = Some(guard.management.take().unwrap().finish().ok().unwrap());
+    stop_turn(&mut guard, member, socket, &turn, None);
     let input = guard.input.as_mut().unwrap();
     assert!(!input.next_ready_pending());
     assert!(input.take_next_ready().is_none());
-    let through = input
-        .serving
-        .owner
-        .context
-        .barrier
-        .latest_recorded()
-        .unwrap();
-    let rows = trace_through(
-        reader,
-        drained,
-        through,
-        Instant::now() + Duration::from_secs(5),
-    )
-    .unwrap();
+    // The slot is free: a later observation is not answered Busy.
+    assert!(input.serving.next_ready.is_none());
+    let rows = rows_through(input, reader, drained);
+    // The refused closed-step instruction.
+    let refusals: Vec<_> = rows
+        .iter()
+        .filter(|row| row["kind"] == "refusal" && row["turn"] == TURN)
+        .collect();
+    assert_eq!(refusals.len(), 1, "{rows:#?}");
+    assert_eq!(number(refusals[0], "sequence"), refused.sequence.0);
+    assert_eq!(refusals[0]["payload"]["template_id"], "step.instruction");
+    assert_eq!(refusals[0]["payload"]["case"], "invalid_context");
     // The filed step loop.instruction names the activated successor.
     let instructions: Vec<_> = rows
         .iter()
@@ -408,17 +500,77 @@ pub(super) fn exercise(
         .collect();
     assert_eq!(closes.len(), 1);
     assert_eq!(closes[0]["turn"], TURN);
-    let close_path = socket.parent().unwrap().join("flags-turn-close.json");
-    while !close_path.exists() {
-        assert!(
-            Instant::now() < end,
-            "actual gate did not receive the stopped world reply"
-        );
-        std::thread::sleep(Duration::from_millis(1));
+    world_closed(socket, &wire);
+    None
+}
+
+/// The -step- modes: the successor's step instruction is rejected by the
+/// classifier (state_template_rejected, back to Task), or its filing is held
+/// while Stop arrives (cancelled; a rejected one still records its fault).
+fn step_outcome(
+    mut guard: Guard<'_>,
+    member: &mut Member,
+    reader: &mut UnixStream,
+    socket: &Path,
+    mode: &str,
+    (plan, second, turn, wire): (s::PlanRef, s::StepId, TurnKey, Vec<u8>),
+) -> Option<Cleanup> {
+    let rejected = mode.contains("-rejected");
+    let held = mode.contains("-held");
+    let root = socket.parent().unwrap().to_path_buf();
+    let input = guard.input.as_mut().unwrap();
+    input
+        .place_step_instruction(
+            vec![],
+            plan,
+            second,
+            turn.clone(),
+            "next ready".into(),
+            s::CutMethod::Flush,
+        )
+        .unwrap();
+    let release = root.join("release-step-classify");
+    if held {
+        until(input, member, "held step classification", |_| {
+            root.join("step-classify-held").exists()
+        });
+        stop_turn(&mut guard, member, socket, &turn, Some(&release));
+    } else {
+        let mut refused = None;
+        until(input, member, "rejected step instruction", |input| {
+            assert!(input.take_step_placement().is_none());
+            refused = input.take_step_refusal();
+            refused.is_some()
+        });
+        let refused = refused.unwrap();
+        // A correctly rejected expansion carries no instruction case.
+        assert_eq!(refused.case, None);
+        assert_eq!(input.progress(), FoundationInputProgress::Task);
+        stop_turn(&mut guard, member, socket, &turn, None);
     }
-    let close: OrganEnvelope = serde_json::from_slice(&std::fs::read(close_path).unwrap()).unwrap();
-    let original: OrganEnvelope = serde_json::from_slice(&wire).unwrap();
-    assert_eq!(close.exchange, original.exchange);
-    assert_eq!(close.position, Position::Close);
+    let input = guard.input.as_mut().unwrap();
+    assert!(input.take_step_placement().is_none());
+    let rows = rows_through(input, reader, vec![]);
+    let faults: Vec<_> = rows
+        .iter()
+        .filter(|row| row["kind"] == "fault" && row["turn"] == TURN)
+        .filter(|row| row.to_string().contains("state_template_rejected"))
+        .collect();
+    assert_eq!(faults.len(), usize::from(rejected), "{rows:#?}");
+    if rejected {
+        assert!(faults[0].to_string().contains("step.instruction"));
+    }
+    // No step instruction reached a placement.
+    let placements = rows
+        .iter()
+        .filter(|row| row["kind"] == "state.placement" && row["turn"] == TURN)
+        .count();
+    assert_eq!(placements, 0, "{rows:#?}");
+    let closes = rows
+        .iter()
+        .filter(|row| row["kind"] == "turn.closed" && row["turn"] == TURN)
+        .count();
+    assert_eq!(closes, 1);
+    world_closed(socket, &wire);
     None
 }
