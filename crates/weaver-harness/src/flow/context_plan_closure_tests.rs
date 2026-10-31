@@ -630,10 +630,13 @@ fn release_summary(fx: &mut SummaryFixture, snapshot: s::PlanSnapshot) {
 #[test]
 fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
     // close does not recheck review_required (#423): unreviewed evidence
-    // closes a category that requires review like any other.
-    for (review_required, cancel_at) in [false, true]
+    // closes a category that requires review like any other. FL1 (#418):
+    // close's only span is the effect's last, so a catalog offering u64::MAX
+    // files its outcome there rather than refusing counter_exhausted.
+    for (review_required, cancel_at, next_span_id) in [false, true]
         .into_iter()
         .flat_map(|review| ["none", "source", "receipt"].map(|at| (review, at)))
+        .flat_map(|(review, at)| [9, u64::MAX].map(|next| (review, at, next)))
     {
         let case = format!("review_required={review_required} cancel_at={cancel_at}");
         let (mut fx, certificate) = closure_fixture(review_required, true);
@@ -643,7 +646,7 @@ fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
         // The reread pages the same bytes at a different capacity.
         serve(&mut fx, PREVIEW, 333);
         // A catalog whose next span is not the step's successor ID.
-        let outcome = serve_marks(&mut fx, 9);
+        let outcome = serve_marks(&mut fx, next_span_id);
         effect_ready(&mut fx);
         let run = fx.run();
         run.context
@@ -1284,30 +1287,6 @@ fn closure_close_foreign_marks_proof_is_a_custody_fault() {
         panic!("a foreign marks proof must not prepare close")
     };
     assert_eq!(detail, "close has a foreign marks proof");
-}
-
-#[test]
-fn closure_close_prepares_its_outcome_at_the_last_allocatable_span() {
-    // FL1 (#418): close's only span is the effect's last, so a Marks
-    // catalog offering u64::MAX prepares the close there rather than
-    // refusing counter_exhausted; the store accepts it.
-    let (mut fx, certificate) = closure_fixture(false, true);
-    let evidence = evidence(&mut fx);
-    begin_close(&mut fx, evidence);
-    serve(&mut fx, PREVIEW, PREVIEW.len());
-    let outcome = serve_marks(&mut fx, u64::MAX);
-    assert_eq!(outcome.local_id.0, u64::MAX);
-    effect_ready(&mut fx);
-    let run = fx.run();
-    run.context
-        .begin_plan_effect(&certificate, &mut run.clock)
-        .unwrap();
-    let source = committed(&mut fx, false);
-    let snapshot = closed_snapshot(&mut fx, &source, &outcome);
-    release_summary(&mut fx, snapshot.clone());
-    let result = finish(&mut fx);
-    assert_eq!(result.current_snapshot(), Some(&snapshot));
-    assert!(fx.records(Kind::Refusal).is_empty());
 }
 
 #[test]

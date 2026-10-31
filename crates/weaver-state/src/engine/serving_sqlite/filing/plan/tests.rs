@@ -1368,6 +1368,9 @@ fn close_files_at_the_last_allocatable_span_and_the_next_marks_read_refuses_coun
     // FL1 (#418): the span counter's last value is allocatable. With the
     // held maximum at u64::MAX - 1 the Marks read offers u64::MAX, close
     // files its outcome there, and only the following Marks read refuses.
+    // The raw row is no store a run could reach (allocation is consecutive
+    // from the seed), so this pins the filing path's counter arithmetic
+    // only; the image check is not consulted.
     let mut store = store();
     create(&mut store, 1, false, false);
     activate(&mut store, 3, 1, 3, None);
