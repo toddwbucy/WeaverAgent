@@ -649,11 +649,15 @@ fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
         serve(&mut fx, PREVIEW, 333);
         // A catalog whose next span is not the step's successor ID.
         let outcome = serve_marks(&mut fx, next_span_id);
-        effect_ready(&mut fx);
+        let ready = (0..128).any(|_| advance(&mut fx).unwrap() == PlanPortProgress::EffectReady);
+        assert!(
+            ready,
+            "{case}: close must prepare its effect after the reread"
+        );
         let run = fx.run();
         run.context
             .begin_plan_effect(&certificate, &mut run.clock)
-            .unwrap();
+            .unwrap_or_else(|error| panic!("{case}: {error:?}"));
         let source = committed(&mut fx, cancel_at == "source");
         if cancel_at == "receipt" {
             fx.run().context.cancel_plan_operation();
