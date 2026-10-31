@@ -96,12 +96,7 @@ pub(in crate::flow) fn attest(
             "held work retains an open pair",
         ));
     }
-    if category(plan, step)?.review_required {
-        return Err(refuse(
-            s::PlanOperationCase::ReviewRequired,
-            "the step category requires review before closure",
-        ));
-    }
+    // review_required is held operator data no plan port enforces (#423).
     Ok(plan.review.clone())
 }
 
@@ -135,12 +130,6 @@ pub(in crate::flow) fn validate_close<'a>(
         return Err(refuse(
             s::PlanOperationCase::ReviewSetupChanged,
             "closure evidence names another review setup",
-        ));
-    }
-    if evidence.review_call().is_none() && category(plan, step)?.review_required {
-        return Err(refuse(
-            s::PlanOperationCase::ReviewRequired,
-            "the step category requires review before closure",
         ));
     }
     Ok((plan, step))

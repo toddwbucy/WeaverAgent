@@ -394,32 +394,20 @@ fn closure_d1_page_capacity_sweep_yields_the_store_accepted_work_reference() {
 }
 
 #[test]
-fn closure_attest_review_required_refuses_and_records_without_effect() {
+fn closure_attest_review_required_category_grants_evidence_without_read_or_effect() {
+    // review_required is held operator data no plan port enforces (#423):
+    // a category that requires review still attests unreviewed closure.
     let (mut fx, _) = closure_fixture(true, false);
     let work = checked_work(&mut fx, PREVIEW.len());
-    let preview_parent = fx.records(Kind::Recall).last().unwrap()["sequence"].clone();
-    let PlanPortCompletion::Refused { refusal, .. } = attest(&mut fx, work) else {
-        panic!("required review must refuse unreviewed closure")
+    let Ok(evidence) = attest(&mut fx, work).into_closure_evidence() else {
+        panic!("a review_required category must still attest")
     };
-    assert_eq!(refusal.case, s::PlanOperationCase::ReviewRequired);
-    assert_eq!(refusal.read_code, None);
-    let rows = fx.records(Kind::Refusal);
-    assert_eq!(rows.len(), 1);
-    let work = pinned();
-    assert_eq!(
-        rows[0]["payload"],
-        serde_json::to_value(weaver_types::RefusalRecord::PlanOperation {
-            operation: s::PlanPortOperation::AttestClosure,
-            expected: work.plan,
-            step_id: Some(work.step_id),
-            refusal,
-        })
-        .unwrap()
-    );
-    assert_eq!(rows[0]["causal_parent"], preview_parent);
+    assert_eq!(evidence.work(), &pinned());
+    assert_eq!(evidence.review_call(), None);
+    fx.boot.member.no_request();
+    assert!(fx.records(Kind::Refusal).is_empty());
     assert!(fx.records(Kind::PlanEvent).is_empty());
     assert!(fx.records(Kind::StepOutcome).is_empty());
-    fx.boot.member.no_request();
 }
 
 #[test]
@@ -1099,10 +1087,26 @@ fn closure_close_refuses_a_changed_review_setup() {
 }
 
 #[test]
-fn closure_close_rechecks_required_review() {
-    // Unreachable in a run (a category changes only with a revision): defence.
-    let refusal = close_against(|plan| plan.categories[0].review_required = true, |_| ());
-    assert_eq!(refusal.case, s::PlanOperationCase::ReviewRequired);
+fn closure_close_review_required_category_closes_with_unreviewed_evidence() {
+    // close does not recheck review_required: unreviewed evidence for a
+    // category that requires review files its outcome like any other.
+    let (mut fx, certificate) = closure_fixture(true, true);
+    let evidence = evidence(&mut fx);
+    begin_close(&mut fx, evidence);
+    serve(&mut fx, PREVIEW, 333);
+    let outcome = serve_marks(&mut fx, 9);
+    effect_ready(&mut fx);
+    let run = fx.run();
+    run.context
+        .begin_plan_effect(&certificate, &mut run.clock)
+        .unwrap();
+    let source = committed(&mut fx, false);
+    let snapshot = closed_snapshot(&mut fx, &source, &outcome);
+    release_summary(&mut fx, snapshot.clone());
+    let result = finish(&mut fx);
+    assert_eq!(result.current_snapshot(), Some(&snapshot));
+    assert!(fx.records(Kind::Refusal).is_empty());
+    assert_eq!(fx.records(Kind::StepOutcome).len(), 1);
 }
 
 #[test]

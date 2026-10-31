@@ -662,11 +662,8 @@ fn verify_closed(
     }
     let mut allowed = vec![closure_id];
     match &step.review_call {
-        None => {
-            if category.review_required {
-                return Err(invalid_effect("required review is missing"));
-            }
-        }
+        // review_required is held operator data the store does not enforce.
+        None => {}
         Some(call) => {
             let (lane,fate,request,request_id,opened,terminal,raw):(String,String,String,i64,i64,i64,String)=db.query_row("SELECT t.lane,t.fate,t.request,s.block_id,t.opened_event,t.terminal_event,b.raw_block FROM tool_pair t JOIN statement_binding s ON s.id=t.statement_id JOIN content_block b ON b.id=t.terminal_event WHERE t.run=?1 AND t.sequence=?2 AND t.call=?3",params![call.run,blob(call.sequence.0),blob(call.call.0)],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?,row.get(6)?)))?;
             let request: PairRequest = decode_strict(&request)
