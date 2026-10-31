@@ -2158,13 +2158,35 @@ fn preflight_open_is_owned_before_load_and_released_only_after_its_real_record()
     assert_eq!(fx.budget.gauges(), (0, 0));
     assert!(fx.flow.standing_classifier().is_none());
     let mut reader = BufReader::new(fx.reader.take().unwrap());
-    let mut kinds = Vec::new();
+    let mut records = Vec::new();
     for _ in 0..2 {
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        kinds.push(serde_json::from_str::<serde_json::Value>(&line).unwrap()["kind"].clone());
+        records.push(serde_json::from_str::<serde_json::Value>(&line).unwrap());
     }
+    let kinds: Vec<_> = records
+        .iter()
+        .map(|record| record["kind"].clone())
+        .collect();
     assert_eq!(kinds, vec!["load", "state.store.measurement"]);
+    // The open measurement: the member's open observation, with no request
+    // source, and the harness's own queue, send and receive times.
+    let open = &records[1];
+    assert_eq!(open["channel"], "measurement");
+    assert_eq!(open["origin"], "runtime");
+    let payload = &open["payload"];
+    assert_eq!(payload["observation"]["operation"], "open");
+    assert_eq!(payload["observation"]["request_id"], "1");
+    assert!(
+        payload
+            .as_object()
+            .unwrap()
+            .get("request_source")
+            .is_some_and(serde_json::Value::is_null)
+    );
+    assert_eq!(payload["harness_queued_ns"], "100");
+    assert_eq!(payload["harness_sent_ns"], "110");
+    assert_eq!(payload["harness_received_ns"], "120");
 }
 
 #[test]
