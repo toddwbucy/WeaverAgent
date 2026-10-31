@@ -4,7 +4,7 @@
 
 **Landing PR:** #408
 
-**Version:** 0.23 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
+**Version:** 0.24 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
 
 ## 0. What this document is
 
@@ -432,7 +432,7 @@ before filing an effect. [PLAN-2, PLAN-5, PLAN-6, CLASS-10]
 | lock from model | Exact current authorized revision and source, unchanged task/review/categories/drafts, all candidate statements held | Insert steps/groups, guard authorized to locked, record this effect as lock source |
 | replace | Exact current expected revision, next revision exactly plus one, source is fully held replace or answer_break event | Retire open execution scopes, guard old revision to superseded, insert next revision and rows, preserve only verified closures |
 | activate | Current locked revision, no active step, named waiting step is first waiting ordinal, no earlier unclosed step, successor matches STATE-STEP-QUERY | Open group if needed, open step, set active with its new SpanRef |
-| close | Current locked revision and active step, current WorkRef and the category-required evidence, next outcome SpanRef | Create/close outcome, close step, set closed, close complete ancestors and set plan complete if no waiting step remains |
+| close | Current locked revision and active step, held step category, current WorkRef and any cited review evidence, next outcome SpanRef | Create/close outcome, close step, set closed, close complete ancestors and set plan complete if no waiting step remains |
 | break | Current locked revision and matching active step or null when none, proposed source held when present | Set broken and this effect's source as last_source, no mark closure |
 
 A fully held operator event means every Text index named in its PlanInputContext has a
@@ -488,21 +488,21 @@ steps are waiting in the new revision. If none wait, close any still-open task u
 effect's source and set complete. [PLAN-2, PLAN-6, MARK-6]
 
 For activation use the first waiting ordinal. Its group must be absent or the only open
-group for that task. Use Spec 06's instruction prefix and child guards. Closing reads
-the exact held Category.review_required. If review_call is null, require false, no
-review ID fields, and the private attest_closure grant on the harness side. Otherwise
-require lane review, fate completed, Result outcome, exact request.setup and
-request.work equal to the plan's setup and effect.work. A partial review ID refuses.
-WorkRef must match the current plan, step and active span in both cases. Recompute its
-complete tagged preview bytes using the serving read's result encoding, then hash those
-bytes under Spec 07 WORK-REFERENCE and require unchanged work. Historical closure
-verification uses that same encoding, including after dump/load and preserved closure.
-Do not replace the byte comparison with JSON-value equality or a parsed reconstruction.
-For a reviewed close the frontier predates the review request, allowing only that
-request, its pair and this outcome afterward. For an unreviewed close only this outcome
-may follow the work frontier. The outcome label is closed. The harness verifies trusted
-authority, while the store verifies this structural account. [PLAN-2, MARK-4, STORE-5,
-PAIR-3, R20-17]
+group for that task. Use Spec 06's instruction prefix and child guards. Closing requires
+the step's Category row to be held but does not read Category.review_required (#423). If
+review_call is null, require no review ID fields and the private attest_closure grant on
+the harness side, under either category value. Otherwise require lane review, fate
+completed, Result outcome, exact request.setup and request.work equal to the plan's
+setup and effect.work. A partial review ID refuses. WorkRef must match the current plan,
+step and active span in both cases. Recompute its complete tagged preview bytes using
+the serving read's result encoding, then hash those bytes under Spec 07 WORK-REFERENCE
+and require unchanged work. Historical closure verification uses that same encoding,
+including after dump/load and preserved closure. Do not replace the byte comparison with
+JSON-value equality or a parsed reconstruction. For a reviewed close the frontier
+predates the review request, allowing only that request, its pair and this outcome
+afterward. For an unreviewed close only this outcome may follow the work frontier. The
+outcome label is closed. The harness verifies trusted authority, while the store
+verifies this structural account. [PLAN-2, MARK-4, STORE-5, PAIR-3, R20-17]
 
 The guarded step UPDATE below must change exactly one row. It is executed in the same
 transaction as the outcome/step marks. All bound IDs are resolved from typed references
@@ -521,8 +521,7 @@ AND EXISTS (SELECT 1 FROM plan_revision p
 AND EXISTS (SELECT 1 FROM plan_category c
   WHERE c.plan_id = s.plan_id AND c.revision = s.revision
   AND c.category_id = s.category_id
-  AND ((json_extract(c.category, '$.review_required') = 0
-      AND :review_run IS NULL AND :review_sequence IS NULL AND :review_call IS NULL)
+  AND ((:review_run IS NULL AND :review_sequence IS NULL AND :review_call IS NULL)
     OR (:review_run IS NOT NULL AND :review_sequence IS NOT NULL
       AND :review_call IS NOT NULL
       AND EXISTS (SELECT 1 FROM tool_pair t
@@ -1348,7 +1347,7 @@ weaver-state dependency of any kind. [FLOW-4, FLOW-5, SEAM-2, SCOPE-1]
 | STATE-SCHEMA | Execute literal DDL, inspect catalog, EXPLAIN noun and verb queries | Remove index, source CHECK, or FK |
 | STATE-FILE | STATE-FILING-INSTRUMENTS and shared malformed corpus | Emit receipt before commit or accept partial noun rows |
 | STATE-PLAN-SCHEMA, STATE-PLAN-READ | Literal DDL, ordered current/historical reads and reload, exact operator digest and null/non-null last-transition turn | Allow two unfinished plans/active steps, renumber IDs, omit references, hash the snapshot or substitute another source/digest/turn |
-| STATE-PLAN-FILE | Every effect guard and atomic source/plan/mark transaction | Skip expected status, close without category-required review evidence, preserve changed evidence or commit one half |
+| STATE-PLAN-FILE | Every effect guard and atomic source/plan/mark transaction, with an unreviewed close of a review_required step | Skip expected status, refuse an unreviewed close for its category's review_required, preserve changed evidence or commit one half |
 | STATE-PLAN-FLAGS | Literal target/count queries, stale source/revision checks, empty plans and maximum unsigned IDs | Count nouns, case-fold addresses, accept an overflowing/noncanonical ID, use an old target set or change a held sample after filing |
 | STATE-MARK-FILE | Atomic source/effect fixtures for every operation row | Commit the source without the mark, skip context equality, permit a crossed scope or edit terminal membership |
 | STATE-MARK-MEMBERS | Literal recursive query with nested prefixes, ignored events and closure outcomes | Exclude the shared opening/closing anchor, include bookkeeping or reorder by trace run |

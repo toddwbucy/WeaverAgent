@@ -4,7 +4,7 @@
 
 **Landing PR:** #420
 
-**Version:** 0.20 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
+**Version:** 0.21 **Date filed:** 2026-10-20 **Document ID:** `state-management-spec-07`
 **Parent:** state-management-primitives-PRD **Editorial:** Per the Working Rules.
 
 ## 0. What this document is
@@ -73,10 +73,11 @@ CLASS-9]
 
 **CATEGORY.** A category is {id, verbs: Vec<String>, acts: Vec<PlanAct>,
 review_required:bool}. The operator supplies review_required explicitly for every
-category. true requires a completed review pair for closure. false permits typed closure
-evidence without that pair and still permits reviewed evidence. No default is inferred
-from the verb. The primitive enforces this bit, while the caller decides when to seek
-closure. [PLAN-2, PLAN-5, R20-17]
+category. true declares that closure needs a completed review pair, and false declares
+that it does not. No default is inferred from the verb. The store holds this bit and
+returns it in plan reads, and the primitive does not enforce it: enforcing it is the
+loop's (#423). Either value permits unreviewed and reviewed closure evidence, and the
+caller decides when to seek closure. [PLAN-2, PLAN-5, R20-17]
 
 PlanAct is statement, external_tool {name}, or inward_recall {verb}. Category IDs are
 technical names in the loaded STE100 scheme. The operator supplies categories only.
@@ -340,12 +341,12 @@ counters. [PLAN-1, STORE-5]
 STATE-PLAN-SCHEMA and STATE-PLAN-FILE in the store amendment own the literal DDL and
 per-effect guards. The effect transaction inserts the source statement, updates the
 plan's guarded state and creates/closes its Spec 06 marks atomically. An update matches
-exactly one expected current revision. Unknown sources, changed closure, forged origin,
-multiple active steps or a missing category-required review pair refuse the whole
-filing. A null review_call is valid only under CATEGORY and CLOSURE-EVIDENCE.
-plan_current {} and plan {plan:PlanRef} return PLAN-READ's typed snapshots. plan_flags
-uses the metadata result in PLAN-FLAG-READ. All use bounded QueryResult paging, and all
-plan tables are part of the dump. [PLAN-2, PLAN-6, MARK-5, PERSIST-1]
+exactly one expected current revision. Unknown sources, changed closure, forged origin
+or multiple active steps refuse the whole filing. A null review_call is valid under
+either CATEGORY value. plan_current {} and plan {plan:PlanRef} return PLAN-READ's typed
+snapshots. plan_flags uses the metadata result in PLAN-FLAG-READ. All use bounded
+QueryResult paging, and all plan tables are part of the dump. [PLAN-2, PLAN-6, MARK-5,
+PERSIST-1]
 
 **PLAN-READ.** Add selectors plan_current:{} and plan:{plan:PlanRef}. QueryResult gains
 plan_current:{current:PlanSnapshot-or-null,
@@ -622,11 +623,10 @@ returns ClosureEvidence with Some(review_call) for passed, or ReviewRejected
 [PLAN-2, STORE-5, PAIR-3, R20-17]
 
 attest_closure checks the same plan, step and held WorkRef, requires every attached pair
-terminal, and requires category.review_required false. It returns ClosureEvidence with
-review_call None. A required review returns PlanOperationRefused with case
-review_required and no effect. This port accepts no model completion statement and
-invokes no tool. Its trusted caller requests closure against the operator's declared
-rule. No fabricated review pair or tool outcome is filed. [PLAN-2, PLAN-5, R20-17]
+terminal. It does not read category.review_required (#423). It returns ClosureEvidence
+with review_call None. This port accepts no model completion statement and invokes no
+tool. Its trusted caller requests closure against the operator's declared rule. No
+fabricated review pair or tool outcome is filed. [PLAN-2, PLAN-5, R20-17]
 
 The review assessment and unreviewed closure request are trusted orchestration inputs. A
 pass certifies authority, current work and the selected category's structural evidence,
@@ -695,7 +695,7 @@ receipt changes the state. [PLAN-1, PLAN-2, PLAN-5, PLAN-6]
 | Locked, no active step | activate(first waiting step) | Guard order and marks, same plan with one active step |
 | Locked, active step | assess_act | AllowedAct or typed refusal, no state change |
 | Locked, active step | observe_review | Check held review and current work, ClosureEvidence or ReviewRejected, no state change |
-| Locked, active step | attest_closure | Category allows no review and current work matches: ClosureEvidence without pair. Otherwise review_required or identity refusal, no state change |
+| Locked, active step | attest_closure | Current work matches, under either category value: ClosureEvidence without pair. Otherwise identity refusal, no state change |
 | Locked, active step | close(valid evidence) | Close marks atomically, Locked with no active step or Complete |
 | Locked | record_break | Broken, no fabricated closure |
 | At rest | Root replace/answer_break | Guard expected revision, supersede and insert next revision |
@@ -802,11 +802,11 @@ No acceptance test needs a particular loop strategy or review script. Protocol f
 call the primitive ports directly with valid and invalid grants. The store's structural
 closure pass does not certify the external reviewer. [PLAN-2, SEAM-2, R20-12]
 
-Exercise both category values with reviewed and unreviewed grants. Required review with
-no pair refuses, permitted no-review closure succeeds, and either category may use a
-valid review. Remove the category check, the private-grant check or the unchanged-work
-check separately and require each fixture to fail. Repeat after dump and load and after
-replacement of the category bit. [PLAN-2, PLAN-5, R20-17]
+Exercise both category values with reviewed and unreviewed grants. Unreviewed closure
+succeeds under either value, and either value may use a valid review. Remove the
+category check, the private-grant check or the unchanged-work check separately and
+require each fixture to fail. Repeat after dump and load and after replacement of the
+category bit. [PLAN-2, PLAN-5, R20-17]
 
 ## 7. Owning amendments and dependencies
 

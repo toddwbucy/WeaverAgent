@@ -4,7 +4,7 @@
 
 **Landing PR:** #373
 
-**Version:** 0.27 **Date filed:** 2026-10-20 **Document ID:**
+**Version:** 0.28 **Date filed:** 2026-10-20 **Document ID:**
 `state-management-foundation-Spec` **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -70,7 +70,7 @@ The same evening's dispositions add the following bindings. [operator 2026-10-20
 | Ruling | Binding disposition |
 | --- | --- |
 | R20-16 | The composite ends Staged. Its tail is the mandatory head of the next AppendAndGenerate, confirmed from Generated.resident. No prefill-only serving exchange is added. |
-| R20-17 | Each operator Category declares whether closure requires a review pair. Typed ClosureEvidence enforces that declaration. |
+| R20-17 | Each operator Category declares whether closure requires a review pair. The store holds and returns that declaration; enforcing it is the loop's (#423). |
 | R20-18 | Wind-down pass count and summary policy belong to the loop. The declared bound, no restart and existing containment remain. |
 | R20-19 | Store observations are retained as operation metadata, never classified content. The harness carries them to the trace. Only an explicit typed query returns them as query data. Kernel sampling remains snapshot-only. |
 | R20-20 | PERSIST-PUBLICATION-GUARD's pending file and load refusal are approved for this representation, subject to a later amendment if needed. |
