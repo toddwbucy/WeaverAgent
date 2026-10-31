@@ -46,9 +46,9 @@ No perturbation on record names a store atomicity test in `S/`.
 | Statement filing and receipts (generic) | `S/tests.rs`: `every_statement_checkpoint_rolls_back_the_source_indexes_and_effects`, `deferred_commit_failure_has_no_receipt_or_surviving_rows` (receipt callback never runs), `receipt_follows_commit_and_source_spelling_remains_exact` (receipt only after commit; duplicate refused, rows unchanged); `S/filing/timing.rs`: `transaction_phase_distinguishes_preflight_refusal_commit_and_rollback`. `mismatched_binding_scheme_run_and_unlicensed_effect_write_nothing` refuses before the transaction (green under P1). P1 red. | `H/coordinator_tests.rs`: `actual_records_and_socket_receipts_preserve_source_and_block_filing_order` (per source: `state.flow` phases copied, classification_started, accepted, file_started, filed; `state.store.measurement` with `request_source` equal to the source; order result, then measurement, then filed; `request_id` and elapsed agree); `H/context_receipt_tests.rs`: `member_receipt_does_not_release_consumer_before_the_terminal_trace_record`, `exact_recorded_sources_distinguish_commits_from_correct_rejections`. P3 red. | Harness: `state-management-filing-receipts-2026-10-21.md` (10 probes, tests not named). Store: none. | None for this question. |
 | Plan create (operator `create`, effect `Lock` with `Operator` source) | `S/filing/plan/tests.rs`: `operator_effect_requires_all_blocks_root_provenance_and_exact_indices` (non-root cause and incomplete blocks refused, image byte-identical; red under P1), `new_operator_plan_retires_broken_execution_without_closing_it` (whole success). | Ignored only: `H/context_plan_effect_tests.rs`: `root_plan_effect_uses_separate_catalog_counters_and_exact_input_sources`; `H/context_plan_effect_filing_tests.rs`: `root_plan_effect_filing_keeps_certified_text_metadata_parent_and_original_bound`; the root-only worker helper `sqlite_update` in `H/context_worker_plan_tests.rs` (two `plan.event`, origins `operator` then `loop`). | None found. | No default-run test asserts the operator `plan.event` input or effect record; every such test needs the root coordination peer. |
 | Plan authorize | `S/filing/plan/tests.rs`: `model_lock_accepts_unique_repaired_statements_from_multiple_emissions_once` files `Authorize` whole as setup. | Ignored only, as for create. `H/context_plan_summary_tests.rs`: `plan_summary_cancelled_plan_filing_keeps_its_late_commit_subscription_and_evidence` records one fixture-built `authorize` `plan.event` (count only, not the production author). | None found. | No store test refuses an `Authorize` and compares the image; no default-run test asserts the production authorize record. |
-| Plan model lock (`Lock` with `Model` source) | `S/filing/plan/tests.rs`: `model_lock_accepts_unique_repaired_statements_from_multiple_emissions_once` (duplicate candidate and replay refused, image byte-identical; red under P1). | None. `H/plan_effect.rs` and `H/mirror_plan.rs` refuse a `Model` lock: no harness author exists on this tree. | None found. | No harness producer for a model lock exists, so no trace record exists to test. |
+| Plan model lock (`Lock` with `Model` source) | `S/filing/plan/tests.rs`: `model_lock_accepts_unique_repaired_statements_from_multiple_emissions_once` (duplicate candidate and replay refused, image byte-identical; red under P1). | None. `H/plan_effect.rs` and `H/mirror_plan.rs` refuse a `Model` lock: no harness author exists on this tree. | None found. | No harness producer for a model lock exists, so no trace record exists to test. Moved to #423 section 7 (gap 3). |
 | Plan replace | `S/filing/plan/tests.rs`: `invalid_group_and_changed_preserved_category_roll_back_the_whole_effect` (red under P1, so the refusal is inside the transaction), `replacement_preserves_a_later_closed_step_without_hiding_the_new_first_step`, `replacement_of_completed_plan_renews_task_and_preserves_terminal_evidence`, `completed_plan_renewal_retires_an_intervening_task_and_keeps_the_old_prompt`. | Ignored only: `H/context_plan_effect_tests.rs`: `root_plan_effect_keeps_an_open_task_but_renews_a_changed_task`. | None found. | No default-run test asserts the replace record. |
-| Plan activate | `S/filing/plan/tests.rs`: `plan_lock_activation_and_unreviewed_close_are_atomic_and_complete_ancestors` (activation succeeds whole; its refused write is a `Break`). | `H/context_plan_activation_effect_tests.rs`: `plan_activation_committed_effect_adopts_native_scopes_even_when_cancelled` (one `plan.event`, no refusal), `plan_activation_classifier_rejection_records_fault_and_refusal_after_cancellation` (`plan.event`, `fault`, `refusal` with causal parents); `H/context_plan_activation_tests.rs`: `plan_activation_group_counter_exhaustion_records_refusal_without_effect` (no `plan.event`; refusal `operation` is `activate`). P4 red. | None found. | No store test refuses an `Activate` and compares the image. The tests count the `plan.event`; its payload is held by the runtime guard `check_filing` in `H/plan_port_effect.rs` (P4), not by a test assertion. |
+| Plan activate | `S/filing/plan/tests.rs`: `plan_lock_activation_and_unreviewed_close_are_atomic_and_complete_ancestors` (activation succeeds whole; its refused write is a `Break`). | `H/context_plan_activation_effect_tests.rs`: `plan_activation_committed_effect_adopts_native_scopes_even_when_cancelled` (one `plan.event`, no refusal), `plan_activation_classifier_rejection_records_fault_and_refusal_after_cancellation` (`plan.event`, `fault`, `refusal` with causal parents); `H/context_plan_activation_tests.rs`: `plan_activation_group_counter_exhaustion_records_refusal_without_effect` (no `plan.event`; refusal `operation` is `activate`). P4 red. | None found. | No store test refuses an `Activate` and compares the image. The tests count the `plan.event`; its payload is held by the runtime guard `check_filing` in `H/plan_port_effect.rs`, and P4 shows a changed payload fails the run (gap 5, accepted). |
 | Plan close | `S/filing/plan/tests.rs`: `closure_refuses_changed_work_digest_and_missing_required_review_without_mutation` (renamed `closure_refuses_changed_work_digest_and_closes_a_review_required_step_unreviewed` by #425, which keeps its changed-digest half), `closure_refuses_any_new_content_after_unreviewed_work_and_keeps_active_marks`, `reviewed_close_refuses_mismatched_setup_work_and_nonresult_outcome` (all red under P1), `reviewed_close_requires_exact_setup_work_pair_and_fixed_frontier`. | `H/context_plan_closure_tests.rs`: `closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot` (one `step.outcome`: payload `context` equals the effect, `template_id`, `outcome`, `work`, `message`, channel, origin, turn; the filing's effect equals the same effect; no `plan.event`). | None found. | None for this question. |
 | Plan break | `S/filing/plan/tests.rs`: `plan_lock_activation_and_unreviewed_close_are_atomic_and_complete_ancestors` (stale `Break` refused, image byte-identical; red under P1), `new_operator_plan_retires_broken_execution_without_closing_it` (break files whole). | `H/context_plan_break_tests.rs`: `plan_break_committed_effect_refreshes_and_reports_even_after_cancellation` (one `plan.break` with `case`, `plan` and causal parent; one `plan.event`), `plan_break_template_rejection_records_fault_then_refusal_without_break`, `plan_break_without_locked_plan_records_original_metadata_without_effect_or_read`. | None found. | The break `plan.event` payload is held only by `check_filing`, as for activate (not perturbed here). |
 | Plan answer_break (`Replace` from an `answer_break` input) | None. No store test files an `answer_break` input; P8 removed the "answer_break requires a broken plan" refusal and all 144 store library tests stayed green. | Ignored only: `H/context_plan_update_tests.rs` (case `answer_unbroken`), `H/pump_plan_tests.rs`: `root_plan_packet_projection_preserves_replacement_ids_and_has_no_unused_or_aliased_blocks`. | None found. | No store test and no default-run trace test exist for answer_break. |
@@ -78,28 +78,31 @@ file after each restore. Target directory `/var/tmp/claude-wt-evidence-target`,
 | P7 | `M/capture.rs`, `Capture::control` | On `Abort` of a held or finished capture, skip `room.remove`. | `timeout_abort_deletes_both_held_and_finished_images_before_success` | Red. |
 | P8 | `S/filing/plan/revision.rs`, `replace` | Disable the "answer_break requires a broken plan" refusal. | The whole store library suite | Green: 144 of 144 pass. |
 
-## Gaps
+## Gaps and their dispositions
 
-1. Plan create, authorize, replace and answer_break: every test that asserts the operator
-   `plan.event` records is ignored, because it needs the root coordination peer. The
-   default suite asserts none of these records.
-2. Plan answer_break: no store test files an `answer_break` input (P8 green).
-3. Plan model lock: no harness author exists on this tree, so no trace record exists.
-4. Plan authorize and activate: no store test refuses either effect and compares the
-   image.
-5. Plan activate and break: the tests count the `plan.event` and do not assert its
-   payload; only the runtime guard `check_filing` holds it.
-6. Capture and seed: no test fails a room write after the part file exists (P5 green), and
-   the seed path has no fallback cleanup.
-7. Seed: `M/seed.rs` has no test.
-8. Publication: no test faults `Room::finish`. Admin's publication was not surveyed.
-9. Restore: no default-run harness test was found that asserts the `load` record for a
-   save-point start (a parent artifact and a position).
-10. Marks: the store pin for the last allocatable span is in #427, not on `main`.
-11. Output filing: no store rollback test uses a `message.assistant` source; coverage rests
-    on the code path it shares with input.
-12. Store open: the open measurement's payload fields are not asserted, only its kind and
-    order.
+The Planner sorted the gaps on 2026-10-31, under the operator's ruling of that date on
+scope: store and trace only, SPU-interaction rows to #423 section 7, and persistence
+counted as built, with its hardening in #424.
+
+| # | Gap | Disposition |
+|---|---|---|
+| 1 | Plan create, authorize, replace and answer_break: every test that asserts the operator `plan.event` records is ignored, because it needs the root coordination peer. The default suite asserts none of these records. | The operator's ruling, pending: (a) one real-root run of those tests, recorded here, or (b) store atomicity accepted here and the trace leg left to #424 section 1. |
+| 2 | Plan answer_break: no store test files an `answer_break` input (P8 green). | #146 gap PR, stacked on #427. |
+| 3 | Plan model lock: no harness author exists on this tree, so no trace record exists. | #423 section 7: the author is driven by model output and waits for the trained model. Store atomicity is evidenced (`model_lock_accepts_unique_repaired_statements_from_multiple_emissions_once`, red under P1). |
+| 4 | Plan authorize and activate: no store test refuses either effect and compares the image. | #146 gap PR, with gap 2. |
+| 5 | Plan activate and break: the tests count the `plan.event` and do not assert its payload; only the runtime guard `check_filing` holds it. | Accepted, no work. P4 shows a changed recorded payload fails the run, which is evidence that the record equals the grant. |
+| 6 | Capture and seed: no test fails a room write after the part file exists (P5 green), and the seed path has no fallback cleanup. | #424 section 2. |
+| 7 | Seed: `M/seed.rs` has no test. | #424 section 2. |
+| 8 | Publication: no test faults `Room::finish`. Admin's publication was not surveyed. | #424 section 2. |
+| 9 | Restore: no default-run harness test was found that asserts the `load` record for a save-point start (a parent artifact and a position). | #424 section 2. |
+| 10 | Marks: the store pin for the last allocatable span is in #427, not on `main`. | Closes when #427 merges; the row is updated then. |
+| 11 | Output filing: no store rollback test uses a `message.assistant` source; coverage rests on the code path it shares with input. | Accepted, no work: `file` is kind-agnostic, and P1's red set covers the shared path. |
+| 12 | Store open: the open measurement's payload fields are not asserted, only its kind and order. | #146 gap PR, with gap 2. |
+
+Police item: `pair_lane_request_mismatch_refuses_and_rolls_back_its_source` refuses
+before its transaction, so its name overclaims. It is renamed in the #146 gap PR.
+
+Once the gap PR lands and gap 1 is ruled, this table is #146's closing evidence.
 
 ## Not settled
 
