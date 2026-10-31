@@ -804,9 +804,10 @@ closure pass does not certify the external reviewer. [PLAN-2, SEAM-2, R20-12]
 
 Exercise both category values with reviewed and unreviewed grants. Unreviewed closure
 succeeds under either value, and either value may use a valid review. Remove the
-category check, the private-grant check or the unchanged-work check separately and
-require each fixture to fail. Repeat after dump and load and after replacement of the
-category bit. [PLAN-2, PLAN-5, R20-17]
+category-existence check, the private-grant check or the unchanged-work check separately
+and require each fixture to fail. Repeat the unreviewed closure under review_required
+true after dump and load and after a replacement that preserves it. [PLAN-2, PLAN-5,
+R20-17]
 
 ## 7. Owning amendments and dependencies
 

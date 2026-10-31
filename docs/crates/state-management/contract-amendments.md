@@ -4,7 +4,7 @@
 
 **Landing PR:** #244
 
-**Version:** 0.20 **Date filed:** 2026-10-21
+**Version:** 0.21 **Date filed:** 2026-10-21
 
 ## 0. What this document is
 
@@ -465,12 +465,13 @@ request, bound to the held operator setup identity, plan and immutable work. It 
 same granted shell, execution shape, confinement, clock and outcomes. The gate may
 assume the ordinary request contract and must refuse the same unavailable tool or
 inadmissible clock. It interprets neither a plan nor a review report. The harness must
-refuse a model report as review authority. Closure follows the step's operator
-Category.review_required: true requires a matching held review return and recorded
-assessment, while false also permits Spec 07's private attest_closure grant. Both forms
-bind current work and require the complete structural evidence. The gate has no role in
-the no-review form. No new runner, process, socket or timeout clock is authorized.
-[PLAN-2, PAIR-1, PAIR-2, R6, R20-17]
+refuse a model report as review authority. The step's operator Category.review_required
+is held and returned, and no primitive enforces it: requesting, running and judging a
+review are the loop's (#423). Spec 07's private attest_closure grant and a matching held
+review return with a recorded assessment are both available under either value. Both
+forms bind current work and require the complete structural evidence. The gate has no
+role in the no-review form. No new runner, process, socket or timeout clock is
+authorized. [PLAN-2, PAIR-1, PAIR-2, R6, R20-17]
 
 **PLAN-DIAGNOSTIC-AGREEMENT.** Amend harness-diagnostic record vocabulary to reject
 these serving plan events as OutsideDiagnosticVocabulary. No serving plan updater or

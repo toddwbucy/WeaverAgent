@@ -520,13 +520,13 @@ AND EXISTS (SELECT 1 FROM plan_revision p
   WHERE p.plan_id = s.plan_id AND p.revision = s.revision AND p.status = 'locked')
 AND EXISTS (SELECT 1 FROM plan_category c
   WHERE c.plan_id = s.plan_id AND c.revision = s.revision
-  AND c.category_id = s.category_id
-  AND ((:review_run IS NULL AND :review_sequence IS NULL AND :review_call IS NULL)
-    OR (:review_run IS NOT NULL AND :review_sequence IS NOT NULL
-      AND :review_call IS NOT NULL
-      AND EXISTS (SELECT 1 FROM tool_pair t
-        WHERE t.run = :review_run AND t.sequence = :review_sequence
-        AND t.call = :review_call AND t.lane = 'review' AND t.fate = 'completed'))))
+  AND c.category_id = s.category_id)
+AND ((:review_run IS NULL AND :review_sequence IS NULL AND :review_call IS NULL)
+  OR (:review_run IS NOT NULL AND :review_sequence IS NOT NULL
+    AND :review_call IS NOT NULL
+    AND EXISTS (SELECT 1 FROM tool_pair t
+      WHERE t.run = :review_run AND t.sequence = :review_sequence
+      AND t.call = :review_call AND t.lane = 'review' AND t.fate = 'completed')))
 ```
 
 Plan status changes also compare the exact expected previous status/revision and require

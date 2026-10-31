@@ -34,7 +34,7 @@ work remains at the deferred seams already named by the PRD and these Specs.
 | [State management foundation - Spec](state-management-foundation-Spec.md) | 0.28 |
 | [State management Spec 02 - STE100 protocol, classifier and input check](state-management-spec-02-protocol-classifier-gate.md) | 0.18 |
 | [State management Spec 05 - Tool-call pairs](state-management-spec-05-tool-pairs.md) | 0.12 |
-| [State Management Spec 06 - Marks, Place, and the Decode Boundary](state-management-spec-06-marks-renderer-engine.md) | 0.13 |
+| [State Management Spec 06 - Marks, Place, and the Decode Boundary](state-management-spec-06-marks-renderer-engine.md) | 0.14 |
 | [State Management Spec 07 - Locked Plan and Forward Flags](state-management-spec-07-plan-forward-flags.md) | 0.21 |
 | [State Management Spec 08 - Sort and Selection Primitives](state-management-spec-08-sort-selection.md) | 0.15 |
 | [State Management Spec 09 - Evidence and Qualification Boundary](state-management-spec-09-qualification-costs.md) | 0.13 |
@@ -48,7 +48,7 @@ contract. Existing code continues to use the previous contracts until the named 
 | Document | Version |
 | --- | --- |
 | [Dependable flow: charter amendment text](charter-amendments.md) | 0.18 |
-| [Dependable flow: contract amendment text](contract-amendments.md) | 0.20 |
+| [Dependable flow: contract amendment text](contract-amendments.md) | 0.21 |
 | [State persistence - contract amendment text](persistence-contract-amendments.md) | 0.14 |
 | [weaver-admin Spec: flow, seed, publication, and boot amendment](weaver-admin-Spec-amendment.md) | 0.24 |
 | [weaver-diagnostic Spec: isolated legacy conversion amendment](weaver-diagnostic-Spec-amendment.md) | 0.8 |
@@ -58,7 +58,7 @@ contract. Existing code continues to use the previous contracts until the named 
 | [weaver-internal Spec: pure recall query amendment](weaver-internal-Spec-amendment.md) | 0.5 |
 | [weaver-spu Spec: placement measurement and STE100 duty amendment](weaver-spu-Spec-amendment.md) | 0.8 |
 | [weaver-state Spec: flow, schema, read, and persistence amendment](weaver-state-Spec-amendment.md) | 0.24 |
-| [weaver-trace Spec: dependable-flow amendment](weaver-trace-Spec-amendment.md) | 0.33 |
+| [weaver-trace Spec: dependable-flow amendment](weaver-trace-Spec-amendment.md) | 0.34 |
 | [weaver-types Spec: dependable-flow amendment](weaver-types-Spec-amendment.md) | 0.37 |
 
 The frozen [graphable paper v0.14][paper] is supporting theory. The PRD and later
