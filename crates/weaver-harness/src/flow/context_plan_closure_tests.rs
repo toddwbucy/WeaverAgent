@@ -638,7 +638,9 @@ fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
         .flat_map(|review| ["none", "source", "receipt"].map(|at| (review, at)))
         .flat_map(|(review, at)| [9, u64::MAX].map(|next| (review, at, next)))
     {
-        let case = format!("review_required={review_required} cancel_at={cancel_at}");
+        let case = format!(
+            "review_required={review_required} cancel_at={cancel_at} next_span_id={next_span_id}"
+        );
         let (mut fx, certificate) = closure_fixture(review_required, true);
         let bound = fx.run().context.deadlines.get(PumpDeadline::Decision);
         let evidence = evidence(&mut fx);
