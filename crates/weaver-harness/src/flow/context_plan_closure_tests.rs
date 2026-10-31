@@ -1287,6 +1287,30 @@ fn closure_close_foreign_marks_proof_is_a_custody_fault() {
 }
 
 #[test]
+fn closure_close_prepares_its_outcome_at_the_last_allocatable_span() {
+    // FL1 (#418): close's only span is the effect's last, so a Marks
+    // catalog offering u64::MAX prepares the close there rather than
+    // refusing counter_exhausted; the store accepts it.
+    let (mut fx, certificate) = closure_fixture(false, true);
+    let evidence = evidence(&mut fx);
+    begin_close(&mut fx, evidence);
+    serve(&mut fx, PREVIEW, PREVIEW.len());
+    let outcome = serve_marks(&mut fx, u64::MAX);
+    assert_eq!(outcome.local_id.0, u64::MAX);
+    effect_ready(&mut fx);
+    let run = fx.run();
+    run.context
+        .begin_plan_effect(&certificate, &mut run.clock)
+        .unwrap();
+    let source = committed(&mut fx, false);
+    let snapshot = closed_snapshot(&mut fx, &source, &outcome);
+    release_summary(&mut fx, snapshot.clone());
+    let result = finish(&mut fx);
+    assert_eq!(result.current_snapshot(), Some(&snapshot));
+    assert!(fx.records(Kind::Refusal).is_empty());
+}
+
+#[test]
 fn closure_close_marks_read_refusal_keeps_its_code_or_faults() {
     // counter_exhausted on close's Marks read is read_refused with that code,
     // parented on the Marks read's measurement, and files nothing.

@@ -1362,3 +1362,37 @@ fn image_refuses_contiguous_plan_ids_swapped_across_all_rows_and_effects() {
         .is_err()
     );
 }
+
+#[test]
+fn close_files_at_the_last_allocatable_span_and_the_next_marks_read_refuses_counter_exhausted() {
+    // FL1 (#418): the span counter's last value is allocatable. With the
+    // held maximum at u64::MAX - 1 the Marks read offers u64::MAX, close
+    // files its outcome there, and only the following Marks read refuses.
+    let mut store = store();
+    create(&mut store, 1, false, false);
+    activate(&mut store, 3, 1, 3, None);
+    let work = work_ref(&store, 3);
+    // A closed outcome under the active step takes the counter to its
+    // second-to-last value.
+    store
+        .connection
+        .execute(
+            "INSERT INTO span(local_id,revision,kind,status,opened_content_id,ended_content_id,parent_local_id,parent_revision) VALUES (?1,X'0000000000000001','step_outcome','closed',(SELECT MIN(id) FROM content_block),(SELECT MIN(id) FROM content_block),?2,X'0000000000000001')",
+            [blob(u64::MAX - 1), blob(3)],
+        )
+        .unwrap();
+    let marks =
+        |store: &ServingSqlite| store.query(&weaver_types::state_flow::ReadSelector::Marks {});
+    assert!(matches!(
+        marks(&store),
+        Ok(QueryResult::Marks { next_span_id, .. }) if next_span_id.0 == u64::MAX
+    ));
+    close(&mut store, 4, u64::MAX, work, None);
+    let closed = snapshot(&store);
+    assert_eq!(closed.steps[0].outcome_span, Some(span(u64::MAX)));
+    assert_eq!(closed.status, PlanStatus::Complete);
+    assert!(matches!(
+        marks(&store),
+        Err(crate::ReadFault::Refused(ReadRefusalCode::CounterExhausted))
+    ));
+}
