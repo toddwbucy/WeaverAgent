@@ -108,7 +108,9 @@ fn snapshot(store: &ServingSqlite) -> PlanSnapshot {
         .unwrap()
         .unwrap()
 }
-fn unchanged(store: &mut ServingSqlite, filing: &StatementFile) {
+/// The filing refuses as an invalid effect and leaves the image
+/// byte-identical; the fault is returned for a caller naming its detail.
+fn unchanged(store: &mut ServingSqlite, filing: &StatementFile) -> FileFault {
     let before = store
         .connection
         .serialize(rusqlite::MAIN_DB)
@@ -118,6 +120,12 @@ fn unchanged(store: &mut ServingSqlite, filing: &StatementFile) {
     assert_eq!(error.code, StateRefusalCode::InvalidEffect, "{error}");
     let after = store.connection.serialize(rusqlite::MAIN_DB).unwrap();
     assert_eq!(&*after, before.as_slice());
+    error
+}
+/// unchanged, and the refusal is the named one.
+fn unchanged_because(store: &mut ServingSqlite, filing: &StatementFile, detail: &str) {
+    let error = unchanged(store, filing);
+    assert_eq!(error.detail, detail, "{error}");
 }
 fn create(store: &mut ServingSqlite, count: u64, review: bool, group: bool) {
     let groups = if group {
@@ -168,6 +176,11 @@ fn create(store: &mut ServingSqlite, count: u64, review: bool, group: bool) {
         .unwrap();
 }
 fn activate(store: &mut ServingSqlite, sequence: u64, id: u64, span_id: u64, group: Option<u64>) {
+    let activation = activation(store, id, span_id, group);
+    store.file(&effect(sequence, activation)).unwrap();
+}
+/// The Activate effect for step `id` with the store's own successor.
+fn activation(store: &ServingSqlite, id: u64, span_id: u64, group: Option<u64>) -> PlanEffect {
     let current = snapshot(store);
     let index = current
         .steps
@@ -187,18 +200,13 @@ fn activate(store: &mut ServingSqlite, sequence: u64, id: u64, span_id: u64, gro
         store.read_limits.max_result_bytes,
     )
     .unwrap();
-    store
-        .file(&effect(
-            sequence,
-            PlanEffect::Activate {
-                expected: current.plan,
-                step_id: step(id),
-                step_span: span(span_id),
-                group_span: group.map(span),
-                successor,
-            },
-        ))
-        .unwrap();
+    PlanEffect::Activate {
+        expected: current.plan,
+        step_id: step(id),
+        step_span: span(span_id),
+        group_span: group.map(span),
+        successor,
+    }
 }
 fn work_ref(store: &ServingSqlite, through: u64) -> WorkRef {
     let current = snapshot(store);
@@ -1361,4 +1369,286 @@ fn image_refuses_contiguous_plan_ids_swapped_across_all_rows_and_effects() {
         )
         .is_err()
     );
+}
+
+/// Raise the held span maximum to `local_id` with one closed filler row
+/// parented to the task span. The row is no store a run could reach
+/// (allocation is consecutive from the seed), so a test using it pins the
+/// filing path's counter arithmetic only; the image check is not consulted.
+fn hold_span_maximum(store: &ServingSqlite, local_id: u64) {
+    store
+        .connection
+        .execute(
+            "INSERT INTO span(local_id,revision,kind,status,opened_content_id,ended_content_id,parent_local_id,parent_revision) VALUES (?1,?2,'step_outcome','closed',(SELECT MIN(id) FROM content_block),(SELECT MIN(id) FROM content_block),?3,?2)",
+            [blob(local_id), blob(1), blob(1)],
+        )
+        .unwrap();
+}
+fn marks(store: &ServingSqlite) -> Result<QueryResult, crate::ReadFault> {
+    store.query(&weaver_types::state_flow::ReadSelector::Marks {})
+}
+
+#[test]
+fn plan_effects_file_at_the_last_allocatable_span_and_the_next_marks_read_refuses_counter_exhausted()
+ {
+    // FL1 (#418): the span counter's last value is allocatable. With the
+    // held maximum at u64::MAX - 1 the Marks read offers u64::MAX, an
+    // activation without a new group or a close files its one span there,
+    // and only the following Marks read refuses.
+    for effect in ["activate", "close"] {
+        let mut store = store();
+        create(&mut store, 1, false, false);
+        if effect == "close" {
+            activate(&mut store, 3, 1, 3, None);
+        }
+        hold_span_maximum(&store, u64::MAX - 1);
+        assert!(
+            matches!(
+                marks(&store),
+                Ok(QueryResult::Marks { next_span_id, .. }) if next_span_id.0 == u64::MAX
+            ),
+            "{effect}"
+        );
+        let current = if effect == "activate" {
+            activate(&mut store, 3, 1, u64::MAX, None);
+            let active = snapshot(&store);
+            assert_eq!(active.steps[0].status, StepStatus::Active, "{effect}");
+            assert_eq!(active.steps[0].span, Some(span(u64::MAX)), "{effect}");
+            active
+        } else {
+            let work = work_ref(&store, 3);
+            close(&mut store, 4, u64::MAX, work, None);
+            let closed = snapshot(&store);
+            assert_eq!(
+                closed.steps[0].outcome_span,
+                Some(span(u64::MAX)),
+                "{effect}"
+            );
+            assert_eq!(closed.status, PlanStatus::Complete, "{effect}");
+            closed
+        };
+        assert_eq!(current, snapshot(&store), "{effect}");
+        assert!(
+            matches!(
+                marks(&store),
+                Err(crate::ReadFault::Refused(ReadRefusalCode::CounterExhausted))
+            ),
+            "{effect}"
+        );
+    }
+}
+
+#[test]
+fn a_filing_past_the_last_span_refuses_counter_exhausted_without_writing() {
+    // FL1 (#418): with the held maximum at u64::MAX there is no next span,
+    // so an activation needing one refuses at the counter, not at the
+    // span-consecutiveness check, and writes nothing.
+    let mut store = store();
+    create(&mut store, 1, false, false);
+    hold_span_maximum(&store, u64::MAX);
+    let current = snapshot(&store);
+    let (successor, _) = reads::step_successor(
+        &store.connection,
+        &store.context.seed_id,
+        &current.plan,
+        None,
+        store.read_limits.max_result_bytes,
+    )
+    .unwrap();
+    let filing = effect(
+        3,
+        PlanEffect::Activate {
+            expected: current.plan,
+            step_id: step(1),
+            step_span: span(u64::MAX),
+            group_span: None,
+            successor,
+        },
+    );
+    unchanged_because(&mut store, &filing, "span counter exhausted");
+}
+
+/// A one-step plan with its step active and, when `broken`, a filed Break;
+/// then an answer_break input and the Replace effect that answers it.
+fn answer_break_on(broken: bool) -> (ServingSqlite, StatementFile) {
+    let mut store = store();
+    create(&mut store, 1, false, false);
+    activate(&mut store, 3, 1, 3, None);
+    if broken {
+        store
+            .file(&effect(
+                4,
+                PlanEffect::Break {
+                    expected: plan(1),
+                    step_id: Some(step(1)),
+                    case: PlanBreakCase::WrongCategory,
+                    proposed_source: None,
+                },
+            ))
+            .unwrap();
+    }
+    let ctx = context(
+        PlanInputOperation::AnswerBreak {
+            replacement: PlanInputReplacement {
+                task: None,
+                steps: vec![PlanInputStep {
+                    id: None,
+                    block: 0.into(),
+                }],
+                categories: categories(false),
+                groups: vec![],
+                review: setup(),
+                preserved_closures: vec![],
+            },
+        },
+        Some(plan(1)),
+    );
+    store.file(&input(5, 0, &ctx)).unwrap();
+    let replace = effect(
+        6,
+        PlanEffect::Replace {
+            expected: plan(1),
+            next: plan(2),
+            source: block(5, 0),
+            task: TaskScopeRef {
+                task: span(1),
+                prompt: span(2),
+            },
+            steps: vec![PlanStepInit {
+                step_id: step(2),
+                instruction: reference(5, 0),
+            }],
+            review: setup(),
+        },
+    );
+    (store, replace)
+}
+
+#[test]
+fn answer_break_replaces_a_broken_plan_whole() {
+    let (mut store, replace) = answer_break_on(true);
+    store.file(&replace).unwrap();
+    let old = reads::plan_snapshot(&store.connection, &store.context.seed_id, &plan(1)).unwrap();
+    assert_eq!(old.status, PlanStatus::Superseded);
+    assert_eq!(old.steps[0].status, StepStatus::Retired);
+    let current = snapshot(&store);
+    assert_eq!(current.plan, plan(2));
+    assert_eq!(current.status, PlanStatus::Locked);
+    assert_eq!(current.steps.len(), 1);
+    assert_eq!(current.steps[0].step_id, step(2));
+    assert_eq!(current.steps[0].status, StepStatus::Waiting);
+    // The open task keeps its scope, and the retired step's span 3 is no
+    // longer open.
+    assert_eq!(
+        current.task,
+        TaskScopeRef {
+            task: span(1),
+            prompt: span(2),
+        }
+    );
+    let QueryResult::Marks { open_scopes, .. } =
+        reads::query(&store, &weaver_types::state_flow::ReadSelector::Marks {}).unwrap()
+    else {
+        unreachable!()
+    };
+    let open: Vec<_> = open_scopes.iter().map(|scope| scope.span.clone()).collect();
+    assert_eq!(open, vec![span(1)]);
+    verify_image_plan(
+        &store.connection,
+        &store.context.seed_id,
+        &store.read_limits,
+    )
+    .unwrap();
+}
+
+#[test]
+fn answer_break_refuses_an_unbroken_plan_without_writing() {
+    let (mut store, replace) = answer_break_on(false);
+    unchanged_because(&mut store, &replace, "answer_break requires a broken plan");
+}
+#[test]
+fn refused_authorize_leaves_the_image_byte_identical() {
+    // "review": the effect names another review setup than its Authorize
+    // input. "operation": the setup matches, but the source is a Create
+    // input, not an Authorize one.
+    let authorize = |review| {
+        effect(
+            2,
+            PlanEffect::Authorize {
+                plan: plan(1),
+                source: block(1, 0),
+                task: TaskScopeRef {
+                    task: span(1),
+                    prompt: span(2),
+                },
+                review,
+            },
+        )
+    };
+    for case in ["review", "operation"] {
+        let mut store = store();
+        let operation = if case == "operation" {
+            PlanInputOperation::Create {
+                task: 0.into(),
+                steps: vec![PlanInputStep {
+                    id: None,
+                    block: 1.into(),
+                }],
+                categories: categories(false),
+                groups: vec![],
+                review: setup(),
+            }
+        } else {
+            PlanInputOperation::Authorize {
+                task: 0.into(),
+                categories: categories(false),
+                groups: vec![],
+                review: setup(),
+            }
+        };
+        let ctx = context(operation, None);
+        let blocks = if case == "operation" { 0..=1 } else { 0..=0 };
+        for index in blocks {
+            store.file(&input(1, index, &ctx)).unwrap();
+        }
+        let review = if case == "review" {
+            let mut other = setup();
+            other.setup_id = "different".into();
+            other
+        } else {
+            setup()
+        };
+        let refused = unchanged(&mut store, &authorize(review));
+        assert_eq!(
+            refused.detail, "authorize does not match operator input",
+            "{case}: {refused}"
+        );
+        if case == "review" {
+            // Positive control: the matching setup authorizes.
+            store.file(&authorize(setup())).unwrap();
+            let authorized = snapshot(&store);
+            assert_eq!(authorized.status, PlanStatus::Authorized);
+            assert_eq!(authorized.review, setup());
+        }
+    }
+}
+
+#[test]
+fn refused_activate_leaves_the_image_byte_identical() {
+    let mut store = store();
+    create(&mut store, 1, false, false);
+    // The step span skips the next allocatable span.
+    let skipped = activation(&store, 1, 9, None);
+    unchanged_because(
+        &mut store,
+        &effect(3, skipped),
+        "span allocation is not consecutive",
+    );
+    // Positive control: the next span activates.
+    let next = activation(&store, 1, 3, None);
+    store.file(&effect(3, next)).unwrap();
+    let active = snapshot(&store);
+    assert_eq!(active.steps[0].step_id, step(1));
+    assert_eq!(active.steps[0].status, StepStatus::Active);
+    assert_eq!(active.steps[0].span, Some(span(3)));
 }

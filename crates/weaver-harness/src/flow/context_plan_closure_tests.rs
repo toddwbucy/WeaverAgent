@@ -630,12 +630,17 @@ fn release_summary(fx: &mut SummaryFixture, snapshot: s::PlanSnapshot) {
 #[test]
 fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
     // close does not recheck review_required (#423): unreviewed evidence
-    // closes a category that requires review like any other.
-    for (review_required, cancel_at) in [false, true]
+    // closes a category that requires review like any other. FL1 (#418):
+    // close's only span is the effect's last, so a catalog offering u64::MAX
+    // files its outcome there rather than refusing counter_exhausted.
+    for (review_required, cancel_at, next_span_id) in [false, true]
         .into_iter()
         .flat_map(|review| ["none", "source", "receipt"].map(|at| (review, at)))
+        .flat_map(|(review, at)| [9, u64::MAX].map(|next| (review, at, next)))
     {
-        let case = format!("review_required={review_required} cancel_at={cancel_at}");
+        let case = format!(
+            "review_required={review_required} cancel_at={cancel_at} next_span_id={next_span_id}"
+        );
         let (mut fx, certificate) = closure_fixture(review_required, true);
         let bound = fx.run().context.deadlines.get(PumpDeadline::Decision);
         let evidence = evidence(&mut fx);
@@ -643,12 +648,16 @@ fn closure_close_files_one_exact_step_outcome_and_adopts_the_snapshot() {
         // The reread pages the same bytes at a different capacity.
         serve(&mut fx, PREVIEW, 333);
         // A catalog whose next span is not the step's successor ID.
-        let outcome = serve_marks(&mut fx, 9);
-        effect_ready(&mut fx);
+        let outcome = serve_marks(&mut fx, next_span_id);
+        let ready = (0..128).any(|_| advance(&mut fx).unwrap() == PlanPortProgress::EffectReady);
+        assert!(
+            ready,
+            "{case}: close must prepare its effect after the reread"
+        );
         let run = fx.run();
         run.context
             .begin_plan_effect(&certificate, &mut run.clock)
-            .unwrap();
+            .unwrap_or_else(|error| panic!("{case}: {error:?}"));
         let source = committed(&mut fx, cancel_at == "source");
         if cancel_at == "receipt" {
             fx.run().context.cancel_plan_operation();

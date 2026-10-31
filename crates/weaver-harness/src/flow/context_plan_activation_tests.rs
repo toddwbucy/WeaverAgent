@@ -315,8 +315,21 @@ fn begin_with_successor(fx: &mut SummaryFixture, successor: CheckedStepSuccessor
 
 #[test]
 fn plan_activation_allocates_ungrouped_new_group_and_existing_group_from_marks() {
-    for group in 0..3 {
-        let (mut fx, marks) = activation_fixture(group);
+    // FL1 (#418): an activation that opens no group allocates one span, the
+    // effect's last, so a catalog offering u64::MAX prepares the step there.
+    // A new group needs two spans, so group 1 at u64::MAX refuses
+    // counter_exhausted instead: that pairing is
+    // plan_activation_group_counter_exhaustion_records_refusal_without_effect.
+    for (group, next) in (0..3)
+        .flat_map(|group| [10, u64::MAX].map(|next| (group, next)))
+        .filter(|&(group, next)| !(group == 1 && next == u64::MAX))
+    {
+        let case = format!("group={group} next_span_id={next}");
+        let (mut fx, mut marks) = activation_fixture(group);
+        let s::QueryResult::Marks { next_span_id, .. } = &mut marks else {
+            unreachable!()
+        };
+        *next_span_id = next.into();
         begin_activation(&mut fx);
         release_result(&mut fx, &marks);
         let mut prepared = false;
@@ -326,29 +339,36 @@ fn plan_activation_allocates_ungrouped_new_group_and_existing_group_from_marks()
                 break;
             }
         }
-        assert!(prepared);
+        assert!(prepared, "{case}");
         let s::PlanEffect::Activate {
             step_span,
             group_span,
             ..
         } = fx.run().context.test_plan_effect().unwrap()
         else {
-            panic!()
+            panic!("{case}")
         };
-        assert_eq!(step_span.local_id.0, if group == 1 { 11 } else { 10 });
+        // A new group takes the next span and the step the one after it.
+        assert_eq!(
+            step_span.local_id.0,
+            if group == 1 { next + 1 } else { next },
+            "{case}"
+        );
         assert_eq!(
             group_span.as_ref().map(|span| span.local_id.0),
             match group {
                 0 => None,
-                1 => Some(10),
+                1 => Some(next),
                 _ => Some(7),
-            }
+            },
+            "{case}"
         );
         assert!(
             take(&mut fx).is_none(),
-            "prepared metadata is not a committed active step"
+            "{case}: prepared metadata is not a committed active step"
         );
-        assert!(fx.records(Kind::PlanEvent).is_empty());
+        assert!(fx.records(Kind::PlanEvent).is_empty(), "{case}");
+        assert!(fx.records(Kind::Refusal).is_empty(), "{case}");
     }
 }
 
