@@ -164,6 +164,8 @@ fn owned_ticket_preserves_source_and_prepares_only_once_under_pressure() {
     let (mut recorder, reader) = recorder();
     fill_capacity(&mut recorder);
     let mut barrier = RecordBarrier::new(recorder, "run".into());
+    // Rebound after the barrier so a panic drops the reader first (#416).
+    let reader = reader;
     let mut inbox = FlowInbox::new();
     let mut budget = budget(1);
     let original = authored("Read retained original.");
@@ -233,6 +235,8 @@ fn second_owned_author_returns_original_without_replacing_first_ticket() {
     let (mut recorder, reader) = recorder();
     fill_capacity(&mut recorder);
     let mut barrier = RecordBarrier::new(recorder, "run".into());
+    // Rebound after the barrier so a panic drops the reader first (#416).
+    let reader = reader;
     let mut inbox = FlowInbox::new();
     let mut budget = budget(2);
     let first = authored("Read first.");
@@ -365,6 +369,8 @@ fn terminal_reserve_bypasses_ticket_then_trace_only_resume_never_files() {
     fill_capacity(&mut recorder);
     let count = recorder.structure().len();
     let mut barrier = RecordBarrier::new(recorder, "run".into());
+    // Rebound after the barrier so a panic drops the reader first (#416).
+    let reader = reader;
     let mut inbox = FlowInbox::new();
     let mut budget = budget(1);
     let original = authored("Read trace-only pending source.");
