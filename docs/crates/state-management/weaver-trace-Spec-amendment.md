@@ -4,7 +4,7 @@
 
 **Landing PR:** #387
 
-**Version:** 0.34 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
+**Version:** 0.35 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
 
 ## 0. What this document is
 
@@ -390,6 +390,11 @@ partition refusal is recorded after load by the preflight recorder, before any
 activation. Diagnostic load retains its old fields and has no state_flow member. Reason:
 the trace must name the declaration and proof used, without linking the trace crate to
 the floor wire crate. [TAP-2, FLOW-3, PERSIST-2, review S2]
+
+With no state-management.ste100 binding, template_inventory.checker_artifact_sha256 and
+ste100_binary_sha256 are explicit null, and no template-check ste100.result follows the
+load. The load still records the inventory, its digest and the scheme bytes. This is the
+operator's ruling of 2026-11-02 on #437 (Q3 and Q7). [TAP-2, FLOW-3, CLASS-2]
 
 Spec 09 RUN-EVIDENCE binds external build and host observations to this exact load and
 captured trace. It is an analysis artifact, not a payload kind, load extension or

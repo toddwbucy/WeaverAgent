@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.8 **Date filed:** 2026-10-20 **Parent:** weaver-diagnostic-PRD
+**Version:** 0.9 **Date filed:** 2026-10-20 **Parent:** weaver-diagnostic-PRD
 
 ## 0. What this document is
 
@@ -35,12 +35,13 @@ conversion. Legacy fixtures keep their existing canonical spelling. Reason: repl
 serving are distinct bindings, not interchangeable schemas. [SCOPE-1, FLOW-3]
 
 **DIAGNOSTIC-STATE.** The diagnostic binding selects the old store engine interface,
-election and preload door on a separate connection/catalog. It never adopts a
-state-content/1 serving dump or supplies a serving seed. No serving load can enable the
-preload door. This stages the local interpretation of analysis-state contract 1/2/3,
-whose copy in this repository is authoritative under R20-5. WeaverAnalysis mirrors it
-and owns its counterpart changes, without becoming a serving deployment gate. [SCOPE-1,
-PERSIST-5, October 18 R8]
+election and preload door on a separate connection/catalog. It never adopts a serving
+dump of state-content/1 or, after weaver-state STATE-GOVERNING's cutover,
+state-content/2, or supplies a serving seed. No serving load can enable the preload
+door. This stages the local interpretation of analysis-state contract 1/2/3, whose copy
+in this repository is authoritative under R20-5. WeaverAnalysis mirrors it and owns its
+counterpart changes, without becoming a serving deployment gate. [SCOPE-1, PERSIST-5,
+October 18 R8]
 
 ## 2. Enforcement, destinations sections 3.1 and 3.2
 

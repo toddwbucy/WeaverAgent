@@ -4,7 +4,7 @@
 
 **Landing PR:** #420
 
-**Version:** 0.45 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.46 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -137,7 +137,7 @@ result containing the RunFailure and an optional returned original AuthoredEvent
 not Clone. A returned original owns no live recorder ticket and has no trace sequence,
 and remains the caller's custody. An absent returned original means the context retains
 that exact original in an existing author slot, or the original has already reached
-Recorded; it never means the original was discarded. RunFailure retains its existing
+Recorded. It never means the original was discarded. RunFailure retains its existing
 failure, wait and nonfatal admission reasons, not event custody. An already-latched
 fatal cause remains immutable and takes precedence over later admission reasons.
 PumpPorts borrows the currently standing lifecycle, gate, decode and legacy-label
@@ -200,30 +200,30 @@ and takes precedence over the later caller error. If the context's held caller o
 or immutable first-fatal original prevents taking another original, return that new
 original in AuthorFailure. Never replace either earlier original, clone an event merely
 to fit an error value, allocate an overflow queue, or invent a ticket. Keep the first
-latched failure unchanged; a later rejected call returns that failure with its own
+latched failure unchanged. A later rejected call returns that failure with its own
 untouched original. This return grants neither retry nor continuation. [FLOW-2, FLOW-3,
 FLOW-4, SORT-4]
 
 Ownership transfer and recording admission are separate facts. An original accepted into
 the one pending author keeps its allocated ticket and original wait through
-CapacityPending and resume; no returned original may duplicate that pending owner. An
+CapacityPending and resume. No returned original may duplicate that pending owner. An
 early owner hold remains unadmitted and may occupy the context's existing single held
 slot. Its caller takes it unchanged before another attempt. If a resumed pending author
 is withdrawn because an existing account owns admission, return that original through
 the same move-owned result when the held slot is occupied, after releasing only that
 attempt's unadmitted preparation and bookkeeping. A withdrawal assigns no trace sequence
-and renews no wait. Existing mandatory account settlement continues; no return permits
+and renews no wait. Existing mandatory account settlement continues. No return permits
 skipping it. [FLOW-2, FLOW-3, FLOW-4, FLOW-5]
 
 **HARNESS-HELD-BOUNDARY.** New owner admission, release, Enter rollback,
 member-capture preparation and Closed refuse while the held caller slot or the
 template-blocked caller slot is occupied, including an original held after release
 began. Return a recoverable Busy refusal when the held original is the blocking
-condition; do not latch protocol_failed for that condition alone. The separate
+condition. Do not latch protocol_failed for that condition alone. The separate
 second-submit caller-error rule above remains unchanged. [FLOW-2, FLOW-3, FLOW-5]
 
 Use one shared private held-input predicate and reason across these admission roads.
-The Busy reason identifies the occupied caller-held or template-blocked slot; if both
+The Busy reason identifies the occupied caller-held or template-blocked slot. If both
 are occupied, both originals remain owed. The method's existing result family may carry
 that private reason, but may not translate held input into WrongProof, MissingHead or
 TemplateBlocked. In particular, completed_template_enter cannot claim a template
@@ -238,13 +238,13 @@ prepare_member_capture returns recoverable Busy, not a new fatal ProtocolFailed.
 invalid phase, missing proof, wrong bound or unmet protocol preconditions keep their
 existing rules. A held
 refusal leaves phase, pending ticket, exact originals, resources and original deadlines
-unchanged; it neither arms a replacement wait nor starts release or capture. Taking the
+unchanged. It neither arms a replacement wait nor starts release or capture. Taking the
 exact originals only removes this hold. A subsequent attempt must still pass all
-ordinary phase, proof, ownership and deadline checks; it is not a promise that retry
+ordinary phase, proof, ownership and deadline checks. It is not a promise that retry
 succeeds and it grants no ordinary author retry permission. [FLOW-2, FLOW-3, FLOW-5]
 
 An already latched fatal cause remains first and is returned before a nonfatal held
-reason. Existing clock/deadline and independent failure checks still run where required;
+reason. Existing clock/deadline and independent failure checks still run where required.
 Busy must not mask an observed failure, renew a bound or revive Failed. Taking an
 original in Failed does not make these healthy boundary APIs available. Independently
 bounded fatal teardown remains required under HARNESS-HALT-BOUND: the existing context
@@ -253,23 +253,23 @@ owed work, and closes/exits failed at the original cap without claiming successf
 Closed or successful Left. No held-input recovery wait extends that cap, and no original
 is dropped just to satisfy close. [FLOW-2, FLOW-3, FLOW-5]
 
-Existing admitted owners may complete their exact private continuations; held input
+Existing admitted owners may complete their exact private continuations. Held input
 grants none of its own. This rule adds no halt-account member, fabricated ticket,
 implicit submission, overflow queue or successful close that loses an original.
 [FLOW-2, FLOW-3, FLOW-5]
 
 Every caller handles both ownership outcomes explicitly. A returned original goes back
-to that caller's existing event or stopped-evidence owner; a caller may not use an error
+to that caller's existing event or stopped-evidence owner. A caller may not use an error
 conversion that drops it. In particular, no From<AuthorFailure> for RunFailure is
 permitted: propagation with ? must not silently discard a returned original.
 Compile-time negative pins must prove that AuthorFailure is not Clone and RunFailure
 does not implement From<AuthorFailure>. Input offered/refusal/turn/message authoring,
 mark-refusal authoring, repair authoring and retained retries preserve their original
-stage and source identities. They mark an attempt started only when the context actually
+stage and source identities. They mark an attempt started only when the context
 takes custody, and never rebuild a returned event from current state. After failure,
 returned custody joins the caller's bounded teardown under the existing deadline. It
 neither enlarges the fixed halt-account schema nor adds a trace record. Halt reporting
-still names only the real pending ticket; an unaccepted original must not be represented
+still names only the real pending ticket. An unaccepted original must not be represented
 as a ticketed AuthorAtHalt. [FLOW-2, FLOW-3, FLOW-5, FLOW-6]
 
 The first fatal account uses the trace writer's fault reserve. It may bypass an event
@@ -425,6 +425,12 @@ inventory, not future results. The model result target exists even when the part
 did not select that source. Correct rejection then authorizes repair but no filing.
 Invalid result shape is a component failure. [CLASS-2, CLASS-9, STORE-3, SORT-4]
 
+A Ste100Request for a model Text block carries the model's emission, e, as recorded on
+the trace. The harness builds the agent's act Y under Spec 02 EFFECTIVE-EMISSION and
+never submits it in place of e. Filing and the client answer use Y. This is the
+operator's ruling of 2026-11-01 (ruling A), confirmed on 2026-11-02 (#432). [OUT-1,
+CLASS-9, CLASS-10]
+
 **HARNESS-RECALL-REFUSAL.** The model association and repair owners implement
 Spec 02 RECALL-REFUSAL before constructing an inward pair or query. The accepted
 association account alone supplies the reserved CallId, original Text index, exact
@@ -456,7 +462,7 @@ complete-attempt boundary across Stop/leave: retain exact correction identity an
 count once when all required facts exist, before fallible continuation or extraction,
 without reopening any cancelled grant or cap continuation. Recorded PairEnded alone
 is not a completion receipt. Cancellation and phase permissions follow
-RECALL-REFUSAL and HARNESS-RECORD-LIFETIME; no new filing after foundation halt or
+RECALL-REFUSAL and HARNESS-RECORD-LIFETIME. No new filing after foundation halt or
 renewal of the original wait is authorized. No new terminal reserve,
 placement grant, final-answer policy or classifier meaning is introduced. [CLASS-9,
 CLASS-10, FLOW-4, FLOW-5, OUT-1]
@@ -485,6 +491,14 @@ defect records state_template_rejected, fails that operation, and never invokes 
 component halt. Spec 02's TEMPLATES defines the substitution proof and certificate
 method. Its production grammar artifact remains a cutover dependency. [CLASS-2, FLOW-8,
 review S2]
+
+With no state-management.ste100 binding, enter stands no STE100 duty, sends no template
+request, authors no ste100.result and derives no TemplateCertificate. The first load
+event still carries the inventory identity and scheme digest, with no checker digest.
+Each runtime expansion is checked structurally under Spec 02 TEMPLATES before it reaches
+the argument. A missing certificate refuses enter only where the binding is elected, and
+a partition failure keeps its path above. This is the operator's ruling of 2026-11-02 on
+#437 (Q7). [CLASS-2, FLOW-8]
 
 **HARNESS-INPUT.** Check a request before granting Ports or starting a turn. Keep the
 existing world request grammar, {text:String, role?:String}, under parse_request. The
@@ -542,6 +556,12 @@ before token consumption, then delivers a late valid reply. Removing the
 cancelled-operation guard or authoring message.user before token consumption must make
 it fail. [GATE-1, CLASS-8, FLOW-4]
 
+With no state-management.ste100 binding, Spec 02 INPUT's unchecked path applies: a
+well-formed request of origin operator mints AcceptedInput with no Ste100Request, a
+request of any other origin is refused as refusal/Input(invalid_input_shape) before any
+token, and the agent takes only input the operator controls. This is the operator's
+ruling of 2026-11-02 on #437 (Q6). [GATE-1, CLASS-4]
+
 ## 3. Ledger, channel, and waits, destinations sections 2 and 6
 
 This replacement applies at the [foundation cutover][cutover]. Until then, the previous
@@ -580,6 +600,14 @@ Filed and correctly_rejected are terminal. No reconnect or resend resolves an un
 commit. The state request counter is distinct from classifier and input counters. The
 channel's control state table is in the store/read and persistence amendments. [SEAM-2,
 FLOW-5]
+
+With no state-management.ste100 binding, nothing is classified or filed by verb (Spec 02
+DECLARATION). The semantic partition selects no Text or accepted-input copy for the
+store, so neither table row for them is reached, and no ledger entry, classifier request
+or store send exists for them. The trace keeps every emission and input. A no-binding
+fixture runs one turn and requires zero classifier requests and zero store sends.
+Electing the binding in that fixture must make it fail. This is the operator's ruling of
+2026-11-02 on #437 (Q3). [STORE-2, TAP-4, CLASS-3]
 
 **HARNESS-PUMP.** Extend exchange_wake and lifecycle wait helpers with state I/O, STE100
 readiness, label-score readiness, and trace capacity wake. All serving waits on
@@ -637,7 +665,7 @@ outer test watchdog. [CLASS-8]
 required original EnterWindow and its existing exchange and descriptor custody. Sample
 received_ns from the common raw clock after the complete packet/descriptor receive and
 before JSON decoding. Structural/encoding violations of TYPES-ENTER-WINDOW follow the
-existing malformed-envelope channel fault; all received descriptors remain accounted
+existing malformed-envelope channel fault. All received descriptors remain accounted
 for on that road. A structurally valid began_ns later than received_ns is malformed
 Enter, not an allowance to wait until that anchor: use the existing before-load
 Malformed refusal on its valid exchange, without state open or a fabricated load.
@@ -655,13 +683,13 @@ PLACE-4]
 
 Before load, expiry follows the existing unadmitted/before-load cleanup and leaves no
 load or refusal record manufactured to explain a run that never stood. Account for and
-close only this unadmitted Enter's owned descriptors; retain the lifecycle position for
+close only this unadmitted Enter's owned descriptors. Retain the lifecycle position for
 its actual before-load rollback outcome. After load, retain the same context, original
 window and all actual owed author/read/pair/Open/process evidence in the entered
 bracket for explicit rollback. An expired exchange produces no substitute lifecycle
 answer. Admin owns its existing unanswered-load result and directs rollback under
 ADMIN-ENTER-WINDOW. Actual component failure still follows HARNESS-HALT with its first
-cause; expiry cannot erase it. Neither path fabricates Released, LastWord, process
+cause. Expiry cannot erase it. Neither path fabricates Released, LastWord, process
 exit, Unload or successful cleanup. [CLASS-8, FLOW-3, FLOW-5, PERSIST-6]
 
 Initialize the private Enter bound from the validated original began_ns/deadline_ns,
@@ -669,7 +697,7 @@ without reconstructing deadline_ns from a later trace origin or sampled remainde
 Keep the trace's separately captured origin_ns and elapsed envelope semantics unchanged.
 A trace origin observed after deadline means expired Enter, not a reversed original
 interval. Preserve original bounds across every owner transfer. Only the actual
-accepted rollback Leave may invoke its existing independent cleanup authority; it
+accepted rollback Leave may invoke its existing independent cleanup authority. It
 never rewrites Enter to that allowance or admits a late Ready. Any already owed
 account is retained or settled under its existing applicable bound and disposition,
 not silently discarded to make expiry look complete. [CLASS-8, FLOW-3, FLOW-5]
@@ -679,7 +707,7 @@ Ready before the deadline and admin received it at or after the deadline. Admin'
 late-answer refusal does not turn that Ready into an accepted load. Once the actual
 forced Leave with rollback true is accepted, the worker follows rollback by the
 directive, regardless of its own entered position or earlier Ready send. No new
-ordinary work is admitted after that acceptance; retain and unwind actual owed work,
+ordinary work is admitted after that acceptance. Retain and unwind actual owed work,
 run no wind-down, take no save point, and release only what stood. Where a load
 bracket stands, its existing terminal rules apply with the load's cause. The accepted
 Leave supplies its existing cleanup allowance, never a new Enter window.
@@ -687,9 +715,9 @@ Leave supplies its existing cleanup allowance, never a new Enter window.
 
 | Enter observation and worker position | Event | Required disposition |
 | --- | --- | --- |
-| Before load; original window expired | Current time reaches the retained deadline | No load or substitute refusal; retain and close actual unadmitted resources under existing before-load rollback. |
-| Load bracket stands; boot has not answered Ready | Original window expires | Keep the same entered context and owed work for explicit rollback; no new ordinary boot work or Ready. |
-| Ready was sent before the cap; worker is Entered; admin receives it late | Actual forced Leave with rollback true is accepted | Follow the existing any-position rollback rule; no new ordinary work after acceptance, no wind-down or save point, and no renewal of Enter. |
+| Before load. Original window expired | Current time reaches the retained deadline | No load or substitute refusal. Retain and close actual unadmitted resources under existing before-load rollback. |
+| Load bracket stands. Boot has not answered Ready | Original window expires | Keep the same entered context and owed work for explicit rollback. No new ordinary boot work or Ready. |
+| Ready was sent before the cap. Worker is Entered. Admin receives it late | Actual forced Leave with rollback true is accepted | Follow the existing any-position rollback rule. No new ordinary work after acceptance, no wind-down or save point, and no renewal of Enter. |
 
 | Claim | Required instrument | Protective change that must fail |
 | --- | --- | --- |
@@ -906,12 +934,12 @@ existing outcomes unless they also produce a flow component failure. [FLOW-4, FL
 | Reporting | Author fault/StateFlowFailed and one refused save_point for an unconfirmed pending capture through reserved entries where trace works | Interrupting |
 | Interrupting | Send ToolInterrupt{by:flow_failure}, await gate containment within halt deadline | Closing |
 | Closing | Close open turn Stopped/fault, answer caller stopped if reachable, lower gate | Releasing |
-| Releasing | Settle or abandon HARNESS-OPEN's owed account under its earlier bound before retiring the decode transport; release SPU, close state and classifier, then author unload with end_reason component_failure | Draining |
+| Releasing | Settle or abandon HARNESS-OPEN's owed account under its earlier bound before retiring the decode transport. Release SPU, close state and classifier, then author unload with end_reason component_failure | Draining |
 | Draining | Bounded trace drain, return ChannelFault::Closed | Failed worker exit |
 | Any halt phase | Further failure | Preserve first cause, append available evidence, never restart teardown |
 
 **HARNESS-RELEASE-ABSENT.** Retain whether the harness
-actually created an SPU child for this run through healthy rollback and Failed
+created an SPU child for this run through healthy rollback and Failed
 cleanup. A typed classifier admission refusal before SPU fork and a real failure
 before SPU fork both leave that fact false. A successful SPU fork makes it true,
 including later exec, Load or Open failure and a child already reaped. Port
@@ -919,7 +947,7 @@ retirement never resets it. Do not start an SPU merely to obtain a release outco
 
 At the foundation cutover, every new Unload still carries `release`. Use the
 paired trace amendment's TRACE-RELEASE-ABSENT optional `release.spu`: omit it only
-when no SPU child was created; otherwise retain the
+when no SPU child was created. Otherwise retain the
 exact existing Confirmed/Unconfirmed rule. Retain the member's independent actual
 Closed/Unconfirmed/absent disposition. Absence creates no Release exchange, death
 fault, new terminal permit, successful Left or additional time. A healthy refusal
@@ -1436,6 +1464,7 @@ direct store update. [TAP-4, MARK-5, CLASS-8, SEAM-2, review S2]
 | Mark coordinator state | Observation | Action and next state |
 | --- | --- | --- |
 | Idle | Caller requests begin_task with accepted input | Wait for its filing under decision barrier, AwaitInput |
+| Idle | Caller requests begin_task with no state-management.ste100 binding | Record RefusalRecord::Instruction with case invalid_context naming the absent binding, return it to caller, Idle, no wait |
 | AwaitInput | Exact input filed receipt | Submit marks read on the sole state owner, Reading |
 | Reading | Valid marks result, current task absent or terminal | Allocate task/prompt proposal, author certified state.mark, Authoring |
 | Reading | Current task open | Return its TaskScopeRef, Idle |
@@ -1448,6 +1477,17 @@ direct store update. [TAP-4, MARK-5, CLASS-8, SEAM-2, review S2]
 | After authoring | Stop or leave with healthy flow | Account and finish the owed filing, no dependent generation |
 | Any wait | Component failure or applicable bound | Foundation latch, no retry or direct mark write |
 
+With no state-management.ste100 binding nothing is filed (HARNESS-LEDGER), so no filing
+receipt can arrive. Every port whose operation would wait on one refuses before that
+wait with its existing typed operation refusal and latches no component failure.
+begin_task records RefusalRecord::Instruction with case invalid_context, as the table's
+no-binding row says, and returns no TaskScopeRef. A HARNESS-PLAN-PORTS operation returns
+PlanOperationRefused with case invalid_target and null read_code, since no task scope
+exists. Reads, turns and wind-down stay available. A no-binding fixture calls begin_task
+and a plan port and requires each refusal with no wait, and removing the guard must make
+it reach the bound instead. This is the operator's ruling of 2026-11-02 on #437 (Q3).
+[MARK-1, PLAN-2, FLOW-4, STORE-2]
+
 Spec 07 invokes the remaining mark helpers through its classified plan effects. Before
 closure it freezes a source frontier and waits for every disposition through it. Only
 filed content and terminal filed pairs may enter a preview or finalized span. Correctly
@@ -1456,16 +1496,17 @@ constructs a closed-span or CutReady grant from it. A preview is evidence for th
 tool, not an instruction to mutate state. [MARK-3, MARK-4, MARK-5, PLAN-2]
 
 **HARNESS-BOOT.** Follow PERSIST-LOAD once per enter: opened, untapped load, semantic
-partition validation and recorder activation, STE100 duty start and template checks,
-first content read system_prompt, recall evidence, cached BootHead, decoder open with
-that head first, pair repair, then user gate. BootHead is a Message plus SpanRef and end
-byte offset. The state member can open before load because that check is structural and
-emits no agent content. The worker starts no classifier before load. Remove the old
-implicit ask_recall boot-tail path and #76 seeding-turn branch. A second mandatory boot
-query is an integration error in the harness, not a store-side ban on later explicit
-recall. Run Spec 05's BOOT-REPAIR through open_pairs, tool.call.completed, PairCopy and
-file_pair, then require its second empty query before gate open. It uses the remaining
-load budget and never edits during adoption. [PERSIST-5, PERSIST-6, PROMPT-1, STORE-8]
+partition validation and recorder activation, STE100 duty start and template checks
+where the binding is elected (TEMPLATE-CHECK), first content read system_prompt, recall
+evidence, cached BootHead, decoder open with that head first, pair repair, then user
+gate. BootHead is a Message plus SpanRef and end byte offset. The state member can open
+before load because that check is structural and emits no agent content. The worker
+starts no classifier before load. Remove the old implicit ask_recall boot-tail path and
+#76 seeding-turn branch. A second mandatory boot query is an integration error in the
+harness, not a store-side ban on later explicit recall. Run Spec 05's BOOT-REPAIR
+through open_pairs, tool.call.completed, PairCopy and file_pair, then require its second
+empty query before gate open. It uses the remaining load budget and never edits during
+adoption. [PERSIST-5, PERSIST-6, PROMPT-1, STORE-8]
 
 Boot recall Recorded establishes BootHead before decoder Open. HARNESS-OPEN consumes
 that private provenance to bind the one Open exchange and its boot placement. The
@@ -1542,8 +1583,8 @@ unframed BootHead Text. Producer fixtures prove rendering/token/prefill truth.
 
 Check the declared head/tail budget and effective generation reserve with Spec 06's
 checked arithmetic, including generation_limit greater than zero for foundation
-serving. Zero is valid evidence of the resolved limit but fails this configured fit;
-it follows the truthful placement then boot_failed path below, not protocol failure.
+serving. Zero is valid evidence of the resolved limit but fails this configured fit.
+It follows the truthful placement then boot_failed path below, not protocol failure.
 A valid Opened describes a prefix already seated, whether or not that configured fit
 succeeds. Retain its exact evidence and author the assembly-zero placement with the
 existing boot recall sequence as causal_parent. Keep the reservation and active boot
@@ -1572,7 +1613,7 @@ An answer exceeding DECODE_MESSAGE_BOUND is component failure. Trace encoding or
 sink errors follow the existing trace failure path. Allocation failure grants no
 readiness, and this
 carrier adds no process-wide allocation-failure recovery. TRACE-PLACEMENT
-states the distinct record-size qualification obligation; the recorder has no
+states the distinct record-size qualification obligation. The recorder has no
 per-record byte ceiling to borrow here. Never truncate evidence or retry Open.
 Later explicit reads
 cannot replace the existing BootHead or open the residency again. [PROMPT-1, PERSIST-6,

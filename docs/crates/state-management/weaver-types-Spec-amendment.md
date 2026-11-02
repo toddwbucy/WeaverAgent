@@ -4,7 +4,7 @@
 
 **Landing PR:** #384
 
-**Version:** 0.37 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.38 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -46,7 +46,10 @@ same positive elapsed_ns and measurement_ref representation as MeasuredWait, but
 no timeout. Spec 09's FLOW-COUNTS owns its sampling use. SchemeDeclaration holds
 scheme_id, artifact_sha256, and verbs, an ordered unique list of nonempty closed verb
 keys. A changed dictionary changes artifact_sha256 and scheme_id. scheme_id is `ste100:`
-followed by artifact_sha256, under Spec 02's SCHEME clause. Admin checks syntax and the
+followed by artifact_sha256, under Spec 02's SCHEME clause. FlowConfig also holds
+thesaurus: Option<ThesaurusDeclaration>, with artifact_sha256 and scheme_id, under Spec
+02's THESAURUS clause. Its scheme_id must equal scheme.scheme_id, and absent elects no
+thesaurus (the operator's ruling of 2026-11-02 on #437, C1). Admin checks syntax and the
 exact scheme bytes, and the classifier checks its loaded artifact. Use the existing
 kebab-case TOML naming and unknown-field refusal. Later strategy keys are added by their
 owning amendment under the same state-management parent. Reason: the declaration is
@@ -82,11 +85,12 @@ attestation, not proof that a benchmark was run. Qualification checks its eviden
 | state-management.flow.observation-interval | elapsed-ns decimal string, measurement-ref string, a cadence rather than a wait bound |
 | state-management.flow.backlog | max-pending-blocks and max-pending-bytes positive decimal strings, measurement-ref nonempty string, lag-alarm-turns positive decimal string |
 | state-management.flow.scheme | scheme-id string, artifact-sha256 lowercase 64-hex string, verbs array of strings |
+| state-management.flow.thesaurus | artifact-sha256 lowercase 64-hex string, scheme-id string. Elective: absent elects no thesaurus, under Spec 02 THESAURUS |
 | state-management.start | dump-sha256 lowercase 64-hex string in a published copy |
 | state-management.persistence.save-wait | elapsed-ns decimal string, measurement-ref string |
 | state-management.persistence.snapshot-wait | elapsed-ns decimal string, measurement-ref string, initial explicit value 120000000000 ns under R20-6 |
 | state-management.reads | max-result-bytes positive decimal string, measurement-ref string |
-| state-management.ste100 | Ste100Instruction, with the seven fields below |
+| state-management.ste100 | Ste100Instruction, with the seven fields below. The one elective table here: absent elects no classifier, under the election paragraph below |
 | state-management.tools.sh | ToolPolicy, required exactly when tool-set elects sh |
 | state-management.placement | c-head positive u64, c-tail positive u64, measurement-ref nonempty string |
 
@@ -128,6 +132,13 @@ absolute-path requirement. Filesystem resolution and named-file digest checks be
 to SPU admission. Neither the declaration codec nor the wire rewrites this locator
 to a directory. Decoder and legacy ClassifyInstruction bindings are unchanged.
 [CLASS-2, CLASS-7, SEAM-2]
+
+state-management.ste100 is a declaration election under Spec 02 DECLARATION.
+StateManagementConfig.ste100 is Option<Ste100Instruction>, and an absent table parses to
+None, which elects no classifier. A present table keeps every requirement above. With
+None, LoadedStateFacts.ste100_binary_sha256 is absent, and TYPES-ENTER carries no
+instruction. This is the operator's ruling of 2026-11-01 (ruling C), made a declaration
+election by the ruling of 2026-11-02 on #437 (Q3). [CLASS-2, CLASS-3, STORE-2]
 
 ToolPolicies is a closed map with sh as its only possible key. ToolPolicy has
 clock_ms:u64 and measurement_ref:String. Require a nonempty reference and a clock in
@@ -201,10 +212,16 @@ the root-judged executable digest in the existing binary facts, copied into
 LoadedStateFacts for show. It is not the model-manifest digest or scheme digest. Spec
 02's CUSTODY governs all three identities. [CLASS-2, FLOW-3]
 
+EnterBinding::Serving and LoadedStateFacts::Serving also carry ste100_thesaurus:
+Option<String>, the exact thesaurus bytes where the declaration elects one. Both byte
+fields come from the selected save point's files under PERSIST-FORMAT, not from admin's
+config root. This is the operator's ruling of 2026-11-02 on #437 (C3 and Q8). [STORE-2,
+PERSIST-3]
+
 **TYPES-ENTER-WINDOW.** Add state_flow::EnterWindow with exactly
 {began_ns:DecimalU64,deadline_ns:DecimalU64}. Both fields are raw readings of the same
 Linux CLOCK_MONOTONIC domain under Spec 09 CLOCK, and began_ns < deadline_ns. The
-interval is positive; an absolute began_ns of zero is not invalid by itself. Require
+interval is positive. An absolute began_ns of zero is not invalid by itself. Require
 canonical DecimalU64 strings, both fields, no unknown or duplicate fields, and checked
 arithmetic. An equal or reversed interval is malformed. A well-formed window whose
 deadline has passed is expired, not malformed, and a codec never renews or clamps it.
@@ -212,13 +229,13 @@ deadline has passed is expired, not malformed, and a codec never renews or clamp
 
 enter_window is required only in the replacement EnterBinding::Serving shape. It has
 no default, optional spelling, caller-chosen duration, or legacy Serving fallback.
-Diagnostic carries no enter_window and continues its separately elected lifecycle;
-the closed Diagnostic shape rejects that member. This is an invocation fact, not a
+Diagnostic carries no enter_window and continues its separately elected lifecycle.
+The closed Diagnostic shape rejects that member. This is an invocation fact, not a
 bound-declaration setting or a new LoadedStateFacts/show or trace load field. The
 existing envelope bound still includes its encoded bytes. No Rust Instant, wall-clock
 translation, time-namespace translation or cross-host deadline is a valid carrier.
 ADMIN-ENTER-WINDOW owns its sole producer and HARNESS-ENTER-WINDOW owns receipt and
-expiry. Both retain the original two values; an existing retry does not earn another
+expiry. Both retain the original two values. An existing retry does not earn another
 budget. This carrier adds no permission to retry. [CLASS-8, FLOW-3, SEAM-2]
 
 The harness converts StateManagementConfig.flow, .persistence, .reads, .ste100, .tools
@@ -339,11 +356,12 @@ result only for identical text under the same scheme, preserving the new source 
 line per frame, carried on the existing inherited UnixStream. Unknown fields, unknown
 versions, duplicate JSON keys, noncanonical counters, and trailing nonspace bytes refuse
 parsing. The wire version is state-flow/1. The schema is state-content/1, defined by the
-complete store and read amendments in this unit. Pair, mark and plan tables join that
-initial catalog before its first deployment. A smaller draft is not a supported runtime
-catalog. After deployment a changed catalog needs a new version and its own
-compatibility act. No unknown JSON extension field is silently held. [SEAM-1, SEAM-2,
-STORE-5]
+complete store and read amendments in this unit. At weaver-state STATE-GOVERNING's
+cutover it is state-content/2, and an earlier image refuses. Pair, mark and plan tables
+join that initial catalog before its first deployment. A smaller draft is not a
+supported runtime catalog. After deployment a changed catalog needs a new version and
+its own compatibility act. No unknown JSON extension field is silently held. [SEAM-1,
+SEAM-2, STORE-5]
 
 | Message | Required fields after protocol, session_id, run_id, request_id, op |
 | --- | --- |
@@ -569,7 +587,7 @@ world request refused before a turn when weaver-admin-Spec section 3.0's current
 position requires NoResidency. Author it only as RefusalRecord::Lifecycle
 {asked:WorldRequest, refusal:NoResidency}. No new
 LifecycleDirective, LifecycleRefusal, trace event kind or world message is added.
-The ask identifies what was refused; Enter, Admit and Release must not stand in for a
+The ask identifies what was refused. Enter, Admit and Release must not stand in for a
 world request. The record's causal_parent identifies the original input.offered, so
 the ask contains no duplicate input_id or frame bytes. Spec 02 INPUT-NO-RESIDENCY
 owns that intake and trace-before-answer order. [GATE-1, FLOW-3, SEAM-2]
@@ -866,12 +884,19 @@ The request uses the 8 MiB complete-line bound and the answer uses the 1 MiB bou
 including the final LF. Use TYPES-CODEC's duplicate-key and strict-field rules. A
 malformed envelope, wrong ID or wrong direction closes without a correlated answer. A
 well-formed seed request has exactly the fields listed above. Its schema_id must be
-state-content/1, seed_id is 32 lowercase hex characters, and raw_block is one complete
-Text ContentBlock whose decoded text equals prompt_text. The nonempty bindings equal
-certificate.bindings. Spec 02 owns scheme parsing and certificate validation against the
-supplied scheme and expected checker identity. Reason: both seed endpoints need the
-dictionary bytes to check the same bindings, and must not substitute an identifier for
-that dictionary. [STORE-2, STORE-3, PERSIST-5, CLASS-2, PROMPT-2]
+state-content/1, and state-content/2 at weaver-state STATE-GOVERNING's cutover, seed_id
+is 32 lowercase hex characters, and raw_block is one complete Text ContentBlock whose
+decoded text equals prompt_text. The nonempty bindings equal certificate.bindings. Spec
+02 owns scheme parsing and certificate validation against the supplied scheme and
+expected checker identity. With no state-management.ste100 binding, bindings and
+certificate.bindings are empty, and SeedRequest.checker_artifact_sha256,
+SeedCertificate.checker_artifact_sha256 and VerifiedSeed.checker_artifact_sha256 are
+each an explicit null. Each is Option<Digest> on the wire, null exactly where the
+authoring declaration elects no binding, and the parser refuses the other combination,
+under Spec 02 SEED-CERTIFICATE (the operator's ruling of 2026-11-02 on #437, Q7).
+Reason: both seed endpoints need the dictionary bytes to check the same bindings, and
+must not substitute an identifier for that dictionary. [STORE-2, STORE-3, PERSIST-5,
+CLASS-2, PROMPT-2]
 
 SeedRefusal has exactly unsupported_schema, malformed_seed, seed_certificate_invalid,
 write_failed, image_too_large and snapshot_failed. Check schema, seed/block shape, then
@@ -964,7 +989,7 @@ still-graceful leave. Terminal unwind refusals follow ADMIN-SAVE's enumerated ne
 outcomes at every capture receive, local-work checkpoint and joined Leave. FailedRun
 is admin's projection shape, with no current harness producer. Defensive acceptance
 requires the original observed run and, after Beginning, the original capture ID.
-A join that cannot identify the run rejects that shape; it has no capture ID to compare.
+A join that cannot identify the run rejects that shape. It has no capture ID to compare.
 Neither a worker refusal nor its nested organ reason supplies admin's own publication
 facts. The receiver rejects other refusal codes, a save report, CaptureComplete or a
 return to publication after this acknowledgement. Aborted keeps its cancellation
@@ -1047,6 +1072,16 @@ rebind. seed/rebind confirmations require matching cause, and serving requires o
 the other three. Index and binding file carry the same confirmation. [PERSIST-2,
 PERSIST-5]
 
+Open also carries thesaurus_sha256, the declared thesaurus digest or null. After an
+install, a rebind or load compares the declaration's digests with the image's current
+versions, not with an earlier declaration's, and an image whose current version changed
+under STATE-INSTALL is not relabeled. SeedRequest also carries ste100_thesaurus:
+Option<String>, the first thesaurus version where elected. Confirmation gains install
+{kind, sha256}, and Cause gains install, which requires it. StatePersistenceInvalid
+gains stage install, and scheme_mismatch also applies at load, for a save point whose
+current versions disagree with the declaration. This is the operator's ruling of
+2026-11-02 on #437 (C2 to C4 and Q8). [PERSIST-2, PERSIST-3, PERSIST-5]
+
 StateManagementConfig also has persistence: PersistenceConfig, with save_wait and
 snapshot_wait as MeasuredWait under their corresponding save-wait and snapshot-wait
 declaration tables. Its elapsed-ns and measurement-ref grammar is the same as the flow
@@ -1054,6 +1089,21 @@ bounds. StartIdentity.position comes from binding.json, and opened must echo it 
 start, never as a second field. The state member compares it with the image's last
 committed event before adoption. A seed position is null. [PERSIST-3, PERSIST-4,
 STORE-5]
+
+**TYPES-INSTALL.** state_flow owns InstallRequest, InstallCaptured and InstallRefusal
+and their state-install/1 codec, under TYPES-SEED's frame, bound, codec and correlation
+rules, with protocol state-install/1 and ops install, captured and refused.
+InstallRequest is {kind, bytes, sha256, ruling, source_sha256, expected}: kind is scheme
+or thesaurus, bytes the exact UTF-8 artifact, sha256 its Digest, ruling a nonempty
+reference to the operator's ruling, and source_sha256 the thesaurus source's Digest,
+present exactly for a thesaurus and equal to the artifact's source.sha256. expected is
+{start:StartIdentity, scheme_sha256:Digest, thesaurus_sha256:Option<Digest>}, which
+admin reads from the selected artifact's binding.json after it verifies the artifact,
+and which STATE-INSTALL compares in place of open's values. InstallCaptured is
+{room_name, size_bytes:DecimalU64}. InstallRefusal is exactly unsupported_schema,
+open_failed, invalid_version, scheme_mismatch, write_failed, image_too_large and
+snapshot_failed. This is the operator's ruling of 2026-11-02 on #437 (C4). [PERSIST-3,
+PERSIST-5, SEAM-1]
 
 **TYPES-SAVE-TIME.** state_flow defines SaveWindow with exactly
 {began_ns:DecimalU64,deadline_ns:DecimalU64}, both raw CLOCK_MONOTONIC readings and
@@ -1117,7 +1167,7 @@ measurement:Box<RawValue>, in that wire field order. It derives Debug, Clone,
 Serialize and Deserialize, and implements PartialEq manually: compare the session
 and every count normally and compare each raw box's get() bytes exactly. This keeps
 TokenAnswer's PartialEq contract without requiring RawValue to implement it. Use
-Generation's existing raw-box comparison pattern; no parse or normalization enters
+Generation's existing raw-box comparison pattern. No parse or normalization enters
 equality. Unknown or duplicate outer fields refuse. [PLACE-1, PLACE-5, SEAM-2]
 
 PlacementCode is invalid_span, invalid_pair, invalid_cut, head_over_capacity,

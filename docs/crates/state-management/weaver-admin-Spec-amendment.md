@@ -4,7 +4,7 @@
 
 **Landing PR:** #373
 
-**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
+**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -37,6 +37,21 @@ and scheme digests. No worker opens these root paths again. Reason: the checker 
 receive the same instance that inventory checked, while binary custody stays with admin.
 [CLASS-2, FLOW-3, PERSIST-3]
 
+A bound declaration with no state-management.ste100 table elects no classifier, under
+Spec 02 DECLARATION. Inventory then requires no ste100-binary and judges none, records
+no executable digest, passes no instruction, and the load facts record the election as
+absent. This is the operator's ruling of 2026-11-01 (ruling C), made a declaration
+election by the ruling of 2026-11-02 on #437 (Q3). [CLASS-2, CLASS-3, STORE-2]
+
+At this amendment's cutover, inventory reads the scheme and, where elected, the
+thesaurus from the selected save point's files under PERSIST-FORMAT and verifies each
+digest against the bound declaration, under Spec 02 CUSTODY. It passes those save-point
+bytes as EnterBinding::Serving.ste100_scheme and the thesaurus field, in place of the
+root file read above. The root keys ste100-scheme.json and the optional
+ste100-thesaurus.json keep their custody judgment and are read only by seed and
+install-governing, never at load. This is the operator's ruling of 2026-11-02 on #437
+(C3 and Q8). [CLASS-2, PERSIST-3, STORE-2]
+
 The instruction's model binding names Spec 02's exact manifest file by an absolute
 pathname under MANIFEST-LOCATOR. A relative value is ConfigInvalid naming the binding
 field. Inventory preserves that declared value and its expected digest. Admin does not
@@ -56,10 +71,17 @@ one-byte-over cases are admission fixtures. Removing the complete-envelope guard
 fail them. [CLASS-8, FLOW-3, PERSIST-6, SEAM-2]
 
 Inventory also validates the declared sh policy against the elected tool set and the
-shared shell maximum. Diagnostic binding requires neither new root key nor a serving
-STE100 instruction. An invalid serving artifact is ConfigInvalid with field attribution
-at inventory. Checker admission or template certification failures after load use the
-existing after-load refusal and rollback path. [CLASS-8, PAIR-2, SCOPE-1]
+shared shell maximum. A declaration that elects a tool with no state-management.ste100
+binding is ConfigInvalid naming state-management.ste100 (the operator's ruling of
+2026-11-02 on #437, Q7). A declaration with no state-management.ste100 binding whose
+gate access rule admits any uid other than the operator UID, or any gid, is
+ConfigInvalid naming gate-instruction.access-rule. Reason: with no classifier the agent
+takes only input the operator controls (the operator's ruling of 2026-11-02 on #437,
+Q6), and the gate's admission holds that before any frame reaches the harness.
+Diagnostic binding requires neither new root key nor a serving STE100 instruction. An
+invalid serving artifact is ConfigInvalid with field attribution at inventory. Checker
+admission or template certification failures after load use the existing after-load
+refusal and rollback path. [CLASS-8, PAIR-2, SCOPE-1]
 
 **ADMIN-SELECTION.** Add one optional regular file, restore-artifact, to the judged
 admin config root's closed key list in Spec 9. Its bytes are one artifact ID, with at
@@ -110,10 +132,10 @@ plan-summary read. [PERSIST-3, PERSIST-6, SEAM-1]
 **ADMIN-ENTER-WINDOW.** For a replacement Serving Load request only, admit the
 request and root configuration first, then sample began_ns once in dispatch after
 admissible and immediately before prepare_run_directory. That preparation is shared
-by every verb; only Load samples this Enter anchor there. The point precedes
+by every verb. Only Load samples this Enter anchor there. The point precedes
 run-directory preparation, invocation/run-lock acquisition, inventory and artifact
 selection, channel creation, child start and Enter carry. Root argument/configuration
-admission precedes the window; all subsequent load preparation and waits spend it.
+admission precedes the window. All subsequent load preparation and waits spend it.
 Entry to load after that shared preparation, or the later Enter send, is too late
 for this anchor. [CLASS-8, PERSIST-6, GATE-1]
 
@@ -122,13 +144,13 @@ multiplication and compute deadline_ns = began_ns + budget_ns with checked addit
 If that interval cannot be represented, return ConfigInvalid attributed to
 load-bound-seconds before Enter is sent. No saturated deadline, declaration override
 or caller-supplied window is accepted. Carry that exact EnterWindow in the required
-Serving binding. The existing launch preserves the common Linux CLOCK_MONOTONIC domain;
-a different time namespace or remote clock is outside this carrier's contract.
+Serving binding. The existing launch preserves the common Linux CLOCK_MONOTONIC domain.
+A different time namespace or remote clock is outside this carrier's contract.
 [CLASS-8, FLOW-3, SEAM-2]
 
 Admin retains that same deadline through encoding, descriptor carry, socket pressure,
-worker scheduling and the answer. Bound those operations by the original deadline;
-check it before and after each work unit and after receipt/decode before accepting the
+worker scheduling and the answer. Bound those operations by the original deadline.
+Check it before and after each work unit and after receipt/decode before accepting the
 matching Ready. A readable socket or a completed send is not a timely Enter answer.
 Acceptance of that timely validated Ready ends the Enter window. The subsequent Open
 marker write, including its file and directory syncs, must succeed before Loaded, but
@@ -146,10 +168,10 @@ containment failure retains its existing precedence over the load's refusal.
 
 Opening, template checking, prompt reads and decoder/gate boot all share this remaining
 time. Any duration needed by a local primitive is derived from the original deadline
-at that operation's current observation; the duration is not re-added to a later clock
+at that operation's current observation. The duration is not re-added to a later clock
 sample. The worker receives the original window, never only a sampled remaining value.
 No stage, partial result, carry retry or parse grants a fresh budget. Later explicit
-rollback Leave retains its existing independent cleanup allowance and cause; it does
+rollback Leave retains its existing independent cleanup allowance and cause. It does
 not extend Enter or permit loaded/Ready. Existing component failure and escalation
 remain distinct from ordinary budget expiry. A failed clock observation cannot mint a
 window or imply successful cleanup. [CLASS-8, PERSIST-6, GATE-1]
@@ -210,6 +232,17 @@ remain cutover dependencies. Protocol fixtures alone cannot certify a production
 The pass statement is exact insertion of certified/reviewed bytes, not a claim that a
 checksum proves meaning. [CLASS-2, PROMPT-2, PROMPT-3, PERSIST-5]
 
+With no state-management.ste100 binding, the certificate file carries the prompt digest,
+scheme and review reference with no bindings, and admin verifies those under Spec 02
+SEED-CERTIFICATE with no expected checker digest. This is the operator's ruling of
+2026-11-02 on #437 (Q7). [PROMPT-2, PERSIST-5]
+
+Seed also reads the root ste100-thesaurus.json where the authoring declaration elects a
+thesaurus, checks it under Spec 02 THESAURUS, and supplies it in SeedRequest. The seed's
+publication carries the scheme and that thesaurus as PERSIST-FORMAT files, with their
+digests in binding.json. This is the operator's ruling of 2026-11-02 on #437 (C2 and
+Q8). [PERSIST-3, PERSIST-5]
+
 **ADMIN-REBIND.** Add root-shell-only `bind-state <agent>` to the same four verb
 surfaces as seed, with no further arguments. Hold the exclusive invocation lock and run
 lock and refuse a loaded agent. Select through ADMIN-SELECTION, verify the triple, and
@@ -226,6 +259,35 @@ field order, kebab-case keys, with no comments. It emits exactly one start hash.
 seed and bind use it. A normal save uses the loaded parsed declaration and the same
 serializer with the new A, never the mutable root draft. B hashes the final bytes passed
 at next load. [PERSIST-2, PERSIST-3]
+
+After install-governing, ADMIN-REBIND's scheme check compares the new declaration's
+scheme and thesaurus digests with the selected save point's current versions, read from
+its files, not with the old declaration's. The load refusal between the install and this
+rebind is intended. Rebinding still cannot change the image's versions. This is the
+operator's ruling of 2026-11-02 on #437 (C4). [PERSIST-2, PERSIST-3]
+
+**ADMIN-INSTALL.** Add root-shell-only `install-governing <agent> --scheme --ruling
+<reference>` and `install-governing <agent> --thesaurus --ruling <reference>` to the
+same four verb surfaces as seed. It takes no path: --scheme reads the judged root key
+ste100-scheme.json, and --thesaurus reads ste100-thesaurus.json. Do not add it to
+connector sudo rules. Hold the exclusive invocation lock and run lock, and refuse a
+loaded agent. Select through ADMIN-SELECTION and verify the artifact. Check the new
+artifact under Spec 02 SCHEME or THESAURUS, and refuse one whose digest is already
+current. Stand the member with --mode=install inside the start step's containment, as
+ADMIN-SEED does, with the selected state.sqlite on fd4, and send InstallRequest with
+expected read from the selected artifact's binding.json. On InstallCaptured, copy the
+image, clean up as seed does, and publish an artifact whose parent is the selected one,
+with confirmation install and cause install. Its agent.toml is the selected artifact's
+declaration copy written by the canonical serializer with only the starting hash
+replaced by the new A, as ADMIN-REBIND does, and B is recomputed. The copy still names
+the old version, and its scheme and thesaurus files are the image's new current
+versions, with their digests in binding.json. The next load refuses scheme_mismatch
+until the operator edits the draft with sudoedit and bind-state publishes it. Record the
+ruling reference with the artifact's sha256 and, for a thesaurus, its source sha256 in
+admin.log. A refusal or crash before publication creates no index entry. Reason: only
+the operator changes a governing table, through admin, under a ruling, as a new hashed
+version. This is the operator's ruling of 2026-11-02 on #437 (C4). [PERSIST-3,
+PERSIST-5, STORE-2]
 
 ## 3. Save and recovery, destinations sections 3.0 and 6
 
@@ -357,7 +419,7 @@ The exact final Left.forced settles the completed save's cause under foundation
 PERSIST-LEAVE-CAUSE. Admin retains the pending guard while finalizing a converted
 Leave's own last index entry to forced_unload. It does not reuse the initiating
 command's graceful flag for the completed save. A joiner verifies that same settled
-cause after the original publisher finishes; it neither finalizes nor repairs a
+cause after the original publisher finishes. It neither finalizes nor repairs a
 publication. [PERSIST-2, PERSIST-3, FLOW-5, operator 2026-10-27]
 
 **ADMIN-SAVE-COMPLETION.** For the replacement Serving conclusion only, replace admin
@@ -369,7 +431,7 @@ and ending the agent cgroup. Once that save completes, a later run-end or marker
 failure preserves its eligibility and identity, reports the cleanup or marker failure,
 and writes no successful conclusion marker. Unloaded still requires successful run
 cleanup and the existing marker and show rules. If finalization itself fails, retain
-the failed publication evidence and still attempt cleanup; retain both failures when
+the failed publication evidence and still attempt cleanup. Retain both failures when
 both fail. A closed, absent or different-run marker retains the existing idempotent
 no-publication rule. A joiner remains a verifier, never a second publisher.
 [PERSIST-2, PERSIST-3, FLOW-5, operator 2026-10-27]
@@ -382,30 +444,30 @@ the earlier of the original shared-tail and outer leave deadlines. The expired c
 window remains evidence but no longer caps this refusal-only wait. That frame
 acknowledges a refused capture only after member cleanup and trace accounting. Remove
 unlisted root parts and, on a timely acknowledgement, disarm the capture wait if still
-armed. Then await
-Left with forced true, no_state false and no save report, or SavePointNotTaken with the
-same missed leg for a leave that stayed graceful. These are the normal continuations;
-neither alone is a final command result. A terminal Malformed, DescriptorsUnusable or
-OrganRefused with organ Gate instead follows the existing failed-unwind conclusion:
-retain the refusal, end remaining run processes, preserve Open and report no successful
-save or Unloaded. OrganRefused keeps its nested reason attributed to the gate; it is
-not admin's own publication account. FailedRun is admin's projection shape; the
-current harness does not emit it. If received from a worker, a matching FailedRun is
-retained only as defensive evidence, never authority for root-owned artifacts or a
-published identity; its pre-Commit public result is Unanswered. Once Beginning has supplied a capture ID, FailedRun must name
-that exact ID as well as the run, at receives and local-work checkpoints. Other
-terminal refusal codes are protocol failures, including a direct StatePersistenceInvalid
-or a code asking the caller to retry a standing run. This same terminal-code rule
-applies to every capture receive, local-work checkpoint and joined Leave exchange,
-including before CaptureRefused and after admin Aborted. A join compares any FailedRun
-with its observed run and rejects it when that run is unavailable or different; it
-has no Beginning and cannot assert a capture ID it never learned. Initial admission
-retains its named standing-refusal cases, and demand or graceful capture cleanup
-retains its specified SavePointNotTaken outcome. Public projection applies the same
-terminal set and never promotes a worker's publication claim. Preserve the outer and shared
-leave windows and all normal conclusion duties. No late save success or renewed
-publication is permitted. A worker Aborted after a latched failure instead follows
-failed-run recovery and proves no cleanup. [PERSIST-4, FLOW-5, admin Spec 3.0]
+armed. Then await Left with forced true, no_state false and no save report, or
+SavePointNotTaken with the same missed leg for a leave that stayed graceful. These are
+the normal continuations. Neither alone is a final command result. A terminal Malformed,
+DescriptorsUnusable or OrganRefused with organ Gate instead follows the existing
+failed-unwind conclusion: retain the refusal, end remaining run processes, preserve Open
+and report no successful save or Unloaded. OrganRefused keeps its nested reason
+attributed to the gate. It is not admin's own publication account. FailedRun is admin's
+projection shape. The current harness does not emit it. If received from a worker, a
+matching FailedRun is retained only as defensive evidence, never authority for
+root-owned artifacts or a published identity. Its pre-Commit public result is
+Unanswered. Once Beginning has supplied a capture ID, FailedRun must name that exact ID
+as well as the run, at receives and local-work checkpoints. Other terminal refusal codes
+are protocol failures, including a direct StatePersistenceInvalid or a code asking the
+caller to retry a standing run. This same terminal-code rule applies to every capture
+receive, local-work checkpoint and joined Leave exchange, including before
+CaptureRefused and after admin Aborted. A join compares any FailedRun with its observed
+run and rejects it when that run is unavailable or different. It has no Beginning and
+cannot assert a capture ID it never learned. Initial admission retains its named
+standing-refusal cases, and demand or graceful capture cleanup retains its specified
+SavePointNotTaken outcome. Public projection applies the same terminal set and never
+promotes a worker's publication claim. Preserve the outer and shared leave windows and
+all normal conclusion duties. No late save success or renewed publication is permitted.
+A worker Aborted after a latched failure instead follows failed-run recovery and proves
+no cleanup. [PERSIST-4, FLOW-5, admin Spec 3.0]
 
 Send at most one admin Aborted for this capture and preserve it through partial carry.
 While awaiting CaptureRefused, validate any crossed Image or ImageFinished but discard
@@ -417,7 +479,7 @@ recovery, never a healthy refusal. Foundation's admin rows govern these cases.
 
 Cleanup and CaptureRefused may finish after the capture deadline while both remaining
 Leave deadlines are live. The final forced Left still needs normal run-end and marker
-duties; a still-graceful refusal leaves S9 available. If either remaining deadline
+duties. A still-graceful refusal leaves S9 available. If either remaining deadline
 expires first, report Unanswered with the Open marker and accept no later
 CaptureRefused or Left as a conclusion. The worker may finish a forced unwind, but
 without a later normal admin conclusion the next load observes NoCleanUnload. A
@@ -527,6 +589,7 @@ PERSIST-3, PERSIST-5]
 | restore | Unloaded, restore-artifact key naming a verified indexed complete artifact | Append selection, existing RestoreNamed. Missing key, pending/broken guard or invalid artifact refuses before change |
 | seed | Unloaded, no seed exists, judged seed prompt/certificate and declaration inputs under ADMIN-SEED | Seeded with StartIdentity only after complete publication. Refuse an existing seed or bad input |
 | bind-state | Unloaded, selected complete artifact and judged territory declaration draft | StateBound after verified same-state publication bound to the new declaration. N6 and scheme identity checks still apply |
+| install-governing | Unloaded, selected complete artifact, the judged root scheme or thesaurus file, and a ruling reference under ADMIN-INSTALL. It takes flags and a ruling reference, never a path | Published artifact with the new current version, the declaration copy's governing digests unchanged and its starting hash the new image's. Refuse a loaded agent, an invalid or already current version, or a thesaurus whose scheme_id is not the current scheme's |
 
 The contract rows state custody and outcomes. ADMIN-SEED, ADMIN-SELECTION and
 PERSIST-FORMAT own representations and publication order. [PERSIST-3, SEAM-1]
@@ -545,6 +608,7 @@ serving contract remains applicable.
 | ADMIN-LOAD | Different mutable draft and verified copy, fd probes, failed-enter fixtures | Run draft after checking copy or report loaded before boot |
 | ADMIN-SEED | Temporary-member process fixture, shared TYPES-SEED corpus, root verb parser and cgroup probes | Seed live state, require a prior artifact, omit checked scheme/checker inputs, skip invoker/ancestor checks, accept caller path or index before successful seed cleanup |
 | ADMIN-REBIND | Same A/new B artifact and immutable prompt check | Mutate dump or use old B after editing config |
+| ADMIN-INSTALL | Install-mode member over a selected artifact, then load before and after rebind | Publish without the version files, change agent.toml, accept a path, or load a declaration that disagrees with the image |
 | ADMIN-SAVE | Three-party protocol, timeout cleanup then retry, cleanup failure, and fsync/rename failure hooks | Index before Commit, overwrite a good artifact, infer cleanup from silence or retry after FlowFailed |
 | ADMIN-FLOW-END | Every replaced lifecycle cell and tool fault cause | Serve on dead member, return Left, or let worker write marker |
 | ADMIN-RECOVERY | Crash before/after Commit, rename and index append, next-load tuple | Promote unconfirmed room data, skip malformed latest or associate load.reset with another selected start |

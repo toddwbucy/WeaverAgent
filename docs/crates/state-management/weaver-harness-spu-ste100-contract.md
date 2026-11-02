@@ -4,7 +4,7 @@
 
 **Landing PR:** #241
 
-**Version:** 0.6 **Date filed:** 2026-10-21 **Document ID:**
+**Version:** 0.7 **Date filed:** 2026-10-21 **Document ID:**
 weaver-harness-spu-ste100-contract **Parent:** weaver-agent-PRD, invariant 5.3
 **Editorial:** Per the Working Rules.
 
@@ -27,6 +27,15 @@ harness and SPU amendments. This agreement states what the parties may assume, w
 must refuse and what an outcome means. It does not grant the checker a store, tool,
 trace or argument-writing duty. Reason: a classification result and the loop's use of it
 are separate acts. [CLASS-1, CLASS-2, SEAM-1, SEAM-2, FLOW-1]
+
+This agreement binds where the declaration elects the classifier binding,
+state-management.ste100. With no binding, no checker stands, the agreement has no SPU
+party for that agent, and the agent converts its emission and files nothing by verb
+under Spec 02 DECLARATION. This is the operator's ruling of 2026-11-02 on #437 (Q7).
+Reason: the strong requirements came from the first design of the full agent. The work
+has since turned to a bootstrap, and a loop with no classifier is a deliberately simple
+subset with one job the model can be graded on. Each requirement comes back when a loop
+elects the part it belongs to. [CLASS-2, CLASS-3, STORE-2]
 
 ## 1. Admission and identity
 
@@ -101,6 +110,12 @@ refuses external input or restates a model emission under CLASS-9. A bad templat
 refuses load or its current operation. None of those outcomes is component failure. The
 checker cannot request a retry or decide when the agent's plan, input or model response
 is accepted. [GATE-1, CLASS-8, CLASS-9, CLASS-10, PLAN-5]
+
+The checker judges the model's emission, e, as the decoder emitted it. Each correction
+is itself a model emission, judged as e. A valid correction enters the harness's
+EffectiveEmission under Spec 02, which is the agent's act Y of OUT-1. Y is what leaves
+the gate and what the store files, and the trace keeps e. This is the operator's ruling
+of 2026-11-01 (ruling A), confirmed on 2026-11-02 (#432). [OUT-1, CLASS-9, CLASS-10]
 
 A crash, absent terminal result or malformed result is component failure. Capacity that
 prevents a conforming input from being checked is absent work, not a language defect.

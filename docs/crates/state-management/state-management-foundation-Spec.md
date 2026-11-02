@@ -4,7 +4,7 @@
 
 **Landing PR:** #373
 
-**Version:** 0.28 **Date filed:** 2026-10-20 **Document ID:**
+**Version:** 0.29 **Date filed:** 2026-10-20 **Document ID:**
 `state-management-foundation-Spec` **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -334,6 +334,24 @@ dump_sha256 A, config_sha256 B, parent_artifact_id or null, position, and confir
 Neither file carries its own hash. Reason: the checked pair identifies both starting
 inputs without a self-reference. [PERSIST-1 through PERSIST-3]
 
+From weaver-state STATE-GOVERNING's cutover, which holds the governing tables in state,
+a published artifact is a directory of the three files above, `ste100-scheme.json` and,
+exactly where the declaration elects a thesaurus, `ste100-thesaurus.json`. The two added
+files are the exact bytes of the image's current versions. An artifact that lacks a
+required file or holds a thesaurus file the declaration does not elect refuses at bind
+and load. binding.json gains scheme_sha256 and thesaurus_sha256, the second null where
+none is elected. scheme_sha256 must equal the scheme file's digest. Where a thesaurus is
+elected, thesaurus_sha256 must equal the thesaurus file's digest, and where it is null,
+no thesaurus file is present. Admin reads these files at load and checks each digest
+against the bound declaration, and at bind against the new draft (weaver-admin
+ADMIN-REBIND). STATE-ADOPT checks that the image's current versions have the same
+digests. Each later publication copies the scheme file and, where present, the thesaurus
+file forward from the artifact it descends from, since no serving operation changes
+them. Only seed and the install verb (weaver-admin ADMIN-INSTALL) publish new ones.
+Admin runs no SQL to read them. Reason: state holds the governing tables, load neither
+reseeds nor overwrites them, and the files let admin check them without SQL. This is the
+operator's ruling of 2026-11-02 on #437 (Q2 and Q8). [PERSIST-2, PERSIST-3, STORE-2]
+
 Admin alone hashes, writes the configuration, and publishes beneath the judged
 territory's save-points directory. Directory name is the next 20-digit publication
 ordinal, a hyphen, and B. The directory is root:admin-access-group 0750, files 0640. The
@@ -369,7 +387,7 @@ Admin initially indexes the Leave request's cause while its publication guard st
 blocks load. After the exact matching Left and the existing marker-rule eligibility
 check, the same publisher finalizes its pending entry's cause before removing that
 guard. ADMIN-SAVE-COMPLETION places this completion before run-end and marker-write
-duties; a later cleanup failure cannot revoke the completed save.
+duties. A later cleanup failure cannot revoke the completed save.
 This is the sole exception to preserving appended index records: only
 graceful_unload may become forced_unload, only in this publisher's last entry, under
 its retained invocation lock and exact durable pending guard. Admin verifies the entire
@@ -382,7 +400,7 @@ refuses. [PERSIST-2, PERSIST-3, PERSIST-4, FLOW-5]
 The replacement is prepared at the admin-derived sibling
 .<artifact_id>.pending.cause.part with root ownership and index permissions. A failed
 or uncertain replacement preserves the publication guard and follows
-PERSIST-PUBLICATION-GUARD; any extant replacement part is reported as retained part
+PERSIST-PUBLICATION-GUARD. Any extant replacement part is reported as retained part
 work. It grants no retry or automatic repair. Joined invocations verify the completed
 entry against their actual Left.forced and never revise another publisher's entry.
 No wire field, artifact codec field or new timing allowance is added. [PERSIST-3,
@@ -391,20 +409,22 @@ PERSIST-4, FLOW-5]
 **PERSIST-ARTIFACT-CODEC.** admin's save_points.rs owns StateBinding and
 StateIndexEntry. The former is the binding.json object, and the latter is one
 save-points.manifest JSON line. They deny missing, unknown and duplicate fields at every
-depth. version is the JSON integer 1. schema_id is state-content/1. seed_id is 32
-lowercase hex characters. Digest fields use lowercase 64-hex strings. position is the
-shared SourcePosition or explicit null, and parent_artifact_id is an artifact ID or
-explicit null. confirmation and cause use TYPES-PERSIST's exact tagged/enumerated
-shapes. [PERSIST-2, PERSIST-3]
+depth. version is the JSON integer 1, and 2 at weaver-state STATE-GOVERNING's cutover.
+schema_id is state-content/1, and state-content/2 at weaver-state STATE-GOVERNING's
+cutover. seed_id is 32 lowercase hex characters. Digest fields use lowercase 64-hex
+strings. position is the shared SourcePosition or explicit null, and parent_artifact_id
+is an artifact ID or explicit null. confirmation and cause use TYPES-PERSIST's exact
+tagged/enumerated shapes. [PERSIST-2, PERSIST-3]
 
-StateBinding has exactly the fields listed above. StateIndexEntry has exactly ordinal,
-artifact_id, dump_sha256, config_sha256, seed_id, parent_artifact_id, cause, position,
-confirmation and arrival. The A/B names in this section mean dump_sha256/config_sha256
-in both objects. ordinal is a positive DecimalU64, starting at "1" and incremented with
-overflow refusal. Its 20-digit zero-padded rendering is the directory's creation
-ordinal. A selection entry retains that directory name while using a new index ordinal.
-Neither JSON reader accepts the old stamp or arrived fields as aliases. [PERSIST-2,
-PERSIST-3]
+StateBinding has exactly the fields listed above, and at weaver-state STATE-GOVERNING's
+cutover also scheme_sha256 and thesaurus_sha256, the second explicit null where none is
+elected. StateIndexEntry has exactly ordinal, artifact_id, dump_sha256, config_sha256,
+seed_id, parent_artifact_id, cause, position, confirmation and arrival. The A/B names in
+this section mean dump_sha256/config_sha256 in both objects. ordinal is a positive
+DecimalU64, starting at "1" and incremented with overflow refusal. Its 20-digit
+zero-padded rendering is the directory's creation ordinal. A selection entry retains
+that directory name while using a new index ordinal. Neither JSON reader accepts the old
+stamp or arrived fields as aliases. [PERSIST-2, PERSIST-3]
 
 Validate the selected entry against its directory name and StateBinding, then perform
 the three hash checks and declaration parse. A seed confirmation has null parent and
@@ -471,7 +491,7 @@ rewrite follows from this distinction. [FLOW-3, PERSIST-3, PERSIST-4, STORE-5, C
 | Publishing | Rename, index append and sync complete | Send Published, AwaitOutcome |
 | AwaitOutcome, on demand | Matching SavePointTaken | Validate report against indexed artifact, answer caller, Done |
 | AwaitOutcome, leave | Matching SavePointCaptureComplete | Disarm capture window, retain shared/outer leave windows, AwaitLeft |
-| AwaitLeft | Matching Left | Validate indexed report and marker eligibility, finalize PERSIST-LEAVE-CAUSE and the pending guard under ADMIN-SAVE-COMPLETION, then complete run-end and marker duties before answering Unloaded; preserve the completed save on a later cleanup refusal, Done |
+| AwaitLeft | Matching Left | Validate indexed report and marker eligibility, finalize PERSIST-LEAVE-CAUSE and the pending guard under ADMIN-SAVE-COMPLETION, then complete run-end and marker duties before answering Unloaded. Preserve the completed save on a later cleanup refusal, Done |
 | AwaitImage or AwaitFinished, on demand | SavePointNotTaken after worker cleanup | Cancel unconfirmed publication, refuse caller, Done, merged retry remains available |
 | Any before Commit, on demand | Explicit worker refusal or local preparation error | Send Aborted where the exchange permits, remove unlisted root part, refuse caller, Done |
 | After Beginning and before Commit, leave | Local preparation error or capture deadline expires | Stop save-success processing, cancel unconfirmed publication, send one Aborted with the same capture ID where the exchange permits, retain its bytes through partial carry, remove unlisted root part, AwaitCaptureRefused under the original shared-tail and outer leave deadlines |
@@ -483,7 +503,7 @@ rewrite follows from this distinction. [FLOW-3, PERSIST-3, PERSIST-4, STORE-5, C
 | After Beginning and before Commit, leave | Worker Aborted after a latched failure | Cancel unconfirmed publication and follow failed-run recovery, no successful Left |
 | AwaitRefusedLeave | Matching Left with forced true, no_state false and no save report | Complete normal forced-leave duties, Done, no save published |
 | AwaitRefusedLeave | SavePointNotTaken with the same missed leg | Report the graceful leave refusal, Done, merged retry remains available |
-| Any capture receive or local-work checkpoint, and joined Leave | Correlated terminal Malformed, DescriptorsUnusable, OrganRefused with organ Gate, or defensive FailedRun with the original run and any known capture ID | Retain the worker evidence and follow ADMIN-SAVE failed-unwind recovery; no successful save, Unloaded or retry of a standing run |
+| Any capture receive or local-work checkpoint, and joined Leave | Correlated terminal Malformed, DescriptorsUnusable, OrganRefused with organ Gate, or defensive FailedRun with the original run and any known capture ID | Retain the worker evidence and follow ADMIN-SAVE failed-unwind recovery. No successful save, Unloaded or retry of a standing run |
 | AwaitRefusedLeave | Other refusal, save report, CaptureComplete or renewed publication | Protocol failure, no publication or successful command result |
 | AwaitRefusedLeave | Shared-tail or outer leave deadline expires | Unanswered, preserve Open marker, Done, accept no late Left as success. The capture wait was already disarmed by CaptureRefused |
 | Any before Commit | Worker EOF, invalid message or expiry of the deadline applicable to that state | Do not publish, preserve Open marker, failed-run recovery, Done |
@@ -681,7 +701,7 @@ admin-derived artifact/part names relative to the judged save-point root, never 
 paths. The file survives rename/index append. After the matching final SavePointTaken or
 successful Left and PERSIST-LEAVE-CAUSE finalization, admin removes it and fsyncs
 the parent before reporting success. For Leave, ADMIN-SAVE-COMPLETION completes this
-save before subsequent run-end and marker duties; a failure of those duties still
+save before subsequent run-end and marker duties. A failure of those duties still
 refuses the command but leaves the completed save eligible. It is protocol custody
 metadata, not a fourth file in a completed save-point directory.
 [PERSIST-2, PERSIST-3, PERSIST-4, R20-7, R20-20]
@@ -953,7 +973,7 @@ document-PR direction, R20-5]
 | PERSIST-ARTIFACT-CODEC | Shared publication/load/restore corpus, including invalid newest with valid older artifact, plus types' state-start-v1 fixtures | Accept an old alias, inconsistent binding/index, wrong ordinal/name or A/B, or fall back past malformed newest |
 | PERSIST-TIME, PERSIST-LEAVE-TIME | Admin/harness fake-clock actor walk, existing leave_window baseline | Arm save_wait during an unbounded S4/S5, move an anchor on partial carry, or ignore an earlier tail |
 | PERSIST-BEGIN | Shared frame corpus and fragmented lifecycle exchange | Accept Image before Beginning, change a window, or accept CaptureComplete as Left |
-| PERSIST-LEAVE-CAUSE | Graceful, forced, converted and joined Leave; pending-tail replacement failures | Use the initiating mode after conversion, revise a completed save or foreign index bytes, remove a guard after uncertain finalization |
+| PERSIST-LEAVE-CAUSE | Graceful, forced, converted and joined Leave. Pending-tail replacement failures | Use the initiating mode after conversion, revise a completed save or foreign index bytes, remove a guard after uncertain finalization |
 | PERSIST-PUBLICATION-GUARD | Crash before/after rename, index append and final outcome, plus failed guard update | Publish after worker failure, load a guarded artifact, skip newest silently or remove guard before final success |
 | PERSIST-EXPIRY | Queued and active save cases, delayed local I/O completion | Infer CaptureNotReady from silence, issue a late Commit, or claim kernel I/O was preempted |
 | PERSIST-CLEANUP projections | Harness/member actor walk through late snapshot, finished and refusal, successful abort and cleanup failure | Send filing before aborted, retain a held image after cleanup, publish a late result or halt on the original timeout alone |

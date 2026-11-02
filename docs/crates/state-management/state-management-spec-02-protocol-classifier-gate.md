@@ -4,7 +4,7 @@
 
 **Landing PR:** #263
 
-**Version:** 0.18 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
+**Version:** 0.19 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -71,6 +71,36 @@ corpus are owed as O02-1. No verb in the old draft's illustrative list is presum
 approved. A synthetic `fixture-read/1` artifact remains test-only. [CLASS-1, CLASS-2,
 CLASS-7]
 
+**THESAURUS.** Add an elective sibling artifact, `ste100-thesaurus.json`, under SCHEME's
+artifact rules: UTF-8 JSON, unknown or duplicate keys refused at every depth, no
+self-hash, and exact bytes that hash to the lowercase 64-hex SHA-256 in
+state-management.flow.thesaurus.artifact-sha256. For each word the scheme does not
+approve and the program's text uses, it holds the senses in which that word is written
+in approved words, and one tag per entry, splice or offer. It names the scheme_id it was
+built against, and load refuses a thesaurus whose scheme_id is not the bound scheme's.
+It is built deterministically from its source, the thesaurus of record, and records that
+source and its sha256 beside its own sha256. The source is `ste/thesaurus.toml` of
+toddwbucy/WeaverTrain at ab63a918b569e5b8673dc2e78e66575ee9df1bd7, sha256
+022df3d809593696766893bf95f915229628497b89ef571dbc997ac8585224da. Work on the thesaurus,
+the verb list and the nouns stays in this repository until it is settled. A tag changes
+only by a ruling, as a new version. No runtime ask extends this artifact. With no
+state-management.flow.thesaurus, no thesaurus is held and the outbound sort makes no
+lookup change. Reason: one verb artifact serves every judge, and a thesaurus change must
+not relabel the scheme or any filing. This is the operator's ruling of 2026-11-01
+(ruling B), with the rulings of 2026-11-02 on #437 (C1 and its correction). [CLASS-2,
+STORE-2, OUT-1]
+
+| Artifact field | Type and meaning |
+| --- | --- |
+| format | Literal ste100-thesaurus/1 |
+| scheme_id | The scheme_id the artifact was built against, `ste100:` followed by the scheme digest |
+| source | {repository:String, commit:String, path:String, sha256:Digest}, the thesaurus of record it was built from and the SHA-256 of that file's exact bytes |
+| entries | Ordered Vec<{word:String, tag:String, senses:Vec<{sense:String, use:Vec<String>}>}>, unique words, each sense and use nonempty, tag splice or offer |
+
+An entry tagged splice has exactly one sense with exactly one use. Any other entry is
+offer. Which entries are splice, and how the loop acts on the tag, belong to the
+thesaurus's rulings and the loop's workflow document. [CLASS-2, OUT-1]
+
 **CUSTODY.** Admin reads the scheme once during inventory, verifies its digest and
 closed dictionary against the bound declaration, and carries the exact bytes in
 `EnterBinding::Serving.ste100_scheme`. The harness never opens agent.toml or this root
@@ -79,6 +109,14 @@ All three retain the same artifact identity. Rebinding the same dump cannot chan
 scheme, as ADMIN-REBIND requires. The configuration has no prompt field. Reason:
 repeating a path lookup after inventory would allow a different scheme to serve the
 checked declaration. [TAP-2, CLASS-2, PERSIST-3, PERSIST-7]
+
+With the governing tables held in state (weaver-state STATE-GOVERNING), inventory reads
+the scheme and, where elected, the thesaurus from the selected save point's files under
+PERSIST-FORMAT, not from admin's config root. It verifies each digest against the bound
+declaration as above and carries the exact bytes at enter, the thesaurus in its own
+field. The root files ste100-scheme.json and ste100-thesaurus.json are the seed and
+install sources only. Load neither reseeds nor overwrites state. This is the operator's
+ruling of 2026-11-02 on #437 (C3 and Q8). [TAP-2, PERSIST-3, STORE-2]
 
 The enter carrier retains the floor's MAX_ENVELOPE_BYTES bound, currently 64 KiB for the
 complete lifecycle envelope. It does not use CHANNEL's fragmented transport. Admin's
@@ -100,6 +138,15 @@ All values are required for serving, with no default. Production rejects fixture
 artifacts. Reason: resource choices and a repair cap must be explicit, attributable and
 testable, rather than implicit queue or model behavior. [CLASS-6, CLASS-7, CLASS-8,
 CLASS-9]
+
+`state-management.ste100` is a declaration election. Absent, it elects no classifier: no
+checker starts, nothing is classified or filed by verb, and the agent converts its
+emission under CLASS-2. The root key `ste100-binary` is then not required, the load
+tuple holds no checker executable digest, and the enter payload and loaded facts carry
+no Ste100Instruction. Present, every value above is required for serving, with no
+default, and the rest of this clause holds unchanged. This is the operator's ruling of
+2026-11-01 (ruling C), made a declaration election by the ruling of 2026-11-02 on #437
+(Q3). [CLASS-2, CLASS-3, STORE-2]
 
 Add the root key `ste100-binary` with the existing organ-binary custody judgment. It
 stays in admin's root, outside the bound declaration. Add its executable digest to the
@@ -191,8 +238,8 @@ Each referenced file has its own declared SHA-256. [CLASS-2, CLASS-7, FLOW-3]
 
 The model artifact retains SPU PRD section 7's provisioned custody: it is owned
 outside the agent uid, readable into the agent and not alterable by it. Pinning a
-descriptor prevents pathname replacement from substituting a different instance;
-it does not make externally writable file contents immutable. Provisioning must
+descriptor prevents pathname replacement from substituting a different instance.
+It does not make externally writable file contents immutable. Provisioning must
 preserve the admitted bytes for any retained mapping or deferred file read. This
 does not apply admin's root-file ownership rule to model files or relocate them
 into admin's config root. [CLASS-2, CLASS-7, SEAM-1]
@@ -408,6 +455,15 @@ not prove arbitrary substitution, safety, step authorization or model accuracy. 
 either the inclusion check or typed-value constructor must make its respective
 acceptance test fail. [CLASS-2, FLOW-8]
 
+With no state-management.ste100 binding, no checker certifies templates. The harness
+starts no STE100 duty, sends no template to a checker, waits for no reply, and serves
+without a TemplateCertificate. The steps above that name the checker or the certificate
+apply only where the binding is elected. The compiled inventory stays the only template
+source, the load tuple records its digest, and no TemplateCertificate is issued. Each
+expansion is checked structurally, by template ID, slot classes and the metadata of
+INSTRUCTION-METADATA, before it reaches the argument. This is the operator's ruling of
+2026-11-02 on #437 (Q7). [CLASS-2, FLOW-8]
+
 **INSTRUCTION-METADATA.** loop.instruction has one trace-owned shape,
 LoopInstructionRecord {template_id:String,message:Message,
 instruction:LoopInstructionMeta}. message is role user with exactly one complete Text
@@ -476,6 +532,16 @@ structural and attributional. Semantic qualification remains the producer's duty
 that producer and normative artifact are explicit cutover prerequisites. [PERSIST-5,
 PROMPT-2]
 
+With no state-management.ste100 binding, the seed takes the prompt with its digest and
+the operator's review reference. The certificate then carries no bindings and a null
+checker_artifact_sha256. verify_seed_certificate takes checker_digest as an optional
+Digest: absent exactly where the authoring declaration elects no binding, when it
+requires the certificate's checker identity null and its bindings empty and checks the
+prompt digest, the scheme identity, the duties and a nonempty review_reference. Present,
+it requires equality as above. VerifiedSeed carries the same optional value. Nothing is
+filed, so no binding is used. This is the operator's ruling of 2026-11-02 on #437 (Q7).
+[PERSIST-5, PROMPT-2]
+
 ## 5. Input at the harness frame path
 
 **INPUT.** Keep credential admission in the gate and request parsing in the harness.
@@ -486,6 +552,16 @@ as part of the foundation, not in an earlier standalone act. Origin is operator 
 when the gate-authenticated dialer UID equals the operator UID carried at enter,
 otherwise external. JSON text cannot choose it. Reason: the gate owns who may connect,
 not the meaning of a line. [GATE-1, TAP-1, PERSIST-5, PERSIST-7]
+
+With no state-management.ste100 binding, the harness checks no input text. After
+parse_request and dialer judgment, a well-formed request of origin operator mints
+AcceptedInput directly, with no ste100 request and no gate_wait. A request of any other
+origin is refused before any token as refusal/Input(invalid_input_shape), with the
+refused close above. Admin's inventory already refuses a declaration with no binding
+whose gate admits another uid (weaver-admin ADMIN-STE100), so this refusal is a second
+lock. The agent takes only input the operator controls, under GATE-1. The table below
+applies where the binding is elected. This is the operator's ruling of 2026-11-02 on
+#437 (Q6). [GATE-1, CLASS-4]
 
 The foundation's input.offered is authored before parsing, with its exact original
 frame. Input checks use target input {input_id,block:0}. input_id is assigned on
@@ -539,7 +615,7 @@ or submitting a content check, retain the lifecycle refusal required by
 weaver-gate-world-contract section 5 and weaver-admin-Spec section 3(B). This
 outcome precedes input-shape and language checks on that road. It does not classify
 the request's contents. An already-submitted check or opened turn retains its own
-failure and cancellation duties; this clause does not reinterpret those outcomes.
+failure and cancellation duties. This clause does not reinterpret those outcomes.
 [GATE-1, FLOW-3, CLASS-8]
 
 Author one refusal with TYPES-WORLD-REQUEST's LifecycleAsk::WorldRequest and the
@@ -549,10 +625,10 @@ input.offered sequence. Retain that original frame, gate exchange and author tic
 through trace pressure. Only after Recorded may the worker send the existing
 unnamed close {"kind":"refused","reason":"no model is resident"} on that exchange.
 No AcceptedInput, message.user, turn.started, filing, placement or generation is
-granted. The input and required-send waits retain their applicable existing bounds;
-partial progress grants no renewed interval. If gate_wait expires while either
+granted. The input and required-send waits retain their applicable existing bounds.
+Partial progress grants no renewed interval. If gate_wait expires while either
 input.offered or its refusal is still unrecorded, the existing input deadline row
-halts with GateBound; it grants no late successful refusal. A flow failure keeps
+halts with GateBound. It grants no late successful refusal. A flow failure keeps
 HARNESS-HALT's precedence, and cannot be reported as a successful lifecycle refusal. [GATE-1,
 FLOW-2, FLOW-3, FLOW-4, CLASS-8]
 
@@ -587,6 +663,13 @@ after exact source, scheme and decoded text comparison. Unselected Text is still
 for the emission contract and repair, but produces no filing. Accepted siblings remain
 ordinary filings even if another block is rejected. [CLASS-3, CLASS-9, CLASS-10,
 STORE-3, TAP-1]
+
+With no state-management.ste100 binding, no Text block is checked, DECISION-BARRIER has
+no check to wait for, and REPAIR is never begun. EffectiveEmission then has empty
+statements, and its text joins the generation's original Text blocks with a single LF,
+in original index order, after any change recorded under EFFECTIVE-EMISSION. This
+follows from the operator's ruling of 2026-11-01 (ruling C), made a declaration election
+by the ruling of 2026-11-02 on #437 (Q3). [CLASS-2, CLASS-3, OUT-1]
 
 **DECISION-BARRIER.** Do not dispatch an emitted tool request, start the next decode
 round or close a successful answer until the current generation's Text checks and any
@@ -659,7 +742,7 @@ under the existing cap gives that repair a finite outcome without erasing the so
 [CLASS-9, CLASS-10, FLOW-3]
 
 After that refusal is recorded, increment failed_corrections once. While repair remains
-live, follow the same below-cap or cap-reached row; after Stop or leave, retain that
+live, follow the same below-cap or cap-reached row. After Stop or leave, retain that
 count under CANCELLED-CORRECTION without reopening either continuation. This preserves
 the operator's Recorded refusal boundary. This is an operation refusal, never non_ste100
 fabricated without a checker result and never component failure. It creates no
@@ -672,7 +755,7 @@ CLASS-9, CLASS-10, FLOW-3]
 
 Every conforming request in a forbidden correction pass still takes Spec 05's start and
 terminal path, ending not_dispatched/pass_purpose while live. Stop or leave may own the
-unclaimed suffix under Spec 05 PAIR-LEAVE; already admitted terminal causes remain
+unclaimed suffix under Spec 05 PAIR-LEAVE. Already admitted terminal causes remain
 unchanged. This includes a valid recall binding.
 An accepted recall binding with invalid operation shape is also an attempted call.
 Record correction_call once for that correction pass and each RECALL-REFUSAL separately
@@ -699,28 +782,28 @@ correction message.assistant identity:
   EMPTY-CORRECTION refusal and no invented classifier or pair evidence.
 - Every conforming request has its actual Spec 05 CompletedPair. Both opening commits
   and the terminal filing receipt, with their recorded observations, must match the
-  original request and terminal; Recorded PairEnded alone is insufficient. Each
+  original request and terminal. Recorded PairEnded alone is insufficient. Each
   forbidden correction terminal is failed/not_dispatched with its actual pass_purpose,
   stop or unload cause. Correctly rejected or unassociated calls need no invented pair.
 
 The last required fact establishes completion. Returning a loan, taking an account or
 running a later ledger hook does not choose that boundary. Count once per correction
-identity: a pass completed before cancellation keeps its count; a failed pass whose
+identity: a pass completed before cancellation keeps its count. A failed pass whose
 owed accounting completes after cancellation updates only the retained cancelled
 account. An unfinished decoded message, missing checker or refusal record, outstanding
 opening/terminal filing receipt, or only a completed prefix of several calls contributes
-no attempt. Ordinary accepted Text filings do not add a wait beyond DECISION-BARRIER;
-request filings required by Spec 05 remain mandatory. [CLASS-8, CLASS-9, CLASS-10,
+no attempt. Ordinary accepted Text filings do not add a wait beyond DECISION-BARRIER.
+Request filings required by Spec 05 remain mandatory. [CLASS-8, CLASS-9, CLASS-10,
 PAIR-1, PAIR-4]
 
 After cancellation, reaching the count boundary or the cap never returns
 RestatementRequest, EffectiveEmission or RepairExhausted, starts another correction,
 or authors a new repair_exhausted continuation. Preserve any already Recorded cap
-event without replay. Keep the original Decision bound and any earlier lifecycle bound;
-no receipt, cancellation, extraction or delayed completion renews either. Owed work may
+event without replay. Keep the original Decision bound and any earlier lifecycle bound.
+No receipt, cancellation, extraction or delayed completion renews either. Owed work may
 finish only through existing lifecycle and recording permissions. This rule adds no
 permission to check, author or file after those permissions end. Foundation halt and
-its ban on new store writes remain unchanged; incomplete evidence cannot become a
+its ban on new store writes remain unchanged. Incomplete evidence cannot become a
 completed attempt by teardown. [CLASS-8, CLASS-9, FLOW-4, FLOW-5, PERSIST-4]
 
 A refused restatement instruction or runtime-template rejection is an operation
@@ -751,6 +834,14 @@ harness owns the private repair proof. The eventual client answer uses the same
 corrected text order. Reason: repair changes what may be acted on without rewriting the
 record or forcing a valid correction back into its old source ID. [CLASS-9, PLAN-1,
 STRAT-2, FLOW-3]
+
+EffectiveEmission is the act Y of OUT-1. The trace keeps the model's emission, e, and Y
+never takes its place there. What leaves the gate and what the store files is Y. A
+change to Y by the outbound sort, beside repair, is authored on the trace beside e
+before Y is used, naming the source block, the changed span, the text replaced and the
+text that replaces it. How the loop chooses a change belongs to the loop's workflow
+document, and the record's representation is O02-6. This is the operator's ruling of
+2026-11-01 (ruling A), confirmed on 2026-11-02 (#432). [OUT-1, CLASS-9, CLASS-10]
 
 RepairAccount is the private owner of original and correction-pass evidence under their
 own generation identities. Its inspection view is
@@ -794,6 +885,11 @@ prove that a shell command safely implements its description. Empty text before 
 bare calls and UnrecoveredCall never acquire a successful send by inference. Their
 visible refusal leaves the agent available to the user. [CLASS-3, CLASS-9, PROMPT-3,
 PAIR-1]
+
+With no state-management.ste100 binding, no tool request is dispatched, because no
+statement can be accepted. The agent's tool set is empty, and admin refuses a
+declaration that elects a tool with no binding. A later loop that needs tools elects the
+classifier. This is the operator's ruling of 2026-11-02 on #437 (Q7). [CLASS-3, PAIR-1]
 
 **RECALL.** A model-output Binding whose verb is one of scheme.recall_keys requests the
 noun-history action. It must have exactly one noun and no governing condition. This is
@@ -924,14 +1020,15 @@ exhaustion, with no gate dispatch. [CLASS-9, CLASS-10, PAIR-1, PLAN-1, STRAT-2]
 
 **AMENDMENTS.** The following replacement/addition text is part of the document act,
 before implementation. The old label contract remains in force for labels. Its
-optionality and retirement do not apply to the new mandatory STE100 seam. Every owning
-section also carries the transition sentence from section 0. Reason: an implementer must
-not choose between two incompatible contracts or write missing charter amendments inside
-a code PR. [FLOW-7, CLASS-8, October 18 A1, R10]
+optionality and retirement do not apply to the new STE100 seam, required where the
+declaration elects the classifier binding (the operator's ruling of 2026-11-02 on #437,
+Q7). Every owning section also carries the transition sentence from section 0. Reason:
+an implementer must not choose between two incompatible contracts or write missing
+charter amendments inside a code PR. [FLOW-7, CLASS-8, October 18 A1, R10]
 
 | Owning document and clause | Text to add or replace |
 | --- | --- |
-| weaver-spu-PRD sections 6 and new 16 | Add a separate STE100 seam between harness and SPU. The SPU checks the fixed language instance and returns complete bindings, a correct defect or component failure. This duty is mandatory for serving and holds neither policy nor state. Section 15 continues to govern the optional label scorer. |
+| weaver-spu-PRD sections 6 and new 16 | Add a separate STE100 seam between harness and SPU. The SPU checks the fixed language instance and returns complete bindings, a correct defect or component failure. This duty is required where the declaration elects the classifier binding, and holds neither policy nor state. Section 15 continues to govern the optional label scorer. |
 | weaver-spu-Spec sections 1 and new 12 | Add the third binary target and its owned module. Add PROTOCOL-OWNER, PARSER, MODEL, BINDING, CAPACITY, CHANNEL, PORT and TEMPLATES with their state tables and instruments. Move the current Open elections section 12 to 13. Section 11 and its label binary remain unchanged. |
 | weaver-types-PRD section 2.3 and Spec sections 2 and 4 | Add Ste100Instruction, scheme bootstrap/readiness/refusal types, template types and certificate validation. TYPES-CLASSIFIER remains the request/reply definition. The legacy label trio is neither removed nor reinterpreted. |
 | weaver-harness-PRD sections 2 and 4, Spec sections 1, 2.1 and 6 | Add the STE100 duty and pump-owned port, typed template construction, input state table and repair barrier. Permit the pure weaver-internal recall constructor as a member dependency. Legacy Ports::classify retains its separate semantics through the shared pump. |
@@ -979,6 +1076,7 @@ CLASS-7, CLASS-9, PROMPT-2]
 | O02-3 | Measure repair yield per additional attempt and task obstruction, then freeze repair_cap and gate/cut/decision waits before the held-out run. Record scheduling and transport contributions. |
 | O02-4 | Qualify max_wire_bytes against the largest supported exact source blocks, complete binding answers, scheme and inventory messages, with memory pressure included. The complete admin enter must also fit its separate unchanged MAX_ENVELOPE_BYTES bound. No measured number is invented here. |
 | O02-5 | Produce the separate PROMPT-3 document, its review, prompt certificate and the WeaverAnalysis producer/verifier fixtures. No prompt is written by this Spec. |
+| O02-6 | Define the trace record for a change to Y by the outbound sort under EFFECTIVE-EMISSION, in the trace and types amendments, before any code changes Y outside repair. The record names the source block, span, replaced text, replacing text and the held table version it came from. |
 
 The foundation's HARNESS-CLASSIFY replacement addresses the missing mandatory production
 result port and preserves the legacy classifier side identified by R10. It also supplies
