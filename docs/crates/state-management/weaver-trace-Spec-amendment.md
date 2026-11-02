@@ -339,6 +339,7 @@ serving contract remains applicable.
 | TRACE-REJECTED-RETURN | Real recorder lines from exact multiline, escaped and maximum admitted packets, and capacity/cancellation resume | Embed RawValue, normalize the packet, discard before Recorded or turn the evidence into a selectable projection |
 | TRACE-REGISTRY | Exhaustive enum match and tests/kinds.rs, plus table-driven turn/payload tests and harness-authored recall refusal bytes | Omit a new kind, alter the typed refusal bytes or admit a forbidden projection |
 | TRACE-EMISSION-CHANGE | Canonical splice and offer records, exact floor-to-trace field comparison, source/version chain, escaping and refused projection fixtures | Drop the prior change or model-source link, alter bytes or counters, admit the wrong envelope or make change evidence selectable |
+| TRACE-EMISSION-CHANGE, generation binding | Two offer instructions and their response envelopes and change records in one turn | Omit or alter a response's instruction parent, or emit a change naming a different response than the harness's private result |
 | TRACE-PLAN | Canonical operator/effect, failed/closed outcome and break fixtures checked against the floor-to-trace conversion, plus exact plan-operation refusal bytes and envelope | Swap the two plan payloads, license close as plan.event, omit null context, change a refusal field or identity, select refusal content or accept a wrong turn/channel/origin |
 | Plan observation | Canonical fixtures for flags success/refusal, successor readiness and both capacity paths | Replace unavailable with zero, drop an identity, add an unknown variant or admit the measurement to residue |
 | TRACE-VALIDATION | Load matrix covering every required call/task tuple and forbidden kind | Permit partial pair or mark coverage, select a boot read or allow a payload predicate |
@@ -423,8 +424,12 @@ subsystem harness and a turn. Its causal_parent is matched.source.sequence. The
 harness verifies same-run and same-turn provenance. No ste100.result is implied by
 this instruction. This implements #437, comment 6586494090, of 2026-11-02.
 
-The response's ordinary message.assistant record proves no independent answer right.
-Spec 02 LOOKUP-OFFER keeps it subordinate to the original answer generation. Only
+For the response's message.assistant, causal_parent is required and names the Recorded
+offer instruction sequence. This is the generation binding defined by
+TYPES-EMISSION-CHANGE. The harness sets it from the private decode-transaction binding,
+never from model text or a caller's source reference. Preserve output/model, subsystem
+harness and the same external turn. This ordinary record proves no independent answer
+right. Spec 02 LOOKUP-OFFER keeps it subordinate to the original answer generation. Only
 an emission.change can put its selected bytes into that generation's Y.
 
 **TRACE-EMISSION-CHANGE.** Add Kind::EmissionChange, spelled emission.change, and
@@ -445,7 +450,11 @@ All counters and span endpoints retain DecimalU64 string spelling. The match's s
 identifies the original model Text block. previous_change identifies its preceding
 effective version, and span addresses that version under Spec 02 OUTBOUND-CHANGE.
 An offer also identifies the instruction and the exact model Text slice used for the
-replacement. These links permit reconstruction of Y without editing any earlier event.
+replacement. method.offer.reemission names the response whose envelope causal_parent
+equals method.offer.instruction.sequence. The harness verifies that pair against the
+private result of the transaction started under that instruction's grant. Trace keeps
+both links without inferring a grant from their serialized values. These links permit
+reconstruction of Y without editing any earlier event.
 
 This payload has no selectable projection. Add it to the registry and partition refusal
 set. An offer's loop.instruction keeps its existing one-Text projection, while the

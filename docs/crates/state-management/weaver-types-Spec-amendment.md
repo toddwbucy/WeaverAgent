@@ -590,7 +590,13 @@ The sentence is an exact slice, never a caller-authored substitute.
 method:EmissionChangeMethod}. The externally tagged method is splice:{} or
 offer:{instruction:SourceBlockId,reemission:SourceBlockId,reemission_span:Span}.
 The instruction reference names block zero of its one-Text loop.instruction. The
-reemission reference names the original Text index in the offer's model response.
+reemission field identifies the generation that consumed that instruction's Recorded
+grant. Its run and sequence name that transaction's message.assistant event, and block
+is an original Text index in that response. The binding field is the response event's
+envelope causal_parent, which must equal instruction.sequence. It is required for this
+response. The harness obtains the source from the bound transaction's Recorded receipt
+under HARNESS-LOOKUP-OFFER, never from the caller. A different generation or instruction
+parent refuses invalid_context under HARNESS-OUTBOUND-CHANGE, even in the same turn.
 All references belong to the current run and external turn. replaced and replacement
 are nonempty. An offer's reemission_span must select exactly replacement. The codec
 grants no authority to apply a change. HARNESS-OUTBOUND-CHANGE owns that private grant
@@ -601,10 +607,11 @@ floor representation under #437, comment 6586494090, of 2026-11-02.
 
 Shared fixtures cover both method variants, all required fields, null previous_change,
 noncanonical counters, reversed or split-UTF-8 spans, changed nested fields and
-duplicate keys. Harness fixtures check source and artifact equality. Compile-time
-checks keep a decoded record from constructing a lookup, expansion or applied-change
-grant. Removing each check must fail its fixture. These are code-act obligations,
-not results of this document act.
+duplicate keys. Harness fixtures check source and artifact equality and swap responses
+between two offers in one turn. Trace fixtures retain each response's instruction
+parent. Compile-time checks keep a decoded record from constructing a lookup, expansion
+or applied-change grant. Removing each check must fail its fixture. These are code-act
+obligations, not results of this document act.
 
 Finish is the existing weaver_types::Finish in wire.rs, with Completed, Stopped and
 Length. No new Finish enum or conversion by spelling is introduced for

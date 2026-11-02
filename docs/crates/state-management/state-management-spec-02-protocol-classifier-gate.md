@@ -563,6 +563,14 @@ Retain its generation accounting and attempted-call evidence. No tool is dispatc
 An offer does not enter REPAIR or charge the classifier repair cap. The loop's shape
 strikes, retry placement and numeric offer cap are elected by the workflow.
 
+The single-use offer grant binds its Recorded instruction to one AppendAndGenerate
+transaction before that transaction starts. Retain that private binding through the
+response's own Recorded receipt. Author the resulting message.assistant with
+causal_parent equal to that instruction's sequence. Only that transaction's completed
+response can produce the private offer result. TYPES-EMISSION-CHANGE's
+method.offer.reemission names its exact recorded source. Neither a shared turn nor
+caller-supplied source IDs prove this binding.
+
 The offer's generation is subordinate to the original answer generation. It has no
 independently releasable EffectiveEmission, client answer or answer contribution.
 Its text reaches the effective answer only through an emission.change recorded on
@@ -612,9 +620,13 @@ For splice, require a current lookup match on a splice-tagged entry with one sen
 and one use. The span equals matched.word_span. The replacement is the deterministic
 rendering of that use under the workflow's word-form rules. For offer, the span equals
 matched.sentence_span. Require a recorded offer instruction with that exact match and
-its completed, recorded model re-emission in the same turn. replacement equals the
-exact decoded reemission_span of the named Text block. The primitive verifies these
-identities and bytes. The workflow decides whether the result meets its checks.
+the private result of the decode transaction that consumed its grant. Require
+method.offer.reemission to name that result's recorded message.assistant and original
+Text index. Its envelope's causal_parent must equal method.offer.instruction.sequence.
+An absent parent or a different instruction or response refuses invalid_context,
+including a response from another offer in the same turn. replacement equals the exact
+decoded reemission_span of that Text block. The primitive verifies these identities
+and bytes. The workflow decides whether the result meets its checks.
 
 An unused or malformed re-emission stays on the trace and creates no Y change. A
 proposed change keeps the old Y until its record is Recorded. Writer pressure keeps
@@ -1120,6 +1132,7 @@ a serving declaration. [CLASS-4, CLASS-7, PROMPT-2, FLOW-7]
 | LOOKUP-OFFER | No-classifier lookup fixture with exact held senses, changed source/version, noun/verb positions, disabled offer template and a recorded re-emission | Require a classifier rejection, accept caller-supplied prose, bypass a verb check through a noun entry, or decode before the instruction records |
 | LOOKUP-OFFER, answer ownership | Original output with several sentences and a one-sentence offer response, both used and unused | Release the bare response, append a second answer, use the response's source/finish for Y or close the turn on the last generation |
 | LOOKUP-OFFER, pass cap | Small fixture cap across matches, blocks and original emissions, with pending capacity, cancellation and malformed responses | Omit the cap, overbook pending reservations, refund a consumed grant, reset the count or decode after exhaustion |
+| LOOKUP-OFFER, generation binding | Two offers in one turn with distinct Recorded instructions and responses, plus an ordinary response | Swap responses, omit or change a response's instruction parent, or make a private result from caller-supplied source IDs |
 | OUTBOUND-CHANGE | Two length-changing splices followed by an offer, reconstructed from real records, plus stale head, byte mismatch, trace pressure and Stop | Apply a change before Recorded, interpret later offsets against the original, branch the chain, rewrite e, or continue after cancellation |
 | SEED-CERTIFICATE | Offline produced certificate and shared TYPES-SEED admin/member fixtures | Alter a prompt byte, binding, scheme bytes, expected checker or duty ID and still seed |
 | INPUT, REUSE | Gate-to-worker integration with byte/UID substitution, queued input, delayed check and held trace capacity | Parse content in gate, open a turn early, trust payload origin, reuse changed text, start the check clock on queued arrival or after input.offered records |

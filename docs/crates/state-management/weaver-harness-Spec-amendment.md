@@ -116,7 +116,8 @@ RecordingContext::author_and_wait path below. Run delegates to it, and Ports bor
 same recording context. Author::author takes kind, subsystem, turn, AuthoredSource,
 causal_parent: Option<Sequence>, and payload, and returns RecordAttempt or
 SubmitFailure. AuthoredEvent holds those six members unchanged. Ordinary callers pass
-None, accepted input supplies the offered sequence. Remove the existing author
+None, accepted input supplies the offered sequence, and an offer's message.assistant
+supplies its instruction sequence under HARNESS-LOOKUP-OFFER. Remove the existing author
 boundary's hardcoded None for this field. author_message keeps its outer
 UnlicensedMessage refusal. The helper calls resume until Recorded, servicing transport
 while pending. It cannot recursively author. The baseline author census is the current
@@ -355,10 +356,15 @@ Record loop.instruction with internal/loop, subsystem harness, the current turn 
 model source sequence as causal_parent. Match every metadata field to the material
 before submission. Only Recorded permits its expansion to reach the argument and its
 model pass to start. Retain the grant while writer capacity is pending, using the
-existing author bound. Consume it once. Correlate the resulting generation through the
-existing request and emission identities. Record the re-emission as ordinary model
-output before any use under HARNESS-OUTBOUND-CHANGE. An offer creates no classifier
-request, rejection, filing or repair-ledger attempt. It grants no tool dispatch.
+existing author bound. Consume it once, binding the Recorded instruction's SourceBlockId
+to the exact AppendAndGenerate transaction before starting that transaction. Keep that
+binding through completion and author the response's message.assistant with
+causal_parent equal to the instruction sequence. Capture the response's run and sequence
+only from that transaction's own Recorded receipt. The private result retains this
+binding and the original content indices. No caller can substitute a completed
+generation or construct this result from source IDs. Record the re-emission before any
+use under HARNESS-OUTBOUND-CHANGE. An offer creates no classifier request, rejection,
+filing or repair-ledger attempt. It grants no tool dispatch.
 
 Retain the original answer generation while the offer's model pass runs. The response
 has its own recorded generation identity and accounting, but no independent answer or
@@ -376,15 +382,19 @@ writer pressure, a new source, a retry nor a new match resets or refunds consump
 The workflow elects the value from its named measurement. MAX_TOOL_ROUNDS and
 bar_round_limit govern tool-result rounds and are not this offer bound.
 
-**HARNESS-OUTBOUND-CHANGE.** Own the private pending change and recorded change chain
-of Spec 02 OUTBOUND-CHANGE. Construct TYPES-EMISSION-CHANGE only after the source,
-match, loaded version, tag, span and exact-text checks pass. For an offer, also check
-the recorded instruction and its correlated, completed model response. Keep at most one
-pending change for a source version. A second proposal cannot branch or overwrite it.
-Convert every field explicitly to the trace-owned mirror and submit emission.change.
-Update that block's Y and chain head only after Recorded, with the same sequence.
-Keep the original generation identity, other blocks and all model evidence unchanged.
-This supplies O02-6 under #437, comment 6586494090, of 2026-11-02.
+**HARNESS-OUTBOUND-CHANGE.** Own the private pending change and recorded change chain of
+Spec 02 OUTBOUND-CHANGE. Construct TYPES-EMISSION-CHANGE only after the source, match,
+loaded version, tag, span and exact-text checks pass. For an offer, require the private
+result from HARNESS-LOOKUP-OFFER's bound decode transaction. method.offer.instruction
+must equal its instruction SourceBlockId, and method.offer.reemission must name its
+recorded response and an original Text index. Verify that response's causal_parent
+equals method.offer.instruction.sequence. After the existing provenance checks, refuse
+invalid_context for a binding mismatch, including another offer's response in the same
+turn. Keep at most one pending change for a source version. A second proposal cannot
+branch or overwrite it. Convert every field explicitly to the trace-owned mirror and
+submit emission.change. Update that block's Y and chain head only after Recorded, with
+the same sequence. Keep the original generation identity, other blocks and all model
+evidence unchanged. This supplies O02-6 under #437, comment 6586494090, of 2026-11-02.
 [OUT-1, CLASS-10, FLOW-3, FLOW-8]
 
 | Operation state | Event | Result |
@@ -403,13 +413,14 @@ This supplies O02-6 under #437, comment 6586494090, of 2026-11-02.
 
 For change requests use template_id thesaurus-offer/1 for offer and the stable operation
 identifier outbound-splice/1 for splice in RefusalRecord::Instruction. The latter is
-refusal attribution only, never a template that can be expanded. Use stale_source for
-a mismatched chain head, wrong_turn for a foreign or closed turn, and invalid_context
-for an invalid match, span, replacement or pending operation. A disabled or malformed
-offer template uses invalid_template. These are operation refusals, not fabricated
-language defects. Once lifecycle permissions end, use their existing account instead
-of authoring a new refusal. A record admitted before cancellation may finish only under
-those permissions, and its late Recorded outcome grants no continuation.
+refusal attribution only, never a template that can be expanded. Use stale_source for a
+mismatched chain head, wrong_turn for a foreign or closed turn, and invalid_context for
+an invalid match, span, replacement, generation binding or pending operation. An elected
+classifier also uses invalid_context. A malformed offer template uses invalid_template.
+These are operation refusals, not fabricated language defects. Once lifecycle
+permissions end, use their existing account instead of authoring a new refusal. A record
+admitted before cancellation may finish only under those permissions, and its late
+Recorded outcome grants no continuation.
 
 Each new record is subject to HARNESS-RECORD and HARNESS-AWAIT-AUTHOR. Neither path
 renews a deadline, reserves another event queue or changes the terminal reserve. A
@@ -1297,6 +1308,8 @@ the one-exchange assumption. Neither number is elected here. [CLASS-6, FALS-5, C
 | TEMPLATE-CHECK | Inventory and substitution certificate fixtures | Serve with missing certificate or unlisted template |
 | HARNESS-LOOKUP-OFFER | No-classifier turn through the real instruction recorder and typed placement, plus altered entry, stale source, duplicate use and cancellation | Send an offer without its recorded instruction, substitute arbitrary prose, require rejection or reuse its grant |
 | HARNESS-LOOKUP-OFFER, provenance and cap | Foreign run, changed loaded artifact and a small fixture cap across blocks, matches, retries and pending instructions | Skip a run or artifact recheck, overbook a reservation, refund consumed capacity or release a pass after exhaustion |
+| HARNESS-LOOKUP-OFFER, generation binding | Two granted offer transactions and an ordinary generation in one turn, with exact instruction parents and response receipts | Swap a completed response, infer identity from the turn or latest generation, alter the parent or construct the private result from decoded IDs |
+| HARNESS-LOOKUP-OFFER, refusal cases | Valid template with an elected classifier, and a malformed template without a classifier | Report invalid_template for the elected classifier or invalid_context for the malformed template |
 | HARNESS-OUTBOUND-CHANGE | Real recorder chain with length-changing splice then offer, held capacity, refusals and lifecycle cancellation | Change Y before Recorded, lose e, branch the chain, mismatch re-emission bytes, renew a bound or release a late continuation |
 | HARNESS-OUTBOUND-CHANGE, answer ownership | Several-sentence original Y and a one-sentence offer response, with used and unused outcomes | Answer or close on the offer generation, append two answers or replace the original source/finish with the response's |
 | HARNESS-INPUT | Existing {text,role} accepted/refused frames and later-turn assembly | Place one rejected block or open a refused turn |
