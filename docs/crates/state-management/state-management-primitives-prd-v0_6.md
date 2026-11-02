@@ -647,9 +647,9 @@ elected, classify-on-write ships as above. This is the operator's ruling of 2026
 through the gate requires STE100 under GATE-1. The input check runs ahead of the model,
 and the same classifier and label scheme serve input and output. Claude Code is the test
 driver. A separate seam remains for a safety classifier ahead of or behind the STE100
-classifier. Reason: STE100 is the condition of exchange, so both sides can be filed,
-retrieved, and checked by the same scheme. Claude Code is identified by the operator as
-writing STE100 well. [B5, H5.5]
+classifier. Reason: where the classifier is elected, STE100 is the condition of
+exchange, so both sides can be filed, retrieved, and checked by the same scheme. Claude
+Code is identified by the operator as writing STE100 well. [B5, H5.5]
 
 The input check runs where the declaration elects the classifier binding. An agent with
 no classifier checks no input and takes only input the operator controls, under GATE-1.
@@ -740,9 +740,9 @@ is outside this first release's STE100 input contract. [A3, H5.5, H0]
 
 ### 7.1 Input at the gate
 
-**GATE-1.** STE100 is the condition of interacting with the agent. Where the declaration
-elects the classifier binding (below), all input through the gate, including the task
-prompt, must conform. Nonconforming input is refused at the gate, never reaches the
+**GATE-1.** Where the declaration elects the classifier binding (below), STE100 is the
+condition of interacting with the agent, and all input through the gate, including the
+task prompt, must conform. Nonconforming input is refused at the gate, never reaches the
 model's argument, and is returned to its sender with a request to restate it. The
 refusal is recorded on the trace. The receiving model does not rewrite refused external
 input. Accepted input reaches the store only through trace, tee copy, partition, and the
@@ -993,10 +993,11 @@ system prompt is the first item in state, inserted in STE100 with its end mark b
 seed tool before the agent exists. It is the first item read at each load, through that
 mark, and place lays it as the argument head before the user channel opens. Nothing is
 copied through the tee or filed again by that boot read. The task prompt subsequently
-enters through the gate in STE100, is held after the system prompt with its end marked,
-and work follows. Configuration and tuple never enter the store. Reason: the agent
-starts with its rules in state and reads them before accepting task input, while the
-traced argument supplies the replay record. [B1, B2, B5, V3:3]
+enters through the gate, in STE100 where the declaration elects the classifier binding
+under GATE-1, is held after the system prompt with its end marked, and work follows.
+Configuration and tuple never enter the store. Reason: the agent starts with its rules
+in state and reads them before accepting task input, while the traced argument supplies
+the replay record. [B1, B2, B5, V3:3]
 
 **PROMPT-2.** No agent deploys without a system prompt meeting this section's
 requirements. The prompt document is reviewed through its own PR process. The deployment
@@ -1330,8 +1331,9 @@ A recorded lag can remain normal flow while supplying evidence against FALS-5. [
 **RELEASE-1.** The following line binds the first release and keeps later seams
 available without reworking the primitives. Reason: prove the first circuit before
 adding the capabilities that depend on it. The seed and boot read establish each agent's
-starting state, and the gate enforces STE100 before model input. [H5.9, H6, A1, A2, P1,
-P3, B1, B2, B5, D1, D2, D6, L1]
+starting state, and, where the declaration elects the classifier binding under GATE-1,
+the gate enforces STE100 before model input. [H5.9, H6, A1, A2, P1, P3, B1, B2, B5, D1,
+D2, D6, L1]
 
 | Rung | Release | Condition for addition |
 | --- | --- | --- |
