@@ -43,6 +43,13 @@ no executable digest, passes no instruction, and the load facts record the elect
 absent. This is the operator's ruling of 2026-11-01 (ruling C), made a declaration
 election by the ruling of 2026-11-02 (#434). [CLASS-2, CLASS-3, STORE-2]
 
+At this amendment's cutover, inventory reads the scheme and, where elected, the
+thesaurus from the selected save point's files under PERSIST-FORMAT and verifies each
+digest against the bound declaration, under Spec 02 CUSTODY. The root keys
+ste100-scheme.json and the optional ste100-thesaurus.json keep their custody judgment
+and are read only by seed and install-governing. This is the operator's ruling of
+2026-11-02 on #437 (C3 and Q8). [CLASS-2, PERSIST-3, STORE-2]
+
 The instruction's model binding names Spec 02's exact manifest file by an absolute
 pathname under MANIFEST-LOCATOR. A relative value is ConfigInvalid naming the binding
 field. Inventory preserves that declared value and its expected digest. Admin does not
@@ -223,6 +230,12 @@ scheme and review reference with no bindings, and admin verifies those under Spe
 SEED-CERTIFICATE with no expected checker digest. This is the operator's ruling of
 2026-11-02 on #437 (Q7). [PROMPT-2, PERSIST-5]
 
+Seed also reads the root ste100-thesaurus.json where the authoring declaration elects a
+thesaurus, checks it under Spec 02 THESAURUS, and supplies it in SeedRequest. The seed's
+publication carries the scheme and that thesaurus as PERSIST-FORMAT files, with their
+digests in binding.json. This is the operator's ruling of 2026-11-02 on #437 (C2 and
+Q8). [PERSIST-3, PERSIST-5]
+
 **ADMIN-REBIND.** Add root-shell-only `bind-state <agent>` to the same four verb
 surfaces as seed, with no further arguments. Hold the exclusive invocation lock and run
 lock and refuse a loaded agent. Select through ADMIN-SELECTION, verify the triple, and
@@ -239,6 +252,32 @@ field order, kebab-case keys, with no comments. It emits exactly one start hash.
 seed and bind use it. A normal save uses the loaded parsed declaration and the same
 serializer with the new A, never the mutable root draft. B hashes the final bytes passed
 at next load. [PERSIST-2, PERSIST-3]
+
+After install-governing, ADMIN-REBIND's scheme check compares the new declaration's
+scheme and thesaurus digests with the selected save point's current versions, read from
+its files, not with the old declaration's. The load refusal between the install and this
+rebind is intended. Rebinding still cannot change the image's versions. This is the
+operator's ruling of 2026-11-02 on #437 (C4). [PERSIST-2, PERSIST-3]
+
+**ADMIN-INSTALL.** Add root-shell-only `install-governing <agent> --scheme --ruling
+<reference>` and `install-governing <agent> --thesaurus --ruling <reference>` to the
+same four verb surfaces as seed. It takes no path: --scheme reads the judged root key
+ste100-scheme.json, and --thesaurus reads ste100-thesaurus.json. Do not add it to
+connector sudo rules. Hold the exclusive invocation lock and run lock, and refuse a
+loaded agent. Select through ADMIN-SELECTION and verify the artifact. Check the new
+artifact under Spec 02 SCHEME or THESAURUS, and refuse one whose digest is already
+current. Stand the member with --mode=install inside the start step's containment, as
+ADMIN-SEED does, with the selected state.sqlite on fd4, and send InstallRequest. On
+InstallCaptured, copy the image, clean up as seed does, and publish an artifact whose
+parent is the selected one, with confirmation install and cause install. Its agent.toml
+is the selected artifact's declaration copy unchanged, so it still names the old
+version, and its scheme and thesaurus files are the image's new current versions. The
+next load refuses scheme_mismatch until the operator edits the draft with sudoedit and
+bind-state publishes it. Record the ruling reference with the artifact's sha256 and, for
+a thesaurus, its source sha256 in admin.log. A refusal or crash before publication
+creates no index entry. Reason: only the operator changes a governing table, through
+admin, under a ruling, as a new hashed version. This is the operator's ruling of
+2026-11-02 on #437 (C4). [PERSIST-3, PERSIST-5, STORE-2]
 
 ## 3. Save and recovery, destinations sections 3.0 and 6
 
@@ -540,6 +579,7 @@ PERSIST-3, PERSIST-5]
 | restore | Unloaded, restore-artifact key naming a verified indexed complete artifact | Append selection, existing RestoreNamed. Missing key, pending/broken guard or invalid artifact refuses before change |
 | seed | Unloaded, no seed exists, judged seed prompt/certificate and declaration inputs under ADMIN-SEED | Seeded with StartIdentity only after complete publication. Refuse an existing seed or bad input |
 | bind-state | Unloaded, selected complete artifact and judged territory declaration draft | StateBound after verified same-state publication bound to the new declaration. N6 and scheme identity checks still apply |
+| install-governing | Unloaded, selected complete artifact, the judged root scheme or thesaurus file, and a ruling reference under ADMIN-INSTALL. It takes flags and a ruling reference, never a path | Published artifact with the new current version and the declaration copy unchanged. Refuse a loaded agent, an invalid or already current version, or a thesaurus whose scheme_id is not the current scheme's |
 
 The contract rows state custody and outcomes. ADMIN-SEED, ADMIN-SELECTION and
 PERSIST-FORMAT own representations and publication order. [PERSIST-3, SEAM-1]
@@ -558,6 +598,7 @@ serving contract remains applicable.
 | ADMIN-LOAD | Different mutable draft and verified copy, fd probes, failed-enter fixtures | Run draft after checking copy or report loaded before boot |
 | ADMIN-SEED | Temporary-member process fixture, shared TYPES-SEED corpus, root verb parser and cgroup probes | Seed live state, require a prior artifact, omit checked scheme/checker inputs, skip invoker/ancestor checks, accept caller path or index before successful seed cleanup |
 | ADMIN-REBIND | Same A/new B artifact and immutable prompt check | Mutate dump or use old B after editing config |
+| ADMIN-INSTALL | Install-mode member over a selected artifact, then load before and after rebind | Publish without the version files, change agent.toml, accept a path, or load a declaration that disagrees with the image |
 | ADMIN-SAVE | Three-party protocol, timeout cleanup then retry, cleanup failure, and fsync/rename failure hooks | Index before Commit, overwrite a good artifact, infer cleanup from silence or retry after FlowFailed |
 | ADMIN-FLOW-END | Every replaced lifecycle cell and tool fault cause | Serve on dead member, return Left, or let worker write marker |
 | ADMIN-RECOVERY | Crash before/after Commit, rename and index append, next-load tuple | Promote unconfirmed room data, skip malformed latest or associate load.reset with another selected start |

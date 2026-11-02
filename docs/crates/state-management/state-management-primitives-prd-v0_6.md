@@ -2,7 +2,8 @@
 
 **Status:** MERGED. Requirements change only on a return from the reviewer seat or
 an operator ruling the changed clause names.
-**Version:** 0.7
+**Version:** 0.7. The filename keeps `v0_6` from the document's landing, and this line
+is the version.
 **Date filed:** 2026-10-16
 **Document ID:** `state-management-primitives-PRD`
 **Editorial:** ASCII, no semicolons, prose at 88 characters.

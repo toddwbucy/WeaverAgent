@@ -212,6 +212,12 @@ the root-judged executable digest in the existing binary facts, copied into
 LoadedStateFacts for show. It is not the model-manifest digest or scheme digest. Spec
 02's CUSTODY governs all three identities. [CLASS-2, FLOW-3]
 
+EnterBinding::Serving and LoadedStateFacts::Serving also carry ste100_thesaurus:
+Option<String>, the exact thesaurus bytes where the declaration elects one. Both byte
+fields come from the selected save point's files under PERSIST-FORMAT, not from admin's
+config root. This is the operator's ruling of 2026-11-02 on #437 (C3 and Q8). [STORE-2,
+PERSIST-3]
+
 **TYPES-ENTER-WINDOW.** Add state_flow::EnterWindow with exactly
 {began_ns:DecimalU64,deadline_ns:DecimalU64}. Both fields are raw readings of the same
 Linux CLOCK_MONOTONIC domain under Spec 09 CLOCK, and began_ns < deadline_ns. The
@@ -1061,6 +1067,16 @@ rebind. seed/rebind confirmations require matching cause, and serving requires o
 the other three. Index and binding file carry the same confirmation. [PERSIST-2,
 PERSIST-5]
 
+Open also carries thesaurus_sha256, the declared thesaurus digest or null. After an
+install, a rebind or load compares the declaration's digests with the image's current
+versions, not with an earlier declaration's, and an image whose current version changed
+under STATE-INSTALL is not relabeled. SeedRequest also carries ste100_thesaurus:
+Option<String>, the first thesaurus version where elected. Confirmation gains install
+{kind, sha256}, and Cause gains install, which requires it. StatePersistenceInvalid
+gains stage install, and scheme_mismatch also applies at load, for a save point whose
+current versions disagree with the declaration. This is the operator's ruling of
+2026-11-02 on #437 (C2 to C4 and Q8). [PERSIST-2, PERSIST-3, PERSIST-5]
+
 StateManagementConfig also has persistence: PersistenceConfig, with save_wait and
 snapshot_wait as MeasuredWait under their corresponding save-wait and snapshot-wait
 declaration tables. Its elapsed-ns and measurement-ref grammar is the same as the flow
@@ -1068,6 +1084,18 @@ bounds. StartIdentity.position comes from binding.json, and opened must echo it 
 start, never as a second field. The state member compares it with the image's last
 committed event before adoption. A seed position is null. [PERSIST-3, PERSIST-4,
 STORE-5]
+
+**TYPES-INSTALL.** state_flow owns InstallRequest, InstallCaptured and InstallRefusal
+and their state-install/1 codec, under TYPES-SEED's frame, bound, codec and correlation
+rules, with protocol state-install/1 and ops install, captured and refused.
+InstallRequest is {kind, bytes, sha256, ruling, source_sha256}: kind is scheme or
+thesaurus, bytes the exact UTF-8 artifact, sha256 its Digest, ruling a nonempty
+reference to the operator's ruling, and source_sha256 the thesaurus source's Digest,
+present exactly for a thesaurus and equal to the artifact's source.sha256.
+InstallCaptured is {room_name, size_bytes:DecimalU64}. InstallRefusal is exactly
+unsupported_schema, open_failed, invalid_version, scheme_mismatch, write_failed,
+image_too_large and snapshot_failed. This is the operator's ruling of 2026-11-02 on #437
+(C4). [PERSIST-3, PERSIST-5, SEAM-1]
 
 **TYPES-SAVE-TIME.** state_flow defines SaveWindow with exactly
 {began_ns:DecimalU64,deadline_ns:DecimalU64}, both raw CLOCK_MONOTONIC readings and

@@ -1111,6 +1111,10 @@ connection. A mode/protocol mismatch closes before any mutation. Old one-file im
 old catalogs refuse serving load as unsupported_schema. Recreate old agents under the
 no-old-layout rule, never silently migrate them. [PERSIST-3, PERSIST-5, SCOPE-1, R8]
 
+Install mode, under STATE-INSTALL, requires read-only fd4 with the selected image, as
+serving does, and refuses any preload door. This is the operator's ruling of 2026-11-02
+on #437 (C4). [PERSIST-3, PERSIST-5]
+
 **STATE-CHANNEL.** Use state-flow/1 on fd3. The same parser receives typed controls from
 the types and persistence amendments. Protocol selection never depends on untrusted
 first-frame shape. A file may be accepted only after opened. The table is complete for
@@ -1243,6 +1247,44 @@ SEED-CERTIFICATE. STATE-ADOPT's binding checks on the prompt span then check tha
 holds none. This is the operator's ruling of 2026-11-02 on #437 (Q7). [PERSIST-5,
 PROMPT-2]
 
+**STATE-GOVERNING.** At this amendment's cutover the serving catalog is state-content/2:
+state-content/1 and the two tables below, with store_meta.schema_id checking
+state-content/2. Until then, state-content/1 stands as written above. An image of
+state-content/1 refuses serving load as unsupported_schema, under STATE-MODE's
+no-old-layout rule. The tables hold the agent's governing tables, the scheme of Spec 02
+SCHEME and, where the declaration elects one, the thesaurus of Spec 02 THESAURUS, as
+exact bytes with one row per installed version. governing_current names the active
+version of each kind. Earlier versions stay as history, and a filing is checked against
+the scheme version its scheme_id names. store_meta.scheme_id is `ste100:` followed by
+the current scheme's sha256. No serving operation writes either table. Seed writes the
+first versions from the bytes admin supplies, with the ruling reference `seed`, and
+install mode alone writes later ones. The agent reads the active versions through the
+bytes admin carries at enter, which STATE-ADOPT ties to these rows. Reason: the
+governing tables live in state, persist across shutdowns, and change only by the
+operator through admin, as new hashed versions. This is the operator's ruling of
+2026-11-02 on #437 (Q2 and C2). [STORE-2, PERSIST-3, PERSIST-5]
+
+```sql
+CREATE TABLE governing_version (
+  kind TEXT NOT NULL CHECK(kind IN ('scheme','thesaurus')),
+  sha256 TEXT NOT NULL CHECK(length(sha256) = 64),
+  bytes BLOB NOT NULL,
+  source_sha256 TEXT CHECK(source_sha256 IS NULL OR length(source_sha256) = 64),
+  ruling TEXT NOT NULL CHECK(length(ruling) > 0),
+  install_ordinal BLOB NOT NULL UNIQUE CHECK(length(install_ordinal) = 8),
+  PRIMARY KEY(kind, sha256),
+  CHECK((kind = 'thesaurus') = (source_sha256 IS NOT NULL))
+)
+```
+
+```sql
+CREATE TABLE governing_current (
+  kind TEXT PRIMARY KEY CHECK(kind IN ('scheme','thesaurus')),
+  sha256 TEXT NOT NULL,
+  FOREIGN KEY(kind, sha256) REFERENCES governing_version(kind, sha256)
+)
+```
+
 **STATE-ADOPT.** Load the raw fd4 image into a scratch in-memory connection. Require
 exact state-content/1 catalog, quick_check success, no foreign_key_check rows, one
 store_meta row, one complete system_prompt span and valid bindings. Compare that row's
@@ -1265,6 +1307,15 @@ open. Pass means schema and structural integrity of those bytes, not semantic tr
 authorization of an operator's prior choices. The evidence is the verified image A and
 the measured catalog/check results. [PERSIST-3, PERSIST-6, STORE-3]
 
+At state-content/2, STATE-ADOPT also requires one current scheme row and, exactly where
+open names a thesaurus, one current thesaurus row. Each current sha256 must equal the
+digest open carries from the declaration, which admin has checked against the save
+point's files under PERSIST-FORMAT. Each version row's bytes must hash to its sha256.
+The current thesaurus's scheme_id and store_meta.scheme_id must both equal the current
+scheme's identity. Any difference refuses scheme_mismatch, naming the kind in detail, so
+the files and the table cannot disagree without a refusal. This is the operator's ruling
+of 2026-11-02 on #437 (C3 and Q8). [PERSIST-3, PERSIST-6, STORE-2]
+
 **STATE-CAPTURE.** After the harness barrier, serialize the current in-memory SQLite
 connection to a complete RAM image, as Store::image does today. Serving remains paused
 through publication, so there is no concurrent mutator or new dump worker. Write that
@@ -1274,6 +1325,21 @@ serialization buffer to peak memory, measured under the declared tuple. Retain t
 existing 1 GiB image bound. Over-bound capture returns image_too_large, not a partial
 image or silence. Admin alone computes A and B and publishes. [STORE-1, PERSIST-1
 through PERSIST-4, COST-2, R1]
+
+**STATE-INSTALL.** Install mode accepts exactly one InstallRequest under TYPES-INSTALL,
+with the selected image read-only on fd4, fd3 and fd9, and no other descriptor. It
+adopts the image with every STATE-ADOPT check, then validates the new version: a scheme
+under Spec 02 SCHEME, or a thesaurus under THESAURUS whose scheme_id names the current
+scheme. In one transaction it inserts the version row with the request's ruling
+reference and the next install ordinal, moves governing_current to it, and for a scheme
+sets store_meta.scheme_id. A scheme install leaves in place a current thesaurus that
+names the old scheme, and the next load refuses until a thesaurus for the new scheme is
+installed. It then serializes the image as STATE-CAPTURE does and returns its room name
+and size. It opens no serving session, runs no model, files nothing, authors no trace
+event and accepts no SQL. A refusal leaves no publishable image. Reason: only the
+operator changes a governing table, outside service, as a new hashed version, and filed
+history keeps its scheme version. This is the operator's ruling of 2026-11-02 on #437
+(C4). [PERSIST-3, PERSIST-5, STORE-2]
 
 **STATE-NO-SAVE.** A failed flow cannot request capture, finish an unconfirmed
 publication, or adopt an orphan from the member's room. Delete parts on exit. The

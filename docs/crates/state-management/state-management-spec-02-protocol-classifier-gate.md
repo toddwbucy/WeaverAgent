@@ -110,6 +110,14 @@ scheme, as ADMIN-REBIND requires. The configuration has no prompt field. Reason:
 repeating a path lookup after inventory would allow a different scheme to serve the
 checked declaration. [TAP-2, CLASS-2, PERSIST-3, PERSIST-7]
 
+With the governing tables held in state (weaver-state STATE-GOVERNING), inventory reads
+the scheme and, where elected, the thesaurus from the selected save point's files under
+PERSIST-FORMAT, not from admin's config root. It verifies each digest against the bound
+declaration as above and carries the exact bytes at enter, the thesaurus in its own
+field. The root files ste100-scheme.json and ste100-thesaurus.json are the seed and
+install sources only. Load neither reseeds nor overwrites state. This is the operator's
+ruling of 2026-11-02 on #437 (C3 and Q8). [TAP-2, PERSIST-3, STORE-2]
+
 The enter carrier retains the floor's MAX_ENVELOPE_BYTES bound, currently 64 KiB for the
 complete lifecycle envelope. It does not use CHANNEL's fragmented transport. Admin's
 existing send_with_sink checks the fully serialized envelope, including the escaped
