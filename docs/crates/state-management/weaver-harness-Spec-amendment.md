@@ -1464,6 +1464,7 @@ direct store update. [TAP-4, MARK-5, CLASS-8, SEAM-2, review S2]
 | Mark coordinator state | Observation | Action and next state |
 | --- | --- | --- |
 | Idle | Caller requests begin_task with accepted input | Wait for its filing under decision barrier, AwaitInput |
+| Idle | Caller requests begin_task with no state-management.ste100 binding | Record RefusalRecord::Instruction with case invalid_context naming the absent binding, return it to caller, Idle, no wait |
 | AwaitInput | Exact input filed receipt | Submit marks read on the sole state owner, Reading |
 | Reading | Valid marks result, current task absent or terminal | Allocate task/prompt proposal, author certified state.mark, Authoring |
 | Reading | Current task open | Return its TaskScopeRef, Idle |
@@ -1475,6 +1476,17 @@ direct store update. [TAP-4, MARK-5, CLASS-8, SEAM-2, review S2]
 | Before authoring | Stop or leave | Cancel proposal with no allocation, lifecycle owns continuation |
 | After authoring | Stop or leave with healthy flow | Account and finish the owed filing, no dependent generation |
 | Any wait | Component failure or applicable bound | Foundation latch, no retry or direct mark write |
+
+With no state-management.ste100 binding nothing is filed (HARNESS-LEDGER), so no filing
+receipt can arrive. Every port whose operation would wait on one refuses before that
+wait with its existing typed operation refusal and latches no component failure.
+begin_task records RefusalRecord::Instruction with case invalid_context, as the table's
+no-binding row says, and returns no TaskScopeRef. A HARNESS-PLAN-PORTS operation returns
+PlanOperationRefused with case invalid_target and null read_code, since no task scope
+exists. Reads, turns and wind-down stay available. A no-binding fixture calls begin_task
+and a plan port and requires each refusal with no wait, and removing the guard must make
+it reach the bound instead. This is the operator's ruling of 2026-11-02 on #437 (Q3).
+[MARK-1, PLAN-2, FLOW-4, STORE-2]
 
 Spec 07 invokes the remaining mark helpers through its classified plan effects. Before
 closure it freezes a source frontier and waits for every disposition through it. Only
