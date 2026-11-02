@@ -1,6 +1,6 @@
 # STE conversion loop
 
-ASD-STE100:9 lexicon: 022df3d809593696766893bf95f915229628497b89ef571dbc997ac8585224da
+ASD-STE100:9 thesaurus: 022df3d809593696766893bf95f915229628497b89ef571dbc997ac8585224da
 
 **Version:** 0.1, 2026-11-02
 **Document ID:** `ste-conversion-loop`
@@ -8,7 +8,7 @@ ASD-STE100:9 lexicon: 022df3d809593696766893bf95f915229628497b89ef571dbc997ac858
 **Landing PR:** #442
 **Standard:** `ASD-STE100`, Issue 9, 2025-01-15
 **Lexicon:** `WeaverTrain ste/`, `ab63a918b569e5b8673dc2e78e66575ee9df1bd7`
-**Lexicon digest:** SHA256 of `ste/thesaurus.toml`, in the header above
+**Thesaurus digest:** SHA256 of `ste/thesaurus.toml`, in the header above
 **Standard copy SHA256:**
 `d1f4ea9e7cd6e46b47aa9057209f99e78c0e9cfc4e27a5b07895b05c1a166431`
 **Approved words SHA256:**
@@ -44,7 +44,7 @@ These are Q4, [#437][q14], with its [correction][q4rename].
 There is no Q5 in that series, as the [operator correction][retirement] states.
 
 **1.05. Rounds.** An adapter round uses one model version and one measured result set.
-A `repair pass` requests a corrected text within that round.
+A driver `repair pass` requests a corrected text within that round under clause 6.04.
 An `offer pass` requests the use of a thesaurus entry by the model.
 Keep an independent count for each.
 
@@ -202,10 +202,14 @@ Use placeholders for HTML tags and exception messages through the line end.
 Use placeholders for padded program listings and Markdown blockquotes.
 Blockquotes are quotations and stay unchanged.
 
-**4.05. Request.** Use the recorded rules prompt before the text.
-Its source includes approved verbs, technical verbs, the fixed mappings and four
+**4.05. Request.** Use the system prompt seeded by clause 3.08.
+The state member seats this prompt on load.
+Send only the text after placeholder substitution in each initial request.
+Do not copy the system prompt into a request.
+Use clause 6.04 for repair requests with checker notes.
+The prompt source includes approved verbs, technical verbs, the fixed mappings and four
 examples.
-Record its hash with each rewrite.
+Record the prompt hash with each rewrite.
 Request one rewrite with all placeholders intact.
 For the single-text baseline, collect one text response for that segment ID.
 The source `unit_outputs` uses raw text for this case.
@@ -358,18 +362,23 @@ The check's execution site stays open in clause 10.02.
 
 **6.03. Shape strikes.** Count a parse failure or lost placeholder as one shape fault.
 Use at most three such emissions for one text, then drop that text.
+Request a fresh rewrite when output is missing.
 Keep all three emissions and their identities on the trace.
 Count drops separately for every round.
 Do not count vocabulary splices or offers as shape faults.
 The retry site stays open in clause 10.03.
 These are rulings Q and S, [#437][epic].
 
-**6.04. Repair.** Keep the failure text and the checker's notes for each `repair pass`.
-Request a fresh rewrite when output is missing.
+**6.04. Repair.** The driver owns each `repair pass` for a language failure after the
+shape checks accept the text.
+Keep the failure text and the checker's notes.
+Send the original text with placeholders, its last rewrite and checker notes through a
+new gate turn.
+Keep one original text per request.
+The agent does not start `REPAIR` under `OUTPUT-UNIT` without a classifier.
 Use "restatement" only for this repair, under Q4, [#437][q14].
-Do not use the classifier's rejected-block constructor without the rejected model
-content.
 The named `offer` path accepts only the thesaurus case in clause 5.06.
+The shape-retry site stays open in clause 10.03.
 The general repair cap stays open in clause 10.12.
 
 **6.05. Review.** Compare a recorded random sample of source texts with their final
@@ -529,7 +538,7 @@ literal-check site.
 Count the detected literal changes and released invalid texts at each site.
 Measure the time per text.
 The operator selects the site from those results.
-The [2026-11-02 correction on #437][retirement] leaves this open.
+The [2026-11-02 correction on #437][retirement] keeps this open.
 
 **10.03. Retry site.** Compare driver retries through new gate turns with retries inside
 the same agent turn.
@@ -538,7 +547,7 @@ per text.
 Keep the three-strike bound unchanged in both comparisons.
 The operator selects the site and any necessary instruction-path amendment.
 No open cell grants a constructor that the merged Specs forbid.
-The [2026-11-02 correction on #437][retirement] leaves this open.
+The [2026-11-02 correction on #437][retirement] keeps this open.
 
 **10.04. Group size.** Measure missing-text counts by group size against the single-text
 baseline.
@@ -574,7 +583,7 @@ The operator rules on the mechanism from these results.
 **10.09. Think classification.** Count the family content by block kind and examine
 their declared outbound status.
 Record the blocks received by a proposed classifier.
-The operator sets the `CLASS-10` block scope through its own PRD amendment.
+The operator sets the scope of `CLASS-10` through its own PRD amendment.
 `Ruling O` still keeps dataset `think` fields unchanged.
 
 **10.10. Cards.** Complete one end-to-end deposit per card with the declared model.
