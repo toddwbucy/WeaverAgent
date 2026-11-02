@@ -1,8 +1,9 @@
 # Sketch: the STE conversion loop
 
-**Status:** sketch. Decides nothing. Feeds PRD authoring. It moves to
-`docs/crates/weaver-harness/Loops/` once the amendments of #432, #433 and #434 land
-(ruling H).
+**Status:** sketch. Decides nothing. Feeds PRD authoring. It is step 1 of the workflow
+loop template in epic #437. It moves to `docs/crates/weaver-harness/Loops/` in the
+workflow PR, after the amendments PR (the epic's step 2, carrying #432, #433 and #434)
+merges (ruling H).
 
 **Version:** 0.2
 **Date filed:** 2026-11-01
@@ -15,7 +16,7 @@
 section 2 says a `Loops/` document "walks a settled set", and that "where it and a
 charter disagree the charter yields nothing." The loop as ruled departs from merged
 text in CLASS-2, CLASS-3, CLASS-9 and CLASS-10 of `state-management-primitives-PRD`,
-and those amendments have not landed. So it stays here until they do.
+and those amendments have not landed. So it stays here until the amendments PR merges.
 
 **Citations.** The loop runs today outside the agent, in the `toddwbucy/WeaverTrain`
 repository, as scripts an operator seat fires by command. Every script and function
@@ -56,7 +57,7 @@ question, not a factor here.
 
 ## 2. The rulings
 
-Rulings A to G are the operator's of 2026-11-01. H to S are the operator's of
+Rulings A to G are the operator's of 2026-11-01. H to T are the operator's of
 2026-11-02.
 
 - **A.** The agent emits at the gate, not at the model. The decoder owns e, the agent
@@ -77,7 +78,7 @@ Rulings A to G are the operator's of 2026-11-01. H to S are the operator's of
   adapter. Both halves meet by the end of the week of 2026-11-02.
 - **G.** The thinkpad also runs `nvidia/NVIDIA-Nemotron-3-Nano-4B-GGUF` at Q4_K_M to
   exercise the hybrid path, as the first target of #382.
-- **H.** The sketch stays in `docs/project/` until #432 to #434 land.
+- **H.** The sketch stays in `docs/project/` until the amendments PR merges.
 - **I.** A `weaver-spu` family entry for the 4B may land from the thinkpad. The rest of
   the olympus lane is unchanged. #436.
 - **J.** The bootstrap plan of section 6.
@@ -92,6 +93,10 @@ Rulings A to G are the operator's of 2026-11-01. H to S are the operator's of
   gets three strikes, and drops are counted and kept on the trace.
 - **R.** Restate-then-solve enters this loop's rewrite turns at round 2 or later.
 - **S.** The kill line counts drops.
+- **T.** A workflow document authorizes loop code. Each piece of loop code traces to a
+  clause of the workflow document this sketch becomes, and code that changes an organ
+  still traces to that organ's Spec. It departs from Working Process H1 and the
+  Document Format's reading of a workflow document. #438.
 
 ## 3. Who starts each turn
 
@@ -444,8 +449,8 @@ turn. Settled per entry by splicing it on the held-out set and counting the spli
 reviewer judges faithful.
 
 **The repair round cap.** CLASS-9 asks for a measured cap on what it calls
-"restatement" (#432 carries the term). Settled by the pass curve over rounds, which in the first batch was 89.2,
-99.2, 99.8 and 99.9 percent.
+"restatement" (#432 carries the term). Settled by the pass curve over rounds, which in
+the first batch was 89.2, 99.2, 99.8 and 99.9 percent.
 
 **Local rewriter quality.** Whether the adapter matches the remote model. Settled by
 the held-out faithful count of each adapter round against Gemini's.
