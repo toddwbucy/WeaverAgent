@@ -28,6 +28,15 @@ must refuse and what an outcome means. It does not grant the checker a store, to
 trace or argument-writing duty. Reason: a classification result and the loop's use of it
 are separate acts. [CLASS-1, CLASS-2, SEAM-1, SEAM-2, FLOW-1]
 
+This agreement binds where the declaration elects the classifier binding,
+state-management.ste100. With no binding, no checker stands, the agreement has no SPU
+party for that agent, and the agent converts its emission and files nothing by verb
+under Spec 02 DECLARATION. This is the operator's ruling of 2026-11-02 on #437 (Q7).
+Reason: the strong requirements came from the first design of the full agent. The work
+has since turned to a bootstrap, and a loop with no classifier is a deliberately simple
+subset with one job the model can be graded on. Each requirement comes back when a loop
+elects the part it belongs to. [CLASS-2, CLASS-3, STORE-2]
+
 ## 1. Admission and identity
 
 The harness supplies one immutable scheme and the declared checker artifact. It may

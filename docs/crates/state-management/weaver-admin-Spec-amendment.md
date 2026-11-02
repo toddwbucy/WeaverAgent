@@ -62,7 +62,9 @@ one-byte-over cases are admission fixtures. Removing the complete-envelope guard
 fail them. [CLASS-8, FLOW-3, PERSIST-6, SEAM-2]
 
 Inventory also validates the declared sh policy against the elected tool set and the
-shared shell maximum. Diagnostic binding requires neither new root key nor a serving
+shared shell maximum. A declaration that elects a tool with no state-management.ste100
+binding is ConfigInvalid naming state-management.ste100 (the operator's ruling of
+2026-11-02 on #437, Q7). Diagnostic binding requires neither new root key nor a serving
 STE100 instruction. An invalid serving artifact is ConfigInvalid with field attribution
 at inventory. Checker admission or template certification failures after load use the
 existing after-load refusal and rollback path. [CLASS-8, PAIR-2, SCOPE-1]
@@ -215,6 +217,11 @@ port and the external certificate producer. Their implementation and qualified a
 remain cutover dependencies. Protocol fixtures alone cannot certify a production seed.
 The pass statement is exact insertion of certified/reviewed bytes, not a claim that a
 checksum proves meaning. [CLASS-2, PROMPT-2, PROMPT-3, PERSIST-5]
+
+With no state-management.ste100 binding, the certificate file carries the prompt digest,
+scheme and review reference with no bindings, and admin verifies those under Spec 02
+SEED-CERTIFICATE with no expected checker digest. This is the operator's ruling of
+2026-11-02 on #437 (Q7). [PROMPT-2, PERSIST-5]
 
 **ADMIN-REBIND.** Add root-shell-only `bind-state <agent>` to the same four verb
 surfaces as seed, with no further arguments. Hold the exclusive invocation lock and run

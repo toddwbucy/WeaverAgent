@@ -71,6 +71,36 @@ corpus are owed as O02-1. No verb in the old draft's illustrative list is presum
 approved. A synthetic `fixture-read/1` artifact remains test-only. [CLASS-1, CLASS-2,
 CLASS-7]
 
+**THESAURUS.** Add an elective sibling artifact, `ste100-thesaurus.json`, under SCHEME's
+artifact rules: UTF-8 JSON, unknown or duplicate keys refused at every depth, no
+self-hash, and exact bytes that hash to the lowercase 64-hex SHA-256 in
+state-management.flow.thesaurus.artifact-sha256. For each word the scheme does not
+approve and the program's text uses, it holds the senses in which that word is written
+in approved words, and one tag per entry, splice or offer. It names the scheme_id it was
+built against, and load refuses a thesaurus whose scheme_id is not the bound scheme's.
+It is built deterministically from its source, the thesaurus of record, and records that
+source and its sha256 beside its own sha256. The source is `ste/thesaurus.toml` of
+toddwbucy/WeaverTrain at ab63a918b569e5b8673dc2e78e66575ee9df1bd7, sha256
+022df3d809593696766893bf95f915229628497b89ef571dbc997ac8585224da. Work on the thesaurus,
+the verb list and the nouns stays in this repository until it is settled. A tag changes
+only by a ruling, as a new version. No runtime ask extends this artifact. With no
+state-management.flow.thesaurus, no thesaurus is held and the outbound sort makes no
+lookup change. Reason: one verb artifact serves every judge, and a thesaurus change must
+not relabel the scheme or any filing. This is the operator's ruling of 2026-11-01
+(ruling B), with the rulings of 2026-11-02 on #437 (C1 and its correction). [CLASS-2,
+STORE-2, OUT-1]
+
+| Artifact field | Type and meaning |
+| --- | --- |
+| format | Literal ste100-thesaurus/1 |
+| scheme_id | The scheme_id the artifact was built against, `ste100:` followed by the scheme digest |
+| source | {repository:String, commit:String, path:String, sha256:Digest}, the thesaurus of record it was built from and the SHA-256 of that file's exact bytes |
+| entries | Ordered Vec<{word:String, tag:String, senses:Vec<{sense:String, use:Vec<String>}>}>, unique words, each sense and use nonempty, tag splice or offer |
+
+An entry tagged splice has exactly one sense with exactly one use. Any other entry is
+offer. Which entries are splice, and how the loop acts on the tag, belong to the
+thesaurus's rulings and the loop's workflow document. [CLASS-2, OUT-1]
+
 **CUSTODY.** Admin reads the scheme once during inventory, verifies its digest and
 closed dictionary against the bound declaration, and carries the exact bytes in
 `EnterBinding::Serving.ste100_scheme`. The harness never opens agent.toml or this root
@@ -417,6 +447,12 @@ not prove arbitrary substitution, safety, step authorization or model accuracy. 
 either the inclusion check or typed-value constructor must make its respective
 acceptance test fail. [CLASS-2, FLOW-8]
 
+With no state-management.ste100 binding, no checker certifies templates. The compiled
+inventory stays the only template source, the load tuple records its digest, and no
+TemplateCertificate is issued. Each expansion is checked structurally, by template ID,
+slot classes and the metadata of INSTRUCTION-METADATA, before it reaches the argument.
+This is the operator's ruling of 2026-11-02 on #437 (Q7). [CLASS-2, FLOW-8]
+
 **INSTRUCTION-METADATA.** loop.instruction has one trace-owned shape,
 LoopInstructionRecord {template_id:String,message:Message,
 instruction:LoopInstructionMeta}. message is role user with exactly one complete Text
@@ -485,6 +521,12 @@ structural and attributional. Semantic qualification remains the producer's duty
 that producer and normative artifact are explicit cutover prerequisites. [PERSIST-5,
 PROMPT-2]
 
+With no state-management.ste100 binding, the seed takes the prompt with its digest and
+the operator's review reference. The certificate then carries no bindings and no checker
+digest, and the validator checks the prompt digest, the scheme identity and a nonempty
+review_reference. Nothing is filed, so no binding is used. This is the operator's ruling
+of 2026-11-02 on #437 (Q7). [PERSIST-5, PROMPT-2]
+
 ## 5. Input at the harness frame path
 
 **INPUT.** Keep credential admission in the gate and request parsing in the harness.
@@ -495,6 +537,12 @@ as part of the foundation, not in an earlier standalone act. Origin is operator 
 when the gate-authenticated dialer UID equals the operator UID carried at enter,
 otherwise external. JSON text cannot choose it. Reason: the gate owns who may connect,
 not the meaning of a line. [GATE-1, TAP-1, PERSIST-5, PERSIST-7]
+
+With no state-management.ste100 binding, the harness checks no input text. After
+parse_request and dialer judgment, a well-formed request mints AcceptedInput directly,
+with no ste100 request and no gate_wait. The agent takes only input the operator
+controls, under GATE-1. The table below applies where the binding is elected. This is
+the operator's ruling of 2026-11-02 on #437 (Q6). [GATE-1, CLASS-4]
 
 The foundation's input.offered is authored before parsing, with its exact original
 frame. Input checks use target input {input_id,block:0}. input_id is assigned on
@@ -596,6 +644,13 @@ after exact source, scheme and decoded text comparison. Unselected Text is still
 for the emission contract and repair, but produces no filing. Accepted siblings remain
 ordinary filings even if another block is rejected. [CLASS-3, CLASS-9, CLASS-10,
 STORE-3, TAP-1]
+
+With no state-management.ste100 binding, no Text block is checked, DECISION-BARRIER has
+no check to wait for, and REPAIR is never begun. EffectiveEmission then has empty
+statements, and its text joins the generation's original Text blocks with a single LF,
+in original index order, after any change recorded under EFFECTIVE-EMISSION. This
+follows from the operator's ruling of 2026-11-01 (ruling C), made a declaration election
+by the ruling of 2026-11-02 (#434). [CLASS-2, CLASS-3, OUT-1]
 
 **DECISION-BARRIER.** Do not dispatch an emitted tool request, start the next decode
 round or close a successful answer until the current generation's Text checks and any
@@ -812,6 +867,11 @@ bare calls and UnrecoveredCall never acquire a successful send by inference. The
 visible refusal leaves the agent available to the user. [CLASS-3, CLASS-9, PROMPT-3,
 PAIR-1]
 
+With no state-management.ste100 binding, no tool request is dispatched, because no
+statement can be accepted. The agent's tool set is empty, and admin refuses a
+declaration that elects a tool with no binding. A later loop that needs tools elects the
+classifier. This is the operator's ruling of 2026-11-02 on #437 (Q7). [CLASS-3, PAIR-1]
+
 **RECALL.** A model-output Binding whose verb is one of scheme.recall_keys requests the
 noun-history action. It must have exactly one noun and no governing condition. This is
 an inward call recognized from the classified statement, not a new `sh` tool-set entry
@@ -941,14 +1001,15 @@ exhaustion, with no gate dispatch. [CLASS-9, CLASS-10, PAIR-1, PLAN-1, STRAT-2]
 
 **AMENDMENTS.** The following replacement/addition text is part of the document act,
 before implementation. The old label contract remains in force for labels. Its
-optionality and retirement do not apply to the new mandatory STE100 seam. Every owning
-section also carries the transition sentence from section 0. Reason: an implementer must
-not choose between two incompatible contracts or write missing charter amendments inside
-a code PR. [FLOW-7, CLASS-8, October 18 A1, R10]
+optionality and retirement do not apply to the new STE100 seam, required where the
+declaration elects the classifier binding (the operator's ruling of 2026-11-02 on #437,
+Q7). Every owning section also carries the transition sentence from section 0. Reason:
+an implementer must not choose between two incompatible contracts or write missing
+charter amendments inside a code PR. [FLOW-7, CLASS-8, October 18 A1, R10]
 
 | Owning document and clause | Text to add or replace |
 | --- | --- |
-| weaver-spu-PRD sections 6 and new 16 | Add a separate STE100 seam between harness and SPU. The SPU checks the fixed language instance and returns complete bindings, a correct defect or component failure. This duty is mandatory for serving and holds neither policy nor state. Section 15 continues to govern the optional label scorer. |
+| weaver-spu-PRD sections 6 and new 16 | Add a separate STE100 seam between harness and SPU. The SPU checks the fixed language instance and returns complete bindings, a correct defect or component failure. This duty is required where the declaration elects the classifier binding, and holds neither policy nor state. Section 15 continues to govern the optional label scorer. |
 | weaver-spu-Spec sections 1 and new 12 | Add the third binary target and its owned module. Add PROTOCOL-OWNER, PARSER, MODEL, BINDING, CAPACITY, CHANNEL, PORT and TEMPLATES with their state tables and instruments. Move the current Open elections section 12 to 13. Section 11 and its label binary remain unchanged. |
 | weaver-types-PRD section 2.3 and Spec sections 2 and 4 | Add Ste100Instruction, scheme bootstrap/readiness/refusal types, template types and certificate validation. TYPES-CLASSIFIER remains the request/reply definition. The legacy label trio is neither removed nor reinterpreted. |
 | weaver-harness-PRD sections 2 and 4, Spec sections 1, 2.1 and 6 | Add the STE100 duty and pump-owned port, typed template construction, input state table and repair barrier. Permit the pure weaver-internal recall constructor as a member dependency. Legacy Ports::classify retains its separate semantics through the shared pump. |

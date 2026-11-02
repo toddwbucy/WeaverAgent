@@ -46,7 +46,10 @@ same positive elapsed_ns and measurement_ref representation as MeasuredWait, but
 no timeout. Spec 09's FLOW-COUNTS owns its sampling use. SchemeDeclaration holds
 scheme_id, artifact_sha256, and verbs, an ordered unique list of nonempty closed verb
 keys. A changed dictionary changes artifact_sha256 and scheme_id. scheme_id is `ste100:`
-followed by artifact_sha256, under Spec 02's SCHEME clause. Admin checks syntax and the
+followed by artifact_sha256, under Spec 02's SCHEME clause. FlowConfig also holds
+thesaurus: Option<ThesaurusDeclaration>, with artifact_sha256 and scheme_id, under Spec
+02's THESAURUS clause. Its scheme_id must equal scheme.scheme_id, and absent elects no
+thesaurus (the operator's ruling of 2026-11-02 on #437, C1). Admin checks syntax and the
 exact scheme bytes, and the classifier checks its loaded artifact. Use the existing
 kebab-case TOML naming and unknown-field refusal. Later strategy keys are added by their
 owning amendment under the same state-management parent. Reason: the declaration is
@@ -82,6 +85,7 @@ attestation, not proof that a benchmark was run. Qualification checks its eviden
 | state-management.flow.observation-interval | elapsed-ns decimal string, measurement-ref string, a cadence rather than a wait bound |
 | state-management.flow.backlog | max-pending-blocks and max-pending-bytes positive decimal strings, measurement-ref nonempty string, lag-alarm-turns positive decimal string |
 | state-management.flow.scheme | scheme-id string, artifact-sha256 lowercase 64-hex string, verbs array of strings |
+| state-management.flow.thesaurus | artifact-sha256 lowercase 64-hex string, scheme-id string. Elective: absent elects no thesaurus, under Spec 02 THESAURUS |
 | state-management.start | dump-sha256 lowercase 64-hex string in a published copy |
 | state-management.persistence.save-wait | elapsed-ns decimal string, measurement-ref string |
 | state-management.persistence.snapshot-wait | elapsed-ns decimal string, measurement-ref string, initial explicit value 120000000000 ns under R20-6 |
@@ -876,9 +880,12 @@ well-formed seed request has exactly the fields listed above. Its schema_id must
 state-content/1, seed_id is 32 lowercase hex characters, and raw_block is one complete
 Text ContentBlock whose decoded text equals prompt_text. The nonempty bindings equal
 certificate.bindings. Spec 02 owns scheme parsing and certificate validation against the
-supplied scheme and expected checker identity. Reason: both seed endpoints need the
-dictionary bytes to check the same bindings, and must not substitute an identifier for
-that dictionary. [STORE-2, STORE-3, PERSIST-5, CLASS-2, PROMPT-2]
+supplied scheme and expected checker identity. With no state-management.ste100 binding,
+bindings and certificate.bindings are empty and the expected checker identity is absent,
+under Spec 02 SEED-CERTIFICATE (the operator's ruling of 2026-11-02 on #437, Q7).
+Reason: both seed endpoints need the dictionary bytes to check the same bindings, and
+must not substitute an identifier for that dictionary. [STORE-2, STORE-3, PERSIST-5,
+CLASS-2, PROMPT-2]
 
 SeedRefusal has exactly unsupported_schema, malformed_seed, seed_certificate_invalid,
 write_failed, image_too_large and snapshot_failed. Check schema, seed/block shape, then

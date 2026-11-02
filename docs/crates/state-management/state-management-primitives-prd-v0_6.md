@@ -649,6 +649,14 @@ ahead of or behind the STE100 classifier. Reason: STE100 is the condition of exc
 so both sides can be filed, retrieved, and checked by the same scheme. Claude Code is
 identified by the operator as writing STE100 well. [B5, H5.5]
 
+The input check runs where the declaration elects the classifier binding. An agent with
+no classifier checks no input and takes only input the operator controls, under GATE-1.
+One election covers both directions. This is the operator's ruling of 2026-11-02 on #437
+(Q6). Reason: the strong requirements came from the first design of the full agent. The
+work has since turned to a bootstrap, and a loop with no classifier is a deliberately
+simple subset with one job the model can be graded on. Each requirement comes back when
+a loop elects the part it belongs to. [GATE-1, CLASS-2]
+
 **CLASS-5.** The protocol targets technical, long-horizon, machine-to-machine work,
 where meaning and intent must stay stable between AI agents. Free conversation is
 not a target. Reason: the narrow domain permits a controlled verb scheme and keeps
@@ -744,6 +752,15 @@ loudly on the trace. The bound and its unit are spec values set by measurement. 
 both sides exchange statements under one scheme, the model must wait for conformance
 before receiving input, and a hung check must not hold the turn forever. Gate
 conformance checking is not a safety decision. [L1, D6, G7, B5, R4, H1, G2]
+
+Input conformance is required where the declaration elects the classifier binding, not
+for every agent. An agent with no classifier takes only input the operator controls,
+under the operator's rule of 2026-10-31 (WeaverTrain issue #2, ruling 10), until the
+safety seam of CLASS-4 exists. This is the operator's ruling of 2026-11-02 on #437 (Q6).
+Reason: the strong requirements came from the first design of the full agent. The work
+has since turned to a bootstrap, and a loop with no classifier is a deliberately simple
+subset with one job the model can be graded on. Each requirement comes back when a loop
+elects the part it belongs to. [CLASS-2, CLASS-4]
 
 The gate receives the sender's input and returns acceptance or a refusal requesting
 restatement. Its classifier seam supplies the conformance result before the model

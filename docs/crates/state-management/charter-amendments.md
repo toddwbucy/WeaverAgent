@@ -4,7 +4,7 @@
 
 **Landing PR:** #182
 
-**Version:** 0.18 **Date filed:** 2026-10-20
+**Version:** 0.19 **Date filed:** 2026-10-20
 
 ## 0. What this document is
 
@@ -157,12 +157,13 @@ serving contract remains applicable.
 
 **SPU-STE100-CHARTER.** Add to SPU PRD section 6 and new section 16: the SPU has a
 separate STE100 seam governed by weaver-harness-spu-ste100-contract. This is a required
-duty for a serving state-management agent. It checks one fixed language instance and
-returns complete bindings, a conformance defect or component failure. It also checks the
-closure of the harness's declared templates under their permitted substitutions. It
-holds neither the partition nor a store, tool or argument-writing motive. The existing
-label scorer and its optional-by-presence rule in section 15 remain unchanged. [CLASS-1
-through CLASS-8, FLOW-4, FLOW-8, October 18 R10]
+duty for a serving state-management agent where the declaration elects the classifier
+binding (the operator's ruling of 2026-11-02 on #437, Q7). It checks one fixed language
+instance and returns complete bindings, a conformance defect or component failure. It
+also checks the closure of the harness's declared templates under their permitted
+substitutions. It holds neither the partition nor a store, tool or argument-writing
+motive. The existing label scorer and its optional-by-presence rule in section 15 remain
+unchanged. [CLASS-1 through CLASS-8, FLOW-4, FLOW-8, October 18 R10]
 
 The harness supplies the exact scheme and targets. The checker owns analysis and
 qualified model execution. Its result supplies no authority to file, place or dispatch.

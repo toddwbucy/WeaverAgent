@@ -4,7 +4,7 @@
 
 **Landing PR:** #408
 
-**Version:** 0.24 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
+**Version:** 0.25 **Date filed:** 2026-10-20 **Parent:** weaver-state-PRD
 
 ## 0. What this document is
 
@@ -1236,6 +1236,12 @@ request.scheme_id and certificate.scheme_id. No root path, model or serving
 configuration is opened by this mode. Semantic conformance evidence is the classifier
 amendment's certificate, not a new classifier in this member. Reason: seed is the sole
 pre-agent write. [PERSIST-5, PROMPT-1, PROMPT-2, PROMPT-3]
+
+With no state-management.ste100 binding, the seed inserts the prompt Text block with no
+bindings, and validates the prompt digest, scheme and review reference under Spec 02
+SEED-CERTIFICATE. STATE-ADOPT's binding checks on the prompt span then check that it
+holds none. This is the operator's ruling of 2026-11-02 on #437 (Q7). [PERSIST-5,
+PROMPT-2]
 
 **STATE-ADOPT.** Load the raw fd4 image into a scratch in-memory connection. Require
 exact state-content/1 catalog, quick_check success, no foreign_key_check rows, one
