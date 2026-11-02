@@ -5,7 +5,7 @@ ASD-STE100:9 lexicon: 022df3d809593696766893bf95f915229628497b89ef571dbc997ac858
 **Version:** 0.1, 2026-11-02
 **Document ID:** `ste-conversion-loop`
 **Parent:** `weaver-harness-PRD`
-**Landing PR:** pending
+**Landing PR:** #442
 **Standard:** `ASD-STE100`, Issue 9, 2025-01-15
 **Lexicon:** `WeaverTrain ste/`, `ab63a918b569e5b8673dc2e78e66575ee9df1bd7`
 **Lexicon digest:** SHA256 of `ste/thesaurus.toml`, in the header above
@@ -302,10 +302,13 @@ Use the private turn owner from `LOOKUP-OFFER` for every reservation.
 Do not use `repair_cap` or `MAX_TOOL_ROUNDS` as this limit.
 
 **5.11. Offer accounting.** Reserve one allowance before instruction creation.
-Refuse a missing or fully consumed cap with the specified `invalid_context` result.
+Refuse if consumed plus reserved allowances are equal to or larger than the cap.
+Also refuse if no cap is supplied.
+Use `invalid_context` with the cap, consumed count and reservations in the detail.
 A recorded instruction consumes its reservation once before model execution.
 Keep reservations during writer pressure.
 Release a refused reservation only when the recorder accepted no instruction.
+Release a cancelled reservation when the recorder accepted no instruction.
 Keep an admitted reservation until its outcome is accounted for.
 Never refund a consumed allowance, also for malformed or unused responses.
 Do not start the count again for a new lookup result or answer generation.
@@ -425,7 +428,7 @@ Rulings Q and S, [#437][epic], set this range and denominator.
 Drops can remove hard texts and favor easy ones.
 Keep the held-out item set unchanged for comparisons.
 Report the missing items and the dropped items.
-Keep it in the record.
+Keep them in the record.
 The source kit has 100 segments and favors its selected remote baseline.
 Near 80 percent faithful, its standard error is about 4 percentage points.
 

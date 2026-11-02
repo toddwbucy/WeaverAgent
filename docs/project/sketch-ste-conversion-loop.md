@@ -1,5 +1,11 @@
 # Sketch: the STE conversion loop
 
+**Consumed:** 2026-11-02 by PR #442.
+Workflow: [ste-conversion-loop][consumed-workflow].
+The text below is retained under Sketch Convention section 7.
+
+[consumed-workflow]: ../crates/weaver-harness/Loops/ste-conversion-loop.md
+
 **Status:** sketch. Decides nothing. Feeds PRD authoring. It is step 1 of the workflow
 loop template in epic #437. It moves to `docs/crates/weaver-harness/Loops/` in the
 workflow PR, after the amendments PR (the epic's step 2, carrying #432, #433 and #434)
