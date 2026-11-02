@@ -37,7 +37,9 @@ The loop converts the agent-authored prose of `nvidia/Nemotron-SWE-v1` trajector
 STE100 and leaves everything else byte-identical. Agent-authored prose is the narration
 in each assistant message and the final report in the closing `finish` call. Code, tool
 calls, tool output, the issue text and the `think` fields stay exactly as the dataset
-holds them, on the scope ratified 2026-11-02 (ruling O).
+holds them, on the scope ratified 2026-11-02 (ruling O). The one exception is the
+`finish` call's `message` argument, which is the final report: it is converted, and the
+call's other arguments stay as they are.
 
 The loop has two objectives (ruling D).
 
@@ -195,8 +197,9 @@ token usage. It decides nothing about content.
 In the first batch, 14 of 375 round-1 answers stopped with finish reason STOP after 1
 to 4 texts. Twelve of those groups held 20 texts. Two were a part's last group, of 8
 texts (`p021/T069.031`) and 12 texts (`p031/T104.026`), so the report's line "1 to 4
-of their 20 texts" is wrong for two of the fourteen. Truncation accounts for 235 of the
-236 missing texts. The second batch lost 258 texts the same way
+of their 20 texts" is wrong for two of the fourteen. Truncation accounts for all 236
+missing texts: every line of `round1-problems.txt` is a text missing from a short answer.
+The second batch lost 258 texts the same way
 (`ste-batch-200-2.md`), so truncation is a property of grouped requests. The missing
 texts went to the repair round.
 
@@ -239,8 +242,9 @@ round.
 
 **11. Assembly** (`ste_batch.cmd_assemble`, `ste_convert.unmask`, `ste_convert.apply`).
 This is compute, not refit: it writes each rewrite into a dataset row, which never
-re-enters a model's argument. A trajectory converts only if every one of its segments
-passes the checker and keeps its literals. Each rewrite, with its code restored, is
+re-enters a model's argument. A trajectory converts only if every eligible prose segment
+passes the checker and keeps its literals. Segments that are not prose are not checked
+and stay as they are. Each rewrite, with its code restored, is
 written into the row at its own message and field, and nothing else in the row moves.
 The first batch converted 196 of 200 trajectories. A check over all 196 found only the
 agent's own messages changed, no placeholder left and no tag that the original did not
