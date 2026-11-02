@@ -445,8 +445,8 @@ not admin's own publication account. FailedRun is admin's projection shape. The
 current harness does not emit it. If received from a worker, a matching FailedRun is
 retained only as defensive evidence, never authority for root-owned artifacts or a
 published identity. Its pre-Commit public result is Unanswered. Once Beginning has
-supplied a capture ID, FailedRun must name that exact ID as well as the run, at receives and local-work checkpoints. Other
-terminal refusal codes are protocol failures, including a direct StatePersistenceInvalid
+supplied a capture ID, FailedRun must name that exact ID as well as the run, at
+receives and local-work checkpoints. Other terminal refusal codes are protocol failures, including a direct StatePersistenceInvalid
 or a code asking the caller to retry a standing run. This same terminal-code rule
 applies to every capture receive, local-work checkpoint and joined Leave exchange,
 including before CaptureRefused and after admin Aborted. A join compares any FailedRun
