@@ -350,15 +350,31 @@ The Instruction contribution remains the only placement path for this offer.
 This implements ruling B (#433) and #437, comment 6586494090, of 2026-11-02.
 [OUT-1, FLOW-8, CLASS-10]
 
-Revalidate the source version and current turn before authoring. Record loop.instruction
-with internal/loop, subsystem harness, the current turn and the model source sequence
-as causal_parent. Match every metadata field to the material before submission. Only
-Recorded permits its expansion to reach the argument and its model pass to start.
-Retain the grant while writer capacity is pending, using the existing author bound.
-Consume it once. Correlate the resulting generation through the existing request and
-emission identities. Record the re-emission as ordinary model output before any use
-under HARNESS-OUTBOUND-CHANGE. An offer creates no classifier request, rejection,
-filing or repair-ledger attempt. It grants no tool dispatch.
+Recheck the source version, run, current turn and loaded artifact before authoring.
+Record loop.instruction with internal/loop, subsystem harness, the current turn and the
+model source sequence as causal_parent. Match every metadata field to the material
+before submission. Only Recorded permits its expansion to reach the argument and its
+model pass to start. Retain the grant while writer capacity is pending, using the
+existing author bound. Consume it once. Correlate the resulting generation through the
+existing request and emission identities. Record the re-emission as ordinary model
+output before any use under HARNESS-OUTBOUND-CHANGE. An offer creates no classifier
+request, rejection, filing or repair-ledger attempt. It grants no tool dispatch.
+
+Retain the original answer generation while the offer's model pass runs. The response
+has its own recorded generation identity and accounting, but no independent answer or
+releasable EffectiveEmission. Route its selected text only through
+HARNESS-OUTBOUND-CHANGE into the original block's Y. Preserve that answer's original
+source and finish. Its Y, not the last decoded response, is the answer for the gate,
+answer contributions and turn closure under Spec 02 LOOKUP-OFFER. No raw offer response
+can become a second answer or an unused offer's fallback answer.
+
+Own Spec 02 LOOKUP-OFFER's offer_pass_cap, consumed count and pending reservations in
+one private external-turn context. Each caller uses that owner. Require the elected
+cap before reserving an allowance or authoring an offer. Carry its exact refusal and
+counting rules through the instruction recorder and single-use pass grant. Neither
+writer pressure, a new source, a retry nor a new match resets or refunds consumption.
+The workflow elects the value from its named measurement. MAX_TOOL_ROUNDS and
+bar_round_limit govern tool-result rounds and are not this offer bound.
 
 **HARNESS-OUTBOUND-CHANGE.** Own the private pending change and recorded change chain
 of Spec 02 OUTBOUND-CHANGE. Construct TYPES-EMISSION-CHANGE only after the source,
@@ -373,8 +389,10 @@ This supplies O02-6 under #437, comment 6586494090, of 2026-11-02.
 
 | Operation state | Event | Result |
 | --- | --- | --- |
-| Matched | Offer requested with a valid current match | Author the instruction, InstructionPending |
-| InstructionPending | Recorded while the turn remains live | Permit placement and its model pass once, Offered |
+| Matched | Offer requested with a valid current match and available allowance | Reserve one allowance and author the instruction, InstructionPending |
+| Matched | Offer requested without an elected cap or available allowance | invalid_context instruction refusal, no offer instruction or model pass |
+| InstructionPending | Recorded while the turn remains live | Consume its reservation once and permit placement and its model pass once, Offered |
+| InstructionPending | Instruction refused or cancelled without recorder admission | Release its reservation, no model pass |
 | Offered | Completed model response and the loop selects its valid change | Author the change, ChangePending |
 | Offered | Completed model response with no selected change | Keep the evidence and old Y, finish this operation without a retry grant |
 | Matched | Splice requested with a valid current match | Author the change, ChangePending |
@@ -1278,7 +1296,9 @@ the one-exchange assumption. Neither number is elected here. [CLASS-6, FALS-5, C
 | HARNESS-RECALL-REFUSAL | Actual recorder pressure and lifecycle waits, mixed original/correction identities and cap fixtures | Admit a second event, lose an owed receipt, return before Recorded, dispatch a refused ID or charge several attempts for one correction |
 | TEMPLATE-CHECK | Inventory and substitution certificate fixtures | Serve with missing certificate or unlisted template |
 | HARNESS-LOOKUP-OFFER | No-classifier turn through the real instruction recorder and typed placement, plus altered entry, stale source, duplicate use and cancellation | Send an offer without its recorded instruction, substitute arbitrary prose, require rejection or reuse its grant |
+| HARNESS-LOOKUP-OFFER, provenance and cap | Foreign run, changed loaded artifact and a small fixture cap across blocks, matches, retries and pending instructions | Skip a run or artifact recheck, overbook a reservation, refund consumed capacity or release a pass after exhaustion |
 | HARNESS-OUTBOUND-CHANGE | Real recorder chain with length-changing splice then offer, held capacity, refusals and lifecycle cancellation | Change Y before Recorded, lose e, branch the chain, mismatch re-emission bytes, renew a bound or release a late continuation |
+| HARNESS-OUTBOUND-CHANGE, answer ownership | Several-sentence original Y and a one-sentence offer response, with used and unused outcomes | Answer or close on the offer generation, append two answers or replace the original source/finish with the response's |
 | HARNESS-INPUT | Existing {text,role} accepted/refused frames and later-turn assembly | Place one rejected block or open a refused turn |
 | INPUT-NO-RESIDENCY | Actual SPU exit, two later world exchanges, held trace capacity and graceful Leave | Accept or classify a later request, send before its refusal records, lose its input.offered link, duplicate organ death, invent a Released confirmation, or replace an S4/S5 Unloading refusal with NoResidency |
 | HARNESS-LEDGER | Every table row, real commit with lost receipt | Accept send success or resend uncertain commit |

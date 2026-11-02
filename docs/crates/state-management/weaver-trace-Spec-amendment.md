@@ -423,6 +423,10 @@ subsystem harness and a turn. Its causal_parent is matched.source.sequence. The
 harness verifies same-run and same-turn provenance. No ste100.result is implied by
 this instruction. This implements #437, comment 6586494090, of 2026-11-02.
 
+The response's ordinary message.assistant record proves no independent answer right.
+Spec 02 LOOKUP-OFFER keeps it subordinate to the original answer generation. Only
+an emission.change can put its selected bytes into that generation's Y.
+
 **TRACE-EMISSION-CHANGE.** Add Kind::EmissionChange, spelled emission.change, and
 Payload::EmissionChange holding a serialize-only, trace-owned EmissionChangeRecord.
 Mirror TYPES-EMISSION-CHANGE exactly, including ThesaurusMatch and both method

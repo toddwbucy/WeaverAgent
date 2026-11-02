@@ -561,7 +561,35 @@ the expansion or starting its model pass. Keep the current external turn. The mo
 re-emission is an ordinary recorded message.assistant under its own source identity.
 Retain its generation accounting and attempted-call evidence. No tool is dispatched.
 An offer does not enter REPAIR or charge the classifier repair cap. The loop's shape
-strikes, retry placement and round policy are not elected by this primitive.
+strikes, retry placement and numeric offer cap are elected by the workflow.
+
+The offer's generation is subordinate to the original answer generation. It has no
+independently releasable EffectiveEmission, client answer or answer contribution.
+Its text reaches the effective answer only through an emission.change recorded on
+the original block under OUTBOUND-CHANGE. Its ordinary recorded model context grants
+no separate answer append or gate send. Keep the original generation's source and
+finish for Y. For DECISION-BARRIER's answer decision and turn closure, the current
+answer generation remains that original generation, never the last offer response.
+The turn can answer only with that generation's Y after its required dispositions.
+An unused offer does not close the turn or make its re-emission a fallback answer.
+
+Before the first offer, require a positive u32 offer_pass_cap elected by the workflow
+for the external turn. The workflow supplies it to the private turn owner. Fix it for
+that whole turn, across all original emissions, blocks, matches, retries and offers.
+There is no default. The workflow must name the measurement of yield and cost per
+additional offer pass that elects the value. The private offer owner reserves one
+allowance before authoring loop.instruction. It refuses if no cap is elected or consumed
+plus reserved allowances reach the cap. Use RefusalRecord::Instruction with template_id
+thesaurus-offer/1, case invalid_context, and detail naming the cap, consumed count and
+reservations. No instruction or decode follows that refusal. A recorded instruction
+consumes its reservation once, before granting a pass. Writer pressure retains the
+reservation without charging again. A refused or cancelled instruction with no recorder
+admission releases its reservation and grants no pass. An admitted instruction keeps its
+reservation until accounted for. Consumed allowances are never refunded, including
+unused or malformed responses and cancellation before decode. New matches and new answer
+generations cannot reset the count. Stop and teardown keep their existing permissions. A
+late Recorded instruction consumes its reserved allowance but grants no continuation.
+Neither the classifier repair cap nor MAX_TOOL_ROUNDS supplies this bound.
 
 **OUTBOUND-CHANGE.** A change to Y outside classifier repair uses the exact
 EmissionChangeRecord of TYPES-EMISSION-CHANGE and TRACE-EMISSION-CHANGE. This defines
@@ -758,7 +786,9 @@ STORE-3, TAP-1]
 With no state-management.ste100 binding, no Text block is checked, DECISION-BARRIER has
 no check to wait for, and REPAIR is never begun. EffectiveEmission then has empty
 statements, and its text joins the generation's original Text blocks with a single LF,
-in original index order, after any change recorded under EFFECTIVE-EMISSION. This
+in original index order, after any change recorded under EFFECTIVE-EMISSION.
+LOOKUP-OFFER's subordinate generation has no independently releasable EffectiveEmission.
+Its selected text reaches the original answer's Y only through OUTBOUND-CHANGE. This
 follows from the operator's ruling of 2026-11-01 (ruling C), made a declaration election
 by the ruling of 2026-11-02 on #437 (Q3). [CLASS-2, CLASS-3, OUT-1]
 
@@ -935,6 +965,10 @@ document. OUTBOUND-CHANGE, TYPES-EMISSION-CHANGE and TRACE-EMISSION-CHANGE defin
 record required by O02-6. This is the operator's ruling of 2026-11-01 (ruling A),
 confirmed on 2026-11-02 (#432). [OUT-1, CLASS-9, CLASS-10]
 
+LOOKUP-OFFER preserves the original answer generation's source and finish. Its model
+re-emissions are subordinate evidence, never independent answers. Only the original
+generation's Y can be released as the answer after an offer.
+
 RepairAccount is the private owner of original and correction-pass evidence under their
 own generation identities. Its inspection view is
 recall_refusals:Vec<RecordedRecallRefusal>, with each entry
@@ -1084,6 +1118,8 @@ a serving declaration. [CLASS-4, CLASS-7, PROMPT-2, FLOW-7]
 | PORT, PORT-SERIALIZATION | Single-thread pump with held output and later input | Submit two requests or omit queue time from a model-blocking bound |
 | TEMPLATES | Grammar-inclusion negative examples and compile-fail typed-slot fixtures | Certify samples only, allow arbitrary String slots or use an unlisted template |
 | LOOKUP-OFFER | No-classifier lookup fixture with exact held senses, changed source/version, noun/verb positions, disabled offer template and a recorded re-emission | Require a classifier rejection, accept caller-supplied prose, bypass a verb check through a noun entry, or decode before the instruction records |
+| LOOKUP-OFFER, answer ownership | Original output with several sentences and a one-sentence offer response, both used and unused | Release the bare response, append a second answer, use the response's source/finish for Y or close the turn on the last generation |
+| LOOKUP-OFFER, pass cap | Small fixture cap across matches, blocks and original emissions, with pending capacity, cancellation and malformed responses | Omit the cap, overbook pending reservations, refund a consumed grant, reset the count or decode after exhaustion |
 | OUTBOUND-CHANGE | Two length-changing splices followed by an offer, reconstructed from real records, plus stale head, byte mismatch, trace pressure and Stop | Apply a change before Recorded, interpret later offsets against the original, branch the chain, rewrite e, or continue after cancellation |
 | SEED-CERTIFICATE | Offline produced certificate and shared TYPES-SEED admin/member fixtures | Alter a prompt byte, binding, scheme bytes, expected checker or duty ID and still seed |
 | INPUT, REUSE | Gate-to-worker integration with byte/UID substitution, queued input, delayed check and held trace capacity | Parse content in gate, open a turn early, trust payload origin, reuse changed text, start the check clock on queued arrival or after input.offered records |
@@ -1174,7 +1210,9 @@ CLASS-7, CLASS-9, PROMPT-2]
 O02-6 is defined by OUTBOUND-CHANGE, TYPES-EMISSION-CHANGE and
 TRACE-EMISSION-CHANGE. Their implementation and instruments must precede any code
 that uses a changed Y. The workflow's first splice tags and the placement of literal
-checks and shape retries remain open on #437. This amendment elects none of them.
+checks and shape retries remain open on #437. The workflow also owes offer_pass_cap
+from the yield and cost measurement named by LOOKUP-OFFER. This amendment elects no
+value for those cells.
 
 The foundation's HARNESS-CLASSIFY replacement addresses the missing mandatory production
 result port and preserves the legacy classifier side identified by R10. It also supplies
