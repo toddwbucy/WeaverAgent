@@ -549,9 +549,10 @@ cancelled-operation guard or authoring message.user before token consumption mus
 it fail. [GATE-1, CLASS-8, FLOW-4]
 
 With no state-management.ste100 binding, Spec 02 INPUT's unchecked path applies: a
-well-formed request mints AcceptedInput with no Ste100Request, and the agent takes only
-input the operator controls. This is the operator's ruling of 2026-11-02 on #437 (Q6).
-[GATE-1, CLASS-4]
+well-formed request of origin operator mints AcceptedInput with no Ste100Request, a
+request of any other origin is refused as refusal/Input(invalid_input_shape) before any
+token, and the agent takes only input the operator controls. This is the operator's
+ruling of 2026-11-02 on #437 (Q6). [GATE-1, CLASS-4]
 
 ## 3. Ledger, channel, and waits, destinations sections 2 and 6
 

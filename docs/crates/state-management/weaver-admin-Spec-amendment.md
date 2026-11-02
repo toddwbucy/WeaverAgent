@@ -73,10 +73,15 @@ fail them. [CLASS-8, FLOW-3, PERSIST-6, SEAM-2]
 Inventory also validates the declared sh policy against the elected tool set and the
 shared shell maximum. A declaration that elects a tool with no state-management.ste100
 binding is ConfigInvalid naming state-management.ste100 (the operator's ruling of
-2026-11-02 on #437, Q7). Diagnostic binding requires neither new root key nor a serving
-STE100 instruction. An invalid serving artifact is ConfigInvalid with field attribution
-at inventory. Checker admission or template certification failures after load use the
-existing after-load refusal and rollback path. [CLASS-8, PAIR-2, SCOPE-1]
+2026-11-02 on #437, Q7). A declaration with no state-management.ste100 binding whose
+gate access rule admits any uid other than the operator UID, or any gid, is
+ConfigInvalid naming gate-instruction.access-rule. Reason: with no classifier the agent
+takes only input the operator controls (the operator's ruling of 2026-11-02 on #437,
+Q6), and the gate's admission holds that before any frame reaches the harness.
+Diagnostic binding requires neither new root key nor a serving STE100 instruction. An
+invalid serving artifact is ConfigInvalid with field attribution at inventory. Checker
+admission or template certification failures after load use the existing after-load
+refusal and rollback path. [CLASS-8, PAIR-2, SCOPE-1]
 
 **ADMIN-SELECTION.** Add one optional regular file, restore-artifact, to the judged
 admin config root's closed key list in Spec 9. Its bytes are one artifact ID, with at

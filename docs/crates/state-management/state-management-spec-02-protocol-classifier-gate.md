@@ -554,10 +554,14 @@ otherwise external. JSON text cannot choose it. Reason: the gate owns who may co
 not the meaning of a line. [GATE-1, TAP-1, PERSIST-5, PERSIST-7]
 
 With no state-management.ste100 binding, the harness checks no input text. After
-parse_request and dialer judgment, a well-formed request mints AcceptedInput directly,
-with no ste100 request and no gate_wait. The agent takes only input the operator
-controls, under GATE-1. The table below applies where the binding is elected. This is
-the operator's ruling of 2026-11-02 on #437 (Q6). [GATE-1, CLASS-4]
+parse_request and dialer judgment, a well-formed request of origin operator mints
+AcceptedInput directly, with no ste100 request and no gate_wait. A request of any other
+origin is refused before any token as refusal/Input(invalid_input_shape), with the
+refused close above. Admin's inventory already refuses a declaration with no binding
+whose gate admits another uid (weaver-admin ADMIN-STE100), so this refusal is a second
+lock. The agent takes only input the operator controls, under GATE-1. The table below
+applies where the binding is elected. This is the operator's ruling of 2026-11-02 on
+#437 (Q6). [GATE-1, CLASS-4]
 
 The foundation's input.offered is authored before parsing, with its exact original
 frame. Input checks use target input {input_id,block:0}. input_id is assigned on

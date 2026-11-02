@@ -340,16 +340,17 @@ exactly where the declaration elects a thesaurus, `ste100-thesaurus.json`. The t
 files are the exact bytes of the image's current versions. An artifact that lacks a
 required file or holds a thesaurus file the declaration does not elect refuses at bind
 and load. binding.json gains scheme_sha256 and thesaurus_sha256, the second null where
-none is elected, and each must equal its file's digest. Admin reads these files at load
-and checks each digest against the bound declaration, and at bind against the new draft
-(weaver-admin ADMIN-REBIND). STATE-ADOPT checks that the image's current versions have
-the same digests. Each later publication copies the scheme file and, where present, the
-thesaurus file forward from the artifact it descends from, since no serving operation
-changes them. Only seed and the install verb (weaver-admin ADMIN-INSTALL) publish new
-ones. Admin runs no SQL to read them. Reason: state holds the governing tables, load
-neither reseeds nor overwrites them, and the files let admin check them without SQL.
-This is the operator's ruling of 2026-11-02 on #437 (Q2 and Q8). [PERSIST-2, PERSIST-3,
-STORE-2]
+none is elected. scheme_sha256 must equal the scheme file's digest. Where a thesaurus is
+elected, thesaurus_sha256 must equal the thesaurus file's digest, and where it is null,
+no thesaurus file is present. Admin reads these files at load and checks each digest
+against the bound declaration, and at bind against the new draft (weaver-admin
+ADMIN-REBIND). STATE-ADOPT checks that the image's current versions have the same
+digests. Each later publication copies the scheme file and, where present, the thesaurus
+file forward from the artifact it descends from, since no serving operation changes
+them. Only seed and the install verb (weaver-admin ADMIN-INSTALL) publish new ones.
+Admin runs no SQL to read them. Reason: state holds the governing tables, load neither
+reseeds nor overwrites them, and the files let admin check them without SQL. This is the
+operator's ruling of 2026-11-02 on #437 (Q2 and Q8). [PERSIST-2, PERSIST-3, STORE-2]
 
 Admin alone hashes, writes the configuration, and publishes beneath the judged
 territory's save-points directory. Directory name is the next 20-digit publication
