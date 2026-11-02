@@ -492,6 +492,14 @@ component halt. Spec 02's TEMPLATES defines the substitution proof and certifica
 method. Its production grammar artifact remains a cutover dependency. [CLASS-2, FLOW-8,
 review S2]
 
+With no state-management.ste100 binding, enter stands no STE100 duty, sends no template
+request, authors no ste100.result and derives no TemplateCertificate. The first load
+event still carries the inventory identity and scheme digest, with no checker digest.
+Each runtime expansion is checked structurally under Spec 02 TEMPLATES before it reaches
+the argument. A missing certificate refuses enter only where the binding is elected, and
+a partition failure keeps its path above. This is the operator's ruling of 2026-11-02 on
+#437 (Q7). [CLASS-2, FLOW-8]
+
 **HARNESS-INPUT.** Check a request before granting Ports or starting a turn. Keep the
 existing world request grammar, {text:String, role?:String}, under parse_request. The
 role member must be absent. The former role system is refused, and this unit adds no
@@ -592,6 +600,14 @@ Filed and correctly_rejected are terminal. No reconnect or resend resolves an un
 commit. The state request counter is distinct from classifier and input counters. The
 channel's control state table is in the store/read and persistence amendments. [SEAM-2,
 FLOW-5]
+
+With no state-management.ste100 binding, nothing is classified or filed by verb (Spec 02
+DECLARATION). The semantic partition selects no Text or accepted-input copy for the
+store, so neither table row for them is reached, and no ledger entry, classifier request
+or store send exists for them. The trace keeps every emission and input. A no-binding
+fixture runs one turn and requires zero classifier requests and zero store sends.
+Electing the binding in that fixture must make it fail. This is the operator's ruling of
+2026-11-02 on #437 (Q3). [STORE-2, TAP-4, CLASS-3]
 
 **HARNESS-PUMP.** Extend exchange_wake and lifecycle wait helpers with state I/O, STE100
 readiness, label-score readiness, and trace capacity wake. All serving waits on
@@ -1468,16 +1484,17 @@ constructs a closed-span or CutReady grant from it. A preview is evidence for th
 tool, not an instruction to mutate state. [MARK-3, MARK-4, MARK-5, PLAN-2]
 
 **HARNESS-BOOT.** Follow PERSIST-LOAD once per enter: opened, untapped load, semantic
-partition validation and recorder activation, STE100 duty start and template checks,
-first content read system_prompt, recall evidence, cached BootHead, decoder open with
-that head first, pair repair, then user gate. BootHead is a Message plus SpanRef and end
-byte offset. The state member can open before load because that check is structural and
-emits no agent content. The worker starts no classifier before load. Remove the old
-implicit ask_recall boot-tail path and #76 seeding-turn branch. A second mandatory boot
-query is an integration error in the harness, not a store-side ban on later explicit
-recall. Run Spec 05's BOOT-REPAIR through open_pairs, tool.call.completed, PairCopy and
-file_pair, then require its second empty query before gate open. It uses the remaining
-load budget and never edits during adoption. [PERSIST-5, PERSIST-6, PROMPT-1, STORE-8]
+partition validation and recorder activation, STE100 duty start and template checks
+where the binding is elected (TEMPLATE-CHECK), first content read system_prompt, recall
+evidence, cached BootHead, decoder open with that head first, pair repair, then user
+gate. BootHead is a Message plus SpanRef and end byte offset. The state member can open
+before load because that check is structural and emits no agent content. The worker
+starts no classifier before load. Remove the old implicit ask_recall boot-tail path and
+#76 seeding-turn branch. A second mandatory boot query is an integration error in the
+harness, not a store-side ban on later explicit recall. Run Spec 05's BOOT-REPAIR
+through open_pairs, tool.call.completed, PairCopy and file_pair, then require its second
+empty query before gate open. It uses the remaining load budget and never edits during
+adoption. [PERSIST-5, PERSIST-6, PROMPT-1, STORE-8]
 
 Boot recall Recorded establishes BootHead before decoder Open. HARNESS-OPEN consumes
 that private provenance to bind the one Open exchange and its boot placement. The
