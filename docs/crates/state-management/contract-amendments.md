@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #244
+**Landing PR:** #439
 
 **Version:** 0.22 **Date filed:** 2026-10-21
 
