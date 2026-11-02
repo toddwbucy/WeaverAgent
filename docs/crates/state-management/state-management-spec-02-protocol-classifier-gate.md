@@ -145,8 +145,8 @@ emission under CLASS-2. The root key `ste100-binary` is then not required, the l
 tuple holds no checker executable digest, and the enter payload and loaded facts carry
 no Ste100Instruction. Present, every value above is required for serving, with no
 default, and the rest of this clause holds unchanged. This is the operator's ruling of
-2026-11-01 (ruling C), made a declaration election by the ruling of 2026-11-02 (#434).
-[CLASS-2, CLASS-3, STORE-2]
+2026-11-01 (ruling C), made a declaration election by the ruling of 2026-11-02 on #437
+(Q3). [CLASS-2, CLASS-3, STORE-2]
 
 Add the root key `ste100-binary` with the existing organ-binary custody judgment. It
 stays in admin's root, outside the bound declaration. Add its executable digest to the
@@ -455,11 +455,14 @@ not prove arbitrary substitution, safety, step authorization or model accuracy. 
 either the inclusion check or typed-value constructor must make its respective
 acceptance test fail. [CLASS-2, FLOW-8]
 
-With no state-management.ste100 binding, no checker certifies templates. The compiled
-inventory stays the only template source, the load tuple records its digest, and no
-TemplateCertificate is issued. Each expansion is checked structurally, by template ID,
-slot classes and the metadata of INSTRUCTION-METADATA, before it reaches the argument.
-This is the operator's ruling of 2026-11-02 on #437 (Q7). [CLASS-2, FLOW-8]
+With no state-management.ste100 binding, no checker certifies templates. The harness
+starts no STE100 duty, sends no template to a checker, waits for no reply, and serves
+without a TemplateCertificate. The steps above that name the checker or the certificate
+apply only where the binding is elected. The compiled inventory stays the only template
+source, the load tuple records its digest, and no TemplateCertificate is issued. Each
+expansion is checked structurally, by template ID, slot classes and the metadata of
+INSTRUCTION-METADATA, before it reaches the argument. This is the operator's ruling of
+2026-11-02 on #437 (Q7). [CLASS-2, FLOW-8]
 
 **INSTRUCTION-METADATA.** loop.instruction has one trace-owned shape,
 LoopInstructionRecord {template_id:String,message:Message,
@@ -530,10 +533,14 @@ that producer and normative artifact are explicit cutover prerequisites. [PERSIS
 PROMPT-2]
 
 With no state-management.ste100 binding, the seed takes the prompt with its digest and
-the operator's review reference. The certificate then carries no bindings and no checker
-digest, and the validator checks the prompt digest, the scheme identity and a nonempty
-review_reference. Nothing is filed, so no binding is used. This is the operator's ruling
-of 2026-11-02 on #437 (Q7). [PERSIST-5, PROMPT-2]
+the operator's review reference. The certificate then carries no bindings and a null
+checker_artifact_sha256. verify_seed_certificate takes checker_digest as an optional
+Digest: absent exactly where the authoring declaration elects no binding, when it
+requires the certificate's checker identity null and its bindings empty and checks the
+prompt digest, the scheme identity, the duties and a nonempty review_reference. Present,
+it requires equality as above. VerifiedSeed carries the same optional value. Nothing is
+filed, so no binding is used. This is the operator's ruling of 2026-11-02 on #437 (Q7).
+[PERSIST-5, PROMPT-2]
 
 ## 5. Input at the harness frame path
 
@@ -658,7 +665,7 @@ no check to wait for, and REPAIR is never begun. EffectiveEmission then has empt
 statements, and its text joins the generation's original Text blocks with a single LF,
 in original index order, after any change recorded under EFFECTIVE-EMISSION. This
 follows from the operator's ruling of 2026-11-01 (ruling C), made a declaration election
-by the ruling of 2026-11-02 (#434). [CLASS-2, CLASS-3, OUT-1]
+by the ruling of 2026-11-02 on #437 (Q3). [CLASS-2, CLASS-3, OUT-1]
 
 **DECISION-BARRIER.** Do not dispatch an emitted tool request, start the next decode
 round or close a successful answer until the current generation's Text checks and any

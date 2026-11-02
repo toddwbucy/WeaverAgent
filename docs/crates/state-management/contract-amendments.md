@@ -4,7 +4,7 @@
 
 **Landing PR:** #244
 
-**Version:** 0.21 **Date filed:** 2026-10-21
+**Version:** 0.22 **Date filed:** 2026-10-21
 
 ## 0. What this document is
 
@@ -283,8 +283,9 @@ older distillate or whole-system exception is accepted as an alternative represe
 The trace's no-internal-crate boundary still stands. [TAP-1 through TAP-5, SEAM-1]
 
 state-copy/1 names the tap projection, state-flow/1 names the store channel protocol,
-and state-content/1 names the member's content schema. They are separate versioned
-contracts, not alternative names for one payload. [SEAM-1, SEAM-2, STORE-8]
+and state-content/1 names the member's content schema (state-content/2 at weaver-state
+STATE-GOVERNING's cutover). They are separate versioned contracts, not alternative names
+for one payload. [SEAM-1, SEAM-2, STORE-8]
 
 In harness-diagnostic contract 3 and 7, and diagnostic Spec 3.1/3.2, state that the
 converter handles the legacy diagnostic envelope with no channel/origin fields. For

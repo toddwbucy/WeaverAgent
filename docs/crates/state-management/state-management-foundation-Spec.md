@@ -334,19 +334,22 @@ dump_sha256 A, config_sha256 B, parent_artifact_id or null, position, and confir
 Neither file carries its own hash. Reason: the checked pair identifies both starting
 inputs without a self-reference. [PERSIST-1 through PERSIST-3]
 
-With the governing tables held in state (weaver-state STATE-GOVERNING), a published
-artifact also holds `ste100-scheme.json` and, where the declaration elects a thesaurus,
-`ste100-thesaurus.json`: the exact bytes of the image's current versions. binding.json
-gains scheme_sha256 and thesaurus_sha256, the second null where none is elected, and
-each must equal its file's digest. Admin reads these files at load and checks each
-digest against the bound declaration, and at bind against the new draft (weaver-admin
-ADMIN-REBIND). STATE-ADOPT checks that the image's current versions have the same
-digests. Each later publication copies both files forward from the artifact it descends
-from, since no serving operation changes them. Only seed and the install verb
-(weaver-admin ADMIN-INSTALL) publish new ones. Admin runs no SQL to read them. Reason:
-state holds the governing tables, load neither reseeds nor overwrites them, and the
-files let admin check them without SQL. This is the operator's ruling of 2026-11-02 on
-#437 (Q2 and Q8). [PERSIST-2, PERSIST-3, STORE-2]
+From weaver-state STATE-GOVERNING's cutover, which holds the governing tables in state,
+a published artifact is a directory of the three files above, `ste100-scheme.json` and,
+exactly where the declaration elects a thesaurus, `ste100-thesaurus.json`. The two added
+files are the exact bytes of the image's current versions. An artifact that lacks a
+required file or holds a thesaurus file the declaration does not elect refuses at bind
+and load. binding.json gains scheme_sha256 and thesaurus_sha256, the second null where
+none is elected, and each must equal its file's digest. Admin reads these files at load
+and checks each digest against the bound declaration, and at bind against the new draft
+(weaver-admin ADMIN-REBIND). STATE-ADOPT checks that the image's current versions have
+the same digests. Each later publication copies the scheme file and, where present, the
+thesaurus file forward from the artifact it descends from, since no serving operation
+changes them. Only seed and the install verb (weaver-admin ADMIN-INSTALL) publish new
+ones. Admin runs no SQL to read them. Reason: state holds the governing tables, load
+neither reseeds nor overwrites them, and the files let admin check them without SQL.
+This is the operator's ruling of 2026-11-02 on #437 (Q2 and Q8). [PERSIST-2, PERSIST-3,
+STORE-2]
 
 Admin alone hashes, writes the configuration, and publishes beneath the judged
 territory's save-points directory. Directory name is the next 20-digit publication
@@ -405,20 +408,22 @@ PERSIST-4, FLOW-5]
 **PERSIST-ARTIFACT-CODEC.** admin's save_points.rs owns StateBinding and
 StateIndexEntry. The former is the binding.json object, and the latter is one
 save-points.manifest JSON line. They deny missing, unknown and duplicate fields at every
-depth. version is the JSON integer 1. schema_id is state-content/1. seed_id is 32
-lowercase hex characters. Digest fields use lowercase 64-hex strings. position is the
-shared SourcePosition or explicit null, and parent_artifact_id is an artifact ID or
-explicit null. confirmation and cause use TYPES-PERSIST's exact tagged/enumerated
-shapes. [PERSIST-2, PERSIST-3]
+depth. version is the JSON integer 1, and 2 at weaver-state STATE-GOVERNING's cutover.
+schema_id is state-content/1, and state-content/2 at weaver-state STATE-GOVERNING's
+cutover. seed_id is 32 lowercase hex characters. Digest fields use lowercase 64-hex
+strings. position is the shared SourcePosition or explicit null, and parent_artifact_id
+is an artifact ID or explicit null. confirmation and cause use TYPES-PERSIST's exact
+tagged/enumerated shapes. [PERSIST-2, PERSIST-3]
 
-StateBinding has exactly the fields listed above. StateIndexEntry has exactly ordinal,
-artifact_id, dump_sha256, config_sha256, seed_id, parent_artifact_id, cause, position,
-confirmation and arrival. The A/B names in this section mean dump_sha256/config_sha256
-in both objects. ordinal is a positive DecimalU64, starting at "1" and incremented with
-overflow refusal. Its 20-digit zero-padded rendering is the directory's creation
-ordinal. A selection entry retains that directory name while using a new index ordinal.
-Neither JSON reader accepts the old stamp or arrived fields as aliases. [PERSIST-2,
-PERSIST-3]
+StateBinding has exactly the fields listed above, and at weaver-state STATE-GOVERNING's
+cutover also scheme_sha256 and thesaurus_sha256, the second explicit null where none is
+elected. StateIndexEntry has exactly ordinal, artifact_id, dump_sha256, config_sha256,
+seed_id, parent_artifact_id, cause, position, confirmation and arrival. The A/B names in
+this section mean dump_sha256/config_sha256 in both objects. ordinal is a positive
+DecimalU64, starting at "1" and incremented with overflow refusal. Its 20-digit
+zero-padded rendering is the directory's creation ordinal. A selection entry retains
+that directory name while using a new index ordinal. Neither JSON reader accepts the old
+stamp or arrived fields as aliases. [PERSIST-2, PERSIST-3]
 
 Validate the selected entry against its directory name and StateBinding, then perform
 the three hash checks and declaration parse. A seed confirmation has null parent and

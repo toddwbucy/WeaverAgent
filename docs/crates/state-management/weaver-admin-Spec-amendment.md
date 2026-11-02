@@ -41,14 +41,16 @@ A bound declaration with no state-management.ste100 table elects no classifier, 
 Spec 02 DECLARATION. Inventory then requires no ste100-binary and judges none, records
 no executable digest, passes no instruction, and the load facts record the election as
 absent. This is the operator's ruling of 2026-11-01 (ruling C), made a declaration
-election by the ruling of 2026-11-02 (#434). [CLASS-2, CLASS-3, STORE-2]
+election by the ruling of 2026-11-02 on #437 (Q3). [CLASS-2, CLASS-3, STORE-2]
 
 At this amendment's cutover, inventory reads the scheme and, where elected, the
 thesaurus from the selected save point's files under PERSIST-FORMAT and verifies each
-digest against the bound declaration, under Spec 02 CUSTODY. The root keys
-ste100-scheme.json and the optional ste100-thesaurus.json keep their custody judgment
-and are read only by seed and install-governing. This is the operator's ruling of
-2026-11-02 on #437 (C3 and Q8). [CLASS-2, PERSIST-3, STORE-2]
+digest against the bound declaration, under Spec 02 CUSTODY. It passes those save-point
+bytes as EnterBinding::Serving.ste100_scheme and the thesaurus field, in place of the
+root file read above. The root keys ste100-scheme.json and the optional
+ste100-thesaurus.json keep their custody judgment and are read only by seed and
+install-governing, never at load. This is the operator's ruling of 2026-11-02 on #437
+(C3 and Q8). [CLASS-2, PERSIST-3, STORE-2]
 
 The instruction's model binding names Spec 02's exact manifest file by an absolute
 pathname under MANIFEST-LOCATOR. A relative value is ConfigInvalid naming the binding

@@ -138,7 +138,7 @@ StateManagementConfig.ste100 is Option<Ste100Instruction>, and an absent table p
 None, which elects no classifier. A present table keeps every requirement above. With
 None, LoadedStateFacts.ste100_binary_sha256 is absent, and TYPES-ENTER carries no
 instruction. This is the operator's ruling of 2026-11-01 (ruling C), made a declaration
-election by the ruling of 2026-11-02 (#434). [CLASS-2, CLASS-3, STORE-2]
+election by the ruling of 2026-11-02 on #437 (Q3). [CLASS-2, CLASS-3, STORE-2]
 
 ToolPolicies is a closed map with sh as its only possible key. ToolPolicy has
 clock_ms:u64 and measurement_ref:String. Require a nonempty reference and a clock in
@@ -356,11 +356,12 @@ result only for identical text under the same scheme, preserving the new source 
 line per frame, carried on the existing inherited UnixStream. Unknown fields, unknown
 versions, duplicate JSON keys, noncanonical counters, and trailing nonspace bytes refuse
 parsing. The wire version is state-flow/1. The schema is state-content/1, defined by the
-complete store and read amendments in this unit. Pair, mark and plan tables join that
-initial catalog before its first deployment. A smaller draft is not a supported runtime
-catalog. After deployment a changed catalog needs a new version and its own
-compatibility act. No unknown JSON extension field is silently held. [SEAM-1, SEAM-2,
-STORE-5]
+complete store and read amendments in this unit. At weaver-state STATE-GOVERNING's
+cutover it is state-content/2, and an earlier image refuses. Pair, mark and plan tables
+join that initial catalog before its first deployment. A smaller draft is not a
+supported runtime catalog. After deployment a changed catalog needs a new version and
+its own compatibility act. No unknown JSON extension field is silently held. [SEAM-1,
+SEAM-2, STORE-5]
 
 | Message | Required fields after protocol, session_id, run_id, request_id, op |
 | --- | --- |
@@ -883,11 +884,15 @@ The request uses the 8 MiB complete-line bound and the answer uses the 1 MiB bou
 including the final LF. Use TYPES-CODEC's duplicate-key and strict-field rules. A
 malformed envelope, wrong ID or wrong direction closes without a correlated answer. A
 well-formed seed request has exactly the fields listed above. Its schema_id must be
-state-content/1, seed_id is 32 lowercase hex characters, and raw_block is one complete
-Text ContentBlock whose decoded text equals prompt_text. The nonempty bindings equal
-certificate.bindings. Spec 02 owns scheme parsing and certificate validation against the
-supplied scheme and expected checker identity. With no state-management.ste100 binding,
-bindings and certificate.bindings are empty and the expected checker identity is absent,
+state-content/1, and state-content/2 at weaver-state STATE-GOVERNING's cutover, seed_id
+is 32 lowercase hex characters, and raw_block is one complete Text ContentBlock whose
+decoded text equals prompt_text. The nonempty bindings equal certificate.bindings. Spec
+02 owns scheme parsing and certificate validation against the supplied scheme and
+expected checker identity. With no state-management.ste100 binding, bindings and
+certificate.bindings are empty, and SeedRequest.checker_artifact_sha256,
+SeedCertificate.checker_artifact_sha256 and VerifiedSeed.checker_artifact_sha256 are
+each an explicit null. Each is Option<Digest> on the wire, null exactly where the
+authoring declaration elects no binding, and the parser refuses the other combination,
 under Spec 02 SEED-CERTIFICATE (the operator's ruling of 2026-11-02 on #437, Q7).
 Reason: both seed endpoints need the dictionary bytes to check the same bindings, and
 must not substitute an identifier for that dictionary. [STORE-2, STORE-3, PERSIST-5,
