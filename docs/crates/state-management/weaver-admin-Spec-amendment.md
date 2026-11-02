@@ -4,7 +4,7 @@
 
 **Landing PR:** #373
 
-**Version:** 0.24 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
+**Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
 ## 0. What this document is
 
@@ -36,6 +36,12 @@ state_management.ste100. Record the executable digest separately from the model-
 and scheme digests. No worker opens these root paths again. Reason: the checker must
 receive the same instance that inventory checked, while binary custody stays with admin.
 [CLASS-2, FLOW-3, PERSIST-3]
+
+A bound declaration with no state-management.ste100 table elects no classifier, under
+Spec 02 DECLARATION. Inventory then requires no ste100-binary and judges none, records
+no executable digest, passes no instruction, and the load facts record the election as
+absent. This is the operator's ruling of 2026-11-01 (ruling C), made a declaration
+election by the ruling of 2026-11-02 (#434). [CLASS-2, CLASS-3, STORE-2]
 
 The instruction's model binding names Spec 02's exact manifest file by an absolute
 pathname under MANIFEST-LOCATOR. A relative value is ConfigInvalid naming the binding
@@ -110,10 +116,10 @@ plan-summary read. [PERSIST-3, PERSIST-6, SEAM-1]
 **ADMIN-ENTER-WINDOW.** For a replacement Serving Load request only, admit the
 request and root configuration first, then sample began_ns once in dispatch after
 admissible and immediately before prepare_run_directory. That preparation is shared
-by every verb; only Load samples this Enter anchor there. The point precedes
+by every verb. Only Load samples this Enter anchor there. The point precedes
 run-directory preparation, invocation/run-lock acquisition, inventory and artifact
 selection, channel creation, child start and Enter carry. Root argument/configuration
-admission precedes the window; all subsequent load preparation and waits spend it.
+admission precedes the window. All subsequent load preparation and waits spend it.
 Entry to load after that shared preparation, or the later Enter send, is too late
 for this anchor. [CLASS-8, PERSIST-6, GATE-1]
 
@@ -122,13 +128,13 @@ multiplication and compute deadline_ns = began_ns + budget_ns with checked addit
 If that interval cannot be represented, return ConfigInvalid attributed to
 load-bound-seconds before Enter is sent. No saturated deadline, declaration override
 or caller-supplied window is accepted. Carry that exact EnterWindow in the required
-Serving binding. The existing launch preserves the common Linux CLOCK_MONOTONIC domain;
-a different time namespace or remote clock is outside this carrier's contract.
+Serving binding. The existing launch preserves the common Linux CLOCK_MONOTONIC domain.
+A different time namespace or remote clock is outside this carrier's contract.
 [CLASS-8, FLOW-3, SEAM-2]
 
 Admin retains that same deadline through encoding, descriptor carry, socket pressure,
-worker scheduling and the answer. Bound those operations by the original deadline;
-check it before and after each work unit and after receipt/decode before accepting the
+worker scheduling and the answer. Bound those operations by the original deadline.
+Check it before and after each work unit and after receipt/decode before accepting the
 matching Ready. A readable socket or a completed send is not a timely Enter answer.
 Acceptance of that timely validated Ready ends the Enter window. The subsequent Open
 marker write, including its file and directory syncs, must succeed before Loaded, but
@@ -146,10 +152,10 @@ containment failure retains its existing precedence over the load's refusal.
 
 Opening, template checking, prompt reads and decoder/gate boot all share this remaining
 time. Any duration needed by a local primitive is derived from the original deadline
-at that operation's current observation; the duration is not re-added to a later clock
+at that operation's current observation. The duration is not re-added to a later clock
 sample. The worker receives the original window, never only a sampled remaining value.
 No stage, partial result, carry retry or parse grants a fresh budget. Later explicit
-rollback Leave retains its existing independent cleanup allowance and cause; it does
+rollback Leave retains its existing independent cleanup allowance and cause. It does
 not extend Enter or permit loaded/Ready. Existing component failure and escalation
 remain distinct from ordinary budget expiry. A failed clock observation cannot mint a
 window or imply successful cleanup. [CLASS-8, PERSIST-6, GATE-1]
@@ -357,7 +363,7 @@ The exact final Left.forced settles the completed save's cause under foundation
 PERSIST-LEAVE-CAUSE. Admin retains the pending guard while finalizing a converted
 Leave's own last index entry to forced_unload. It does not reuse the initiating
 command's graceful flag for the completed save. A joiner verifies that same settled
-cause after the original publisher finishes; it neither finalizes nor repairs a
+cause after the original publisher finishes. It neither finalizes nor repairs a
 publication. [PERSIST-2, PERSIST-3, FLOW-5, operator 2026-10-27]
 
 **ADMIN-SAVE-COMPLETION.** For the replacement Serving conclusion only, replace admin
@@ -369,7 +375,7 @@ and ending the agent cgroup. Once that save completes, a later run-end or marker
 failure preserves its eligibility and identity, reports the cleanup or marker failure,
 and writes no successful conclusion marker. Unloaded still requires successful run
 cleanup and the existing marker and show rules. If finalization itself fails, retain
-the failed publication evidence and still attempt cleanup; retain both failures when
+the failed publication evidence and still attempt cleanup. Retain both failures when
 both fail. A closed, absent or different-run marker retains the existing idempotent
 no-publication rule. A joiner remains a verifier, never a second publisher.
 [PERSIST-2, PERSIST-3, FLOW-5, operator 2026-10-27]
@@ -384,21 +390,21 @@ acknowledges a refused capture only after member cleanup and trace accounting. R
 unlisted root parts and, on a timely acknowledgement, disarm the capture wait if still
 armed. Then await
 Left with forced true, no_state false and no save report, or SavePointNotTaken with the
-same missed leg for a leave that stayed graceful. These are the normal continuations;
-neither alone is a final command result. A terminal Malformed, DescriptorsUnusable or
+same missed leg for a leave that stayed graceful. These are the normal continuations.
+Neither alone is a final command result. A terminal Malformed, DescriptorsUnusable or
 OrganRefused with organ Gate instead follows the existing failed-unwind conclusion:
 retain the refusal, end remaining run processes, preserve Open and report no successful
-save or Unloaded. OrganRefused keeps its nested reason attributed to the gate; it is
-not admin's own publication account. FailedRun is admin's projection shape; the
+save or Unloaded. OrganRefused keeps its nested reason attributed to the gate. It is
+not admin's own publication account. FailedRun is admin's projection shape. The
 current harness does not emit it. If received from a worker, a matching FailedRun is
 retained only as defensive evidence, never authority for root-owned artifacts or a
-published identity; its pre-Commit public result is Unanswered. Once Beginning has supplied a capture ID, FailedRun must name
+published identity. Its pre-Commit public result is Unanswered. Once Beginning has supplied a capture ID, FailedRun must name
 that exact ID as well as the run, at receives and local-work checkpoints. Other
 terminal refusal codes are protocol failures, including a direct StatePersistenceInvalid
 or a code asking the caller to retry a standing run. This same terminal-code rule
 applies to every capture receive, local-work checkpoint and joined Leave exchange,
 including before CaptureRefused and after admin Aborted. A join compares any FailedRun
-with its observed run and rejects it when that run is unavailable or different; it
+with its observed run and rejects it when that run is unavailable or different. It
 has no Beginning and cannot assert a capture ID it never learned. Initial admission
 retains its named standing-refusal cases, and demand or graceful capture cleanup
 retains its specified SavePointNotTaken outcome. Public projection applies the same
@@ -417,7 +423,7 @@ recovery, never a healthy refusal. Foundation's admin rows govern these cases.
 
 Cleanup and CaptureRefused may finish after the capture deadline while both remaining
 Leave deadlines are live. The final forced Left still needs normal run-end and marker
-duties; a still-graceful refusal leaves S9 available. If either remaining deadline
+duties. A still-graceful refusal leaves S9 available. If either remaining deadline
 expires first, report Unanswered with the Open marker and accept no later
 CaptureRefused or Left as a conclusion. The worker may finish a forced unwind, but
 without a later normal admin conclusion the next load observes NoCleanUnload. A

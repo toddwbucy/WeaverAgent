@@ -4,7 +4,7 @@
 
 **Landing PR:** #241
 
-**Version:** 0.6 **Date filed:** 2026-10-21 **Document ID:**
+**Version:** 0.7 **Date filed:** 2026-10-21 **Document ID:**
 weaver-harness-spu-ste100-contract **Parent:** weaver-agent-PRD, invariant 5.3
 **Editorial:** Per the Working Rules.
 
@@ -101,6 +101,12 @@ refuses external input or restates a model emission under CLASS-9. A bad templat
 refuses load or its current operation. None of those outcomes is component failure. The
 checker cannot request a retry or decide when the agent's plan, input or model response
 is accepted. [GATE-1, CLASS-8, CLASS-9, CLASS-10, PLAN-5]
+
+The checker judges the model's emission, e, as the decoder emitted it. Each correction
+is itself a model emission, judged as e. A valid correction enters the harness's
+EffectiveEmission under Spec 02, which is the agent's act Y of OUT-1. Y is what leaves
+the gate and what the store files, and the trace keeps e. This is the operator's ruling
+of 2026-11-01 (ruling A), confirmed on 2026-11-02 (#432). [OUT-1, CLASS-9, CLASS-10]
 
 A crash, absent terminal result or malformed result is component failure. Capacity that
 prevents a conforming input from being checked is absent work, not a language defect.

@@ -4,7 +4,7 @@
 
 **Landing PR:** #263
 
-**Version:** 0.18 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
+**Version:** 0.19 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -101,6 +101,15 @@ artifacts. Reason: resource choices and a repair cap must be explicit, attributa
 testable, rather than implicit queue or model behavior. [CLASS-6, CLASS-7, CLASS-8,
 CLASS-9]
 
+`state-management.ste100` is a declaration election. Absent, it elects no classifier: no
+checker starts, nothing is classified or filed by verb, and the agent converts its
+emission under CLASS-2. The root key `ste100-binary` is then not required, the load
+tuple holds no checker executable digest, and the enter payload and loaded facts carry
+no Ste100Instruction. Present, every value above is required for serving, with no
+default, and the rest of this clause holds unchanged. This is the operator's ruling of
+2026-11-01 (ruling C), made a declaration election by the ruling of 2026-11-02 (#434).
+[CLASS-2, CLASS-3, STORE-2]
+
 Add the root key `ste100-binary` with the existing organ-binary custody judgment. It
 stays in admin's root, outside the bound declaration. Add its executable digest to the
 load tuple. The serving enter payload carries `Ste100Instruction` once at
@@ -191,8 +200,8 @@ Each referenced file has its own declared SHA-256. [CLASS-2, CLASS-7, FLOW-3]
 
 The model artifact retains SPU PRD section 7's provisioned custody: it is owned
 outside the agent uid, readable into the agent and not alterable by it. Pinning a
-descriptor prevents pathname replacement from substituting a different instance;
-it does not make externally writable file contents immutable. Provisioning must
+descriptor prevents pathname replacement from substituting a different instance.
+It does not make externally writable file contents immutable. Provisioning must
 preserve the admitted bytes for any retained mapping or deferred file read. This
 does not apply admin's root-file ownership rule to model files or relocate them
 into admin's config root. [CLASS-2, CLASS-7, SEAM-1]
@@ -539,7 +548,7 @@ or submitting a content check, retain the lifecycle refusal required by
 weaver-gate-world-contract section 5 and weaver-admin-Spec section 3(B). This
 outcome precedes input-shape and language checks on that road. It does not classify
 the request's contents. An already-submitted check or opened turn retains its own
-failure and cancellation duties; this clause does not reinterpret those outcomes.
+failure and cancellation duties. This clause does not reinterpret those outcomes.
 [GATE-1, FLOW-3, CLASS-8]
 
 Author one refusal with TYPES-WORLD-REQUEST's LifecycleAsk::WorldRequest and the
@@ -549,10 +558,10 @@ input.offered sequence. Retain that original frame, gate exchange and author tic
 through trace pressure. Only after Recorded may the worker send the existing
 unnamed close {"kind":"refused","reason":"no model is resident"} on that exchange.
 No AcceptedInput, message.user, turn.started, filing, placement or generation is
-granted. The input and required-send waits retain their applicable existing bounds;
-partial progress grants no renewed interval. If gate_wait expires while either
+granted. The input and required-send waits retain their applicable existing bounds.
+Partial progress grants no renewed interval. If gate_wait expires while either
 input.offered or its refusal is still unrecorded, the existing input deadline row
-halts with GateBound; it grants no late successful refusal. A flow failure keeps
+halts with GateBound. It grants no late successful refusal. A flow failure keeps
 HARNESS-HALT's precedence, and cannot be reported as a successful lifecycle refusal. [GATE-1,
 FLOW-2, FLOW-3, FLOW-4, CLASS-8]
 
@@ -659,7 +668,7 @@ under the existing cap gives that repair a finite outcome without erasing the so
 [CLASS-9, CLASS-10, FLOW-3]
 
 After that refusal is recorded, increment failed_corrections once. While repair remains
-live, follow the same below-cap or cap-reached row; after Stop or leave, retain that
+live, follow the same below-cap or cap-reached row. After Stop or leave, retain that
 count under CANCELLED-CORRECTION without reopening either continuation. This preserves
 the operator's Recorded refusal boundary. This is an operation refusal, never non_ste100
 fabricated without a checker result and never component failure. It creates no
@@ -672,7 +681,7 @@ CLASS-9, CLASS-10, FLOW-3]
 
 Every conforming request in a forbidden correction pass still takes Spec 05's start and
 terminal path, ending not_dispatched/pass_purpose while live. Stop or leave may own the
-unclaimed suffix under Spec 05 PAIR-LEAVE; already admitted terminal causes remain
+unclaimed suffix under Spec 05 PAIR-LEAVE. Already admitted terminal causes remain
 unchanged. This includes a valid recall binding.
 An accepted recall binding with invalid operation shape is also an attempted call.
 Record correction_call once for that correction pass and each RECALL-REFUSAL separately
@@ -699,28 +708,28 @@ correction message.assistant identity:
   EMPTY-CORRECTION refusal and no invented classifier or pair evidence.
 - Every conforming request has its actual Spec 05 CompletedPair. Both opening commits
   and the terminal filing receipt, with their recorded observations, must match the
-  original request and terminal; Recorded PairEnded alone is insufficient. Each
+  original request and terminal. Recorded PairEnded alone is insufficient. Each
   forbidden correction terminal is failed/not_dispatched with its actual pass_purpose,
   stop or unload cause. Correctly rejected or unassociated calls need no invented pair.
 
 The last required fact establishes completion. Returning a loan, taking an account or
 running a later ledger hook does not choose that boundary. Count once per correction
-identity: a pass completed before cancellation keeps its count; a failed pass whose
+identity: a pass completed before cancellation keeps its count. A failed pass whose
 owed accounting completes after cancellation updates only the retained cancelled
 account. An unfinished decoded message, missing checker or refusal record, outstanding
 opening/terminal filing receipt, or only a completed prefix of several calls contributes
-no attempt. Ordinary accepted Text filings do not add a wait beyond DECISION-BARRIER;
-request filings required by Spec 05 remain mandatory. [CLASS-8, CLASS-9, CLASS-10,
+no attempt. Ordinary accepted Text filings do not add a wait beyond DECISION-BARRIER.
+Request filings required by Spec 05 remain mandatory. [CLASS-8, CLASS-9, CLASS-10,
 PAIR-1, PAIR-4]
 
 After cancellation, reaching the count boundary or the cap never returns
 RestatementRequest, EffectiveEmission or RepairExhausted, starts another correction,
 or authors a new repair_exhausted continuation. Preserve any already Recorded cap
-event without replay. Keep the original Decision bound and any earlier lifecycle bound;
-no receipt, cancellation, extraction or delayed completion renews either. Owed work may
+event without replay. Keep the original Decision bound and any earlier lifecycle bound.
+No receipt, cancellation, extraction or delayed completion renews either. Owed work may
 finish only through existing lifecycle and recording permissions. This rule adds no
 permission to check, author or file after those permissions end. Foundation halt and
-its ban on new store writes remain unchanged; incomplete evidence cannot become a
+its ban on new store writes remain unchanged. Incomplete evidence cannot become a
 completed attempt by teardown. [CLASS-8, CLASS-9, FLOW-4, FLOW-5, PERSIST-4]
 
 A refused restatement instruction or runtime-template rejection is an operation
@@ -751,6 +760,14 @@ harness owns the private repair proof. The eventual client answer uses the same
 corrected text order. Reason: repair changes what may be acted on without rewriting the
 record or forcing a valid correction back into its old source ID. [CLASS-9, PLAN-1,
 STRAT-2, FLOW-3]
+
+EffectiveEmission is the act Y of OUT-1. The trace keeps the model's emission, e, and Y
+never takes its place there. What leaves the gate and what the store files is Y. A
+change to Y by the outbound sort, beside repair, is authored on the trace beside e
+before Y is used, naming the source block, the changed span, the text replaced and the
+text that replaces it. How the loop chooses a change belongs to the loop's workflow
+document, and the record's representation is O02-6. This is the operator's ruling of
+2026-11-01 (ruling A), confirmed on 2026-11-02 (#432). [OUT-1, CLASS-9, CLASS-10]
 
 RepairAccount is the private owner of original and correction-pass evidence under their
 own generation identities. Its inspection view is
@@ -979,6 +996,7 @@ CLASS-7, CLASS-9, PROMPT-2]
 | O02-3 | Measure repair yield per additional attempt and task obstruction, then freeze repair_cap and gate/cut/decision waits before the held-out run. Record scheduling and transport contributions. |
 | O02-4 | Qualify max_wire_bytes against the largest supported exact source blocks, complete binding answers, scheme and inventory messages, with memory pressure included. The complete admin enter must also fit its separate unchanged MAX_ENVELOPE_BYTES bound. No measured number is invented here. |
 | O02-5 | Produce the separate PROMPT-3 document, its review, prompt certificate and the WeaverAnalysis producer/verifier fixtures. No prompt is written by this Spec. |
+| O02-6 | Define the trace record for a change to Y by the outbound sort under EFFECTIVE-EMISSION, in the trace and types amendments, before any code changes Y outside repair. The record names the source block, span, replaced text, replacing text and the held table version it came from. |
 
 The foundation's HARNESS-CLASSIFY replacement addresses the missing mandatory production
 result port and preserves the legacy classifier side identified by R10. It also supplies

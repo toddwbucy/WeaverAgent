@@ -4,7 +4,7 @@
 
 **Landing PR:** #260
 
-**Version:** 0.8 **Date filed:** 2026-10-21 **Parent:** weaver-spu-PRD
+**Version:** 0.9 **Date filed:** 2026-10-21 **Parent:** weaver-spu-PRD
 
 ## 0. Scope and owning clauses
 
@@ -54,7 +54,7 @@ max_tokens_per_turn and terminal_tokens equal to one. Use checked u64 conversion
 current renderer supplies one promoted terminator token under SPU Spec 4.3. A different
 convention is outside this wire's admitted behavior. The harness checks its measured
 head/tail budget and foundation serving's positive effective generation requirement
-against these facts before enter can succeed. Report a resolved zero unchanged; it is
+against these facts before enter can succeed. Report a resolved zero unchanged. It is
 valid Opened evidence and fails that harness fit check. This adds no SPU-side zero-limit
 refusal or change to diagnostic generation. A failed fit closes this residency by
 existing failed-enter teardown, not a second Open. Reason: a resolved
@@ -275,6 +275,11 @@ inclusion results, reports them, and waits for the next request. No result from 
 duty dispatches a tool, chooses a partition or updates a store. Correct non_ste100 keeps
 the checker usable. A component_failed reply ends the duty after its attempted terminal
 answer, under PORT. [CLASS-2, CLASS-8, CLASS-10, SEAM-1, FLOW-4]
+
+The duty judges each Text block as the decoder emitted it, the model's emission e. It
+never receives the agent's act Y, which the harness builds under Spec 02
+EFFECTIVE-EMISSION. This is the operator's ruling of 2026-11-01 (ruling A), confirmed on
+2026-11-02 (#432). [OUT-1, CLASS-9, CLASS-10]
 
 Add tests/manifest.rs::ste100_binary_set as a new instrument. It reads Cargo.toml and
 requires exactly weaver-spu at src/main.rs, weaver-spu-classify at src/bin/classify.rs

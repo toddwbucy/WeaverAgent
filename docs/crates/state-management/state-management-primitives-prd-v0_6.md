@@ -2,7 +2,7 @@
 
 **Status:** MERGED. Requirements change only on a return from the reviewer seat or
 an operator ruling the changed clause names.
-**Version:** 0.6
+**Version:** 0.7
 **Date filed:** 2026-10-16
 **Document ID:** `state-management-primitives-PRD`
 **Editorial:** ASCII, no semicolons, prose at 88 characters.
@@ -387,6 +387,11 @@ without a matching request is rejected under PAIR-1. Reason: the meaning protoco
 supplies the filing structure, and the return answers the action already named by
 its request. [R4, H5.1, H5.5]
 
+Where no classifier is elected, the store files no statement by verb, because the
+classifier supplies the verb and the noun. The trace still holds every emission. This is
+the operator's ruling of 2026-11-01 (ruling C), made a declaration election by the
+ruling of 2026-11-02 (#434). [CLASS-2, CLASS-3]
+
 **STORE-3.** Each verb and noun pair points to the stored block and its source span.
 The pairs are the index and the block is the content. A verb over a compound object
 is one action with several values, each pair retaining its span pointer. Reason:
@@ -618,10 +623,24 @@ noun acted on, with its condition and pointer to the span. Reason: the narrow pa
 job bounds its cost. Output filing is owed before the cut under CLASS-6. Gate input
 checking must finish before the input reaches the model under GATE-1. [D6, H5.5, P3]
 
+Where a deployment elects no classifier, the agent still emits under the STE100 contract
+and the verb set fixed at load, converts its emission, and files nothing by verb. The
+classifier binding is a declaration election, and absent means no classifier, on the
+operator's ruling of 2026-11-01 (ruling C), made a declaration election by the ruling of
+2026-11-02 (#434). Reason: a converting loop needs the emission contract before a model
+emits STE100 stably enough to classify, and an elective binding lets the classifier join
+later under the same contract. [CLASS-3, STORE-2]
+
 **CLASS-3.** Classify-on-write ships for the model's own STE100 output, including tool
 requests. A tool return is not classified and completes its pair by matching its
 send. Reason: a tool request is model output, while the return's role is completion
 of the already identified communication. [H5.5, H5.7]
+
+Where no classifier is elected, classify-on-write does not run. Nothing is classified or
+filed by verb, and the trace still holds every emission. Wherever the classifier is
+elected, classify-on-write ships as above. This is the operator's ruling of 2026-11-01
+(ruling C), made a declaration election by the ruling of 2026-11-02 (#434). [CLASS-2,
+CLASS-10, STORE-2]
 
 **CLASS-4.** All input through the gate requires STE100 under GATE-1. The input check
 runs ahead of the model, and the same classifier and label scheme serve input and
@@ -678,6 +697,12 @@ the user. Reason: the model's emission contract is STE100, and restatement repai
 correctly detected emission defect with the loop's instruction explicit in the trace.
 [D5, A3, A4, R6, H5.5, G2]
 
+The rejected block stays on the trace as the decoder emitted it, as part of e under
+OUT-1. A valid correction takes its place in the agent's act, Y. Y is what leaves the
+gate and what the store files, and a correction is never written back into e. This is
+the operator's ruling of 2026-11-01 (ruling A), confirmed on 2026-11-02 (#432). [OUT-1,
+CLASS-10]
+
 **CLASS-10.** A model emission reaches the trace as a normal emission. The tee copies
 it, and the partition selects from that copy. The classifier is the downstream filter at
 the store's door. If it correctly reports that a block subject to STE100 classification
@@ -687,6 +712,14 @@ rejected-emission kind and no training-pair duty inside the agent. Reason: valid
 rejection keeps nonconforming content out of retained state without hiding it from the
 trace or moving content inspection into the tee. Unclassified tool returns still follow
 their request's pair under STORE-2. [G7, A3, A4, R4]
+
+The trace keeps the model's emission, e. Where repair or the outbound sort changes what
+the agent emits, each change is recorded on the trace beside e, and the result is the
+act Y of OUT-1. Y is what leaves the gate and what the store files. The classifier,
+where one runs, reads e. This is the operator's ruling of 2026-11-01 (ruling A),
+confirmed on 2026-11-02 (#432). Reason: the gap between e and Y records every change the
+agent made and is the training signal, so neither may stand in for the other. [OUT-1,
+CLASS-9, STORE-2]
 
 The filter rejects a non-STE100 block regardless of whether it is a careless emission
 or attempted prompt injection. STE100 conformance is not itself a safety decision:

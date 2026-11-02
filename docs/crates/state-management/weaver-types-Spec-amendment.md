@@ -4,7 +4,7 @@
 
 **Landing PR:** #384
 
-**Version:** 0.37 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.38 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -86,7 +86,7 @@ attestation, not proof that a benchmark was run. Qualification checks its eviden
 | state-management.persistence.save-wait | elapsed-ns decimal string, measurement-ref string |
 | state-management.persistence.snapshot-wait | elapsed-ns decimal string, measurement-ref string, initial explicit value 120000000000 ns under R20-6 |
 | state-management.reads | max-result-bytes positive decimal string, measurement-ref string |
-| state-management.ste100 | Ste100Instruction, with the seven fields below |
+| state-management.ste100 | Ste100Instruction, with the seven fields below. The one elective table here: absent elects no classifier, under the election paragraph below |
 | state-management.tools.sh | ToolPolicy, required exactly when tool-set elects sh |
 | state-management.placement | c-head positive u64, c-tail positive u64, measurement-ref nonempty string |
 
@@ -128,6 +128,13 @@ absolute-path requirement. Filesystem resolution and named-file digest checks be
 to SPU admission. Neither the declaration codec nor the wire rewrites this locator
 to a directory. Decoder and legacy ClassifyInstruction bindings are unchanged.
 [CLASS-2, CLASS-7, SEAM-2]
+
+state-management.ste100 is a declaration election under Spec 02 DECLARATION.
+StateManagementConfig.ste100 is Option<Ste100Instruction>, and an absent table parses to
+None, which elects no classifier. A present table keeps every requirement above. With
+None, LoadedStateFacts.ste100_binary_sha256 is absent, and TYPES-ENTER carries no
+instruction. This is the operator's ruling of 2026-11-01 (ruling C), made a declaration
+election by the ruling of 2026-11-02 (#434). [CLASS-2, CLASS-3, STORE-2]
 
 ToolPolicies is a closed map with sh as its only possible key. ToolPolicy has
 clock_ms:u64 and measurement_ref:String. Require a nonempty reference and a clock in
@@ -204,7 +211,7 @@ LoadedStateFacts for show. It is not the model-manifest digest or scheme digest.
 **TYPES-ENTER-WINDOW.** Add state_flow::EnterWindow with exactly
 {began_ns:DecimalU64,deadline_ns:DecimalU64}. Both fields are raw readings of the same
 Linux CLOCK_MONOTONIC domain under Spec 09 CLOCK, and began_ns < deadline_ns. The
-interval is positive; an absolute began_ns of zero is not invalid by itself. Require
+interval is positive. An absolute began_ns of zero is not invalid by itself. Require
 canonical DecimalU64 strings, both fields, no unknown or duplicate fields, and checked
 arithmetic. An equal or reversed interval is malformed. A well-formed window whose
 deadline has passed is expired, not malformed, and a codec never renews or clamps it.
@@ -212,13 +219,13 @@ deadline has passed is expired, not malformed, and a codec never renews or clamp
 
 enter_window is required only in the replacement EnterBinding::Serving shape. It has
 no default, optional spelling, caller-chosen duration, or legacy Serving fallback.
-Diagnostic carries no enter_window and continues its separately elected lifecycle;
-the closed Diagnostic shape rejects that member. This is an invocation fact, not a
+Diagnostic carries no enter_window and continues its separately elected lifecycle.
+The closed Diagnostic shape rejects that member. This is an invocation fact, not a
 bound-declaration setting or a new LoadedStateFacts/show or trace load field. The
 existing envelope bound still includes its encoded bytes. No Rust Instant, wall-clock
 translation, time-namespace translation or cross-host deadline is a valid carrier.
 ADMIN-ENTER-WINDOW owns its sole producer and HARNESS-ENTER-WINDOW owns receipt and
-expiry. Both retain the original two values; an existing retry does not earn another
+expiry. Both retain the original two values. An existing retry does not earn another
 budget. This carrier adds no permission to retry. [CLASS-8, FLOW-3, SEAM-2]
 
 The harness converts StateManagementConfig.flow, .persistence, .reads, .ste100, .tools
@@ -569,7 +576,7 @@ world request refused before a turn when weaver-admin-Spec section 3.0's current
 position requires NoResidency. Author it only as RefusalRecord::Lifecycle
 {asked:WorldRequest, refusal:NoResidency}. No new
 LifecycleDirective, LifecycleRefusal, trace event kind or world message is added.
-The ask identifies what was refused; Enter, Admit and Release must not stand in for a
+The ask identifies what was refused. Enter, Admit and Release must not stand in for a
 world request. The record's causal_parent identifies the original input.offered, so
 the ask contains no duplicate input_id or frame bytes. Spec 02 INPUT-NO-RESIDENCY
 owns that intake and trace-before-answer order. [GATE-1, FLOW-3, SEAM-2]
@@ -964,7 +971,7 @@ still-graceful leave. Terminal unwind refusals follow ADMIN-SAVE's enumerated ne
 outcomes at every capture receive, local-work checkpoint and joined Leave. FailedRun
 is admin's projection shape, with no current harness producer. Defensive acceptance
 requires the original observed run and, after Beginning, the original capture ID.
-A join that cannot identify the run rejects that shape; it has no capture ID to compare.
+A join that cannot identify the run rejects that shape. It has no capture ID to compare.
 Neither a worker refusal nor its nested organ reason supplies admin's own publication
 facts. The receiver rejects other refusal codes, a save report, CaptureComplete or a
 return to publication after this acknowledgement. Aborted keeps its cancellation
@@ -1117,7 +1124,7 @@ measurement:Box<RawValue>, in that wire field order. It derives Debug, Clone,
 Serialize and Deserialize, and implements PartialEq manually: compare the session
 and every count normally and compare each raw box's get() bytes exactly. This keeps
 TokenAnswer's PartialEq contract without requiring RawValue to implement it. Use
-Generation's existing raw-box comparison pattern; no parse or normalization enters
+Generation's existing raw-box comparison pattern. No parse or normalization enters
 equality. Unknown or duplicate outer fields refuse. [PLACE-1, PLACE-5, SEAM-2]
 
 PlacementCode is invalid_span, invalid_pair, invalid_cut, head_over_capacity,
