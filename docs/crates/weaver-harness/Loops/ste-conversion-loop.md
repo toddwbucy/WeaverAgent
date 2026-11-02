@@ -361,8 +361,12 @@ substitution.
 The check's execution site stays open in clause 10.02.
 
 **6.03. Shape strikes.** Count a parse failure or lost placeholder as one shape fault.
+Missing output from a completed answer is a parse failure.
 Use at most three such emissions for one text, then drop that text.
-Request a fresh rewrite when output is missing.
+For a completed answer with missing output, request a fresh rewrite only before the
+third shape fault.
+This clause grants no retry after a transport or lifecycle failure.
+Keep the shape count for that text across new gate turns.
 Keep all three emissions and their identities on the trace.
 Count drops separately for every round.
 Do not count vocabulary splices or offers as shape faults.
@@ -379,7 +383,8 @@ The agent does not start `REPAIR` under `OUTPUT-UNIT` without a classifier.
 Use "restatement" only for this repair, under Q4, [#437][q14].
 The named `offer` path accepts only the thesaurus case in clause 5.06.
 The shape-retry site stays open in clause 10.03.
-The general repair cap stays open in clause 10.12.
+For calibration, apply the limit in clause 6.07.
+The measured repair cap stays open in clause 10.12.
 
 **6.05. Review.** Compare a recorded random sample of source texts with their final
 rewrites.
@@ -397,6 +402,23 @@ Keep all fields outside the scope byte-identical.
 Check for remaining placeholders, new tags and changes outside eligible prose.
 Record the output hash and the accepted and refused trajectory counts.
 Assembly changes a dataset row and does not change a model argument.
+
+**6.07. Driver repair limit.** For calibration, set `driver_repair_pass_cap` to 3 for
+each original text.
+The initial conversion request does not consume this cap.
+Count each driver language-repair request before its gate turn starts.
+Keep the cap and count across shape retries and new gate turns.
+Do not refund a request for malformed or unused output.
+Apply clause 6.03 to malformed responses.
+At the cap, send no further language-repair request.
+After applicable shape retries, record `language_unresolved` if the last text still has
+a language failure.
+Keep that text out of assembly.
+Keep its source, all model emissions and checker results.
+Report `language_unresolved_count` beside the shape-drop count.
+Three repairs and the initial request give the source's four-cycle calibration
+candidate.
+Use clause 10.12 to select the measured cap from yield and cost.
 
 ## 7. Trace and quality decisions
 
@@ -599,7 +621,9 @@ Keep all unruled entries and forms out of the splice path.
 
 **10.12. Repair cap.** Measure the cumulative success count, faithful count, tokens and
 time after each `repair pass`.
-The operator selects the repair cap from that curve.
+The operator selects the measured repair cap from that curve.
+Start with clause 6.07's calibration cap.
+Name this measurement `repair-yield-cost`.
 The source success rates were 89.2, 99.2, 99.8 and 99.9 percent over four cycles.
 This cell does not change the three shape faults or `offer_pass_cap`.
 
