@@ -1328,18 +1328,21 @@ through PERSIST-4, COST-2, R1]
 
 **STATE-INSTALL.** Install mode accepts exactly one InstallRequest under TYPES-INSTALL,
 with the selected image read-only on fd4, fd3 and fd9, and no other descriptor. It
-adopts the image with every STATE-ADOPT check, then validates the new version: a scheme
-under Spec 02 SCHEME, or a thesaurus under THESAURUS whose scheme_id names the current
-scheme. In one transaction it inserts the version row with the request's ruling
-reference and the next install ordinal, moves governing_current to it, and for a scheme
-sets store_meta.scheme_id. A scheme install leaves in place a current thesaurus that
-names the old scheme, and the next load refuses until a thesaurus for the new scheme is
-installed. It then serializes the image as STATE-CAPTURE does and returns its room name
-and size. It opens no serving session, runs no model, files nothing, authors no trace
-event and accepts no SQL. A refusal leaves no publishable image. Reason: only the
-operator changes a governing table, outside service, as a new hashed version, and filed
-history keeps its scheme version. This is the operator's ruling of 2026-11-02 on #437
-(C4). [PERSIST-3, PERSIST-5, STORE-2]
+adopts the image with every STATE-ADOPT check, with two differences. It compares the
+image against the request's expected start identity and digests, since install mode has
+no open. It does not require the current thesaurus to name the current scheme, a check
+serving load keeps, so a thesaurus install can repair the mismatch a scheme install
+leaves. It then validates the new version: a scheme under Spec 02 SCHEME, or a thesaurus
+under THESAURUS whose scheme_id names the current scheme. In one transaction it inserts
+the version row with the request's ruling reference and the next install ordinal, moves
+governing_current to it, and for a scheme sets store_meta.scheme_id. A scheme install
+leaves in place a current thesaurus that names the old scheme, and the next load refuses
+until a thesaurus for the new scheme is installed. It then serializes the image as
+STATE-CAPTURE does and returns its room name and size. It opens no serving session, runs
+no model, files nothing, authors no trace event and accepts no SQL. A refusal leaves no
+publishable image. Reason: only the operator changes a governing table, outside service,
+as a new hashed version, and filed history keeps its scheme version. This is the
+operator's ruling of 2026-11-02 on #437 (C4). [PERSIST-3, PERSIST-5, STORE-2]
 
 **STATE-NO-SAVE.** A failed flow cannot request capture, finish an unconfirmed
 publication, or adopt an orphan from the member's room. Delete parts on exit. The

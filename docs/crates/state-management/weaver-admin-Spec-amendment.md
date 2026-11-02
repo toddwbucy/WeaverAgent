@@ -267,17 +267,20 @@ connector sudo rules. Hold the exclusive invocation lock and run lock, and refus
 loaded agent. Select through ADMIN-SELECTION and verify the artifact. Check the new
 artifact under Spec 02 SCHEME or THESAURUS, and refuse one whose digest is already
 current. Stand the member with --mode=install inside the start step's containment, as
-ADMIN-SEED does, with the selected state.sqlite on fd4, and send InstallRequest. On
-InstallCaptured, copy the image, clean up as seed does, and publish an artifact whose
-parent is the selected one, with confirmation install and cause install. Its agent.toml
-is the selected artifact's declaration copy unchanged, so it still names the old
-version, and its scheme and thesaurus files are the image's new current versions. The
-next load refuses scheme_mismatch until the operator edits the draft with sudoedit and
-bind-state publishes it. Record the ruling reference with the artifact's sha256 and, for
-a thesaurus, its source sha256 in admin.log. A refusal or crash before publication
-creates no index entry. Reason: only the operator changes a governing table, through
-admin, under a ruling, as a new hashed version. This is the operator's ruling of
-2026-11-02 on #437 (C4). [PERSIST-3, PERSIST-5, STORE-2]
+ADMIN-SEED does, with the selected state.sqlite on fd4, and send InstallRequest with
+expected read from the selected artifact's binding.json. On InstallCaptured, copy the
+image, clean up as seed does, and publish an artifact whose parent is the selected one,
+with confirmation install and cause install. Its agent.toml is the selected artifact's
+declaration copy written by the canonical serializer with only the starting hash
+replaced by the new A, as ADMIN-REBIND does, and B is recomputed. The copy still names
+the old version, and its scheme and thesaurus files are the image's new current
+versions, with their digests in binding.json. The next load refuses scheme_mismatch
+until the operator edits the draft with sudoedit and bind-state publishes it. Record the
+ruling reference with the artifact's sha256 and, for a thesaurus, its source sha256 in
+admin.log. A refusal or crash before publication creates no index entry. Reason: only
+the operator changes a governing table, through admin, under a ruling, as a new hashed
+version. This is the operator's ruling of 2026-11-02 on #437 (C4). [PERSIST-3,
+PERSIST-5, STORE-2]
 
 ## 3. Save and recovery, destinations sections 3.0 and 6
 
@@ -579,7 +582,7 @@ PERSIST-3, PERSIST-5]
 | restore | Unloaded, restore-artifact key naming a verified indexed complete artifact | Append selection, existing RestoreNamed. Missing key, pending/broken guard or invalid artifact refuses before change |
 | seed | Unloaded, no seed exists, judged seed prompt/certificate and declaration inputs under ADMIN-SEED | Seeded with StartIdentity only after complete publication. Refuse an existing seed or bad input |
 | bind-state | Unloaded, selected complete artifact and judged territory declaration draft | StateBound after verified same-state publication bound to the new declaration. N6 and scheme identity checks still apply |
-| install-governing | Unloaded, selected complete artifact, the judged root scheme or thesaurus file, and a ruling reference under ADMIN-INSTALL. It takes flags and a ruling reference, never a path | Published artifact with the new current version and the declaration copy unchanged. Refuse a loaded agent, an invalid or already current version, or a thesaurus whose scheme_id is not the current scheme's |
+| install-governing | Unloaded, selected complete artifact, the judged root scheme or thesaurus file, and a ruling reference under ADMIN-INSTALL. It takes flags and a ruling reference, never a path | Published artifact with the new current version, the declaration copy's governing digests unchanged and its starting hash the new image's. Refuse a loaded agent, an invalid or already current version, or a thesaurus whose scheme_id is not the current scheme's |
 
 The contract rows state custody and outcomes. ADMIN-SEED, ADMIN-SELECTION and
 PERSIST-FORMAT own representations and publication order. [PERSIST-3, SEAM-1]

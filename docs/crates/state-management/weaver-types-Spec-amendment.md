@@ -1088,14 +1088,17 @@ STORE-5]
 **TYPES-INSTALL.** state_flow owns InstallRequest, InstallCaptured and InstallRefusal
 and their state-install/1 codec, under TYPES-SEED's frame, bound, codec and correlation
 rules, with protocol state-install/1 and ops install, captured and refused.
-InstallRequest is {kind, bytes, sha256, ruling, source_sha256}: kind is scheme or
-thesaurus, bytes the exact UTF-8 artifact, sha256 its Digest, ruling a nonempty
+InstallRequest is {kind, bytes, sha256, ruling, source_sha256, expected}: kind is scheme
+or thesaurus, bytes the exact UTF-8 artifact, sha256 its Digest, ruling a nonempty
 reference to the operator's ruling, and source_sha256 the thesaurus source's Digest,
-present exactly for a thesaurus and equal to the artifact's source.sha256.
-InstallCaptured is {room_name, size_bytes:DecimalU64}. InstallRefusal is exactly
-unsupported_schema, open_failed, invalid_version, scheme_mismatch, write_failed,
-image_too_large and snapshot_failed. This is the operator's ruling of 2026-11-02 on #437
-(C4). [PERSIST-3, PERSIST-5, SEAM-1]
+present exactly for a thesaurus and equal to the artifact's source.sha256. expected is
+{start:StartIdentity, scheme_sha256:Digest, thesaurus_sha256:Option<Digest>}, which
+admin reads from the selected artifact's binding.json after it verifies the artifact,
+and which STATE-INSTALL compares in place of open's values. InstallCaptured is
+{room_name, size_bytes:DecimalU64}. InstallRefusal is exactly unsupported_schema,
+open_failed, invalid_version, scheme_mismatch, write_failed, image_too_large and
+snapshot_failed. This is the operator's ruling of 2026-11-02 on #437 (C4). [PERSIST-3,
+PERSIST-5, SEAM-1]
 
 **TYPES-SAVE-TIME.** state_flow defines SaveWindow with exactly
 {began_ns:DecimalU64,deadline_ns:DecimalU64}, both raw CLOCK_MONOTONIC readings and
