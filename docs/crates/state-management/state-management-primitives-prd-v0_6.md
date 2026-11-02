@@ -1340,9 +1340,9 @@ D2, D6, L1]
 | Dependable single trace-to-store flow | Prerequisite | Required before state management depends on it |
 | Wall compaction | First | Elected bring-up path |
 | Leave in place, reminder, cut at the step boundary | First | Declared strategy, no saved buffer entries |
-| Seed, whole-store dump, and reinjection | First | Ordinary three-file save points and A/B verification for every load |
+| Seed, whole-store dump, and reinjection | First | Ordinary three-file save points, with the governing files added at weaver-state STATE-GOVERNING's cutover, and A/B verification for every load |
 | System-prompt boot read | First | Read and place through the prompt's end mark before the user channel opens |
-| STE100 input and output classification | First | Gate refusal and bounded input checks, model restatement for output, measured lag, and bounded filing waits at cuts |
+| STE100 input and output classification | First | Where the declaration elects the classifier binding under GATE-1: gate refusal and bounded input checks, model restatement for output, measured lag, and bounded filing waits at cuts |
 | Tool-call pair lifecycle | First | Every opened pair reaches an end |
 | Structured retrieval and harness-driven injection | First | Deployment enable control, injection budget, and declared selection under P1 |
 | KV caching | Next | First release proves out |
