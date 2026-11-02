@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #384
+**Landing PR:** #441
 
-**Version:** 0.38 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
+**Version:** 0.39 **Date filed:** 2026-10-21 **Parent:** weaver-types-PRD
 
 ## 0. What this document is
 
@@ -492,6 +492,8 @@ serving contract remains applicable.
 | TYPES-ENTER | Serialization fixtures for both binding kinds and exhaustive refusal mapping | Drop validation attribution or require serving bounds for diagnostic replay |
 | TYPES-FILE | Shared round-trip corpus read by harness and state tests | Alter a UTF-8 offset, source ordinal, optional field rule, or raw block spelling |
 | TYPES-EFFECT | Strict context/effect corpus and private-constructor compile tests | File an effect without its source context, admit effect on model text, or carry rejected text inside context |
+| TYPES-LOOKUP | Canonical lookup/material corpus with null previous_change, source spans and exact held senses | Accept unknown or duplicate nested fields, invalid counters, or a decoded value as a private grant |
+| TYPES-EMISSION-CHANGE | Splice and offer codec fixtures with all source links and exact before/after text | Lose a chain link, change a byte, accept an invalid span or grant a Y change from decoded data |
 | TYPES-WIRE | Decoder perturbation tests for each frame and refusal | Accept duplicate keys, wrong IDs, or unknown fields |
 | TYPES-FAULT | Exhaustive fault serialization and harness disposition tests | Route state_template_rejected into the component halt |
 | Dependency boundary | Existing manifest test | Add an interior crate as a production dependency |
@@ -545,16 +547,71 @@ Both endpoints use these floor definitions. [PAIR-1, PAIR-2, PAIR-3, STORE-5]
 
 **TYPES-TEMPLATE.** LoopInstructionMeta is the externally tagged enum whose exact
 variants and fields are Spec 02 INSTRUCTION-METADATA's table. It lives in state_flow,
-with no untyped metadata member. TemplateCertificate is harness-only, private
+with no untyped metadata member. Add offer {matched:ThesaurusMatch} and SlotClass
+thesaurus_offer under LOOKUP-OFFER. Restatement and retry keep their existing fields
+and authoring conditions. Only the harness's checked lookup owner can supply the new
+slot's private material. No deserialized floor value grants a template expansion.
+TemplateCertificate is harness-only, private
 {run_id:String,scheme_id:String,checker_artifact_sha256:Digest,
 inventory_sha256:Digest,accepted:Vec<TemplateAcceptance>}. TemplateAcceptance is
 {template_id:String,request_id:DecimalU64,result_source:SourcePosition} in inventory
-order. Only the completed load-template check constructs it. It serializes no runtime
-authority onto a socket. VerifiedSeed is a private floor validator result
+order, excluding LOOKUP-OFFER's disabled kind offer. Only the completed load-template
+check constructs it. It serializes no runtime authority onto a socket. VerifiedSeed
+is a private floor validator result
 {prompt_sha256:Digest,scheme_id:String,checker_artifact_sha256:Digest,
 bindings:Vec<Binding>}. Only verify_seed_certificate constructs it after all TYPES-SEED
 checks. SeedCertificate is the public exact TYPES-PERSIST struct, not a synonym for
 either private grant. [CLASS-2, FLOW-8, PERSIST-5, PROMPT-2]
+
+**TYPES-LOOKUP.** Add the closed data shapes below in state_flow. These are
+representations, not the harness's private LookupMatch or OfferMaterial grants.
+Use TYPES-CANONICAL field order and TYPES-CODEC's duplicate and unknown-field checks
+at every depth. Option fields are required and explicit null when absent. All spans
+use TYPES-FILE's half-open UTF-8 byte convention. Source references preserve original
+content indices. These shapes implement #437, comment 6586494090, of 2026-11-02.
+[OUT-1, FLOW-8, CLASS-10]
+
+| Type | Fields in order |
+| --- | --- |
+| ThesaurusMatch | source:SourceBlockId, previous_change:Option<DecimalU64>, sentence_span:Span, word_span:Span, scheme_id:String, thesaurus_sha256:Digest, entry_word:String |
+| OfferSense | sense:String, use:Vec<String> |
+| OfferMaterial | matched:ThesaurusMatch, sentence:String, senses:Vec<OfferSense> |
+
+scheme_id is the bound scheme identity. thesaurus_sha256 identifies the exact held
+artifact, and entry_word identifies its unique entry. The artifact's source provenance
+remains THESAURUS's. A previous_change sequence precedes the new record in the same
+run. Spans are nonempty, and word_span lies inside sentence_span. Sense text, use lists
+and their elements are nonempty and retain artifact order. Runtime constructors compare
+every value with the loaded artifact and current source version under LOOKUP-OFFER.
+The sentence is an exact slice, never a caller-authored substitute.
+
+**TYPES-EMISSION-CHANGE.** Add EmissionChangeRecord
+{matched:ThesaurusMatch,span:Span,replaced:String,replacement:String,
+method:EmissionChangeMethod}. The externally tagged method is splice:{} or
+offer:{instruction:SourceBlockId,reemission:SourceBlockId,reemission_span:Span}.
+The instruction reference names block zero of its one-Text loop.instruction. The
+reemission field identifies the generation that consumed that instruction's Recorded
+grant. Its run and sequence name that transaction's message.assistant event, and block
+is an original Text index in that response. The binding field is the response event's
+envelope causal_parent, which must equal instruction.sequence. It is required for this
+response. The harness obtains the source from the bound transaction's Recorded receipt
+under HARNESS-LOOKUP-OFFER, never from the caller. A different generation or instruction
+parent refuses invalid_context under HARNESS-OUTBOUND-CHANGE, even in the same turn.
+All references belong to the current run and external turn. replaced and replacement
+are nonempty. An offer's reemission_span must select exactly replacement. The codec
+grants no authority to apply a change. HARNESS-OUTBOUND-CHANGE owns that private grant
+and all comparisons.
+Use the same strict codec, scalar and canonical rules as TYPES-LOOKUP. This is O02-6's
+floor representation under #437, comment 6586494090, of 2026-11-02.
+[OUT-1, CLASS-10, FLOW-3, FLOW-8]
+
+Shared fixtures cover both method variants, all required fields, null previous_change,
+noncanonical counters, reversed or split-UTF-8 spans, changed nested fields and
+duplicate keys. Harness fixtures check source and artifact equality and swap responses
+between two offers in one turn. Trace fixtures retain each response's instruction
+parent. Compile-time checks keep a decoded record from constructing a lookup, expansion
+or applied-change grant. Removing each check must fail its fixture. These are code-act
+obligations, not results of this document act.
 
 Finish is the existing weaver_types::Finish in wire.rs, with Completed, Stopped and
 Length. No new Finish enum or conversion by spelling is introduced for

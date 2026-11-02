@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #420
+**Landing PR:** #441
 
-**Version:** 0.46 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
+**Version:** 0.47 **Date filed:** 2026-10-21 **Parent:** weaver-harness-PRD
 
 ## 0. What this document is
 
@@ -116,7 +116,8 @@ RecordingContext::author_and_wait path below. Run delegates to it, and Ports bor
 same recording context. Author::author takes kind, subsystem, turn, AuthoredSource,
 causal_parent: Option<Sequence>, and payload, and returns RecordAttempt or
 SubmitFailure. AuthoredEvent holds those six members unchanged. Ordinary callers pass
-None, accepted input supplies the offered sequence. Remove the existing author
+None, accepted input supplies the offered sequence, and an offer's message.assistant
+supplies its instruction sequence under HARNESS-LOOKUP-OFFER. Remove the existing author
 boundary's hardcoded None for this field. author_message keeps its outer
 UnlicensedMessage refusal. The helper calls resume until Recorded, servicing transport
 while pending. It cannot recursively author. The baseline author census is the current
@@ -297,12 +298,13 @@ row. No payload may choose channel or origin. [TAP-1, TAP-5]
 | loop.instruction, sort.decision, state.sort.measurement, step.outcome, state.mark, state.mark.position, state.placement, model.request | internal | loop |
 | model.measurement, model.field, score, state.flow, state.store.measurement | measurement | runtime |
 | classify.request, classify.output, ste100.result | internal | runtime |
+| emission.change | internal | loop |
 | load, unload, session.closed, turn.started, turn.closed, fault, elision, refusal, flush, recall, save_point, message.restored, message.system | internal | runtime |
 
 The serving path never authors message.system. Replace WIND_DOWN_REQUEST's message.user
 with certified loop.instruction. Remove the live seeding acknowledgement with #76.
-Restatement, compaction, and step instructions enter the template inventory before their
-consumers ship. [FLOW-8, CLASS-9, review S2]
+Restatement, offer, compaction, and step instructions enter the template inventory
+before their consumers ship. [FLOW-8, CLASS-9, review S2]
 
 **HARNESS-LOOPS.** Keep engine.rs as the sole author of accepted conversation input. The
 frame boundary records input.offered and obtains its conformance result, but does not
@@ -328,7 +330,7 @@ STORE-8, PROMPT-1, CLASS-2, SCOPE-1]
 | Contribution | Engine obligation before append | Refuse |
 | --- | --- | --- |
 | Input | Open one turn, author message.user once with BoundaryInput(uid), then consume its tap outcome | Foreign run, consumed token, altered bytes or scheme, second input in the same turn |
-| Instruction | Expand certified template, author loop.instruction once with Loop origin, then consume its tap outcome | Unregistered template, wrong slot type, missing slot, changed inventory digest |
+| Instruction | Expand the template under Spec 02 TEMPLATES and LOOKUP-OFFER, author loop.instruction once with Loop origin, then consume its tap outcome | Unregistered or disabled template, wrong slot type, missing slot, changed inventory digest |
 | Held | Record recall provenance and place the exact stored span, with no new filing | Wrong source, incomplete span, altered bytes |
 | Raw Message or caller-selected role | No serving constructor exists | System, assistant and tool-result impersonation through the loop delta |
 
@@ -338,6 +340,93 @@ contribution cannot open an external turn without AcceptedInput. Only the engine
 emission and granted tool-return paths author assistant and tool-result messages. The
 stored prompt is seated by boot, never supplied by a loop contribution. [FLOW-8,
 PROMPT-1, STORE-8]
+
+**HARNESS-LOOKUP-OFFER.** Add the checked lookup and offer constructors of Spec 02
+LOOKUP-OFFER to the serving instruction path. They operate with no classifier and use
+the exact governing bytes carried at enter and checked by STATE-ADOPT. The lookup
+owner retains the source block's recorded Y version and the matched entry. It returns
+a private, single-use offer grant containing the typed material and metadata. A caller
+cannot replace either with a string, a role, HeldMaterial or a decoded record.
+The Instruction contribution remains the only placement path for this offer.
+This implements ruling B (#433) and #437, comment 6586494090, of 2026-11-02.
+[OUT-1, FLOW-8, CLASS-10]
+
+Recheck the source version, run, current turn and loaded artifact before authoring.
+Record loop.instruction with internal/loop, subsystem harness, the current turn and the
+model source sequence as causal_parent. Match every metadata field to the material
+before submission. Only Recorded permits its expansion to reach the argument and its
+model pass to start. Retain the grant while writer capacity is pending, using the
+existing author bound. Consume it once, binding the Recorded instruction's SourceBlockId
+to the exact AppendAndGenerate transaction before starting that transaction. Keep that
+binding through completion and author the response's message.assistant with
+causal_parent equal to the instruction sequence. Capture the response's run and sequence
+only from that transaction's own Recorded receipt. The private result retains this
+binding and the original content indices. No caller can substitute a completed
+generation or construct this result from source IDs. Record the re-emission before any
+use under HARNESS-OUTBOUND-CHANGE. An offer creates no classifier request, rejection,
+filing or repair-ledger attempt. It grants no tool dispatch.
+
+Retain the original answer generation while the offer's model pass runs. The response
+has its own recorded generation identity and accounting, but no independent answer or
+releasable EffectiveEmission. Route its selected text only through
+HARNESS-OUTBOUND-CHANGE into the original block's Y. Preserve that answer's original
+source and finish. Its Y, not the last decoded response, is the answer for the gate,
+answer contributions and turn closure under Spec 02 LOOKUP-OFFER. No raw offer response
+can become a second answer or an unused offer's fallback answer.
+
+Own Spec 02 LOOKUP-OFFER's offer_pass_cap, consumed count and pending reservations in
+one private external-turn context. Each caller uses that owner. Require the elected
+cap before reserving an allowance or authoring an offer. Carry its exact refusal and
+counting rules through the instruction recorder and single-use pass grant. Neither
+writer pressure, a new source, a retry nor a new match resets or refunds consumption.
+The workflow elects the value from its named measurement. MAX_TOOL_ROUNDS and
+bar_round_limit govern tool-result rounds and are not this offer bound.
+
+**HARNESS-OUTBOUND-CHANGE.** Own the private pending change and recorded change chain of
+Spec 02 OUTBOUND-CHANGE. Construct TYPES-EMISSION-CHANGE only after the source, match,
+loaded version, tag, span and exact-text checks pass. For an offer, require the private
+result from HARNESS-LOOKUP-OFFER's bound decode transaction. method.offer.instruction
+must equal its instruction SourceBlockId, and method.offer.reemission must name its
+recorded response and an original Text index. Verify that response's causal_parent
+equals method.offer.instruction.sequence. After the existing provenance checks, refuse
+invalid_context for a binding mismatch, including another offer's response in the same
+turn. Keep at most one pending change for a source version. A second proposal cannot
+branch or overwrite it. Convert every field explicitly to the trace-owned mirror and
+submit emission.change. Update that block's Y and chain head only after Recorded, with
+the same sequence. Keep the original generation identity, other blocks and all model
+evidence unchanged. This supplies O02-6 under #437, comment 6586494090, of 2026-11-02.
+[OUT-1, CLASS-10, FLOW-3, FLOW-8]
+
+| Operation state | Event | Result |
+| --- | --- | --- |
+| Matched | Offer requested with a valid current match and available allowance | Reserve one allowance and author the instruction, InstructionPending |
+| Matched | Offer requested without an elected cap or available allowance | invalid_context instruction refusal, no offer instruction or model pass |
+| InstructionPending | Recorded while the turn remains live | Consume its reservation once and permit placement and its model pass once, Offered |
+| InstructionPending | Instruction refused or cancelled without recorder admission | Release its reservation, no model pass |
+| Offered | Completed model response and the loop selects its valid change | Author the change, ChangePending |
+| Offered | Completed model response with no selected change | Keep the evidence and old Y, finish this operation without a retry grant |
+| Matched | Splice requested with a valid current match | Author the change, ChangePending |
+| ChangePending | Recorded while the turn remains live | Apply to Y once and advance its chain head, Recorded |
+| InstructionPending or ChangePending | CapacityPending | Retain the exact record and old Y under the existing author bound |
+| Matched or Offered | Invalid context, source, span, tag or replacement | Existing instruction refusal, no changed Y or model-pass grant |
+| Any live state | Stop, leave or flow failure | Existing cancellation and teardown, no new model pass or changed output |
+
+For change requests use template_id thesaurus-offer/1 for offer and the stable operation
+identifier outbound-splice/1 for splice in RefusalRecord::Instruction. The latter is
+refusal attribution only, never a template that can be expanded. Use stale_source for a
+mismatched chain head, wrong_turn for a foreign or closed turn, and invalid_context for
+an invalid match, span, replacement, generation binding or pending operation. An elected
+classifier also uses invalid_context. A malformed offer template uses invalid_template.
+These are operation refusals, not fabricated language defects. Once lifecycle
+permissions end, use their existing account instead of authoring a new refusal. A record
+admitted before cancellation may finish only under those permissions, and its late
+Recorded outcome grants no continuation.
+
+Each new record is subject to HARNESS-RECORD and HARNESS-AWAIT-AUTHOR. Neither path
+renews a deadline, reserves another event queue or changes the terminal reserve. A
+consumer receives changed EffectiveEmission text only with its recorded proof. The
+no-classifier ledger branch still selects no Text for filing. The workflow chooses
+splice tags, retries, shape checks and quality decisions. This primitive does not.
 
 | Current consumer at 2eb5c5a2 | Required replacement at cutover |
 | --- | --- |
@@ -473,8 +562,11 @@ digests in the first load event under TRACE-LOAD. After that event, validate the
 semantic partition and activate the recorder. Stand the STE100 duty through the worker's
 existing after-load organ start sequence. Check the inventory before the boot content
 read and before opening the user channel. Each template is Spec 02's TemplateSpec, with
-typed technical_name or step_id slots. The request carries its canonical compact JSON
-and a template target. An accepted reply must have bindings:[], unlike accepted Text
+typed technical_name or step_id slots on the certified path. LOOKUP-OFFER owns the
+additional no-classifier offer slot and its disabled status on that path. Record the
+full inventory, but send certification requests only for enabled templates in inventory
+order. The request carries its canonical compact JSON and a template target. An
+accepted reply must have bindings:[], unlike accepted Text
 replies. Certification proves grammar inclusion for every legal substitution, not
 sampled examples or arbitrary certified fragments joined together. Author each exact
 reply as a turnless ste100.result in inventory order. Retain those replies as
@@ -483,7 +575,7 @@ load and no result event precedes it. A failed partition or template check uses
 EnterFailure::AfterLoad and its existing refusal and rollback path. A partition failure
 uses the preflight recorder without activating a content tap.
 
-The pass certifies only conformance of that inventory and its substitution rule. Its
+The pass certifies only the enabled inventory entries and their substitution rule. Its
 evidence is the exact inventory bytes, scheme and checker digests, recorded replies, and
 accepted template IDs. It does not prove safety or arbitrary runtime strings. Missing
 certificate or incompatible scheme refuses enter. A correctly reported runtime template
@@ -1214,6 +1306,12 @@ the one-exchange assumption. Neither number is elected here. [CLASS-6, FALS-5, C
 | HARNESS-CLASSIFY | Scripted double, all table rows, zero-noun Accepted and target mismatches | Treat Pending as rejection, accept an empty noun vector or a label score as bindings |
 | HARNESS-RECALL-REFUSAL | Actual recorder pressure and lifecycle waits, mixed original/correction identities and cap fixtures | Admit a second event, lose an owed receipt, return before Recorded, dispatch a refused ID or charge several attempts for one correction |
 | TEMPLATE-CHECK | Inventory and substitution certificate fixtures | Serve with missing certificate or unlisted template |
+| HARNESS-LOOKUP-OFFER | No-classifier turn through the real instruction recorder and typed placement, plus altered entry, stale source, duplicate use and cancellation | Send an offer without its recorded instruction, substitute arbitrary prose, require rejection or reuse its grant |
+| HARNESS-LOOKUP-OFFER, provenance and cap | Foreign run, changed loaded artifact and a small fixture cap across blocks, matches, retries and pending instructions | Skip a run or artifact recheck, overbook a reservation, refund consumed capacity or release a pass after exhaustion |
+| HARNESS-LOOKUP-OFFER, generation binding | Two granted offer transactions and an ordinary generation in one turn, with exact instruction parents and response receipts | Swap a completed response, infer identity from the turn or latest generation, alter the parent or construct the private result from decoded IDs |
+| HARNESS-LOOKUP-OFFER, refusal cases | Valid template with an elected classifier, and a malformed template without a classifier | Report invalid_template for the elected classifier or invalid_context for the malformed template |
+| HARNESS-OUTBOUND-CHANGE | Real recorder chain with length-changing splice then offer, held capacity, refusals and lifecycle cancellation | Change Y before Recorded, lose e, branch the chain, mismatch re-emission bytes, renew a bound or release a late continuation |
+| HARNESS-OUTBOUND-CHANGE, answer ownership | Several-sentence original Y and a one-sentence offer response, with used and unused outcomes | Answer or close on the offer generation, append two answers or replace the original source/finish with the response's |
 | HARNESS-INPUT | Existing {text,role} accepted/refused frames and later-turn assembly | Place one rejected block or open a refused turn |
 | INPUT-NO-RESIDENCY | Actual SPU exit, two later world exchanges, held trace capacity and graceful Leave | Accept or classify a later request, send before its refusal records, lose its input.offered link, duplicate organ death, invent a Released confirmation, or replace an S4/S5 Unloading refusal with NoResidency |
 | HARNESS-LEDGER | Every table row, real commit with lost receipt | Accept send success or resend uncertain commit |

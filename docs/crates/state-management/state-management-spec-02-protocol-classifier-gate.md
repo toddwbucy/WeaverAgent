@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #263
+**Landing PR:** #441
 
-**Version:** 0.19 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
+**Version:** 0.20 **Date filed:** 2026-10-21 **Document ID:** state-management-spec-02
 **Parent:** state-management-primitives-PRD
 
 ## 0. What this document is
@@ -415,14 +415,15 @@ this adapter. [CLASS-4, CLASS-6, CLASS-8, R20-12]
 **TEMPLATES.** The compiled harness inventory is the only template source. The scheme
 contains grammar and lexical classes, never a second inventory. Each entry is
 TemplateSpec {template_id:String, kind:String, parts:Vec<TemplatePart>}. TemplatePart is
-externally tagged literal:String or slot:{name:String, class:SlotClass}. SlotClass is
-technical_name or step_id. The former is one of the scheme's technical_names and the
-latter is the scheme's step-reference token class. Arbitrary noun spans and arbitrary
-strings are not substitution classes. Long held content uses the store's HeldMaterial
-contribution. Rejected text stays in its current argument for repair and is named by
-source ID, never manufactured as HeldMaterial or inserted into a template slot. Reason:
-accepting a source sentence does not prove that concatenating it into a different
-sentence conforms. [CLASS-2, FLOW-8, SORT-4, PLAN-2]
+externally tagged literal:String or slot:{name:String, class:SlotClass}. The certified
+slot classes are technical_name and step_id. The former is one of the scheme's
+technical_names and the latter is the scheme's step-reference token class.
+LOOKUP-OFFER adds thesaurus_offer only for its unclassified offer template. Arbitrary
+noun spans and arbitrary strings are not substitution classes. Long held content uses
+the store's HeldMaterial contribution. Classifier-rejected text stays in its current
+argument for repair and is named by source ID, never manufactured as HeldMaterial or
+inserted into a template slot. Reason: accepting a source sentence does not prove that
+concatenating it into a different sentence conforms. [CLASS-2, FLOW-8, SORT-4, PLAN-2]
 
 For a template target, Ste100Request.text is the canonical compact JSON encoding of
 TemplateSpec, with fields in the order above. The target's template_id must match. The
@@ -442,17 +443,18 @@ replies, scheme digest, checker digest and inventory digest. Replies are turnles
 ste100.result events, after load. The inventory bytes are serialized in the load tuple
 so replay can recover what was checked. [FLOW-3, CLASS-8, PROMPT-2]
 
-Runtime TemplateExpansion is private and constructed only from a certified ID and typed
-TechnicalName or StepId values. Invalid substitutions or unknown IDs refuse the
-operation before authoring, with refusal evidence. The harness emits each expansion's
-own event before its text reaches the argument. A correctly rejected expansion still
-follows state_template_rejected and operation failure, never model repair or component
-halt. A certificate does not make a model infallible. [FLOW-8, CLASS-8, CLASS-10]
+On the classifier path, runtime TemplateExpansion is private and constructed only from a
+certified ID and typed TechnicalName or StepId values. Invalid substitutions or unknown
+IDs refuse the operation before authoring, with refusal evidence. The harness emits each
+expansion's own event before its text reaches the argument. A correctly rejected
+expansion still follows state_template_rejected and operation failure, never model
+repair or component halt. A certificate does not make a model infallible. [FLOW-8,
+CLASS-8, CLASS-10]
 
-The template pass certifies the named inventory's grammar closure under exactly those
-classes. Evidence is the inventory, grammar, proof outcome and exact replies. It does
-not prove arbitrary substitution, safety, step authorization or model accuracy. Removing
-either the inclusion check or typed-value constructor must make its respective
+The template pass certifies the enabled inventory entries' grammar closure under exactly
+those classes. Evidence is the inventory, grammar, proof outcome and exact replies. It
+does not prove arbitrary substitution, safety, step authorization or model accuracy.
+Removing either the inclusion check or typed-value constructor must make its respective
 acceptance test fail. [CLASS-2, FLOW-8]
 
 With no state-management.ste100 binding, no checker certifies templates. The harness
@@ -468,7 +470,9 @@ INSTRUCTION-METADATA, before it reaches the argument. This is the operator's rul
 LoopInstructionRecord {template_id:String,message:Message,
 instruction:LoopInstructionMeta}. message is role user with exactly one complete Text
 block from a certified expansion. instruction is externally tagged by the closed
-variants below. Its references are metadata, never text interpolated into a template.
+variants below. With no classifier, TEMPLATES substitutes its structural check for
+certification. References remain metadata. Only LOOKUP-OFFER permits its checked
+sentence and held entry to appear as the typed thesaurus_offer slot.
 SourceContext and StatementEffect remain null when that Text is filed. The metadata is
 retained on the trace, with any required plan/pair references held by their own typed
 records. Reason: every loop instruction must have its own trace record and a declared
@@ -477,6 +481,7 @@ purpose before it affects a decision. [FLOW-8, CLASS-9, PLAN-4, STRAT-2]
 | Variant | Exact metadata | Valid authoring condition |
 | --- | --- | --- |
 | restatement | source:SourceBlockId, attempt:DecimalU64 | Current correctly rejected model block, attempt starts at one and respects the repair cap |
+| offer | matched:ThesaurusMatch | Current outbound lookup match on an offer-tagged held entry, with no classifier elected, under LOOKUP-OFFER |
 | retry | retry_of:CallId, attempt:DecimalU64 | Filed terminal from Spec 05 RETRY, same-session identity and positive attempt |
 | plan_proposal | plan:PlanRef, authorization:SourceBlockId | Current authorized plan and exact operator source, no previous lock |
 | step | plan:PlanRef, step_id:StepId, instruction:StatementRef, span:SpanRef | Filed activation and exact held instruction of the active step |
@@ -487,10 +492,10 @@ purpose before it affects a decision. [FLOW-8, CLASS-9, PLAN-4, STRAT-2]
 Only wind_down permits an absent turn. Other variants require the current open external
 turn, except restatement of the lifecycle wind-down's own emission, which uses that
 already bracketed wind-down turn. No instruction opens a turn by itself. The variant
-chooses its certified template family. Review and step use the referenced step ID for
-the typed slot. Compaction chooses the fixed system or task reservation template, never
-arbitrary source content as a slot. Metadata mismatches refuse the operation before
-authoring and emit RefusalRecord::Instruction
+chooses its template family under TEMPLATES. Review and step use the referenced step ID
+for the typed slot. Compaction chooses the fixed system or task reservation template,
+never arbitrary source content as a slot. Metadata mismatches refuse the operation
+before authoring and emit RefusalRecord::Instruction
 {template_id:String,case:InstructionRefusal,detail:String}. InstructionRefusal is
 invalid_template, invalid_context, stale_source or wrong_turn. This uses the existing
 refusal kind, with seam instruction. The operation stops with that refusal. It does not
@@ -504,6 +509,132 @@ and turn rule. Runtime fixtures substitute a stale source, wrong step, foreign s
 report-shaped model text. Removing the private constructor or reference/turn check must
 fail the respective fixture. This is a representation and authority pass, not production
 certification of the template words. [FLOW-8, CLASS-2, PLAN-5]
+
+**LOOKUP-OFFER.** On the no-classifier path, the outbound sort can request an offer
+from a lookup match against the loaded thesaurus. It requires neither a classifier
+result nor a rejected block. Use the named offer variant. Restatement keeps its repair
+condition, and retry keeps its tool-terminal condition. Reason: a lookup match and a
+classifier rejection have different evidence. This implements ruling B (#433) and the
+operator's ruling of 2026-11-02 on #437, comment 6586494090. [OUT-1, FLOW-8]
+
+The harness constructs a private LookupMatch from the current effective Text block and
+the exact loaded governing artifacts. Its public description is TYPES-LOOKUP's
+ThesaurusMatch. The source is a recorded model Text block in the current external turn.
+previous_change identifies that block's current recorded Y version under
+OUTBOUND-CHANGE. sentence_span contains word_span. Both are nonempty half-open UTF-8
+byte spans in that version's decoded text. The lookup supplies the word match under the
+workflow's position and word-form rules. It reads the matched entry from the thesaurus
+whose digest and scheme identity were checked at enter. A noun entry never disables the
+verb or -ing check for a word used as a verb (#433, comment 6581195193). The workflow
+chooses when to look up, which valid match to offer, and whether to use a later
+re-emission.
+
+An offer requires tag offer. Its private OfferMaterial holds that match, the exact
+sentence slice, and every sense and use of that entry in artifact order. No caller
+supplies replacement prose or adds a sense. A serialized ThesaurusMatch or OfferMaterial
+is evidence, never a grant. Recheck the source version, run, turn and loaded artifact
+before authoring. A changed version is stale_source, a foreign turn is wrong_turn, and
+an absent or wrong-tagged entry or elected classifier is invalid_context. Use the
+existing instruction refusal and authoring rules. A refused offer grants no model pass.
+
+Add one compiled template, template_id thesaurus-offer/1 and kind offer. Its parts are
+the literal below, one LF, and the sole slot named material of class thesaurus_offer.
+Render the slot as TYPES-CANONICAL JSON for TYPES-LOOKUP's OfferMaterial. The exact
+sentence is data copied from the checked source version. The senses are data copied
+from the held entry. This is the only source-text substitution this clause permits.
+
+```text
+Use the applicable meaning from the entry below.
+Write the sentence again. Keep its meaning and literals unchanged.
+```
+
+Record this template in the full compiled inventory and its digest at load. It is
+enabled only when no classifier is elected. With a classifier, exclude kind offer from
+the certification requests and disable its constructor. The certificate covers only
+the remaining inventory entries, in their original order. It never certifies this
+slot or its raw sentence. With no classifier, check the exact template, slot class,
+material and metadata structurally under Q7. The message remains one user Text block,
+and instruction.matched must equal material.matched. No scheme extension is made.
+
+Author loop.instruction with the source model event as causal_parent before placing
+the expansion or starting its model pass. Keep the current external turn. The model's
+re-emission is an ordinary recorded message.assistant under its own source identity.
+Retain its generation accounting and attempted-call evidence. No tool is dispatched.
+An offer does not enter REPAIR or charge the classifier repair cap. The loop's shape
+strikes, retry placement and numeric offer cap are elected by the workflow.
+
+The single-use offer grant binds its Recorded instruction to one AppendAndGenerate
+transaction before that transaction starts. Retain that private binding through the
+response's own Recorded receipt. Author the resulting message.assistant with
+causal_parent equal to that instruction's sequence. Only that transaction's completed
+response can produce the private offer result. TYPES-EMISSION-CHANGE's
+method.offer.reemission names its exact recorded source. Neither a shared turn nor
+caller-supplied source IDs prove this binding.
+
+The offer's generation is subordinate to the original answer generation. It has no
+independently releasable EffectiveEmission, client answer or answer contribution.
+Its text reaches the effective answer only through an emission.change recorded on
+the original block under OUTBOUND-CHANGE. Its ordinary recorded model context grants
+no separate answer append or gate send. Keep the original generation's source and
+finish for Y. For DECISION-BARRIER's answer decision and turn closure, the current
+answer generation remains that original generation, never the last offer response.
+The turn can answer only with that generation's Y after its required dispositions.
+An unused offer does not close the turn or make its re-emission a fallback answer.
+
+Before the first offer, require a positive u32 offer_pass_cap elected by the workflow
+for the external turn. The workflow supplies it to the private turn owner. Fix it for
+that whole turn, across all original emissions, blocks, matches, retries and offers.
+There is no default. The workflow must name the measurement of yield and cost per
+additional offer pass that elects the value. The private offer owner reserves one
+allowance before authoring loop.instruction. It refuses if no cap is elected or consumed
+plus reserved allowances reach the cap. Use RefusalRecord::Instruction with template_id
+thesaurus-offer/1, case invalid_context, and detail naming the cap, consumed count and
+reservations. No instruction or decode follows that refusal. A recorded instruction
+consumes its reservation once, before granting a pass. Writer pressure retains the
+reservation without charging again. A refused or cancelled instruction with no recorder
+admission releases its reservation and grants no pass. An admitted instruction keeps its
+reservation until accounted for. Consumed allowances are never refunded, including
+unused or malformed responses and cancellation before decode. New matches and new answer
+generations cannot reset the count. Stop and teardown keep their existing permissions. A
+late Recorded instruction consumes its reserved allowance but grants no continuation.
+Neither the classifier repair cap nor MAX_TOOL_ROUNDS supplies this bound.
+
+**OUTBOUND-CHANGE.** A change to Y outside classifier repair uses the exact
+EmissionChangeRecord of TYPES-EMISSION-CHANGE and TRACE-EMISSION-CHANGE. This defines
+O02-6 for lookup splices and offers on the no-classifier path. The record holds the
+original model source, the previous change, the changed span, both texts, the lookup
+match and the method's evidence. The trace keeps all model emissions unchanged.
+The harness records the change before using the new Y at the gate or in an argument.
+This implements ruling A (#432) and #437, comment 6586494090, on 2026-11-02.
+[OUT-1, CLASS-10, FLOW-3, FLOW-8]
+
+Reconstruct one block's current Y from its original decoded Text and its recorded
+change chain. previous_change is null for its first change. Otherwise it names the
+last emission.change sequence for that same original source. Apply each record's
+span replacement to that version. Offsets name UTF-8 bytes in the preceding version,
+not the original bytes after an earlier edit changes length. Keep other blocks and
+the LF separators of OUTPUT-UNIT unchanged. Refuse a stale head, overlapping pending
+change or replaced text that differs from the exact slice. Do not branch the chain.
+
+For splice, require a current lookup match on a splice-tagged entry with one sense
+and one use. The span equals matched.word_span. The replacement is the deterministic
+rendering of that use under the workflow's word-form rules. For offer, the span equals
+matched.sentence_span. Require a recorded offer instruction with that exact match and
+the private result of the decode transaction that consumed its grant. Require
+method.offer.reemission to name that result's recorded message.assistant and original
+Text index. Its envelope's causal_parent must equal method.offer.instruction.sequence.
+An absent parent or a different instruction or response refuses invalid_context,
+including a response from another offer in the same turn. replacement equals the exact
+decoded reemission_span of that Text block. The primitive verifies these identities
+and bytes. The workflow decides whether the result meets its checks.
+
+An unused or malformed re-emission stays on the trace and creates no Y change. A
+proposed change keeps the old Y until its record is Recorded. Writer pressure keeps
+the same pending record under the existing authoring bound. A refusal, Stop, leave or
+flow failure grants no changed output or new decode. Existing teardown accounts for
+any admitted record. A late Recorded result during teardown grants no continuation.
+This adds no classifier result, filing, tool permission or time allowance. Pairing
+model output with changes for training remains WeaverAnalysis's work under CLASS-10.
 
 **SEED-CERTIFICATE.** The foundation's SeedCertificate fields remain unchanged. The
 separately run qualification tool in WeaverAnalysis produces the certificate from a full
@@ -667,7 +798,9 @@ STORE-3, TAP-1]
 With no state-management.ste100 binding, no Text block is checked, DECISION-BARRIER has
 no check to wait for, and REPAIR is never begun. EffectiveEmission then has empty
 statements, and its text joins the generation's original Text blocks with a single LF,
-in original index order, after any change recorded under EFFECTIVE-EMISSION. This
+in original index order, after any change recorded under EFFECTIVE-EMISSION.
+LOOKUP-OFFER's subordinate generation has no independently releasable EffectiveEmission.
+Its selected text reaches the original answer's Y only through OUTBOUND-CHANGE. This
 follows from the operator's ruling of 2026-11-01 (ruling C), made a declaration election
 by the ruling of 2026-11-02 on #437 (Q3). [CLASS-2, CLASS-3, OUT-1]
 
@@ -840,8 +973,13 @@ never takes its place there. What leaves the gate and what the store files is Y.
 change to Y by the outbound sort, beside repair, is authored on the trace beside e
 before Y is used, naming the source block, the changed span, the text replaced and the
 text that replaces it. How the loop chooses a change belongs to the loop's workflow
-document, and the record's representation is O02-6. This is the operator's ruling of
-2026-11-01 (ruling A), confirmed on 2026-11-02 (#432). [OUT-1, CLASS-9, CLASS-10]
+document. OUTBOUND-CHANGE, TYPES-EMISSION-CHANGE and TRACE-EMISSION-CHANGE define the
+record required by O02-6. This is the operator's ruling of 2026-11-01 (ruling A),
+confirmed on 2026-11-02 (#432). [OUT-1, CLASS-9, CLASS-10]
+
+LOOKUP-OFFER preserves the original answer generation's source and finish. Its model
+re-emissions are subordinate evidence, never independent answers. Only the original
+generation's Y can be released as the answer after an offer.
 
 RepairAccount is the private owner of original and correction-pass evidence under their
 own generation identities. Its inspection view is
@@ -991,6 +1129,11 @@ a serving declaration. [CLASS-4, CLASS-7, PROMPT-2, FLOW-7]
 | CHANNEL | Real SEQPACKET tests at exact datagram and whole-message bounds | Skip total/offset check, accept MSG_TRUNC, or use an incomplete reply |
 | PORT, PORT-SERIALIZATION | Single-thread pump with held output and later input | Submit two requests or omit queue time from a model-blocking bound |
 | TEMPLATES | Grammar-inclusion negative examples and compile-fail typed-slot fixtures | Certify samples only, allow arbitrary String slots or use an unlisted template |
+| LOOKUP-OFFER | No-classifier lookup fixture with exact held senses, changed source/version, noun/verb positions, disabled offer template and a recorded re-emission | Require a classifier rejection, accept caller-supplied prose, bypass a verb check through a noun entry, or decode before the instruction records |
+| LOOKUP-OFFER, answer ownership | Original output with several sentences and a one-sentence offer response, both used and unused | Release the bare response, append a second answer, use the response's source/finish for Y or close the turn on the last generation |
+| LOOKUP-OFFER, pass cap | Small fixture cap across matches, blocks and original emissions, with pending capacity, cancellation and malformed responses | Omit the cap, overbook pending reservations, refund a consumed grant, reset the count or decode after exhaustion |
+| LOOKUP-OFFER, generation binding | Two offers in one turn with distinct Recorded instructions and responses, plus an ordinary response | Swap responses, omit or change a response's instruction parent, or make a private result from caller-supplied source IDs |
+| OUTBOUND-CHANGE | Two length-changing splices followed by an offer, reconstructed from real records, plus stale head, byte mismatch, trace pressure and Stop | Apply a change before Recorded, interpret later offsets against the original, branch the chain, rewrite e, or continue after cancellation |
 | SEED-CERTIFICATE | Offline produced certificate and shared TYPES-SEED admin/member fixtures | Alter a prompt byte, binding, scheme bytes, expected checker or duty ID and still seed |
 | INPUT, REUSE | Gate-to-worker integration with byte/UID substitution, queued input, delayed check and held trace capacity | Parse content in gate, open a turn early, trust payload origin, reuse changed text, start the check clock on queued arrival or after input.offered records |
 | OUTPUT-UNIT | Mixed Text/ToolCall messages with sparse selected indices | Renumber indices or skip checking unselected Text |
@@ -1036,7 +1179,7 @@ charter amendments inside a code PR. [FLOW-7, CLASS-8, October 18 A1, R10]
 | weaver-admin-PRD sections 2 and 4.1, Spec sections 4, 6 and 9 | Inventory the protected scheme, ste100-binary and qualified instruction, carry exact bytes at enter and validate the seed certificate. Admin runs no conformance model. All load work consumes the existing remaining load budget. |
 | weaver-gate-world-contract sections 2 and 3 and gate Spec section 4 | At foundation cutover retire the role system seeding line. Harness refuses failed input checks before a turn, returning kind/refusal reason with no run or turn. Gate relays those lines unread and keeps its existing credential and size checks. Named repair-exhausted closes answer an opened turn. |
 | weaver-internal-PRD section 2 and Spec sections 1, 2 and 5 | Add the pure noun-query constructor under READ-3 as the second framework member. It accepts only the subject and has no dependencies or I/O. Harness dispatches the query on its existing store seam. No new shell or gate registry entry is created. |
-| harness loop documents and Rust worker contract | After cutover all serving input uses AcceptedInput, every loop instruction is a certified expansion and every model generation follows DECISION-BARRIER. No loop synthesizes the boot system prompt or dispatches a pending/rejected call. |
+| harness loop documents and Rust worker contract | After cutover all serving input uses AcceptedInput. Every loop instruction follows TEMPLATES and INSTRUCTION-METADATA, including LOOKUP-OFFER on the no-classifier path. Every generation follows the applicable DECISION-BARRIER election. No loop synthesizes the boot system prompt or dispatches a pending/rejected call. |
 
 The complete [harness-SPU STE100 contract][ste100-contract] sits beside the owning
 amendments in docs/crates/state-management/ under R20-14. It
@@ -1076,7 +1219,13 @@ CLASS-7, CLASS-9, PROMPT-2]
 | O02-3 | Measure repair yield per additional attempt and task obstruction, then freeze repair_cap and gate/cut/decision waits before the held-out run. Record scheduling and transport contributions. |
 | O02-4 | Qualify max_wire_bytes against the largest supported exact source blocks, complete binding answers, scheme and inventory messages, with memory pressure included. The complete admin enter must also fit its separate unchanged MAX_ENVELOPE_BYTES bound. No measured number is invented here. |
 | O02-5 | Produce the separate PROMPT-3 document, its review, prompt certificate and the WeaverAnalysis producer/verifier fixtures. No prompt is written by this Spec. |
-| O02-6 | Define the trace record for a change to Y by the outbound sort under EFFECTIVE-EMISSION, in the trace and types amendments, before any code changes Y outside repair. The record names the source block, span, replaced text, replacing text and the held table version it came from. |
+
+O02-6 is defined by OUTBOUND-CHANGE, TYPES-EMISSION-CHANGE and
+TRACE-EMISSION-CHANGE. Their implementation and instruments must precede any code
+that uses a changed Y. The workflow's first splice tags and the placement of literal
+checks and shape retries remain open on #437. The workflow also owes offer_pass_cap
+from the yield and cost measurement named by LOOKUP-OFFER. This amendment elects no
+value for those cells.
 
 The foundation's HARNESS-CLASSIFY replacement addresses the missing mandatory production
 result port and preserves the legacy classifier side identified by R10. It also supplies

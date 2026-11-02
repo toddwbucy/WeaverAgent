@@ -2,9 +2,9 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #387
+**Landing PR:** #441
 
-**Version:** 0.35 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
+**Version:** 0.36 **Date filed:** 2026-10-21 **Parent:** weaver-trace-PRD
 
 ## 0. What this document is
 
@@ -47,6 +47,7 @@ both the trace and declaration parser. [TAP-1, TAP-3]
 | tool.call.completed | Serving PairEnded from Spec 05 | pair, whole payload | Required except abandoned_at_load, which forbids a turn |
 | tool.return_rejected | RejectedReturn from Spec 05 | Forbidden, unpaired or duplicate return | Optional |
 | loop.instruction | Spec 02 LoopInstructionRecord | message.content.text[0] or wildcard, no context sidecar | Required except wind_down |
+| emission.change | EmissionChangeRecord under TRACE-EMISSION-CHANGE | Forbidden, change evidence | Required |
 | sort.decision | Spec 08 SortDecisionRecord | message.content.text[0] or wildcard, no context sidecar | Optional |
 | state.sort.measurement | Spec 08 SortMeasurement | Forbidden measurement | Optional |
 | step.outcome | Spec 07 StepOutcomeRecord | message.content.text[0] or wildcard, context sidecar required | Required |
@@ -237,7 +238,8 @@ component fault, never an unselected event. [TAP-1, PAIR-1, PAIR-3, FLOW-4]
 **TRACE-VALIDATION.** Load refuses a partition selecting measurement payload,
 save_point, message.restored, message.system, input.offered, ste100.result, recall,
 state.placement, state.mark.position, state.sort.measurement, plan.break,
-state.plan.measurement, message.tool_result or tool.return_rejected. It also requires
+state.plan.measurement, message.tool_result or tool.return_rejected. It also refuses
+emission.change. It requires
 all loop.instruction/internal/loop Text, with no context projection, so every authorized
 review send can be filed. A reviewed closure cites that send whatever the category's
 review_required declares, which no primitive enforces (#423), and a later root plan
@@ -336,6 +338,8 @@ serving contract remains applicable.
 | TRACE-ENVELOPE | Perturbation in tests/recorder.rs, canonical fixture with escaped content and omitted options | Infer origin from content or change sequence to a JSON number |
 | TRACE-REJECTED-RETURN | Real recorder lines from exact multiline, escaped and maximum admitted packets, and capacity/cancellation resume | Embed RawValue, normalize the packet, discard before Recorded or turn the evidence into a selectable projection |
 | TRACE-REGISTRY | Exhaustive enum match and tests/kinds.rs, plus table-driven turn/payload tests and harness-authored recall refusal bytes | Omit a new kind, alter the typed refusal bytes or admit a forbidden projection |
+| TRACE-EMISSION-CHANGE | Canonical splice and offer records, exact floor-to-trace field comparison, source/version chain, escaping and refused projection fixtures | Drop the prior change or model-source link, alter bytes or counters, admit the wrong envelope or make change evidence selectable |
+| TRACE-EMISSION-CHANGE, generation binding | Two offer instructions and their response envelopes and change records in one turn | Omit or alter a response's instruction parent, or emit a change naming a different response than the harness's private result |
 | TRACE-PLAN | Canonical operator/effect, failed/closed outcome and break fixtures checked against the floor-to-trace conversion, plus exact plan-operation refusal bytes and envelope | Swap the two plan payloads, license close as plan.event, omit null context, change a refusal field or identity, select refusal content or accept a wrong turn/channel/origin |
 | Plan observation | Canonical fixtures for flags success/refusal, successor readiness and both capacity paths | Replace unavailable with zero, drop an identity, add an unknown variant or admit the measurement to residue |
 | TRACE-VALIDATION | Load matrix covering every required call/task tuple and forbidden kind | Permit partial pair or mark coverage, select a boot read or allow a payload predicate |
@@ -411,6 +415,54 @@ source IDs, DecimalU64 strings, WorkRef and review digest. Kind licensing checks
 metadata variant and its turn rule before submit. The tee projects only the declared
 Message Text, and neither parses purpose to decide admission nor creates a second filing
 from metadata. [FLOW-8, TAP-1, PLAN-2, CLASS-2]
+
+Add the offer metadata variant and its nested ThesaurusMatch mirror under
+TYPES-LOOKUP. Its message is the exact structural expansion permitted by Spec 02
+LOOKUP-OFFER. Preserve the original source index, both spans, previous_change, scheme
+identity, thesaurus digest and entry word. License offer only on internal/loop with
+subsystem harness and a turn. Its causal_parent is matched.source.sequence. The
+harness verifies same-run and same-turn provenance. No ste100.result is implied by
+this instruction. This implements #437, comment 6586494090, of 2026-11-02.
+
+For the response's message.assistant, causal_parent is required and names the Recorded
+offer instruction sequence. This is the generation binding defined by
+TYPES-EMISSION-CHANGE. The harness sets it from the private decode-transaction binding,
+never from model text or a caller's source reference. Preserve output/model, subsystem
+harness and the same external turn. This ordinary record proves no independent answer
+right. Spec 02 LOOKUP-OFFER keeps it subordinate to the original answer generation. Only
+an emission.change can put its selected bytes into that generation's Y.
+
+**TRACE-EMISSION-CHANGE.** Add Kind::EmissionChange, spelled emission.change, and
+Payload::EmissionChange holding a serialize-only, trace-owned EmissionChangeRecord.
+Mirror TYPES-EMISSION-CHANGE exactly, including ThesaurusMatch and both method
+variants. Trace links no floor crate. The harness converts each field explicitly.
+License only internal/loop, subsystem harness, with the current external turn.
+For splice, causal_parent is matched.previous_change when present, otherwise
+matched.source.sequence. For offer, causal_parent is method.offer.reemission.sequence.
+Every referenced event precedes this change. The harness validates provenance under
+HARNESS-OUTBOUND-CHANGE.
+This is O02-6's trace representation under #437, comment 6586494090, of 2026-11-02.
+[OUT-1, CLASS-10, FLOW-3, FLOW-8]
+
+Preserve replaced and replacement as JSON strings whose decoded UTF-8 bytes are exact.
+Normal JSON escaping keeps embedded quotes and newlines inside one canonical record.
+All counters and span endpoints retain DecimalU64 string spelling. The match's source
+identifies the original model Text block. previous_change identifies its preceding
+effective version, and span addresses that version under Spec 02 OUTBOUND-CHANGE.
+An offer also identifies the instruction and the exact model Text slice used for the
+replacement. method.offer.reemission names the response whose envelope causal_parent
+equals method.offer.instruction.sequence. The harness verifies that pair against the
+private result of the transaction started under that instruction's grant. Trace keeps
+both links without inferring a grant from their serialized values. These links permit
+reconstruction of Y without editing any earlier event.
+
+This payload has no selectable projection. Add it to the registry and partition refusal
+set. An offer's loop.instruction keeps its existing one-Text projection, while the
+no-classifier ledger selects none of that Text for filing. Change evidence creates no
+second statement, training pair or store write. Diagnostic conversion rejects the new
+kind as OutsideDiagnosticVocabulary. Serving readers must support the new kind before
+consuming its traces. A recorded proposal is evidence, not proof of gate delivery.
+The harness's Recorded boundary and lifecycle permission determine whether Y is used.
 
 **TRACE-PLACEMENT.** PlacementRecord has the exact fields in Spec 06's PLACEMENT-RECORD,
 with UnitMapEntry from its PLACE-PORT. The trace owns explicit serialize-only mirrors of
