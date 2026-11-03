@@ -2,10 +2,10 @@
 
 ASD-STE100:9 thesaurus: 022df3d809593696766893bf95f915229628497b89ef571dbc997ac8585224da
 
-**Version:** 0.3, 2026-11-03
+**Version:** 0.4, 2026-11-03
 **Document ID:** `ste-conversion-loop`
 **Parent:** `weaver-harness-PRD`
-**Landing PR:** #446
+**Landing PR:** Pending draft number
 **Standard:** `ASD-STE100`, Issue 9, 2025-01-15
 **Lexicon:** `WeaverTrain ste/`, `ab63a918b569e5b8673dc2e78e66575ee9df1bd7`
 **Thesaurus digest:** SHA256 of `ste/thesaurus.toml`, in the header above
@@ -36,6 +36,9 @@ Use the later rulings where they change the sketch.
 The [2026-11-02 operator rulings on #442][round-rulings] set the four choices for
 this workflow.
 The [2026-11-03 decision on #437][r0-request] sets the shared driver request limit.
+The [folded-layout decision on #437][fold-ruling] sets the prompt and request layouts.
+The [2026-11-03 decision on #447][transport-ruling] sets transport-stop counts.
+The [rewriter decision on #437][rewriter] changes the first adapter's job.
 
 **1.03. Record.** Keep the sketch at its original path.
 Mark it with this document's path, PR and date.
@@ -214,7 +217,14 @@ Blockquotes are quotations and stay unchanged.
 
 **4.05. Request.** Use the system prompt seeded by clause 3.08.
 The state member seats this prompt on load.
-Send only the text after placeholder substitution in each initial request.
+Use the folded prompt in clause 4.07.
+Set the initial request text to `"<<<TEXT\n" + masked_text + "\nTEXT>>>"`.
+Here, `masked_text` is the complete text after clause 4.04's placeholder substitution.
+Each `\n` is one LF byte.
+Add no final LF after `TEXT>>>`.
+Send this text in the gate's `text` field with no `role` field.
+The gate makes one user message with one `Text ContentBlock` under `HARNESS-INPUT`.
+Send no example turns or caller-supplied roles.
 Do not copy the system prompt into a request.
 Use clause 6.04 for repair requests with checker notes.
 The prompt source includes approved verbs, technical verbs, the fixed mappings and four
@@ -224,6 +234,7 @@ Request one rewrite with all placeholders intact.
 For the single-text baseline, collect one text response for that segment ID.
 The source `unit_outputs` uses raw text for this case.
 Its grouped JSON format is not the single-text response format.
+The [folded-layout decision on #437][fold-ruling] sets this layout.
 
 **4.06. Collection.** Record each request, response identity, finish reason and token
 use.
@@ -231,6 +242,68 @@ Keep missing output and parser faults in the result record.
 Do not include the model thought-block data in the candidate rewrite.
 Keep that data unchanged on the trace.
 Collection makes no semantic judgment.
+
+**4.07. Prompt identity.** Seed the exact bytes of [ste-conversion-prompt.txt][prompt].
+Its SHA256 is
+`0fe2ee35a59f6b1e30734af4d7a72e32bd6dbc0e728abc98e32e2c609dad07ed`.
+Include the file's final LF in this digest and in the seeded text.
+Use this digest as the folded prompt's identity in each result and training data pin.
+Keep the source system-text SHA256 as provenance:
+`0a42709ebe47ef8f17d728921b8bd802e0bf1466fced8d020b0b3c6dec6aa701`.
+Keep the source bundle SHA256 as provenance:
+`e21370fcd140a4bb5e7a0d2dd415c58d8ecead9333a9e730adb66ab96e7a851c`.
+These source hashes do not identify the folded bytes.
+Use `ste_prompt.render(20, 25)` and `ste_prompt.examples()` as the fold's source.
+Use these functions from [WeaverTrain `9881da6`][prompt-source].
+Use the approved words artifact in the header and that revision's other source files.
+The operator reviews the folded file before seed under `SEED-CERTIFICATE`.
+Record that review reference under clause 3.08.
+Use the [WeaverTrain #17 decision][train-fold] for the training message layout.
+
+**4.08. Fold.** Use the complete source system text as UTF-8 bytes.
+Replace `The earlier messages are examples.` with the next sentence.
+Use `The worked examples are at the end of this system prompt.`.
+This replacement occurs exactly once.
+Change no other source byte.
+Keep the system text's final LF.
+Append `\n# Worked examples`.
+Use the four source example pairs in their recorded sequence.
+For each pair, append `\n\n## Example N\n\nInput:\n\n`, with `N` from 1 to 4.
+Then append the pair's complete user text, `\n\nOutput:\n\n` and its complete assistant
+text.
+Keep each source example text byte-identical.
+Keep the source `<<<TEXT` and `TEXT>>>` lines inside each example input.
+Append one final LF.
+Each `\n` is one LF byte.
+This is the fold proposal under [#437][fold-ruling].
+
+**4.09. Source-data exemption.** Keep the source characters, punctuation and line
+divisions in [ste-conversion-prompt.txt][prompt] under clause 4.08.
+The operator's 2026-11-03 decision selects [option (b)][fold-edits].
+Its exemption applies only to the source bytes in that file.
+These source bytes have an exemption from the ASCII, semicolon and word-prohibition
+gates.
+The source has seven non-ASCII characters and one semicolon.
+The three word-prohibition checks find no match in this source.
+Apply all editorial gates to the new headings, markers and replacement sentence.
+Apply all editorial gates to every other file.
+Do not divide source lines or normalize source whitespace.
+Compare every source byte with the pinned inputs before commit.
+Record the exact exempt findings and the file path in the PR body.
+The frozen source files and lexicon stay unchanged.
+
+**4.10. Request context.** Start each gate request with only the folded system prompt
+as its kept context.
+This applies to the initial request, each shape retry and each language repair.
+The loop owns this cut.
+Use the boot system mark and `PREFIX-PREPARE` in [Spec 06][spec06] for the cut.
+Use its `N` rule and the family's flush policy.
+The current request supplies the only appended user message before its first generation.
+Keep prior requests, answers and offer instructions out of that argument.
+Keep their trace records under clause 7.01.
+An internal offer can append its instruction and response during the same external turn.
+Clause 5.14 still applies inside that turn.
+Compare the complete initial or repair message list under clause 9.05.
 
 ## 5. Agent procedure
 
@@ -388,9 +461,13 @@ For a completed answer with missing output, request a fresh rewrite only before 
 third shape fault.
 After a transport or lifecycle failure, send no further request for that text.
 Do not use an earlier candidate as its final output after that failure.
+Give the text the terminal class `transport_stopped` with no final output.
+Do not give that text either conversion-loss class.
+Keep any earlier candidates and faults in the result record only.
+Apply the [#447 decision][transport-ruling] and clause 7.07 to this third class.
 Keep the shape count for that text across new gate turns.
 Keep every emission and its identity on the trace.
-Keep the final output when it is available.
+Keep the final output when no transport or lifecycle failure prevents it.
 Keep its checker results in the score record.
 Count drops separately for every round.
 Do not count vocabulary splices or offers as shape faults.
@@ -404,6 +481,9 @@ after shape checks accept the text.
 Keep the failure text and the checker's notes.
 Send the original text with placeholders, its last rewrite and checker notes through a
 new gate turn.
+Use the exact one-block layout in clause 6.08.
+Use the last `Y` that the driver received, with its recorded vocabulary changes.
+Do not replace `Y` with an earlier physical assistant message.
 Keep one original text per request.
 The agent does not start `REPAIR` under `OUTPUT-UNIT` without a classifier.
 Use "restatement" only for this repair, under Q4, [#437][q14].
@@ -470,10 +550,33 @@ Mark the count as incomplete if its source records are incomplete.
 Use no guessed count.
 The Python reference does not use internal offers.
 An equal number of gate requests can include different numbers of model generations.
-Report both loss classes under clause 7.04.
+Report both loss classes and `transport_stopped` under clauses 7.04 and 7.07.
 For `R0`, give these measurements no kill-line verdict, under [#437][r0-rulings].
 Use clause 10.12 to select the measured cap from yield and cost.
 This is [decision 4 on #442][round-rulings].
+
+**6.08. Repair block.** Start the repair text with `"<<<TEXT\n" + masked_text +
+"\nTEXT>>>"`.
+Use the same original `masked_text` as the initial request.
+Append `"\n\n<<<PREVIOUS_REWRITE\n" + last_rewrite + "\nPREVIOUS_REWRITE>>>"`.
+Here, `last_rewrite` is the complete `Y` that the driver received under clause 6.04.
+Append `"\n\nYour rewrite breaks these rules:\n" + notes`.
+Make `notes` from `ste_check.repair_note` with the pinned checker and lexicon.
+Include the guard notes from `ste_kit_run.one` for a copied example or a word-ratio
+failure.
+Use that function at clause 4.07's pinned source revision.
+Remove whitespace from the start and end of the complete notes.
+If the notes are empty, use `- Obey the rules.`.
+Append `\n\nWrite the complete rewrite again with these problems corrected.`.
+Append ` Keep the meaning. Output only the rewritten text.`.
+Each `\n` means one LF byte.
+Add no final LF to the complete repair text.
+Keep all bytes inside `masked_text` and `last_rewrite` unchanged.
+Send this complete text as the gate's one user message under clause 4.05.
+Use clause 4.10 to remove prior turns from the argument.
+For a shape retry, use the initial layout in clause 4.05.
+Keep the original text and shared request count unchanged for that retry.
+The [folded-layout decision on #437][fold-ruling] sets this single-block repair.
 
 ## 7. Trace and quality decisions
 
@@ -507,19 +610,31 @@ Use a sample size the operator judges sufficient.
 Do not judge it on the first few texts.
 Report the shape-drop count and `language_unresolved_count` separately beside the
 combined rate.
-Record their combined lost-text count and the attempted-text count.
-Count each lost text once in the numerator.
-Count each original text once in the denominator.
-Include both lost-text classes in that denominator.
+Also report `transport_stopped_count` beside these counts.
+Record the conversion-loss total and the attempted-text count.
+Count each shape drop or `language_unresolved` text once in the numerator.
+Keep `transport_stopped` out of that numerator.
+Count each original text with a request once in the denominator.
+Include all three terminal classes in that denominator.
+The first request count under clause 6.07 puts a text in this attempted-text set.
+Do not count a never-attempted text in that denominator.
+If the denominator is zero, report no rate.
+For a void round, report no kill-line result under clause 7.07.
 The threshold within that range and sample size stay open in clause 10.06.
 Rulings Q and S, [#437][epic], set this range and denominator.
 The [operator's decision 1 on #442][round-rulings] extends `ruling S` to both lost-text
 classes.
+The [#447 decision][transport-ruling] sets transport-stop counts and the void bound.
 
-**7.05. Bias.** Report the faithful count beside both lost-text counts for every round.
+**7.05. Bias.** Report the faithful count beside both conversion-loss counts and
+`transport_stopped_count` for every round.
 Shape drops and `language_unresolved` texts can remove hard texts and favor easy ones.
+Transport stops can remove hard texts and decrease the measured conversion-loss rate.
 Keep the held-out item set unchanged for comparisons.
-Report missing items, shape drops and `language_unresolved` items.
+Report missing items, shape drops, `language_unresolved` items and `transport_stopped`
+items.
+List never-attempted texts separately if a run stops.
+Record this bias even when the transport-stop count is not larger than its bound.
 Keep them in the record.
 This applies [decision 1 on #442][round-rulings] to both lost-text classes.
 The source kit has 100 segments and favors its selected remote baseline.
@@ -530,14 +645,36 @@ on its use.
 Calibration alone grants neither its inclusion nor its exclusion from the next corpus.
 Clause 10.07 holds that open decision.
 
+**7.07. Transport bound.** Read `transport_stop_bound` from the operator's round
+parameters before conversion starts.
+The operator sets this nonnegative integer at each round start.
+Use no default value.
+For `R0`, record the operator's bound before each complete kit evaluation starts.
+Count each `transport_stopped` text once.
+If `transport_stopped_count` is larger than the bound, the round is void.
+Report `void`, the bound, all three terminal counts and the attempted-text count.
+Give that round no kill-line result.
+Keep never-attempted texts in their own list under clause 7.05.
+At the bound, the transport count alone does not make the round void.
+This bound grants no retry or earlier-candidate promotion after a transport stop.
+For `R0`, report the stopped count and void status without a kill-line verdict.
+The pinned `ste_score.py` counts a missing output as a failure.
+Do not use that score as the conversion-loss numerator.
+The [#447 decision][transport-ruling] sets this bound.
+Use clause 10.22 for its later measurement.
+
 ## 8. Training sequence
 
-**8.01. First adapter.** Train the small LoRA adapter on the two rewritten batches, 387
-complete trajectories.
+**8.01. First adapter.** Make rewriter pairs from the two rewritten batches, 387
+complete trajectories, under [WeaverTrain #17][train-rewriter].
 Use Nemotron 3 Nano 30B A3B for this adapter.
-It is an emitter of narration and final reports in STE100.
-Do not make a rewriter adapter in this step.
-These are rulings J and K, [#437][epic], and the [emitter decision][emitter].
+It rewrites one prose segment into STE100 after placeholder substitution.
+Use the folded system prompt and clause 4.05's user message before the training target.
+Put training loss on the target only.
+Keep the prior emitter data and result records unchanged.
+The [2026-11-03 rewriter decision][rewriter] supersedes the [emitter decision][emitter]
+for this first adapter.
+Rulings J and K, [#437][epic], still supply the corpus and later emitter goal.
 
 **8.02. Data identity.** The first batch has 196 trajectories.
 Its `converted.jsonl` SHA256 is
@@ -550,7 +687,7 @@ Each deposit's `run.json` supplies its hash under `ruling K`, [#437][epic].
 **8.03. Local rewrite.** Put that adapter at the model-turn stage of the local loop.
 Use one text per request under `ruling P`, [#437][epic].
 Measure its rewrite ability under clause 10.01.
-The emitter decision keeps that question open.
+The rewriter decision closes the adapter's job-format choice.
 Use lookup, splices and offers for vocabulary corrections under `ruling B`,
 [#433][i433].
 
@@ -605,16 +742,28 @@ Measure complete turns on the target model under clause 10.19.
 **9.05. Render.** Compare trainer tokens with SPU tokens for one held-out prompt.
 Record the template, `enable_thinking`, tools choice and `max_seq_length`.
 Keep `enable_thinking` off for the initial comparison.
-Compare the trajectory template output with tool schemas and the rewrite template output
-with no tools list.
+Compare the complete message list before generation, not only the system text.
+It contains the exact folded system prompt and one user message from clause 4.05.
+Use no tools list or example turns.
+Read the seeded prompt bytes from the save point and check clause 4.07's digest.
+Save the complete messages, template output bytes and token IDs for both paths.
+Also compare a repair request under clauses 6.08 and 4.10.
+Refuse the comparison if any message, byte or token is different.
+Report two differences from the pinned Python reference in `R0`.
+The examples are inside the system prompt instead of eight example turns.
+This includes the example-location wording change in clause 4.08.
+A repair uses one user message instead of a continued conversation.
 Record each downloaded 4B file's SHA256 and machine.
-The [emitter decision on #437][emitter] sets these checks.
+The [folded-layout decision][fold-ruling] and [rewriter decision][rewriter] set these
+checks.
 
 ## 10. Ruled sites, open cells and measurements
 
-**10.01. Adapter job format.** Measure parse failures and placeholder losses per
-single-text request on the first local test.
-This gives the result for the emitter adapter's rewrite ability.
+**10.01. Adapter job format.** The [rewriter decision][rewriter] closes this format
+choice.
+Measure parse failures and placeholder losses per single-text request on the first local
+test.
+Name the measurement `rewriter-shape-rate`.
 Keep independent records for vocabulary correction and shape failure.
 
 **10.02. Literal site.** Driver assembly is the ruled literal-check site under clause
@@ -658,7 +807,9 @@ Keep independent records for the checker success rate and faithful count.
 attempted-text sample increases.
 The operator sets the sufficient sample size and threshold within 20 to 25 percent.
 Keep shape drops and `language_unresolved` texts in that rate under clause 7.04.
-Report both counts separately beside the combined rate.
+Report both counts and `transport_stopped_count` beside the combined rate for a valid
+round.
+For a void round, report the counts and no kill-line result under clause 7.07.
 These are rulings Q and S, [#437][epic], with [decision 1 on #442][round-rulings].
 
 **10.07. Calibration corpus.** Measure faithful count, shape losses and semantic defects
@@ -727,7 +878,7 @@ semantics of hedged sentences.
 The operator rules on the accepted forms.
 Do not change uncertainty to certainty or advice to a requirement.
 
-**10.18. Render choices.** Measure token differences for the two template outputs in
+**10.18. Render choices.** Measure token differences between trainer and SPU under
 clause 9.05.
 Record differences in template, tools, `enable_thinking` and sequence length.
 Test `enable_thinking` enabled only under a later decision.
@@ -757,7 +908,16 @@ Input classification, independent direction elections and later detectors belong
 their own loop measurements.
 This cell grants no autonomic action to this loop.
 
+**10.22. Transport effects.** Name the measurement `transport-stop-rate-and-bias`.
+Report stopped-text counts, attempted-text counts and the selected bound for each round.
+Compare the length and failure history of stopped texts with completed texts.
+Record the number and cause of void rounds.
+The operator uses these measurements for later bound choices.
+They supply no default bound and change no conversion-loss threshold.
+
 [sketch]: ../../../project/sketch-ste-conversion-loop.md
+[prompt]: ste-conversion-prompt.txt
+[spec06]: ../../state-management/state-management-spec-06-marks-renderer-engine.md
 [spec02]: ../../state-management/state-management-spec-02-protocol-classifier-gate.md
 [state-spec]: ../../state-management/weaver-state-Spec-amendment.md
 [cutover]: ../../state-management/state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
@@ -793,3 +953,10 @@ This cell grants no autonomic action to this loop.
 [noun]: https://github.com/toddwbucy/WeaverAgent/issues/433#issuecomment-6581195193
 [ste-ruling]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6579488631
 [emitter]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6579865632
+[fold-ruling]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6609999828
+[fold-edits]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6610863318
+[transport-ruling]: https://github.com/toddwbucy/WeaverAgent/issues/447#issuecomment-6608754538
+[rewriter]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6605288962
+[train-rewriter]: https://github.com/toddwbucy/WeaverTrain/issues/17#issuecomment-6605286044
+[train-fold]: https://github.com/toddwbucy/WeaverTrain/issues/17#issuecomment-6610000291
+[prompt-source]: https://github.com/toddwbucy/WeaverTrain/tree/9881da6cfbc92b08b31264883aea63b73aa7b694
