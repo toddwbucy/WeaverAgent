@@ -55,7 +55,8 @@ pub(super) fn prepare_against(
     let source = crate::read_declaration(config)?;
     let draft = weaver_types::parse_serving_draft(&source)
         .map_err(|error| LifecycleRefusal::ConfigInvalid { field: error.field })?;
-    let mut inventory = inventory::take_serving_inventory(agent, &source, &draft, boundary)?;
+    let mut inventory =
+        inventory::take_serving_inventory(agent, &source, &draft, boundary, config.operator)?;
     crate::sink_within_territory(&inventory.config.trace_sink, &config.territory)?;
     crate::grant_shell(config, &mut inventory)?;
     Ok(Prepared { draft, selector })

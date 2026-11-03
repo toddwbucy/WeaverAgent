@@ -19,7 +19,12 @@ pub struct StateManagementConfig {
     pub start: StateStartConfig,
     pub persistence: PersistenceConfig,
     pub reads: ReadLimits,
-    pub ste100: Ste100Instruction,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_option"
+    )]
+    pub ste100: Option<Ste100Instruction>,
     pub tools: ToolPolicies,
     pub placement: PlacementConfig,
 }
@@ -30,7 +35,13 @@ impl StateManagementConfig {
         self.flow.validate()?;
         self.persistence.validate()?;
         self.reads.validate()?;
-        self.ste100.validate()?;
+        if let Some(instruction) = &self.ste100 {
+            instruction.validate()?;
+        } else if !elected_tools.is_empty() {
+            return Err(ValidationError(
+                "tools require an elected STE100 classifier",
+            ));
+        }
         self.tools.validate(elected_tools)?;
         self.placement.validate()
     }
@@ -328,7 +339,7 @@ pub(super) fn positive_size(
     usize::try_from(value.0).map_err(|_| ValidationError(message))
 }
 
-fn present_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(super) fn present_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,

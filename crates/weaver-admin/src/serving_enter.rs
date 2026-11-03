@@ -70,8 +70,21 @@ impl PreparedEnter {
             .map_err(|error| custody("config root", error))?;
         let source = std::str::from_utf8(artifact.configuration_bytes())
             .map_err(|error| invalid("declaration", error.to_string()))?;
-        let mut inventory =
-            inventory::take_bound_inventory(agent, source, artifact.declaration(), boundary)?;
+        let mut inventory = inventory::take_bound_inventory(
+            agent,
+            source,
+            artifact.declaration(),
+            boundary,
+            config.operator,
+        )?;
+        // The retained state-content/1 startup still requires classifier proof.
+        // The optional declaration alone does not activate the cutover path.
+        if artifact.declaration().state_management().ste100.is_none() {
+            return Err(invalid(
+                "state-management.ste100",
+                "this startup path requires a classifier",
+            ));
+        }
         crate::sink_within_territory(&inventory.config.trace_sink, &config.territory)?;
         crate::grant_shell(config, &mut inventory)?;
         let checker_path =
@@ -201,7 +214,7 @@ impl PreparedEnter {
             state_management: state_management.clone(),
             start: start.clone(),
             ste100_scheme: ste100_scheme.clone(),
-            ste100_binary_sha256: self.checker_digest.clone(),
+            ste100_binary_sha256: Some(self.checker_digest.clone()),
         }
     }
     /// Uses the same retained envelope and passes the existing state endpoint.

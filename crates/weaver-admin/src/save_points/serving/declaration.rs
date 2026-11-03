@@ -295,7 +295,9 @@ impl Writer {
             &max_result_bytes.0.to_string(),
         )?;
         self.string("state-management.reads.measurement-ref", measurement_ref)?;
-        self.ste100(ste100)?;
+        if let Some(instruction) = ste100 {
+            self.ste100(instruction)?;
+        }
         let ToolPolicies { sh } = tools;
         if let Some(ToolPolicy {
             clock_ms,

@@ -100,7 +100,12 @@ pub enum LoadedStateFacts {
         state_management: StateManagementConfig,
         start: StartIdentity,
         ste100_scheme: String,
-        ste100_binary_sha256: Digest,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "super::declaration::present_option"
+        )]
+        ste100_binary_sha256: Option<Digest>,
     },
     Diagnostic {
         state_election: crate::StateElection,

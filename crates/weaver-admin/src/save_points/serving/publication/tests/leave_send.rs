@@ -90,7 +90,11 @@ fn precommit_send_peer_closure_drains_exact_refusal_under_original_leave_windows
                 let mut settle = || {
                     assert_eq!(terminal(&mut owner), expected, "{site}/{mode}");
                     if mode == "graceful" {
-                        assert!(matches!(owner.failure(), Some(FailureCause::WorkerOutcome)));
+                        assert!(
+                            matches!(owner.failure(), Some(FailureCause::WorkerOutcome)),
+                            "{site}/{mode}/expired={expire_before_read}: {:?}",
+                            owner.failure()
+                        );
                     } else {
                         assert!(owner.failure().is_none());
                     }

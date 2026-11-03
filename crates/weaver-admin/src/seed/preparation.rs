@@ -142,7 +142,17 @@ fn prepare_against(
             detail: "invalid seed authoring declaration".into(),
         }
     })?;
-    let mut inventory = inventory::take_seed_inventory(agent, &source, &draft, boundary)?;
+    let mut inventory =
+        inventory::take_seed_inventory(agent, &source, &draft, boundary, config.operator)?;
+    let state = draft.state_management();
+    // This state-content/1 seed path still requires a classifier certificate.
+    // The no-classifier seed path belongs to the coupled foundation cutover.
+    let instruction = state.ste100.as_ref().ok_or_else(|| {
+        invalid(
+            "state-management.ste100",
+            "this seed path requires a classifier",
+        )
+    })?;
     crate::sink_within_territory(&inventory.config.trace_sink, &config.territory)?;
     crate::grant_shell(config, &mut inventory)?;
 
@@ -184,7 +194,6 @@ fn prepare_against(
             "certificate supplies no statement bindings".into(),
         ));
     }
-    let state = draft.state_management();
     let raw_block = serde_json::value::RawValue::from_string(
         serde_json::json!({"type": "text", "text": prompt}).to_string(),
     )
@@ -194,18 +203,14 @@ fn prepare_against(
         seed_id,
         scheme_id: state.flow.scheme.scheme_id.clone(),
         ste100_scheme: scheme,
-        checker_artifact_sha256: state.ste100.model_artifact_sha256.clone(),
+        checker_artifact_sha256: instruction.model_artifact_sha256.clone(),
         prompt_text: prompt,
         raw_block,
         bindings: certificate.bindings.clone(),
         certificate,
     };
     let verified = request
-        .validate_structure(
-            hash,
-            &state.flow.scheme,
-            &state.ste100.model_artifact_sha256,
-        )
+        .validate_structure(hash, &state.flow.scheme, &instruction.model_artifact_sha256)
         .map_err(|refused| match refused {
             SeedRefusal::SeedCertificateInvalid => PreparationFailure::Certificate(
                 "prompt, scheme, checker, bindings or reviewed duties do not agree".into(),

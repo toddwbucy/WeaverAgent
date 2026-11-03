@@ -9,6 +9,7 @@ use weaver_types::state_flow::enter::{EnterBinding, EnterPayload};
 pub(in crate::flow) struct EnterLoadFacts {
     composer: weaver_trace::LoopIdentity,
     checker_digest: shared::Digest,
+    instruction: shared::Ste100Instruction,
 }
 
 impl<'a> StartupComposition<'a> {
@@ -49,6 +50,10 @@ impl<'a> StartupComposition<'a> {
             state_management
                 .validate(&elected)
                 .map_err(|_| "invalid Enter state-management declaration")?;
+            let instruction = state_management
+                .ste100
+                .as_ref()
+                .ok_or("classifier startup requires an elected classifier")?;
             if !inputs.classifier_binary.is_absolute() {
                 return Err("checker launch path must be absolute");
             }
@@ -72,7 +77,7 @@ impl<'a> StartupComposition<'a> {
                 Ste100Bootstrap {
                     protocol: shared::STE100_PROTOCOL.into(),
                     scheme_text: ste100_scheme.clone(),
-                    instruction: state_management.ste100.clone(),
+                    instruction: instruction.clone(),
                 },
                 digest,
             ))
@@ -93,6 +98,7 @@ impl<'a> StartupComposition<'a> {
             enter_load: Some(EnterLoadFacts {
                 composer: inputs.composer,
                 checker_digest,
+                instruction: bootstrap.instruction.clone(),
             }),
             bootstrap,
             binary: inputs.classifier_binary,
@@ -136,7 +142,7 @@ impl EnterLoadFacts {
                 state_management: state_management.clone(),
                 start: start.clone(),
                 ste100_scheme: ste100_scheme.clone(),
-                ste100_binary_sha256: self.checker_digest.clone(),
+                ste100_binary_sha256: Some(self.checker_digest.clone()),
             },
             state_store: payload.state_store.clone(),
             state_member: true,
@@ -211,14 +217,14 @@ impl EnterLoadFacts {
                 uid: payload.cause.uid,
             },
             library_path: payload.library_path.clone(),
-            state_flow: declaration(state_management),
+            state_flow: declaration(state_management, &self.instruction),
             state_start: mirror::start(start),
             clock_source: trace::ClockSource::ClockMonotonic,
             origin_ns: origin.into(),
             state_member_observation: mirror::member(member),
             template_inventory: inventory.record(
                 &state_management.flow.scheme,
-                &state_management.ste100.model_artifact_sha256,
+                &self.instruction.model_artifact_sha256,
             ),
             ste100_scheme: ste100_scheme.clone(),
             ste100_binary_sha256: self.checker_digest.to_string(),
@@ -240,13 +246,16 @@ fn wait(value: &shared::MeasuredWait) -> trace::MeasuredWait {
         measurement_ref: value.measurement_ref.clone(),
     }
 }
-fn declaration(value: &shared::StateManagementConfig) -> trace::FlowDeclarationRecord {
+fn declaration(
+    value: &shared::StateManagementConfig,
+    instruction: &shared::Ste100Instruction,
+) -> trace::FlowDeclarationRecord {
     let shared::StateManagementConfig {
         flow,
         start: _,
         persistence,
         reads,
-        ste100,
+        ste100: _,
         tools,
         placement,
     } = value;
@@ -307,7 +316,7 @@ fn declaration(value: &shared::StateManagementConfig) -> trace::FlowDeclarationR
             max_result_bytes: reads.max_result_bytes.0.into(),
             measurement_ref: reads.measurement_ref.clone(),
         },
-        ste100: mirror::instruction(ste100),
+        ste100: mirror::instruction(instruction),
         tools: trace::ToolPolicies {
             sh: tools.sh.as_ref().map(
                 |shared::ToolPolicy {

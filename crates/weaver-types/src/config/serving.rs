@@ -13,7 +13,8 @@ use crate::state_flow::{
 
 use super::{AgentConfig, BindingKind, ConfigError, ConfigErrorKind, FieldName, StoreEngine};
 
-/// Parsed authoring values. Only the starting dump hash may be absent.
+/// Parsed authoring values. The starting dump hash may be absent before binding.
+/// An absent STE100 instruction elects no classifier under TYPES-CONFIG.
 ///
 /// A borrowed view is available before seeding so inventory can judge the scheme
 /// and classifier. It cannot be injected into a declaration wrapper by callers.
@@ -23,7 +24,7 @@ pub struct DraftStateManagement {
     pub start: Option<StateStartConfig>,
     pub persistence: PersistenceConfig,
     pub reads: ReadLimits,
-    pub ste100: Ste100Instruction,
+    pub ste100: Option<Ste100Instruction>,
     pub tools: ToolPolicies,
     pub placement: PlacementConfig,
 }

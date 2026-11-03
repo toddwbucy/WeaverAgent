@@ -96,6 +96,23 @@ fn canonical_bytes_follow_parser_order_and_have_one_hash() {
 }
 
 #[test]
+fn absent_classifier_stays_absent_in_canonical_declarations_and_rebinding() {
+    let source = GOLDEN
+        .lines()
+        .filter(|line| !line.starts_with("state-management.ste100."))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    let (bound, rendered) = round_trip(&source);
+    assert_eq!(rendered, source);
+    assert!(bound.state_management().ste100.is_none());
+    let rebound = bound.with_start(Digest::new("d".repeat(64)).unwrap());
+    let bytes = render(&rebound).unwrap();
+    assert!(!bytes.contains("state-management.ste100"));
+    assert_eq!(parse_serving_declaration(&bytes).unwrap(), rebound);
+}
+
+#[test]
 fn rebinding_changes_only_start_and_canonical_hash() {
     let original = fixture();
     let replaced = original.with_start(Digest::new("d".repeat(64)).unwrap());

@@ -207,6 +207,7 @@ fn root_plan_exchange_preserves_receipts_refusals_and_lost_answer_without_replay
         "wrong-run",
         "turn-attributed",
         "active",
+        "no-classifier",
     ] {
         let (end, peer) = socketpair(
             AddressFamily::Unix,
@@ -228,7 +229,7 @@ fn root_plan_exchange_preserves_receipts_refusals_and_lost_answer_without_replay
                 observed.payload,
                 Payload::Directive(LifecycleDirective::Observe)
             );
-            let facts = observation(
+            let mut facts = observation(
                 &observed.exchange,
                 if case == "active" { "active" } else { "idle" },
                 if case == "timeout" {
@@ -237,11 +238,22 @@ fn root_plan_exchange_preserves_receipts_refusals_and_lost_answer_without_replay
                     2_000_000_000
                 },
             );
+            if case == "no-classifier" {
+                let serving = &mut facts["payload"]["body"]["load"]["state"]["serving"];
+                serving["state_management"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("ste100");
+                serving
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("ste100_binary_sha256");
+            }
             transmit(&peer, &facts);
             // The actual worker ends Observe's connection before the next
             // management operation. Reusing it cannot deliver the update.
             drop(peer);
-            if case == "active" {
+            if matches!(case, "active" | "no-classifier") {
                 return;
             }
             let peer = update_peer;
@@ -311,7 +323,14 @@ fn root_plan_exchange_preserves_receipts_refusals_and_lost_answer_without_replay
                 ))
             },
         );
-        assert_eq!(dials, if case == "active" { 1 } else { 2 });
+        assert_eq!(
+            dials,
+            if matches!(case, "active" | "no-classifier") {
+                1
+            } else {
+                2
+            }
+        );
         match (case, result) {
             ("updated", Ok(LifecycleAnswer::PlanUpdated { .. })) => (),
             (
@@ -339,6 +358,7 @@ fn root_plan_exchange_preserves_receipts_refusals_and_lost_answer_without_replay
                 Err(LifecycleRefusal::Malformed),
             ) => (),
             ("active", Err(LifecycleRefusal::ActivityNotAtRest)) => (),
+            ("no-classifier", Err(LifecycleRefusal::OutOfOrder)) => (),
             other => panic!("{other:?}"),
         }
         worker.join().unwrap();
