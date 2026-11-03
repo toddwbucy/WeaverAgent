@@ -2,7 +2,7 @@
 
 ASD-STE100:9 thesaurus: 022df3d809593696766893bf95f915229628497b89ef571dbc997ac8585224da
 
-**Version:** 0.2, 2026-11-03
+**Version:** 0.3, 2026-11-03
 **Document ID:** `ste-conversion-loop`
 **Parent:** `weaver-harness-PRD`
 **Landing PR:** #445
@@ -35,6 +35,7 @@ It has no form before that cutover.
 Use the later rulings where they change the sketch.
 The [2026-11-02 operator rulings on #442][round-rulings] set the four choices for
 this workflow.
+The [2026-11-03 decision on #437][r0-request] sets the shared driver request limit.
 
 **1.03. Record.** Keep the sketch at its original path.
 Mark it with this document's path, PR and date.
@@ -48,9 +49,9 @@ These are Q4, [#437][q14], with its [correction][q4rename].
 There is no Q5 in that series, as the [operator correction][retirement] states.
 
 **1.05. Rounds.** An adapter round uses one model version and one measured result set.
-A driver `repair pass` requests a corrected text within that round under clause 6.04.
+A driver `repair pass` requests another rewrite under clauses 6.03, 6.04 and 6.07.
 An `offer pass` requests the use of a thesaurus entry by the model.
-Keep an independent count for each.
+Keep the driver request count independent of the internal offer count.
 
 **1.06. Writing.** Use at most 20 words per instruction and 25 per description.
 Use placeholders for clause names, identifiers, paths and backticked technical names
@@ -380,16 +381,22 @@ Clause 10.02 keeps a later comparison of sites.
 **6.03. Shape strikes.** Count a parse failure or lost placeholder as one shape fault.
 The driver checks the shape and sends each retry through a new gate turn.
 Missing output from a completed answer is a parse failure.
-Use at most three such emissions for one text, then drop that text.
+Drop the text at its third shape fault.
+Also drop it if the final permitted request has a shape fault.
+Use the shared request limit in clause 6.07 for every shape retry.
 For a completed answer with missing output, request a fresh rewrite only before the
 third shape fault.
-This clause grants no retry after a transport or lifecycle failure.
+After a transport or lifecycle failure, send no further request for that text.
+Do not use an earlier candidate as its final output after that failure.
 Keep the shape count for that text across new gate turns.
-Keep all three emissions and their identities on the trace.
+Keep every emission and its identity on the trace.
+Keep the final output when it is available.
+Keep its checker results in the score record.
 Count drops separately for every round.
 Do not count vocabulary splices or offers as shape faults.
 These are rulings Q and S, [#437][epic].
 The driver site is [decision 2 on #442][round-rulings].
+The [2026-11-03 decision on #437][r0-request] adds the shared request limit.
 Clause 10.03 keeps a later comparison of sites.
 
 **6.04. Repair.** The driver owns each `repair pass` for a language failure after the
@@ -423,24 +430,38 @@ Check for remaining placeholders, new tags and changes outside eligible prose.
 Record the output hash and the accepted and refused trajectory counts.
 Assembly changes a dataset row and does not change a model argument.
 
-**6.07. Driver repair limit.** Read `driver_repair_pass_cap` from the operator's round
+**6.07. Driver request limit.** Read `driver_repair_pass_cap` from the operator's round
 parameters.
 The operator sets this cap at each round start.
 Do not start conversion without an explicit count.
 Use no default value.
 Apply this cap to each original text.
-The initial conversion request does not consume this cap.
-Count each driver language-repair request before its gate turn starts.
-Keep the cap and count across shape retries and new gate turns.
+The cap bounds all requests after the initial conversion request.
+The total request limit is one plus `driver_repair_pass_cap`.
+Keep one shared gate-request count for each text.
+Count the initial request, each shape retry and each language repair.
+Count each request before the driver sends it to the gate.
+Keep this count across all shape retries and language repairs.
 Do not refund a request for malformed or unused output.
 Apply clause 6.03 to malformed responses.
-At the cap, send no further language-repair request.
-After applicable shape retries, record `language_unresolved` if the last text still has
-a language failure.
+At the request limit, send no further request for that text.
+At that limit, a final shape fault is a shape drop under clause 6.03.
+At the limit, record `language_unresolved` if the final text has valid shape and a
+language failure.
 Use `language_unresolved` only for a text with no shape-drop result under clause 6.03.
 Keep that text out of assembly.
-Keep its source, all model emissions and checker results.
+Keep its source, all model emissions and checker results for the score.
 Report `language_unresolved_count` beside the shape-drop count.
+For `R0`, use the elected cap of two from [#437][r0-rulings].
+This gives one initial request and at most two further gate requests.
+The [2026-11-03 decision][r0-request] makes this one shared limit of three requests.
+For `R0`, keep `offer_pass_cap` at one per external turn under [#437][r0-rulings].
+An internal offer does not consume another gate request.
+Report the number of model generations for each gate request.
+The Python reference does not use internal offers.
+An equal number of gate requests can include different numbers of model generations.
+Report both loss classes under clause 7.04.
+For `R0`, give these measurements no kill-line verdict, under [#437][r0-rulings].
 Use clause 10.12 to select the measured cap from yield and cost.
 This is [decision 4 on #442][round-rulings].
 
@@ -601,9 +622,9 @@ clause 6.03.
 The [operator's decision 2 on #442][round-rulings] closes this site choice.
 Keep a later site comparison under the measurement `shape-retry-site-cost`.
 Compare driver retries through new gate turns with retries inside the same agent turn.
-Measure shape recovery, time, token cost and completeness of the three-emission trace
+Measure shape recovery, time, token cost and completeness of the recorded emissions
 per text.
-Keep the three-strike bound unchanged in both comparisons.
+Keep the shared request limit and three-strike bound unchanged in both comparisons.
 For a later site change, first record the operator's decision and merge any necessary
 instruction-path amendment.
 No open cell grants a constructor that the merged Specs forbid.
@@ -662,7 +683,8 @@ Keep all unruled entries and forms out of the splice path.
 This is [decision 3 on #442][round-rulings].
 
 **10.12. Repair cap.** Measure the cumulative success count, faithful count, tokens and
-time after each `repair pass`.
+time after each gate request.
+Record recovery counts for shape faults and language failures independently.
 The operator selects the measured repair cap from that curve.
 Start with the operator's round parameter under clause 6.07.
 Name this measurement `repair-yield-cost`.
@@ -745,6 +767,8 @@ This cell grants no autonomic action to this loop.
 [pr439]: https://github.com/toddwbucy/WeaverAgent/pull/439
 [pr441]: https://github.com/toddwbucy/WeaverAgent/pull/441
 [round-rulings]: https://github.com/toddwbucy/WeaverAgent/pull/442#issuecomment-6590982515
+[r0-rulings]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6595641498
+[r0-request]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6604111261
 [train]: https://github.com/toddwbucy/WeaverTrain/tree/ab63a918
 [train2]: https://github.com/toddwbucy/WeaverTrain/issues/2
 [q14]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6580579071
