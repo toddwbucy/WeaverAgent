@@ -2,7 +2,7 @@
 
 ASD-STE100:9 thesaurus: 022df3d809593696766893bf95f915229628497b89ef571dbc997ac8585224da
 
-**Version:** 0.1, 2026-11-02
+**Version:** 0.2, 2026-11-03
 **Document ID:** `ste-conversion-loop`
 **Parent:** `weaver-harness-PRD`
 **Landing PR:** #442
@@ -159,13 +159,14 @@ The next load refuses until the declaration and image digests agree.
 Use [ADMIN-INSTALL][admin-spec] for this sequence.
 These are C4, [#437][c-q67], and its [accepted sequence][q8].
 
-**3.08. Prompt.** Use the merged seed path through `deploy/turn.py --system`.
+**3.08. Prompt.** Use `seed <agent>` from the root shell before the first load.
+Use [ADMIN-SEED][admin-spec] and [ADMIN-RETIRE][admin-spec] for this sequence.
 The state member holds the prompt and seats it on each later load.
 Supply its digest and the operator's review reference.
 Use `SEED-CERTIFICATE` with no bindings and no checker artifact digest.
 The scheme, duties and prompt digest checks still apply.
 Q7, [#437][c-q67], accepts this seed without a classifier.
-C5, [#437][c-q67], keeps the prompt path unchanged.
+C5, [#437][c-q67], keeps the prompt in its seed span.
 A new prompt version through admin stays owed under [#440][i440].
 
 **3.09. Templates.** Use the compiled template inventory and record its digest at load.
