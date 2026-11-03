@@ -2,10 +2,10 @@
 
 ASD-STE100:9 thesaurus: 022df3d809593696766893bf95f915229628497b89ef571dbc997ac8585224da
 
-**Version:** 0.1, 2026-11-02
+**Version:** 0.2, 2026-11-03
 **Document ID:** `ste-conversion-loop`
 **Parent:** `weaver-harness-PRD`
-**Landing PR:** #442
+**Landing PR:** #445
 **Standard:** `ASD-STE100`, Issue 9, 2025-01-15
 **Lexicon:** `WeaverTrain ste/`, `ab63a918b569e5b8673dc2e78e66575ee9df1bd7`
 **Thesaurus digest:** SHA256 of `ste/thesaurus.toml`, in the header above
@@ -159,7 +159,8 @@ The next load refuses until the declaration and image digests agree.
 Use [ADMIN-INSTALL][admin-spec] for this sequence.
 These are C4, [#437][c-q67], and its [accepted sequence][q8].
 
-**3.08. Prompt.** Use the merged seed path through `deploy/turn.py --system`.
+**3.08. Prompt.** Use `seed <agent>` from the root shell before the first load.
+Use [ADMIN-SEED][admin-spec] and [ADMIN-RETIRE][admin-spec] for this sequence.
 The state member holds the prompt and seats it on each later load.
 Supply its digest and the operator's review reference.
 Use `SEED-CERTIFICATE` with no bindings and no checker artifact digest.
