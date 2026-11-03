@@ -31,6 +31,8 @@ Rulings A to G have the date 2026-11-01.
 Rulings H to T have the date 2026-11-02.
 The amendments in the header supply the requirements for the organs.
 Use the later rulings where they change the sketch.
+The [2026-11-02 operator rulings on #442][round-rulings] set the four choices for
+this workflow.
 
 **1.03. Record.** Keep the sketch at its original path.
 Mark it with this document's path, PR and date.
@@ -117,10 +119,13 @@ WeaverTools work stays paused.
 
 **3.03. Tags.** Each entry has a `splice` or `offer` tag.
 A `splice` entry has exactly one sense and one use.
-An `offer` entry has several senses or has a requirement for a new sentence.
+An `offer` entry can have one or more senses.
+Start with an empty splice table and tag every entry `offer`.
+Send each lookup result to the offer path until the operator rules a splice tag.
 Only an operator decision changes a tag in a new version.
-The first splice tags stay open in clause 10.11.
+The first splice tags stay open until measurement after round 1, under clause 10.11.
 These are `ruling B`, [#433][i433], and `THESAURUS`.
+The initial empty table follows [decision 3 on #442][round-rulings].
 
 **3.04. Versions.** Keep each installed version and a current pointer in
 `state-content/2`.
@@ -173,6 +178,7 @@ These are Q7, [#437][c-q67], and [Spec 02][spec02] `TEMPLATES`.
 **4.01. Driver.** Keep sample selection, placeholder substitution, request construction
 and assembly outside the agent.
 The driver also scores results and starts the manual review of the semantics.
+The driver checks literals at assembly and starts shape retries through new gate turns.
 Send one text per request through `deploy/turn.py`.
 `Ruling P`, [#437][epic], sets this single-text baseline.
 Do not start grouped requests before the measurement in clause 10.04.
@@ -257,6 +263,7 @@ Without a decision for the form of the word, do not make a splice.
 
 **5.05. Splice.** Use the current `splice` lookup result with exactly one sense and one
 use.
+Make this path with the initial empty table in clause 3.03.
 Replace only its word span with the deterministic text for that use.
 Use `OUTBOUND-CHANGE` to record the proposed change before its use.
 This operation has no model execution.
@@ -283,8 +290,8 @@ Source IDs alone grant no change, also IDs from another offer in the same turn.
 
 **5.08. Offer result.** Apply the language and placeholder checks to the candidate
 sentence.
-Keep literal-check placement open in clause 10.02.
 Use only a result with no failure from these checks.
+The driver checks literals at assembly under clause 6.02.
 Select an exact span from the recorded `Text` in that result.
 Propose its replacement of the matched sentence through `OUTBOUND-CHANGE`.
 Keep an unused or malformed result on the trace without a change to `Y`.
@@ -296,14 +303,15 @@ Keep the original answer's source and finish.
 Use that answer's changed `Y` for the gate and turn closure.
 An unused offer response is not a fallback answer.
 
-**5.10. Offer limit.** For calibration, set `offer_pass_cap` to 1 before the first
-offer.
-This is an initial measurement parameter, not a measured optimum.
+**5.10. Offer limit.** Read `offer_pass_cap` from the operator's round parameters.
+The operator sets this cap at each round start.
+Use no default value.
 Use `offer-yield-cost` in clause 10.20 to select later values.
 Keep the positive `u32` value unchanged for the complete external turn.
 Count across all original emissions, Text-block data, matches, retries and offers.
 Use the private turn owner from `LOOKUP-OFFER` for every reservation.
 Do not use `repair_cap` or `MAX_TOOL_ROUNDS` as this limit.
+This is [decision 4 on #442][round-rulings].
 
 **5.11. Offer accounting.** Reserve one allowance before instruction creation.
 Refuse if consumed plus reserved allowances are equal to or larger than the cap.
@@ -317,6 +325,8 @@ Keep an admitted reservation until its outcome is accounted for.
 Never refund a consumed allowance, also for malformed or unused responses.
 Do not start the count again for a new lookup result or answer generation.
 A late `Recorded` instruction consumes its allowance and grants no continuation.
+With no cap and an empty splice table, record lookups without a change to `Y`.
+Send language failures to driver repair under clause 6.04.
 
 **5.12. Change.** Use `EmissionChangeRecord` for each proposed change to `Y`.
 Keep the original source and the previous change identity.
@@ -354,13 +364,16 @@ These checks do not supply a classifier election or a `STORE-2` grant.
 
 **6.02. Literals.** Keep the glued literals unchanged, such as `145.[[C8]]` and
 `[[C4]]([[C5]]`.
+Do this check in the driver at assembly.
 Slash-joined placeholders can become independent placeholders if each count stays
 correct.
 Refuse assembly if a literal is different from its source after placeholder
 substitution.
-The check's execution site stays open in clause 10.02.
+This site is [decision 2 on #442][round-rulings].
+Clause 10.02 keeps a later comparison of sites.
 
 **6.03. Shape strikes.** Count a parse failure or lost placeholder as one shape fault.
+The driver checks the shape and sends each retry through a new gate turn.
 Missing output from a completed answer is a parse failure.
 Use at most three such emissions for one text, then drop that text.
 For a completed answer with missing output, request a fresh rewrite only before the
@@ -370,8 +383,9 @@ Keep the shape count for that text across new gate turns.
 Keep all three emissions and their identities on the trace.
 Count drops separately for every round.
 Do not count vocabulary splices or offers as shape faults.
-The retry site stays open in clause 10.03.
 These are rulings Q and S, [#437][epic].
+The driver site is [decision 2 on #442][round-rulings].
+Clause 10.03 keeps a later comparison of sites.
 
 **6.04. Repair.** The driver owns each `repair pass` for a language failure after the
 shape checks accept the text.
@@ -382,8 +396,8 @@ Keep one original text per request.
 The agent does not start `REPAIR` under `OUTPUT-UNIT` without a classifier.
 Use "restatement" only for this repair, under Q4, [#437][q14].
 The named `offer` path accepts only the thesaurus case in clause 5.06.
-The shape-retry site stays open in clause 10.03.
-For calibration, apply the limit in clause 6.07.
+Use clause 6.03 for shape retries in the driver.
+Apply the limit in clause 6.07.
 The measured repair cap stays open in clause 10.12.
 
 **6.05. Review.** Compare a recorded random sample of source texts with their final
@@ -396,6 +410,7 @@ Count reviewer defects per hundred checker-passed segments.
 
 **6.06. Assembly.** Accept a trajectory only when every eligible prose segment has no
 check failure.
+Use the driver's literal check in clause 6.02 before assembly.
 Replace each placeholder with its exact span from the codes file.
 Put each rewrite at its original message and field.
 Keep all fields outside the scope byte-identical.
@@ -403,8 +418,12 @@ Check for remaining placeholders, new tags and changes outside eligible prose.
 Record the output hash and the accepted and refused trajectory counts.
 Assembly changes a dataset row and does not change a model argument.
 
-**6.07. Driver repair limit.** For calibration, set `driver_repair_pass_cap` to 3 for
-each original text.
+**6.07. Driver repair limit.** Read `driver_repair_pass_cap` from the operator's round
+parameters.
+The operator sets this cap at each round start.
+Do not start conversion without an explicit count.
+Use no default value.
+Apply this cap to each original text.
 The initial conversion request does not consume this cap.
 Count each driver language-repair request before its gate turn starts.
 Keep the cap and count across shape retries and new gate turns.
@@ -413,12 +432,12 @@ Apply clause 6.03 to malformed responses.
 At the cap, send no further language-repair request.
 After applicable shape retries, record `language_unresolved` if the last text still has
 a language failure.
+Use `language_unresolved` only for a text with no shape-drop result under clause 6.03.
 Keep that text out of assembly.
 Keep its source, all model emissions and checker results.
 Report `language_unresolved_count` beside the shape-drop count.
-Three repairs and the initial request give the source's four-cycle calibration
-candidate.
 Use clause 10.12 to select the measured cap from yield and cost.
+This is [decision 4 on #442][round-rulings].
 
 ## 7. Trace and quality decisions
 
@@ -445,21 +464,28 @@ From round 2, reject a round whose decrease from the prior round is larger than 
 margin.
 `Ruling Q`, [#437][epic], sets this sequence.
 
-**7.04. Kill line.** Count drops in the kill-line result.
-The kill line is a drop rate of 20 to 25 percent.
+**7.04. Kill line.** Count shape drops and `language_unresolved` texts together in the
+kill-line result.
+The kill line is a combined loss rate of 20 to 25 percent.
 Use a sample size the operator judges sufficient.
 Do not judge it on the first few texts.
-Record the drop count, attempted-text count and rate together.
+Report the shape-drop count and `language_unresolved_count` separately beside the
+combined rate.
+Record their combined lost-text count and the attempted-text count.
+Count each lost text once in the numerator.
 Count each original text once in the denominator.
-Include the dropped texts in that denominator.
+Include both lost-text classes in that denominator.
 The threshold within that range and sample size stay open in clause 10.06.
 Rulings Q and S, [#437][epic], set this range and denominator.
+The [operator's decision 1 on #442][round-rulings] extends `ruling S` to both lost-text
+classes.
 
-**7.05. Bias.** Report the faithful count beside the drop count for every round.
-Drops can remove hard texts and favor easy ones.
+**7.05. Bias.** Report the faithful count beside both lost-text counts for every round.
+Shape drops and `language_unresolved` texts can remove hard texts and favor easy ones.
 Keep the held-out item set unchanged for comparisons.
-Report the missing items and the dropped items.
+Report missing items, shape drops and `language_unresolved` items.
 Keep them in the record.
+This applies [decision 1 on #442][round-rulings] to both lost-text classes.
 The source kit has 100 segments and favors its selected remote baseline.
 Near 80 percent faithful, its standard error is about 4 percentage points.
 
@@ -548,28 +574,34 @@ with no tools list.
 Record each downloaded 4B file's SHA256 and machine.
 The [emitter decision on #437][emitter] sets these checks.
 
-## 10. Open cells and their measurements
+## 10. Ruled sites, open cells and measurements
 
 **10.01. Adapter job format.** Measure parse failures and placeholder losses per
 single-text request on the first local test.
 This gives the result for the emitter adapter's rewrite ability.
 Keep independent records for vocabulary correction and shape failure.
 
-**10.02. Literal site.** Compare the outbound sort with driver assembly as the
-literal-check site.
+**10.02. Literal site.** Driver assembly is the ruled literal-check site under clause
+6.02.
+The [operator's decision 2 on #442][round-rulings] closes this site choice.
+Keep a later site comparison under the measurement `literal-site-cost`.
+Compare the outbound sort with driver assembly as the literal-check site.
 Count the detected literal changes and released invalid texts at each site.
 Measure the time per text.
-The operator selects the site from those results.
-The [2026-11-02 correction on #437][retirement] keeps this open.
+For a later site change, first record the operator's decision and merge any required
+Spec amendment.
 
-**10.03. Retry site.** Compare driver retries through new gate turns with retries inside
-the same agent turn.
+**10.03. Retry site.** The driver sends shape retries through new gate turns under
+clause 6.03.
+The [operator's decision 2 on #442][round-rulings] closes this site choice.
+Keep a later site comparison under the measurement `shape-retry-site-cost`.
+Compare driver retries through new gate turns with retries inside the same agent turn.
 Measure shape recovery, time, token cost and completeness of the three-emission trace
 per text.
 Keep the three-strike bound unchanged in both comparisons.
-The operator selects the site and any necessary instruction-path amendment.
+For a later site change, first record the operator's decision and merge any necessary
+instruction-path amendment.
 No open cell grants a constructor that the merged Specs forbid.
-The [2026-11-02 correction on #437][retirement] keeps this open.
 
 **10.04. Group size.** Measure missing-text counts by group size against the single-text
 baseline.
@@ -586,10 +618,12 @@ The operator sets the allowed decrease before round 2 from those results.
 Compare each later adapter round with the prior round and Gemini.
 Keep independent records for the checker success rate and faithful count.
 
-**10.06. Kill sample.** Measure drop rate and its uncertainty as the attempted-text
-sample increases.
+**10.06. Kill sample.** Measure the combined loss rate and its uncertainty as the
+attempted-text sample increases.
 The operator sets the sufficient sample size and threshold within 20 to 25 percent.
-Keep drops in that rate under rulings Q and S, [#437][epic].
+Keep shape drops and `language_unresolved` texts in that rate under clause 7.04.
+Report both counts separately beside the combined rate.
+These are rulings Q and S, [#437][epic], with [decision 1 on #442][round-rulings].
 
 **10.07. Calibration corpus.** Measure faithful count, shape losses and semantic defects
 in round 1's accepted output.
@@ -616,13 +650,16 @@ The deposits give the results for the two card cells.
 on the held-out set.
 Count replacements the reviewer judges faithful and record each failure context.
 Include case and inflection variants in that measurement.
-The operator rules on the first tags and their exact deterministic forms.
+The operator rules on the first tags and their exact deterministic forms from
+measurement after round 1.
+Keep this cell open and start with the empty splice table in clause 3.03.
 Keep all unruled entries and forms out of the splice path.
+This is [decision 3 on #442][round-rulings].
 
 **10.12. Repair cap.** Measure the cumulative success count, faithful count, tokens and
 time after each `repair pass`.
 The operator selects the measured repair cap from that curve.
-Start with clause 6.07's calibration cap.
+Start with the operator's round parameter under clause 6.07.
 Name this measurement `repair-yield-cost`.
 The source success rates were 89.2, 99.2, 99.8 and 99.9 percent over four cycles.
 This cell does not change the three shape faults or `offer_pass_cap`.
@@ -670,7 +707,7 @@ For each additional `offer pass`, count new checker-accepted sentences and
 reviewer-faithful corrections.
 Also record unused responses, tokens, decode time and total turn time.
 Keep the input set, model, artifacts and other limits unchanged.
-Start with the one-pass calibration parameter in clause 5.10.
+Start with the operator's round parameter under clause 5.10.
 Use controlled later tests with each candidate positive `offer_pass_cap` set before the
 turn.
 The operator selects a later cap from marginal yield and cost.
@@ -701,6 +738,7 @@ This cell grants no autonomic action to this loop.
 [i382]: https://github.com/toddwbucy/WeaverAgent/issues/382
 [pr439]: https://github.com/toddwbucy/WeaverAgent/pull/439
 [pr441]: https://github.com/toddwbucy/WeaverAgent/pull/441
+[round-rulings]: https://github.com/toddwbucy/WeaverAgent/pull/442#issuecomment-6590982515
 [train]: https://github.com/toddwbucy/WeaverTrain/tree/ab63a918
 [train2]: https://github.com/toddwbucy/WeaverTrain/issues/2
 [q14]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6580579071
