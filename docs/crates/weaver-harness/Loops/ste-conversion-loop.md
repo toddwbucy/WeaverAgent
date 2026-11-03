@@ -30,6 +30,8 @@ The process document change stays with the Planner.
 Rulings A to G have the date 2026-11-01.
 Rulings H to T have the date 2026-11-02.
 The amendments in the header supply the requirements for the organs.
+This workflow applies only at and after the [foundation cutover][cutover].
+It has no form before that cutover.
 Use the later rulings where they change the sketch.
 The [2026-11-02 operator rulings on #442][round-rulings] set the four choices for
 this workflow.
@@ -725,6 +727,7 @@ This cell grants no autonomic action to this loop.
 [sketch]: ../../../project/sketch-ste-conversion-loop.md
 [spec02]: ../../state-management/state-management-spec-02-protocol-classifier-gate.md
 [state-spec]: ../../state-management/weaver-state-Spec-amendment.md
+[cutover]: ../../state-management/state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 [admin-spec]: ../../state-management/weaver-admin-Spec-amendment.md
 [harness-spec]: ../../state-management/weaver-harness-Spec-amendment.md
 [hardware]: ../../../../crates/weaver-spu/kernels/PROVENANCE.md
