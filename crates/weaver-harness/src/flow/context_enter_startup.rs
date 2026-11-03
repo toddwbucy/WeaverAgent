@@ -9,6 +9,7 @@ use weaver_types::state_flow::enter::{EnterBinding, EnterPayload};
 pub(in crate::flow) struct EnterLoadFacts {
     composer: weaver_trace::LoopIdentity,
     checker_digest: shared::Digest,
+    instruction: shared::Ste100Instruction,
 }
 
 impl<'a> StartupComposition<'a> {
@@ -97,6 +98,7 @@ impl<'a> StartupComposition<'a> {
             enter_load: Some(EnterLoadFacts {
                 composer: inputs.composer,
                 checker_digest,
+                instruction: bootstrap.instruction.clone(),
             }),
             bootstrap,
             binary: inputs.classifier_binary,
@@ -169,10 +171,6 @@ impl EnterLoadFacts {
         else {
             unreachable!("checked Serving Enter")
         };
-        let instruction = state_management
-            .ste100
-            .as_ref()
-            .expect("startup checked classifier election");
         let load = trace::LoadRecord {
             residual_readout: payload.spu_instruction.decoder.residual_readout_election,
             field: payload
@@ -219,14 +217,14 @@ impl EnterLoadFacts {
                 uid: payload.cause.uid,
             },
             library_path: payload.library_path.clone(),
-            state_flow: declaration(state_management),
+            state_flow: declaration(state_management, &self.instruction),
             state_start: mirror::start(start),
             clock_source: trace::ClockSource::ClockMonotonic,
             origin_ns: origin.into(),
             state_member_observation: mirror::member(member),
             template_inventory: inventory.record(
                 &state_management.flow.scheme,
-                &instruction.model_artifact_sha256,
+                &self.instruction.model_artifact_sha256,
             ),
             ste100_scheme: ste100_scheme.clone(),
             ste100_binary_sha256: self.checker_digest.to_string(),
@@ -248,13 +246,16 @@ fn wait(value: &shared::MeasuredWait) -> trace::MeasuredWait {
         measurement_ref: value.measurement_ref.clone(),
     }
 }
-fn declaration(value: &shared::StateManagementConfig) -> trace::FlowDeclarationRecord {
+fn declaration(
+    value: &shared::StateManagementConfig,
+    instruction: &shared::Ste100Instruction,
+) -> trace::FlowDeclarationRecord {
     let shared::StateManagementConfig {
         flow,
         start: _,
         persistence,
         reads,
-        ste100,
+        ste100: _,
         tools,
         placement,
     } = value;
@@ -315,11 +316,7 @@ fn declaration(value: &shared::StateManagementConfig) -> trace::FlowDeclarationR
             max_result_bytes: reads.max_result_bytes.0.into(),
             measurement_ref: reads.measurement_ref.clone(),
         },
-        ste100: mirror::instruction(
-            ste100
-                .as_ref()
-                .expect("startup checked classifier election"),
-        ),
+        ste100: mirror::instruction(instruction),
         tools: trace::ToolPolicies {
             sh: tools.sh.as_ref().map(
                 |shared::ToolPolicy {

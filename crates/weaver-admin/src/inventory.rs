@@ -242,7 +242,7 @@ fn judge_classifier_election(
                 .access_rule
                 .allowed_uids
                 .iter()
-                .any(|uid| *uid != operator))
+                .any(|uid| *uid != operator && !gate.access_rule.denied_uids.contains(uid)))
     {
         return Err(LifecycleRefusal::ConfigInvalid {
             field: Some(FieldName("gate-instruction.access-rule".into())),

@@ -14,16 +14,26 @@ fn no_classifier_limits_tools_and_gate_access_before_host_checks() {
         .join("\n");
     let operator = 1000;
     let name = AgentName(fixture.config.agent.clone());
-    let accepted = weaver_types::parse_serving_draft(&source).unwrap();
-    let bound = accepted
-        .clone()
-        .bind_start(weaver_types::state_flow::Digest::new("a".repeat(64)).unwrap());
-    for result in [
-        take_serving_inventory(&name, &source, &accepted, &fixture.boundary, 0),
-        take_seed_inventory(&name, &source, &accepted, &fixture.boundary, 0),
-        take_bound_inventory(&name, &source, &bound, &fixture.boundary, 0),
+    for source in [
+        source.clone(),
+        source
+            .replace("allowed-uids = [0]", "allowed-uids = [0, 1000]")
+            .replace("denied-uids = []", "denied-uids = [1000]"),
+        source
+            .replace("allowed-uids = [0]", "allowed-uids = [1000]")
+            .replace("denied-uids = []", "denied-uids = [1000]"),
     ] {
-        assert!(result.is_ok(), "{result:?}");
+        let accepted = weaver_types::parse_serving_draft(&source).unwrap();
+        let bound = accepted
+            .clone()
+            .bind_start(weaver_types::state_flow::Digest::new("a".repeat(64)).unwrap());
+        for result in [
+            take_serving_inventory(&name, &source, &accepted, &fixture.boundary, 0),
+            take_seed_inventory(&name, &source, &accepted, &fixture.boundary, 0),
+            take_bound_inventory(&name, &source, &bound, &fixture.boundary, 0),
+        ] {
+            assert!(result.is_ok(), "{result:?}");
+        }
     }
     let mut broken_host = fixture.boundary.clone();
     broken_host.home = fixture.config.territory.join("missing-home");
@@ -32,6 +42,12 @@ fn no_classifier_limits_tools_and_gate_access_before_host_checks() {
         (
             "operator plus foreign uid",
             source.replace("allowed-uids = [0]", "allowed-uids = [1000, 0]"),
+            "gate-instruction.access-rule",
+        ),
+        (
+            "one foreign uid denied and another admitted",
+            source.replace("allowed-uids = [0]", "allowed-uids = [1000, 0, 2000]")
+                .replace("denied-uids = []", "denied-uids = [0]"),
             "gate-instruction.access-rule",
         ),
         (
