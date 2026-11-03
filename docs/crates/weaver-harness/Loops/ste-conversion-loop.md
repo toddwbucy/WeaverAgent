@@ -5,7 +5,7 @@ ASD-STE100:9 thesaurus: 022df3d809593696766893bf95f915229628497b89ef571dbc997ac8
 **Version:** 0.2, 2026-11-03
 **Document ID:** `ste-conversion-loop`
 **Parent:** `weaver-harness-PRD`
-**Landing PR:** #442
+**Landing PR:** #445
 **Standard:** `ASD-STE100`, Issue 9, 2025-01-15
 **Lexicon:** `WeaverTrain ste/`, `ab63a918b569e5b8673dc2e78e66575ee9df1bd7`
 **Thesaurus digest:** SHA256 of `ste/thesaurus.toml`, in the header above
@@ -166,7 +166,7 @@ Supply its digest and the operator's review reference.
 Use `SEED-CERTIFICATE` with no bindings and no checker artifact digest.
 The scheme, duties and prompt digest checks still apply.
 Q7, [#437][c-q67], accepts this seed without a classifier.
-C5, [#437][c-q67], keeps the prompt in its seed span.
+C5, [#437][c-q67], keeps the prompt path unchanged.
 A new prompt version through admin stays owed under [#440][i440].
 
 **3.09. Templates.** Use the compiled template inventory and record its digest at load.
