@@ -5,7 +5,7 @@ ASD-STE100:9 thesaurus: 022df3d809593696766893bf95f915229628497b89ef571dbc997ac8
 **Version:** 0.4, 2026-11-03
 **Document ID:** `ste-conversion-loop`
 **Parent:** `weaver-harness-PRD`
-**Landing PR:** Pending draft number
+**Landing PR:** #448
 **Standard:** `ASD-STE100`, Issue 9, 2025-01-15
 **Lexicon:** `WeaverTrain ste/`, `ab63a918b569e5b8673dc2e78e66575ee9df1bd7`
 **Thesaurus digest:** SHA256 of `ste/thesaurus.toml`, in the header above
@@ -254,7 +254,7 @@ Keep the source bundle SHA256 as provenance:
 `e21370fcd140a4bb5e7a0d2dd415c58d8ecead9333a9e730adb66ab96e7a851c`.
 These source hashes do not identify the folded bytes.
 Use `ste_prompt.render(20, 25)` and `ste_prompt.examples()` as the fold's source.
-Use these functions from [WeaverTrain `9881da6`][prompt-source].
+Use these functions at the runtime revision in clause 4.11.
 Use the approved words artifact in the header and that revision's other source files.
 The operator reviews the folded file before seed under `SEED-CERTIFICATE`.
 Record that review reference under clause 3.08.
@@ -279,7 +279,7 @@ This is the fold proposal under [#437][fold-ruling].
 
 **4.09. Source-data exemption.** Keep the source characters, punctuation and line
 divisions in [ste-conversion-prompt.txt][prompt] under clause 4.08.
-The operator's 2026-11-03 decision selects [option (b)][fold-edits].
+The [operator's 2026-11-03 decision][fold-byte-rule] selects option (b).
 Its exemption applies only to the source bytes in that file.
 These source bytes have an exemption from the ASCII, semicolon and word-prohibition
 gates.
@@ -304,6 +304,14 @@ Keep their trace records under clause 7.01.
 An internal offer can append its instruction and response during the same external turn.
 Clause 5.14 still applies inside that turn.
 Compare the complete initial or repair message list under clause 9.05.
+
+**4.11. Runtime source.** Use the scripts from [WeaverTrain `9881da6`][train].
+This revision supplies `ste_convert`, `ste_check`, `ste_kit_run`, `ste_prompt` and
+`ste_score`.
+Use this one revision for all functions from these five scripts.
+Use the header's lexicon and clause 1.06's sentence limits with these scripts.
+The `ste/` tree is unchanged between `ab63a918` and `9881da6`.
+Keep this document's lexicon pin unchanged.
 
 ## 5. Agent procedure
 
@@ -435,6 +443,7 @@ Measure the reached path under clause 10.16.
 
 **6.01. Language.** Apply `ste_check.check` with the pinned lexicon and limits in clause
 1.06.
+Use clause 4.11's runtime revision for this function, `Converter.guard` and `Judge`.
 Check verbs, words, `-ing` forms, contractions, capitals and placeholders.
 Check for a copied example, excessive word growth or loss, and new markup.
 Use the source `Converter.guard` and `Judge` rules for those extra checks.
@@ -561,10 +570,11 @@ Use the same original `masked_text` as the initial request.
 Append `"\n\n<<<PREVIOUS_REWRITE\n" + last_rewrite + "\nPREVIOUS_REWRITE>>>"`.
 Here, `last_rewrite` is the complete `Y` that the driver received under clause 6.04.
 Append `"\n\nYour rewrite breaks these rules:\n" + notes`.
-Make `notes` from `ste_check.repair_note` with the pinned checker and lexicon.
+Make `notes` from `ste_check.repair_note` at clause 4.11's revision with the pinned
+lexicon.
 Include the guard notes from `ste_kit_run.one` for a copied example or a word-ratio
 failure.
-Use that function at clause 4.07's pinned source revision.
+Use that function at clause 4.11's runtime revision.
 Remove whitespace from the start and end of the complete notes.
 If the notes are empty, use `- Obey the rules.`.
 Append `\n\nWrite the complete rewrite again with these problems corrected.`.
@@ -659,6 +669,7 @@ At the bound, the transport count alone does not make the round void.
 This bound grants no retry or earlier-candidate promotion after a transport stop.
 For `R0`, report the stopped count and void status without a kill-line verdict.
 The pinned `ste_score.py` counts a missing output as a failure.
+Use that script at clause 4.11's runtime revision.
 Do not use that score as the conversion-loss numerator.
 The [#447 decision][transport-ruling] sets this bound.
 Use clause 10.22 for its later measurement.
@@ -942,7 +953,7 @@ They supply no default bound and change no conversion-loss threshold.
 [round-rulings]: https://github.com/toddwbucy/WeaverAgent/pull/442#issuecomment-6590982515
 [r0-rulings]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6595641498
 [r0-request]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6604111261
-[train]: https://github.com/toddwbucy/WeaverTrain/tree/ab63a918
+[train]: https://github.com/toddwbucy/WeaverTrain/tree/9881da6cfbc92b08b31264883aea63b73aa7b694
 [train2]: https://github.com/toddwbucy/WeaverTrain/issues/2
 [q14]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6580579071
 [q4rename]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6580617912
@@ -954,9 +965,8 @@ They supply no default bound and change no conversion-loss threshold.
 [ste-ruling]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6579488631
 [emitter]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6579865632
 [fold-ruling]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6609999828
-[fold-edits]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6610863318
+[fold-byte-rule]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6611242178
 [transport-ruling]: https://github.com/toddwbucy/WeaverAgent/issues/447#issuecomment-6608754538
 [rewriter]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6605288962
 [train-rewriter]: https://github.com/toddwbucy/WeaverTrain/issues/17#issuecomment-6605286044
 [train-fold]: https://github.com/toddwbucy/WeaverTrain/issues/17#issuecomment-6610000291
-[prompt-source]: https://github.com/toddwbucy/WeaverTrain/tree/9881da6cfbc92b08b31264883aea63b73aa7b694
