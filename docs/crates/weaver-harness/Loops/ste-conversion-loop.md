@@ -258,6 +258,8 @@ Use these functions at the runtime revision in clause 4.11.
 Use the approved words artifact in the header and that revision's other source files.
 The operator reviews the folded file before seed under `SEED-CERTIFICATE`.
 Record that review reference under clause 3.08.
+The [2026-11-03 approval][prompt-approval] applies to this digest only.
+Get a new review if the file changes.
 Use the [WeaverTrain #17 decision][train-fold] for the training message layout.
 
 **4.08. Fold.** Use the complete source system text as UTF-8 bytes.
@@ -659,17 +661,26 @@ Clause 10.07 holds that open decision.
 parameters before conversion starts.
 The operator sets this nonnegative integer at each round start.
 Use no default value.
-For `R0`, record the operator's bound before each complete kit evaluation starts.
+For both `R0` kit evaluations, use `transport_stop_bound` = 0 under the
+[2026-11-03 decision][r0-transport].
+Record this bound before each complete kit evaluation starts.
 Count each `transport_stopped` text once.
 If `transport_stopped_count` is larger than the bound, the round is void.
 Report `void`, the bound, all three terminal counts and the attempted-text count.
 Give that round no kill-line result.
 Keep never-attempted texts in their own list under clause 7.05.
 At the bound, the transport count alone does not make the round void.
-This bound grants no retry or earlier-candidate promotion after a transport stop.
+Do not retry a stopped text within that evaluation or promote an earlier candidate.
 For `R0`, report the stopped count and void status without a kill-line verdict.
+For `R0`, the first stopped text makes that evaluation void.
+Keep every void evaluation and its counts.
+Give a void evaluation no `R0` score.
+Start a new evaluation at the first kit item with the same frozen inputs and parameters.
+Record the void evaluation and each new evaluation separately.
+Use a new operator bound for each later round.
 The pinned `ste_score.py` counts a missing output as a failure.
 Use that script at clause 4.11's runtime revision.
+For `R0`, use that script only for an evaluation that is not void.
 Do not use that score as the conversion-loss numerator.
 The [#447 decision][transport-ruling] sets this bound.
 Use clause 10.22 for its later measurement.
@@ -967,6 +978,8 @@ They supply no default bound and change no conversion-loss threshold.
 [fold-ruling]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6609999828
 [fold-byte-rule]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6611242178
 [transport-ruling]: https://github.com/toddwbucy/WeaverAgent/issues/447#issuecomment-6608754538
+[r0-transport]: https://github.com/toddwbucy/WeaverAgent/issues/447#issuecomment-6614455356
+[prompt-approval]: https://github.com/toddwbucy/WeaverAgent/pull/448#issuecomment-6614454936
 [rewriter]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6605288962
 [train-rewriter]: https://github.com/toddwbucy/WeaverTrain/issues/17#issuecomment-6605286044
 [train-fold]: https://github.com/toddwbucy/WeaverTrain/issues/17#issuecomment-6610000291
