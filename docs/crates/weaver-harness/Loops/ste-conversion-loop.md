@@ -305,6 +305,8 @@ An unused offer response is not a fallback answer.
 
 **5.10. Offer limit.** Read `offer_pass_cap` from the operator's round parameters.
 The operator sets this cap at each round start.
+Use this parameter as the workflow's elected value.
+Supply that exact value to the private turn owner.
 Use no default value.
 Use `offer-yield-cost` in clause 10.20 to select later values.
 Keep the positive `u32` value unchanged for the complete external turn.
