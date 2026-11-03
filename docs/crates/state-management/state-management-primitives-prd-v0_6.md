@@ -8,7 +8,7 @@ is the version.
 **Document ID:** `state-management-primitives-PRD`
 **Editorial:** ASCII, no semicolons, prose at 88 characters.
 
-**Landing PR:** #182
+**Landing PR:** #439
 
 ## 0. Authority and reading
 
