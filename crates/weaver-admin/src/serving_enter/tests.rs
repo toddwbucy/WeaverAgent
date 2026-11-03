@@ -15,6 +15,34 @@ fn facts() -> RuntimeFacts {
         cause: Cause { uid: 0 },
     }
 }
+
+#[test]
+fn classifier_free_binding_does_not_activate_classifier_only_startup() {
+    let mut fixture = fixture();
+    fixture.config.operator = 0;
+    let source = fs::read_to_string(fixture.config.territory.join("agent.toml")).unwrap();
+    let source = source
+        .lines()
+        .filter(|line| !line.starts_with("state-management.ste100."))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let draft = weaver_types::parse_serving_draft(&source).unwrap();
+    let verified = verified_enter_fixture(draft.bind_start(hash(b"placeholder")));
+    fs::remove_file(fixture.config.root.join("ste100-binary")).unwrap();
+    let error = PreparedEnter::prepare_against(
+        &fixture.config,
+        &AgentName(fixture.config.agent.clone()),
+        verified,
+        facts(),
+        7,
+        &fixture.boundary,
+    )
+    .err()
+    .expect("classifier-only startup refuses");
+    assert!(matches!(error, PreparationFailure::Inventory {
+        refusal: weaver_types::LifecycleRefusal::ConfigInvalid { field: Some(ref name) }, ..
+    } if name.0 == "state-management.ste100"));
+}
 #[test]
 fn replacement_enter_producer_uses_verified_settings_and_exact_checked_root_bytes() {
     let fixture = fixture();
@@ -79,7 +107,11 @@ fn replacement_enter_producer_uses_verified_settings_and_exact_checked_root_byte
     );
     assert_ne!(
         executable_hash,
-        state_management.ste100.model_artifact_sha256
+        state_management
+            .ste100
+            .as_ref()
+            .unwrap()
+            .model_artifact_sha256
     );
     let LoadedStateFacts::Serving {
         ste100_binary_sha256,
@@ -88,7 +120,7 @@ fn replacement_enter_producer_uses_verified_settings_and_exact_checked_root_byte
     else {
         panic!()
     };
-    assert_eq!(ste100_binary_sha256, executable_hash);
+    assert_eq!(ste100_binary_sha256, Some(executable_hash));
     // Send from the producer after the root scheme changes: no later read may
     // replace the checked instance, and the descriptor pair stays in order.
     fs::write(

@@ -173,6 +173,7 @@ pub(crate) fn take_seed_inventory(
     source: &str,
     draft: &weaver_types::ServingDraft,
     boundary: &Boundary,
+    operator: u32,
 ) -> Result<Inventory, LifecycleRefusal> {
     // ADMIN-SEED starts the member under its own restricted identity. This
     // seed-only judgment leaves the active legacy inventory unchanged.
@@ -183,7 +184,7 @@ pub(crate) fn take_seed_inventory(
         diag!("boundary unverified: the seed member must be neither root nor the agent");
         return Err(LifecycleRefusal::BoundaryUnverified);
     }
-    take_serving_inventory(name, source, draft, boundary)
+    take_serving_inventory(name, source, draft, boundary, operator)
 }
 
 /// The shared operational judgments for a parsed serving authoring draft.
@@ -194,7 +195,13 @@ pub(crate) fn take_serving_inventory(
     source: &str,
     draft: &weaver_types::ServingDraft,
     boundary: &Boundary,
+    operator: u32,
 ) -> Result<Inventory, LifecycleRefusal> {
+    judge_classifier_election(
+        draft.agent(),
+        draft.state_management().ste100.is_some(),
+        operator,
+    )?;
     judge_config(name, source, draft.agent().clone(), boundary, None)
 }
 
@@ -205,8 +212,43 @@ pub(crate) fn take_bound_inventory(
     source: &str,
     bound: &weaver_types::ServingDeclaration,
     boundary: &Boundary,
+    operator: u32,
 ) -> Result<Inventory, LifecycleRefusal> {
+    judge_classifier_election(
+        bound.agent(),
+        bound.state_management().ste100.is_some(),
+        operator,
+    )?;
     judge_config(name, source, bound.agent().clone(), boundary, None)
+}
+
+// ADMIN-STE100, Q6 and Q7. Judge before the common inventory walks host paths.
+fn judge_classifier_election(
+    config: &AgentConfig,
+    elected: bool,
+    operator: u32,
+) -> Result<(), LifecycleRefusal> {
+    if elected {
+        return Ok(());
+    }
+    if !config.tool_set.is_empty() {
+        return Err(LifecycleRefusal::ConfigInvalid {
+            field: Some(FieldName("state-management.ste100".into())),
+        });
+    }
+    if let Some(gate) = &config.gate_instruction
+        && (!gate.access_rule.allowed_gids.is_empty()
+            || gate
+                .access_rule
+                .allowed_uids
+                .iter()
+                .any(|uid| *uid != operator))
+    {
+        return Err(LifecycleRefusal::ConfigInvalid {
+            field: Some(FieldName("gate-instruction.access-rule".into())),
+        });
+    }
+    Ok(())
 }
 
 fn judge_config(

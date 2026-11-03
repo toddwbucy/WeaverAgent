@@ -3,6 +3,90 @@
 
 use super::*;
 
+#[test]
+fn no_classifier_limits_tools_and_gate_access_before_host_checks() {
+    let fixture = crate::seed::preparation::tests::fixture();
+    let original = std::fs::read_to_string(fixture.config.territory.join("agent.toml")).unwrap();
+    let source = original
+        .lines()
+        .filter(|line| !line.starts_with("state-management.ste100."))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let operator = 1000;
+    let name = AgentName(fixture.config.agent.clone());
+    let accepted = weaver_types::parse_serving_draft(&source).unwrap();
+    let bound = accepted
+        .clone()
+        .bind_start(weaver_types::state_flow::Digest::new("a".repeat(64)).unwrap());
+    for result in [
+        take_serving_inventory(&name, &source, &accepted, &fixture.boundary, 0),
+        take_seed_inventory(&name, &source, &accepted, &fixture.boundary, 0),
+        take_bound_inventory(&name, &source, &bound, &fixture.boundary, 0),
+    ] {
+        assert!(result.is_ok(), "{result:?}");
+    }
+    let mut broken_host = fixture.boundary.clone();
+    broken_host.home = fixture.config.territory.join("missing-home");
+    for (case, source, field) in [
+        ("foreign uid", source.clone(), "gate-instruction.access-rule"),
+        (
+            "operator plus foreign uid",
+            source.replace("allowed-uids = [0]", "allowed-uids = [1000, 0]"),
+            "gate-instruction.access-rule",
+        ),
+        (
+            "group admission",
+            source.replace("allowed-uids = [0]", "allowed-uids = [1000]")
+                .replace("allowed-gids = []", "allowed-gids = [1000]"),
+            "gate-instruction.access-rule",
+        ),
+        (
+            "tool election",
+            source.replace("tool-set = []", "tool-set = [\"sh\"]")
+                .replace("state-management.tools = {}", "state-management.tools.sh.clock-ms = 1\nstate-management.tools.sh.measurement-ref = \"fixture\""),
+            "state-management.ste100",
+        ),
+    ] {
+        let draft = weaver_types::parse_serving_draft(&source).unwrap();
+        let bound = draft.clone().bind_start(
+            weaver_types::state_flow::Digest::new("a".repeat(64)).unwrap(),
+        );
+        for result in [
+            take_serving_inventory(&name, &source, &draft, &broken_host, operator),
+            take_seed_inventory(&name, &source, &draft, &broken_host, operator),
+            take_bound_inventory(&name, &source, &bound, &broken_host, operator),
+        ] {
+            assert_eq!(result.unwrap_err(), LifecycleRefusal::ConfigInvalid {
+                field: Some(FieldName(field.into())),
+            }, "{case}");
+        }
+    }
+    let mut agent = weaver_types::parse_serving_draft(&source)
+        .unwrap()
+        .agent()
+        .clone();
+    let gate = agent.gate_instruction.as_mut().unwrap();
+    gate.access_rule.allowed_uids = [operator].into();
+    assert!(judge_classifier_election(&agent, false, operator).is_ok());
+    agent
+        .gate_instruction
+        .as_mut()
+        .unwrap()
+        .access_rule
+        .allowed_uids
+        .clear();
+    assert!(judge_classifier_election(&agent, false, operator).is_ok());
+    agent
+        .gate_instruction
+        .as_mut()
+        .unwrap()
+        .access_rule
+        .allowed_gids
+        .insert(1000);
+    agent.tool_set.push(weaver_types::ToolName("sh".into()));
+    assert!(judge_classifier_election(&agent, true, operator).is_ok());
+}
+
 /// **A rule admitting a peer the socket's mode turns away is named.**
 ///
 /// The gate binds `0770` owned by the agent's group, so a uid outside it

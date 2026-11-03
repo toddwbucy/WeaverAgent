@@ -49,6 +49,10 @@ impl<'a> StartupComposition<'a> {
             state_management
                 .validate(&elected)
                 .map_err(|_| "invalid Enter state-management declaration")?;
+            let instruction = state_management
+                .ste100
+                .as_ref()
+                .ok_or("classifier startup requires an elected classifier")?;
             if !inputs.classifier_binary.is_absolute() {
                 return Err("checker launch path must be absolute");
             }
@@ -72,7 +76,7 @@ impl<'a> StartupComposition<'a> {
                 Ste100Bootstrap {
                     protocol: shared::STE100_PROTOCOL.into(),
                     scheme_text: ste100_scheme.clone(),
-                    instruction: state_management.ste100.clone(),
+                    instruction: instruction.clone(),
                 },
                 digest,
             ))
@@ -136,7 +140,7 @@ impl EnterLoadFacts {
                 state_management: state_management.clone(),
                 start: start.clone(),
                 ste100_scheme: ste100_scheme.clone(),
-                ste100_binary_sha256: self.checker_digest.clone(),
+                ste100_binary_sha256: Some(self.checker_digest.clone()),
             },
             state_store: payload.state_store.clone(),
             state_member: true,
@@ -165,6 +169,10 @@ impl EnterLoadFacts {
         else {
             unreachable!("checked Serving Enter")
         };
+        let instruction = state_management
+            .ste100
+            .as_ref()
+            .expect("startup checked classifier election");
         let load = trace::LoadRecord {
             residual_readout: payload.spu_instruction.decoder.residual_readout_election,
             field: payload
@@ -218,7 +226,7 @@ impl EnterLoadFacts {
             state_member_observation: mirror::member(member),
             template_inventory: inventory.record(
                 &state_management.flow.scheme,
-                &state_management.ste100.model_artifact_sha256,
+                &instruction.model_artifact_sha256,
             ),
             ste100_scheme: ste100_scheme.clone(),
             ste100_binary_sha256: self.checker_digest.to_string(),
@@ -307,7 +315,11 @@ fn declaration(value: &shared::StateManagementConfig) -> trace::FlowDeclarationR
             max_result_bytes: reads.max_result_bytes.0.into(),
             measurement_ref: reads.measurement_ref.clone(),
         },
-        ste100: mirror::instruction(ste100),
+        ste100: mirror::instruction(
+            ste100
+                .as_ref()
+                .expect("startup checked classifier election"),
+        ),
         tools: trace::ToolPolicies {
             sh: tools.sh.as_ref().map(
                 |shared::ToolPolicy {

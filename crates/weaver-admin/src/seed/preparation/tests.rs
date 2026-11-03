@@ -291,6 +291,24 @@ fn preparation_retains_exact_certified_bytes_without_an_existing_artifact() {
 }
 
 #[test]
+fn classifier_free_draft_does_not_bypass_the_state_content_1_seed_certificate() {
+    let mut fixture = fixture();
+    fixture.config.operator = 0;
+    let source = fs::read_to_string(fixture.config.territory.join("agent.toml")).unwrap();
+    let source = source
+        .lines()
+        .filter(|line| !line.starts_with("state-management.ste100."))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fixture.write_territory("agent.toml", source.as_bytes());
+    fs::remove_file(fixture.config.root.join("ste100-binary")).unwrap();
+    let error = fixture.prepare().expect_err("classifier-only seed refuses");
+    assert!(matches!(error, PreparationFailure::Inventory {
+        refusal: LifecycleRefusal::ConfigInvalid { field: Some(ref name) }, ..
+    } if name.0 == "state-management.ste100"));
+}
+
+#[test]
 fn certificate_cannot_supply_its_own_expected_prompt_checker_or_scheme_identity() {
     for changed in [
         "prompt",

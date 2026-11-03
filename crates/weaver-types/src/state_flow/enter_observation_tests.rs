@@ -26,6 +26,41 @@ fn load(value: &mut Value) -> &mut Value {
 }
 
 #[test]
+fn classifier_election_and_executable_digest_have_matching_presence() {
+    for instruction in [false, true] {
+        for executable in [false, true] {
+            let mut value = serde_json::to_value(fixture()).unwrap();
+            let serving = &mut load(&mut value)["state"]["serving"];
+            if !instruction {
+                serving["state_management"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("ste100");
+            }
+            if !executable {
+                serving
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("ste100_binary_sha256");
+            }
+            let decoded = ObservationEnvelope::decode(&serde_json::to_vec(&value).unwrap());
+            assert_eq!(decoded.is_ok(), instruction == executable);
+            let typed: ObservationEnvelope = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(typed.encode().is_ok(), instruction == executable);
+            if instruction == executable {
+                assert_eq!(
+                    serde_json::from_slice::<Value>(&decoded.unwrap().encode().unwrap()).unwrap(),
+                    value
+                );
+            }
+        }
+    }
+    let mut value = serde_json::to_value(fixture()).unwrap();
+    load(&mut value)["state"]["serving"]["ste100_binary_sha256"] = Value::Null;
+    assert!(ObservationEnvelope::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+}
+
+#[test]
 fn replacement_observation_preserves_committed_plan_and_rejects_it_without_serving() {
     let mut value = serde_json::to_value(fixture()).unwrap();
     value["payload"]["body"]["plan"] = json!({

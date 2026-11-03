@@ -343,7 +343,13 @@ fn circuit(case: Case) {
     let mut original = None;
     let mut original_peer = None;
     if matches!(case, Case::Entered(_)) {
-        let (source, peer) = entered_tests::adopt(&mut run, record, &bootstrap, &child.path);
+        let (source, peer) = entered_tests::adopt(
+            &mut run,
+            record,
+            &bootstrap,
+            &child.path,
+            !matches!(case, Case::Entered("no-classifier")),
+        );
         original = Some(source);
         original_peer = Some(peer);
     }
@@ -366,8 +372,9 @@ fn circuit(case: Case) {
             classifier_binary: child.path.clone(),
             inventory: request.inventory,
         };
-        if let Case::Entered(mode @ ("foreign-context" | "foreign-resources" | "missing-checker")) =
-            case
+        if let Case::Entered(
+            mode @ ("foreign-context" | "foreign-resources" | "missing-checker" | "no-classifier"),
+        ) = case
         {
             let mut foreign = Fixture::new(config());
             let mut foreign_resources = foreign.context.failed_enter_resources().unwrap();
@@ -387,6 +394,9 @@ fn circuit(case: Case) {
             };
             let (returned, reason) = result.err().expect("unrelated Enter input accepted");
             assert!(!reason.is_empty());
+            if mode == "no-classifier" {
+                assert_eq!(reason, "classifier startup requires an elected classifier");
+            }
             assert!(returned.original.adopted_by(&run.context));
             assert_eq!(run.context.phase(), RecordingPhase::Preflight);
             assert!(resources.classifier_child().is_none());
@@ -562,7 +572,10 @@ fn circuit(case: Case) {
                 else {
                     panic!()
                 };
-                assert_eq!(&owner.bootstrap.instruction, &state_management.ste100);
+                assert_eq!(
+                    Some(&owner.bootstrap.instruction),
+                    state_management.ste100.as_ref()
+                );
                 assert_eq!(&owner.bootstrap.scheme_text, ste100_scheme);
             }
             assert_eq!(opens, 1);
@@ -988,6 +1001,10 @@ fn enter_startup_composition_refuses_a_foreign_resource_owner() {
 #[test]
 fn enter_startup_composition_requires_root_checker_digest() {
     circuit(Case::Entered("missing-checker"));
+}
+#[test]
+fn enter_startup_composition_requires_classifier_election_before_fork() {
+    circuit(Case::Entered("no-classifier"));
 }
 #[test]
 fn enter_startup_composition_refuses_substituted_spu_instruction_before_fork() {

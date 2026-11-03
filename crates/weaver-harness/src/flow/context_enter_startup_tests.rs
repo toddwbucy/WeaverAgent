@@ -51,15 +51,24 @@ pub(super) fn adopt(
     load: &weaver_trace::serving::payloads::LoadRecord,
     bootstrap: &s::Ste100Bootstrap,
     binary: &std::path::Path,
+    classifier: bool,
 ) -> (ReceivedEnter, OwnedFd) {
     let mut envelope = envelope(&run.context.declaration, load, bootstrap, binary);
     let bound = run.context.deadlines.get(PumpDeadline::Enter).unwrap();
     let weaver_types::state_flow::enter::EnterContent::Directive(
         weaver_types::state_flow::enter::EnterDirective::Enter { payload },
     ) = &mut envelope.payload;
-    let EnterBinding::Serving { enter_window, .. } = &mut payload.binding else {
+    let EnterBinding::Serving {
+        enter_window,
+        state_management,
+        ..
+    } = &mut payload.binding
+    else {
         panic!()
     };
+    if !classifier {
+        state_management.ste100 = None;
+    }
     *enter_window = s::EnterWindow {
         began_ns: bound.began_ns().into(),
         deadline_ns: bound.deadline_ns().into(),

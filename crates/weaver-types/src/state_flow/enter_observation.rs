@@ -88,6 +88,16 @@ impl ObservationEnvelope {
             {
                 return Err(CodecError::InvalidLoadedState);
             }
+            if let Some(load) = load
+                && let LoadedStateFacts::Serving {
+                    state_management,
+                    ste100_binary_sha256,
+                    ..
+                } = &load.state
+                && state_management.ste100.is_some() != ste100_binary_sha256.is_some()
+            {
+                return Err(CodecError::InvalidLoadedState);
+            }
         }
         Ok(())
     }

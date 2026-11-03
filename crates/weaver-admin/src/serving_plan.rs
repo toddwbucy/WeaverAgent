@@ -184,7 +184,11 @@ fn exchange(
     if state == AgentState::Active {
         return Err(LifecycleRefusal::ActivityNotAtRest);
     }
-    let wait = &state_management.ste100.decision_wait;
+    let instruction = state_management
+        .ste100
+        .as_ref()
+        .ok_or(LifecycleRefusal::OutOfOrder)?;
+    let wait = &instruction.decision_wait;
     wait.validate().map_err(|_| LifecycleRefusal::Malformed)?;
     let mut channel = dial().map_err(channel_refusal)?;
     channel

@@ -154,7 +154,11 @@ pub(super) fn parse_state(
         measurement_ref: reads.nonempty("measurement-ref")?,
     };
     checked(&root.path("reads"), reads.validate())?;
-    let ste100 = parse_ste100(&root)?;
+    let ste100 = if root.table.contains_key("ste100") {
+        Some(parse_ste100(&root)?)
+    } else {
+        None
+    };
     let tools = parse_tools(&root, elected)?;
     let placement = root.child("placement", &["c-head", "c-tail", "measurement-ref"])?;
     let c_head: u64 = placement.get("c-head")?;

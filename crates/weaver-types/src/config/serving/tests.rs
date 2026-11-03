@@ -113,6 +113,71 @@ fn assert_bad(source: &str, field: &str) {
     assert_eq!(error.field, Some(FieldName(field.into())));
 }
 
+fn without_classifier() -> String {
+    full()
+        .lines()
+        .filter(|line| {
+            !line.starts_with("state-management.ste100.")
+                && !line.starts_with("state-management.tools.sh.")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace("tool-set = [\"sh\"]", "tool-set = []")
+        + "\nstate-management.tools = {}\n"
+}
+
+#[test]
+fn absent_classifier_survives_draft_binding_and_wire_round_trip() {
+    let source = without_classifier();
+    let bound = parse_serving_declaration(&source).unwrap();
+    let draft =
+        parse_serving_draft(&without(&source, "state-management.start.dump-sha256")).unwrap();
+    assert_eq!(
+        draft.bind_start(Digest::new("b".repeat(64)).unwrap()),
+        bound
+    );
+    let state = bound.state_management();
+    state.validate(&[]).unwrap();
+    let wire = serde_json::to_value(state).unwrap();
+    assert!(wire.get("ste100").is_none());
+    let decoded: StateManagementConfig = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(&decoded, state);
+    let mut explicit_null = wire;
+    explicit_null["ste100"] = serde_json::Value::Null;
+    assert!(serde_json::from_value::<StateManagementConfig>(explicit_null).is_err());
+}
+
+#[test]
+fn tools_require_classifier_even_with_a_complete_tool_policy() {
+    let bound = parse_serving_declaration(&without_classifier()).unwrap();
+    let mut state = bound.state_management().clone();
+    state.tools.sh = Some(crate::state_flow::ToolPolicy {
+        clock_ms: 1,
+        measurement_ref: "fixture".into(),
+    });
+    assert!(state.validate(&["sh".into()]).is_err());
+}
+
+#[test]
+fn an_elected_classifier_cannot_be_empty_partial_or_the_wrong_shape() {
+    let source = without_classifier();
+    for value in ["{}", "{ instances = 1 }"] {
+        let error = parse_serving_draft(&format!("{source}\nstate-management.ste100 = {value}\n"))
+            .unwrap_err();
+        assert_eq!(error.kind, ConfigErrorKind::MissingField);
+        assert_eq!(
+            error.field,
+            Some(FieldName("state-management.ste100.model-binding".into()))
+        );
+    }
+    for value in ["1", "[]", "\"\""] {
+        assert_bad(
+            &format!("{source}\nstate-management.ste100 = {value}\n"),
+            "state-management.ste100",
+        );
+    }
+}
+
 #[test]
 fn complete_serving_grammar_retains_every_common_and_new_setting() {
     let parsed = parse_serving_declaration(&full()).unwrap();
@@ -134,11 +199,12 @@ fn complete_serving_grammar_retains_every_common_and_new_setting() {
         120_000_000_000
     );
     assert_eq!(state.reads.max_result_bytes.0, 18);
-    assert_eq!(state.ste100.model_binding.devices[0].0, 3);
-    assert_eq!(state.ste100.instances, 2);
-    assert_eq!(state.ste100.max_wire_bytes.0, 19);
-    assert_eq!(state.ste100.repair_cap.attempts, 3);
-    assert_eq!(state.ste100.decision_wait.elapsed_ns.0, 20);
+    let instruction = state.ste100.as_ref().unwrap();
+    assert_eq!(instruction.model_binding.devices[0].0, 3);
+    assert_eq!(instruction.instances, 2);
+    assert_eq!(instruction.max_wire_bytes.0, 19);
+    assert_eq!(instruction.repair_cap.attempts, 3);
+    assert_eq!(instruction.decision_wait.elapsed_ns.0, 20);
     assert_eq!(state.tools.sh.as_ref().unwrap().clock_ms, 60_000);
     assert_eq!(state.placement.c_head, 21);
     assert_eq!(state.placement.c_tail, 22);
@@ -148,7 +214,7 @@ fn complete_serving_grammar_retains_every_common_and_new_setting() {
 }
 
 #[test]
-fn draft_absence_is_limited_to_the_start_hash_and_binding_changes_only_it() {
+fn draft_start_hash_absence_and_binding_preserve_operational_settings() {
     let source = without(&full(), "state-management.start.dump-sha256");
     let expected = parse_serving_declaration(&full()).unwrap();
     for source in [
@@ -305,7 +371,14 @@ fn ste100_manifest_locator_has_exact_field_attribution_and_preserves_legacy_bind
         let source = replace(&full(), key, &value);
         let parsed = parse_serving_declaration(&source).unwrap();
         assert_eq!(
-            parsed.state_management().ste100.model_binding.artifact.0,
+            parsed
+                .state_management()
+                .ste100
+                .as_ref()
+                .unwrap()
+                .model_binding
+                .artifact
+                .0,
             locator
         );
         // The exact legacy parser result retains its relative decoder and label
