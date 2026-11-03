@@ -306,9 +306,9 @@ Clause 5.14 still applies inside that turn.
 Compare the complete initial or repair message list under clause 9.05.
 
 **4.11. Runtime source.** Use the scripts from [WeaverTrain `9881da6`][train].
-This revision supplies `ste_convert`, `ste_check`, `ste_kit_run`, `ste_prompt` and
-`ste_score`.
-Use this one revision for all functions from these five scripts.
+This revision supplies `ste_convert`, `ste_check`, `ste_experiment`, `ste_kit_run`,
+`ste_prompt` and `ste_score`.
+Use this one revision for all functions from these scripts.
 Use the header's lexicon and clause 1.06's sentence limits with these scripts.
 The `ste/` tree is unchanged between `ab63a918` and `9881da6`.
 Keep this document's lexicon pin unchanged.
