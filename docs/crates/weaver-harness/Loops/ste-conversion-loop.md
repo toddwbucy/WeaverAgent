@@ -5,7 +5,7 @@ ASD-STE100:9 thesaurus: 022df3d809593696766893bf95f915229628497b89ef571dbc997ac8
 **Version:** 0.3, 2026-11-03
 **Document ID:** `ste-conversion-loop`
 **Parent:** `weaver-harness-PRD`
-**Landing PR:** #445
+**Landing PR:** #446
 **Standard:** `ASD-STE100`, Issue 9, 2025-01-15
 **Lexicon:** `WeaverTrain ste/`, `ab63a918b569e5b8673dc2e78e66575ee9df1bd7`
 **Thesaurus digest:** SHA256 of `ste/thesaurus.toml`, in the header above
@@ -399,8 +399,8 @@ The driver site is [decision 2 on #442][round-rulings].
 The [2026-11-03 decision on #437][r0-request] adds the shared request limit.
 Clause 10.03 keeps a later comparison of sites.
 
-**6.04. Repair.** The driver owns each `repair pass` for a language failure after the
-shape checks accept the text.
+**6.04. Language repair.** For a language failure, the driver owns the `repair pass`
+after shape checks accept the text.
 Keep the failure text and the checker's notes.
 Send the original text with placeholders, its last rewrite and checker notes through a
 new gate turn.
@@ -457,7 +457,17 @@ This gives one initial request and at most two further gate requests.
 The [2026-11-03 decision][r0-request] makes this one shared limit of three requests.
 For `R0`, keep `offer_pass_cap` at one per external turn under [#437][r0-rulings].
 An internal offer does not consume another gate request.
-Report the number of model generations for each gate request.
+Report the number of recorded generation outcomes for each gate request.
+Count `model.output` events from the [trace][trace-base] for the request's `RunId` and
+external turn.
+Count each event once as a recorded generation outcome.
+Use `loop.instruction` and `message.assistant` causal parents to identify offer
+responses under clause 5.07.
+Use [TRACE-INSTRUCTION][trace-spec] for those parent links.
+Use [RECORD-OWNERS][qualification] for the source of each measurement.
+Do not count an `emission.change` as another generation.
+Mark the count as incomplete if its source records are incomplete.
+Use no guessed count.
 The Python reference does not use internal offers.
 An equal number of gate requests can include different numbers of model generations.
 Report both loss classes under clause 7.04.
@@ -753,6 +763,9 @@ This cell grants no autonomic action to this loop.
 [cutover]: ../../state-management/state-management-foundation-Spec.md#1-applicability-and-the-serving-cutover
 [admin-spec]: ../../state-management/weaver-admin-Spec-amendment.md
 [harness-spec]: ../../state-management/weaver-harness-Spec-amendment.md
+[trace-base]: ../../weaver-trace/weaver-trace-Spec.md
+[trace-spec]: ../../state-management/weaver-trace-Spec-amendment.md
+[qualification]: ../../state-management/state-management-spec-09-qualification-costs.md
 [hardware]: ../../../../crates/weaver-spu/kernels/PROVENANCE.md
 [epic]: https://github.com/toddwbucy/WeaverAgent/issues/437
 [parent]: https://github.com/toddwbucy/WeaverAgent/issues/423
