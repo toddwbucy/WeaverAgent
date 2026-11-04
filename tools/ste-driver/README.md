@@ -3,7 +3,8 @@
 This tool builds outside the agent workspace. It has its own lock file and no
 dependency on an agent organ. It implements the external driver's pinned masking,
 language and literal checks. Its command sends requests through `deploy/turn.py`
-and keeps the external results. Agent composition and trace enrichment remain owed.
+and keeps the external results. A separate offline command collects trace evidence.
+Agent composition remains owed.
 
 The authority is `docs/crates/weaver-harness/Loops/ste-conversion-loop.md`:
 
@@ -128,10 +129,49 @@ required.
 This library does not seed or load an agent. Before a live run, the composition
 owner must verify the loaded prompt, model, caps, boot cut and frozen kit.
 The report's prompt hash is the expected approved identity, not a measurement
-of a live agent. Trace enrichment, first model emissions, token use, generation
-counts and offer parent links remain owed. These fields stay null and marked
-incomplete. The library makes no estimate from a gate-request count.
+of a live agent. The evaluation's trace fields stay null and marked incomplete.
+Use the offline command below to collect trace evidence after capture.
+The library makes no estimate from a gate-request count.
 It does not assemble dataset trajectories or call the scorer or meaning reviewer.
+
+The `trace-report` command joins a captured trace to `journal.jsonl`. It opens no
+gate, agent or model. Its output directory must be new. It preserves both input
+files byte for byte as `trace.jsonl` and `journal.jsonl`, with their SHA256 values
+in `trace-report.json`. It changes no evaluation result or scorer output.
+
+```sh
+"$CARGO_TARGET_DIR/debug/weaver-ste-driver" trace-report \
+  --trace /path/to/captured-trace.jsonl \
+  --journal /path/to/r0-pass-1/journal.jsonl \
+  --output /path/to/r0-pass-1-trace
+```
+
+Each report entry keeps the segment ID, request ordinal, request text and checked
+attempt. The checked reply supplies its run and external turn. The entry keeps
+every event in that turn, including thought blocks and change spans. It records
+the first raw model output and counts only `model.output` events. It never counts
+an `emission.change` as a generation. Offer entries retain the source Text block,
+instruction sequence and response sequences from the recorded causal parents.
+
+Token counts come from each `model.measurement` token vector. The report keeps
+the measurement sequence and original timing values, and the full events retain
+all other producer fields. It does not pair measurements to outcomes by adjacency
+or treat resident context size as token use.
+
+Exit 0 means the captured evidence passed this command's completeness checks.
+It requires a gapless run from load at sequence zero, a complete turn bracket,
+valid outcome fields, one measurement per outcome, and complete offer parent
+links. Exit 2 means evidence is incomplete. That entry's generation count is null
+and its reasons are recorded. An unfinished request or one without checked run
+and turn identities remains incomplete. A cancelled offer without a recorded
+assistant response also remains incomplete. Broken JSON lines or a missing final
+trace LF make all counts incomplete. Trace gaps in a run make that run's counts
+incomplete. An unload after the captured turns is not required.
+
+Exit 1 means collection failed. An ambiguous journal refuses before creating the
+output directory. This report is an external measurement of supplied files. It
+does not certify custody, qualify R0, reconstruct effective output, prove filing
+or verify loaded artifacts. The original trace remains the byte authority.
 
 Run these commands from the repository root. Use a target owned by this checkout.
 

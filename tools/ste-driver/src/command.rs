@@ -20,6 +20,8 @@ const USAGE: &str = "weaver-ste-driver evaluate --config FILE --output DIRECTORY
 One frozen kit evaluation. All input paths and R0 caps are required in FILE.\n\
 Exit 0: complete evaluation, 1: command failure, 2: void evaluation.\n\
 A completed evaluation can include shape drops or language failures.";
+const TRACE_USAGE: &str = "weaver-ste-driver trace-report --trace FILE --journal FILE --output DIRECTORY\n\
+Offline trace evidence in a new directory. Exit 0: complete, 2: incomplete, 1: command failure.";
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -60,7 +62,15 @@ impl Config {
 
 enum Arguments {
     Help,
-    Evaluate { config: PathBuf, output: PathBuf },
+    Evaluate {
+        config: PathBuf,
+        output: PathBuf,
+    },
+    TraceReport {
+        trace: PathBuf,
+        journal: PathBuf,
+        output: PathBuf,
+    },
 }
 
 fn arguments(args: impl Iterator<Item = OsString>) -> Result<Arguments> {
@@ -69,14 +79,20 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Arguments> {
     if first == "--help" && args.next().is_none() {
         return Ok(Arguments::Help);
     }
-    if first != "evaluate" {
+    if first != "evaluate" && first != "trace-report" {
         return Err(USAGE.into());
     }
     let mut config = None;
     let mut output = None;
+    let mut trace = None;
+    let mut journal = None;
     while let Some(flag) = args.next() {
-        let slot = if flag == "--config" {
+        let slot = if flag == "--config" && first == "evaluate" {
             &mut config
+        } else if flag == "--trace" && first == "trace-report" {
+            &mut trace
+        } else if flag == "--journal" && first == "trace-report" {
+            &mut journal
         } else if flag == "--output" {
             &mut output
         } else {
@@ -91,6 +107,13 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Arguments> {
         }
         *slot = Some(PathBuf::from(value));
     }
+    if first == "trace-report" {
+        return Ok(Arguments::TraceReport {
+            trace: trace.ok_or("missing --trace")?,
+            journal: journal.ok_or("missing --journal")?,
+            output: output.ok_or("missing --output")?,
+        });
+    }
     Ok(Arguments::Evaluate {
         config: config.ok_or("missing --config")?,
         output: output.ok_or("missing --output")?,
@@ -99,10 +122,25 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Arguments> {
 
 /// Check pinned conversion inputs before creating a run or sending a gate request.
 pub(crate) fn execute(args: impl Iterator<Item = OsString>) -> Result<u8> {
-    let Arguments::Evaluate { config, output } = arguments(args)? else {
-        println!("{USAGE}");
-        return Ok(0);
-    };
+    match arguments(args)? {
+        Arguments::Help => {
+            println!("{USAGE}\n\n{TRACE_USAGE}");
+            Ok(0)
+        }
+        Arguments::TraceReport {
+            trace,
+            journal,
+            output,
+        } => {
+            let complete = weaver_ste_driver::trace_report::collect(&trace, &journal, &output)?;
+            println!("{}", json!({"complete":complete,"output":output}));
+            Ok(if complete { 0 } else { 2 })
+        }
+        Arguments::Evaluate { config, output } => evaluate(config, output),
+    }
+}
+
+fn evaluate(config: PathBuf, output: PathBuf) -> Result<u8> {
     let config_path = std::fs::canonicalize(config)?;
     let bytes = std::fs::read(&config_path)?;
     let mut config: Config = serde_json::from_slice(&bytes)?;
