@@ -2891,6 +2891,9 @@ mod repair;
 #[path = "offer_budget.rs"]
 mod offer_budget;
 
+#[path = "change_book.rs"]
+mod change_book;
+
 #[path = "context_repair.rs"]
 mod repair_driver;
 #[allow(unused_imports)]
