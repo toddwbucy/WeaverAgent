@@ -88,6 +88,42 @@ fn offer_budget_only_unadmitted_cancellation_returns_an_allowance() {
 }
 
 #[test]
+fn offer_budget_late_admission_cannot_reverse_instruction_cancellation() {
+    let mut owner = OfferBudget::new(Some(1));
+    let reservation = owner.reserve().unwrap();
+    owner.admitted(&reservation).unwrap();
+    assert_eq!(owner.cancel(&reservation), Ok(Cancellation::AwaitingRecord));
+    assert_eq!(
+        owner.admitted(&reservation),
+        Err(AccountingError::AlreadyAdmitted)
+    );
+    counts(&owner, 0, 1);
+    assert_eq!(
+        owner.recorded(&reservation),
+        Ok(RecordedAllowance::ConsumedAfterCancellation)
+    );
+    refusal(&mut owner, "1", 1, 0);
+}
+
+#[test]
+fn offer_budget_late_admission_cannot_reverse_turn_cancellation() {
+    let mut owner = OfferBudget::new(Some(1));
+    let reservation = owner.reserve().unwrap();
+    owner.admitted(&reservation).unwrap();
+    owner.cancel_turn();
+    assert_eq!(
+        owner.admitted(&reservation),
+        Err(AccountingError::AlreadyAdmitted)
+    );
+    counts(&owner, 0, 1);
+    assert_eq!(
+        owner.recorded(&reservation),
+        Ok(RecordedAllowance::ConsumedAfterCancellation)
+    );
+    refusal(&mut owner, "1", 1, 0);
+}
+
+#[test]
 fn offer_budget_cannot_charge_without_admission_or_charge_twice() {
     let mut owner = OfferBudget::new(Some(2));
     let reservation = owner.reserve().unwrap();
