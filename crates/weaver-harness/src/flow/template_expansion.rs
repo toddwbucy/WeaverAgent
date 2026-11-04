@@ -174,13 +174,12 @@ fn expand(
     }
     let inventory = certificate.inventory();
     if certificate.inventory_sha256() != inventory.digest()
-        || certificate.accepted().len() != inventory.templates().len()
+        || certificate.accepted().len() != inventory.certifiable().count()
     {
         return Err(ExpansionRefusal::InvalidCertificate);
     }
     let Some((index, template)) = inventory
-        .templates()
-        .iter()
+        .certifiable()
         .enumerate()
         .find(|(_, template)| template.template_id == template_id)
     else {

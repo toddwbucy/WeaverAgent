@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "offer_inventory_tests.rs"]
+mod offer_tests;
+
 #[test]
 fn offer_slot_mirror_keeps_the_typed_material_class() {
     let template = TemplateSpec {

@@ -176,10 +176,6 @@ fn outbound_expansion_refuses_absent_names_step_slots_and_multiple_variables() {
             name: "step".into(),
             class: SlotClass::StepId,
         }],
-        vec![TemplatePart::Slot {
-            name: "offer".into(),
-            class: SlotClass::ThesaurusOffer,
-        }],
         vec![
             TemplatePart::Slot {
                 name: "one".into(),
@@ -296,11 +292,7 @@ fn restatement_registration_cannot_select_unknown_or_different_event_family() {
 
 #[test]
 fn restatement_never_interpolates_slots_or_creates_a_step_spelling() {
-    for class in [
-        SlotClass::TechnicalName,
-        SlotClass::StepId,
-        SlotClass::ThesaurusOffer,
-    ] {
+    for class in [SlotClass::TechnicalName, SlotClass::StepId] {
         let mut with_slot = template();
         with_slot.parts.insert(
             1,
@@ -326,6 +318,35 @@ fn restatement_never_interpolates_slots_or_creates_a_step_spelling() {
             .unwrap_err(),
         ExpansionRefusal::EmptyBody
     );
+}
+
+#[test]
+fn disabled_offer_inventory_never_shifts_a_certificate_or_grants_its_slot() {
+    for position in 0..=1 {
+        let mut entries = vec![template()];
+        entries.insert(position, crate::flow::templates::offer::template().clone());
+        let certificate = certificate(entries);
+        assert_eq!(certificate.inventory().templates().len(), 2);
+        assert_eq!(certificate.accepted().len(), 1);
+        assert_eq!(
+            RESTATEMENT
+                .expand(&certificate, expected(&certificate))
+                .unwrap()
+                .text(),
+            "Restate the statement.\n"
+        );
+        assert_eq!(
+            expand(
+                &certificate,
+                expected(&certificate),
+                crate::flow::templates::offer::TEMPLATE_ID,
+                "offer",
+                Some("identity")
+            )
+            .unwrap_err(),
+            ExpansionRefusal::InvalidTemplate
+        );
+    }
 }
 
 #[test]
