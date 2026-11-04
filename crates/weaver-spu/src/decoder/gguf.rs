@@ -50,7 +50,7 @@ use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::LlamaModel;
+use llama_cpp_2::model::{LlamaLoraAdapter, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 
@@ -70,6 +70,10 @@ use crate::residency::{Admission, AdmitRefusal};
 /// re-initializing global state that half-exists.
 static BACKEND: OnceLock<Result<LlamaBackend, String>> = OnceLock::new();
 
+pub(crate) fn backend_started() -> bool {
+    BACKEND.get().is_some()
+}
+
 fn backend() -> Result<&'static LlamaBackend, AdmitRefusal> {
     let state = BACKEND.get_or_init(|| {
         LlamaBackend::init().map_err(|error| format!("llama.cpp backend init: {error}"))
@@ -88,7 +92,15 @@ fn backend() -> Result<&'static LlamaBackend, AdmitRefusal> {
 /// the weights' memory when the model is dropped, which is what lets the
 /// release's ordering hold by construction.
 pub struct ResidentModel {
+    // LORA-5: this inert handle drops before the model that owns its allocation.
+    adapter: Option<ResidentAdapter>,
     model: LlamaModel,
+}
+
+struct ResidentAdapter {
+    handle: std::cell::RefCell<LlamaLoraAdapter>,
+    identity: crate::lora::Identity,
+    placement: std::collections::BTreeMap<String, String>,
 }
 
 impl ResidentModel {
@@ -112,6 +124,16 @@ impl ResidentModel {
     /// the decode act, which touches the engine's device surface anyway, and
     /// until then this paragraph is the boundary of what is verified.
     pub fn load(admission: &Admission<'_>) -> Result<ResidentModel, AdmitRefusal> {
+        // LORA-3: refuse absent observation before any backend allocation.
+        if let Some(prepared) = admission.adapter() {
+            crate::lora::observation::records().map_err(|detail| {
+                AdmitRefusal::Adapter(prepared.failure(
+                    crate::lora::FailureKind::Load,
+                    "adapter-observer",
+                    detail,
+                ))
+            })?;
+        }
         let backend = backend()?;
         let devices = admission.devices();
 
@@ -154,7 +176,38 @@ impl ResidentModel {
                 }
             })?
         };
-        Ok(ResidentModel { model })
+        // LORA-3: load after the base. A failed observer drops both through
+        // the model owner. A successful handle alone is not qualification.
+        let adapter = if let Some(prepared) = admission.adapter() {
+            use crate::lora::{FailureKind, observation};
+            let failure = |detail| {
+                AdmitRefusal::Adapter(prepared.failure(FailureKind::Load, "adapter-load", detail))
+            };
+            let start = observation::records().map_err(&failure)?.len();
+            let handle = model
+                .lora_adapter_init(prepared.path())
+                .map_err(|error| failure(format!("lora_adapter_init: {error}")))?;
+            let records = observation::records().map_err(&failure)?;
+            let placement =
+                observation::judge(&records[start..], &prepared.identity.targets, devices)
+                    .map_err(&failure)?;
+            Some(ResidentAdapter {
+                handle: std::cell::RefCell::new(handle),
+                identity: prepared.identity.clone(),
+                placement,
+            })
+        } else {
+            None
+        };
+        Ok(ResidentModel { adapter, model })
+    }
+
+    pub fn adapter_identity(&self) -> Option<&crate::lora::Identity> {
+        self.adapter.as_ref().map(|a| &a.identity)
+    }
+
+    pub fn adapter_placement(&self) -> Option<&std::collections::BTreeMap<String, String>> {
+        self.adapter.as_ref().map(|a| &a.placement)
     }
 
     /// The engine's handle, for the decode acts that follow. Crate-visible so
@@ -269,12 +322,44 @@ impl<'a> GgufEngine<'a> {
             },
             None => params,
         };
-        let context = model
-            .model()
-            .new_context(backend, params)
-            .map_err(|error| DecodeFault::Engine {
-                detail: format!("new_context: {error}"),
-            })?;
+        let context_result =
+            model
+                .model()
+                .new_context(backend, params)
+                .map_err(|error| DecodeFault::Engine {
+                    detail: format!("new_context: {error}"),
+                });
+        let context = match context_result {
+            Ok(context) => context,
+            Err(error) => {
+                if let Some(state) = tap {
+                    // No context survived to retain this allocation.
+                    drop(unsafe { Box::from_raw(state.as_ptr()) });
+                }
+                return Err(error);
+            }
+        };
+
+        // LORA-4: attach before the caller can decode even one prefix token.
+        // Every recreated context comes through this same open operation.
+        let context = match crate::lora::attach_before_use(
+            context,
+            model.adapter.as_ref(),
+            |context, adapter| {
+                context.lora_adapter_set(&mut adapter.handle.borrow_mut(), adapter.identity.scale)
+            },
+        ) {
+            Ok(context) => context,
+            Err(error) => {
+                if let Some(state) = tap {
+                    // LORA-5: destroy the failed context before its callback state.
+                    drop(unsafe { Box::from_raw(state.as_ptr()) });
+                }
+                return Err(Self::engine_fault(format!(
+                    "adapter attachment failed: {error}"
+                )));
+            }
+        };
 
         let sampler = Self::chain(knobs, knobs.seed);
 
@@ -545,7 +630,10 @@ fn host_only(path: &std::path::Path) -> Result<ResidentModel, DecodeFault> {
             detail: format!("host_only load: {error}"),
         }
     })?;
-    Ok(ResidentModel { model })
+    Ok(ResidentModel {
+        adapter: None,
+        model,
+    })
 }
 
 #[cfg(test)]
