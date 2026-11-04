@@ -957,6 +957,20 @@ pub const REGISTRY: &[Declaration] = &[
         taps_column: false,
     },
     Declaration {
+        // Workflow 9.02 and #436 R4(a): the pinned 4B template, thinking off.
+        // The pinned llama.cpp classifies NEMOTRON_H as hybrid. Its recurrent
+        // state requires reconstruction when the loop cuts to the boot mark.
+        family: "nemotron_h",
+        shard_widths: &[1, 2],
+        template: qwen2::TEMPLATE,
+        generation_opener: qwen2::nemotron::GENERATION_OPENER,
+        renderer: qwen2::nemotron::renderer,
+        selecting_markers: qwen2::nemotron::RENDERED_MARKERS,
+        flush: FlushMechanism::ReestablishAndReprefill,
+        taps_readout: false,
+        taps_column: false,
+    },
+    Declaration {
         // **The first family that names no role**, wrapping the user's text in
         // `[INST]` and `[/INST]` and leaving the model's bare, so the shape
         // carries the speaker and there is nothing for a placeholder to fill.

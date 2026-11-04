@@ -179,6 +179,12 @@ const PROBES: &[Probe] = &[
         default_path: "/opt/weaver/models/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-heretic.i1-IQ4_XS.gguf",
         rendered: qwen2::RENDERED_MARKERS,
     },
+    Probe {
+        family: "nemotron_h",
+        env: "WEAVER_VOCAB_NEMOTRON_H",
+        default_path: "/opt/weaver/models/NVIDIA-Nemotron3-Nano-4B-Q4_K_M.gguf",
+        rendered: qwen2::nemotron::RENDERED_MARKERS,
+    },
 ];
 
 impl Probe {

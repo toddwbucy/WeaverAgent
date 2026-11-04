@@ -42,6 +42,7 @@ fn one_architecture_selects_one_entry_under_either_containers_spelling() {
         ("qwen3_5", "qwen35"),
         ("gpt_oss", "gpt-oss"),
         ("nemotron_h_moe", "nemotron_h_moe"),
+        ("nemotron_h", "nemotron_h"),
     ];
     for (safetensors, gguf) in pairs {
         let by_safetensors = select(&FamilyName(safetensors.into()), None)
@@ -114,6 +115,7 @@ fn no_two_registry_spellings_fold_to_one_key() {
         ("qwen35moe", "qwen35moe"),
         ("gemma4", "gemma4"),
         ("nemotron_h_moe", "nemotronhmoe"),
+        ("nemotron_h", "nemotronh"),
         ("mistral3", "mistral3"),
         ("phi3", "phi3"),
         ("gpt-oss", "gptoss"),
@@ -517,7 +519,7 @@ fn one_module_serves_keys_whose_flush_mechanisms_differ() {
         );
     }
 
-    for reestablishing in ["qwen35", "qwen35moe", "nemotron_h_moe"] {
+    for reestablishing in ["qwen35", "qwen35moe", "nemotron_h_moe", "nemotron_h"] {
         assert_eq!(
             flush_of(reestablishing),
             FlushMechanism::ReestablishAndReprefill,
