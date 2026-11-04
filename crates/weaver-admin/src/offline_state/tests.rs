@@ -50,7 +50,7 @@ fn seed(fixture: &Fixture) -> StartIdentity {
     )
     .unwrap();
     let created = SeedCreated {
-        schema_id: "state-content/1".into(),
+        schema_id: "state-content/2".into(),
         seed_id,
         room_name,
         size_bytes: DecimalU64(IMAGE.len() as u64),

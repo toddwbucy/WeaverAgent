@@ -171,7 +171,7 @@ impl SeedRequest {
         scheme: &SchemeDeclaration,
         expected_checker: Option<&Digest>,
     ) -> Result<VerifiedSeed, SeedRefusal> {
-        if self.schema_id != "state-content/1" {
+        if self.schema_id != super::STATE_CONTENT_SCHEMA {
             return Err(SeedRefusal::UnsupportedSchema);
         }
         if self.seed_id.len() != 32
@@ -537,7 +537,7 @@ mod tests {
         };
         (
             SeedRequest {
-                schema_id: "state-content/1".into(),
+                schema_id: super::super::STATE_CONTENT_SCHEMA.into(),
                 seed_id: "a".repeat(32),
                 scheme_id: scheme.scheme_id.clone(),
                 ste100_scheme: scheme_text,

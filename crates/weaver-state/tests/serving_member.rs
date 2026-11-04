@@ -201,6 +201,7 @@ fn seed_is_held_as_raw_sqlite_then_deleted_on_eof_or_a_second_request() {
             &fixtures::common(1),
             &member.seed.schema_id,
             &member.seed.scheme_id,
+            None,
             &fixtures::start(&image, &member.seed),
             fixtures::limits(1_000_000),
         )
@@ -289,7 +290,7 @@ fn open_checks_schema_scheme_and_image_identity_before_answering_opened() {
 }
 
 #[test]
-fn legacy_open_refuses_a_thesaurus_digest_without_adopting_the_image() {
+fn open_refuses_a_thesaurus_digest_absent_from_the_current_image() {
     let mut member = Member::launch("serving", ImageDescriptor::ReadOnly, false, false);
     let mut request = member.open_request();
     let StateFrame::Open {
@@ -302,7 +303,7 @@ fn legacy_open_refuses_a_thesaurus_digest_without_adopting_the_image() {
     let answer = member.exchange(&request);
     assert!(
         matches!(answer, StateFrame::Refused {
-        code: StateRefusalCode::UnsupportedSchema, ref detail, ..
+        code: StateRefusalCode::SchemeMismatch, ref detail, ..
     } if detail.contains("thesaurus")),
         "{answer:?}"
     );
@@ -660,6 +661,7 @@ fn capture_acknowledge_release_and_dump_frontier_match_observed_operations() {
         &run,
         &member.seed.schema_id,
         &member.seed.scheme_id,
+        None,
         &start,
         fixtures::limits(4_000_000),
     )

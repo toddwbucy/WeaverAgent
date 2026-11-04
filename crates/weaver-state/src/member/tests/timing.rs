@@ -195,6 +195,7 @@ impl Fixture {
             &common,
             &seed.schema_id,
             &seed.scheme_id,
+            None,
             &fixtures::start(image.as_bytes(), &seed),
             read_limits.clone(),
         )
