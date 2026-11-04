@@ -1,0 +1,1056 @@
+{
+  "revision": "9881da6cfbc92b08b31264883aea63b73aa7b694",
+  "source_sha256": {
+    "ste_convert.py": "c1a9668766ec4cd67792772f3d070083c33d9939f0cd96a7df2578d6da0b7b66",
+    "ste_check.py": "185a186f4d637616f5e506bda55ff19f909aa3f8f7022e2a35d3b88d409d1b2c",
+    "ste_experiment.py": "eb0d0bd1aebfc6b9a4dc243df420203a7c0e7d27c26f04efdc1b37c8836916cb"
+  },
+  "unicode": "16.0.0",
+  "cases": [
+    {
+      "name": "plain",
+      "source": "Read the file and return its name.",
+      "masked": "Read the file and return its name.",
+      "codes": [],
+      "restored": "Read the file and return its name.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "empty",
+      "source": "",
+      "masked": "",
+      "codes": [],
+      "restored": "",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "inline",
+      "source": "Read `core` and `other` now.",
+      "masked": "Read [[C1]] and [[C2]] now.",
+      "codes": [
+        "`core`",
+        "`other`"
+      ],
+      "restored": "Read `core` and `other` now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "fenced",
+      "source": "Before\n```rust\ncall(3)\n```\nAfter",
+      "masked": "Before\n[[C1]]\nAfter",
+      "codes": [
+        "```rust\ncall(3)\n```"
+      ],
+      "restored": "Before\n```rust\ncall(3)\n```\nAfter",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "unclosed_fence",
+      "source": "Before ```open\nnext",
+      "masked": "Before ```open\nnext",
+      "codes": [],
+      "restored": "Before ```open\nnext",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "nested",
+      "source": "Set d[`k`] = [1, [2]] in path/to/file.py.",
+      "masked": "Set [[C3]] = [[C4]] in [[C2]]",
+      "codes": [
+        "`k`",
+        "path/to/file.py.",
+        "d[[[C1]]]",
+        "[1, [2]]"
+      ],
+      "restored": "Set d[`k`] = [1, [2]] in path/to/file.py.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "bracket_string",
+      "source": "Call f('a)b', g('c]d')) now.",
+      "masked": "Call [[C1]] now.",
+      "codes": [
+        "f('a)b', g('c]d'))"
+      ],
+      "restored": "Call f('a)b', g('c]d')) now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "apostrophe",
+      "source": "Use (don't remove it), then check (it's ready).",
+      "masked": "Use (don't remove it), then check (it's ready).",
+      "codes": [],
+      "restored": "Use (don't remove it), then check (it's ready).",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "prefix",
+      "source": "Call f(r'a)b', x) and length(E'a)b') now.",
+      "masked": "Call [[C1]] and [[C2]] now.",
+      "codes": [
+        "f(r'a)b', x)",
+        "length(E'a)b')"
+      ],
+      "restored": "Call f(r'a)b', x) and length(E'a)b') now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "escaped",
+      "source": "Call f(\"a\\\"b)world\") now.",
+      "masked": "Call [[C2]] now.",
+      "codes": [
+        "\"a\\\"b)world\"",
+        "f([[C1]])"
+      ],
+      "restored": "Call f(\"a\\\"b)world\") now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "windows",
+      "source": "Use \"C:\\tmp\\\" then read \"file\".",
+      "masked": "Use [[C1]] then read [[C2]].",
+      "codes": [
+        "\"C:\\tmp\\\"",
+        "\"file\""
+      ],
+      "restored": "Use \"C:\\tmp\\\" then read \"file\".",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "empty_string",
+      "source": "Set \"\" and \"  \" as values.",
+      "masked": "Set [[C1]] and [[C2]] as values.",
+      "codes": [
+        "\"\"",
+        "\"  \""
+      ],
+      "restored": "Set \"\" and \"  \" as values.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quotation",
+      "source": "> First line\nsecond line\n\nContinue.",
+      "masked": "[[C1]]\n\nContinue.",
+      "codes": [
+        "> First line\nsecond line"
+      ],
+      "restored": "> First line\nsecond line\n\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "nested_quote",
+      "source": "> First\n>> Next\n> Last\n\nContinue.",
+      "masked": "[[C1]]\n\nContinue.",
+      "codes": [
+        "> First\n>> Next\n> Last"
+      ],
+      "restored": "> First\n>> Next\n> Last\n\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quote_crlf",
+      "source": "> First\r\n\r\nContinue.",
+      "masked": "[[C1]]\n\r\nContinue.",
+      "codes": [
+        "> First\r"
+      ],
+      "restored": "> First\r\n\r\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quote_rule",
+      "source": "> First\n---\nContinue.",
+      "masked": "[[C1]]\n---\nContinue.",
+      "codes": [
+        "> First"
+      ],
+      "restored": "> First\n---\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quote_blank",
+      "source": "> First\n>\nContinue.",
+      "masked": "[[C1]]\nContinue.",
+      "codes": [
+        "> First\n>"
+      ],
+      "restored": "> First\n>\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quote_number",
+      "source": "> See\n#123 is an issue.",
+      "masked": "[[C1]]",
+      "codes": [
+        "> See\n#123 is an issue."
+      ],
+      "restored": "> See\n#123 is an issue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quote_heading",
+      "source": "> First\n# Header",
+      "masked": "[[C1]]\n# Header",
+      "codes": [
+        "> First"
+      ],
+      "restored": "> First\n# Header",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quote_after_heading",
+      "source": "> # Header\nContinue.",
+      "masked": "[[C1]]\nContinue.",
+      "codes": [
+        "> # Header"
+      ],
+      "restored": "> # Header\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quote_fence",
+      "source": "> ```\n> code\n> ```\nContinue.",
+      "masked": "[[C2]]\nContinue.",
+      "codes": [
+        "```\n> code\n> ```",
+        "> [[C1]]"
+      ],
+      "restored": "> ```\n> code\n> ```\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quote_tilde",
+      "source": "> ~~~\n> code\n> ~~~\nContinue.",
+      "masked": "[[C1]]\nContinue.",
+      "codes": [
+        "> ~~~\n> code\n> ~~~"
+      ],
+      "restored": "> ~~~\n> code\n> ~~~\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quote_list",
+      "source": "- > First\n  > Next\n\nContinue.",
+      "masked": "- [[C1]]\n\nContinue.",
+      "codes": [
+        "> First\n  > Next"
+      ],
+      "restored": "- > First\n  > Next\n\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quote_second_item",
+      "source": "- > First\n- > Second\n\nContinue.",
+      "masked": "- [[C1]]\n- [[C2]]\n\nContinue.",
+      "codes": [
+        "> First",
+        "> Second"
+      ],
+      "restored": "- > First\n- > Second\n\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quote_number_item",
+      "source": "1. > First\n\nContinue.",
+      "masked": "1. [[C1]]\n\nContinue.",
+      "codes": [
+        "> First"
+      ],
+      "restored": "1. > First\n\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quote_interrupt_list",
+      "source": "> First\n- Continue.",
+      "masked": "[[C1]]\n- Continue.",
+      "codes": [
+        "> First"
+      ],
+      "restored": "> First\n- Continue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quote_indent",
+      "source": "- > First\n\n  Continue.",
+      "masked": "- [[C1]]\n\n  Continue.",
+      "codes": [
+        "> First"
+      ],
+      "restored": "- > First\n\n  Continue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "tags",
+      "source": "<details><summary>Read the file</summary><br/></details>",
+      "masked": "[[C1]][[C2]]Read the [[C6]][[C4]][[C5]]",
+      "codes": [
+        "<details>",
+        "<summary>",
+        "</summary>",
+        "<br/>",
+        "</details>",
+        "file[[C3]]"
+      ],
+      "restored": "<details><summary>Read the file</summary><br/></details>",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "tag_boundary",
+      "source": "x<name> <<other> <tag key=\"value\"> here",
+      "masked": "x<name> <<other> [[C1]] here",
+      "codes": [
+        "<tag key=\"value\">"
+      ],
+      "restored": "x<name> <<other> <tag key=\"value\"> here",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "error",
+      "source": "Read ValueError: data [bad]\nThen MyWarning:\nContinue.",
+      "masked": "Read [[C1]]\nThen [[C2]]\nContinue.",
+      "codes": [
+        "ValueError: data [bad]",
+        "MyWarning:"
+      ],
+      "restored": "Read ValueError: data [bad]\nThen MyWarning:\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "paths",
+      "source": "Read ../a/b.py and ./c/d.toml at https://example.test/e.",
+      "masked": "Read [[C2]] and [[C3]] at [[C1]]",
+      "codes": [
+        "https://example.test/e.",
+        "../a/b.py",
+        "./c/d.toml"
+      ],
+      "restored": "Read ../a/b.py and ./c/d.toml at https://example.test/e.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "filenames",
+      "source": "Read file.yaml, other.yml, core.pyx and one.pyi.",
+      "masked": "Read [[C1]], [[C2]], [[C3]] and [[C4]].",
+      "codes": [
+        "file.yaml",
+        "other.yml",
+        "core.pyx",
+        "one.pyi"
+      ],
+      "restored": "Read file.yaml, other.yml, core.pyx and one.pyi.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "identifiers",
+      "source": "Call abc.def and snake_case next to 1.2 and 123.",
+      "masked": "Call [[C1]] and [[C2]] next to 1.2 and 123.",
+      "codes": [
+        "abc.def",
+        "snake_case"
+      ],
+      "restored": "Call abc.def and snake_case next to 1.2 and 123.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "prose_labels",
+      "source": "File: core.py\nLines: 1-4\nName: the method",
+      "masked": "File: [[C1]]\nLines: 1-4\nName: the method",
+      "codes": [
+        "core.py"
+      ],
+      "restored": "File: core.py\nLines: 1-4\nName: the method",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "listing",
+      "source": "a   : 1\nb   : 2\n\nc   : 3\n\nContinue.",
+      "masked": "[[C1]]\n\nContinue.",
+      "codes": [
+        "a   : 1\nb   : 2\n\nc   : 3"
+      ],
+      "restored": "a   : 1\nb   : 2\n\nc   : 3\n\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "listing_control_blank",
+      "source": "a   : 1\n\u001c\nb   : 2\nc   : 3\n\u001f",
+      "masked": "[[C1]]\n\u001f",
+      "codes": [
+        "a   : 1\n\u001c\nb   : 2\nc   : 3"
+      ],
+      "restored": "a   : 1\n\u001c\nb   : 2\nc   : 3\n\u001f",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "short_listing",
+      "source": "a   : 1\nb   : 2\n\nContinue.",
+      "masked": "a   : 1\nb   : 2\n\nContinue.",
+      "codes": [],
+      "restored": "a   : 1\nb   : 2\n\nContinue.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "listing_crlf",
+      "source": "a   : 1\r\nb   : 2\r\nc   : 3\r\n",
+      "masked": "[[C1]]\n",
+      "codes": [
+        "a   : 1\r\nb   : 2\r\nc   : 3\r"
+      ],
+      "restored": "a   : 1\r\nb   : 2\r\nc   : 3\r\n",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "unclosed_call",
+      "source": "Call f('unfinished\\",
+      "masked": "Call f('unfinished\\",
+      "codes": [],
+      "restored": "Call f('unfinished\\",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "unmatched",
+      "source": "Call f([3}, next\nThen {1, 2}.",
+      "masked": "Call f([3}, next\nThen [[C1]].",
+      "codes": [
+        "{1, 2}"
+      ],
+      "restored": "Call f([3}, next\nThen {1, 2}.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "long_aside",
+      "source": "Read (one two three four five) now.",
+      "masked": "Read [[C1]] now.",
+      "codes": [
+        "(one two three four five)"
+      ],
+      "restored": "Read (one two three four five) now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "unicode_aside",
+      "source": "Read (it\u2019s ready) now.",
+      "masked": "Read (it\u2019s ready) now.",
+      "codes": [],
+      "restored": "Read (it\u2019s ready) now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "literal_markers",
+      "source": "Keep [[C1]] and [[C123]] as source data.",
+      "masked": "Keep [[C1]] and [[C123]] as source data.",
+      "codes": [],
+      "restored": "Keep [[C1]] and [[C123]] as source data.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "glued",
+      "source": "See 145.[[C8]] and **[[C2]]**. Run [[C4]]([[C5]] now.",
+      "masked": "See [[C1]] and **[[C2]]**. Run [[C4]]([[C5]] now.",
+      "codes": [
+        "145.[[C8]]"
+      ],
+      "restored": "See 145.[[C8]] and **[[C2]]**. Run [[C4]]([[C5]] now.",
+      "glued": [
+        "145.[[C8]]",
+        "[[C4]]([[C5]]"
+      ],
+      "altered_none": [
+        "145.[[C8]]",
+        "[[C4]]([[C5]]"
+      ],
+      "altered": [
+        "145.[[C8]]"
+      ]
+    },
+    {
+      "name": "slashed",
+      "source": "Keep [[C8]]/[[C9]] and v1/[[C3]] as they are.",
+      "masked": "Keep [[C8]]/[[C9]] and [[C1]][[C3]] as they are.",
+      "codes": [
+        "v1/"
+      ],
+      "restored": "Keep [[C8]]/[[C9]] and v1/[[C3]] as they are.",
+      "glued": [
+        "v1/[[C3]]"
+      ],
+      "altered_none": [
+        "v1/[[C3]]"
+      ],
+      "altered": [
+        "v1/[[C3]]"
+      ]
+    },
+    {
+      "name": "equation",
+      "source": "If [[C1]]=[[C2]] then 1.[[C3]] stays.",
+      "masked": "If [[C1]]=[[C2]] then [[C1]] stays.",
+      "codes": [
+        "1.[[C3]]"
+      ],
+      "restored": "If 1.[[C3]]=[[C2]] then 1.[[C3]] stays.",
+      "glued": [
+        "[[C1]]=[[C2]]",
+        "1.[[C3]]"
+      ],
+      "altered_none": [
+        "[[C1]]=[[C2]]",
+        "1.[[C3]]"
+      ],
+      "altered": [
+        "1.[[C3]]"
+      ]
+    },
+    {
+      "name": "repeated_literal",
+      "source": "See 1.[[C3]] and 1.[[C3]] again.",
+      "masked": "See [[C1]] and [[C2]] again.",
+      "codes": [
+        "1.[[C3]]",
+        "1.[[C3]]"
+      ],
+      "restored": "See 1.[[C3]] and 1.[[C3]] again.",
+      "glued": [
+        "1.[[C3]]",
+        "1.[[C3]]"
+      ],
+      "altered_none": [
+        "1.[[C3]]",
+        "1.[[C3]]"
+      ],
+      "altered": [
+        "1.[[C3]]",
+        "1.[[C3]]"
+      ]
+    },
+    {
+      "name": "space_1c",
+      "source": "\"\u001c\" https://test/a\u001cb\n1.[[C2]]\u001c[[C3]]",
+      "masked": "[[C2]] [[C1]]\u001cb\n[[C3]]\u001c[[C3]]",
+      "codes": [
+        "https://test/a",
+        "\"\u001c\"",
+        "1.[[C2]]"
+      ],
+      "restored": "\"\u001c\" https://test/a\u001cb\n1.\"\u001c\"\u001c1.\"\u001c\"",
+      "glued": [
+        "1.[[C2]]"
+      ],
+      "altered_none": [
+        "1.[[C2]]"
+      ],
+      "altered": [
+        "1.[[C2]]"
+      ]
+    },
+    {
+      "name": "space_1d",
+      "source": "\"\u001d\" https://test/a\u001db\n1.[[C2]]\u001d[[C3]]",
+      "masked": "[[C2]] [[C1]]\u001db\n[[C3]]\u001d[[C3]]",
+      "codes": [
+        "https://test/a",
+        "\"\u001d\"",
+        "1.[[C2]]"
+      ],
+      "restored": "\"\u001d\" https://test/a\u001db\n1.\"\u001d\"\u001d1.\"\u001d\"",
+      "glued": [
+        "1.[[C2]]"
+      ],
+      "altered_none": [
+        "1.[[C2]]"
+      ],
+      "altered": [
+        "1.[[C2]]"
+      ]
+    },
+    {
+      "name": "space_1e",
+      "source": "\"\u001e\" https://test/a\u001eb\n1.[[C2]]\u001e[[C3]]",
+      "masked": "[[C2]] [[C1]]\u001eb\n[[C3]]\u001e[[C3]]",
+      "codes": [
+        "https://test/a",
+        "\"\u001e\"",
+        "1.[[C2]]"
+      ],
+      "restored": "\"\u001e\" https://test/a\u001eb\n1.\"\u001e\"\u001e1.\"\u001e\"",
+      "glued": [
+        "1.[[C2]]"
+      ],
+      "altered_none": [
+        "1.[[C2]]"
+      ],
+      "altered": [
+        "1.[[C2]]"
+      ]
+    },
+    {
+      "name": "space_1f",
+      "source": "\"\u001f\" https://test/a\u001fb\n1.[[C2]]\u001f[[C3]]",
+      "masked": "[[C2]] [[C1]]\u001fb\n[[C3]]\u001f[[C3]]",
+      "codes": [
+        "https://test/a",
+        "\"\u001f\"",
+        "1.[[C2]]"
+      ],
+      "restored": "\"\u001f\" https://test/a\u001fb\n1.\"\u001f\"\u001f1.\"\u001f\"",
+      "glued": [
+        "1.[[C2]]"
+      ],
+      "altered_none": [
+        "1.[[C2]]"
+      ],
+      "altered": [
+        "1.[[C2]]"
+      ]
+    },
+    {
+      "name": "space_85",
+      "source": "\"\u0085\" https://test/a\u0085b\n1.[[C2]]\u0085[[C3]]",
+      "masked": "[[C2]] [[C1]]\u0085b\n[[C3]]\u0085[[C3]]",
+      "codes": [
+        "https://test/a",
+        "\"\u0085\"",
+        "1.[[C2]]"
+      ],
+      "restored": "\"\u0085\" https://test/a\u0085b\n1.\"\u0085\"\u00851.\"\u0085\"",
+      "glued": [
+        "1.[[C2]]"
+      ],
+      "altered_none": [
+        "1.[[C2]]"
+      ],
+      "altered": [
+        "1.[[C2]]"
+      ]
+    },
+    {
+      "name": "space_a0",
+      "source": "\"\u00a0\" https://test/a\u00a0b\n1.[[C2]]\u00a0[[C3]]",
+      "masked": "[[C2]] [[C1]]\u00a0b\n[[C3]]\u00a0[[C3]]",
+      "codes": [
+        "https://test/a",
+        "\"\u00a0\"",
+        "1.[[C2]]"
+      ],
+      "restored": "\"\u00a0\" https://test/a\u00a0b\n1.\"\u00a0\"\u00a01.\"\u00a0\"",
+      "glued": [
+        "1.[[C2]]"
+      ],
+      "altered_none": [
+        "1.[[C2]]"
+      ],
+      "altered": [
+        "1.[[C2]]"
+      ]
+    },
+    {
+      "name": "space_1680",
+      "source": "\"\u1680\" https://test/a\u1680b\n1.[[C2]]\u1680[[C3]]",
+      "masked": "[[C2]] [[C1]]\u1680b\n[[C3]]\u1680[[C3]]",
+      "codes": [
+        "https://test/a",
+        "\"\u1680\"",
+        "1.[[C2]]"
+      ],
+      "restored": "\"\u1680\" https://test/a\u1680b\n1.\"\u1680\"\u16801.\"\u1680\"",
+      "glued": [
+        "1.[[C2]]"
+      ],
+      "altered_none": [
+        "1.[[C2]]"
+      ],
+      "altered": [
+        "1.[[C2]]"
+      ]
+    },
+    {
+      "name": "space_2007",
+      "source": "\"\u2007\" https://test/a\u2007b\n1.[[C2]]\u2007[[C3]]",
+      "masked": "[[C2]] [[C1]]\u2007b\n[[C3]]\u2007[[C3]]",
+      "codes": [
+        "https://test/a",
+        "\"\u2007\"",
+        "1.[[C2]]"
+      ],
+      "restored": "\"\u2007\" https://test/a\u2007b\n1.\"\u2007\"\u20071.\"\u2007\"",
+      "glued": [
+        "1.[[C2]]"
+      ],
+      "altered_none": [
+        "1.[[C2]]"
+      ],
+      "altered": [
+        "1.[[C2]]"
+      ]
+    },
+    {
+      "name": "space_2028",
+      "source": "\"\u2028\" https://test/a\u2028b\n1.[[C2]]\u2028[[C3]]",
+      "masked": "[[C2]] [[C1]]\u2028b\n[[C3]]\u2028[[C3]]",
+      "codes": [
+        "https://test/a",
+        "\"\u2028\"",
+        "1.[[C2]]"
+      ],
+      "restored": "\"\u2028\" https://test/a\u2028b\n1.\"\u2028\"\u20281.\"\u2028\"",
+      "glued": [
+        "1.[[C2]]"
+      ],
+      "altered_none": [
+        "1.[[C2]]"
+      ],
+      "altered": [
+        "1.[[C2]]"
+      ]
+    },
+    {
+      "name": "space_2029",
+      "source": "\"\u2029\" https://test/a\u2029b\n1.[[C2]]\u2029[[C3]]",
+      "masked": "[[C2]] [[C1]]\u2029b\n[[C3]]\u2029[[C3]]",
+      "codes": [
+        "https://test/a",
+        "\"\u2029\"",
+        "1.[[C2]]"
+      ],
+      "restored": "\"\u2029\" https://test/a\u2029b\n1.\"\u2029\"\u20291.\"\u2029\"",
+      "glued": [
+        "1.[[C2]]"
+      ],
+      "altered_none": [
+        "1.[[C2]]"
+      ],
+      "altered": [
+        "1.[[C2]]"
+      ]
+    },
+    {
+      "name": "word_e9",
+      "source": "Read a\u00e9_b and \u00e9.name then \u00e9(1, 2).",
+      "masked": "Read [[C2]] and \u00e9.name then [[C1]].",
+      "codes": [
+        "\u00e9(1, 2)",
+        "a\u00e9_b"
+      ],
+      "restored": "Read a\u00e9_b and \u00e9.name then \u00e9(1, 2).",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "word_301",
+      "source": "Read a\u0301_b and \u0301.name then \u0301(1, 2).",
+      "masked": "Read a\u0301[[C2]] and \u0301.name then \u0301[[C1]].",
+      "codes": [
+        "(1, 2)",
+        "_b"
+      ],
+      "restored": "Read a\u0301_b and \u0301.name then \u0301(1, 2).",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "word_2163",
+      "source": "Read a\u2163_b and \u2163.name then \u2163(1, 2).",
+      "masked": "Read [[C2]] and \u2163.name then [[C1]].",
+      "codes": [
+        "\u2163(1, 2)",
+        "a\u2163_b"
+      ],
+      "restored": "Read a\u2163_b and \u2163.name then \u2163(1, 2).",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "word_b2",
+      "source": "Read a\u00b2_b and \u00b2.name then \u00b2(1, 2).",
+      "masked": "Read [[C2]] and \u00b2.name then [[C1]].",
+      "codes": [
+        "\u00b2(1, 2)",
+        "a\u00b2_b"
+      ],
+      "restored": "Read a\u00b2_b and \u00b2.name then \u00b2(1, 2).",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "word_200c",
+      "source": "Read a\u200c_b and \u200c.name then \u200c(1, 2).",
+      "masked": "Read a\u200c[[C2]] and \u200c.name then \u200c[[C1]].",
+      "codes": [
+        "(1, 2)",
+        "_b"
+      ],
+      "restored": "Read a\u200c_b and \u200c.name then \u200c(1, 2).",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "word_203f",
+      "source": "Read a\u203f_b and \u203f.name then \u203f(1, 2).",
+      "masked": "Read a\u203f[[C2]] and \u203f.name then \u203f[[C1]].",
+      "codes": [
+        "(1, 2)",
+        "_b"
+      ],
+      "restored": "Read a\u203f_b and \u203f.name then \u203f(1, 2).",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "word_4e00",
+      "source": "Read a\u4e00_b and \u4e00.name then \u4e00(1, 2).",
+      "masked": "Read [[C2]] and \u4e00.name then [[C1]].",
+      "codes": [
+        "\u4e00(1, 2)",
+        "a\u4e00_b"
+      ],
+      "restored": "Read a\u4e00_b and \u4e00.name then \u4e00(1, 2).",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "word_1f600",
+      "source": "Read a\ud83d\ude00_b and \ud83d\ude00.name then \ud83d\ude00(1, 2).",
+      "masked": "Read a\ud83d\ude00[[C2]] and \ud83d\ude00.name then \ud83d\ude00[[C1]].",
+      "codes": [
+        "(1, 2)",
+        "_b"
+      ],
+      "restored": "Read a\ud83d\ude00_b and \ud83d\ude00.name then \ud83d\ude00(1, 2).",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "word_11f02",
+      "source": "Read a\ud807\udf02_b and \ud807\udf02.name then \ud807\udf02(1, 2).",
+      "masked": "Read [[C2]] and \ud807\udf02.name then [[C1]].",
+      "codes": [
+        "\ud807\udf02(1, 2)",
+        "a\ud807\udf02_b"
+      ],
+      "restored": "Read a\ud807\udf02_b and \ud807\udf02.name then \ud807\udf02(1, 2).",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "prefix_66",
+      "source": "Call f(r'a)b') now.",
+      "masked": "Call [[C1]] now.",
+      "codes": [
+        "f(r'a)b')"
+      ],
+      "restored": "Call f(r'a)b') now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "prefix_67",
+      "source": "Call f(R'a)b') now.",
+      "masked": "Call [[C1]] now.",
+      "codes": [
+        "f(R'a)b')"
+      ],
+      "restored": "Call f(R'a)b') now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "prefix_68",
+      "source": "Call f(rb'a)b') now.",
+      "masked": "Call [[C1]] now.",
+      "codes": [
+        "f(rb'a)b')"
+      ],
+      "restored": "Call f(rb'a)b') now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "prefix_69",
+      "source": "Call f(fr'a)b') now.",
+      "masked": "Call [[C1]] now.",
+      "codes": [
+        "f(fr'a)b')"
+      ],
+      "restored": "Call f(fr'a)b') now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "prefix_70",
+      "source": "Call f(u'a)b') now.",
+      "masked": "Call [[C1]] now.",
+      "codes": [
+        "f(u'a)b')"
+      ],
+      "restored": "Call f(u'a)b') now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "prefix_71",
+      "source": "Call f(E'a)b') now.",
+      "masked": "Call [[C1]] now.",
+      "codes": [
+        "f(E'a)b')"
+      ],
+      "restored": "Call f(E'a)b') now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "prefix_72",
+      "source": "Call f(name'a)b') now.",
+      "masked": "Call [[C1]]b') now.",
+      "codes": [
+        "f(name'a)"
+      ],
+      "restored": "Call f(name'a)b') now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "prefix_73",
+      "source": "Call f(a\u0301'a)b') now.",
+      "masked": "Call [[C1]] now.",
+      "codes": [
+        "f(a\u0301'a)b')"
+      ],
+      "restored": "Call f(a\u0301'a)b') now.",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "listing_unicode_blank",
+      "source": "a   : 1\n\u0085\nb   : 2\nc   : 3\n\u0085",
+      "masked": "[[C1]]\n\u0085",
+      "codes": [
+        "a   : 1\n\u0085\nb   : 2\nc   : 3"
+      ],
+      "restored": "a   : 1\n\u0085\nb   : 2\nc   : 3\n\u0085",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quoted_glued",
+      "source": "Keep \"145.[[C8]]\" inside prose.",
+      "masked": "Keep [[C1]] inside prose.",
+      "codes": [
+        "\"145.[[C8]]\""
+      ],
+      "restored": "Keep \"145.[[C8]]\" inside prose.",
+      "glued": [
+        "145.[[C8]]"
+      ],
+      "altered_none": [
+        "145.[[C8]]"
+      ],
+      "altered": [
+        "145.[[C8]]"
+      ]
+    }
+  ]
+}
