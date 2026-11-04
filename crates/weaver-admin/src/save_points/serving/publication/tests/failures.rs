@@ -621,7 +621,7 @@ fn draft_cannot_change_the_judged_session_or_trace_territory() {
             }
             let previous = fixture.index_bytes();
             let names = fixture.names();
-            let original = declaration::render(&declaration::tests::fixture()).unwrap();
+            let original = declaration::render(&governing_fixture().1).unwrap();
             let text = if bad_session {
                 original.replace("fixture-session", "other-session")
             } else {
@@ -640,6 +640,7 @@ fn draft_cannot_change_the_judged_session_or_trace_territory() {
                     &fixture.scope(),
                     draft,
                     SeedImage {
+                        governing: &governing_fixture().0,
                         expected_seed_id: &created.seed_id,
                         created: &created,
                         room: room.as_fd(),
@@ -725,8 +726,7 @@ fn preexisting_guard_collision_is_never_replaced_or_removed() {
     let loaded = fixture.seed_complete(&mut repo);
     let mut publication = fixture.capture(&mut repo, &loaded, 3, PersistenceCause::Requested);
     let configuration =
-        declaration::render(&declaration::tests::fixture().with_start(hash(CAPTURE_BYTES)))
-            .unwrap();
+        declaration::render(&governing_fixture().1.with_start(hash(CAPTURE_BYTES))).unwrap();
     let id = ArtifactId::from_parts(DecimalU64(2), hash(configuration.as_bytes())).unwrap();
     let guard_path = fixture.root.join(format!(".{id}.pending"));
     let foreign_bytes = b"existing refusal owned by another attempt";
@@ -812,6 +812,7 @@ fn complete_seed_with_checkpoint(
         &fixture.scope(),
         draft(),
         SeedImage {
+            governing: &governing_fixture().0,
             expected_seed_id: &created.seed_id,
             created: &created,
             room: room.as_fd(),

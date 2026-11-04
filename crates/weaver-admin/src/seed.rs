@@ -159,6 +159,7 @@ fn publish_member(
             created: &created,
             room: room.as_fd(),
             member_uid: prepared.member_account().uid,
+            governing: prepared.governing(),
         },
         &mut |_| {
             checkpoint(deadline)?;

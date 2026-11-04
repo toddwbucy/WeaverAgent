@@ -103,7 +103,12 @@ fn selecting_the_current_latest_again_always_records_a_new_ordinal() {
             .unwrap();
         assert_eq!(selected.entry().ordinal, DecimalU64(ordinal));
         assert_eq!(selected.entry().arrival, Arrival::Selected);
-        assert_eq!(selected.entry().binding(), first.binding());
+        assert_eq!(
+            selected
+                .entry()
+                .binding(governing_fixture().0.scheme_sha256().clone(), None),
+            first.binding(governing_fixture().0.scheme_sha256().clone(), None)
+        );
         assert_eq!(selected.entry().cause, first.cause);
     }
     assert_eq!(repository.read_index().unwrap().len(), 3);

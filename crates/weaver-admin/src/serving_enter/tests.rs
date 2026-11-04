@@ -1,7 +1,19 @@
 use super::*;
-use crate::save_points::serving::repository::tests::verified_enter_fixture;
+
 use crate::seed::preparation::tests::fixture;
 use std::fs;
+
+fn verified_fixture(
+    fixture: &crate::seed::preparation::tests::Fixture,
+    bound: weaver_types::ServingDeclaration,
+) -> VerifiedArtifact {
+    let scheme = fs::read_to_string(fixture.config.root.join("ste100-scheme.json")).unwrap();
+    let thesaurus =
+        bound.state_management().flow.thesaurus.as_ref().map(|_| {
+            fs::read_to_string(fixture.config.root.join("ste100-thesaurus.json")).unwrap()
+        });
+    crate::save_points::serving::repository::tests::verified_enter_fixture(bound, scheme, thesaurus)
+}
 
 fn facts() -> RuntimeFacts {
     RuntimeFacts {
@@ -27,7 +39,7 @@ fn classifier_free_binding_does_not_activate_classifier_only_startup() {
         .collect::<Vec<_>>()
         .join("\n");
     let draft = weaver_types::parse_serving_draft(&source).unwrap();
-    let verified = verified_enter_fixture(draft.bind_start(hash(b"placeholder")));
+    let verified = verified_fixture(&fixture, draft.bind_start(hash(b"placeholder")));
     fs::remove_file(fixture.config.root.join("ste100-binary")).unwrap();
     let error = PreparedEnter::prepare_against(
         &fixture.config,
@@ -50,14 +62,24 @@ fn state_content_1_load_refuses_a_thesaurus_before_root_artifact_reads() {
     fixture.config.operator = 0;
     let source = fs::read_to_string(fixture.config.territory.join("agent.toml")).unwrap();
     let draft = weaver_types::parse_serving_draft(&source).unwrap();
+    let thesaurus = serde_json::json!({
+        "format": "ste100-thesaurus/1", "scheme_id": draft.state_management().flow.scheme.scheme_id,
+        "source": {"repository":"synthetic", "commit":"test", "path":"test", "sha256":hash(b"source")},
+        "entries": []
+    }).to_string();
+    fs::write(
+        fixture.config.root.join("ste100-thesaurus.json"),
+        &thesaurus,
+    )
+    .unwrap();
     let source = format!(
         "{source}\nstate-management.flow.thesaurus = \
          {{artifact-sha256 = \"{}\", scheme-id = \"{}\"}}\n",
-        "d".repeat(64),
+        hash(thesaurus.as_bytes()),
         draft.state_management().flow.scheme.scheme_id
     );
     let draft = weaver_types::parse_serving_draft(&source).unwrap();
-    let verified = verified_enter_fixture(draft.bind_start(hash(b"placeholder")));
+    let verified = verified_fixture(&fixture, draft.bind_start(hash(b"placeholder")));
     fs::remove_file(fixture.config.root.join("ste100-binary")).unwrap();
     let error = PreparedEnter::prepare_against(
         &fixture.config,
@@ -78,7 +100,7 @@ fn replacement_enter_producer_uses_verified_settings_and_exact_checked_root_byte
     let fixture = fixture();
     let source = fs::read_to_string(fixture.config.territory.join("agent.toml")).unwrap();
     let draft = weaver_types::parse_serving_draft(&source).unwrap();
-    let verified = verified_enter_fixture(draft.bind_start(hash(b"placeholder")));
+    let verified = verified_fixture(&fixture, draft.bind_start(hash(b"placeholder")));
     let expected = verified.declaration().clone();
     let identity = verified.identity();
     let original_checker = fs::read_to_string(fixture.config.root.join("ste100-binary")).unwrap();
@@ -217,16 +239,13 @@ fn replacement_enter_producer_uses_verified_settings_and_exact_checked_root_byte
 }
 #[test]
 fn replacement_enter_producer_refuses_changed_scheme_identity_and_custody() {
-    for case in ["digest", "verbs", "mode", "binary-conflict"] {
+    // GoverningFiles now refuses changed verb keys before an artifact is verified.
+    for case in ["digest", "mode", "binary-conflict"] {
         let fixture = fixture();
         let source = fs::read_to_string(fixture.config.territory.join("agent.toml")).unwrap();
-        let mut draft_source = source.clone();
-        if case == "verbs" {
-            draft_source = source.replace("verbs = [\"read\"]", "verbs = [\"hold\"]");
-            assert_ne!(source, draft_source);
-        }
-        let verified = verified_enter_fixture(
-            weaver_types::parse_serving_draft(&draft_source)
+        let verified = verified_fixture(
+            &fixture,
+            weaver_types::parse_serving_draft(&source)
                 .unwrap()
                 .bind_start(hash(b"placeholder")),
         );

@@ -57,7 +57,7 @@ fn response(peer: &OwnedFd) -> CapturePayload {
 }
 
 fn seed(fixture: &Fixture, repo: &mut Repository) -> StartIdentity {
-    let rendered = declaration::render(&declaration::tests::fixture())
+    let rendered = declaration::render(&governing_fixture().1)
         .unwrap()
         .replace(
             "save-wait.elapsed-ns = \"17\"",
@@ -70,6 +70,7 @@ fn seed(fixture: &Fixture, repo: &mut Repository) -> StartIdentity {
         &fixture.scope(),
         parse_serving_draft(&rendered).unwrap(),
         SeedImage {
+            governing: &governing_fixture().0,
             expected_seed_id: &created.seed_id,
             created: &created,
             room: room.as_fd(),

@@ -31,6 +31,7 @@ use weaver_types::{RunId, ServingDeclaration, ServingDraft, SessionId};
 use super::codec::{self, Arrival, ArtifactId, PublicationGuard, StateIndexEntry};
 use super::declaration;
 use super::fs_ops::{self, PartDirectory};
+use super::governing::GoverningFiles;
 use super::repository::{LoadScope, Repository};
 use crate::save_points::{MANIFEST, Owner, PUBLISH_RESERVE, SAVE_POINT_BOUND};
 
@@ -76,6 +77,7 @@ pub(crate) struct SeedImage<'a> {
     pub(crate) created: &'a SeedCreated,
     pub(crate) room: BorrowedFd<'a>,
     pub(crate) member_uid: u32,
+    pub(crate) governing: &'a GoverningFiles,
 }
 
 /// Image fields after the caller checked Observe, Beginning, run/exchange,
@@ -156,6 +158,7 @@ pub(crate) struct Publication<'repo> {
     ordinal: DecimalU64,
     origin: Origin,
     declaration: ServingDeclaration,
+    governing: GoverningFiles,
     part: Option<PartDirectory>,
     work_name: String,
     dump_sha256: Option<Digest>,
@@ -212,6 +215,7 @@ impl<'repo> Publication<'repo> {
                 seed_id: image.expected_seed_id.into(),
             },
             declaration,
+            image.governing.clone(),
         )?;
         publication.copy_room(
             image.room,
@@ -270,7 +274,15 @@ impl<'repo> Publication<'repo> {
         let source = File::from(parent.dump().try_clone_to_owned().map_err(before_io)?);
         let expected_a = parent.entry().dump_sha256.clone();
         let size = source.metadata().map_err(before_io)?.len();
-        let mut publication = Self::new(repository, scope, prefix, ordinal, origin, declaration)?;
+        let mut publication = Self::new(
+            repository,
+            scope,
+            prefix,
+            ordinal,
+            origin,
+            declaration,
+            parent.governing().clone(),
+        )?;
         publication.copy(&source, size, checkpoint)?;
         if publication.dump_sha256.as_ref() != Some(&expected_a) {
             return Err(publication.fail("verified parent image changed during rebind"));
@@ -326,6 +338,7 @@ impl<'repo> Publication<'repo> {
             ordinal,
             origin,
             parent.declaration().clone(),
+            parent.governing().clone(),
         )?;
         publication.copy_room(
             image.room,
@@ -681,8 +694,11 @@ impl<'repo> Publication<'repo> {
         ordinal: DecimalU64,
         origin: Origin,
         declaration: ServingDeclaration,
+        governing: GoverningFiles,
     ) -> Result<Self, Failure> {
         check_scope(&declaration, scope)?;
+        let flow = &declaration.state_management().flow;
+        governing.verify_declaration(&flow.scheme, flow.thesaurus.as_ref())?;
         Ok(Self {
             repository,
             session: scope.session.clone(),
@@ -691,6 +707,7 @@ impl<'repo> Publication<'repo> {
             ordinal,
             origin,
             declaration,
+            governing,
             part: None,
             work_name: part_name()?,
             dump_sha256: None,
@@ -849,24 +866,35 @@ impl<'repo> Publication<'repo> {
             .entry
             .as_ref()
             .unwrap()
-            .binding()
+            .binding(
+                self.governing.scheme_sha256().clone(),
+                self.governing.thesaurus_sha256().cloned(),
+            )
             .to_json()
             .map_err(|e| self.fail(e.to_string()))?;
         self.check(PersistencePhase::Preparing, checkpoint)?;
-        for (name, bytes) in [
-            ("agent.toml", configuration.as_bytes()),
-            ("binding.json", binding.as_slice()),
-        ] {
+        let mut files = vec![
+            ("agent.toml", configuration.into_bytes()),
+            ("binding.json", binding),
+            (
+                "ste100-scheme.json",
+                self.governing.scheme().as_bytes().to_vec(),
+            ),
+        ];
+        if let Some(thesaurus) = self.governing.thesaurus() {
+            files.push(("ste100-thesaurus.json", thesaurus.as_bytes().to_vec()));
+        }
+        for (name, bytes) in files {
             self.perform(PersistencePhase::Preparing, checkpoint, |this| {
                 let file = fs_ops::write_new(
                     this.part.as_ref().unwrap().fd(),
                     name,
-                    bytes,
+                    &bytes,
                     this.file_owner(),
                     0o640,
                 )
                 .map_err(|e| e.to_string())?;
-                this.remember(name, &file, hash(bytes))?;
+                this.remember(name, &file, hash(&bytes))?;
                 Ok(())
             })?;
         }

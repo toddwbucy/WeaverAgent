@@ -246,6 +246,24 @@ fn rename_refuses_a_replaced_directory_entry() {
 }
 
 #[test]
+fn explicit_cleanup_removes_every_governing_publication_file() {
+    let f = Fixture::new();
+    let part = create_part(f.fd(), "part", f.owner).unwrap();
+    for name in [
+        "state.sqlite",
+        "agent.toml",
+        "binding.json",
+        "ste100-scheme.json",
+        "ste100-thesaurus.json",
+    ] {
+        write_new(part.fd(), name, b"synthetic held bytes", f.owner, 0o640).unwrap();
+    }
+    part.remove().unwrap();
+    assert!(!f.path.join("part").exists());
+    assert_eq!(fs::read_dir(&f.path).unwrap().count(), 0);
+}
+
+#[test]
 fn explicit_cleanup_refuses_unknown_or_unowned_children_before_removing_any() {
     for bad in ["unknown", "symlink", "hardlink", "directory"] {
         let f = Fixture::new();

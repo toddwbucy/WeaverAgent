@@ -13,6 +13,10 @@ mod causes;
 mod failures;
 mod leave_actor;
 
+fn governing_fixture() -> (GoverningFiles, weaver_types::ServingDeclaration) {
+    super::super::governing::tests::publication_fixture(false)
+}
+
 const SEED_BYTES: &[u8] = b"the member, not admin, judges this image";
 const CAPTURE_BYTES: &[u8] = b"a complete captured state image";
 
@@ -24,12 +28,13 @@ fn seed_publication_itself_refuses_prior_artifact_evidence_without_an_index() {
     let mut repository = fixture.repository();
     let created = fixture.seed_image();
     let room = open_directory(&fixture.room).unwrap();
-    let declaration = declaration::render(&declaration::tests::fixture()).unwrap();
+    let declaration = declaration::render(&governing_fixture().1).unwrap();
     let result = Publication::seed(
         &mut repository,
         &fixture.scope(),
         parse_serving_draft(&declaration).unwrap(),
         SeedImage {
+            governing: &governing_fixture().0,
             expected_seed_id: &created.seed_id,
             created: &created,
             room: room.as_fd(),
@@ -56,10 +61,16 @@ struct Fixture {
     owner: Owner,
     session: SessionId,
     trace_path: PathBuf,
+    governing: GoverningFiles,
+    declaration: weaver_types::ServingDeclaration,
 }
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_thesaurus(false)
+    }
+
+    fn with_thesaurus(elected: bool) -> Self {
         static SERIAL: AtomicU64 = AtomicU64::new(0);
         let base = std::env::temp_dir().join(format!(
             "publication-{}-{}-{}",
@@ -76,7 +87,7 @@ impl Fixture {
         fs::create_dir(&room).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o750)).unwrap();
         fs::set_permissions(&room, fs::Permissions::from_mode(0o700)).unwrap();
-        let declaration = declaration::tests::fixture();
+        let (governing, declaration) = super::super::governing::tests::publication_fixture(elected);
         let trace_path = match &declaration.agent().trace_sink {
             TraceSink::File { path, .. }
             | TraceSink::Pipe { path, .. }
@@ -92,6 +103,8 @@ impl Fixture {
             },
             session: declaration.agent().session.clone(),
             trace_path,
+            governing,
+            declaration,
         }
     }
 
@@ -135,8 +148,9 @@ impl Fixture {
         Publication::seed(
             repo,
             &self.scope(),
-            draft(),
+            parse_serving_draft(&declaration::render(&self.declaration).unwrap()).unwrap(),
             SeedImage {
+                governing: &self.governing,
                 expected_seed_id: &created.seed_id,
                 created: &created,
                 room: room.as_fd(),
@@ -238,7 +252,7 @@ fn run() -> RunId {
 }
 
 fn draft() -> ServingDraft {
-    parse_serving_draft(&declaration::render(&declaration::tests::fixture()).unwrap()).unwrap()
+    parse_serving_draft(&declaration::render(&governing_fixture().1).unwrap()).unwrap()
 }
 
 fn position(capture: u64) -> SourcePosition {
@@ -403,6 +417,7 @@ fn second_seed_refuses_without_touching_the_chain() {
         &fixture.scope(),
         draft(),
         SeedImage {
+            governing: &governing_fixture().0,
             expected_seed_id: &created.seed_id,
             created: &created,
             room: room.as_fd(),
@@ -462,6 +477,7 @@ fn seed_refuses_uncorrelated_or_untrusted_room_images() {
             &fixture.scope(),
             draft(),
             SeedImage {
+                governing: &governing_fixture().0,
                 expected_seed_id: &expected_seed_id,
                 created: &created,
                 room: room.as_fd(),
@@ -491,7 +507,7 @@ fn rebind_preserves_image_and_position_while_binding_operational_changes() {
         .finish(FinalOutcome::SavePointTaken(&report(&saved, 1)), &mut alive)
         .unwrap();
     drop(capture);
-    let text = declaration::render(&declaration::tests::fixture())
+    let text = declaration::render(&governing_fixture().1)
         .unwrap()
         .replace("max-result-bytes = \"18\"", "max-result-bytes = \"29\"");
     let new_draft = parse_serving_draft(&text).unwrap();
@@ -525,9 +541,12 @@ fn rebind_rejects_changed_scheme_and_wrong_territory() {
     let mut repo = fixture.repository();
     fixture.seed_complete(&mut repo);
     let original = fixture.index_bytes();
-    let text = declaration::render(&declaration::tests::fixture())
+    let text = declaration::render(&governing_fixture().1)
         .unwrap()
-        .replace(&"b".repeat(64), &"d".repeat(64));
+        .replace(
+            governing_fixture().0.scheme_sha256().as_str(),
+            &"d".repeat(64),
+        );
     let error = Publication::rebind(
         &mut repo,
         &fixture.scope(),
@@ -645,4 +664,93 @@ fn later_capture_in_one_run_keeps_the_loaded_source_as_parent() {
         repo.load(None, &fixture.scope()).unwrap().identity(),
         last.unwrap()
     );
+}
+
+#[test]
+fn publication_preserves_the_governing_bytes_from_seed_through_bind_and_save() {
+    for elected in [false, true] {
+        let fixture = Fixture::with_thesaurus(elected);
+        let mut repo = fixture.repository();
+        let seeded = fixture.seed_complete(&mut repo);
+        let mut draft_text = declaration::render(&fixture.declaration).unwrap();
+        draft_text = draft_text.replace("fixture-save", "changed-save-measurement");
+        let mut rebound = Publication::rebind(
+            &mut repo,
+            &fixture.scope(),
+            None,
+            parse_serving_draft(&draft_text).unwrap(),
+            &mut alive,
+        )
+        .unwrap();
+        assert_eq!(rebound.advance(&mut alive).unwrap(), Progress::Renamed);
+        assert_eq!(rebound.advance(&mut alive).unwrap(), Progress::Verified);
+        let Progress::Complete(bound) = rebound.advance(&mut alive).unwrap() else {
+            panic!("rebind must finish");
+        };
+        drop(rebound);
+        let mut save = fixture.capture(&mut repo, &bound, 3, PersistenceCause::Requested);
+        let saved = publish(&mut save, 3);
+        drop(save);
+        for identity in [seeded, bound, saved] {
+            let dir = fixture.root.join(&identity.artifact_id);
+            assert_eq!(
+                fs::read(dir.join("ste100-scheme.json")).unwrap(),
+                fixture.governing.scheme().as_bytes()
+            );
+            if let Some(thesaurus) = fixture.governing.thesaurus() {
+                assert_eq!(
+                    fs::read(dir.join("ste100-thesaurus.json")).unwrap(),
+                    thesaurus.as_bytes()
+                );
+            } else {
+                assert!(!dir.join("ste100-thesaurus.json").exists());
+            }
+            let binding =
+                codec::StateBinding::from_json(&fs::read(dir.join("binding.json")).unwrap())
+                    .unwrap();
+            assert_eq!(&binding.scheme_sha256, fixture.governing.scheme_sha256());
+            assert_eq!(
+                binding.thesaurus_sha256.as_ref(),
+                fixture.governing.thesaurus_sha256()
+            );
+        }
+    }
+}
+
+#[test]
+fn rebind_cannot_change_the_held_thesaurus_election() {
+    for elected in [false, true] {
+        let fixture = Fixture::with_thesaurus(elected);
+        let mut repo = fixture.repository();
+        fixture.seed_complete(&mut repo);
+        let before = fixture.index_bytes();
+        let names = fixture.names();
+        let source = declaration::render(&fixture.declaration).unwrap();
+        let changed = if elected {
+            source
+                .lines()
+                .filter(|line| !line.starts_with("state-management.flow.thesaurus."))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            format!(
+                "{source}state-management.flow.thesaurus = {{artifact-sha256 = \
+                \"{}\", scheme-id = \"{}\"}}\n",
+                "d".repeat(64),
+                fixture.declaration.state_management().flow.scheme.scheme_id
+            )
+        };
+        let error = Publication::rebind(
+            &mut repo,
+            &fixture.scope(),
+            None,
+            parse_serving_draft(&changed).unwrap(),
+            &mut alive,
+        )
+        .err()
+        .expect("rebind cannot replace governing bytes or election");
+        assert_eq!(error.case, PersistenceCase::SchemeMismatch);
+        assert_eq!(fixture.index_bytes(), before);
+        assert_eq!(fixture.names(), names);
+    }
 }

@@ -17,7 +17,13 @@ use weaver_types::state_flow::{DecimalU64, Digest};
 
 use crate::save_points::{Owner, SAVE_POINT_BOUND};
 
-const FILES: [&str; 3] = ["state.sqlite", "agent.toml", "binding.json"];
+pub(super) const FILES: [&str; 5] = [
+    "state.sqlite",
+    "agent.toml",
+    "binding.json",
+    "ste100-scheme.json",
+    "ste100-thesaurus.json",
+];
 
 /// A directory created by this act beneath a held root. It remains held after
 /// rename, and `name` changes before any post-rename operation can fail.
@@ -142,7 +148,7 @@ impl PartDirectory {
         self.identity.require_name(self.root.as_fd(), &self.name)
     }
 
-    /// Remove only this held directory and its three possible files. Unknown
+    /// Remove only this held directory and its five possible files. Unknown
     /// entries or a changed inode refuse without recursive walking.
     pub(super) fn remove(&self) -> io::Result<()> {
         self.identity.require_name(self.root.as_fd(), &self.name)?;

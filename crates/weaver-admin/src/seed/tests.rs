@@ -165,6 +165,7 @@ fn copied<'a>(
         },
         draft.clone(),
         SeedImage {
+            governing: fixture.prepared.governing(),
             expected_seed_id: &request.seed_id,
             created: &created,
             room: room.as_fd(),

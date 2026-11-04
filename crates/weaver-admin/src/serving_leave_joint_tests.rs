@@ -154,6 +154,7 @@ fn publish_seed(root: &Path, config: &ServiceConfig, payload: &EnterPayload) -> 
     let EnterBinding::Serving {
         gate_instruction,
         state_management,
+        ste100_scheme,
         ..
     } = &payload.binding
     else {
@@ -220,11 +221,19 @@ fn publish_seed(root: &Path, config: &ServiceConfig, payload: &EnterPayload) -> 
     let _invocation =
         start::take_invocation_lock(&directory, crate::verb_table::HolderVerb::Load).unwrap();
     let _run = start::take_run_lock(&directory).unwrap().unwrap();
+    let governing = crate::save_points::serving::governing::GoverningFiles::verify(
+        ste100_scheme.clone(),
+        None,
+        &draft.state_management().flow.scheme,
+        None,
+    )
+    .unwrap();
     let mut publication = Publication::seed(
         &mut repository,
         &scope,
         draft,
         SeedImage {
+            governing: &governing,
             expected_seed_id: &created.seed_id,
             created: &created,
             room: room.as_fd(),

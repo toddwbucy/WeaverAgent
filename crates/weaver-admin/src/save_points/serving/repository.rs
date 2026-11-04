@@ -17,6 +17,7 @@ use weaver_types::{ServingDeclaration, SessionId, parse_serving_declaration};
 
 use super::Fault;
 use super::codec::{Arrival, ArtifactId, PublicationGuard, StateBinding, StateIndexEntry};
+use super::governing::GoverningFiles;
 use crate::save_points::{MANIFEST, Owner, SAVE_POINT_BOUND};
 
 const DUMP: &str = "state.sqlite";
@@ -39,7 +40,7 @@ pub(crate) struct Repository {
     pub(super) access_gid: u32,
 }
 
-/// Proof of file custody, agreement with the expected entry, the three hashes
+/// Proof of file custody, agreement with the expected entry, the file hashes
 /// and parseability of the declaration copy. Index membership and guard absence
 /// depend on the verifying route. This does not certify SQLite, STE100
 /// qualification, peer liveness or the full inventory admission.
@@ -49,6 +50,7 @@ pub(crate) struct VerifiedArtifact {
     declaration: ServingDeclaration,
     configuration: Vec<u8>,
     dump: File,
+    governing: GoverningFiles,
 }
 
 /// A restore failure never claims that an attempted append left the index alone.
@@ -60,6 +62,10 @@ pub(crate) struct RestoreFailure {
 }
 
 impl VerifiedArtifact {
+    pub(crate) fn governing(&self) -> &GoverningFiles {
+        &self.governing
+    }
+
     pub(super) fn entry(&self) -> &StateIndexEntry {
         &self.entry
     }
@@ -425,7 +431,6 @@ impl Repository {
         )
         .map_err(|e| layout(format!("open artifact {}: {e}", entry.artifact_id)))?;
         judge_directory(directory.as_fd(), self.root_owner.uid, self.access_gid)?;
-        exact_files(directory.as_fd())?;
         let owner = Owner {
             uid: self.root_owner.uid,
             gid: self.access_gid,
@@ -457,11 +462,38 @@ impl Repository {
         if declaration.state_management().start.dump_sha256 != binding.dump_sha256 {
             return Err(binding_fault("agent.toml names a different dump_sha256"));
         }
+        let flow = &declaration.state_management().flow;
+        exact_files(directory.as_fd(), flow.thesaurus.is_some())?;
+        let scheme =
+            String::from_utf8(read_judged(directory.as_fd(), "ste100-scheme.json", owner)?)
+                .map_err(|error| binding_fault(format!("scheme is not UTF-8: {error}")))?;
+        let thesaurus = if flow.thesaurus.is_some() {
+            Some(
+                String::from_utf8(read_judged(
+                    directory.as_fd(),
+                    "ste100-thesaurus.json",
+                    owner,
+                )?)
+                .map_err(|error| binding_fault(format!("thesaurus is not UTF-8: {error}")))?,
+            )
+        } else {
+            None
+        };
+        let governing =
+            GoverningFiles::verify(scheme, thesaurus, &flow.scheme, flow.thesaurus.as_ref())?;
+        if governing.scheme_sha256() != &binding.scheme_sha256
+            || governing.thesaurus_sha256() != binding.thesaurus_sha256.as_ref()
+        {
+            return Err(binding_fault(
+                "governing files disagree with binding digests",
+            ));
+        }
         Ok(VerifiedArtifact {
             entry,
             declaration,
             configuration,
             dump,
+            governing,
         })
     }
 
@@ -588,7 +620,7 @@ pub(super) fn judge_acl(descriptor: BorrowedFd<'_>, name: &str) -> Result<(), Fa
     }
 }
 
-fn exact_files(directory: BorrowedFd<'_>) -> Result<(), Fault> {
+fn exact_files(directory: BorrowedFd<'_>, thesaurus: bool) -> Result<(), Fault> {
     let descriptor = directory
         .try_clone_to_owned()
         .map_err(|e| layout(format!("dup directory: {e}")))?;
@@ -602,14 +634,18 @@ fn exact_files(directory: BorrowedFd<'_>) -> Result<(), Fault> {
             names.insert(name.to_vec());
         }
     }
-    let expected = BTreeSet::from([
+    let mut expected = BTreeSet::from([
         DUMP.as_bytes().to_vec(),
         CONFIGURATION.as_bytes().to_vec(),
         BINDING.as_bytes().to_vec(),
+        b"ste100-scheme.json".to_vec(),
     ]);
+    if thesaurus {
+        expected.insert(b"ste100-thesaurus.json".to_vec());
+    }
     if names != expected {
         return Err(layout(
-            "artifact directory does not contain exactly its three files",
+            "artifact directory differs from its elected file set",
         ));
     }
     Ok(())
