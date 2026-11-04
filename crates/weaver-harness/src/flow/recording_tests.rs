@@ -904,6 +904,7 @@ fn state_socket_completion_waits_for_real_recorded_measurement_and_releases_once
         scheme_id,
         start,
         read_limits,
+        thesaurus_sha256: None,
     } = s::decode_state_line(line.as_bytes(), s::FrameDirection::Request).unwrap()
     else {
         panic!("actual open frame");

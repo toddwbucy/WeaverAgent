@@ -45,6 +45,9 @@ impl StateRequest {
                 common,
                 schema_id,
                 scheme_id,
+                // Workflow 3.05: this retained startup elects no thesaurus.
+                // Enter validation refuses an election until the load slice.
+                thesaurus_sha256: None,
                 start,
                 read_limits,
             },

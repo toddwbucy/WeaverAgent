@@ -289,6 +289,28 @@ fn open_checks_schema_scheme_and_image_identity_before_answering_opened() {
 }
 
 #[test]
+fn legacy_open_refuses_a_thesaurus_digest_without_adopting_the_image() {
+    let mut member = Member::launch("serving", ImageDescriptor::ReadOnly, false, false);
+    let mut request = member.open_request();
+    let StateFrame::Open {
+        thesaurus_sha256, ..
+    } = &mut request
+    else {
+        unreachable!()
+    };
+    *thesaurus_sha256 = Some(fixtures::digest(b"thesaurus"));
+    let answer = member.exchange(&request);
+    assert!(
+        matches!(answer, StateFrame::Refused {
+        code: StateRefusalCode::UnsupportedSchema, ref detail, ..
+    } if detail.contains("thesaurus")),
+        "{answer:?}"
+    );
+    member.assert_closed();
+    assert!(member.room_names().is_empty());
+}
+
+#[test]
 fn fragmented_open_and_coalesced_file_controls_keep_order_and_one_receipt_each() {
     let mut member = Member::launch("serving", ImageDescriptor::ReadOnly, false, false);
     let open = member.open_request();

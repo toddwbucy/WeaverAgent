@@ -119,6 +119,14 @@ pub fn seed_image(request: &SeedRequest) -> Result<SeedImage, SeedFault> {
         .validate_structure(sha256, &scheme, request.checker_artifact_sha256.as_ref())
         .map_err(|code| SeedFault::new(code, "seed structure or certificate mismatch"))?;
 
+    // Workflow 3.04: accepting these bytes requires the versioned catalog.
+    if request.ste100_thesaurus.is_some() {
+        return Err(SeedFault::new(
+            SeedRefusal::UnsupportedSchema,
+            "state-content/1 cannot hold a thesaurus",
+        ));
+    }
+
     // The legacy catalog requires a bound seed statement. STATE-GOVERNING
     // supplies the no-classifier image path with state-content/2.
     if request.checker_artifact_sha256.is_none() {

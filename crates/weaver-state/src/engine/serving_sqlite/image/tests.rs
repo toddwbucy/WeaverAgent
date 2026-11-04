@@ -57,6 +57,7 @@ pub(in crate::engine::serving_sqlite) fn fixture() -> SeedRequest {
         seed_id: "a".repeat(32),
         scheme_id,
         ste100_scheme: artifact,
+        ste100_thesaurus: None,
         checker_artifact_sha256: Some(sha256(b"checker")),
         prompt_text: "Read item.".into(),
         raw_block: serde_json::value::RawValue::from_string(
@@ -89,6 +90,26 @@ fn legacy_seed_image_cannot_publish_an_unbound_prompt() {
         .expect("legacy image needs bindings");
     assert_eq!(failure.code, SeedRefusal::MalformedSeed);
     assert!(failure.detail.contains("state-content/1"));
+}
+
+#[test]
+fn legacy_seed_image_refuses_a_thesaurus_instead_of_discarding_it() {
+    let mut request = fixture();
+    request.ste100_thesaurus = Some(
+        serde_json::json!({
+            "format": "ste100-thesaurus/1",
+            "scheme_id": request.scheme_id,
+            "source": {"repository": "test", "commit": "test", "path": "test",
+                "sha256": sha256(b"test")},
+            "entries": []
+        })
+        .to_string(),
+    );
+    let error = seed_image(&request)
+        .err()
+        .expect("legacy schema cannot hold these bytes");
+    assert_eq!(error.code, SeedRefusal::UnsupportedSchema);
+    assert!(error.detail.contains("thesaurus"));
 }
 
 #[test]

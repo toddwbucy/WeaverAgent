@@ -209,6 +209,7 @@ fn prepare_against(
         seed_id,
         scheme_id: state.flow.scheme.scheme_id.clone(),
         ste100_scheme: scheme,
+        ste100_thesaurus: None,
         checker_artifact_sha256: Some(instruction.model_artifact_sha256.clone()),
         prompt_text: prompt,
         raw_block,

@@ -183,6 +183,7 @@ impl Member {
             common: self.common(),
             schema_id: self.seed.schema_id.clone(),
             scheme_id: self.seed.scheme_id.clone(),
+            thesaurus_sha256: None,
             start: self.start.clone(),
             read_limits: fixtures::limits(self.max_result_bytes.0),
         }
