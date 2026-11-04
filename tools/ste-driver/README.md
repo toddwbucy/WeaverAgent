@@ -70,6 +70,8 @@ python3 tools/ste-driver/tests/language_reference.py /path/to/pinned/WeaverTrain
 
 The language generator records 75 synthetic source-test cases and 11 guard cases.
 It also checks the pinned test module and manifest hashes before importing them.
+It pins `ste_kit_run.py` and extracts the guard notes and fallback from its AST.
+It does not run that module's model client.
 The generators need no approved-words artifact, model, gate or network. They change
 only this tool's fixture and character-class files. They do not modify WeaverTrain.
 The fixture cases are tests, not the R0 evaluation kit or an R0 result.

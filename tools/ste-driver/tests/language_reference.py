@@ -15,6 +15,7 @@ assert __import__('unicodedata').unidata_version == '16.0.0'
 for name, expected in {
     'scripts/ste_check.py': '185a186f4d637616f5e506bda55ff19f909aa3f8f7022e2a35d3b88d409d1b2c',
     'scripts/ste_convert.py': 'c1a9668766ec4cd67792772f3d070083c33d9939f0cd96a7df2578d6da0b7b66',
+    'scripts/ste_kit_run.py': 'e279b548967ef969657d47094b25577cea8933d7094400306ce0df4866593c84',
     'src/weaver_train/manifest.py': 'a112ff67fb8e60a5669dfedda76203ef4a7bbc5cf501125d375a5e2ea7384b6d',
     'tests/test_ste_check.py': '50f45e16dccb2c170a1c011c5900a59bfe284f4406ebceecdc8a3a0f48138acc',
 }.items():
@@ -23,6 +24,22 @@ for name, expected in {
 sys.path.insert(0, str(reference / 'scripts'))
 import ste_check as ste
 import ste_convert as convert
+
+# Read the note bytes from the pinned async function without running its client.
+kit_tree = ast.parse((reference / 'scripts/ste_kit_run.py').read_text())
+one = next(n for n in kit_tree.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'one')
+guard_notes = {}
+for node in ast.walk(one):
+    if (isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+            and isinstance(node.test.left, ast.Constant)
+            and node.test.left.value in ('copied_example', 'word_ratio')):
+        addition, = node.body
+        assert isinstance(addition, ast.AugAssign) and addition.target.id == 'note'
+        guard_notes[node.test.left.value] = ast.literal_eval(addition.value)
+fallback, = [ast.literal_eval(n.values[1]) for n in ast.walk(one)
+             if isinstance(n, ast.BoolOp) and isinstance(n.op, ast.Or)
+             and ast.unparse(n.values[0]) == 'note.strip()']
+assert set(guard_notes) == {'copied_example', 'word_ratio'}
 
 original_build = ste.Lexicon.build
 original_check = ste.check
@@ -95,15 +112,13 @@ for output, source in [
         else original_check(output, source, lex)
     if output is not None: convert.Converter.guard(fake, result, output, source)
     note = original_repair(result, lex)
-    if 'copied_example' in result['hard']:
-        note += '\n- You copied text from an example. Rewrite only the text between <<<TEXT and TEXT>>>.'
-    if 'word_ratio' in result['hard']:
-        note += ('\n- Your rewrite is much longer or much shorter than the text. Keep all of the '
-                 'information and add nothing.')
+    for rule in ('copied_example', 'word_ratio'):
+        if rule in result['hard']:
+            note += guard_notes[rule]
     data = copy.deepcopy(lexicons[id(lex)][1])
     data['fixed'] = dict(lex.fixed)
     guard_cases.append({'lexicon': data, 'output': output, 'source': source, 'examples': examples,
-                        'result': result, 'notes': note.strip() or '- Obey the rules.'})
+                        'result': result, 'notes': note.strip() or fallback})
 unique = []
 for case in records + guard_cases:
     lexicon = case.pop('lexicon')
