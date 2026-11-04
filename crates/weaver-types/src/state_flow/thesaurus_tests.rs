@@ -202,6 +202,9 @@ fn declaration_and_artifact_reject_invalid_digest_and_tag_spellings() {
         for bad in [
             json!(""),
             json!("B".repeat(64)),
+            json!("Splice"),
+            json!("OFFER"),
+            json!(" offer"),
             json!(null),
             json!(1),
             json!({"offer": null}),
