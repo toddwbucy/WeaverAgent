@@ -292,3 +292,64 @@ fn governing_adoption_checks_artifact_grammar_even_with_rebound_outer_hashes() {
     assert_eq!(fault.code, StateRefusalCode::SchemeMismatch);
     assert!(fault.detail.contains("scheme"));
 }
+
+#[test]
+fn governing_adoption_validates_current_and_historical_thesaurus_shapes() {
+    let mut request = fixture();
+    let valid = thesaurus(&request.scheme_id);
+    let valid_digest = sha256(valid.as_bytes());
+    request.ste100_thesaurus = Some(valid.clone());
+    let image = seed_image(&request).unwrap();
+    for current in [false, true] {
+        for defect in ["format", "source_path", "duplicate_word", "splice_uses"] {
+            let mut artifact: serde_json::Value = serde_json::from_str(&valid).unwrap();
+            match defect {
+                "format" => artifact["format"] = "ste100-thesaurus/2".into(),
+                "source_path" => artifact["source"]["path"] = "".into(),
+                "duplicate_word" => {
+                    let repeated = artifact["entries"][0].clone();
+                    artifact["entries"].as_array_mut().unwrap().push(repeated);
+                }
+                "splice_uses" => {
+                    artifact["entries"][0]["senses"][0]["use"] =
+                        serde_json::json!(["start", "begin"]);
+                }
+                _ => unreachable!(),
+            }
+            let bytes = serde_json::to_vec(&artifact).unwrap();
+            let digest = sha256(&bytes);
+            let db = connection(image.as_bytes());
+            db.execute(
+                "INSERT INTO governing_version
+                 (kind,sha256,bytes,source_sha256,ruling,install_ordinal)
+                 SELECT kind,?1,?2,source_sha256,'synthetic invalid version',?3
+                 FROM governing_version WHERE kind='thesaurus' AND sha256=?4",
+                params![
+                    digest.as_str(),
+                    bytes,
+                    2_u64.to_be_bytes(),
+                    valid_digest.as_str()
+                ],
+            )
+            .unwrap();
+            if current {
+                db.execute(
+                    "UPDATE governing_current SET sha256=?1 WHERE kind='thesaurus'",
+                    [digest.as_str()],
+                )
+                .unwrap();
+            }
+            let changed = db.serialize(rusqlite::MAIN_DB).unwrap();
+            let expected = if current { &digest } else { &valid_digest };
+            let fault = adopt(&changed, &request.scheme_id, Some(expected))
+                .err()
+                .expect("strict decode and matching hashes do not prove artifact shape");
+            assert_eq!(
+                fault.code,
+                StateRefusalCode::SchemeMismatch,
+                "current={current}, {defect}: {fault}"
+            );
+            assert!(fault.detail.contains("thesaurus"), "{fault}");
+        }
+    }
+}
