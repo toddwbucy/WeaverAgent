@@ -17,6 +17,9 @@ use weaver_types::state_flow::{
 
 use super::coordinator::{CheckOperation, RecordedCheck};
 
+#[path = "offer_template.rs"]
+pub(super) mod offer;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TemplateError {
     InvalidInventory,
@@ -72,12 +75,26 @@ impl CompiledInventory {
             template
                 .validate()
                 .map_err(|_| TemplateError::InvalidInventory)?;
-            if !Kind::from_name(&template.kind).is_some_and(|kind| {
-                matches!(
-                    content_schema(kind),
-                    ContentSchema::OneText { .. } | ContentSchema::Plan
-                )
-            }) {
+            let offer = template.kind == "offer" || template.template_id == offer::TEMPLATE_ID;
+            if offer && template != offer::template() {
+                return Err(TemplateError::InvalidInventory);
+            }
+            if !offer
+                && (!Kind::from_name(&template.kind).is_some_and(|kind| {
+                    matches!(
+                        content_schema(kind),
+                        ContentSchema::OneText { .. } | ContentSchema::Plan
+                    )
+                }) || template.parts.iter().any(|part| {
+                    matches!(
+                        part,
+                        TemplatePart::Slot {
+                            class: weaver_types::state_flow::SlotClass::ThesaurusOffer,
+                            ..
+                        }
+                    )
+                }))
+            {
                 return Err(TemplateError::InvalidInventory);
             }
             if !ids.insert(&template.template_id) {
@@ -106,6 +123,13 @@ impl CompiledInventory {
 
     pub(super) fn templates(&self) -> &'static [TemplateSpec] {
         self.templates
+    }
+
+    /// LOOKUP-OFFER remains recorded but is never sent to the classifier.
+    pub(super) fn certifiable(&self) -> impl Iterator<Item = &TemplateSpec> {
+        self.templates
+            .iter()
+            .filter(|template| template.kind != "offer")
     }
 
     pub(super) fn bytes(&self) -> &[u8] {
@@ -152,8 +176,10 @@ impl CompiledInventory {
 
     fn operation(&self, index: usize) -> Option<CheckOperation> {
         self.templates
-            .get(index)
-            .zip(self.texts.get(index))
+            .iter()
+            .zip(self.texts.iter())
+            .filter(|(template, _)| template.kind != "offer")
+            .nth(index)
             .map(|(template, text)| CheckOperation::Template {
                 template_id: template.template_id.clone(),
                 text: text.clone(),
@@ -336,7 +362,7 @@ impl TemplateCheckTranscript {
     }
 
     pub(super) fn is_complete(&self) -> bool {
-        self.failure.is_none() && self.accepted.len() == self.inventory.templates.len()
+        self.failure.is_none() && self.accepted.len() == self.inventory.certifiable().count()
     }
 
     pub(super) fn records(&self) -> &[TemplateCheckRecord] {
