@@ -124,17 +124,15 @@ fn nemotron_unsupported_calls_remain_unrecovered_and_cannot_turn_into_text() {
     assert_eq!(parsed.unrecovered.len(), 1);
     assert_eq!(parsed.unrecovered[0].fragment, fragment);
     assert_eq!(parsed.unrecovered[0].grammar.family, "nemotron_h");
-    assert!(
-        renderer()
-            .render_delta(&Message {
-                role: Role::Assistant,
-                content: vec![ContentBlock::ToolCall(weaver_traits::ToolCall {
-                    name: "read".into(),
-                    arguments: "{}".into(),
-                })],
-            })
-            .is_err()
-    );
+    let tool_call = Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::ToolCall(weaver_traits::ToolCall {
+            name: "read".into(),
+            arguments: "{}".into(),
+        })],
+    };
+    assert!(crate::family::render_each(renderer(), std::slice::from_ref(&tool_call)).is_err());
+    assert!(renderer().render_delta(&tool_call).is_err());
     assert!(
         renderer()
             .render_delta(&message(Role::ToolResult, "Result"))
