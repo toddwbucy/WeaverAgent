@@ -89,6 +89,17 @@ fn offer_inventory_refuses_changed_words_identity_layout_and_unlicensed_slots() 
 }
 
 #[test]
+fn offer_inventory_reserves_the_offer_identity_without_a_thesaurus_slot() {
+    let mut ordinary = template(offer::TEMPLATE_ID);
+    ordinary.parts = vec![TemplatePart::Literal("Read the text.".into())];
+    assert_eq!(ordinary.kind, "loop.instruction");
+    assert!(matches!(
+        CompiledInventory::new(Box::leak(vec![ordinary].into_boxed_slice())),
+        Err(TemplateError::InvalidInventory)
+    ));
+}
+
+#[test]
 fn offer_inventory_skips_only_offer_in_original_certification_order() {
     for position in 0..=2 {
         let mut entries = static_templates().to_vec();
