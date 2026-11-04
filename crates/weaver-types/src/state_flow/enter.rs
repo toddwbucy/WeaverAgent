@@ -85,6 +85,13 @@ pub enum EnterBinding {
         state_management: StateManagementConfig,
         start: StartIdentity,
         ste100_scheme: String,
+        /// TYPES-ENTER: the exact UTF-8 artifact from the selected save point.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "super::declaration::present_option"
+        )]
+        ste100_thesaurus: Option<String>,
     },
     Diagnostic {
         state_election: crate::StateElection,
@@ -100,6 +107,13 @@ pub enum LoadedStateFacts {
         state_management: StateManagementConfig,
         start: StartIdentity,
         ste100_scheme: String,
+        /// TYPES-ENTER: the exact UTF-8 artifact from the selected save point.
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "super::declaration::present_option"
+        )]
+        ste100_thesaurus: Option<String>,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",

@@ -51,7 +51,7 @@ pub(super) fn adopt(
     load: &weaver_trace::serving::payloads::LoadRecord,
     bootstrap: &s::Ste100Bootstrap,
     binary: &std::path::Path,
-    classifier: bool,
+    mode: &str,
 ) -> (ReceivedEnter, OwnedFd) {
     let mut envelope = envelope(&run.context.declaration, load, bootstrap, binary);
     let bound = run.context.deadlines.get(PumpDeadline::Enter).unwrap();
@@ -61,13 +61,23 @@ pub(super) fn adopt(
     let EnterBinding::Serving {
         enter_window,
         state_management,
+        ste100_thesaurus,
         ..
     } = &mut payload.binding
     else {
         panic!()
     };
-    if !classifier {
+    if mode == "no-classifier" {
         state_management.ste100 = None;
+    }
+    if mode == "thesaurus-election" {
+        state_management.flow.thesaurus = Some(s::ThesaurusDeclaration {
+            artifact_sha256: s::Digest::new("d".repeat(64)).unwrap(),
+            scheme_id: state_management.flow.scheme.scheme_id.clone(),
+        });
+    }
+    if mode == "thesaurus-bytes" {
+        *ste100_thesaurus = Some("synthetic unpaired artifact".into());
     }
     *enter_window = s::EnterWindow {
         began_ns: bound.began_ns().into(),

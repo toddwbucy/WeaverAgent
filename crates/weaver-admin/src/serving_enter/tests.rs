@@ -43,6 +43,36 @@ fn classifier_free_binding_does_not_activate_classifier_only_startup() {
         refusal: weaver_types::LifecycleRefusal::ConfigInvalid { field: Some(ref name) }, ..
     } if name.0 == "state-management.ste100"));
 }
+
+#[test]
+fn state_content_1_load_refuses_a_thesaurus_before_root_artifact_reads() {
+    let mut fixture = fixture();
+    fixture.config.operator = 0;
+    let source = fs::read_to_string(fixture.config.territory.join("agent.toml")).unwrap();
+    let draft = weaver_types::parse_serving_draft(&source).unwrap();
+    let source = format!(
+        "{source}\nstate-management.flow.thesaurus = \
+         {{artifact-sha256 = \"{}\", scheme-id = \"{}\"}}\n",
+        "d".repeat(64),
+        draft.state_management().flow.scheme.scheme_id
+    );
+    let draft = weaver_types::parse_serving_draft(&source).unwrap();
+    let verified = verified_enter_fixture(draft.bind_start(hash(b"placeholder")));
+    fs::remove_file(fixture.config.root.join("ste100-binary")).unwrap();
+    let error = PreparedEnter::prepare_against(
+        &fixture.config,
+        &AgentName(fixture.config.agent.clone()),
+        verified,
+        facts(),
+        7,
+        &fixture.boundary,
+    )
+    .err()
+    .expect("legacy load must not lose an election");
+    assert!(matches!(error, PreparationFailure::Inventory {
+        refusal: weaver_types::LifecycleRefusal::ConfigInvalid { field: Some(ref name) }, ..
+    } if name.0 == "state-management.flow.thesaurus"));
+}
 #[test]
 fn replacement_enter_producer_uses_verified_settings_and_exact_checked_root_bytes() {
     let fixture = fixture();

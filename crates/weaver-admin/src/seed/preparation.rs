@@ -145,6 +145,12 @@ fn prepare_against(
     let mut inventory =
         inventory::take_seed_inventory(agent, &source, &draft, boundary, config.operator)?;
     let state = draft.state_management();
+    if state.flow.thesaurus.is_some() {
+        return Err(invalid(
+            "state-management.flow.thesaurus",
+            "state-content/1 seed cannot hold a thesaurus",
+        ));
+    }
     // This state-content/1 seed path still requires a classifier certificate.
     // The no-classifier seed path belongs to the coupled foundation cutover.
     let instruction = state.ste100.as_ref().ok_or_else(|| {

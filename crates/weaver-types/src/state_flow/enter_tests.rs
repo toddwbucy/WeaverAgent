@@ -6,6 +6,37 @@ fn fixture() -> EnterEnvelope {
 fn payload(value: &mut Value) -> &mut Value {
     &mut value["payload"]["body"]["payload"]
 }
+
+#[test]
+fn thesaurus_carrier_keeps_exact_utf8_and_uses_the_complete_envelope_bound() {
+    let mut value = serde_json::to_value(fixture()).unwrap();
+    assert!(
+        payload(&mut value)["binding"]
+            .get("ste100_thesaurus")
+            .is_none()
+    );
+    let text = " {\"example\":\"caf\u{e9}\"}\r\n";
+    payload(&mut value)["binding"]["ste100_thesaurus"] = json!(text);
+    let envelope = EnterEnvelope::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+    let EnterBinding::Serving {
+        ste100_thesaurus, ..
+    } = &envelope.enter().binding
+    else {
+        panic!()
+    };
+    assert_eq!(ste100_thesaurus.as_deref(), Some(text));
+    assert_eq!(
+        EnterEnvelope::decode(&envelope.encode().unwrap()).unwrap(),
+        envelope
+    );
+    for invalid in [Value::Null, json!({}), json!(1)] {
+        payload(&mut value)["binding"]["ste100_thesaurus"] = invalid;
+        assert!(EnterEnvelope::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+    payload(&mut value)["binding"]["ste100_thesaurus"] = json!("\n".repeat(32768));
+    let over: EnterEnvelope = serde_json::from_value(value).unwrap();
+    assert!(matches!(over.encode(), Err(CodecError::TooLarge)));
+}
 #[test]
 fn replacement_enter_round_trip_preserves_exact_scheme_and_bound_settings() {
     let envelope = fixture();

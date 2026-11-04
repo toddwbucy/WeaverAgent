@@ -8,8 +8,8 @@ use toml::{Table, Value};
 use crate::state_flow::{
     DecimalU64, Digest, FlowBacklog, FlowConfig, MeasuredInterval, MeasuredWait, PartitionRule,
     PersistenceConfig, PlacementConfig, ReadLimits, RepairCap, SHELL_MAX_CLOCK_MS,
-    SchemeDeclaration, StateStartConfig, Ste100Instruction, ToolPolicies, ToolPolicy,
-    ValidationError,
+    SchemeDeclaration, StateStartConfig, Ste100Instruction, ThesaurusDeclaration, ToolPolicies,
+    ToolPolicy, ValidationError,
 };
 use crate::{ArtifactRef, DeviceOrdinal, ModelBinding, ToolName};
 
@@ -197,6 +197,7 @@ fn parse_flow(root: &Object<'_>) -> Result<FlowConfig, ConfigError> {
             "observation-interval",
             "backlog",
             "scheme",
+            "thesaurus",
         ],
     )?;
     let version: u32 = flow.get("version")?;
@@ -272,6 +273,17 @@ fn parse_flow(root: &Object<'_>) -> Result<FlowConfig, ConfigError> {
         &format!("{}.scheme.scheme-id", flow.path),
         scheme.validate(),
     )?;
+    let thesaurus = if flow.table.contains_key("thesaurus") {
+        let table = flow.child("thesaurus", &["artifact-sha256", "scheme-id"])?;
+        let declaration = ThesaurusDeclaration {
+            artifact_sha256: table.get::<Digest>("artifact-sha256")?,
+            scheme_id: table.nonempty("scheme-id")?,
+        };
+        checked(&table.path("scheme-id"), declaration.validate(&scheme))?;
+        Some(declaration)
+    } else {
+        None
+    };
     let value = FlowConfig {
         version,
         partition,
@@ -280,6 +292,7 @@ fn parse_flow(root: &Object<'_>) -> Result<FlowConfig, ConfigError> {
         observation_interval,
         backlog,
         scheme,
+        thesaurus,
     };
     checked(&flow.path, value.validate())?;
     Ok(value)
