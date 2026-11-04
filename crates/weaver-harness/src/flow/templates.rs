@@ -181,6 +181,9 @@ fn mirror_template(template: &TemplateSpec) -> trace::TemplateSpec {
                             trace::SlotClass::TechnicalName
                         }
                         weaver_types::state_flow::SlotClass::StepId => trace::SlotClass::StepId,
+                        weaver_types::state_flow::SlotClass::ThesaurusOffer => {
+                            trace::SlotClass::ThesaurusOffer
+                        }
                     },
                 },
             })

@@ -176,6 +176,10 @@ fn outbound_expansion_refuses_absent_names_step_slots_and_multiple_variables() {
             name: "step".into(),
             class: SlotClass::StepId,
         }],
+        vec![TemplatePart::Slot {
+            name: "offer".into(),
+            class: SlotClass::ThesaurusOffer,
+        }],
         vec![
             TemplatePart::Slot {
                 name: "one".into(),
@@ -292,7 +296,11 @@ fn restatement_registration_cannot_select_unknown_or_different_event_family() {
 
 #[test]
 fn restatement_never_interpolates_slots_or_creates_a_step_spelling() {
-    for class in [SlotClass::TechnicalName, SlotClass::StepId] {
+    for class in [
+        SlotClass::TechnicalName,
+        SlotClass::StepId,
+        SlotClass::ThesaurusOffer,
+    ] {
         let mut with_slot = template();
         with_slot.parts.insert(
             1,

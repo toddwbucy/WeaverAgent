@@ -228,6 +228,13 @@ fn payload_licensed(envelope: &Envelope, payload: &Payload) -> bool {
         (K::LoopInstruction, P::LoopInstruction(record)) => {
             user_text(&record.message, true)
                 && (turn || matches!(record.instruction, LoopInstructionMeta::WindDown {}))
+                && match &record.instruction {
+                    LoopInstructionMeta::Offer { matched } => {
+                        envelope.subsystem == Subsystem::Harness
+                            && envelope.causal_parent == Some(Sequence(matched.source.sequence.0))
+                    }
+                    _ => true,
+                }
         }
         (K::EmissionChange, P::EmissionChange(record)) => {
             let parent = match &record.method {
