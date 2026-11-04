@@ -121,10 +121,19 @@ impl CompiledInventory {
         scheme: &SchemeDeclaration,
         checker: &Digest,
     ) -> trace::TemplateInventory {
+        self.record_election(scheme, Some(checker))
+    }
+
+    // TRACE-LOAD keeps the inventory even when no classifier is elected.
+    pub(super) fn record_election(
+        &self,
+        scheme: &SchemeDeclaration,
+        checker: Option<&Digest>,
+    ) -> trace::TemplateInventory {
         trace::TemplateInventory {
             scheme_id: scheme.scheme_id.clone(),
             inventory_sha256: self.digest.as_str().into(),
-            checker_artifact_sha256: checker.as_str().into(),
+            checker_artifact_sha256: checker.map(|value| value.as_str().into()),
             templates: self.templates.iter().map(mirror_template).collect(),
         }
     }

@@ -331,7 +331,7 @@ fn circuit(case: Case) {
         unreachable!()
     };
     record.ste100_scheme = bootstrap.scheme_text.clone();
-    record.state_flow.ste100 = crate::flow::mirror::instruction(&bootstrap.instruction);
+    record.state_flow.ste100 = Some(crate::flow::mirror::instruction(&bootstrap.instruction));
     record.template_inventory = inventory.record(
         &run.context.declaration.scheme,
         &bootstrap.instruction.model_artifact_sha256,

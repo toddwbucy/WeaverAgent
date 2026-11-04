@@ -351,8 +351,11 @@ impl Fixture {
             .as_str()
             .into();
         load.template_inventory.scheme_id = declared.scheme.scheme_id.clone();
-        load.template_inventory.checker_artifact_sha256 =
-            load.state_flow.ste100.model_artifact_sha256.clone();
+        load.template_inventory.checker_artifact_sha256 = load
+            .state_flow
+            .ste100
+            .as_ref()
+            .map(|value| value.model_artifact_sha256.clone());
         load.state_member_observation =
             super::super::mirror::member(&s::MemberObservationIdentity {
                 instrument_version: "state-observation/2".into(),

@@ -53,7 +53,7 @@ pub(super) fn load_record() -> LoadRecord {
                 max_result_bytes: 10000.into(),
                 measurement_ref: "fixture".into(),
             },
-            ste100: Ste100Instruction {
+            ste100: Some(Ste100Instruction {
                 model_binding: ModelBinding {
                     artifact: "checker".into(),
                     devices: vec![0],
@@ -67,7 +67,7 @@ pub(super) fn load_record() -> LoadRecord {
                     measurement_ref: "fixture".into(),
                 },
                 decision_wait: wait,
-            },
+            }),
             tools: ToolPolicies { sh: None },
             placement: PlacementConfig {
                 c_head: 2048,
@@ -95,7 +95,7 @@ pub(super) fn load_record() -> LoadRecord {
         template_inventory: TemplateInventory {
             scheme_id: "scheme".into(),
             inventory_sha256: "i".repeat(64),
-            checker_artifact_sha256: "c".repeat(64),
+            checker_artifact_sha256: Some("c".repeat(64)),
             templates: vec![TemplateSpec {
                 template_id: "wind_down".into(),
                 kind: "loop.instruction".into(),
@@ -103,7 +103,7 @@ pub(super) fn load_record() -> LoadRecord {
             }],
         },
         ste100_scheme: "{\n  \"edition\": \"Issue 9\"\n}\n".into(),
-        ste100_binary_sha256: "e".repeat(64),
+        ste100_binary_sha256: Some("e".repeat(64)),
     }
 }
 
