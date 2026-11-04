@@ -228,7 +228,7 @@ fn seed_is_held_as_raw_sqlite_then_deleted_on_eof_or_a_second_request() {
 fn seed_certificate_failure_never_creates_a_room_image() {
     let mut member = Member::launch("seed", ImageDescriptor::Absent, false, false);
     let mut seed = member.seed.clone();
-    seed.certificate.checker_artifact_sha256 = fixtures::digest(b"wrong checker");
+    seed.certificate.checker_artifact_sha256 = Some(fixtures::digest(b"wrong checker"));
     let request = SeedFrame::Seed {
         request: Box::new(seed),
     };

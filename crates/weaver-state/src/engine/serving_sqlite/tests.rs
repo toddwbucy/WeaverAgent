@@ -46,9 +46,11 @@ fn binding(connection: &Connection, block: i64, ordinal: u64) -> i64 {
 }
 
 #[test]
-fn literal_ddl_is_the_complete_merged_catalog() {
+fn literal_ddl_is_the_complete_state_content_1_catalog() {
     let specification =
         include_str!("../../../../../docs/crates/state-management/weaver-state-Spec-amendment.md");
+    // STATE-GOVERNING adds two tables only at the state-content/2 cutover.
+    let (specification, _) = specification.split_once("**STATE-GOVERNING.**").unwrap();
     let expected: Vec<_> = specification
         .split("```sql\n")
         .skip(1)

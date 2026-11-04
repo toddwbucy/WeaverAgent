@@ -210,14 +210,14 @@ fn seed_request() -> SeedRequest {
         scheme_id: "scheme".into(),
         // This codec fixture does not certify or execute a semantic artifact.
         ste100_scheme: "{}".into(),
-        checker_artifact_sha256: digest(),
+        checker_artifact_sha256: Some(digest()),
         prompt_text: "Read the file.".into(),
         raw_block: RawValue::from_string(RAW_TEXT.into()).unwrap(),
         bindings: bindings(),
         certificate: SeedCertificate {
             prompt_sha256: digest(),
             scheme_id: "scheme".into(),
-            checker_artifact_sha256: digest(),
+            checker_artifact_sha256: Some(digest()),
             review_reference: "fixture:review".into(),
             bindings: bindings(),
             duties: vec![

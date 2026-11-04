@@ -93,7 +93,7 @@ pub(crate) fn fixture_with_member(member: inventory::MemberAccount) -> Fixture {
     let certificate = SeedCertificate {
         prompt_sha256: hash(prompt.as_bytes()),
         scheme_id: format!("ste100:{scheme_digest}"),
-        checker_artifact_sha256: model_digest.clone(),
+        checker_artifact_sha256: Some(model_digest.clone()),
         review_reference: "synthetic fixture, not operator qualification".into(),
         bindings: vec![binding(prompt)],
         duties: PromptDuty::ALL.to_vec(),
@@ -277,7 +277,7 @@ fn preparation_retains_exact_certified_bytes_without_an_existing_artifact() {
     assert_eq!(prepared.verified.prompt_sha256(), &hash(b"Read item."));
     assert_ne!(
         prepared.checker_binary_sha256(),
-        &prepared.request().checker_artifact_sha256,
+        prepared.request().checker_artifact_sha256.as_ref().unwrap(),
         "executable digest and declared model digest are distinct facts"
     );
     assert_eq!(
@@ -344,7 +344,7 @@ fn certificate_cannot_supply_its_own_expected_prompt_checker_or_scheme_identity(
         let mut certificate = fixture.certificate();
         match changed {
             "prompt" => certificate.prompt_sha256 = hash(b"another prompt"),
-            "checker" => certificate.checker_artifact_sha256 = hash(b"another checker"),
+            "checker" => certificate.checker_artifact_sha256 = Some(hash(b"another checker")),
             "scheme" => certificate.scheme_id = format!("ste100:{}", hash(b"another scheme")),
             "duty" => {
                 certificate.duties.pop();

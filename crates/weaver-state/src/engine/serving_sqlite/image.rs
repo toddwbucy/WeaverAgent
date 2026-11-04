@@ -116,9 +116,17 @@ pub fn seed_image(request: &SeedRequest) -> Result<SeedImage, SeedFault> {
         verbs,
     };
     request
-        .validate_structure(sha256, &scheme, &request.checker_artifact_sha256)
+        .validate_structure(sha256, &scheme, request.checker_artifact_sha256.as_ref())
         .map_err(|code| SeedFault::new(code, "seed structure or certificate mismatch"))?;
 
+    // The legacy catalog requires a bound seed statement. STATE-GOVERNING
+    // supplies the no-classifier image path with state-content/2.
+    if request.checker_artifact_sha256.is_none() {
+        return Err(SeedFault::new(
+            SeedRefusal::MalformedSeed,
+            "state-content/1 seed requires a classifier binding",
+        ));
+    }
     let mut catalog = ServingCatalog::create()?;
     {
         let tx = catalog.connection.transaction()?;
