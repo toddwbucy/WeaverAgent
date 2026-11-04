@@ -110,6 +110,10 @@ for cp in [0xE9, 0x301, 0x2163, 0xB2, 0x200C, 0x203F, 0x4E00, 0x1F600, 0x11F02]:
     cases.append((f"word_{cp:x}", f"Read a{c}_b and {c}.name then {c}(1, 2)."))
 for prefix in ["r", "R", "rb", "fr", "u", "E", "name", "a\u0301"]:
     cases.append((f"prefix_{len(cases)}", f"Call f({prefix}'a)b') now."))
+cases.extend([
+    ("listing_unicode_blank", "a   : 1\n\u0085\nb   : 2\nc   : 3\n\u0085"),
+    ("quoted_glued", 'Keep "145.[[C8]]" inside prose.'),
+])
 
 records = []
 for name, source in cases:

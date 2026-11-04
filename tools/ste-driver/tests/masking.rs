@@ -16,7 +16,7 @@ fn masking_and_restoration_match_the_pinned_reference() {
     let fixture: Value = serde_json::from_str(include_str!("reference.json")).unwrap();
     let masker = Masker::new().unwrap();
     let cases = fixture["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 74);
+    assert_eq!(cases.len(), 76);
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let got = masker.mask(case["source"].as_str().unwrap()).unwrap();

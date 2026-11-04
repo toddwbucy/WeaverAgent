@@ -16,7 +16,8 @@ order. The caller must persist the codes, check placeholder counts and refuse
 source marker collisions before it sends a request. This module is the source
 mask function, not the conversion or acceptance policy.
 
-`LiteralCheck` reports changed glued tokens without changing output. Slash-joined
+Pass the masked request text to `LiteralCheck`. It reports changed glued tokens
+without changing output. Slash-joined
 placeholders can separate if the caller's count check passes. Missing output
 changes every glued literal. The source check uses substring presence, not an
 occurrence count for glued tokens. The separate placeholder check owns counts.
@@ -38,7 +39,7 @@ cargo clippy --manifest-path tools/ste-driver/Cargo.toml --all-targets --locked 
 
 The reference revision is WeaverTrain
 `9881da6cfbc92b08b31264883aea63b73aa7b694`. `tests/reference.py` checks the source
-hashes before it imports `ste_convert` and `ste_experiment`. It regenerates 74
+hashes before it imports `ste_convert` and `ste_experiment`. It regenerates 76
 fixture cases and the Unicode character classes with Python Unicode 16.0.0.
 The measured reference host used Python 3.14.8. Rust's default word and whitespace
 classes differ from Python's, so the tool uses the generated ranges instead.

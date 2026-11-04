@@ -1021,6 +1021,36 @@
       "glued": [],
       "altered_none": [],
       "altered": []
+    },
+    {
+      "name": "listing_unicode_blank",
+      "source": "a   : 1\n\u0085\nb   : 2\nc   : 3\n\u0085",
+      "masked": "[[C1]]\n\u0085",
+      "codes": [
+        "a   : 1\n\u0085\nb   : 2\nc   : 3"
+      ],
+      "restored": "a   : 1\n\u0085\nb   : 2\nc   : 3\n\u0085",
+      "glued": [],
+      "altered_none": [],
+      "altered": []
+    },
+    {
+      "name": "quoted_glued",
+      "source": "Keep \"145.[[C8]]\" inside prose.",
+      "masked": "Keep [[C1]] inside prose.",
+      "codes": [
+        "\"145.[[C8]]\""
+      ],
+      "restored": "Keep \"145.[[C8]]\" inside prose.",
+      "glued": [
+        "145.[[C8]]"
+      ],
+      "altered_none": [
+        "145.[[C8]]"
+      ],
+      "altered": [
+        "145.[[C8]]"
+      ]
     }
   ]
 }
