@@ -115,6 +115,82 @@ fn completed_missing_and_lost_placeholders_drop_at_the_shared_limit() {
 }
 
 #[test]
+fn extra_or_repeated_placeholders_get_notes_and_count_as_language_loss() {
+    let judge = judge();
+    for (source, output) in [
+        ("Read [[C1]].", "Read [[C1]] [[C1]]."),
+        ("Read [[C1]].", "Read [[C1]] [[C2]]."),
+        ("Read the file.", "Read [[C1]]."),
+    ] {
+        let mut conversion = TextConversion::new(source.into(), 2);
+        for ordinal in 1..=3 {
+            let request = conversion.begin_request().unwrap();
+            assert_eq!(
+                request.kind,
+                if ordinal == 1 {
+                    RequestKind::Initial
+                } else {
+                    RequestKind::Repair
+                }
+            );
+            if ordinal > 1 {
+                assert!(
+                    request
+                        .text
+                        .contains("These placeholders occur too many times")
+                );
+                assert!(
+                    request
+                        .text
+                        .contains(&format!("<<<PREVIOUS_REWRITE\n{output}\n"))
+                );
+            }
+            conversion
+                .record_result(
+                    request.ordinal,
+                    check_answer(capture(json!(output), "answered"), &judge, source).unwrap(),
+                )
+                .unwrap();
+        }
+        assert_eq!(conversion.terminal(), Some(Terminal::LanguageUnresolved));
+        assert_eq!(conversion.shape_faults(), 0);
+        assert_eq!(conversion.final_output(), Some(output));
+    }
+}
+
+#[test]
+fn a_lost_occurrence_is_a_shape_fault_even_with_an_extra_marker() {
+    let judge = judge();
+    for (source, output) in [
+        ("Read [[C1]] [[C1]].", "Read [[C1]]."),
+        ("Read [[C1]] [[C1]].", "Read [[C1]] [[C2]]."),
+        ("Read [[C1]].", "Read [[C2]]."),
+    ] {
+        let mut conversion = TextConversion::new(source.into(), 2);
+        for ordinal in 1..=3 {
+            let request = conversion.begin_request().unwrap();
+            assert_eq!(
+                request.kind,
+                if ordinal == 1 {
+                    RequestKind::Initial
+                } else {
+                    RequestKind::ShapeRetry
+                }
+            );
+            assert!(!request.text.contains("<<<PREVIOUS_REWRITE"));
+            conversion
+                .record_result(
+                    request.ordinal,
+                    check_answer(capture(json!(output), "answered"), &judge, source).unwrap(),
+                )
+                .unwrap();
+        }
+        assert_eq!(conversion.terminal(), Some(Terminal::ShapeDrop));
+        assert_eq!(conversion.shape_faults(), 3);
+    }
+}
+
+#[test]
 fn truncation_is_a_language_failure_and_changed_literals_refuse_assembly() {
     let judge = judge();
     let mut truncated = capture(json!("Read the file."), "answered");

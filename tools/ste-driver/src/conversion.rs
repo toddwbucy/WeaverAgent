@@ -37,7 +37,11 @@ pub fn check_answer(
     }
     response["check"] = check.to_json();
     let failures = check.hard.keys().map(|key| (*key).to_owned()).collect();
-    if empty || check.hard.contains_key("placeholders") {
+    if empty
+        || judge
+            .checker
+            .lost_placeholder(answer.text.as_deref().unwrap_or(""), source)?
+    {
         return Ok(AttemptResult::ShapeFault {
             output: answer.text,
             failures,

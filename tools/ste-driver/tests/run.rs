@@ -143,7 +143,7 @@ fn a_complete_run_counts_both_loss_classes_and_keeps_the_last_outputs() {
     let directory = Directory::new();
     let kit = directory.kit(&[
         json!({"id":"shape","kind":"narration","text":"Read [[C1]]."}),
-        json!({"id":"language","kind":"narration","text":"Read the file."}),
+        json!({"id":"language","kind":"narration","text":"Read [[C1]]."}),
         json!({"id":"pass","kind":"final","text":"Read the file."}),
     ]);
     let run = directory.0.join("complete");
@@ -153,9 +153,9 @@ fn a_complete_run_counts_both_loss_classes_and_keeps_the_last_outputs() {
             answered("Read."),
             answered("Read."),
             answered("Read."),
-            answered("Read the file\x3b"),
-            answered("Read the file\x3b"),
-            answered("Read the file\x3b"),
+            answered("Read [[C1]] [[C1]]."),
+            answered("Read [[C1]] [[C1]]."),
+            answered("Read [[C1]] [[C1]]."),
             answered("Read the file."),
         ]),
         sent: 0,
@@ -188,7 +188,7 @@ fn a_complete_run_counts_both_loss_classes_and_keeps_the_last_outputs() {
         rows,
         vec![
             json!({"id":"shape","output":"Read."}),
-            json!({"id":"language","output":"Read the file\x3b"}),
+            json!({"id":"language","output":"Read [[C1]] [[C1]]."}),
             json!({"id":"pass","output":"Read the file."})
         ]
     );

@@ -64,7 +64,8 @@ It writes and syncs the parameters before the first request. Each request is
 recorded before `TurnClient` calls the gate script. The complete stdout, stderr,
 exit status, answer identity, checks and notes stay with the attempt. A stopped
 or invalid gate close stops the text and voids this R0 evaluation. A completed
-answer with no text or wrong placeholder counts uses the shape retry path.
+answer with no text or a lost placeholder occurrence uses the shape retry path.
+Extra or repeated placeholders use language repair with the checker's notes.
 Truncation and other hard language findings use the repair path. There is no
 automatic restart of a stopped pass and no earlier-output fallback.
 
