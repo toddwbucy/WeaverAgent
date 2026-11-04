@@ -10,6 +10,7 @@ mod python_re;
 mod repair;
 pub mod run;
 pub mod source;
+pub mod trace_report;
 
 // The external request owner is shared as source, with no agent library edge.
 #[path = "../../../crates/weaver-harness/dev_ste_driver/mod.rs"]
