@@ -33,6 +33,16 @@ fn string(out: &mut Vec<u8>, text: &str) {
 }
 
 fn gguf(path: &Path, adapter: bool, tensors: &[(&str, [u64; 2])], extra: &[(&str, &str)]) {
+    gguf_with_alpha(path, adapter, tensors, extra, None);
+}
+
+fn gguf_with_alpha(
+    path: &Path,
+    adapter: bool,
+    tensors: &[(&str, [u64; 2])],
+    extra: &[(&str, &str)],
+    alpha: Option<f32>,
+) {
     let mut metadata = vec![("general.architecture", "llama")];
     if adapter {
         metadata.extend([("general.type", "adapter"), ("adapter.type", "lora")]);
@@ -41,11 +51,16 @@ fn gguf(path: &Path, adapter: bool, tensors: &[(&str, [u64; 2])], extra: &[(&str
     let mut out = b"GGUF".to_vec();
     out.extend(3u32.to_le_bytes());
     out.extend((tensors.len() as u64).to_le_bytes());
-    out.extend((metadata.len() as u64).to_le_bytes());
+    out.extend((metadata.len() as u64 + u64::from(alpha.is_some())).to_le_bytes());
     for (key, value) in metadata {
         string(&mut out, key);
         out.extend(8u32.to_le_bytes());
         string(&mut out, value);
+    }
+    if let Some(alpha) = alpha {
+        string(&mut out, "adapter.lora.alpha");
+        out.extend(6u32.to_le_bytes());
+        out.extend(alpha.to_le_bytes());
     }
     let mut bytes = 0u64;
     for (name, dims) in tensors {
@@ -191,6 +206,62 @@ fn metadata_accounts_for_every_pair_and_its_storage() {
         BTreeMap::from([("blk.0.attn_q.weight".into(), 2)])
     );
     assert_eq!(identity.tensor_bytes, (8 * 2 + 2 * 16) * 4);
+}
+
+#[test]
+fn stored_alpha_distinguishes_absence_from_zero_and_nonzero() {
+    let files = Files::new();
+    let (base, adapter) = artifacts(&files);
+    let tensors = [
+        ("blk.0.attn_q.weight.lora_a", [8, 2]),
+        ("blk.0.attn_q.weight.lora_b", [2, 16]),
+    ];
+    for alpha in [None, Some(0.0), Some(16.0)] {
+        gguf_with_alpha(&adapter, true, &tensors, &[], alpha);
+        let identity = inspect(
+            &adapter,
+            std::slice::from_ref(&base),
+            "llama",
+            &request(&adapter),
+        )
+        .unwrap();
+        assert_eq!(identity.alpha, alpha);
+    }
+    for alpha in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        gguf_with_alpha(&adapter, true, &tensors, &[], Some(alpha));
+        assert!(
+            inspect(
+                &adapter,
+                std::slice::from_ref(&base),
+                "llama",
+                &request(&adapter)
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn overlapping_tensor_ranges_refuse_even_when_each_tensor_fits() {
+    let files = Files::new();
+    let (base, adapter) = artifacts(&files);
+    inspect(
+        &adapter,
+        std::slice::from_ref(&base),
+        "llama",
+        &request(&adapter),
+    )
+    .unwrap();
+    let mut bytes = std::fs::read(&adapter).unwrap();
+    let name = b"blk.0.attn_q.weight.lora_b";
+    let name_start = bytes.windows(name.len()).position(|b| b == name).unwrap();
+    // The offset follows the name, dimension count, two dimensions and type.
+    let offset_start = name_start + name.len() + 4 + 2 * 8 + 4;
+    bytes[offset_start..offset_start + 8].copy_from_slice(&0u64.to_le_bytes());
+    std::fs::write(&adapter, bytes).unwrap();
+    let error = inspect(&adapter, &[base], "llama", &request(&adapter)).unwrap_err();
+    assert_eq!(error.kind, FailureKind::Unreadable);
+    assert_eq!(error.detail, "empty or overlapping adapter tensor data");
 }
 
 #[test]
@@ -377,6 +448,21 @@ fn non_agent_owned_read_only_file_passes_kernel_custody_check() {
     judge_custody(&file).unwrap();
 }
 
+#[test]
+fn only_kernel_write_denials_establish_custody() {
+    for errno in [nix::libc::EACCES, nix::libc::EROFS] {
+        judge_write_denial(Some(errno)).unwrap();
+    }
+    for errno in [
+        None,
+        Some(nix::libc::ENOSYS),
+        Some(nix::libc::EBADF),
+        Some(nix::libc::EIO),
+    ] {
+        assert!(judge_write_denial(errno).is_err(), "accepted {errno:?}");
+    }
+}
+
 #[cfg(feature = "gguf")]
 #[test]
 fn callback_capture_survives_fixture_drop_in_an_isolated_process() {
@@ -435,6 +521,8 @@ fn successful_load_still_fails_on_fallback_missing_or_ambiguous_placement() {
         bytes: text.as_bytes().into(),
     };
     let good = record("llama_adapter_lora_init_impl: lora for 'blk.0.attn_q.weight' -> 'CUDA0'\n");
+    let mut wrong_level = good.clone();
+    wrong_level.level = llama_cpp_sys_2::GGML_LOG_LEVEL_WARN as i32;
     assert_eq!(
         judge(std::slice::from_ref(&good), &targets, &devices)
             .unwrap()
@@ -443,6 +531,10 @@ fn successful_load_still_fails_on_fallback_missing_or_ambiguous_placement() {
     );
     for records in [
         vec![],
+        vec![wrong_level],
+        vec![record(
+            "llama_adapter_lora_init_impl: lora for 'blk.0.attn_v.weight' -> 'CUDA0'\n",
+        )],
         vec![good.clone(), good.clone()],
         vec![record(
             "llama_adapter_lora_init_impl: lora for 'blk.0.attn_q.weight' -> 'CPU'\n",

@@ -113,7 +113,8 @@ pub struct Identity {
     pub sha256: String,
     pub base_weights_hash: String,
     pub scale: f32,
-    pub alpha: f32,
+    /// Stored alpha, absent when the artifact leaves the backend default in use.
+    pub alpha: Option<f32>,
     pub targets: BTreeMap<String, u64>,
     pub tensor_bytes: u64,
 }
@@ -262,10 +263,11 @@ fn judge_custody(file: &File) -> Result<(), String> {
     if result == 0 {
         return Err("adapter is writable by the agent uid".into());
     }
-    if !matches!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(nix::libc::EACCES | nix::libc::EROFS)
-    ) {
+    judge_write_denial(std::io::Error::last_os_error().raw_os_error())
+}
+
+fn judge_write_denial(errno: Option<i32>) -> Result<(), String> {
+    if !matches!(errno, Some(nix::libc::EACCES | nix::libc::EROFS)) {
         return Err("cannot establish adapter write denial".into());
     }
     Ok(())
@@ -334,8 +336,8 @@ fn inspect(
         ));
     }
     let alpha = match adapter.values.get("adapter.lora.alpha") {
-        None => 0.0,
-        Some(Value::Float(value)) if value.is_finite() => *value,
+        None => None,
+        Some(Value::Float(value)) if value.is_finite() => Some(*value),
         _ => return Err("adapter alpha must be finite f32".into()),
     };
     let mut base = BTreeMap::new();
