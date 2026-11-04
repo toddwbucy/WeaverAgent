@@ -90,6 +90,8 @@ pub struct WeightsHash(pub String);
 /// with the whole ordering inverted.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AdmitRefusal {
+    /// LORA-2: fixture-only detail, mapped onto the existing lifecycle cases.
+    Adapter(crate::lora::Failure),
     /// The load elected residual readout and this family's engine cannot tap.
     /// Judged on the admit path, so the refusal costs the operator nothing
     /// beyond the header read.
@@ -153,6 +155,7 @@ impl AdmitRefusal {
 impl From<AdmitRefusal> for LifecycleRefusal {
     fn from(refusal: AdmitRefusal) -> Self {
         match refusal {
+            AdmitRefusal::Adapter(failure) => failure.lifecycle(),
             AdmitRefusal::Unresolvable { .. } => LifecycleRefusal::ArtifactUnresolvable,
             AdmitRefusal::Unreadable { .. } => LifecycleRefusal::ArtifactUnreadable,
             AdmitRefusal::Family(inner) => inner.into(),
@@ -185,6 +188,8 @@ impl From<AdmitRefusal> for LifecycleRefusal {
 /// a path that was never resolved, never header-read, and never judged is not
 /// expressible. The fields are read-only views into the admit that made them.
 pub struct Admission<'a> {
+    #[cfg(feature = "gguf")]
+    adapter: Option<&'a crate::lora::Prepared>,
     path: &'a Path,
     /// Every shard's descriptor path in split order, one entry for a
     /// single-file artifact. The loader that can take a set takes this, and
@@ -197,6 +202,10 @@ pub struct Admission<'a> {
 }
 
 impl Admission<'_> {
+    #[cfg(feature = "gguf")]
+    pub(crate) fn adapter(&self) -> Option<&crate::lora::Prepared> {
+        self.adapter
+    }
     pub fn path(&self) -> &Path {
         self.path
     }
@@ -597,10 +606,26 @@ impl Residency {
         readout: ReadoutElection,
         surprisal_elected: bool,
     ) -> Result<&Resident, AdmitRefusal> {
+        // LORA-1: production callers share admission with absent adapter input.
+        self.admit_with_adapter(binding, headroom, readout, surprisal_elected, None)
+    }
+
+    pub(crate) fn admit_with_adapter(
+        &mut self,
+        binding: &ModelBinding,
+        headroom: Headroom,
+        readout: ReadoutElection,
+        surprisal_elected: bool,
+        adapter: Option<&crate::lora::Request>,
+    ) -> Result<&Resident, AdmitRefusal> {
         if self.admit_attempted {
             return Err(AdmitRefusal::AlreadyAttempted);
         }
         self.admit_attempted = true;
+
+        if let Some(request) = adapter {
+            request.validate().map_err(AdmitRefusal::Adapter)?;
+        }
 
         // Step one. Resolve the binding to an artifact. Free.
         let (path, reference_kind) =
@@ -623,6 +648,25 @@ impl Residency {
         // loading it and without touching a device. Free.
         let header = artifact::read_header(&mut pinned)
             .map_err(|refusal| AdmitRefusal::on_artifact(refusal, &path, "header"))?;
+
+        if let Some(request) = adapter
+            && header.container != artifact::Container::Gguf
+        {
+            return Err(AdmitRefusal::Adapter(crate::lora::Failure::new(
+                request,
+                crate::lora::FailureKind::Incompatible,
+                "adapter-backend",
+                "the fixture requires the GGUF backend",
+            )));
+        }
+
+        // LORA-2: directory checks precede device judgment and allocation.
+        let mut adapter = adapter
+            .map(|request| {
+                crate::lora::prepare(request, &pinned.paths(), &header.family.0)
+                    .map_err(AdmitRefusal::Adapter)
+            })
+            .transpose()?;
 
         // Step three, cheapest first. The width condition is a comparison
         // between the binding's count and the family's declaration and reads
@@ -657,6 +701,15 @@ impl Residency {
             .len()
             .map_err(|refusal| AdmitRefusal::on_artifact(refusal, &path, "size"))?
             / binding.devices.len() as u64;
+        // LORA-2: each assigned device must fit the entire adapter as a safe
+        // preflight bound until measured target placement apportions its cost.
+        let adapter_bytes = adapter.as_ref().map_or(0, |a| a.identity.tensor_bytes);
+        let shard_bytes =
+            shard_bytes
+                .checked_add(adapter_bytes)
+                .ok_or_else(|| AdmitRefusal::LoadFailed {
+                    detail: "base plus adapter storage overflow".into(),
+                })?;
         judge_room_and_reach(&binding.devices, shard_bytes, headroom)?;
 
         // **The weights hash is judged here, the last free step**, per Spec
@@ -671,6 +724,12 @@ impl Residency {
         let reference = std::path::PathBuf::from(&binding.artifact.0);
         let weights_hash = artifact::weights_hash(&reference, reference_kind, &mut pinned)
             .map_err(|refusal| AdmitRefusal::on_artifact(refusal, &reference, "hash"))?;
+
+        if let Some(adapter) = &mut adapter {
+            adapter
+                .verify(&weights_hash.0)
+                .map_err(AdmitRefusal::Adapter)?;
+        }
 
         // Step four. Take the devices in shard order and load each shard. The
         // binding's order is the shard order, and the loader's one door is the
@@ -688,6 +747,8 @@ impl Residency {
         let pinned_path = pinned.path();
         let pinned_paths = pinned.paths();
         let admission = Admission {
+            #[cfg(feature = "gguf")]
+            adapter: adapter.as_ref(),
             path: &pinned_path,
             paths: &pinned_paths,
             header: &header,
