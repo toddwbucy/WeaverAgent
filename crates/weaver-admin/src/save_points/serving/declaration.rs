@@ -331,6 +331,7 @@ impl Writer {
             observation_interval,
             backlog,
             scheme,
+            thesaurus,
         } = value;
         const PREFIX: &str = "state-management.flow";
         self.integer(&format!("{PREFIX}.version"), u64::from(*version))?;
@@ -386,7 +387,18 @@ impl Writer {
         self.strings(
             &format!("{PREFIX}.scheme.verbs"),
             verbs.iter().map(String::as_str),
-        )
+        )?;
+        if let Some(thesaurus) = thesaurus {
+            self.string(
+                &format!("{PREFIX}.thesaurus.artifact-sha256"),
+                thesaurus.artifact_sha256.as_str(),
+            )?;
+            self.string(
+                &format!("{PREFIX}.thesaurus.scheme-id"),
+                &thesaurus.scheme_id,
+            )?;
+        }
+        Ok(())
     }
 
     fn ste100(&mut self, value: &Ste100Instruction) -> Result<(), RenderError> {

@@ -874,6 +874,17 @@ impl Drop for Member {
 }
 
 fn compare(cut: &str, live: &mut Member, rebuilt: &mut Member, expected: &[Event]) {
+    // The two sockets have no shared write order. Per STATE Spec section 4,
+    // replay waits for the preload seal, while shape answers at its arrival.
+    // Check replay first so the later shape reads the sealed holdings.
+    let wanted_replay = subset(expected, "replay", None);
+    let live_replay = answer_events(&live.ask("replay", None), "replay");
+    let rebuilt_replay = answer_events(&rebuilt.ask("replay", None), "replay");
+    assert_eq!(
+        (&live_replay, &rebuilt_replay),
+        (&wanted_replay, &wanted_replay),
+        "three-way replay disagreement at {cut}"
+    );
     let wanted_shape = shape(expected);
     let live_shape = answer_shape(&live.ask("shape", None));
     let rebuilt_shape = answer_shape(&rebuilt.ask("shape", None));
@@ -885,12 +896,7 @@ fn compare(cut: &str, live: &mut Member, rebuilt: &mut Member, expected: &[Event
         (&wanted_shape, &wanted_shape),
         "three-way shape disagreement at {cut}"
     );
-    for (ask, last) in [
-        ("replay", None),
-        ("identity", None),
-        ("recall", None),
-        ("recall", Some(1)),
-    ] {
+    for (ask, last) in [("identity", None), ("recall", None), ("recall", Some(1))] {
         let wanted = subset(expected, ask, last);
         let left = answer_events(&live.ask(ask, last), ask);
         let right = answer_events(&rebuilt.ask(ask, last), ask);

@@ -90,11 +90,15 @@ pub enum TemplatePart {
 pub enum SlotClass {
     TechnicalName,
     StepId,
+    ThesaurusOffer,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoopInstructionMeta {
+    Offer {
+        matched: ThesaurusMatch,
+    },
     Restatement {
         source: SourceBlockId,
         attempt: DecimalU64,

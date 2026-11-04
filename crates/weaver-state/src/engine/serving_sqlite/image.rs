@@ -116,12 +116,13 @@ pub fn seed_image(request: &SeedRequest) -> Result<SeedImage, SeedFault> {
         verbs,
     };
     request
-        .validate_structure(sha256, &scheme, &request.checker_artifact_sha256)
+        .validate_structure(sha256, &scheme, request.checker_artifact_sha256.as_ref())
         .map_err(|code| SeedFault::new(code, "seed structure or certificate mismatch"))?;
 
     let mut catalog = ServingCatalog::create()?;
     {
         let tx = catalog.connection.transaction()?;
+        super::governing::seed(&tx, request)?;
         tx.execute(
             "INSERT INTO store_meta(singleton,schema_id,seed_id,scheme_id) VALUES(1,?1,?2,?3)",
             params![request.schema_id, request.seed_id, request.scheme_id],

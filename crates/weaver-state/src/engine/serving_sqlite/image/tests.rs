@@ -4,6 +4,8 @@ use crate::ServingStore;
 use weaver_types::state_flow::{Binding, NounBinding, PromptDuty, SeedCertificate, Span};
 use weaver_types::state_flow::{Common, ReadLimits, ReadSelector, StartIdentity, StateRefusalCode};
 
+mod governing;
+
 pub(in crate::engine::serving_sqlite) fn fixture() -> SeedRequest {
     // This fixture proves the byte contract only. It is not a qualified language
     // artifact, model, prompt or production conformance certificate.
@@ -47,17 +49,18 @@ pub(in crate::engine::serving_sqlite) fn fixture() -> SeedRequest {
     let certificate = SeedCertificate {
         prompt_sha256: sha256(b"Read item."),
         scheme_id: scheme_id.clone(),
-        checker_artifact_sha256: sha256(b"checker"),
+        checker_artifact_sha256: Some(sha256(b"checker")),
         review_reference: "test fixture, no production qualification".into(),
         bindings: bindings.clone(),
         duties: PromptDuty::ALL.to_vec(),
     };
     SeedRequest {
-        schema_id: "state-content/1".into(),
+        schema_id: "state-content/2".into(),
         seed_id: "a".repeat(32),
         scheme_id,
         ste100_scheme: artifact,
-        checker_artifact_sha256: sha256(b"checker"),
+        ste100_thesaurus: None,
+        checker_artifact_sha256: Some(sha256(b"checker")),
         prompt_text: "Read item.".into(),
         raw_block: serde_json::value::RawValue::from_string(
             r#"{"type":"text","text":"Read item."}"#.into(),
@@ -154,7 +157,7 @@ fn seed_refusals_preserve_schema_shape_certificate_order_and_hash_attribution() 
         seed_image(&request).err().unwrap().code,
         SeedRefusal::UnsupportedSchema
     );
-    request.schema_id = "state-content/1".into();
+    request.schema_id = "state-content/2".into();
     assert_eq!(
         seed_image(&request).err().unwrap().code,
         SeedRefusal::MalformedSeed
@@ -169,7 +172,7 @@ fn seed_refusals_preserve_schema_shape_certificate_order_and_hash_attribution() 
         match field {
             "prompt" => request.certificate.prompt_sha256 = sha256(b"wrong"),
             "scheme" => request.scheme_id = format!("ste100:{}", sha256(b"wrong")),
-            "checker" => request.checker_artifact_sha256 = sha256(b"wrong"),
+            "checker" => request.checker_artifact_sha256 = Some(sha256(b"wrong")),
             "duty" => {
                 request.certificate.duties.pop();
             }
@@ -241,6 +244,7 @@ fn adopted_seed_reads_prompt_without_filing_and_roundtrips_verified_image() {
         &common(),
         &request.schema_id,
         &request.scheme_id,
+        None,
         &start,
         limits(),
     )
@@ -257,6 +261,7 @@ fn adopted_seed_reads_prompt_without_filing_and_roundtrips_verified_image() {
         &common(),
         &request.schema_id,
         &request.scheme_id,
+        None,
         &identity(&captured),
         limits(),
     )
@@ -299,6 +304,7 @@ fn adoption_refuses_corruption_even_when_image_hash_is_rebound() {
             &common(),
             &request.schema_id,
             &request.scheme_id,
+            None,
             &identity(&bytes),
             limits(),
         )
@@ -314,10 +320,18 @@ fn adoption_distinguishes_scheme_limits_and_image_identity_failures() {
     let image = seed_image(&request).unwrap();
     let start = identity(image.as_bytes());
     let open = |schema: &str, scheme: &str, start: &StartIdentity, limits: ReadLimits| {
-        ServingSqlite::adopt(image.as_bytes(), &common(), schema, scheme, start, limits)
-            .err()
-            .unwrap()
-            .code
+        ServingSqlite::adopt(
+            image.as_bytes(),
+            &common(),
+            schema,
+            scheme,
+            None,
+            start,
+            limits,
+        )
+        .err()
+        .unwrap()
+        .code
     };
     assert_eq!(
         open("old", &request.scheme_id, &start, limits()),
@@ -364,6 +378,7 @@ fn image_adoption_keeps_committed_order_across_new_runs_and_refuses_old_run_writ
         &common(),
         &request.schema_id,
         &request.scheme_id,
+        None,
         &identity(image.as_bytes()),
         limits(),
     )
@@ -411,6 +426,7 @@ fn image_adoption_keeps_committed_order_across_new_runs_and_refuses_old_run_writ
         &next_common,
         &request.schema_id,
         &request.scheme_id,
+        None,
         &start,
         limits(),
     )
@@ -462,6 +478,7 @@ fn malformed_recall_adoption_refuses_exact_shape_even_with_consistent_pair_and_h
             &common(),
             &request.schema_id,
             &request.scheme_id,
+            None,
             &identity(seed.as_bytes()),
             limits(),
         )
@@ -512,6 +529,7 @@ fn malformed_recall_adoption_refuses_exact_shape_even_with_consistent_pair_and_h
             &common(),
             &request.schema_id,
             &request.scheme_id,
+            None,
             &start,
             limits(),
         );
@@ -541,6 +559,7 @@ fn abandoned_pair_adoption_requires_a_prior_run_even_with_rebound_image_identity
         &common(),
         &request.schema_id,
         &request.scheme_id,
+        None,
         &identity(seed.as_bytes()),
         limits(),
     )
@@ -565,6 +584,7 @@ fn abandoned_pair_adoption_requires_a_prior_run_even_with_rebound_image_identity
         &next,
         &request.schema_id,
         &request.scheme_id,
+        None,
         &loaded_from,
         limits(),
     )
@@ -594,6 +614,7 @@ fn abandoned_pair_adoption_requires_a_prior_run_even_with_rebound_image_identity
         &next,
         &request.schema_id,
         &request.scheme_id,
+        None,
         &start,
         limits(),
     )
@@ -623,6 +644,7 @@ fn abandoned_pair_adoption_requires_a_prior_run_even_with_rebound_image_identity
         &next,
         &request.schema_id,
         &request.scheme_id,
+        None,
         &start,
         limits(),
     )
@@ -643,6 +665,7 @@ fn pair_image_roundtrip_keeps_whole_result_and_rejects_index_divergence() {
         &common(),
         &request.schema_id,
         &request.scheme_id,
+        None,
         &identity(seed.as_bytes()),
         limits(),
     )
@@ -681,6 +704,7 @@ fn pair_image_roundtrip_keeps_whole_result_and_rejects_index_divergence() {
         &common(),
         &request.schema_id,
         &request.scheme_id,
+        None,
         &start,
         limits(),
     )
@@ -718,6 +742,7 @@ fn pair_image_roundtrip_keeps_whole_result_and_rejects_index_divergence() {
                 &common(),
                 &request.schema_id,
                 &request.scheme_id,
+                None,
                 &start,
                 limits()
             )

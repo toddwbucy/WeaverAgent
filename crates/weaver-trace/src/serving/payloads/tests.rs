@@ -137,7 +137,7 @@ fn template_inventory_records_the_symbolic_parts_without_claiming_a_pass() {
     let record = TemplateInventory {
         scheme_id: "scheme".into(),
         inventory_sha256: "inventory".into(),
-        checker_artifact_sha256: "checker".into(),
+        checker_artifact_sha256: Some("checker".into()),
         templates: vec![TemplateSpec {
             template_id: "step".into(),
             kind: "loop.instruction".into(),
@@ -592,7 +592,7 @@ pub(crate) fn load_record() -> LoadRecord {
                 max_result_bytes: 10000.into(),
                 measurement_ref: "fixture".into(),
             },
-            ste100: Ste100Instruction {
+            ste100: Some(Ste100Instruction {
                 model_binding: ModelBinding {
                     artifact: "checker".into(),
                     devices: vec![0],
@@ -606,7 +606,7 @@ pub(crate) fn load_record() -> LoadRecord {
                     measurement_ref: "fixture".into(),
                 },
                 decision_wait: wait,
-            },
+            }),
             tools: ToolPolicies { sh: None },
             placement: PlacementConfig {
                 c_head: 2048,
@@ -634,7 +634,7 @@ pub(crate) fn load_record() -> LoadRecord {
         template_inventory: TemplateInventory {
             scheme_id: "scheme".into(),
             inventory_sha256: "i".repeat(64),
-            checker_artifact_sha256: "c".repeat(64),
+            checker_artifact_sha256: Some("c".repeat(64)),
             templates: vec![TemplateSpec {
                 template_id: "wind_down".into(),
                 kind: "loop.instruction".into(),
@@ -642,7 +642,7 @@ pub(crate) fn load_record() -> LoadRecord {
             }],
         },
         ste100_scheme: "{\n  \"edition\": \"Issue 9\"\n}\n".into(),
-        ste100_binary_sha256: "e".repeat(64),
+        ste100_binary_sha256: Some("e".repeat(64)),
     }
 }
 
@@ -712,6 +712,38 @@ fn load_records_exact_scheme_text_current_member_and_complete_declaration() {
         Some(&serde_json::Value::Null)
     );
     assert_eq!(value["stack"]["worker"], "worker-hash");
+}
+
+#[test]
+fn no_classifier_load_keeps_explicit_nulls_inventory_and_exact_scheme_bytes() {
+    let mut load = load_record();
+    let expected = serde_json::to_value(&load).unwrap();
+    load.state_flow.ste100 = None;
+    load.template_inventory.checker_artifact_sha256 = None;
+    load.ste100_binary_sha256 = None;
+    let encoded = json(&load);
+    assert!(!encoded.contains('\n'));
+    let value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(
+        value.get("ste100_binary_sha256"),
+        Some(&serde_json::Value::Null)
+    );
+    assert!(value["state_flow"].get("ste100").is_none());
+    assert_eq!(
+        value["template_inventory"].get("checker_artifact_sha256"),
+        Some(&serde_json::Value::Null)
+    );
+    for field in ["scheme_id", "inventory_sha256", "templates"] {
+        assert_eq!(
+            value["template_inventory"][field],
+            expected["template_inventory"][field]
+        );
+    }
+    assert_eq!(value["ste100_scheme"], load.ste100_scheme);
+    assert_eq!(
+        value["state_flow"]["scheme"],
+        expected["state_flow"]["scheme"]
+    );
 }
 
 #[test]

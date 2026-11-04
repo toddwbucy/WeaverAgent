@@ -1,0 +1,271 @@
+{
+  "source_revision": "3eab5a7bdfb5e669104f0014242972da1db50771",
+  "template_sha256": "ab7813c3abdd9cb655905a410728b26c7884eca45ddfab8d9f931553485a7862",
+  "oracle": "Jinja2 3.1.6, Transformers whitespace settings, tools empty, thinking false, history truncation true",
+  "cases": [
+    {
+      "name": "boot",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Use the exact prompt.\r\n"
+        }
+      ],
+      "generation": false,
+      "rendered": "<|im_start|>system\nUse the exact prompt.\r\n<|im_end|>\n"
+    },
+    {
+      "name": "initial",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Use STE."
+        },
+        {
+          "role": "user",
+          "content": "Text: Read the file."
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\nUse STE.<|im_end|>\n<|im_start|>user\nText: Read the file.<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
+      "name": "repair",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Use STE."
+        },
+        {
+          "role": "user",
+          "content": "Text: Read the file.\nPrior answer: Read file.\nRepair this answer."
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\nUse STE.<|im_end|>\n<|im_start|>user\nText: Read the file.\nPrior answer: Read file.\nRepair this answer.<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
+      "name": "empty_system",
+      "messages": [
+        {
+          "role": "system",
+          "content": ""
+        },
+        {
+          "role": "user",
+          "content": "Read."
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\n<|im_end|>\n<|im_start|>user\nRead.<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
+      "name": "implicit_system",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Read."
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\n<|im_end|>\n<|im_start|>user\nRead.<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
+      "name": "assistant_plain",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "user",
+          "content": "U"
+        },
+        {
+          "role": "assistant",
+          "content": "  Answer.  "
+        }
+      ],
+      "generation": false,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>user\nU<|im_end|>\n<|im_start|>assistant\n<think></think>  Answer.<|im_end|>\n"
+    },
+    {
+      "name": "assistant_empty",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "assistant",
+          "content": ""
+        }
+      ],
+      "generation": false,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>assistant\n<think></think><|im_end|>\n"
+    },
+    {
+      "name": "assistant_thought",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "assistant",
+          "content": "<think>thought</think> Answer. "
+        }
+      ],
+      "generation": false,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>assistant\n<think>thought</think> Answer.<|im_end|>\n"
+    },
+    {
+      "name": "historical_thought",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "assistant",
+          "content": "<think>thought</think> Answer. "
+        },
+        {
+          "role": "user",
+          "content": "Next."
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>assistant\n<think></think> Answer.<|im_end|>\n<|im_start|>user\nNext.<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
+      "name": "historical_plain",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "assistant",
+          "content": "  Answer.  "
+        },
+        {
+          "role": "user",
+          "content": "Next."
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>assistant\n<think></think>  Answer.<|im_end|>\n<|im_start|>user\nNext.<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
+      "name": "repeated_thought_close",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "assistant",
+          "content": "<think>a</think>b</think>c"
+        },
+        {
+          "role": "user",
+          "content": "Next."
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>assistant\n<think></think>c<|im_end|>\n<|im_start|>user\nNext.<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
+      "name": "unclosed_thought",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "assistant",
+          "content": "<think> unfinished "
+        },
+        {
+          "role": "user",
+          "content": "Next."
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>assistant\n<think> unfinished<|im_end|>\n<|im_start|>user\nNext.<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
+      "name": "close_without_open",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "assistant",
+          "content": "</think> Answer. "
+        },
+        {
+          "role": "user",
+          "content": "Next."
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>assistant\n</think> Answer.<|im_end|>\n<|im_start|>user\nNext.<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
+      "name": "mid_system",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "user",
+          "content": " U\r\n"
+        },
+        {
+          "role": "system",
+          "content": "Advice\n"
+        },
+        {
+          "role": "user",
+          "content": "Next"
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>user\n U\r\n<|im_end|>\n<|im_start|>system\nAdvice\n<|im_end|>\n<|im_start|>user\nNext<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
+      "name": "python_trim",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "assistant",
+          "content": "\u001c<think>x</think>answer\u001f"
+        }
+      ],
+      "generation": false,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>assistant\n<think>x</think>answer<|im_end|>\n"
+    },
+    {
+      "name": "unicode_whitespace",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "assistant",
+          "content": "\u0085<think>x</think>answer\u00a0"
+        }
+      ],
+      "generation": false,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>assistant\n<think>x</think>answer<|im_end|>\n"
+    }
+  ]
+}

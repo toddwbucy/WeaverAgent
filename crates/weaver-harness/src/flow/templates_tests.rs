@@ -1,4 +1,23 @@
 use super::*;
+
+#[path = "offer_inventory_tests.rs"]
+mod offer_tests;
+
+#[test]
+fn offer_slot_mirror_keeps_the_typed_material_class() {
+    let template = TemplateSpec {
+        template_id: "thesaurus-offer/1".into(),
+        kind: "offer".into(),
+        parts: vec![TemplatePart::Slot {
+            name: "offer".into(),
+            class: SlotClass::ThesaurusOffer,
+        }],
+    };
+    assert_eq!(
+        serde_json::to_string(&mirror_template(&template)).unwrap(),
+        serde_json::to_string(&template).unwrap()
+    );
+}
 use std::sync::OnceLock;
 use weaver_types::state_flow::{
     Binding, NounBinding, SlotClass, SourceBlockId, Span, Ste100ComponentCode, Ste100DefectCode,
@@ -126,13 +145,35 @@ fn compiled_inventory_has_exact_ordered_bytes_digest_and_trace_mirror() {
     );
     assert_eq!(record.inventory_sha256, inventory.digest().as_str());
     assert_eq!(record.scheme_id, scheme().scheme_id);
-    assert_eq!(record.checker_artifact_sha256, checker().as_str());
+    assert_eq!(
+        record.checker_artifact_sha256.as_deref(),
+        Some(checker().as_str())
+    );
 
     let mut reversed = static_templates().to_vec();
     reversed.reverse();
     let reversed = CompiledInventory::new(Box::leak(reversed.into_boxed_slice())).unwrap();
     assert_ne!(inventory.digest(), reversed.digest());
     assert_ne!(inventory.bytes(), reversed.bytes());
+}
+
+#[test]
+fn no_classifier_inventory_keeps_symbols_but_cannot_certify_an_elected_checker() {
+    let inventory = inventory();
+    let absent = inventory.record_election(&scheme(), None);
+    let elected = inventory.record(&scheme(), &checker());
+    assert_eq!(absent.scheme_id, elected.scheme_id);
+    assert_eq!(absent.inventory_sha256, elected.inventory_sha256);
+    assert_eq!(absent.templates, elected.templates);
+    assert_eq!(absent.checker_artifact_sha256, None);
+    assert_eq!(
+        inventory.matches_load(&absent, &scheme(), &checker()),
+        Err(TemplateError::LoadMismatch)
+    );
+    assert!(matches!(
+        TemplateCheckTranscript::begin(inventory, "run".into(), scheme(), checker(), &absent),
+        Err(TemplateError::LoadMismatch)
+    ));
 }
 
 #[test]
@@ -189,7 +230,7 @@ fn load_agreement_covers_every_identity_and_exact_template_part() {
         (|load: &mut trace::TemplateInventory| load.scheme_id.push('x'))
             as fn(&mut trace::TemplateInventory),
         |load| load.inventory_sha256 = "c".repeat(64),
-        |load| load.checker_artifact_sha256 = "c".repeat(64),
+        |load| load.checker_artifact_sha256 = Some("c".repeat(64)),
         |load| load.templates.reverse(),
         |load| load.templates[0].template_id.push('x'),
         |load| load.templates[0].kind = "sort.decision".into(),

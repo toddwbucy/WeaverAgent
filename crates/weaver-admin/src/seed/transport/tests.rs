@@ -19,7 +19,8 @@ fn request() -> SeedRequest {
         seed_id: "b".repeat(32),
         scheme_id: "synthetic-transport-only".into(),
         ste100_scheme: "synthetic-transport-only".into(),
-        checker_artifact_sha256: digest.clone(),
+        ste100_thesaurus: None,
+        checker_artifact_sha256: Some(digest.clone()),
         prompt_text: "Read item.".into(),
         raw_block: serde_json::value::RawValue::from_string(
             r#"{"type":"text","text":"Read item."}"#.into(),
@@ -29,7 +30,7 @@ fn request() -> SeedRequest {
         certificate: SeedCertificate {
             prompt_sha256: digest.clone(),
             scheme_id: "synthetic-transport-only".into(),
-            checker_artifact_sha256: digest,
+            checker_artifact_sha256: Some(digest),
             review_reference: "transport fixture only".into(),
             bindings: vec![],
             duties: PromptDuty::ALL.to_vec(),

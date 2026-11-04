@@ -201,6 +201,7 @@ fn seed_is_held_as_raw_sqlite_then_deleted_on_eof_or_a_second_request() {
             &fixtures::common(1),
             &member.seed.schema_id,
             &member.seed.scheme_id,
+            None,
             &fixtures::start(&image, &member.seed),
             fixtures::limits(1_000_000),
         )
@@ -228,7 +229,7 @@ fn seed_is_held_as_raw_sqlite_then_deleted_on_eof_or_a_second_request() {
 fn seed_certificate_failure_never_creates_a_room_image() {
     let mut member = Member::launch("seed", ImageDescriptor::Absent, false, false);
     let mut seed = member.seed.clone();
-    seed.certificate.checker_artifact_sha256 = fixtures::digest(b"wrong checker");
+    seed.certificate.checker_artifact_sha256 = Some(fixtures::digest(b"wrong checker"));
     let request = SeedFrame::Seed {
         request: Box::new(seed),
     };
@@ -286,6 +287,28 @@ fn open_checks_schema_scheme_and_image_identity_before_answering_opened() {
         member.assert_closed();
         assert!(member.room_names().is_empty());
     }
+}
+
+#[test]
+fn open_refuses_a_thesaurus_digest_absent_from_the_current_image() {
+    let mut member = Member::launch("serving", ImageDescriptor::ReadOnly, false, false);
+    let mut request = member.open_request();
+    let StateFrame::Open {
+        thesaurus_sha256, ..
+    } = &mut request
+    else {
+        unreachable!()
+    };
+    *thesaurus_sha256 = Some(fixtures::digest(b"thesaurus"));
+    let answer = member.exchange(&request);
+    assert!(
+        matches!(answer, StateFrame::Refused {
+        code: StateRefusalCode::SchemeMismatch, ref detail, ..
+    } if detail.contains("thesaurus")),
+        "{answer:?}"
+    );
+    member.assert_closed();
+    assert!(member.room_names().is_empty());
 }
 
 #[test]
@@ -638,6 +661,7 @@ fn capture_acknowledge_release_and_dump_frontier_match_observed_operations() {
         &run,
         &member.seed.schema_id,
         &member.seed.scheme_id,
+        None,
         &start,
         fixtures::limits(4_000_000),
     )

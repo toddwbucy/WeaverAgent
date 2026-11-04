@@ -33,6 +33,7 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
         common,
         schema_id,
         scheme_id,
+        thesaurus_sha256,
         start,
         read_limits,
     } = request
@@ -45,6 +46,7 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
             &common,
             &schema_id,
             &scheme_id,
+            thesaurus_sha256.as_ref(),
             &start,
             read_limits.clone(),
         )
@@ -56,10 +58,11 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
     } else {
         Err(weaver_state::engine::serving_sqlite::OpenFault {
             code: StateRefusalCode::UnsupportedSchema,
-            detail: "serving requires a raw state-content/1 SQLite image".into(),
+            detail: "serving requires a raw state-content/2 SQLite image".into(),
         })
     };
     drop(image);
+    drop(thesaurus_sha256);
     let mut store = match adopted {
         Ok(store) => store,
         Err(error) => {

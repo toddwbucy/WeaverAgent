@@ -9,15 +9,15 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 
 use super::{
-    CaptureRefusalCode, ControlRefusalCode, DecimalU64, MemberObservationIdentity, PairFile,
-    ReadLimits, ReadRefusalCode, SeedCreated, SeedRefusal, SeedRequest, SourceBlockId,
+    CaptureRefusalCode, ControlRefusalCode, DecimalU64, Digest, MemberObservationIdentity,
+    PairFile, ReadLimits, ReadRefusalCode, SeedCreated, SeedRefusal, SeedRequest, SourceBlockId,
     StartIdentity, StateControl, StateControlAnswer, StateOperation, StateOperationObservation,
     StatementFile, ValidationError,
 };
 
 pub const STATE_FLOW_PROTOCOL: &str = "state-flow/1";
 pub const STATE_SEED_PROTOCOL: &str = "state-seed/1";
-pub const STATE_CONTENT_SCHEMA: &str = "state-content/1";
+pub const STATE_CONTENT_SCHEMA: &str = "state-content/2";
 
 /// Exchange identity. Protocol and operation are fixed by the enclosing variant.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +81,7 @@ pub enum StateFrame {
         common: Common,
         schema_id: String,
         scheme_id: String,
+        thesaurus_sha256: Option<Digest>,
         start: StartIdentity,
         read_limits: ReadLimits,
     },
@@ -375,12 +376,14 @@ impl Serialize for StateFrame {
             Self::Open {
                 schema_id,
                 scheme_id,
+                thesaurus_sha256,
                 start,
                 read_limits,
                 ..
             } => {
                 map.serialize_entry("schema_id", schema_id)?;
                 map.serialize_entry("scheme_id", scheme_id)?;
+                map.serialize_entry("thesaurus_sha256", thesaurus_sha256)?;
                 map.serialize_entry("start", start)?;
                 map.serialize_entry("read_limits", read_limits)?;
             }
@@ -476,7 +479,13 @@ impl StateFrame {
         };
         let op: String = fields.take("op")?;
         fields.require_keys(match op.as_str() {
-            "open" => &["schema_id", "scheme_id", "start", "read_limits"],
+            "open" => &[
+                "schema_id",
+                "scheme_id",
+                "thesaurus_sha256",
+                "start",
+                "read_limits",
+            ],
             "opened" => &[
                 "schema_id",
                 "scheme_id",
@@ -497,6 +506,7 @@ impl StateFrame {
                 common,
                 schema_id: fields.take("schema_id")?,
                 scheme_id: fields.take("scheme_id")?,
+                thesaurus_sha256: fields.take("thesaurus_sha256")?,
                 start: fields.take("start")?,
                 read_limits: fields.take("read_limits")?,
             },

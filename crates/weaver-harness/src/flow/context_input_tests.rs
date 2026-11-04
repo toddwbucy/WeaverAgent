@@ -53,7 +53,7 @@ fn duty() -> (s::Ste100Bootstrap, s::SchemeDeclaration, s::Ste100Ready) {
             artifact: ArtifactRef("/synthetic/input-transaction-manifest.json".into()),
             devices: vec![DeviceOrdinal(0)],
         },
-        model_artifact_sha256: seed.checker_artifact_sha256,
+        model_artifact_sha256: seed.checker_artifact_sha256.expect("classifier fixture"),
         instances: 1,
         max_wire_bytes: 262144.into(),
         measurement_ref: "synthetic transport, not qualification".into(),
@@ -198,9 +198,9 @@ impl InputFixture {
         };
         load.ste100_scheme = bootstrap.scheme_text.clone();
         load.state_flow.tools.sh = sh;
-        load.state_flow.ste100 = super::super::mirror::instruction(&bootstrap.instruction);
+        load.state_flow.ste100 = Some(super::super::mirror::instruction(&bootstrap.instruction));
         load.template_inventory.checker_artifact_sha256 =
-            bootstrap.instruction.model_artifact_sha256.as_str().into();
+            Some(bootstrap.instruction.model_artifact_sha256.as_str().into());
         if let Some(inventory) = inventory {
             load.template_inventory = inventory.record(
                 &run.context.declaration.scheme,

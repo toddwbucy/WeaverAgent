@@ -50,18 +50,26 @@ fn seed(fixture: &Fixture) -> StartIdentity {
     )
     .unwrap();
     let created = SeedCreated {
-        schema_id: "state-content/1".into(),
+        schema_id: "state-content/2".into(),
         seed_id,
         room_name,
         size_bytes: DecimalU64(IMAGE.len() as u64),
     };
     let room = crate::save_points::open_directory(&room_path).unwrap();
     let mut repository = repository(fixture);
+    let governing = crate::save_points::serving::governing::GoverningFiles::verify(
+        crate::seed::preparation::tests::scheme(),
+        None,
+        &prepared.draft.state_management().flow.scheme,
+        None,
+    )
+    .unwrap();
     let mut publication = Publication::seed(
         &mut repository,
         &scope,
         prepared.draft.clone(),
         SeedImage {
+            governing: &governing,
             expected_seed_id: &created.seed_id,
             created: &created,
             room: room.as_fd(),
@@ -446,7 +454,11 @@ fn bind_rejects_a_stale_selector_and_a_changed_scheme_before_publication() {
     );
     assert_eq!(index(&fixture), before);
     fixture.selector(second.artifact_id.as_bytes());
-    fixture.edit(&"b".repeat(64), &"d".repeat(64));
+    fixture.edit(
+        crate::seed::preparation::hash(crate::seed::preparation::tests::scheme().as_bytes())
+            .as_str(),
+        &"d".repeat(64),
+    );
     let scheme = run_fixture(&fixture, Operation::BindState).unwrap_err();
     assert!(
         matches!(scheme, Failure::Publication(ref e) if e.case == PersistenceCase::SchemeMismatch),

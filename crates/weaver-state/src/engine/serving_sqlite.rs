@@ -1,4 +1,4 @@
-//! The RAM state-content/1 store under the state-management weaver-state Spec
+//! The RAM state-content/2 store under the state-management weaver-state Spec
 //! amendment: atomic filing, read-only queries and verified seed/image ports.
 //!
 //! This additive foundation is not selected by the member's existing serving
@@ -15,6 +15,7 @@ use weaver_types::state_flow::{
 use crate::{FileCommit, FileFault, ReadFault, ServingStore};
 
 mod filing;
+mod governing;
 mod image;
 mod observation;
 mod reads;
@@ -38,6 +39,7 @@ pub struct ServingSqlite {
     connection: Connection,
     context: ServingContext,
     read_limits: ReadLimits,
+    schemes: governing::Schemes,
     #[cfg(test)]
     filing_hooks: Option<Box<dyn filing::FilingTestHooks>>,
 }
@@ -101,7 +103,7 @@ impl ServingSqlite {
     }
 }
 
-/// An empty, verified state-content/1 catalog in RAM.
+/// An empty, verified state-content/2 catalog in RAM.
 ///
 /// The connection is private. This type offers no SQL, file, query or image port,
 /// and cannot open an existing file or become the member's serving store by itself.
@@ -151,7 +153,7 @@ impl fmt::Display for CatalogFault {
             }
             Self::JsonTableUnavailable => write!(formatter, "json_each failed its fixed probe"),
             Self::CatalogMismatch { object } => {
-                write!(formatter, "state-content/1 catalog differs at {object}")
+                write!(formatter, "state-content/2 catalog differs at {object}")
             }
             Self::Integrity { detail } => write!(formatter, "catalog integrity: {detail}"),
         }

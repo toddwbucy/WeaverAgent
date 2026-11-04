@@ -31,6 +31,7 @@
 //! fn directive_name(d: &LifecycleDirective) -> &'static str {
 //!     match d {
 //!         LifecycleDirective::PlanUpdate { .. } => "plan_update",
+//!         LifecycleDirective::Seed { .. } => "seed",
 //!         LifecycleDirective::Enter { .. } => "enter",
 //!         LifecycleDirective::Leave { .. } => "leave",
 //!         LifecycleDirective::Stop { .. } => "stop",
@@ -54,6 +55,7 @@
 //! fn answer_name(a: &LifecycleAnswer) -> &'static str {
 //!     match a {
 //!         LifecycleAnswer::PlanUpdated { .. } => "plan_updated",
+//!         LifecycleAnswer::Seeded { .. } => "seeded",
 //!         LifecycleAnswer::Ready => "ready",
 //!         LifecycleAnswer::Left { .. } => "left",
 //!         LifecycleAnswer::SavePointTaken { .. } => "save_point_taken",

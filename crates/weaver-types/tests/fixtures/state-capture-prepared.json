@@ -8,9 +8,9 @@
     "kind": "save_point_prepared",
     "body": {
       "capture_id": "1",
-      "artifact_id": "00000000000000000002-5e058479c05f3c58fba7a9b5ef097f71ad4a5fa155011739bc1e021532325d43",
+      "artifact_id": "00000000000000000002-8b5597ef577b1bd732513d6ef9db57c8533e10c7ae80d02c5b15bb99c4f006f8",
       "dump_sha256": "578de0b2110495503bc6c8fb906fa4244692bbab06cdbd938ac360884ad22d5c",
-      "config_sha256": "5e058479c05f3c58fba7a9b5ef097f71ad4a5fa155011739bc1e021532325d43"
+      "config_sha256": "8b5597ef577b1bd732513d6ef9db57c8533e10c7ae80d02c5b15bb99c4f006f8"
     }
   }
 }

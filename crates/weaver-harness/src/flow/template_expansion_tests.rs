@@ -321,6 +321,35 @@ fn restatement_never_interpolates_slots_or_creates_a_step_spelling() {
 }
 
 #[test]
+fn disabled_offer_inventory_never_shifts_a_certificate_or_grants_its_slot() {
+    for position in 0..=1 {
+        let mut entries = vec![template()];
+        entries.insert(position, crate::flow::templates::offer::template().clone());
+        let certificate = certificate(entries);
+        assert_eq!(certificate.inventory().templates().len(), 2);
+        assert_eq!(certificate.accepted().len(), 1);
+        assert_eq!(
+            RESTATEMENT
+                .expand(&certificate, expected(&certificate))
+                .unwrap()
+                .text(),
+            "Restate the statement.\n"
+        );
+        assert_eq!(
+            expand(
+                &certificate,
+                expected(&certificate),
+                crate::flow::templates::offer::TEMPLATE_ID,
+                "offer",
+                Some("identity")
+            )
+            .unwrap_err(),
+            ExpansionRefusal::InvalidTemplate
+        );
+    }
+}
+
+#[test]
 fn restatement_checks_the_exact_acceptance_in_its_certificate() {
     for mutate in [
         (|certificate: &mut TemplateCertificate| certificate.accepted.clear())

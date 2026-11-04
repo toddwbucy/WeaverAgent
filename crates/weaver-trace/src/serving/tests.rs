@@ -178,6 +178,7 @@ fn registry_is_closed_and_covers_every_merged_kind() {
         "state.flow",
         "state.store.measurement",
         "ste100.result",
+        "emission.change",
     ];
     assert_eq!(REGISTRY_ID, "state-copy/1");
     assert_eq!(Kind::ALL.len(), expected.len());

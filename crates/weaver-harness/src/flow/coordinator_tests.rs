@@ -202,6 +202,7 @@ impl Fixture {
             scheme_id,
             start,
             read_limits,
+            thesaurus_sha256: None,
         } = request
         else {
             panic!("open request");
@@ -2037,6 +2038,7 @@ impl<P: Ste100Port> BootFixture<P> {
             scheme_id,
             start,
             read_limits,
+            thesaurus_sha256: None,
         } = request
         else {
             panic!("open");
@@ -2415,7 +2417,7 @@ fn held_classifier_admission(
                 artifact: weaver_types::ArtifactRef("/synthetic/admission-manifest.json".into()),
                 devices: vec![weaver_types::DeviceOrdinal(0)],
             },
-            model_artifact_sha256: seed.checker_artifact_sha256,
+            model_artifact_sha256: seed.checker_artifact_sha256.expect("classifier fixture"),
             instances: 1,
             max_wire_bytes: 262144.into(),
             measurement_ref: "synthetic transport only, not qualification".into(),

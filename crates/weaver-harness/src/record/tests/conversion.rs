@@ -628,6 +628,53 @@ fn diagnostic_conversion_keeps_supported_subsystems_and_refuses_foreign_ones() {
 }
 
 #[test]
+fn diagnostic_refuses_emission_change_kind_and_payload_without_writing() {
+    let change = p::EmissionChangeRecord {
+        matched: p::ThesaurusMatch {
+            source: p::SourceBlockId {
+                run: "source-run".into(),
+                sequence: 10.into(),
+                block: 2.into(),
+            },
+            previous_change: None,
+            sentence_span: p::Span {
+                start: 0.into(),
+                end: 9.into(),
+            },
+            word_span: p::Span {
+                start: 4.into(),
+                end: 8.into(),
+            },
+            scheme_id: "scheme".into(),
+            thesaurus_sha256: "a".repeat(64),
+            entry_word: "coal".into(),
+        },
+        span: p::Span {
+            start: 4.into(),
+            end: 8.into(),
+        },
+        replaced: "coal".into(),
+        replacement: "fuel".into(),
+        method: p::EmissionChangeMethod::Splice {},
+    };
+    for (kind, payload) in [
+        (s::Kind::EmissionChange, None),
+        (
+            s::Kind::EmissionChange,
+            Some(s::Payload::EmissionChange(Box::new(change.clone()))),
+        ),
+        (
+            s::Kind::Fault,
+            Some(s::Payload::EmissionChange(Box::new(change))),
+        ),
+    ] {
+        let mut fixture = Diagnostic::new();
+        fixture.assert_refused(shared(kind, payload));
+        fixture.assert_writer_sound_without_clearing_the_record_latch();
+    }
+}
+
+#[test]
 fn diagnostic_shared_door_cannot_submit_to_the_legacy_serving_arm() {
     for native in [false, true] {
         let mut record = Record::from(

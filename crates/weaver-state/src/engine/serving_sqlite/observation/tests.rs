@@ -68,8 +68,9 @@ fn store() -> ServingSqlite {
             run_id: "run".into(),
             request_id: 1.into(),
         },
-        "state-content/1",
+        "state-content/2",
         &request.scheme_id,
+        None,
         &start,
         ReadLimits {
             max_result_bytes: 1_000_000.into(),
@@ -282,8 +283,9 @@ fn captured_metadata_has_a_fixed_frontier_and_reopen_requires_a_new_run() {
         ServingSqlite::adopt(
             &image,
             common,
-            "state-content/1",
+            "state-content/2",
             &store.context.scheme_id,
+            None,
             &start,
             store.read_limits.clone(),
         )
@@ -345,8 +347,9 @@ fn adoption_refuses_missing_or_impossible_operation_history() {
                     run_id: "next-run".into(),
                     request_id: 1.into(),
                 },
-                "state-content/1",
+                "state-content/2",
                 &store.context.scheme_id,
+                None,
                 &start,
                 store.read_limits.clone(),
             )
@@ -475,8 +478,9 @@ fn observation_history_adoption_and_reads_preserve_v1_and_v2_and_refuse_unknown_
                 run_id: "new-run".into(),
                 request_id: 1.into(),
             },
-            "state-content/1",
+            "state-content/2",
             &original.context.scheme_id,
+            None,
             &start,
             original.read_limits.clone(),
         );

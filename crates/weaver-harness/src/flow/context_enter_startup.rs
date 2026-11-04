@@ -36,6 +36,7 @@ impl<'a> StartupComposition<'a> {
                 state_management,
                 start,
                 ste100_scheme,
+                ste100_thesaurus,
                 shell,
                 ..
             } = &inputs.original.envelope().enter().binding
@@ -50,6 +51,9 @@ impl<'a> StartupComposition<'a> {
             state_management
                 .validate(&elected)
                 .map_err(|_| "invalid Enter state-management declaration")?;
+            if state_management.flow.thesaurus.is_some() || ste100_thesaurus.is_some() {
+                return Err("state-content/1 startup cannot hold a thesaurus");
+            }
             let instruction = state_management
                 .ste100
                 .as_ref()
@@ -124,6 +128,7 @@ impl EnterLoadFacts {
             state_management,
             start,
             ste100_scheme,
+            ste100_thesaurus,
             ..
         } = &payload.binding
         else {
@@ -142,6 +147,7 @@ impl EnterLoadFacts {
                 state_management: state_management.clone(),
                 start: start.clone(),
                 ste100_scheme: ste100_scheme.clone(),
+                ste100_thesaurus: ste100_thesaurus.clone(),
                 ste100_binary_sha256: Some(self.checker_digest.clone()),
             },
             state_store: payload.state_store.clone(),
@@ -217,7 +223,7 @@ impl EnterLoadFacts {
                 uid: payload.cause.uid,
             },
             library_path: payload.library_path.clone(),
-            state_flow: declaration(state_management, &self.instruction),
+            state_flow: declaration(state_management),
             state_start: mirror::start(start),
             clock_source: trace::ClockSource::ClockMonotonic,
             origin_ns: origin.into(),
@@ -227,7 +233,7 @@ impl EnterLoadFacts {
                 &self.instruction.model_artifact_sha256,
             ),
             ste100_scheme: ste100_scheme.clone(),
-            ste100_binary_sha256: self.checker_digest.to_string(),
+            ste100_binary_sha256: Some(self.checker_digest.to_string()),
         };
         AuthoredEvent {
             kind: Kind::Load,
@@ -246,16 +252,13 @@ fn wait(value: &shared::MeasuredWait) -> trace::MeasuredWait {
         measurement_ref: value.measurement_ref.clone(),
     }
 }
-fn declaration(
-    value: &shared::StateManagementConfig,
-    instruction: &shared::Ste100Instruction,
-) -> trace::FlowDeclarationRecord {
+fn declaration(value: &shared::StateManagementConfig) -> trace::FlowDeclarationRecord {
     let shared::StateManagementConfig {
         flow,
         start: _,
         persistence,
         reads,
-        ste100: _,
+        ste100,
         tools,
         placement,
     } = value;
@@ -267,6 +270,7 @@ fn declaration(
         observation_interval,
         backlog,
         scheme,
+        thesaurus: _,
     } = flow;
     trace::FlowDeclarationRecord {
         registry_id: weaver_trace::serving::REGISTRY_ID.into(),
@@ -316,7 +320,7 @@ fn declaration(
             max_result_bytes: reads.max_result_bytes.0.into(),
             measurement_ref: reads.measurement_ref.clone(),
         },
-        ste100: mirror::instruction(instruction),
+        ste100: ste100.as_ref().map(mirror::instruction),
         tools: trace::ToolPolicies {
             sh: tools.sh.as_ref().map(
                 |shared::ToolPolicy {
@@ -333,5 +337,33 @@ fn declaration(
             c_tail: placement.c_tail,
             measurement_ref: placement.measurement_ref.clone(),
         },
+    }
+}
+
+#[cfg(test)]
+mod election_tests {
+    use super::*;
+
+    #[test]
+    fn declaration_mirror_preserves_classifier_election_without_changing_other_fields() {
+        let envelope: shared::enter::EnterEnvelope = serde_json::from_str(include_str!(
+            "../../../weaver-types/tests/fixtures/state-enter.json"
+        ))
+        .unwrap();
+        let EnterBinding::Serving {
+            state_management, ..
+        } = &envelope.enter().binding
+        else {
+            panic!("serving fixture");
+        };
+        let mut state = state_management.clone();
+        let mut expected = serde_json::to_value(declaration(&state)).unwrap();
+        assert_eq!(
+            expected["ste100"],
+            serde_json::to_value(&state.ste100).unwrap()
+        );
+        state.ste100 = None;
+        expected.as_object_mut().unwrap().remove("ste100");
+        assert_eq!(serde_json::to_value(declaration(&state)).unwrap(), expected);
     }
 }

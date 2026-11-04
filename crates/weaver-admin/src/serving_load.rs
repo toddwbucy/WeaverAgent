@@ -281,7 +281,7 @@ fn start_load(
             &config.spu,
             &config.gate,
             config.headroom_bytes.as_deref(),
-            Some(prepared.checker_binary()),
+            prepared.checker_binary(),
         ),
         uid: account.uid,
         gid: account.gid,

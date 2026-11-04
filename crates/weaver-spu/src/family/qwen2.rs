@@ -9,6 +9,8 @@ use weaver_types::ToolName;
 
 use super::{Declaration, Family, FamilyName, Markers, Message, Parsed, RenderRefusal, lookup};
 
+pub mod nemotron;
+
 /// The ChatML turn markers. Written here and nowhere else in the crate.
 pub const TURN_OPEN: &str = "<|im_start|>";
 pub const TURN_CLOSE: &str = "<|im_end|>";

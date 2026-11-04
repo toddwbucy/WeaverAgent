@@ -331,7 +331,7 @@ fn circuit(case: Case) {
         unreachable!()
     };
     record.ste100_scheme = bootstrap.scheme_text.clone();
-    record.state_flow.ste100 = crate::flow::mirror::instruction(&bootstrap.instruction);
+    record.state_flow.ste100 = Some(crate::flow::mirror::instruction(&bootstrap.instruction));
     record.template_inventory = inventory.record(
         &run.context.declaration.scheme,
         &bootstrap.instruction.model_artifact_sha256,
@@ -342,14 +342,8 @@ fn circuit(case: Case) {
     let start = serde_json::from_value(serde_json::to_value(&record.state_start).unwrap()).unwrap();
     let mut original = None;
     let mut original_peer = None;
-    if matches!(case, Case::Entered(_)) {
-        let (source, peer) = entered_tests::adopt(
-            &mut run,
-            record,
-            &bootstrap,
-            &child.path,
-            !matches!(case, Case::Entered("no-classifier")),
-        );
+    if let Case::Entered(mode) = case {
+        let (source, peer) = entered_tests::adopt(&mut run, record, &bootstrap, &child.path, mode);
         original = Some(source);
         original_peer = Some(peer);
     }
@@ -373,7 +367,8 @@ fn circuit(case: Case) {
             inventory: request.inventory,
         };
         if let Case::Entered(
-            mode @ ("foreign-context" | "foreign-resources" | "missing-checker" | "no-classifier"),
+            mode @ ("foreign-context" | "foreign-resources" | "missing-checker" | "no-classifier"
+            | "thesaurus-election" | "thesaurus-bytes"),
         ) = case
         {
             let mut foreign = Fixture::new(config());
@@ -396,6 +391,9 @@ fn circuit(case: Case) {
             assert!(!reason.is_empty());
             if mode == "no-classifier" {
                 assert_eq!(reason, "classifier startup requires an elected classifier");
+            }
+            if mode.starts_with("thesaurus-") {
+                assert_eq!(reason, "state-content/1 startup cannot hold a thesaurus");
             }
             assert!(returned.original.adopted_by(&run.context));
             assert_eq!(run.context.phase(), RecordingPhase::Preflight);
@@ -797,6 +795,7 @@ fn circuit(case: Case) {
                 scheme_id,
                 start,
                 read_limits,
+                thesaurus_sha256: None,
             } = request
             else {
                 panic!("unexpected startup state traffic")
@@ -1009,4 +1008,10 @@ fn enter_startup_composition_requires_classifier_election_before_fork() {
 #[test]
 fn enter_startup_composition_refuses_substituted_spu_instruction_before_fork() {
     circuit(Case::Entered("wrong-spu"));
+}
+
+#[test]
+fn state_content_1_startup_cannot_ignore_a_thesaurus_election_or_bytes() {
+    circuit(Case::Entered("thesaurus-election"));
+    circuit(Case::Entered("thesaurus-bytes"));
 }

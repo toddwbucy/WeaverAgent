@@ -127,6 +127,64 @@ fn without_classifier() -> String {
 }
 
 #[test]
+fn thesaurus_election_is_independent_and_survives_binding_and_wire() {
+    for source in [full(), without_classifier()] {
+        let absent = parse_serving_declaration(&source).unwrap();
+        assert!(absent.state_management().flow.thesaurus.is_none());
+        let source = format!(
+            "{source}\nstate-management.flow.thesaurus = \
+             {{artifact-sha256 = \"{}\", scheme-id = \"ste100:{}\"}}\n",
+            "d".repeat(64),
+            "a".repeat(64)
+        );
+        let bound = parse_serving_declaration(&source).unwrap();
+        let draft =
+            parse_serving_draft(&without(&source, "state-management.start.dump-sha256")).unwrap();
+        assert_eq!(
+            draft.bind_start(Digest::new("b".repeat(64)).unwrap()),
+            bound
+        );
+        let flow = &bound.state_management().flow;
+        flow.validate().unwrap();
+        let elected = flow.thesaurus.as_ref().unwrap();
+        assert_eq!(elected.artifact_sha256.as_str(), "d".repeat(64));
+        assert_eq!(elected.scheme_id, flow.scheme.scheme_id);
+        let wire = serde_json::to_value(flow).unwrap();
+        assert_eq!(
+            serde_json::from_value::<FlowConfig>(wire.clone()).unwrap(),
+            *flow
+        );
+        let mut null = wire;
+        null["thesaurus"] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<FlowConfig>(null).is_err());
+        let mut wrong = flow.clone();
+        wrong.thesaurus.as_mut().unwrap().scheme_id = format!("ste100:{}", "e".repeat(64));
+        assert!(wrong.validate().is_err());
+    }
+}
+
+#[test]
+fn thesaurus_table_refuses_partial_unknown_wrong_shape_and_wrong_identity() {
+    let good = format!(
+        "{{artifact-sha256 = \"{}\", scheme-id = \"ste100:{}\"}}",
+        "d".repeat(64),
+        "a".repeat(64)
+    );
+    for table in [
+        "{}".to_owned(),
+        "[]".to_owned(),
+        "1".to_owned(),
+        good.replace(&"d".repeat(64), "bad"),
+        good.replace(&"a".repeat(64), &"e".repeat(64)),
+        good.replace("artifact-sha256", "artifact_sha256"),
+        good.replace('}', ", unknown = true}"),
+    ] {
+        let source = format!("{}\nstate-management.flow.thesaurus = {table}\n", full());
+        assert!(parse_serving_draft(&source).is_err(), "{table}");
+    }
+}
+
+#[test]
 fn absent_classifier_survives_draft_binding_and_wire_round_trip() {
     let source = without_classifier();
     let bound = parse_serving_declaration(&source).unwrap();

@@ -204,6 +204,7 @@ fn launch(mode: &str, observations: u64) -> (Fixture, BufReader<UnixStream>, See
         common: fixtures::common(1),
         schema_id: seed.schema_id.clone(),
         scheme_id: seed.scheme_id.clone(),
+        thesaurus_sha256: None,
         start: fixtures::start(&image, &seed),
         read_limits: fixtures::limits(1_000_000),
     };

@@ -46,17 +46,17 @@ fn binding(connection: &Connection, block: i64, ordinal: u64) -> i64 {
 }
 
 #[test]
-fn literal_ddl_is_the_complete_merged_catalog() {
+fn literal_ddl_is_the_complete_state_content_2_catalog() {
     let specification =
         include_str!("../../../../../docs/crates/state-management/weaver-state-Spec-amendment.md");
     let expected: Vec<_> = specification
         .split("```sql\n")
         .skip(1)
         .filter_map(|block| block.split_once("\n```"))
-        .map(|(sql, _)| sql.trim())
+        .map(|(sql, _)| sql.trim().replace("state-content/1", "state-content/2"))
         .filter(|sql| sql.starts_with("CREATE "))
         .collect();
-    assert_eq!(expected.len(), 27);
+    assert_eq!(expected.len(), 29);
     assert_eq!(schema::DDL.as_slice(), expected);
     assert!(schema::DDL.iter().all(|sql| !sql.contains(';')));
 }
@@ -70,8 +70,10 @@ fn creates_every_table_and_index_but_no_seed_or_legacy_table() {
         .filter(|object| !object.name.starts_with("sqlite_"))
         .map(|object| object.name.as_str())
         .collect();
-    assert_eq!(named.len(), 27);
+    assert_eq!(named.len(), 29);
     for table in [
+        "governing_version",
+        "governing_current",
         "store_meta",
         "content_block",
         "statement_binding",
@@ -389,7 +391,7 @@ pub(super) mod filing {
         let connection = catalog.connection;
         connection
             .execute(
-                "INSERT INTO store_meta VALUES (1,'state-content/1',?1,?2)",
+                "INSERT INTO store_meta VALUES (1,'state-content/2',?1,?2)",
                 params!["a".repeat(32), "scheme"],
             )
             .unwrap();
@@ -419,6 +421,7 @@ pub(super) mod filing {
                 max_result_bytes: 1_000_000.into(),
                 measurement_ref: "test fixture".into(),
             },
+            schemes: [("scheme".into(), vec!["read".into()])].into(),
             filing_hooks: None,
         }
     }
@@ -1558,6 +1561,7 @@ pub(super) mod filing {
             &common,
             &request.schema_id,
             &request.scheme_id,
+            None,
             &start,
             limits.clone(),
         )
@@ -1576,6 +1580,7 @@ pub(super) mod filing {
             &common,
             &request.schema_id,
             &request.scheme_id,
+            None,
             &start,
             limits.clone(),
         )
@@ -1613,6 +1618,7 @@ pub(super) mod filing {
                     &common,
                     &request.schema_id,
                     &request.scheme_id,
+                    None,
                     &forged_start,
                     limits.clone(),
                 )

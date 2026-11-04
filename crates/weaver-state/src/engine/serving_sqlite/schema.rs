@@ -1,10 +1,10 @@
-//! The literal state-content/1 catalog from STATE-SCHEMA,
+//! The literal state-content/2 catalog from STATE-SCHEMA,
 //! STATE-OBSERVATION-SCHEMA and STATE-PLAN-SCHEMA.
 
-pub(super) const DDL: [&str; 27] = [
+pub(super) const DDL: [&str; 29] = [
     r#"CREATE TABLE store_meta (
   singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
-  schema_id TEXT NOT NULL CHECK(schema_id = 'state-content/1'),
+  schema_id TEXT NOT NULL CHECK(schema_id = 'state-content/2'),
   seed_id TEXT NOT NULL UNIQUE,
   scheme_id TEXT NOT NULL
 )"#,
@@ -255,5 +255,20 @@ WHERE status IN ('authorized','locked','broken')"#,
     REFERENCES plan_group(plan_id, revision, group_id),
   FOREIGN KEY(plan_id, revision, step_id)
     REFERENCES plan_step(plan_id, revision, step_id)
+)"#,
+    r#"CREATE TABLE governing_version (
+  kind TEXT NOT NULL CHECK(kind IN ('scheme','thesaurus')),
+  sha256 TEXT NOT NULL CHECK(length(sha256) = 64),
+  bytes BLOB NOT NULL,
+  source_sha256 TEXT CHECK(source_sha256 IS NULL OR length(source_sha256) = 64),
+  ruling TEXT NOT NULL CHECK(length(ruling) > 0),
+  install_ordinal BLOB NOT NULL UNIQUE CHECK(length(install_ordinal) = 8),
+  PRIMARY KEY(kind, sha256),
+  CHECK((kind = 'thesaurus') = (source_sha256 IS NOT NULL))
+)"#,
+    r#"CREATE TABLE governing_current (
+  kind TEXT PRIMARY KEY CHECK(kind IN ('scheme','thesaurus')),
+  sha256 TEXT NOT NULL,
+  FOREIGN KEY(kind, sha256) REFERENCES governing_version(kind, sha256)
 )"#,
 ];

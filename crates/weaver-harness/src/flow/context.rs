@@ -1517,7 +1517,11 @@ impl RecordingContext {
             self.load_duty = Some(LoadDuty {
                 placement: load.state_flow.placement.clone(),
                 scheme_text: load.ste100_scheme.clone(),
-                instruction: load.state_flow.ste100.clone(),
+                instruction: load
+                    .state_flow
+                    .ste100
+                    .clone()
+                    .expect("classifier load was checked"),
                 persistence: load.state_flow.persistence.clone(),
                 template_inventory: load.template_inventory.clone(),
                 tools: load.state_flow.tools.clone(),
@@ -2004,8 +2008,10 @@ impl RecordingContext {
             && load.clock_source == serving::payloads::ClockSource::ClockMonotonic
             && super::mirror::matches_flow(&self.declaration, &load.state_flow)
             && load.template_inventory.scheme_id == self.declaration.scheme.scheme_id
-            && load.template_inventory.checker_artifact_sha256
-                == load.state_flow.ste100.model_artifact_sha256
+            && load.state_flow.ste100.as_ref().is_some_and(|instruction| {
+                load.template_inventory.checker_artifact_sha256.as_deref()
+                    == Some(instruction.model_artifact_sha256.as_str())
+            })
             && self
                 .open_start
                 .as_ref()
@@ -2881,6 +2887,12 @@ mod pair_tests;
 
 #[path = "repair.rs"]
 mod repair;
+
+#[path = "offer_budget.rs"]
+mod offer_budget;
+
+#[path = "change_book.rs"]
+mod change_book;
 
 #[path = "context_repair.rs"]
 mod repair_driver;

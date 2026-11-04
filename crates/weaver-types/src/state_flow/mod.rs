@@ -12,6 +12,7 @@ pub mod enter;
 mod enter_window;
 mod frame;
 mod lifecycle_refusal;
+mod lookup;
 mod marks;
 mod observation;
 mod pair;
@@ -22,6 +23,8 @@ mod recall_refusal;
 mod scalars;
 mod selection;
 mod ste100;
+mod ste100_offer;
+mod thesaurus;
 
 pub use codec::*;
 pub use content::*;
@@ -29,6 +32,7 @@ pub use declaration::*;
 pub use enter_window::EnterWindow;
 pub use frame::*;
 pub use lifecycle_refusal::*;
+pub use lookup::*;
 pub use marks::*;
 pub use observation::*;
 pub use pair::*;
@@ -39,6 +43,7 @@ pub use recall_refusal::*;
 pub use scalars::{DecimalU64, Digest, MeasuredInterval, MeasuredWait, ValidationError};
 pub use selection::*;
 pub use ste100::*;
+pub use thesaurus::*;
 
 /// Deserialize a required field whose value may explicitly be null.
 ///

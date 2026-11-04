@@ -34,7 +34,7 @@ pub(crate) fn setup(fixture: &Fixture) -> StartIdentity {
     let room_name = format!("seed-{seed_id}.sqlite");
     write(&room.join(&room_name), IMAGE, 0o600);
     let created = SeedCreated {
-        schema_id: "state-content/1".into(),
+        schema_id: "state-content/2".into(),
         seed_id,
         room_name,
         size_bytes: DecimalU64(IMAGE.len() as u64),
@@ -54,11 +54,19 @@ pub(crate) fn setup(fixture: &Fixture) -> StartIdentity {
     )
     .unwrap();
     let room = save_points::open_directory(&room).unwrap();
+    let governing = crate::save_points::serving::governing::GoverningFiles::verify(
+        fs::read_to_string(fixture.config.root.join("ste100-scheme.json")).unwrap(),
+        None,
+        &draft.state_management().flow.scheme,
+        None,
+    )
+    .unwrap();
     let mut publication = Publication::seed(
         &mut repository,
         &scope,
         draft.clone(),
         SeedImage {
+            governing: &governing,
             expected_seed_id: &created.seed_id,
             created: &created,
             room: room.as_fd(),

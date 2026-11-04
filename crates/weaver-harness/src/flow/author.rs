@@ -143,6 +143,7 @@ fn attribution(
         K::PlanBreak
         | K::StatePlanMeasurement
         | K::LoopInstruction
+        | K::EmissionChange
         | K::SortDecision
         | K::StateSortMeasurement
         | K::StepOutcome

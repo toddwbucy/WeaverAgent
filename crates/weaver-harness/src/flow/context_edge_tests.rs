@@ -334,7 +334,7 @@ pub(super) fn classifier_fixture() -> (s::Ste100Bootstrap, s::SchemeDeclaration,
             artifact: ArtifactRef("/synthetic/context-manifest.json".into()),
             devices: vec![DeviceOrdinal(0)],
         },
-        model_artifact_sha256: seed.checker_artifact_sha256,
+        model_artifact_sha256: seed.checker_artifact_sha256.expect("classifier fixture"),
         instances: 1,
         max_wire_bytes: 262144.into(),
         measurement_ref: "synthetic transport, not qualification".into(),
@@ -373,9 +373,9 @@ pub(super) fn activate_classifier_duty(fx: &mut Fixture, bootstrap: &s::Ste100Bo
         unreachable!();
     };
     load.ste100_scheme = bootstrap.scheme_text.clone();
-    load.state_flow.ste100 = super::super::mirror::instruction(&bootstrap.instruction);
+    load.state_flow.ste100 = Some(super::super::mirror::instruction(&bootstrap.instruction));
     load.template_inventory.checker_artifact_sha256 =
-        bootstrap.instruction.model_artifact_sha256.as_str().into();
+        Some(bootstrap.instruction.model_artifact_sha256.as_str().into());
     assert_eq!(fx.author(authored).unwrap(), Sequence(0));
     fx.context.activate(&mut fx.clock).unwrap();
     for _ in 0..16 {
@@ -653,7 +653,18 @@ fn load_refuses_structurally_valid_facts_that_differ_from_its_actual_owners() {
             load.template_inventory.scheme_id.push_str("-other")
         }),
         ("template checker", |load| {
-            load.template_inventory.checker_artifact_sha256 = "d".repeat(64)
+            load.template_inventory.checker_artifact_sha256 = Some("d".repeat(64))
+        }),
+        ("absent template checker", |load| {
+            load.template_inventory.checker_artifact_sha256 = None
+        }),
+        ("absent classifier instruction", |load| {
+            load.state_flow.ste100 = None
+        }),
+        ("no classifier on the classifier-only owner", |load| {
+            load.state_flow.ste100 = None;
+            load.template_inventory.checker_artifact_sha256 = None;
+            load.ste100_binary_sha256 = None;
         }),
         ("partition identity", |load| {
             load.state_flow.partition[0].id.push_str("-other")

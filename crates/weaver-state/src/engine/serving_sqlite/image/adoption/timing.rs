@@ -68,6 +68,7 @@ impl ServingSqlite {
         common: &Common,
         schema_id: &str,
         scheme_id: &str,
+        thesaurus_sha256: Option<&Digest>,
         start: &StartIdentity,
         read_limits: ReadLimits,
     ) -> Result<ObservedAdoption, ReadFault> {
@@ -77,6 +78,7 @@ impl ServingSqlite {
             common,
             schema_id,
             scheme_id,
+            thesaurus_sha256,
             start,
             read_limits,
             Some(&mut timing),
@@ -117,6 +119,7 @@ mod tests {
                 &common,
                 schema,
                 scheme,
+                None,
                 start,
                 limits.clone(),
             )
@@ -146,6 +149,7 @@ mod tests {
             &common,
             STATE_CONTENT_SCHEMA,
             &seed.scheme_id,
+            None,
             &start,
             limits,
             Some(&mut timing),
