@@ -57,7 +57,9 @@ The normal caller supplies absence. The SPU fixture driver supplies presence.
 Other crates neither link this mechanic nor receive a new configuration field.
 
 The base instruction retains its model binding, assigned devices, readout
-election and effective parameters. The adapter request contains these values.
+election and effective parameters. The optional adapter request supplements
+that instruction with exactly the four members below. It does not copy or
+override those base values.
 
 | Member | Meaning and validation |
 | --- | --- |
