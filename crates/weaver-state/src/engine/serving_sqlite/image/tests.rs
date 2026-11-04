@@ -47,7 +47,7 @@ pub(in crate::engine::serving_sqlite) fn fixture() -> SeedRequest {
     let certificate = SeedCertificate {
         prompt_sha256: sha256(b"Read item."),
         scheme_id: scheme_id.clone(),
-        checker_artifact_sha256: sha256(b"checker"),
+        checker_artifact_sha256: Some(sha256(b"checker")),
         review_reference: "test fixture, no production qualification".into(),
         bindings: bindings.clone(),
         duties: PromptDuty::ALL.to_vec(),
@@ -57,7 +57,7 @@ pub(in crate::engine::serving_sqlite) fn fixture() -> SeedRequest {
         seed_id: "a".repeat(32),
         scheme_id,
         ste100_scheme: artifact,
-        checker_artifact_sha256: sha256(b"checker"),
+        checker_artifact_sha256: Some(sha256(b"checker")),
         prompt_text: "Read item.".into(),
         raw_block: serde_json::value::RawValue::from_string(
             r#"{"type":"text","text":"Read item."}"#.into(),
@@ -75,6 +75,20 @@ fn connection(image: &[u8]) -> Connection {
         .unwrap();
     super::super::configure(&connection).unwrap();
     connection
+}
+
+#[test]
+fn legacy_seed_image_cannot_publish_an_unbound_prompt() {
+    let mut request = fixture();
+    request.checker_artifact_sha256 = None;
+    request.certificate.checker_artifact_sha256 = None;
+    request.bindings.clear();
+    request.certificate.bindings.clear();
+    let failure = seed_image(&request)
+        .err()
+        .expect("legacy image needs bindings");
+    assert_eq!(failure.code, SeedRefusal::MalformedSeed);
+    assert!(failure.detail.contains("state-content/1"));
 }
 
 #[test]
@@ -169,7 +183,7 @@ fn seed_refusals_preserve_schema_shape_certificate_order_and_hash_attribution() 
         match field {
             "prompt" => request.certificate.prompt_sha256 = sha256(b"wrong"),
             "scheme" => request.scheme_id = format!("ste100:{}", sha256(b"wrong")),
-            "checker" => request.checker_artifact_sha256 = sha256(b"wrong"),
+            "checker" => request.checker_artifact_sha256 = Some(sha256(b"wrong")),
             "duty" => {
                 request.certificate.duties.pop();
             }

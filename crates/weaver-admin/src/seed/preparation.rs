@@ -209,14 +209,18 @@ fn prepare_against(
         seed_id,
         scheme_id: state.flow.scheme.scheme_id.clone(),
         ste100_scheme: scheme,
-        checker_artifact_sha256: instruction.model_artifact_sha256.clone(),
+        checker_artifact_sha256: Some(instruction.model_artifact_sha256.clone()),
         prompt_text: prompt,
         raw_block,
         bindings: certificate.bindings.clone(),
         certificate,
     };
     let verified = request
-        .validate_structure(hash, &state.flow.scheme, &instruction.model_artifact_sha256)
+        .validate_structure(
+            hash,
+            &state.flow.scheme,
+            Some(&instruction.model_artifact_sha256),
+        )
         .map_err(|refused| match refused {
             SeedRefusal::SeedCertificateInvalid => PreparationFailure::Certificate(
                 "prompt, scheme, checker, bindings or reviewed duties do not agree".into(),

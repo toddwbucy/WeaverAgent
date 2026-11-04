@@ -44,7 +44,10 @@ fn ready_classifier() -> (Classifier<SocketPort>, Channel, Ste100Request) {
             artifact: ArtifactRef("/synthetic/wire-manifest.json".into()),
             devices: vec![DeviceOrdinal(0)],
         },
-        model_artifact_sha256: seed.checker_artifact_sha256.clone(),
+        model_artifact_sha256: seed
+            .checker_artifact_sha256
+            .clone()
+            .expect("classifier fixture"),
         instances: 1,
         max_wire_bytes: (TEST_WIRE_BOUND as u64).into(),
         measurement_ref: "synthetic integration fixture, not qualification".into(),

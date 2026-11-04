@@ -53,7 +53,7 @@ fn duty() -> (s::Ste100Bootstrap, s::SchemeDeclaration, s::Ste100Ready) {
             artifact: ArtifactRef("/synthetic/input-transaction-manifest.json".into()),
             devices: vec![DeviceOrdinal(0)],
         },
-        model_artifact_sha256: seed.checker_artifact_sha256,
+        model_artifact_sha256: seed.checker_artifact_sha256.expect("classifier fixture"),
         instances: 1,
         max_wire_bytes: 262144.into(),
         measurement_ref: "synthetic transport, not qualification".into(),
