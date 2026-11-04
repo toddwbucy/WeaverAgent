@@ -134,7 +134,7 @@ the merged TYPES-CONFIG. This is the principal coupling the audit identifies.
 | `state-management.flow.observation-interval.elapsed-ns`, `.measurement-ref` | M: Required positive cadence under TYPES-CONFIG and Spec 09 FLOW-COUNTS. It is not a deadline. | Conditional on the observed flow. Never borrow this value for H1. |
 | `state-management.start.dump-sha256` | M: Optional in the authoring draft, required in the published declaration. `parse_serving_declaration` refuses absence. ADMIN-VALIDATION requires an indexed verified artifact. | Conditional on persistent state. A decoder-only arrangement does not need a seed dump merely to load its model. Its initial text route remains to be specified. H3, H4. |
 | `state-management.persistence.save-wait.elapsed-ns`, `.measurement-ref` | M: Required. Grammar and `PersistenceConfig::validate` refuse absence or an invalid bound. | Conditional on the selected persistence protocol. A selected save still needs bounded completion and rollback. H3. |
-| `state-management.persistence.snapshot-wait.elapsed-ns`, `.measurement-ref` | M: Required by TYPES-CONFIG and PERSIST-EXPIRY. Provisioning writes the inherited 120-second value explicitly. | Conditional on snapshots. The inherited value is not a universal primitive deadline or benchmark. H3. |
+| `state-management.persistence.snapshot-wait.elapsed-ns`, `.measurement-ref` | M: Required by TYPES-CONFIG and PERSIST-EXPIRY. Foundation Spec section 5 names 120 seconds as the initial explicit setting. The operator's declaration carries it. No provisioning step writes it. | Conditional on snapshots. The initial setting is not a universal primitive deadline or benchmark. H3. |
 | `state-management.reads.max-result-bytes`, `.measurement-ref` | M: Required complete-result bound under STATE-PAGES. Grammar checks size and reference. | Conditional on state reads. A selected read retains complete-result refusal rather than partial success. |
 | `state-management.placement.c-head`, `.c-tail`, `.measurement-ref` | M: Required positive capacities under Spec 06 CAPACITY. `PlacementConfig::validate` rejects zero values and overflow. | Conditional on that head/tail placement mechanism. The decoder still has a finite model context without that algorithm. H1, H7. |
 | `StartIdentity.seed_id`, `.artifact_id`, `.dump_sha256`, `.config_sha256`, `.parent_artifact_id`, `.position` | M: Required shape under TYPES-PERSIST. Nullable lineage fields remain present. State and admin verify the identity against the artifact. | Conditional on persistent lineage. No state does not mean fabricating an initial artifact identity. H3. |
@@ -147,7 +147,7 @@ the merged TYPES-CONFIG. This is the principal coupling the audit identifies.
 | `state-management.ste100.model-artifact-sha256` | M: Required digest of the classifier manifest for a present instruction. Bootstrap verifies the artifact identity. | Only an elected classifier needs this manifest identity. It is not the checker executable or scheme hash. H4. |
 | `state-management.ste100.instances`, `.max-wire-bytes`, `.measurement-ref` | M: Required positive resource limits and nonempty reference for a present instruction. Structural validation refuses invalid values. | Conditional on the STE100 duty. Removing it must remove its queues and logical-message obligations. |
 | `state-management.ste100.repair-cap.attempts`, `.measurement-ref` | M: Required positive classifier-repair bound under DECLARATION. | Conditional on classifier repair. It is not the external STE driver's three-request limit or offer cap. |
-| `state-management.ste100.decision-wait.elapsed-ns`, `.measurement-ref` | M: Required inside a present instruction. HARNESS-CLOCK also uses it for non-classifier send receipts and placement. Eleven non-test harness reads were identified in the held review. | Split the ownership question by active operation, not by an R0 default. A classifier election cannot supply the only bound for unrelated elected work. H1. |
+| `state-management.ste100.decision-wait.elapsed-ns`, `.measurement-ref` | M: Required inside a present instruction. HARNESS-CLOCK also uses it for non-classifier send receipts and placement. Section 8 lists ten wait consumers and one trace mirror. | Split the ownership question by active operation, not by an R0 default. A classifier election cannot supply the only bound for unrelated elected work. H1. |
 | `state-management.flow.scheme.scheme-id`, `.artifact-sha256`, `.verbs` | M: Required even without STE100 under TYPES-CONFIG and SCHEME. Grammar and scheme verification reject missing or mismatched identities and verb keys. | Conditional on consumers of the language instance, including an elected lexical store or lookup. No classifier alone does not prove there are no other consumers. H4, H5. |
 | `state-management.flow.thesaurus.artifact-sha256`, `.scheme-id` | M: Elective under THESAURUS. If present, its scheme identity must match. Main's FlowConfig and grammar do not yet carry it. #450 adds those unmerged carriers. | No election means no lookup change or thesaurus load. An elected artifact retains exact provenance and binding checks. H2, H5. |
 | Scheme `format`, `reference.edition`, `.document_sha256`, `.rule_ids`, `.dictionary_sha256` | M: Required by SCHEME. Strict decoding and scheme validation refuse missing, unknown or mismatched fields. | Conditional governing artifact for the selected language features. A digest names evidence and does not contain the lexical tables. H4, H5. |
@@ -321,8 +321,33 @@ entry or type inspected, not a claim that every replacement component is active.
 | Static worker composition | M: `crates/weaver-harness/src/bin/worker/main.rs`, main and dev_loop::drive selection |
 | Sink required for either recorder | M: `crates/weaver-harness/src/lifecycle.rs`, enter_with_setup |
 | Classifier-coupled startup | M: `crates/weaver-harness/src/flow/context_enter_startup.rs`, StartupComposition::from_enter |
-| Non-classifier wait uses | M: `crates/weaver-harness/src/flow/context_place_generation.rs` and `context_worker_generation.rs`, decision_wait reads |
+| Initial snapshot setting and its renderer | M: `docs/crates/state-management/state-management-foundation-Spec.md`, section 5, lines 719-720. `crates/weaver-admin/src/save_points/serving/declaration.rs`, lines 285-288, renders the supplied value |
 | Trace load representation | M: `crates/weaver-trace/src/serving/payloads/records.rs`, FlowDeclarationRecord and TemplateInventory |
+
+The complete M census of `decision_wait` consumers follows. Paths start at
+`crates/weaver-harness/src/flow/`. Ten sites use the duration for a wait.
+The eleventh copies the instruction into trace evidence and starts no wait.
+These are inputs to Group D's ownership amendment, not new bound elections.
+
+| File | Lines on M | Consumer |
+| --- | --- | --- |
+| `context_boot_pairs.rs` | 537 | Boot pair receipt wait, capped by Enter and Leave |
+| `context_input.rs` | 407 | Required world-close send interval |
+| `context_pair_execution.rs` | 519, 550, 619 | Terminal wait, next-send wait and rejection wait |
+| `context_place_generation.rs` | 392 | Decision window before output processing |
+| `context_plan_update.rs` | 299 | Root plan acceptance window |
+| `context_repair.rs` | 1279 | Repair decision window |
+| `context_worker_generation.rs` | 890 | Generation Decision window when none is armed |
+| `context_worker_plan_refusal.rs` | 39 | Plan-refusal response window |
+| `mirror.rs` | 116-137 | Trace instruction mirror, including duration and measurement reference |
+
+This source search reproduces the census on M. The mirror has several matches
+for one consumer. The excluded fixture and test files do not run in service.
+
+```sh
+rg -n 'decision_wait' crates/weaver-harness/src/flow \
+  --glob '*.rs' --glob '!**/*test*' --glob '!recording_fixture.rs'
+```
 
 [epic]: https://github.com/toddwbucy/WeaverAgent/issues/473
 [ledger]: https://github.com/toddwbucy/WeaverAgent/issues/437#issuecomment-6627363218
