@@ -41,6 +41,16 @@ impl Lexicon {
             &train_root.join("ste/fixed-mappings.toml"),
             FIXED_MAPPINGS_SHA256,
         )?;
+        Self::from_sources(words, verbs, nouns, names, fixed)
+    }
+
+    fn from_sources(
+        words: Value,
+        verbs: Value,
+        nouns: Value,
+        names: Value,
+        fixed: Value,
+    ) -> Result<Self> {
         let technical_verbs = verbs["verbs"]
             .as_object()
             .ok_or("technical verbs must be a table")?
@@ -115,6 +125,68 @@ fn read_toml(path: &Path, expected: &str) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::read_pinned;
+    use crate::{check::Checker, lexicon::Lexicon};
+    use serde_json::json;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn source_mapping_reaches_checks_and_notes_with_every_lexicon_source() {
+        let words = json!({
+            "approved_words":{"read":["v"],"the":["art"],"a":["art"]},
+            "unapproved_words":{"odd":["adj"],"inspect":["v"]},
+            "unapproved_verbs":[
+                {"word":"inspect","alternatives":["read"]},
+                {"word":"blob","alternatives":["read"]},
+                {"word":"buffer","alternatives":["read"]}
+            ],
+            "technical_noun_examples":["blob"],
+            "verbs":[{"key":"read"}]
+        });
+        let lex = Lexicon::from_sources(
+            words,
+            json!({"verbs":{"stream":{}}}),
+            json!({"nouns":["buffer"]}),
+            json!({"domain":["READ"],"products":["ODD"]}),
+            json!({"mappings":{"inspect":"read"}}),
+        )
+        .unwrap();
+        let checker = Checker::new(lex, 3, 25).unwrap();
+        let names = BTreeSet::new();
+        let result = checker
+            .check(
+                "READ the blob. Blob a buffer. Buffer the blob.",
+                "text",
+                &names,
+            )
+            .unwrap();
+        assert!(result.ok(), "{:?}", result.hard);
+        assert!(result.soft.is_empty());
+        let technical = checker
+            .check("Stream the buffer. Streaming a buffer.", "text", &names)
+            .unwrap();
+        assert!(technical.ok(), "{:?}", technical.hard);
+        assert!(technical.soft.is_empty());
+        let odd = checker.check("The odd zebra.", "text", &names).unwrap();
+        assert_eq!(odd.soft["unapproved_words"], [json!("odd")]);
+        assert_eq!(odd.soft["unknown_words"], [json!("zebra")]);
+        let proper = checker.check("ODD.", "text", &names).unwrap();
+        assert!(proper.ok());
+        assert!(proper.soft.is_empty());
+        let verb = checker
+            .check("Inspected the blob.", "text", &names)
+            .unwrap();
+        assert_eq!(verb.hard["verbs"], [json!("inspected")]);
+        assert!(
+            checker
+                .repair_note(&verb)
+                .contains("Write \"read\" for it (a fixed rule).")
+        );
+        assert_eq!(checker.lex.unapproved_verbs["inspect"], ["read"]);
+        let instruction = checker
+            .check("Read the buffer a blob.", "text", &names)
+            .unwrap();
+        assert_eq!(instruction.hard["length"][0]["limit"], 3);
+    }
 
     #[test]
     fn pinned_reads_keep_exact_bytes_and_refuse_changed_source() {

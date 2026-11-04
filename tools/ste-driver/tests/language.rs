@@ -128,3 +128,17 @@ fn literal_repair_note_keeps_the_pinned_bytes() {
         )
     );
 }
+
+#[test]
+fn example_line_guard_includes_exactly_twenty_characters() {
+    let examples = vec!["abcdefghijklmnopqrs".into(), "abcdefghijklmnopqrst".into()];
+    let judge = Judge::new(checker(), &examples).unwrap();
+    for (output, source, copied) in [
+        ("abcdefghijklmnopqrs", "text", false),
+        ("abcdefghijklmnopqrst", "text", true),
+        ("abcdefghijklmnopqrst", "abcdefghijklmnopqrst", false),
+    ] {
+        let result = judge.check(Some(output), source, &BTreeSet::new()).unwrap();
+        assert_eq!(result.hard.contains_key("copied_example"), copied);
+    }
+}
