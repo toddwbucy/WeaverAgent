@@ -17,6 +17,7 @@ use weaver_types::state_flow::{
 };
 use weaver_types::{AgentName, FieldName, LifecycleRefusal, ServingDraft};
 
+use crate::save_points::serving::governing::GoverningFiles;
 use crate::{ServiceConfig, inventory};
 
 /// Only this module can construct prepared inputs. The floor's private
@@ -27,11 +28,16 @@ pub(super) struct PreparedSeed {
     inventory: inventory::Inventory,
     request: SeedRequest,
     verified: VerifiedSeed,
+    governing: GoverningFiles,
     checker_binary: PathBuf,
     checker_binary_sha256: Digest,
 }
 
 impl PreparedSeed {
+    pub(super) fn governing(&self) -> &GoverningFiles {
+        &self.governing
+    }
+
     pub(super) fn draft(&self) -> &ServingDraft {
         &self.draft
     }
@@ -228,11 +234,19 @@ fn prepare_against(
             ),
             other => invalid("seed", format!("invalid constructed request: {other:?}")),
         })?;
+    let governing = GoverningFiles::verify(
+        request.ste100_scheme.clone(),
+        request.ste100_thesaurus.clone(),
+        &state.flow.scheme,
+        state.flow.thesaurus.as_ref(),
+    )
+    .map_err(|error| invalid("governing files", error.to_string()))?;
     Ok(PreparedSeed {
         draft,
         inventory,
         request,
         verified,
+        governing,
         checker_binary,
         checker_binary_sha256,
     })

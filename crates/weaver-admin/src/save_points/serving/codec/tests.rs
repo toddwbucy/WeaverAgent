@@ -12,11 +12,13 @@ fn artifact(ordinal: u64, byte: char) -> ArtifactId {
 
 fn seed() -> StateBinding {
     StateBinding {
-        version: 1,
+        version: 2,
         schema_id: "state-content/2".into(),
         seed_id: "a".repeat(32),
         dump_sha256: digest('1'),
         config_sha256: digest('2'),
+        scheme_sha256: digest('4'),
+        thesaurus_sha256: None,
         parent_artifact_id: None,
         position: None,
         confirmation: Confirmation::Seed {
@@ -218,11 +220,12 @@ fn selector_allows_only_the_exact_basename_and_one_optional_final_lf() {
 fn canonical_binding_has_declared_field_order_and_explicit_nulls() {
     let binding = seed();
     let expected = format!(
-        "{{\"version\":1,\"schema_id\":\"state-content/2\",\"seed_id\":\"{}\",\"dump_sha256\":\"{}\",\"config_sha256\":\"{}\",\"parent_artifact_id\":null,\"position\":null,\"confirmation\":{{\"seed\":{{\"seed_id\":\"{}\"}}}}}}",
+        "{{\"version\":2,\"schema_id\":\"state-content/2\",\"seed_id\":\"{}\",\"dump_sha256\":\"{}\",\"config_sha256\":\"{}\",\"parent_artifact_id\":null,\"position\":null,\"confirmation\":{{\"seed\":{{\"seed_id\":\"{}\"}}}},\"scheme_sha256\":\"{}\",\"thesaurus_sha256\":null}}",
         "a".repeat(32),
         "1".repeat(64),
         "2".repeat(64),
-        "a".repeat(32)
+        "a".repeat(32),
+        "4".repeat(64)
     );
     assert_eq!(text(binding.to_json().unwrap()), expected);
     assert_eq!(
@@ -235,11 +238,12 @@ fn canonical_binding_has_declared_field_order_and_explicit_nulls() {
 fn canonical_nested_source_position_and_confirmation_keep_their_contract_order() {
     let binding = serving();
     let expected = format!(
-        "{{\"version\":1,\"schema_id\":\"state-content/2\",\"seed_id\":\"{}\",\"dump_sha256\":\"{}\",\"config_sha256\":\"{}\",\"parent_artifact_id\":\"{}\",\"position\":{{\"block_id\":{{\"run\":\"source-run\",\"sequence\":\"18446744073709551615\",\"block\":\"0\"}},\"turn\":null}},\"confirmation\":{{\"serving\":{{\"run_id\":\"capture-run\",\"capture_id\":\"18446744073709551615\"}}}}}}",
+        "{{\"version\":2,\"schema_id\":\"state-content/2\",\"seed_id\":\"{}\",\"dump_sha256\":\"{}\",\"config_sha256\":\"{}\",\"parent_artifact_id\":\"{}\",\"position\":{{\"block_id\":{{\"run\":\"source-run\",\"sequence\":\"18446744073709551615\",\"block\":\"0\"}},\"turn\":null}},\"confirmation\":{{\"serving\":{{\"run_id\":\"capture-run\",\"capture_id\":\"18446744073709551615\"}}}},\"scheme_sha256\":\"{}\",\"thesaurus_sha256\":null}}",
         "a".repeat(32),
         "1".repeat(64),
         "3".repeat(64),
-        artifact(1, '2')
+        artifact(1, '2'),
+        "4".repeat(64)
     );
     assert_eq!(text(binding.to_json().unwrap()), expected);
     assert_eq!(
@@ -266,7 +270,7 @@ fn binding_rejects_missing_unknown_and_duplicate_keys_at_every_depth() {
 fn escaped_duplicate_keys_cannot_alias_artifact_fields() {
     let bytes = text(serving().to_json().unwrap());
     for malformed in [
-        bytes.replace("\"version\":1", "\"version\":1,\"\\u0076ersion\":1"),
+        bytes.replace("\"version\":2", "\"version\":2,\"\\u0076ersion\":2"),
         bytes.replace(
             "\"run_id\":\"capture-run\"",
             "\"run_id\":\"capture-run\",\"\\u0072un_id\":\"capture-run\"",
@@ -285,7 +289,7 @@ fn binding_refuses_noncanonical_scalars_schema_and_legacy_aliases() {
     let valid: Value = serde_json::from_slice(&serving().to_json().unwrap()).unwrap();
     for (pointer, invalid) in [
         ("/version", json!(0)),
-        ("/version", json!(2)),
+        ("/version", json!(1)),
         ("/version", json!(1.0)),
         ("/version", json!("1")),
         ("/version", Value::Null),

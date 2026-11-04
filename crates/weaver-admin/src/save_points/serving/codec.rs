@@ -128,6 +128,8 @@ pub(super) struct StateBinding {
     pub(super) parent_artifact_id: Option<ArtifactId>,
     pub(super) position: Option<SourcePosition>,
     pub(super) confirmation: Confirmation,
+    pub(super) scheme_sha256: Digest,
+    pub(super) thesaurus_sha256: Option<Digest>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -270,7 +272,7 @@ fn validate_identity(
 
 impl StateBinding {
     pub(super) fn validate(&self) -> Result<(), Error> {
-        if self.version != 1 || self.schema_id != SCHEMA_ID {
+        if self.version != 2 || self.schema_id != SCHEMA_ID {
             return Err(invalid("unsupported state binding version or schema"));
         }
         validate_identity(
@@ -292,6 +294,8 @@ impl StateBinding {
             parent_artifact_id: parse_parent(field!(fields, "parent_artifact_id", Option<String>))?,
             position: field!(fields, "position", Option<SourcePosition>),
             confirmation: field!(fields, "confirmation", Confirmation),
+            scheme_sha256: field!(fields, "scheme_sha256", Digest),
+            thesaurus_sha256: field!(fields, "thesaurus_sha256", Option<Digest>),
         };
         fields.finish()?;
         result.validate()?;
@@ -309,6 +313,8 @@ impl StateBinding {
             "parent_artifact_id" => self.parent_artifact_id.as_ref().map(ArtifactId::as_str),
             "position" => self.position,
             "confirmation" => self.confirmation,
+            "scheme_sha256" => self.scheme_sha256,
+            "thesaurus_sha256" => self.thesaurus_sha256,
         }
     }
 }
@@ -355,9 +361,13 @@ impl StateIndexEntry {
         Ok(())
     }
 
-    pub(super) fn binding(&self) -> StateBinding {
+    pub(super) fn binding(
+        &self,
+        scheme_sha256: Digest,
+        thesaurus_sha256: Option<Digest>,
+    ) -> StateBinding {
         StateBinding {
-            version: 1,
+            version: 2,
             schema_id: SCHEMA_ID.into(),
             seed_id: self.seed_id.clone(),
             dump_sha256: self.dump_sha256.clone(),
@@ -365,11 +375,20 @@ impl StateIndexEntry {
             parent_artifact_id: self.parent_artifact_id.clone(),
             position: self.position.clone(),
             confirmation: self.confirmation.clone(),
+            scheme_sha256,
+            thesaurus_sha256,
         }
     }
 
     pub(super) fn matches_binding(&self, binding: &StateBinding) -> bool {
-        self.binding() == *binding
+        binding.version == 2
+            && binding.schema_id == SCHEMA_ID
+            && self.seed_id == binding.seed_id
+            && self.dump_sha256 == binding.dump_sha256
+            && self.config_sha256 == binding.config_sha256
+            && self.parent_artifact_id == binding.parent_artifact_id
+            && self.position == binding.position
+            && self.confirmation == binding.confirmation
     }
 
     pub(super) fn from_json(bytes: &[u8]) -> Result<Self, Error> {
@@ -432,7 +451,10 @@ pub(super) fn validate_index(entries: &[StateIndexEntry]) -> Result<(), Error> {
                 let original = publications
                     .get(&entry.artifact_id)
                     .ok_or_else(|| invalid("selection names an unpublished artifact"))?;
-                if entry.cause != original.cause || entry.binding() != original.binding() {
+                let mut selected = entry.clone();
+                selected.ordinal = original.ordinal;
+                selected.arrival = original.arrival;
+                if selected != **original {
                     return Err(invalid("selection changes the original artifact identity"));
                 }
             }

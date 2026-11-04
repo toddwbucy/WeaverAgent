@@ -1,6 +1,6 @@
 //! Bound serving artifacts, per the foundation Spec sections 5.1 and 5.3.
 //!
-//! This module judges and publishes indexed three-file artifacts through held
+//! This module judges and publishes indexed state-content/2 artifacts through held
 //! descriptors. Publication owns filesystem steps, never lifecycle outcomes.
 //! It does not start a member, take a run lock, or change the running admin verbs. The later cutover must call it only after root inventory and
 //! the existing invocation/run-lock checks. Schema adoption remains the member's.
@@ -8,6 +8,7 @@
 pub(crate) mod codec;
 pub(crate) mod declaration;
 mod fs_ops;
+pub(crate) mod governing;
 pub(crate) mod publication;
 pub(crate) mod repository;
 

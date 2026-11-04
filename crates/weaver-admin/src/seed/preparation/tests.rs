@@ -188,7 +188,7 @@ fn binding(text: &str) -> Binding {
     }
 }
 
-fn scheme() -> String {
+pub(crate) fn scheme() -> String {
     serde_json::json!({
         "format":"ste100-scheme/1",
         "reference":{"edition":"synthetic-seed-test",

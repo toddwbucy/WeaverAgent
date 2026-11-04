@@ -20,15 +20,28 @@ mod seed;
 #[path = "loaded_tests.rs"]
 mod loaded;
 
+fn governing_fixture() -> (
+    super::super::governing::GoverningFiles,
+    weaver_types::ServingDeclaration,
+) {
+    super::super::governing::tests::publication_fixture(false)
+}
+
 struct Fixture {
     path: PathBuf,
     owner: Owner,
     session: SessionId,
     trace_path: PathBuf,
+    governing: super::super::governing::GoverningFiles,
+    declaration: weaver_types::ServingDeclaration,
 }
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_thesaurus(false)
+    }
+
+    fn with_thesaurus(elected: bool) -> Self {
         static SERIAL: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
             "artifact-{}-{}-{}",
@@ -45,7 +58,7 @@ impl Fixture {
             uid: nix::unistd::geteuid().as_raw(),
             gid: nix::unistd::getegid().as_raw(),
         };
-        let declaration = declaration::tests::fixture();
+        let (governing, declaration) = super::super::governing::tests::publication_fixture(elected);
         let trace_path = match &declaration.agent().trace_sink {
             TraceSink::File { path, .. }
             | TraceSink::Pipe { path, .. }
@@ -56,6 +69,8 @@ impl Fixture {
             owner,
             session: declaration.agent().session.clone(),
             trace_path,
+            governing,
+            declaration,
         }
     }
 
@@ -94,7 +109,7 @@ impl Fixture {
     ) -> StateIndexEntry {
         let a = hash(image);
         let configuration = config.map(str::to_owned).unwrap_or_else(|| {
-            declaration::render(&declaration::tests::fixture().with_start(a.clone())).unwrap()
+            declaration::render(&self.declaration.clone().with_start(a.clone())).unwrap()
         });
         let b = hash(configuration.as_bytes());
         let id = ArtifactId::from_parts(DecimalU64(ordinal), b.clone()).unwrap();
@@ -140,9 +155,27 @@ impl Fixture {
         );
         self.write(
             Path::new(id.as_str()).join(BINDING),
-            &entry.binding().to_json().unwrap(),
+            &entry
+                .binding(
+                    self.governing.scheme_sha256().clone(),
+                    self.governing.thesaurus_sha256().cloned(),
+                )
+                .to_json()
+                .unwrap(),
             0o640,
         );
+        self.write(
+            Path::new(id.as_str()).join("ste100-scheme.json"),
+            self.governing.scheme().as_bytes(),
+            0o640,
+        );
+        if let Some(thesaurus) = self.governing.thesaurus() {
+            self.write(
+                Path::new(id.as_str()).join("ste100-thesaurus.json"),
+                thesaurus.as_bytes(),
+                0o640,
+            );
+        }
         let manifest = self.path.join(MANIFEST);
         let mut bytes = fs::read(&manifest).unwrap_or_default();
         bytes.extend_from_slice(&entry.to_json().unwrap());
@@ -325,7 +358,7 @@ fn each_hash_agreement_is_required_independently() {
 
     let f = Fixture::new();
     // A, B, the directory and binding agree. Only the A inside the copy is wrong.
-    let config = declaration::render(&declaration::tests::fixture()).unwrap();
+    let config = declaration::render(&governing_fixture().1).unwrap();
     f.artifact(1, None, b"a different raw image", Some(&config));
     assert_eq!(
         f.repository().load(None, &f.scope()).unwrap_err().case,
@@ -337,7 +370,7 @@ fn each_hash_agreement_is_required_independently() {
 fn binding_identity_must_match_index_even_when_both_are_well_formed() {
     let f = Fixture::new();
     let entry = f.seed();
-    let mut binding = entry.binding();
+    let mut binding = entry.binding(governing_fixture().0.scheme_sha256().clone(), None);
     binding.seed_id = "2".repeat(32);
     binding.confirmation = Confirmation::Seed {
         seed_id: binding.seed_id.clone(),
@@ -420,9 +453,9 @@ fn malformed_guard_never_means_absent_guard() {
 }
 
 #[test]
-fn artifact_has_exactly_three_files_including_non_utf8_entry_check() {
+fn artifact_has_exactly_four_files_including_non_utf8_entry_check() {
     for name in [
-        std::ffi::OsString::from("fourth"),
+        std::ffi::OsString::from("fifth"),
         std::ffi::OsString::from_vec(vec![0xff]),
     ] {
         let f = Fixture::new();
@@ -434,7 +467,7 @@ fn artifact_has_exactly_three_files_including_non_utf8_entry_check() {
         );
         assert!(f.repository().load(None, &f.scope()).is_err());
     }
-    for missing in [DUMP, CONFIGURATION, BINDING] {
+    for missing in [DUMP, CONFIGURATION, BINDING, "ste100-scheme.json"] {
         let f = Fixture::new();
         let entry = f.seed();
         fs::remove_file(f.path.join(entry.artifact_id.as_str()).join(missing)).unwrap();
@@ -444,7 +477,7 @@ fn artifact_has_exactly_three_files_including_non_utf8_entry_check() {
 
 #[test]
 fn file_symlinks_hardlinks_fifo_and_modes_refuse_before_reading() {
-    for name in [DUMP, CONFIGURATION, BINDING] {
+    for name in [DUMP, CONFIGURATION, BINDING, "ste100-scheme.json"] {
         for alteration in ["symlink", "hardlink", "mode", "fifo"] {
             let f = Fixture::new();
             let entry = f.seed();
@@ -785,12 +818,94 @@ fn directory_default_acl_and_unreadable_acl_judgment_refuse() {
 }
 
 /// Real indexed/hash/custody verification for the paired Enter composition tests.
-pub(crate) fn verified_enter_fixture(bound: weaver_types::ServingDeclaration) -> VerifiedArtifact {
+pub(crate) fn verified_enter_fixture(
+    bound: weaver_types::ServingDeclaration,
+    scheme: String,
+    thesaurus: Option<String>,
+) -> VerifiedArtifact {
     let mut fixture = Fixture::new();
+    fixture.governing = super::super::governing::GoverningFiles::verify(
+        scheme,
+        thesaurus,
+        &bound.state_management().flow.scheme,
+        bound.state_management().flow.thesaurus.as_ref(),
+    )
+    .unwrap();
     fixture.session = bound.agent().session.clone();
     fixture.trace_path = super::super::trace_path(&bound.agent().trace_sink).to_path_buf();
     let image = b"synthetic member image, not SQLite qualification";
     let bound = bound.with_start(hash(image));
     fixture.artifact(1, None, image, Some(&declaration::render(&bound).unwrap()));
     fixture.repository().load(None, &fixture.scope()).unwrap()
+}
+
+#[test]
+fn governing_files_require_the_elected_set_and_exact_binding_hashes() {
+    for elected in [false, true] {
+        let f = Fixture::with_thesaurus(elected);
+        let entry = f.seed();
+        let loaded = f.repository().load(None, &f.scope()).unwrap();
+        assert_eq!(loaded.governing().scheme(), f.governing.scheme());
+        assert_eq!(loaded.governing().thesaurus(), f.governing.thesaurus());
+        let directory = f.path.join(entry.artifact_id.as_str());
+        assert_eq!(
+            fs::read_dir(&directory).unwrap().count(),
+            if elected { 5 } else { 4 }
+        );
+        let original = fs::read(directory.join(BINDING)).unwrap();
+        for field in ["scheme_sha256", "thesaurus_sha256"] {
+            let mut value: serde_json::Value = serde_json::from_slice(&original).unwrap();
+            value[field] = serde_json::Value::String("f".repeat(64));
+            f.write(
+                Path::new(entry.artifact_id.as_str()).join(BINDING),
+                &serde_json::to_vec(&value).unwrap(),
+                0o640,
+            );
+            assert_eq!(
+                f.repository().load(None, &f.scope()).unwrap_err().case,
+                PersistenceCase::BindingMismatch
+            );
+        }
+        f.write(
+            Path::new(entry.artifact_id.as_str()).join(BINDING),
+            &original,
+            0o640,
+        );
+        if elected {
+            fs::remove_file(directory.join("ste100-thesaurus.json")).unwrap();
+        } else {
+            f.write(
+                Path::new(entry.artifact_id.as_str()).join("ste100-thesaurus.json"),
+                b"unrequested",
+                0o640,
+            );
+        }
+        assert!(f.repository().load(None, &f.scope()).is_err());
+    }
+}
+
+#[test]
+fn governing_file_digest_is_compared_with_the_independent_declaration() {
+    for name in ["ste100-scheme.json", "ste100-thesaurus.json"] {
+        let f = Fixture::with_thesaurus(true);
+        let entry = f.seed();
+        let path = Path::new(entry.artifact_id.as_str()).join(name);
+        let mut changed = fs::read(f.path.join(&path)).unwrap();
+        changed.push(b' ');
+        f.write(path, &changed, 0o640);
+        let binding_path = Path::new(entry.artifact_id.as_str()).join(BINDING);
+        let mut binding: serde_json::Value =
+            serde_json::from_slice(&fs::read(f.path.join(&binding_path)).unwrap()).unwrap();
+        let field = if name == "ste100-scheme.json" {
+            "scheme_sha256"
+        } else {
+            "thesaurus_sha256"
+        };
+        binding[field] = serde_json::Value::String(hash(&changed).to_string());
+        f.write(binding_path, &serde_json::to_vec(&binding).unwrap(), 0o640);
+        assert_eq!(
+            f.repository().load(None, &f.scope()).unwrap_err().case,
+            PersistenceCase::SchemeMismatch
+        );
+    }
 }

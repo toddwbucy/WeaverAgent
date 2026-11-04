@@ -174,10 +174,14 @@ pub(in crate::offline_state) mod tests {
         let save_points = territory.join("save-points");
         fs::create_dir(&save_points).unwrap();
         fs::set_permissions(&save_points, fs::Permissions::from_mode(0o750)).unwrap();
-        let source = DRAFT.replace(
-            "\"TRACE_PATH\"",
-            &serde_json::to_string(&territory.join("trace.jsonl")).unwrap(),
-        );
+        let scheme = crate::seed::preparation::tests::scheme();
+        let scheme_digest = crate::seed::preparation::hash(scheme.as_bytes());
+        let source = DRAFT
+            .replace(&"b".repeat(64), scheme_digest.as_str())
+            .replace(
+                "\"TRACE_PATH\"",
+                &serde_json::to_string(&territory.join("trace.jsonl")).unwrap(),
+            );
         write(&territory.join("agent.toml"), source.as_bytes(), 0o640);
         let uid = nix::unistd::geteuid().as_raw();
         let gid = nix::unistd::getegid().as_raw();
