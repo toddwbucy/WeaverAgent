@@ -309,6 +309,28 @@ fn classifier_free_draft_does_not_bypass_the_state_content_1_seed_certificate() 
 }
 
 #[test]
+fn state_content_1_seed_refuses_a_thesaurus_before_reading_artifacts() {
+    let mut fixture = fixture();
+    fixture.config.operator = 0;
+    let source = fs::read_to_string(fixture.config.territory.join("agent.toml")).unwrap();
+    let draft = weaver_types::parse_serving_draft(&source).unwrap();
+    let source = format!(
+        "{source}\nstate-management.flow.thesaurus = \
+         {{artifact-sha256 = \"{}\", scheme-id = \"{}\"}}\n",
+        "d".repeat(64),
+        draft.state_management().flow.scheme.scheme_id
+    );
+    fixture.write_territory("agent.toml", source.as_bytes());
+    fs::remove_file(fixture.config.root.join("ste100-binary")).unwrap();
+    let error = fixture
+        .prepare()
+        .expect_err("legacy seed must not lose an election");
+    assert!(matches!(error, PreparationFailure::Inventory {
+        refusal: LifecycleRefusal::ConfigInvalid { field: Some(ref name) }, ..
+    } if name.0 == "state-management.flow.thesaurus"));
+}
+
+#[test]
 fn certificate_cannot_supply_its_own_expected_prompt_checker_or_scheme_identity() {
     for changed in [
         "prompt",

@@ -85,6 +85,18 @@ impl PreparedEnter {
                 "this startup path requires a classifier",
             ));
         }
+        if artifact
+            .declaration()
+            .state_management()
+            .flow
+            .thesaurus
+            .is_some()
+        {
+            return Err(invalid(
+                "state-management.flow.thesaurus",
+                "state-content/1 startup cannot hold a thesaurus",
+            ));
+        }
         crate::sink_within_territory(&inventory.config.trace_sink, &config.territory)?;
         crate::grant_shell(config, &mut inventory)?;
         let checker_path =
@@ -155,6 +167,7 @@ impl PreparedEnter {
                     state_management: state.clone(),
                     start: artifact.identity(),
                     ste100_scheme: scheme_text,
+                    ste100_thesaurus: None,
                 },
                 state_store: inventory.config.state_store.clone().unwrap_or_default(),
                 declaration: artifact.identity().config_sha256.to_string(),
@@ -205,6 +218,7 @@ impl PreparedEnter {
             state_management,
             start,
             ste100_scheme,
+            ste100_thesaurus,
             ..
         } = &self.envelope.enter().binding
         else {
@@ -214,6 +228,7 @@ impl PreparedEnter {
             state_management: state_management.clone(),
             start: start.clone(),
             ste100_scheme: ste100_scheme.clone(),
+            ste100_thesaurus: ste100_thesaurus.clone(),
             ste100_binary_sha256: Some(self.checker_digest.clone()),
         }
     }

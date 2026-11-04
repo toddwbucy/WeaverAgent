@@ -36,6 +36,7 @@ impl<'a> StartupComposition<'a> {
                 state_management,
                 start,
                 ste100_scheme,
+                ste100_thesaurus,
                 shell,
                 ..
             } = &inputs.original.envelope().enter().binding
@@ -50,6 +51,9 @@ impl<'a> StartupComposition<'a> {
             state_management
                 .validate(&elected)
                 .map_err(|_| "invalid Enter state-management declaration")?;
+            if state_management.flow.thesaurus.is_some() || ste100_thesaurus.is_some() {
+                return Err("state-content/1 startup cannot hold a thesaurus");
+            }
             let instruction = state_management
                 .ste100
                 .as_ref()
@@ -124,6 +128,7 @@ impl EnterLoadFacts {
             state_management,
             start,
             ste100_scheme,
+            ste100_thesaurus,
             ..
         } = &payload.binding
         else {
@@ -142,6 +147,7 @@ impl EnterLoadFacts {
                 state_management: state_management.clone(),
                 start: start.clone(),
                 ste100_scheme: ste100_scheme.clone(),
+                ste100_thesaurus: ste100_thesaurus.clone(),
                 ste100_binary_sha256: Some(self.checker_digest.clone()),
             },
             state_store: payload.state_store.clone(),
@@ -267,6 +273,7 @@ fn declaration(
         observation_interval,
         backlog,
         scheme,
+        thesaurus: _,
     } = flow;
     trace::FlowDeclarationRecord {
         registry_id: weaver_trace::serving::REGISTRY_ID.into(),

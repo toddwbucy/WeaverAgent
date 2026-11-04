@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     DecimalU64, Digest, MeasuredInterval, MeasuredWait, StateStartConfig, Ste100Instruction,
-    ValidationError,
+    ThesaurusDeclaration, ValidationError,
 };
 
 /// The existing gate ceiling, shared by declaration and wire validation.
@@ -57,6 +57,13 @@ pub struct FlowConfig {
     pub observation_interval: MeasuredInterval,
     pub backlog: FlowBacklog,
     pub scheme: SchemeDeclaration,
+    /// TYPES-CONFIG: absence elects no thesaurus, independently of a classifier.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_option"
+    )]
+    pub thesaurus: Option<ThesaurusDeclaration>,
 }
 
 impl FlowConfig {
@@ -69,6 +76,9 @@ impl FlowConfig {
         self.observation_interval.validate()?;
         self.backlog.validate()?;
         self.scheme.validate()?;
+        if let Some(thesaurus) = &self.thesaurus {
+            thesaurus.validate(&self.scheme)?;
+        }
         let mut ids = BTreeSet::new();
         for rule in &self.partition {
             rule.validate()?;

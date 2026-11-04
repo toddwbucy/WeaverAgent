@@ -26,6 +26,22 @@ fn load(value: &mut Value) -> &mut Value {
 }
 
 #[test]
+fn show_keeps_exact_thesaurus_bytes_and_refuses_a_nontext_carrier() {
+    let mut value = serde_json::to_value(fixture()).unwrap();
+    let text = " {\"example\":\"caf\u{e9}\"}\r\n";
+    load(&mut value)["state"]["serving"]["ste100_thesaurus"] = json!(text);
+    let parsed = ObservationEnvelope::decode(&serde_json::to_vec(&value).unwrap()).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&parsed.encode().unwrap()).unwrap(),
+        value
+    );
+    for invalid in [Value::Null, json!({}), json!(1)] {
+        load(&mut value)["state"]["serving"]["ste100_thesaurus"] = invalid;
+        assert!(ObservationEnvelope::decode(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+}
+
+#[test]
 fn classifier_election_and_executable_digest_have_matching_presence() {
     for instruction in [false, true] {
         for executable in [false, true] {

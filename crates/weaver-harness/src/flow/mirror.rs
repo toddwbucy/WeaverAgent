@@ -405,8 +405,10 @@ pub(super) fn matches_flow(
         observation_interval,
         backlog,
         scheme,
+        thesaurus,
     } = value;
-    record.registry_id == weaver_trace::serving::REGISTRY_ID
+    thesaurus.is_none()
+        && record.registry_id == weaver_trace::serving::REGISTRY_ID
         && record.version == *version
         && record.partition.len() == partition.len()
         && record.partition.iter().zip(partition).all(|(a, b)| {

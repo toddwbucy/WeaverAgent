@@ -22,6 +22,7 @@ pub(super) fn config() -> FlowConfig {
     let load = fixture::load_record();
     let digest = s::Digest::new("a".repeat(64)).unwrap();
     FlowConfig {
+        thesaurus: None,
         version: 1,
         partition: fixture::partition()
             .rules
@@ -55,6 +56,27 @@ pub(super) fn config() -> FlowConfig {
             verbs: vec!["read".into()],
         },
     }
+}
+
+#[test]
+fn legacy_load_record_cannot_claim_an_elected_thesaurus() {
+    let mut declaration = config();
+    let run = Fixture::new(declaration.clone());
+    let Some(Payload::Elections(load)) = run.load_event().payload else {
+        panic!()
+    };
+    assert!(super::super::mirror::matches_flow(
+        &declaration,
+        &load.state_flow
+    ));
+    declaration.thesaurus = Some(s::ThesaurusDeclaration {
+        artifact_sha256: s::Digest::new("d".repeat(64)).unwrap(),
+        scheme_id: declaration.scheme.scheme_id.clone(),
+    });
+    assert!(!super::super::mirror::matches_flow(
+        &declaration,
+        &load.state_flow
+    ));
 }
 
 pub(super) fn event(kind: Kind, payload: Option<Payload>) -> AuthoredEvent {

@@ -68,6 +68,31 @@ fn round_trip(source: &str) -> (ServingDeclaration, String) {
 }
 
 #[test]
+fn elected_thesaurus_survives_canonical_declaration_publication() {
+    let source = format!(
+        "{GOLDEN}state-management.flow.thesaurus = \
+         {{artifact-sha256 = \"{}\", scheme-id = \"ste100:{}\"}}\n",
+        "d".repeat(64),
+        "b".repeat(64)
+    );
+    let (declaration, rendered) = round_trip(&source);
+    assert_eq!(
+        declaration
+            .state_management()
+            .flow
+            .thesaurus
+            .as_ref()
+            .unwrap()
+            .artifact_sha256
+            .as_str(),
+        "d".repeat(64)
+    );
+    assert!(rendered.contains("state-management.flow.thesaurus.artifact-sha256"));
+    assert!(rendered.contains("state-management.flow.thesaurus.scheme-id"));
+    assert!(!render(&fixture()).unwrap().contains("thesaurus"));
+}
+
+#[test]
 fn canonical_bytes_follow_parser_order_and_have_one_hash() {
     // Authoring layout, comments and field order do not reach the bound bytes.
     let source = GOLDEN
