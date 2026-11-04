@@ -241,6 +241,77 @@ fn replacement_enter_producer_uses_verified_settings_and_exact_saved_bytes() {
     );
 }
 #[test]
+fn enter_refuses_unjudged_root_thesaurus_custody_in_both_elections() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    for elected in [false, true] {
+        for link in [false, true] {
+            let mut fixture = fixture();
+            crate::seed::preparation::tests::elect_no_classifier(&mut fixture);
+            if elected {
+                crate::seed::preparation::tests::elect_thesaurus(&fixture);
+            }
+            let path = fixture.config.root.join("ste100-thesaurus.json");
+            if !elected {
+                fs::write(&path, b"unused source bytes").unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+            }
+            let source = fs::read_to_string(fixture.config.territory.join("agent.toml")).unwrap();
+            let bound = weaver_types::parse_serving_draft(&source)
+                .unwrap()
+                .bind_start(hash(b"placeholder"));
+            PreparedEnter::prepare_against(
+                &fixture.config,
+                &AgentName(fixture.config.agent.clone()),
+                verified_fixture(&fixture, bound.clone()),
+                facts(),
+                7,
+                &fixture.boundary,
+            )
+            .unwrap();
+            let verified = verified_fixture(&fixture, bound);
+            if link {
+                let target = fixture
+                    .config
+                    .root
+                    .parent()
+                    .unwrap()
+                    .join("other-thesaurus");
+                fs::rename(&path, &target).unwrap();
+                symlink(target, &path).unwrap();
+            } else {
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+            }
+            let error = PreparedEnter::prepare_against(
+                &fixture.config,
+                &AgentName(fixture.config.agent.clone()),
+                verified,
+                facts(),
+                7,
+                &fixture.boundary,
+            )
+            .err()
+            .expect("root source custody must refuse");
+            assert!(
+                matches!(
+                    &error,
+                    PreparationFailure::Inventory {
+                        refusal: weaver_types::LifecycleRefusal::BoundaryUnverified,
+                        ..
+                    }
+                ),
+                "{error}"
+            );
+            if !link {
+                assert!(
+                    error.to_string().contains("ste100-thesaurus.json"),
+                    "{error}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn replacement_enter_producer_refuses_changed_scheme_identity_and_custody() {
     // GoverningFiles now refuses changed verb keys before an artifact is verified.
     for case in ["mode", "binary-conflict"] {

@@ -445,6 +445,48 @@ fn seed_thesaurus_requires_the_elected_bytes_and_file_custody() {
 }
 
 #[test]
+fn seed_without_thesaurus_still_refuses_unjudged_root_thesaurus_custody() {
+    for link in [false, true] {
+        let mut fixture = fixture();
+        elect_no_classifier(&mut fixture);
+        let path = fixture.config.root.join("ste100-thesaurus.json");
+        write(&path, b"unused source bytes", 0o640);
+        fixture.prepare().unwrap();
+        if link {
+            let target = fixture
+                .config
+                .root
+                .parent()
+                .unwrap()
+                .join("other-thesaurus");
+            fs::rename(&path, &target).unwrap();
+            symlink(target, &path).unwrap();
+        } else {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let error = fixture
+            .prepare()
+            .expect_err("root source custody must refuse");
+        assert!(
+            matches!(
+                &error,
+                PreparationFailure::Inventory {
+                    refusal: weaver_types::LifecycleRefusal::BoundaryUnverified,
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        if !link {
+            assert!(
+                error.to_string().contains("ste100-thesaurus.json"),
+                "{error}"
+            );
+        }
+    }
+}
+
+#[test]
 fn seed_preparation_keeps_governing_whitespace_at_the_request_boundary() {
     let mut fixture = fixture();
     elect_no_classifier(&mut fixture);
