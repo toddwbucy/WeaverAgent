@@ -56,9 +56,48 @@ the approved seed file separately. Fold headings never enter the judge.
 
 `Kit::read` accepts already-masked narration and final segments. It preserves
 their locators and exact input-file bytes, and refuses repeated IDs or long text.
-Kit selection, the 100-item R0 roster and its mask-table deposit remain caller
-duties. `prepare_text` rejects raw source marker collisions before masking.
-The preparation caller must record each exclusion and persist the returned codes.
+Kit selection and the 100-item R0 roster remain caller duties. `prepare_text`
+rejects raw source marker collisions before masking. The `prepare-kit` command
+deposits the supplied source, masked input and ordered code tables together.
+
+Its config requires `source` and `source_sha256`. Unknown, repeated, null or
+missing fields refuse the command. The source path resolves from the config
+directory. The output path resolves from the current directory and must be new.
+
+```json
+{
+  "source": "/path/to/frozen-source.jsonl",
+  "source_sha256": "REPLACE_WITH_THE_FROZEN_SOURCE_SHA256"
+}
+```
+
+```sh
+"$CARGO_TARGET_DIR/debug/weaver-ste-driver" prepare-kit \
+  --config /path/to/prepare.json --output /path/to/prepared-kit
+```
+
+The command verifies the exact source digest before masking. Each source JSONL
+record requires `id`, `kind`, `uuid`, `loc` and `raw`. IDs and trajectory UUIDs
+must be nonempty and unique. Narration locators require a nonnegative `msg` and
+`field: "content"`. Final locators require `field: "finish"` and a nonnegative
+`call` too. Extra source fields are preserved, except `text` is reserved and
+refused. A malformed record, source marker collision or masked text above 6000
+characters refuses the whole preparation before the output directory exists.
+
+`source.jsonl` retains the source bytes. `input.jsonl` retains source order and
+locators, with `text` replacing `raw`. `codes.jsonl` contains each segment's `id`
+and ordered `codes` array. `preparation.json` records all three file hashes,
+segment and kind counts, masked character bins and maximum length. Exit 0 means
+these files were written. Exit 1 means preparation failed. A deposit failure can
+leave partial files and attempts to write `failure.json`. It never overwrites
+an existing output directory or substitutes another row.
+
+Preparation neither selects nor qualifies rows. The report states that
+qualification is not assessed. The frozen roster's selection record, dataset
+lookup and whole-row token limit remain separate checks. Length bins count
+masked Unicode characters below 200, from 200 through 499, and at least 500.
+The command opens no gate, agent or model. Use its `input.jsonl` path and digest
+as the evaluator's kit after the roster and rows qualify.
 
 `evaluate` needs explicit R0 parameters of 2 repairs, 1 offer and 0 stops.
 It writes and syncs the parameters before the first request. Each request is
@@ -123,8 +162,8 @@ cargo build --manifest-path tools/ste-driver/Cargo.toml --bin weaver-ste-driver 
 ```
 
 The command consumes a prepared kit. It does not select the roster or attest its
-qualification. The 100-item R0 roster, mask tables and selection evidence remain
-required.
+qualification. Retain the preparation deposit and selection evidence with the
+100-item R0 roster.
 
 This library does not seed or load an agent. Before a live run, the composition
 owner must verify the loaded prompt, model, caps, boot cut and frozen kit.

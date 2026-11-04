@@ -22,6 +22,15 @@ Exit 0: complete evaluation, 1: command failure, 2: void evaluation.\n\
 A completed evaluation can include shape drops or language failures.";
 const TRACE_USAGE: &str = "weaver-ste-driver trace-report --trace FILE --journal FILE --output DIRECTORY\n\
 Offline trace evidence in a new directory. Exit 0: complete, 2: incomplete, 1: command failure.";
+const PREPARE_USAGE: &str = "weaver-ste-driver prepare-kit --config FILE --output DIRECTORY\n\
+Retain source and mask tables. Exit 0: prepared, 1: command failure. No row qualification.";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrepareConfig {
+    source: PathBuf,
+    source_sha256: String,
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -66,6 +75,10 @@ enum Arguments {
         config: PathBuf,
         output: PathBuf,
     },
+    PrepareKit {
+        config: PathBuf,
+        output: PathBuf,
+    },
     TraceReport {
         trace: PathBuf,
         journal: PathBuf,
@@ -79,7 +92,7 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Arguments> {
     if first == "--help" && args.next().is_none() {
         return Ok(Arguments::Help);
     }
-    if first != "evaluate" && first != "trace-report" {
+    if first != "evaluate" && first != "trace-report" && first != "prepare-kit" {
         return Err(USAGE.into());
     }
     let mut config = None;
@@ -87,7 +100,7 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Arguments> {
     let mut trace = None;
     let mut journal = None;
     while let Some(flag) = args.next() {
-        let slot = if flag == "--config" && first == "evaluate" {
+        let slot = if flag == "--config" && (first == "evaluate" || first == "prepare-kit") {
             &mut config
         } else if flag == "--trace" && first == "trace-report" {
             &mut trace
@@ -114,6 +127,12 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Arguments> {
             output: output.ok_or("missing --output")?,
         });
     }
+    if first == "prepare-kit" {
+        return Ok(Arguments::PrepareKit {
+            config: config.ok_or("missing --config")?,
+            output: output.ok_or("missing --output")?,
+        });
+    }
     Ok(Arguments::Evaluate {
         config: config.ok_or("missing --config")?,
         output: output.ok_or("missing --output")?,
@@ -124,7 +143,7 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Arguments> {
 pub(crate) fn execute(args: impl Iterator<Item = OsString>) -> Result<u8> {
     match arguments(args)? {
         Arguments::Help => {
-            println!("{USAGE}\n\n{TRACE_USAGE}");
+            println!("{USAGE}\n\n{TRACE_USAGE}\n\n{PREPARE_USAGE}");
             Ok(0)
         }
         Arguments::TraceReport {
@@ -137,6 +156,26 @@ pub(crate) fn execute(args: impl Iterator<Item = OsString>) -> Result<u8> {
             Ok(if complete { 0 } else { 2 })
         }
         Arguments::Evaluate { config, output } => evaluate(config, output),
+        Arguments::PrepareKit { config, output } => {
+            let config_path = std::fs::canonicalize(config)?;
+            let mut config: PrepareConfig = serde_json::from_slice(&std::fs::read(&config_path)?)?;
+            if config.source.as_os_str().is_empty() {
+                return Err("source path is empty".into());
+            }
+            if config.source.is_relative() {
+                config.source = config_path
+                    .parent()
+                    .ok_or("config path has no parent")?
+                    .join(config.source);
+            }
+            let report = weaver_ste_driver::prepare::prepare(
+                &config.source,
+                &config.source_sha256,
+                &output,
+            )?;
+            println!("{report}");
+            Ok(0)
+        }
     }
 }
 
