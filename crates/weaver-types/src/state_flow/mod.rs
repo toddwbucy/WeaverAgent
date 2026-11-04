@@ -22,6 +22,7 @@ mod recall_refusal;
 mod scalars;
 mod selection;
 mod ste100;
+mod thesaurus;
 
 pub use codec::*;
 pub use content::*;
@@ -39,6 +40,7 @@ pub use recall_refusal::*;
 pub use scalars::{DecimalU64, Digest, MeasuredInterval, MeasuredWait, ValidationError};
 pub use selection::*;
 pub use ste100::*;
+pub use thesaurus::*;
 
 /// Deserialize a required field whose value may explicitly be null.
 ///
