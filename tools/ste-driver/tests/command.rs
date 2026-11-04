@@ -100,6 +100,47 @@ fn command_help_and_argument_refusals_do_not_need_runtime_files() {
 }
 
 #[test]
+fn command_argument_guards_report_their_own_refusal_before_file_access() {
+    let directory = Directory::new();
+    let cases = [
+        (
+            vec![
+                "evaluate", "--config", "a", "--output", "b", "--config", "c",
+            ],
+            "repeated command option",
+        ),
+        (
+            vec![
+                "evaluate", "--config", "a", "--output", "b", "--output", "c",
+            ],
+            "repeated command option",
+        ),
+        (
+            vec!["evaluate", "--config", "--output", "run"],
+            "missing command option value",
+        ),
+        (
+            vec!["evaluate", "--config", "a", "--output", "--help"],
+            "missing command option value",
+        ),
+    ];
+    for (args, reason) in cases {
+        let result = Command::new(env!("CARGO_BIN_EXE_weaver-ste-driver"))
+            .args(args)
+            .current_dir(&directory.0)
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(1));
+        assert_eq!(
+            String::from_utf8(result.stderr).unwrap(),
+            format!("STE driver: {reason}\n")
+        );
+        assert!(result.stdout.is_empty());
+        assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 0);
+    }
+}
+
+#[test]
 fn command_requires_every_field_and_the_exact_r0_elections() {
     let directory = Directory::new();
     let (base, path) = fixture(&directory);
