@@ -252,6 +252,7 @@ fn a_directive_outside_the_drawn_vocabulary_refuses_out_of_order() {
             },
             LifecycleDirective::Lower,
             LifecycleDirective::Load { agent: agent() },
+            LifecycleDirective::Seed { agent: agent() },
             LifecycleDirective::Unload { agent: agent() },
             LifecycleDirective::Validate { agent: agent() },
             LifecycleDirective::Show { agent: agent() },

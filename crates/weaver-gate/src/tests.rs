@@ -660,6 +660,7 @@ fn undrawn() -> Vec<LifecycleDirective> {
         LifecycleDirective::Observe,
         LifecycleDirective::Release,
         LifecycleDirective::Load { agent: agent() },
+        LifecycleDirective::Seed { agent: agent() },
         LifecycleDirective::Unload { agent: agent() },
         LifecycleDirective::Validate { agent: agent() },
         LifecycleDirective::Show { agent: agent() },

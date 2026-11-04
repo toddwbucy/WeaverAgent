@@ -23,6 +23,7 @@
 use serde::{Deserialize, Serialize};
 
 mod plan;
+mod seed_command;
 
 use crate::config::{FieldName, GateInstruction, SpuInstruction, ToolName};
 
@@ -250,6 +251,11 @@ pub enum RefusingOrgan {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LifecycleDirective {
+    /// TYPES-PERSIST: an admin command, never a forwarded worker directive.
+    #[serde(deserialize_with = "seed_command::directive")]
+    Seed {
+        agent: AgentName,
+    },
     /// Root's exact fixed-file proposal; interpretation belongs to the worker.
     #[serde(deserialize_with = "plan::directive")]
     PlanUpdate {
@@ -403,6 +409,11 @@ pub enum SavePointLeg {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LifecycleAnswer {
+    /// TYPES-PERSIST: returned only after seed publication completes.
+    #[serde(deserialize_with = "seed_command::answer")]
+    Seeded {
+        start: crate::state_flow::StartIdentity,
+    },
     /// A committed root plan update, including its exact content position.
     #[serde(deserialize_with = "plan::answer")]
     PlanUpdated {
