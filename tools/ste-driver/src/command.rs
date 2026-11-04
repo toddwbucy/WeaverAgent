@@ -1,0 +1,146 @@
+//! Workflow 4.01, 4.05-4.07, 4.11, 6.01, 6.07 and 7.07, external entry.
+
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use weaver_ste_driver::{
+    check::Checker,
+    gate::TurnClient,
+    guard::Judge,
+    lexicon::Lexicon,
+    prompt::{BUNDLE_SHA256, SYSTEM_SHA256, source_examples},
+    run::{Kit, R0Parameters, evaluate_with_provenance, verify_folded_prompt},
+    source::APPROVED_WORDS_SHA256,
+};
+
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+const USAGE: &str = "weaver-ste-driver evaluate --config FILE --output DIRECTORY\n\
+One frozen kit evaluation. All input paths and R0 caps are required in FILE.\n\
+Exit 0: complete evaluation, 1: command failure, 2: void evaluation.\n\
+A completed evaluation can include shape drops or language failures.";
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Config {
+    repo: PathBuf,
+    agent: String,
+    config_root: PathBuf,
+    train_root: PathBuf,
+    approved_words: PathBuf,
+    prompt_bundle: PathBuf,
+    kit: PathBuf,
+    kit_sha256: String,
+    driver_repair_pass_cap: u32,
+    offer_pass_cap: u32,
+    transport_stop_bound: u64,
+}
+
+impl Config {
+    fn resolve(&mut self, parent: &Path) -> Result<()> {
+        for path in [
+            &mut self.repo,
+            &mut self.config_root,
+            &mut self.train_root,
+            &mut self.approved_words,
+            &mut self.prompt_bundle,
+            &mut self.kit,
+        ] {
+            if path.as_os_str().is_empty() {
+                return Err("an input path is empty".into());
+            }
+            if path.is_relative() {
+                *path = parent.join(&*path);
+            }
+        }
+        Ok(())
+    }
+}
+
+enum Arguments {
+    Help,
+    Evaluate { config: PathBuf, output: PathBuf },
+}
+
+fn arguments(args: impl Iterator<Item = OsString>) -> Result<Arguments> {
+    let mut args = args;
+    let first = args.next().ok_or(USAGE)?;
+    if first == "--help" && args.next().is_none() {
+        return Ok(Arguments::Help);
+    }
+    if first != "evaluate" {
+        return Err(USAGE.into());
+    }
+    let mut config = None;
+    let mut output = None;
+    while let Some(flag) = args.next() {
+        let slot = if flag == "--config" {
+            &mut config
+        } else if flag == "--output" {
+            &mut output
+        } else {
+            return Err("unknown command option".into());
+        };
+        if slot.is_some() {
+            return Err("repeated command option".into());
+        }
+        let value = args.next().ok_or("missing command option value")?;
+        if value.is_empty() || value.to_str().is_some_and(|s| s.starts_with("--")) {
+            return Err("missing command option value".into());
+        }
+        *slot = Some(PathBuf::from(value));
+    }
+    Ok(Arguments::Evaluate {
+        config: config.ok_or("missing --config")?,
+        output: output.ok_or("missing --output")?,
+    })
+}
+
+/// Check pinned conversion inputs before creating a run or sending a gate request.
+pub(crate) fn execute(args: impl Iterator<Item = OsString>) -> Result<u8> {
+    let Arguments::Evaluate { config, output } = arguments(args)? else {
+        println!("{USAGE}");
+        return Ok(0);
+    };
+    let config_path = std::fs::canonicalize(config)?;
+    let bytes = std::fs::read(&config_path)?;
+    let mut config: Config = serde_json::from_slice(&bytes)?;
+    let parameters = R0Parameters::new(
+        config.driver_repair_pass_cap,
+        config.offer_pass_cap,
+        config.transport_stop_bound,
+    )?;
+    config.resolve(config_path.parent().ok_or("config path has no parent")?)?;
+    let mut transport = TurnClient::new(&config.repo, &config.agent, &config.config_root)?;
+    let kit = Kit::read(&config.kit)?;
+    if config.kit_sha256 != kit.sha256() {
+        return Err("frozen kit hash mismatch".into());
+    }
+    verify_folded_prompt(
+        &config
+            .repo
+            .join("docs/crates/weaver-harness/Loops/ste-conversion-prompt.txt"),
+    )?;
+    let examples = source_examples(&config.prompt_bundle)?;
+    let lexicon = Lexicon::load_pinned(&config.train_root, &config.approved_words)?;
+    let judge = Judge::new(Checker::new(lexicon, 20, 25)?, &examples)?;
+    let provenance = json!({
+        "command":"evaluate", "config":config, "config_path":config_path,
+        "config_sha256":format!("{:x}",Sha256::digest(&bytes)),
+        "source_revision":"9881da6cfbc92b08b31264883aea63b73aa7b694",
+        "source_system_sha256":SYSTEM_SHA256, "source_bundle_sha256":BUNDLE_SHA256,
+        "approved_words_sha256":APPROVED_WORDS_SHA256,
+        "live_agent_identity":"requires operator and trace verification"
+    });
+    let report = evaluate_with_provenance(
+        &kit,
+        &parameters,
+        &judge,
+        &mut transport,
+        &output,
+        &provenance,
+    )?;
+    println!("{}", report.to_json());
+    Ok(if report.void { 2 } else { 0 })
+}

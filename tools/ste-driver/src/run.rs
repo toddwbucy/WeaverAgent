@@ -138,8 +138,21 @@ pub fn evaluate(
     transport: &mut impl Transport,
     directory: &Path,
 ) -> Result<RoundReport> {
+    evaluate_with_provenance(kit, parameters, judge, transport, directory, &Value::Null)
+}
+
+/// Persist caller provenance with the run parameters before the first request.
+/// This is an external record, not an attestation about the loaded agent.
+pub fn evaluate_with_provenance(
+    kit: &Kit,
+    parameters: &R0Parameters,
+    judge: &Judge,
+    transport: &mut impl Transport,
+    directory: &Path,
+    provenance: &Value,
+) -> Result<RoundReport> {
     std::fs::create_dir(directory)?;
-    let result = evaluate_inner(kit, parameters, judge, transport, directory);
+    let result = evaluate_inner(kit, parameters, judge, transport, directory, provenance);
     if let Err(error) = &result {
         let _ = write_json(
             &directory.join("failure.json"),
@@ -157,6 +170,7 @@ fn evaluate_inner(
     judge: &Judge,
     transport: &mut impl Transport,
     directory: &Path,
+    provenance: &Value,
 ) -> Result<RoundReport> {
     let mut input = create(&directory.join("input.jsonl"))?;
     input.write_all(&kit.bytes)?;
@@ -165,6 +179,7 @@ fn evaluate_inner(
         &directory.join("run.json"),
         &json!({
             "kind":"ste-kit-run", "engine":"weaver-gate", "status":"started",
+            "provenance":provenance,
             "started_unix_seconds":std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)?.as_secs(),
             "input_sha256":kit.sha256, "segments":kit.segments.len(),

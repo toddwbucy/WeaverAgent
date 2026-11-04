@@ -2,8 +2,8 @@
 
 This tool builds outside the agent workspace. It has its own lock file and no
 dependency on an agent organ. It implements the external driver's pinned masking,
-language and literal checks. Its run library sends requests through `deploy/turn.py`
-and keeps the external results. The executable and agent composition are later work.
+language and literal checks. Its command sends requests through `deploy/turn.py`
+and keeps the external results. Agent composition and trace enrichment remain owed.
 
 The authority is `docs/crates/weaver-harness/Loops/ste-conversion-loop.md`:
 
@@ -77,6 +77,54 @@ nonvoid run publishes `output.jsonl` for the pinned scorer. Final shape and
 language failures keep their available last outputs and their refusal records.
 Literal checks mark assembly eligibility and never start another request.
 
+The `evaluate` command runs one frozen kit. Its config requires every field below.
+Unknown, repeated, null or missing fields refuse the command. Input paths resolve
+from the config file's directory. The output path resolves from the current directory.
+The kit digest must match the exact file bytes. The command verifies the folded prompt,
+source examples and lexicon before it creates a run or calls the gate. It records the
+config digest, resolved inputs and source provenance in `run.json` before the
+first call.
+The config names the operator's agent and admin config root explicitly.
+
+```json
+{
+  "repo": "/path/to/WeaverAgent",
+  "agent": "ste-r0",
+  "config_root": "/path/to/admin-config",
+  "train_root": "/path/to/pinned/WeaverTrain",
+  "approved_words": "/path/to/approved-words.json",
+  "prompt_bundle": "/path/to/source-prompt-bundle.json",
+  "kit": "/path/to/frozen-kit.jsonl",
+  "kit_sha256": "REPLACE_WITH_THE_FROZEN_KIT_SHA256",
+  "driver_repair_pass_cap": 2,
+  "offer_pass_cap": 1,
+  "transport_stop_bound": 0
+}
+```
+
+Exit 0 means the complete evaluation was recorded. It can contain shape drops and
+language failures. Exit 2 means the evaluation is void. Exit 1 means the command failed.
+A void evaluation keeps its journal and counts, publishes no scorer output and starts
+no automatic retry. Each invocation requires a new output directory.
+
+After the agent and frozen kit qualify, the operator runs the two evaluations with
+the same config. The source bundle is the original `ste_prompt` JSON output, not the
+folded file. Its system and bundle hashes must match the workflow pins.
+
+```sh
+export CARGO_TARGET_DIR=/tmp/weaver-ste-driver-target
+export TMPDIR=/tmp
+cargo build --manifest-path tools/ste-driver/Cargo.toml --bin weaver-ste-driver --locked
+"$CARGO_TARGET_DIR/debug/weaver-ste-driver" evaluate \
+  --config /path/to/r0-config.json --output /path/to/r0-pass-1
+"$CARGO_TARGET_DIR/debug/weaver-ste-driver" evaluate \
+  --config /path/to/r0-config.json --output /path/to/r0-pass-2
+```
+
+The command consumes a prepared kit. It does not select the roster or attest its
+qualification. The 100-item R0 roster, mask tables and selection evidence remain
+required.
+
 This library does not seed or load an agent. Before a live run, the composition
 owner must verify the loaded prompt, model, caps, boot cut and frozen kit.
 The report's prompt hash is the expected approved identity, not a measurement
@@ -119,3 +167,16 @@ It does not run that module's model client.
 The generators need no approved-words artifact, model, gate or network. They change
 only this tool's fixture and character-class files. They do not modify WeaverTrain.
 The fixture cases are tests, not the R0 evaluation kit or an R0 result.
+
+The command's pinned-input test uses the real binary and gate client with a synthetic
+Unix socket. It needs operator-supplied reference artifacts and is explicitly ignored
+without them. Run it separately with those paths set. It starts no agent or model.
+It covers a completed evaluation, output-directory reuse and a separate void evaluation.
+
+```sh
+export STE_TEST_TRAIN_ROOT=/path/to/pinned/WeaverTrain
+export STE_TEST_APPROVED_WORDS=/path/to/approved-words.json
+export STE_TEST_PROMPT_BUNDLE=/path/to/source-prompt-bundle.json
+cargo test --manifest-path tools/ste-driver/Cargo.toml --locked --test command \
+  command_runs_the_pinned_checker_through_a_synthetic_gate -- --ignored --exact
+```
