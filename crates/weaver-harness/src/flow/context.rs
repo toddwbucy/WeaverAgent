@@ -2888,6 +2888,9 @@ mod pair_tests;
 #[path = "repair.rs"]
 mod repair;
 
+#[path = "offer_budget.rs"]
+mod offer_budget;
+
 #[path = "context_repair.rs"]
 mod repair_driver;
 #[allow(unused_imports)]
