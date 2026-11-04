@@ -17,7 +17,7 @@ use super::{
 
 pub const STATE_FLOW_PROTOCOL: &str = "state-flow/1";
 pub const STATE_SEED_PROTOCOL: &str = "state-seed/1";
-pub const STATE_CONTENT_SCHEMA: &str = "state-content/1";
+pub const STATE_CONTENT_SCHEMA: &str = "state-content/2";
 
 /// Exchange identity. Protocol and operation are fixed by the enclosing variant.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -13,7 +13,7 @@ fn artifact(ordinal: u64, byte: char) -> ArtifactId {
 fn seed() -> StateBinding {
     StateBinding {
         version: 1,
-        schema_id: "state-content/1".into(),
+        schema_id: "state-content/2".into(),
         seed_id: "a".repeat(32),
         dump_sha256: digest('1'),
         config_sha256: digest('2'),
@@ -218,7 +218,7 @@ fn selector_allows_only_the_exact_basename_and_one_optional_final_lf() {
 fn canonical_binding_has_declared_field_order_and_explicit_nulls() {
     let binding = seed();
     let expected = format!(
-        "{{\"version\":1,\"schema_id\":\"state-content/1\",\"seed_id\":\"{}\",\"dump_sha256\":\"{}\",\"config_sha256\":\"{}\",\"parent_artifact_id\":null,\"position\":null,\"confirmation\":{{\"seed\":{{\"seed_id\":\"{}\"}}}}}}",
+        "{{\"version\":1,\"schema_id\":\"state-content/2\",\"seed_id\":\"{}\",\"dump_sha256\":\"{}\",\"config_sha256\":\"{}\",\"parent_artifact_id\":null,\"position\":null,\"confirmation\":{{\"seed\":{{\"seed_id\":\"{}\"}}}}}}",
         "a".repeat(32),
         "1".repeat(64),
         "2".repeat(64),
@@ -235,7 +235,7 @@ fn canonical_binding_has_declared_field_order_and_explicit_nulls() {
 fn canonical_nested_source_position_and_confirmation_keep_their_contract_order() {
     let binding = serving();
     let expected = format!(
-        "{{\"version\":1,\"schema_id\":\"state-content/1\",\"seed_id\":\"{}\",\"dump_sha256\":\"{}\",\"config_sha256\":\"{}\",\"parent_artifact_id\":\"{}\",\"position\":{{\"block_id\":{{\"run\":\"source-run\",\"sequence\":\"18446744073709551615\",\"block\":\"0\"}},\"turn\":null}},\"confirmation\":{{\"serving\":{{\"run_id\":\"capture-run\",\"capture_id\":\"18446744073709551615\"}}}}}}",
+        "{{\"version\":1,\"schema_id\":\"state-content/2\",\"seed_id\":\"{}\",\"dump_sha256\":\"{}\",\"config_sha256\":\"{}\",\"parent_artifact_id\":\"{}\",\"position\":{{\"block_id\":{{\"run\":\"source-run\",\"sequence\":\"18446744073709551615\",\"block\":\"0\"}},\"turn\":null}},\"confirmation\":{{\"serving\":{{\"run_id\":\"capture-run\",\"capture_id\":\"18446744073709551615\"}}}}}}",
         "a".repeat(32),
         "1".repeat(64),
         "3".repeat(64),
@@ -289,7 +289,7 @@ fn binding_refuses_noncanonical_scalars_schema_and_legacy_aliases() {
         ("/version", json!(1.0)),
         ("/version", json!("1")),
         ("/version", Value::Null),
-        ("/schema_id", json!("state-content/2")),
+        ("/schema_id", json!("state-content/1")),
         ("/seed_id", json!("a".repeat(31))),
         ("/seed_id", json!("A".repeat(32))),
         ("/seed_id", json!("g".repeat(32))),

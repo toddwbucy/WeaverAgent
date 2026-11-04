@@ -201,7 +201,7 @@ fn publish_seed(root: &Path, config: &ServiceConfig, payload: &EnterPayload) -> 
     .unwrap();
     let room = save_points::open_directory(&room_path).unwrap();
     let created = SeedCreated {
-        schema_id: "state-content/1".into(),
+        schema_id: "state-content/2".into(),
         seed_id,
         room_name,
         size_bytes: (image.len() as u64).into(),

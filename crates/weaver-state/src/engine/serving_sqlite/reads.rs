@@ -1,4 +1,4 @@
-//! Read-only state-content/1 queries and bounded complete-result serialization.
+//! Read-only state-content/2 queries and bounded complete-result serialization.
 //!
 //! The encoded port streams SQLite rows into one bounded snapshot. The public typed
 //! port decodes only that bounded result. Private transaction-local plan guards

@@ -37,12 +37,12 @@ fn metadata_is_singleton_and_pins_the_schema_id() {
     let catalog = ServingCatalog::create().unwrap();
     let connection = &catalog.connection;
     let sql = "INSERT INTO store_meta VALUES (?1, ?2, 'seed', 'scheme')";
-    constraint(connection.execute(sql, params![2, "state-content/1"]));
-    constraint(connection.execute(sql, params![1, "state-content/2"]));
-    connection
-        .execute(sql, params![1, "state-content/1"])
-        .unwrap();
+    constraint(connection.execute(sql, params![2, "state-content/2"]));
     constraint(connection.execute(sql, params![1, "state-content/1"]));
+    connection
+        .execute(sql, params![1, "state-content/2"])
+        .unwrap();
+    constraint(connection.execute(sql, params![1, "state-content/2"]));
 }
 
 #[test]

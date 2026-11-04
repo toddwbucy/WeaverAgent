@@ -40,17 +40,13 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
     else {
         return Err(invalid("serving channel must begin with open"));
     };
-    let adopted = if thesaurus_sha256.is_some() {
-        Err(weaver_state::engine::serving_sqlite::OpenFault {
-            code: StateRefusalCode::UnsupportedSchema,
-            detail: "state-content/1 cannot hold a thesaurus".into(),
-        })
-    } else if image.starts_with(b"SQLite format 3\0") {
+    let adopted = if image.starts_with(b"SQLite format 3\0") {
         let observed = ServingSqlite::adopt_observed(
             &image,
             &common,
             &schema_id,
             &scheme_id,
+            thesaurus_sha256.as_ref(),
             &start,
             read_limits.clone(),
         )
@@ -62,7 +58,7 @@ fn run(channel: &mut Channel, room: &Room, image: Vec<u8>) -> io::Result<()> {
     } else {
         Err(weaver_state::engine::serving_sqlite::OpenFault {
             code: StateRefusalCode::UnsupportedSchema,
-            detail: "serving requires a raw state-content/1 SQLite image".into(),
+            detail: "serving requires a raw state-content/2 SQLite image".into(),
         })
     };
     drop(image);

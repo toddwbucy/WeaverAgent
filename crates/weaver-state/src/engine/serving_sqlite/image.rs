@@ -119,25 +119,10 @@ pub fn seed_image(request: &SeedRequest) -> Result<SeedImage, SeedFault> {
         .validate_structure(sha256, &scheme, request.checker_artifact_sha256.as_ref())
         .map_err(|code| SeedFault::new(code, "seed structure or certificate mismatch"))?;
 
-    // Workflow 3.04: accepting these bytes requires the versioned catalog.
-    if request.ste100_thesaurus.is_some() {
-        return Err(SeedFault::new(
-            SeedRefusal::UnsupportedSchema,
-            "state-content/1 cannot hold a thesaurus",
-        ));
-    }
-
-    // The legacy catalog requires a bound seed statement. STATE-GOVERNING
-    // supplies the no-classifier image path with state-content/2.
-    if request.checker_artifact_sha256.is_none() {
-        return Err(SeedFault::new(
-            SeedRefusal::MalformedSeed,
-            "state-content/1 seed requires a classifier binding",
-        ));
-    }
     let mut catalog = ServingCatalog::create()?;
     {
         let tx = catalog.connection.transaction()?;
+        super::governing::seed(&tx, request)?;
         tx.execute(
             "INSERT INTO store_meta(singleton,schema_id,seed_id,scheme_id) VALUES(1,?1,?2,?3)",
             params![request.schema_id, request.seed_id, request.scheme_id],

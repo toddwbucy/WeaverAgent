@@ -12,7 +12,7 @@ use weaver_types::state_flow::{
     SourcePosition, decode_strict,
 };
 
-pub(super) const SCHEMA_ID: &str = "state-content/1";
+pub(super) const SCHEMA_ID: &str = "state-content/2";
 pub(super) const GUARD_FORMAT: &str = "state-publication/1";
 
 #[derive(Debug)]

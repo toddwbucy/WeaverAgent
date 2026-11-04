@@ -76,15 +76,15 @@ fn file_inner(
         &filing.scheme_id,
     )?;
     validate_effect_license(filing)?;
-    // Open supplies the scheme identity, not another dictionary. The classifier
-    // owns language judgment. The member verifies only nonempty keys and spans.
-    let keys: Vec<String> = filing
-        .bindings
-        .iter()
-        .map(|binding| binding.verb.clone())
-        .collect();
+    // STATE-GOVERNING: the opened image supplies the version's dictionary.
+    let keys = store.schemes.get(&filing.scheme_id).ok_or_else(|| {
+        fault(
+            StateRefusalCode::SchemeMismatch,
+            "filing scheme version is absent",
+        )
+    })?;
     filing
-        .validate_structure(&keys)
+        .validate_structure(keys)
         .map_err(|error| fault(StateRefusalCode::InvalidBinding, error.to_string()))?;
     #[cfg(test)]
     let hooks = store.filing_hooks.as_deref();

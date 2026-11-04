@@ -64,6 +64,7 @@ impl ServingSqlite {
         common: &Common,
         schema_id: &str,
         scheme_id: &str,
+        thesaurus_sha256: Option<&Digest>,
         start: &StartIdentity,
         read_limits: ReadLimits,
     ) -> Result<Self, OpenFault> {
@@ -72,17 +73,20 @@ impl ServingSqlite {
             common,
             schema_id,
             scheme_id,
+            thesaurus_sha256,
             start,
             read_limits,
             None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn adopt_inner(
         image: &[u8],
         common: &Common,
         schema_id: &str,
         scheme_id: &str,
+        thesaurus_sha256: Option<&Digest>,
         start: &StartIdentity,
         read_limits: ReadLimits,
         timing: Option<&mut timing::QueryTiming>,
@@ -112,6 +116,21 @@ impl ServingSqlite {
         connection.deserialize_read_exact(rusqlite::MAIN_DB, image, image.len(), false)?;
         lift_memory_limit(&connection)?;
         configure(&connection)?;
+        // STATE-GOVERNING gives the retired catalog a distinct refusal even
+        // when Open already names the new schema. Read only schema metadata.
+        let old_meta = super::super::schema::DDL[0].replace("state-content/2", "state-content/1");
+        let old_catalog: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema
+             WHERE type='table' AND name='store_meta' AND sql=?1)",
+            [&old_meta],
+            |row| row.get(0),
+        )?;
+        if old_catalog {
+            return Err(OpenFault {
+                code: StateRefusalCode::UnsupportedSchema,
+                detail: "state-content/1 image is retired".into(),
+            });
+        }
         verify_schema(&connection)?;
         verify_integrity(&connection)?;
         // json_each is first used only after final schema adoption.
@@ -142,7 +161,8 @@ impl ServingSqlite {
         {
             return Err(invalid("image metadata mismatch"));
         }
-        verify_content(&connection, &scheme)?;
+        let schemes = super::super::governing::verify(&connection, &scheme, thesaurus_sha256)?;
+        verify_content(&connection, &schemes)?;
         pairs::verify(&connection, start)?;
         filing::marks::verify_image_marks(&connection, &seed)
             .map_err(|error| invalid(error.to_string()))?;
@@ -175,6 +195,7 @@ impl ServingSqlite {
                 start: start.clone(),
             },
             read_limits,
+            schemes,
             #[cfg(test)]
             filing_hooks: None,
         })
@@ -289,7 +310,10 @@ fn source(row: &Row<'_>) -> Result<(SourceBlockId, SourceEnvelope), OpenFault> {
     Ok((block_id, envelope))
 }
 
-fn verify_content(connection: &Connection, scheme: &str) -> Result<(), OpenFault> {
+fn verify_content(
+    connection: &Connection,
+    schemes: &super::super::governing::Schemes,
+) -> Result<(), OpenFault> {
     let mut stmt = connection.prepare("SELECT * FROM content_block ORDER BY id")?;
     let mut rows = stmt.query([])?;
     let mut seed_seen = false;
@@ -300,9 +324,9 @@ fn verify_content(connection: &Connection, scheme: &str) -> Result<(), OpenFault
             return Err(invalid("invalid content ID"));
         }
         let stored_scheme: String = row.get("scheme_id")?;
-        if stored_scheme != scheme {
-            return Err(invalid("mixed content scheme"));
-        }
+        let verbs = schemes
+            .get(&stored_scheme)
+            .ok_or_else(|| invalid("content scheme version is absent"))?;
         let raw: Box<RawValue> = decode!(row, "raw_block", Box<RawValue>);
         let source_kind: String = row.get("source_kind")?;
         let content_type: String = row.get("content_type")?;
@@ -333,12 +357,15 @@ fn verify_content(connection: &Connection, scheme: &str) -> Result<(), OpenFault
                 return Err(invalid("seed bytes differ from decoded text"));
             }
             let bindings = bindings(connection, id)?;
-            let verbs = bindings.iter().map(|b| b.verb.clone()).collect::<Vec<_>>();
-            validate_bindings(&bindings, &text, &verbs).map_err(|e| invalid(e.to_string()))?;
+            // STATE-SEED permits an unbound seed. Open carries no checker election,
+            // so this is structural validation, not an election-dependent count.
+            // The rebind pairing gap is recorded on #437 in 6621432077.
+            if !bindings.is_empty() {
+                validate_bindings(&bindings, &text, verbs).map_err(|e| invalid(e.to_string()))?;
+            }
         } else if content_type == "statement" {
             let (block_id, source) = source(row)?;
             let bindings = bindings(connection, id)?;
-            let verbs = bindings.iter().map(|b| b.verb.clone()).collect::<Vec<_>>();
             let context_raw: Option<String> = row.get("context_raw")?;
             let context = context_raw
                 .map(|raw| -> Result<SourceContext, OpenFault> {
@@ -369,7 +396,7 @@ fn verify_content(connection: &Connection, scheme: &str) -> Result<(), OpenFault
                 effect,
             };
             filing
-                .validate_structure(&verbs)
+                .validate_structure(verbs)
                 .map_err(|e| invalid(e.to_string()))?;
             filing::validate_effect_license(&filing).map_err(|e| invalid(e.to_string()))?;
         } else if content_type == "pair" {

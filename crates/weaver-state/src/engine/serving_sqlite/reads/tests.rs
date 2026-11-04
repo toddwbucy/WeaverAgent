@@ -6,7 +6,7 @@ fn test_store() -> ServingSqlite {
     catalog
         .connection
         .execute(
-            "INSERT INTO store_meta VALUES(1,'state-content/1','seed','scheme')",
+            "INSERT INTO store_meta VALUES(1,'state-content/2','seed','scheme')",
             [],
         )
         .unwrap();
@@ -35,6 +35,7 @@ fn test_store() -> ServingSqlite {
             max_result_bytes: 1_000_000.into(),
             measurement_ref: "fixture".into(),
         },
+        schemes: [("scheme".into(), vec!["read".into()])].into(),
         filing_hooks: None,
     }
 }

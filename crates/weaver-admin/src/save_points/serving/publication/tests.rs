@@ -427,7 +427,7 @@ fn seed_refuses_uncorrelated_or_untrusted_room_images() {
         let mut uid = fixture.owner.uid;
         match case {
             0 => created.seed_id = "2".repeat(32),
-            1 => created.schema_id = "state-content/2".into(),
+            1 => created.schema_id = "state-content/1".into(),
             2 => created.room_name.push_str(".part"),
             3 => created.room_name = "../seed.sqlite".into(),
             4 => created.size_bytes.0 += 1,

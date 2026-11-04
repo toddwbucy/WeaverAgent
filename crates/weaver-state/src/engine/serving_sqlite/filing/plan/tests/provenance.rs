@@ -31,8 +31,9 @@ impl Fixture {
         let store = ServingSqlite::adopt(
             seed.as_bytes(),
             &common,
-            "state-content/1",
+            "state-content/2",
             &request.scheme_id,
+            None,
             &start,
             ReadLimits {
                 max_result_bytes: 1_000_000.into(),
@@ -192,8 +193,9 @@ impl Fixture {
         ServingSqlite::adopt(
             bytes,
             &self.common,
-            "state-content/1",
+            "state-content/2",
             &self.store.context.scheme_id,
+            None,
             &start,
             self.store.read_limits.clone(),
         )
