@@ -457,3 +457,123 @@ fn plan_transition_source_distinguishes_absence_from_a_held_non_event() {
         }
     }
 }
+
+// Simulate only the merged install table changes, not an install command.
+fn advance_governing_scheme(fixture: &mut Fixture) -> String {
+    let old = fixture.store.context.scheme_id.clone();
+    let bytes: Vec<u8> = fixture
+        .store
+        .connection
+        .query_row(
+            "SELECT bytes FROM governing_version WHERE kind='scheme' AND sha256=?1",
+            [old.strip_prefix("ste100:").unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut newer = bytes;
+    newer.push(b'\n');
+    let hash = digest(&newer);
+    let scheme = format!("ste100:{hash}");
+    fixture
+        .store
+        .connection
+        .execute(
+            "INSERT INTO governing_version VALUES('scheme',?1,?2,NULL,'synthetic install',?3)",
+            params![hash.as_str(), newer, blob(2)],
+        )
+        .unwrap();
+    fixture
+        .store
+        .connection
+        .execute(
+            "UPDATE governing_current SET sha256=?1 WHERE kind='scheme'",
+            [hash.as_str()],
+        )
+        .unwrap();
+    fixture
+        .store
+        .connection
+        .execute("UPDATE store_meta SET scheme_id=?1", [&scheme])
+        .unwrap();
+    fixture.store.context.scheme_id = scheme;
+    old
+}
+
+#[test]
+fn historical_plan_reads_and_adoption_keep_the_retained_operator_scheme() {
+    let mut fixture = Fixture::new();
+    fixture.begin(false);
+    fixture.complete();
+    fixture.replace(false);
+    let selectors = [
+        ReadSelector::PlanCurrent {},
+        ReadSelector::Plan { plan: plan(1) },
+        ReadSelector::Plan { plan: plan(2) },
+    ];
+    let expected: Vec<_> = selectors
+        .iter()
+        .map(|selector| reads::query(&fixture.store, selector).unwrap())
+        .collect();
+    let old = advance_governing_scheme(&mut fixture);
+    let bytes = fixture.store.image().unwrap();
+    let mut adopted = fixture
+        .adopt(&bytes)
+        .expect("retained plans adopt after install");
+    assert_eq!(
+        adopted.image().unwrap(),
+        bytes,
+        "adoption must not rewrite history"
+    );
+    for (selector, expected) in selectors.iter().zip(expected) {
+        assert_eq!(
+            serde_json::to_value(reads::query(&adopted, selector).unwrap()).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+    }
+    let mut new_filing = statement(20, "message.assistant");
+    new_filing.scheme_id = old;
+    assert_eq!(
+        adopted.file(&new_filing).unwrap_err().code,
+        StateRefusalCode::SchemeMismatch,
+        "new filings need the active scheme"
+    );
+    new_filing.scheme_id = adopted.context.scheme_id.clone();
+    adopted.file(&new_filing).unwrap();
+}
+
+#[test]
+fn new_plan_effect_cannot_authorize_an_input_from_a_retired_scheme() {
+    let mut fixture = Fixture::new();
+    let ctx = context(
+        PlanInputOperation::Authorize {
+            task: 0.into(),
+            categories: categories(false),
+            groups: vec![],
+            review: setup(),
+        },
+        None,
+    );
+    fixture.file(input(1, 0, &ctx));
+    advance_governing_scheme(&mut fixture);
+    let bytes = fixture.store.image().unwrap();
+    let mut adopted = fixture.adopt(&bytes).unwrap();
+    let mut filing = effect(
+        2,
+        PlanEffect::Authorize {
+            plan: plan(1),
+            source: block(1, 0),
+            task: TaskScopeRef {
+                task: span(1),
+                prompt: span(2),
+            },
+            review: setup(),
+        },
+    );
+    filing.scheme_id = adopted.context.scheme_id.clone();
+    let before = adopted.image().unwrap();
+    let error = adopted
+        .file(&filing)
+        .expect_err("old input cannot authorize a new plan");
+    assert_eq!(error.code, StateRefusalCode::InvalidEffect);
+    assert_eq!(adopted.image().unwrap(), before);
+}

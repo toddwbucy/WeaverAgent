@@ -288,8 +288,11 @@ pub(in crate::engine::serving_sqlite) fn operator_context(
     db: &Connection,
     id: i64,
 ) -> Result<PlanInputContext> {
+    // STATE-GOVERNING and STATE-INSTALL preserve history under its own scheme.
+    // Adoption verifies retained versions first. New plan inputs still require
+    // the active scheme in filing::plan::revision::operator_input.
     let mut statement = db.prepare(
-        "SELECT context_raw FROM content_block WHERE id=?1 AND source_kind='event' AND kind='plan.event' AND channel='input' AND origin='operator' AND turn IS NULL AND block=?2 AND effect IS NULL AND scheme_id=(SELECT scheme_id FROM store_meta WHERE singleton=1)",
+        "SELECT context_raw FROM content_block WHERE id=?1 AND source_kind='event' AND kind='plan.event' AND channel='input' AND origin='operator' AND turn IS NULL AND block=?2 AND effect IS NULL AND (scheme_id=(SELECT scheme_id FROM store_meta WHERE singleton=1) OR scheme_id IN (SELECT 'ste100:' || sha256 FROM governing_version WHERE kind='scheme'))",
     )?;
     let mut rows = statement.query(params![id, blob(0.into())])?;
     let row = rows.next()?.ok_or(ReadFailure::ComponentCorruption(
