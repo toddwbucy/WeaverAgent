@@ -6,6 +6,7 @@ pub mod guard;
 pub mod lexicon;
 pub mod literal;
 pub mod mask;
+pub mod prepare;
 mod python_re;
 mod repair;
 pub mod run;
