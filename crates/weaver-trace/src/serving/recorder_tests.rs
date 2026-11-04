@@ -581,6 +581,73 @@ fn malformed_render_and_append_failure_consume_no_admission_or_capacity() {
 }
 
 #[test]
+fn emission_change_checks_every_reference_against_the_assigned_sequence() {
+    use super::super::change_tests::change_event;
+    use super::super::payloads::EmissionChangeMethod;
+    for offer in [false, true] {
+        for defect in 0..8 {
+            let (mut recorder, reader) = recorder();
+            for _ in 1..20 {
+                let submitted = recorded(recorder.submit(message("Read file.")));
+                assert!(matches!(submitted.tap, TapOutcome::Selected(_)));
+            }
+            assert_eq!(recorder.core.next, Some(20));
+            let mut event = change_event(offer);
+            let Some(Payload::EmissionChange(change)) = &mut event.payload else {
+                unreachable!()
+            };
+            match defect {
+                0 => change.matched.source.sequence = 20.into(),
+                1 => change.matched.previous_change = Some(20.into()),
+                2 => change.matched.source.run = "foreign".into(),
+                3..=6 if offer => {
+                    let EmissionChangeMethod::Offer {
+                        instruction,
+                        reemission,
+                        ..
+                    } = &mut change.method
+                    else {
+                        unreachable!()
+                    };
+                    match defect {
+                        3 => instruction.sequence = 20.into(),
+                        4 => reemission.sequence = 20.into(),
+                        5 => instruction.run = "foreign".into(),
+                        6 => reemission.run = "foreign".into(),
+                        _ => unreachable!(),
+                    }
+                }
+                _ => {}
+            }
+            event.envelope.causal_parent = Some(Sequence(match &change.method {
+                EmissionChangeMethod::Splice {} => {
+                    change
+                        .matched
+                        .previous_change
+                        .unwrap_or(change.matched.source.sequence)
+                        .0
+                }
+                EmissionChangeMethod::Offer { reemission, .. } => reemission.sequence.0,
+            }));
+            let rejects = defect < 3 || (offer && defect < 7);
+            let before = recorder.boundary().admitted;
+            let result = recorder.submit(event);
+            if rejects {
+                assert!(result.is_err(), "offer={offer}, defect={defect}");
+                assert_eq!(recorder.boundary().admitted, before);
+                assert_eq!(recorder.core.next, Some(20));
+            } else {
+                assert_eq!(recorded(result).sequence, Sequence(20));
+            }
+            drained(&mut recorder);
+            drop(recorder);
+            let lines = bytes(reader);
+            assert_eq!(lines.lines().count(), if rejects { 20 } else { 21 });
+        }
+    }
+}
+
+#[test]
 fn capacity_pending_preserves_event_and_sequence_then_admits_after_real_wake() {
     let (mut recorder, mut reader) = recorder();
     drained(&mut recorder);

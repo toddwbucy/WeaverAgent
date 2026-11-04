@@ -470,6 +470,27 @@ impl Core {
             return Err(failure);
         }
         let sequence = Sequence(self.next.ok_or_else(malformed)?);
+        if let Some(Payload::EmissionChange(change)) = event.payload.as_ref() {
+            // TRACE-EMISSION-CHANGE: compare references with the assigned sequence.
+            // Same-turn provenance and transaction grants remain harness duties.
+            let before = |value: &super::payloads::SourceBlockId| {
+                value.run == self.run.0 && value.sequence.0 < sequence.0
+            };
+            if !before(&change.matched.source)
+                || change
+                    .matched
+                    .previous_change
+                    .is_some_and(|previous| previous.0 >= sequence.0)
+                || matches!(
+                    &change.method,
+                    super::payloads::EmissionChangeMethod::Offer {
+                        instruction, reemission, ..
+                    } if !before(instruction) || !before(reemission)
+                )
+            {
+                return Err(malformed());
+            }
+        }
         if matches!(
             event.payload.as_ref(),
             Some(Payload::Placement(record))
