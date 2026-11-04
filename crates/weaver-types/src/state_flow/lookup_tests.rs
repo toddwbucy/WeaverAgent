@@ -275,6 +275,10 @@ fn emission_changes_require_the_exact_current_and_response_slices() {
             instruction.block = 1.into()
         }) as fn(&mut SourceBlockId, &mut SourceBlockId, &mut Span),
         |instruction, _, _| instruction.run = "foreign".into(),
+        |instruction, reemission, _| {
+            instruction.run = "foreign".into();
+            reemission.run = "foreign".into();
+        },
         |_, reemission, _| reemission.run = "foreign".into(),
         |_, _, span| span.end = 12.into(),
         |_, _, span| *span = super::tests::span(11, 2),
