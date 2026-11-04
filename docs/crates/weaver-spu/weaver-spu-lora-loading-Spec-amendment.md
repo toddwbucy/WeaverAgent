@@ -2,6 +2,8 @@
 
 **Status:** MERGED.
 
+**Landing PR:** #475
+
 **Version:** 0.1
 **Date filed:** 2026-11-04
 **Document ID:** `weaver-spu-lora-loading-Spec-amendment`
@@ -142,6 +144,27 @@ The C backend checks architecture, target presence and tensor shape during
 load. It also has paths that skip normalization tensors or select CPU buffers.
 Therefore a successful handle alone does not satisfy this amendment.
 
+The fixture elects the pinned backend's log callback as its placement observer.
+In an isolated fixture process, install llama_log_set through llama-cpp-sys-2
+before admission. Capture DEBUG and WARN records as well as the other levels.
+Keep the capture alive for the isolated process's entire lifetime, including
+model teardown and every in-flight callback. Do not replace it during the run.
+The callback copies the supplied text and level. It calls no backend function
+and cannot unwind across the C boundary. Run no unrelated load in that process.
+
+Preserve the raw callback records in the fixture report. Parse the pinned
+llama_adapter_lora_init_impl records that map each target to its buffer type.
+Require one placement observation for every requested target pair. Match each
+buffer to the declared backend placement and assigned devices. Missing,
+ambiguous or unmapped observations fail qualification, rather than implying
+device placement from the absence of a warning.
+
+The pinned warning includes "cannot use buft" and "fallback to CPU".
+That warning fails the fixture even when the adapter load returns success.
+The per-target DEBUG record also exposes the selected buffer. A changed backend
+pin requires this observer to be requalified against its emitted records.
+No production logging or measurement shape changes with this observer.
+
 Account for every adapter tensor and the buffer placement it receives.
 Every required pair must be loaded for a target the selected graph uses.
 An ignored target, empty adapter or undeclared placement fallback fails the
@@ -239,7 +262,7 @@ failed attempts. Mark unavailable observations absent, not zero.
 | --- | --- |
 | Source and build | WeaverAgent commit, llama-cpp-rs pin, backend features, host and effective device assignment |
 | Artifact provenance | Training-base identity, runtime-base BLAKE3 identity, source adapter identity, conversion command and version, converted adapter SHA-256 |
-| Adapter operation | Scale, stored alpha, target names, ranks, loaded tensor pairs, actual buffer placement, and attachment outcome |
+| Adapter operation | Scale, stored alpha, target names, ranks, loaded tensor pairs, raw placement callback records, parsed per-target buffers, and attachment outcome |
 | Exact input | Rendered input bytes, template and tokenizer identities, input token IDs and effective generation settings |
 | Output and resources | Output token IDs and text, stop reason, elapsed load and decode times, and measured allocation or peak-memory evidence |
 | Refusal and cleanup | Failed stage, typed result, backend detail and release observations, including partial-load and attach failures |
@@ -268,7 +291,7 @@ but cannot stand for the real adapter application proof.
 | Absence is base-only | Compare the existing path with absent adapter input and count adapter operations | Acquire or attach any adapter under absence |
 | Identity and custody | Wrong digest, wrong base, denied uid, writable or agent-owned artifact, and pathname-replacement fixtures | Skip a check or reopen an unchecked pathname |
 | Cheap checks precede loading | A recording driver with input that fails before allocation | Allocate before the identity and compatibility judgments |
-| Complete loading | Valid pairs, missing partners, wrong shapes, unknown targets and skipped-feature fixtures | Ignore one requested tensor or accept an empty adapter |
+| Complete loading and placement | Pair, shape, target and skipped-feature fixtures plus the callback observer. Force CPU fallback while load succeeds and require fixture failure. Also exercise missing placement records | Accept the recorded CPU fallback, infer a missing placement or ignore a requested tensor |
 | Attachment precedes prefix | Backend call order plus an injected attachment failure | Decode any prefix token before attachment or continue after failure |
 | Residency remains fixed | Exercise generation, cancel, flush and elision, including any context recreation | Lose or change the adapter while rebuilding kept tokens |
 | Cleanup | Inject failures during adapter allocation and context attachment, then inspect owned-resource release | Leak a resource, double-free or complete release early |
@@ -331,6 +354,7 @@ and are not claims that the new mechanic has already been implemented.
 | Pinned context.rs::lora_adapter_remove | Clears the entire set, not only its handle argument |
 | Pinned LlamaModel::drop and llama-model.cpp::~llama_model | Model drop releases registered adapters, the mechanism elected by LORA-5 |
 | Pinned llama-adapter.cpp and llama.h | Metadata and tensor checks, skipped tensor path, buffer placement and model-owned adapter lifetime |
+| Pinned llama-impl.h, llama-impl.cpp and llama_log_set | DEBUG and WARN delivery to the fixture's placement observer |
 | Pinned models/mamba-base.cpp::build_mamba2_layer | LoRA graph paths for ssm_in and ssm_out, separate from conversion proof |
 
 Production identity consumers held for item 3 are listed below. The source
