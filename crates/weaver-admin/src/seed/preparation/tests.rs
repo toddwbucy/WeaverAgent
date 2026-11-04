@@ -276,7 +276,7 @@ fn preparation_retains_exact_certified_bytes_without_an_existing_artifact() {
     assert_eq!(prepared.request().bindings, prepared.verified.bindings());
     assert_eq!(prepared.verified.prompt_sha256(), &hash(b"Read item."));
     assert_ne!(
-        prepared.checker_binary_sha256(),
+        prepared.checker_binary_sha256().unwrap(),
         prepared.request().checker_artifact_sha256.as_ref().unwrap(),
         "executable digest and declared model digest are distinct facts"
     );
@@ -290,9 +290,7 @@ fn preparation_retains_exact_certified_bytes_without_an_existing_artifact() {
     assert!(!fixture.config.territory.join("state").exists());
 }
 
-#[test]
-fn classifier_free_draft_does_not_bypass_the_state_content_1_seed_certificate() {
-    let mut fixture = fixture();
+pub(crate) fn elect_no_classifier(fixture: &mut Fixture) {
     fixture.config.operator = 0;
     let source = fs::read_to_string(fixture.config.territory.join("agent.toml")).unwrap();
     let source = source
@@ -301,33 +299,185 @@ fn classifier_free_draft_does_not_bypass_the_state_content_1_seed_certificate() 
         .collect::<Vec<_>>()
         .join("\n");
     fixture.write_territory("agent.toml", source.as_bytes());
+    let mut certificate = fixture.certificate();
+    certificate.checker_artifact_sha256 = None;
+    certificate.bindings.clear();
+    fixture.write_territory(
+        "system-prompt-certificate.json",
+        &serde_json::to_vec(&certificate).unwrap(),
+    );
     fs::remove_file(fixture.config.root.join("ste100-binary")).unwrap();
-    let error = fixture.prepare().expect_err("classifier-only seed refuses");
-    assert!(matches!(error, PreparationFailure::Inventory {
-        refusal: LifecycleRefusal::ConfigInvalid { field: Some(ref name) }, ..
-    } if name.0 == "state-management.ste100"));
 }
 
-#[test]
-fn state_content_1_seed_refuses_a_thesaurus_before_reading_artifacts() {
-    let mut fixture = fixture();
-    fixture.config.operator = 0;
+pub(crate) fn elect_thesaurus(fixture: &Fixture) -> String {
     let source = fs::read_to_string(fixture.config.territory.join("agent.toml")).unwrap();
     let draft = weaver_types::parse_serving_draft(&source).unwrap();
+    let text = format!(
+        "\r\n{}\n",
+        serde_json::json!({
+            "format":"ste100-thesaurus/1",
+            "scheme_id": draft.state_management().flow.scheme.scheme_id,
+            "source": {"repository":"synthetic", "commit":"test", "path":"test",
+                "sha256":hash(b"source")}, "entries": []
+        })
+    );
+    write(
+        &fixture.config.root.join("ste100-thesaurus.json"),
+        text.as_bytes(),
+        0o640,
+    );
     let source = format!(
         "{source}\nstate-management.flow.thesaurus = \
-         {{artifact-sha256 = \"{}\", scheme-id = \"{}\"}}\n",
-        "d".repeat(64),
+        {{artifact-sha256 = \"{}\", scheme-id = \"{}\"}}\n",
+        hash(text.as_bytes()),
         draft.state_management().flow.scheme.scheme_id
     );
     fixture.write_territory("agent.toml", source.as_bytes());
-    fs::remove_file(fixture.config.root.join("ste100-binary")).unwrap();
-    let error = fixture
-        .prepare()
-        .expect_err("legacy seed must not lose an election");
-    assert!(matches!(error, PreparationFailure::Inventory {
-        refusal: LifecycleRefusal::ConfigInvalid { field: Some(ref name) }, ..
-    } if name.0 == "state-management.flow.thesaurus"));
+    text
+}
+
+#[test]
+fn seed_preparation_preserves_both_checker_and_thesaurus_elections() {
+    for classifier in [false, true] {
+        for thesaurus in [false, true] {
+            let mut fixture = fixture();
+            if !classifier {
+                elect_no_classifier(&mut fixture);
+            }
+            let expected = thesaurus.then(|| elect_thesaurus(&fixture));
+            let prepared = fixture.prepare().unwrap();
+            assert_eq!(prepared.checker_binary().is_some(), classifier);
+            assert_eq!(prepared.checker_binary_sha256().is_some(), classifier);
+            assert_eq!(
+                prepared.request.checker_artifact_sha256.is_some(),
+                classifier
+            );
+            assert_eq!(!prepared.request.bindings.is_empty(), classifier);
+            assert_eq!(prepared.request.ste100_thesaurus, expected);
+            assert_eq!(prepared.governing().thesaurus(), expected.as_deref());
+        }
+    }
+}
+
+#[test]
+fn classifier_free_seed_does_not_read_an_unelected_executable() {
+    let mut fixture = fixture();
+    elect_no_classifier(&mut fixture);
+    write(
+        &fixture.config.root.join("ste100-binary"),
+        b"/absent/checker",
+        0o640,
+    );
+    let prepared = fixture.prepare().unwrap();
+    assert!(prepared.checker_binary().is_none());
+    assert!(prepared.checker_binary_sha256().is_none());
+}
+
+#[test]
+fn classifier_free_seed_keeps_the_exact_folded_prompt_and_checks_its_review() {
+    let mut fixture = fixture();
+    elect_no_classifier(&mut fixture);
+    let prompt = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/crates/weaver-harness/Loops/ste-conversion-prompt.txt"
+    ));
+    fixture.write_territory("system-prompt.md", prompt.as_bytes());
+    let mut certificate = fixture.certificate();
+    certificate.prompt_sha256 = hash(prompt.as_bytes());
+    certificate.checker_artifact_sha256 = None;
+    certificate.bindings.clear();
+    fixture.write_territory(
+        "system-prompt-certificate.json",
+        &serde_json::to_vec(&certificate).unwrap(),
+    );
+    let prepared = fixture.prepare().unwrap();
+    assert_eq!(prepared.request.prompt_text.as_bytes(), prompt.as_bytes());
+    assert_eq!(prepared.verified.prompt_sha256(), &hash(prompt.as_bytes()));
+    assert!(prepared.request.bindings.is_empty());
+    for defect in ["review", "digest", "checker", "bindings", "duties"] {
+        let mut changed = certificate.clone();
+        match defect {
+            "review" => changed.review_reference.clear(),
+            "digest" => changed.prompt_sha256 = hash(b"wrong prompt"),
+            "checker" => changed.checker_artifact_sha256 = Some(hash(b"unelected")),
+            "bindings" => changed.bindings = vec![binding(prompt)],
+            "duties" => {
+                changed.duties.pop();
+            }
+            _ => unreachable!(),
+        }
+        fixture.write_territory(
+            "system-prompt-certificate.json",
+            &serde_json::to_vec(&changed).unwrap(),
+        );
+        assert!(
+            matches!(fixture.prepare(), Err(PreparationFailure::Certificate(_))),
+            "{defect}"
+        );
+    }
+}
+
+#[test]
+fn seed_thesaurus_requires_the_elected_bytes_and_file_custody() {
+    for defect in ["missing", "digest", "mode", "link"] {
+        let mut fixture = fixture();
+        elect_no_classifier(&mut fixture);
+        let original = elect_thesaurus(&fixture);
+        let path = fixture.config.root.join("ste100-thesaurus.json");
+        match defect {
+            "missing" => fs::remove_file(&path).unwrap(),
+            "digest" => fs::write(&path, format!("{original} ")).unwrap(),
+            "mode" => fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap(),
+            "link" => {
+                let target = fixture
+                    .config
+                    .root
+                    .parent()
+                    .unwrap()
+                    .join("other-thesaurus");
+                fs::rename(&path, &target).unwrap();
+                symlink(target, &path).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(fixture.prepare().is_err(), "{defect}");
+    }
+}
+
+#[test]
+fn seed_preparation_keeps_governing_whitespace_at_the_request_boundary() {
+    let mut fixture = fixture();
+    elect_no_classifier(&mut fixture);
+    let path = fixture.config.root.join("ste100-scheme.json");
+    let original = fs::read_to_string(&path).unwrap();
+    let exact = format!("\r\n{original}\n");
+    fs::write(path, &exact).unwrap();
+    let digest = hash(exact.as_bytes());
+    let draft = fs::read_to_string(fixture.config.territory.join("agent.toml")).unwrap();
+    fixture.write_territory(
+        "agent.toml",
+        draft
+            .replace(hash(original.as_bytes()).as_str(), digest.as_str())
+            .as_bytes(),
+    );
+    let mut certificate: SeedCertificate = decode_strict(
+        &fs::read_to_string(
+            fixture
+                .config
+                .territory
+                .join("system-prompt-certificate.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    certificate.scheme_id = format!("ste100:{digest}");
+    fixture.write_territory(
+        "system-prompt-certificate.json",
+        &serde_json::to_vec(&certificate).unwrap(),
+    );
+    let prepared = fixture.prepare().unwrap();
+    assert_eq!(prepared.request.ste100_scheme.as_bytes(), exact.as_bytes());
+    assert_eq!(prepared.governing.scheme().as_bytes(), exact.as_bytes());
 }
 
 #[test]
@@ -431,7 +581,7 @@ fn seed_input_files_refuse_symlinks_and_wider_modes() {
 fn checker_custody_refuses_links_writable_files_and_missing_execute_permission() {
     for changed in ["link", "writable", "not-executable", "relative"] {
         let fixture = fixture();
-        let path = fixture.prepared.checker_binary();
+        let path = fixture.prepared.checker_binary().unwrap();
         match changed {
             "link" => {
                 let moved = path.with_extension("original");
@@ -459,7 +609,7 @@ fn checker_custody_refuses_links_writable_files_and_missing_execute_permission()
 #[test]
 fn checker_ancestor_alias_is_resolved_once_and_only_the_canonical_path_is_retained() {
     let fixture = fixture();
-    let canonical = fixture.prepared.checker_binary();
+    let canonical = fixture.prepared.checker_binary().unwrap();
     let alias = fixture.config.root.parent().unwrap().join("binary-alias");
     symlink(canonical.parent().unwrap(), &alias).unwrap();
     let aliased = alias.join(canonical.file_name().unwrap());
@@ -469,8 +619,8 @@ fn checker_ancestor_alias_is_resolved_once_and_only_the_canonical_path_is_retain
         0o640,
     );
     let prepared = fixture.prepare().unwrap();
-    assert_eq!(prepared.checker_binary(), canonical);
-    assert_ne!(prepared.checker_binary(), aliased);
+    assert_eq!(prepared.checker_binary(), Some(canonical));
+    assert_ne!(prepared.checker_binary(), Some(aliased.as_path()));
     assert_eq!(
         prepared.checker_binary_sha256(),
         fixture.prepared.checker_binary_sha256()
