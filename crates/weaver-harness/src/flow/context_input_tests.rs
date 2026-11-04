@@ -198,9 +198,9 @@ impl InputFixture {
         };
         load.ste100_scheme = bootstrap.scheme_text.clone();
         load.state_flow.tools.sh = sh;
-        load.state_flow.ste100 = super::super::mirror::instruction(&bootstrap.instruction);
+        load.state_flow.ste100 = Some(super::super::mirror::instruction(&bootstrap.instruction));
         load.template_inventory.checker_artifact_sha256 =
-            bootstrap.instruction.model_artifact_sha256.as_str().into();
+            Some(bootstrap.instruction.model_artifact_sha256.as_str().into());
         if let Some(inventory) = inventory {
             load.template_inventory = inventory.record(
                 &run.context.declaration.scheme,

@@ -1185,7 +1185,12 @@ fn circuit(mode: &str) {
         load.state_flow.persistence.save_wait.elapsed_ns = 5_000_000_000.into();
     }
     if mode.starts_with("input-worker") {
-        load.state_flow.ste100.decision_wait.elapsed_ns = 5_000_000_000.into();
+        load.state_flow
+            .ste100
+            .as_mut()
+            .unwrap()
+            .decision_wait
+            .elapsed_ns = 5_000_000_000.into();
         bootstrap.instruction.decision_wait.elapsed_ns = 5_000_000_000.into();
     }
     if mode.contains("-external-") && !mode.contains("no-grant") {

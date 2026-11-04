@@ -143,7 +143,7 @@ pub struct PlacementRecord {
 pub struct TemplateInventory {
     pub scheme_id: String,
     pub inventory_sha256: Digest,
-    pub checker_artifact_sha256: Digest,
+    pub checker_artifact_sha256: Option<Digest>,
     pub templates: Vec<TemplateSpec>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -158,7 +158,8 @@ pub struct FlowDeclarationRecord {
     pub scheme: SchemeDeclaration,
     pub persistence: PersistenceConfig,
     pub reads: ReadLimits,
-    pub ste100: Ste100Instruction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ste100: Option<Ste100Instruction>,
     pub tools: ToolPolicies,
     pub placement: PlacementConfig,
 }
@@ -196,7 +197,7 @@ pub struct LoadRecord {
     /// Exact scheme artifact text. JSON string escaping preserves its whitespace
     /// without putting physical newlines inside the canonical trace record.
     pub ste100_scheme: String,
-    pub ste100_binary_sha256: Digest,
+    pub ste100_binary_sha256: Option<Digest>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
