@@ -186,8 +186,41 @@ fn open() -> StateFrame {
         common: common(1),
         schema_id: STATE_CONTENT_SCHEMA.into(),
         scheme_id: "scheme".into(),
+        thesaurus_sha256: None,
         start: start(),
         read_limits: read_limits(),
+    }
+}
+
+#[test]
+fn open_requires_a_nullable_thesaurus_digest_and_preserves_its_identity() {
+    for expected in [None, Some(digest())] {
+        let mut frame = open();
+        let StateFrame::Open {
+            thesaurus_sha256, ..
+        } = &mut frame
+        else {
+            unreachable!()
+        };
+        *thesaurus_sha256 = expected.clone();
+        let bytes = encode_state_line(&frame, FrameDirection::Request).unwrap();
+        let StateFrame::Open {
+            thesaurus_sha256, ..
+        } = decode_state_line(&bytes, FrameDirection::Request).unwrap()
+        else {
+            unreachable!()
+        };
+        assert_eq!(thesaurus_sha256, expected);
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["thesaurus_sha256"], serde_json::json!(expected));
+        for bad in [serde_json::json!(12), serde_json::json!("bad digest")] {
+            let mut changed = value.clone();
+            changed["thesaurus_sha256"] = bad;
+            assert!(serde_json::from_value::<StateFrame>(changed).is_err());
+        }
+        let mut missing = value;
+        missing.as_object_mut().unwrap().remove("thesaurus_sha256");
+        assert!(serde_json::from_value::<StateFrame>(missing).is_err());
     }
 }
 
@@ -210,6 +243,7 @@ fn seed_request() -> SeedRequest {
         scheme_id: "scheme".into(),
         // This codec fixture does not certify or execute a semantic artifact.
         ste100_scheme: "{}".into(),
+        ste100_thesaurus: None,
         checker_artifact_sha256: Some(digest()),
         prompt_text: "Read the file.".into(),
         raw_block: RawValue::from_string(RAW_TEXT.into()).unwrap(),

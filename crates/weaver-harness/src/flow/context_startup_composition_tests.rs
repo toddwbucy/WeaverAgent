@@ -795,6 +795,7 @@ fn circuit(case: Case) {
                 scheme_id,
                 start,
                 read_limits,
+                thesaurus_sha256: None,
             } = request
             else {
                 panic!("unexpected startup state traffic")

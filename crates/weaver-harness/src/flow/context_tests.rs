@@ -284,6 +284,7 @@ impl Fixture {
             scheme_id,
             start,
             read_limits,
+            thesaurus_sha256: None,
         } = request
         else {
             panic!("open");

@@ -33,6 +33,7 @@ pub fn seed() -> SeedRequest {
         seed_id: "a".repeat(32),
         scheme_id: scheme_id.clone(),
         ste100_scheme: artifact,
+        ste100_thesaurus: None,
         checker_artifact_sha256: Some(digest(b"synthetic checker")),
         prompt_text: text.into(),
         raw_block: raw_text(text),

@@ -70,6 +70,9 @@ pub struct SeedRequest {
     pub seed_id: String,
     pub scheme_id: String,
     pub ste100_scheme: String,
+    /// TYPES-PERSIST and workflow 3.02: exact first-version bytes or explicit null.
+    #[serde(deserialize_with = "super::required_option")]
+    pub ste100_thesaurus: Option<String>,
     #[serde(deserialize_with = "super::required_option")]
     pub checker_artifact_sha256: Option<Digest>,
     pub prompt_text: String,
@@ -189,6 +192,21 @@ impl SeedRequest {
             .validate(&hash(self.ste100_scheme.as_bytes()), scheme)
             .map_err(|_| invalid)?;
         artifact.verify_blobs(&hash).map_err(|_| invalid)?;
+        if let Some(bytes) = &self.ste100_thesaurus {
+            let thesaurus: super::Ste100Thesaurus =
+                super::decode_strict(bytes).map_err(|_| invalid)?;
+            let digest = hash(bytes.as_bytes());
+            thesaurus
+                .validate(
+                    &digest,
+                    &super::ThesaurusDeclaration {
+                        artifact_sha256: digest.clone(),
+                        scheme_id: scheme.scheme_id.clone(),
+                    },
+                    scheme,
+                )
+                .map_err(|_| invalid)?;
+        }
         if self.scheme_id != scheme.scheme_id
             || self.checker_artifact_sha256.as_ref() != expected_checker
         {
@@ -523,6 +541,7 @@ mod tests {
                 seed_id: "a".repeat(32),
                 scheme_id: scheme.scheme_id.clone(),
                 ste100_scheme: scheme_text,
+                ste100_thesaurus: None,
                 checker_artifact_sha256: Some(digest('5')),
                 prompt_text: "Read item.".into(),
                 raw_block: RawValue::from_string(r#"{"type":"text","text":"Read item."}"#.into())
@@ -547,6 +566,64 @@ mod tests {
                 _ => digest('9'),
             }
         }
+    }
+
+    #[test]
+    fn seed_thesaurus_bytes_are_exact_and_bound_to_the_supplied_scheme() {
+        let (mut seed, scheme) = seed_fixture();
+        let value = serde_json::json!({
+            "format": "ste100-thesaurus/1",
+            "scheme_id": scheme.scheme_id,
+            "source": {"repository": "test", "commit": "fixture", "path": "source",
+                "sha256": digest('7')},
+            "entries": [{"word": "read", "tag": "offer", "senses": [
+                {"sense": "test", "use": ["Read"]}
+            ]}]
+        });
+        let bytes = format!("{}\r\n", serde_json::to_string_pretty(&value).unwrap());
+        seed.ste100_thesaurus = Some(bytes.clone());
+        let verify = |seed: &SeedRequest| {
+            seed.validate_structure(
+                |bytes| fixture_hash(bytes, &seed.ste100_scheme),
+                &scheme,
+                Some(&digest('5')),
+            )
+        };
+        verify(&seed).unwrap();
+        let wire = serde_json::to_string(&seed).unwrap();
+        let decoded: SeedRequest = super::super::decode_strict(&wire).unwrap();
+        assert_eq!(decoded.ste100_thesaurus.as_deref(), Some(bytes.as_str()));
+        for (path, changed) in [
+            ("/format", serde_json::json!("unknown")),
+            (
+                "/scheme_id",
+                serde_json::json!(format!("ste100:{}", digest('6'))),
+            ),
+            ("/source/path", serde_json::json!("")),
+            ("/source/sha256", serde_json::json!("bad")),
+            ("/entries/0/tag", serde_json::json!("unknown")),
+            ("/entries/0/senses/0/use", serde_json::json!([])),
+        ] {
+            let mut bad = value.clone();
+            *bad.pointer_mut(path).unwrap() = changed;
+            seed.ste100_thesaurus = Some(bad.to_string());
+            assert_eq!(
+                verify(&seed).unwrap_err(),
+                SeedRefusal::SeedCertificateInvalid,
+                "{path}"
+            );
+        }
+        seed.ste100_thesaurus = Some("{\"entries\":[],\"entries\":[]}".into());
+        assert_eq!(
+            verify(&seed).unwrap_err(),
+            SeedRefusal::SeedCertificateInvalid
+        );
+        seed.ste100_thesaurus = None;
+        verify(&seed).unwrap();
+        let mut wire = serde_json::to_value(&seed).unwrap();
+        assert!(wire["ste100_thesaurus"].is_null());
+        wire.as_object_mut().unwrap().remove("ste100_thesaurus");
+        assert!(serde_json::from_value::<SeedRequest>(wire).is_err());
     }
 
     #[test]
