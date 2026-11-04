@@ -329,6 +329,7 @@ pub enum TemplatePart {
 pub enum SlotClass {
     TechnicalName,
     StepId,
+    ThesaurusOffer,
 }
 
 impl TemplateSpec {
@@ -350,6 +351,11 @@ impl TemplateSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum LoopInstructionMeta {
+    /// TYPES-TEMPLATE data only. The harness owns the checked offer grant.
+    #[serde(deserialize_with = "super::ste100_offer::metadata")]
+    Offer {
+        matched: super::ThesaurusMatch,
+    },
     Restatement {
         source: SourceBlockId,
         attempt: DecimalU64,

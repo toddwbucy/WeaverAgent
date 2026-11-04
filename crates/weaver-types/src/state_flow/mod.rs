@@ -23,6 +23,7 @@ mod recall_refusal;
 mod scalars;
 mod selection;
 mod ste100;
+mod ste100_offer;
 mod thesaurus;
 
 pub use codec::*;

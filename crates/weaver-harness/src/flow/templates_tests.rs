@@ -1,4 +1,20 @@
 use super::*;
+
+#[test]
+fn offer_slot_mirror_keeps_the_typed_material_class() {
+    let template = TemplateSpec {
+        template_id: "thesaurus-offer/1".into(),
+        kind: "offer".into(),
+        parts: vec![TemplatePart::Slot {
+            name: "offer".into(),
+            class: SlotClass::ThesaurusOffer,
+        }],
+    };
+    assert_eq!(
+        serde_json::to_string(&mirror_template(&template)).unwrap(),
+        serde_json::to_string(&template).unwrap()
+    );
+}
 use std::sync::OnceLock;
 use weaver_types::state_flow::{
     Binding, NounBinding, SlotClass, SourceBlockId, Span, Ste100ComponentCode, Ste100DefectCode,

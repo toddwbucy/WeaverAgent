@@ -2,6 +2,15 @@
 
 use super::*;
 
+/// TRACE-INSTRUCTION retains the exact lookup evidence without granting placement.
+pub(in crate::flow) fn offer_instruction(
+    value: &shared::ThesaurusMatch,
+) -> trace::LoopInstructionMeta {
+    trace::LoopInstructionMeta::Offer {
+        matched: thesaurus_match(value),
+    }
+}
+
 pub(in crate::flow) fn thesaurus_match(value: &shared::ThesaurusMatch) -> trace::ThesaurusMatch {
     let shared::ThesaurusMatch {
         source: original,
@@ -56,6 +65,28 @@ pub(in crate::flow) fn emission_change(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn offer_instruction_mirror_keeps_every_match_field() {
+        let fixture =
+            include_str!("../../../weaver-types/tests/fixtures/ste-offer-instruction.json");
+        let shared::LoopInstructionMeta::Offer { mut matched } =
+            serde_json::from_str(fixture).unwrap()
+        else {
+            panic!("offer fixture")
+        };
+        assert_eq!(
+            serde_json::to_string(&offer_instruction(&matched)).unwrap(),
+            fixture.trim()
+        );
+        matched.previous_change = Some(9_007_199_254_740_993.into());
+        matched.source.block = u64::MAX.into();
+        matched.entry_word = "\"caf\u{e9}\"\n".into();
+        assert_eq!(
+            serde_json::to_string(&offer_instruction(&matched)).unwrap(),
+            serde_json::to_string(&shared::LoopInstructionMeta::Offer { matched }).unwrap()
+        );
+    }
 
     #[test]
     fn change_mirror_preserves_both_methods_and_every_exact_field() {

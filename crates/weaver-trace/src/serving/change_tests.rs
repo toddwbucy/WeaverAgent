@@ -62,6 +62,53 @@ fn accepts(event: &Event) -> bool {
 }
 
 #[test]
+fn offer_instruction_keeps_match_metadata_and_the_exact_source_parent() {
+    let mut event = change_event(true);
+    event.envelope.kind = Kind::LoopInstruction;
+    event.envelope.causal_parent = Some(Sequence(10));
+    let mut matched = change(true).matched;
+    matched.previous_change = Some(9.into());
+    event.payload = Some(Payload::LoopInstruction(Box::new(LoopInstructionRecord {
+        template_id: "thesaurus-offer/1".into(),
+        message: serde_json::value::RawValue::from_string(
+            r#"{"role":"user","content":[{"type":"text","text":"Use fuel."}]}"#.into(),
+        )
+        .unwrap(),
+        instruction: LoopInstructionMeta::Offer { matched },
+    })));
+    assert!(accepts(&event));
+    for field in 0..7 {
+        let mut wrong = event.clone();
+        match field {
+            0 => wrong.envelope.channel = Channel::Output,
+            1 => wrong.envelope.origin = Origin::Model,
+            2 => wrong.envelope.subsystem = Subsystem::Spu,
+            3 => wrong.envelope.turn = None,
+            4 => wrong.envelope.causal_parent = None,
+            5 => wrong.envelope.causal_parent = Some(Sequence(9)),
+            6 => wrong.envelope.causal_parent = Some(Sequence(13)),
+            _ => unreachable!(),
+        }
+        assert!(!accepts(&wrong), "field={field}");
+    }
+    let metadata = LoopInstructionMeta::Offer {
+        matched: change(true).matched,
+    };
+    assert_eq!(
+        serde_json::to_string(&metadata).unwrap(),
+        include_str!("../../tests/fixtures/ste-offer-instruction.json").trim()
+    );
+    assert_eq!(
+        serde_json::to_string(&SlotClass::ThesaurusOffer).unwrap(),
+        "\"thesaurus_offer\""
+    );
+    assert_eq!(
+        content_schema(Kind::LoopInstruction),
+        ContentSchema::OneText { context: false }
+    );
+}
+
+#[test]
 fn emission_change_has_exact_canonical_fields_and_no_selectable_projection() {
     for (offer, fixture) in [
         (
