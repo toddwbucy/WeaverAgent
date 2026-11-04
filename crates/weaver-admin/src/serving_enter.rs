@@ -7,17 +7,17 @@ use std::path::PathBuf;
 
 use crate::save_points::serving::repository::VerifiedArtifact;
 use crate::seed::preparation::{
-    PreparationFailure, custody, hash, invalid, judge_checker, read_text,
+    PreparationFailure, custody, invalid, judge_governing_sources, read_checker,
 };
 use crate::{
     ServiceConfig,
     channel::{ChannelFault, Coordination},
     inventory,
 };
+use weaver_types::state_flow::Digest;
 use weaver_types::state_flow::enter::{
     EnterBinding, EnterEnvelope, EnterPayload, LoadedStateFacts,
 };
-use weaver_types::state_flow::{Digest, Ste100Scheme, decode_strict};
 use weaver_types::{AgentName, Cause, Reset, RunId};
 
 /// Root/runtime facts do not replace any operational setting in the artifact.
@@ -32,8 +32,7 @@ pub(crate) struct RuntimeFacts {
 pub(crate) struct PreparedEnter {
     artifact: VerifiedArtifact,
     inventory: inventory::Inventory,
-    checker_binary: PathBuf,
-    checker_digest: Digest,
+    checker: Option<(PathBuf, Digest)>,
     envelope: EnterEnvelope,
 }
 impl PreparedEnter {
@@ -77,51 +76,18 @@ impl PreparedEnter {
             boundary,
             config.operator,
         )?;
-        // The retained state-content/1 startup still requires classifier proof.
-        // The optional declaration alone does not activate the cutover path.
-        if artifact.declaration().state_management().ste100.is_none() {
-            return Err(invalid(
-                "state-management.ste100",
-                "this startup path requires a classifier",
-            ));
-        }
-        if artifact
-            .declaration()
-            .state_management()
-            .flow
-            .thesaurus
-            .is_some()
-        {
-            return Err(invalid(
-                "state-management.flow.thesaurus",
-                "state-content/1 startup cannot hold a thesaurus",
-            ));
-        }
         crate::sink_within_territory(&inventory.config.trace_sink, &config.territory)?;
         crate::grant_shell(config, &mut inventory)?;
-        let checker_path =
-            PathBuf::from(read_text(root.as_fd(), "ste100-binary", owner, None, None)?.trim());
-        if !checker_path.is_absolute() {
-            return Err(invalid(
-                "ste100-binary",
-                "checker binary path is not absolute",
-            ));
-        }
-        let (checker_binary, checker_digest) = judge_checker(&checker_path, owner)?;
-        let scheme_text = read_text(
-            root.as_fd(),
-            "ste100-scheme.json",
-            owner,
-            Some(config.access_gid),
-            Some(0o640),
-        )?;
-        let scheme: Ste100Scheme = decode_strict(&scheme_text)
-            .map_err(|error| invalid("ste100-scheme.json", error.to_string()))?;
+        // ADMIN-STE100, C3 and Q8. Load takes bytes from its verified save point.
         let state = artifact.declaration().state_management();
-        scheme
-            .validate(&hash(scheme_text.as_bytes()), &state.flow.scheme)
-            .and_then(|()| scheme.verify_blobs(hash))
-            .map_err(|error| invalid("ste100-scheme.json", error.to_string()))?;
+        let checker = state
+            .ste100
+            .as_ref()
+            .map(|_| read_checker(root.as_fd(), owner))
+            .transpose()?;
+        judge_governing_sources(root.as_fd(), owner, config.access_gid)?;
+        let scheme_text = artifact.governing().scheme().to_owned();
+        let thesaurus_text = artifact.governing().thesaurus().map(str::to_owned);
         let weaver_types::EnterBinding::Serving {
             gate_instruction,
             shell,
@@ -134,23 +100,25 @@ impl PreparedEnter {
         };
         // Stack keys are executable basenames. A renamed checker must not be
         // reported under an invented filename or overwrite another binary fact.
-        let checker_name = checker_binary
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| invalid("ste100-binary", "checker has no UTF-8 basename"))?;
-        if facts
-            .stack
-            .get(checker_name)
-            .is_some_and(|existing| existing != checker_digest.as_str())
-        {
-            return Err(invalid(
-                "ste100-binary",
-                "checker basename conflicts with another stack digest",
-            ));
+        if let Some((binary, digest)) = &checker {
+            let checker_name = binary
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| invalid("ste100-binary", "checker has no UTF-8 basename"))?;
+            if facts
+                .stack
+                .get(checker_name)
+                .is_some_and(|existing| existing != digest.as_str())
+            {
+                return Err(invalid(
+                    "ste100-binary",
+                    "checker basename conflicts with another stack digest",
+                ));
+            }
+            facts
+                .stack
+                .insert(checker_name.to_owned(), digest.to_string());
         }
-        facts
-            .stack
-            .insert(checker_name.to_owned(), checker_digest.to_string());
         let mut spu_instruction = inventory.config.spu_instruction.clone();
         spu_instruction.decoder.refeed_permission = false;
         spu_instruction.decoder.column_permission = false;
@@ -167,7 +135,7 @@ impl PreparedEnter {
                     state_management: state.clone(),
                     start: artifact.identity(),
                     ste100_scheme: scheme_text,
-                    ste100_thesaurus: None,
+                    ste100_thesaurus: thesaurus_text,
                 },
                 state_store: inventory.config.state_store.clone().unwrap_or_default(),
                 declaration: artifact.identity().config_sha256.to_string(),
@@ -196,8 +164,7 @@ impl PreparedEnter {
         Ok(Self {
             artifact,
             inventory,
-            checker_binary,
-            checker_digest,
+            checker,
             envelope,
         })
     }
@@ -207,8 +174,8 @@ impl PreparedEnter {
     pub(crate) fn dump(&self) -> BorrowedFd<'_> {
         self.artifact.dump()
     }
-    pub(crate) fn checker_binary(&self) -> &std::path::Path {
-        &self.checker_binary
+    pub(crate) fn checker_binary(&self) -> Option<&std::path::Path> {
+        self.checker.as_ref().map(|(path, _)| path.as_path())
     }
     pub(crate) fn envelope(&self) -> &EnterEnvelope {
         &self.envelope
@@ -229,7 +196,7 @@ impl PreparedEnter {
             start: start.clone(),
             ste100_scheme: ste100_scheme.clone(),
             ste100_thesaurus: ste100_thesaurus.clone(),
-            ste100_binary_sha256: Some(self.checker_digest.clone()),
+            ste100_binary_sha256: self.checker.as_ref().map(|(_, digest)| digest.clone()),
         }
     }
     /// Uses the same retained envelope and passes the existing state endpoint.

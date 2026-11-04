@@ -29,8 +29,7 @@ pub(super) struct PreparedSeed {
     request: SeedRequest,
     verified: VerifiedSeed,
     governing: GoverningFiles,
-    checker_binary: PathBuf,
-    checker_binary_sha256: Digest,
+    checker: Option<(PathBuf, Digest)>,
 }
 
 impl PreparedSeed {
@@ -60,12 +59,12 @@ impl PreparedSeed {
         &self.request
     }
 
-    pub(super) fn checker_binary(&self) -> &Path {
-        &self.checker_binary
+    pub(super) fn checker_binary(&self) -> Option<&Path> {
+        self.checker.as_ref().map(|(path, _)| path.as_path())
     }
 
-    pub(super) fn checker_binary_sha256(&self) -> &Digest {
-        &self.checker_binary_sha256
+    pub(super) fn checker_binary_sha256(&self) -> Option<&Digest> {
+        self.checker.as_ref().map(|(_, digest)| digest)
     }
 
     pub(super) fn into_parts(self) -> (ServingDraft, inventory::Inventory, SeedRequest) {
@@ -151,32 +150,15 @@ fn prepare_against(
     let mut inventory =
         inventory::take_seed_inventory(agent, &source, &draft, boundary, config.operator)?;
     let state = draft.state_management();
-    if state.flow.thesaurus.is_some() {
-        return Err(invalid(
-            "state-management.flow.thesaurus",
-            "state-content/1 seed cannot hold a thesaurus",
-        ));
-    }
-    // This state-content/1 seed path still requires a classifier certificate.
-    // The no-classifier seed path belongs to the coupled foundation cutover.
-    let instruction = state.ste100.as_ref().ok_or_else(|| {
-        invalid(
-            "state-management.ste100",
-            "this seed path requires a classifier",
-        )
-    })?;
+    // ADMIN-SEED, Q3 and Q7. The declaration elects the checker, not its key.
+    let instruction = state.ste100.as_ref();
     crate::sink_within_territory(&inventory.config.trace_sink, &config.territory)?;
     crate::grant_shell(config, &mut inventory)?;
 
-    let checker_path = read_text(root.as_fd(), "ste100-binary", owner, None, None)?;
-    let checker_path = PathBuf::from(checker_path.trim());
-    if !checker_path.is_absolute() {
-        return Err(invalid(
-            "ste100-binary",
-            "checker binary path is not absolute",
-        ));
-    }
-    let (checker_binary, checker_binary_sha256) = judge_checker(&checker_path, owner)?;
+    let checker = instruction
+        .map(|_| read_checker(root.as_fd(), owner))
+        .transpose()?;
+    judge_governing_sources(root.as_fd(), owner, config.access_gid)?;
     let scheme = read_text(
         root.as_fd(),
         "ste100-scheme.json",
@@ -184,6 +166,20 @@ fn prepare_against(
         Some(config.access_gid),
         Some(0o640),
     )?;
+    let thesaurus = state
+        .flow
+        .thesaurus
+        .as_ref()
+        .map(|_| {
+            read_text(
+                root.as_fd(),
+                "ste100-thesaurus.json",
+                owner,
+                Some(config.access_gid),
+                Some(0o640),
+            )
+        })
+        .transpose()?;
     let prompt = read_text(
         config.territory_fd()?,
         "system-prompt.md",
@@ -201,9 +197,11 @@ fn prepare_against(
     let certificate: SeedCertificate = decode_strict(&certificate).map_err(|error| {
         PreparationFailure::Certificate(format!("certificate does not parse: {error}"))
     })?;
-    if certificate.bindings.is_empty() {
+    // SEED-CERTIFICATE: absence requires no bindings, election requires bindings.
+    // Preserve the certificate refusal before constructing its request copy.
+    if instruction.is_none() != certificate.bindings.is_empty() {
         return Err(PreparationFailure::Certificate(
-            "certificate supplies no statement bindings".into(),
+            "certificate bindings disagree with the checker election".into(),
         ));
     }
     let raw_block = serde_json::value::RawValue::from_string(
@@ -215,8 +213,8 @@ fn prepare_against(
         seed_id,
         scheme_id: state.flow.scheme.scheme_id.clone(),
         ste100_scheme: scheme,
-        ste100_thesaurus: None,
-        checker_artifact_sha256: Some(instruction.model_artifact_sha256.clone()),
+        ste100_thesaurus: thesaurus,
+        checker_artifact_sha256: instruction.map(|value| value.model_artifact_sha256.clone()),
         prompt_text: prompt,
         raw_block,
         bindings: certificate.bindings.clone(),
@@ -226,7 +224,7 @@ fn prepare_against(
         .validate_structure(
             hash,
             &state.flow.scheme,
-            Some(&instruction.model_artifact_sha256),
+            instruction.map(|value| &value.model_artifact_sha256),
         )
         .map_err(|refused| match refused {
             SeedRefusal::SeedCertificateInvalid => PreparationFailure::Certificate(
@@ -247,8 +245,7 @@ fn prepare_against(
         request,
         verified,
         governing,
-        checker_binary,
-        checker_binary_sha256,
+        checker,
     })
 }
 
@@ -301,6 +298,44 @@ fn open_judged(
         Ok(true) => Err(custody(name, "file carries an access-control entry")),
         Err(error) => Err(custody(name, error)),
     }
+}
+
+/// ADMIN-STE100: root source files retain custody checks even at load.
+/// Only seed and install read their contents. Absence does not affect a load.
+pub(crate) fn judge_governing_sources(
+    directory: BorrowedFd<'_>,
+    owner: u32,
+    group: u32,
+) -> Result<(), PreparationFailure> {
+    for name in ["ste100-scheme.json", "ste100-thesaurus.json"] {
+        match nix::sys::stat::fstatat(directory, name, nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW) {
+            Err(nix::errno::Errno::ENOENT) => continue,
+            Err(error) => return Err(custody(name, error)),
+            Ok(_) => {}
+        }
+        drop(open_judged(
+            directory,
+            name,
+            owner,
+            Some(group),
+            Some(0o640),
+        )?);
+    }
+    Ok(())
+}
+
+pub(crate) fn read_checker(
+    directory: BorrowedFd<'_>,
+    owner: u32,
+) -> Result<(PathBuf, Digest), PreparationFailure> {
+    let path = PathBuf::from(read_text(directory, "ste100-binary", owner, None, None)?.trim());
+    if !path.is_absolute() {
+        return Err(invalid(
+            "ste100-binary",
+            "checker binary path is not absolute",
+        ));
+    }
+    judge_checker(&path, owner)
 }
 
 pub(crate) fn judge_checker(
