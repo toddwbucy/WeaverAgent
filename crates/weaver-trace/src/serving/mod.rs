@@ -53,6 +53,8 @@ pub use tee::{
 };
 
 #[cfg(test)]
+mod change_tests;
+#[cfg(test)]
 mod recall_tests;
 #[cfg(test)]
 mod tests;

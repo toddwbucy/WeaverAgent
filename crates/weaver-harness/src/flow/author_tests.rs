@@ -63,7 +63,7 @@ fn all_registered_kinds_have_only_their_declared_sources() {
         ("tool.call.started", vec![2, 4]),
         ("tool.call.completed", vec![3, 4]),
         (
-            "plan.break state.plan.measurement loop.instruction sort.decision state.sort.measurement step.outcome state.mark state.mark.position state.placement model.request",
+            "plan.break state.plan.measurement loop.instruction sort.decision state.sort.measurement step.outcome state.mark state.mark.position state.placement model.request emission.change",
             vec![4],
         ),
         (

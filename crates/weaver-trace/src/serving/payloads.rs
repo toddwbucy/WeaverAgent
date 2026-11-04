@@ -16,6 +16,7 @@
 use serde::{Serialize, Serializer};
 use serde_json::value::RawValue;
 
+mod change;
 mod classifier;
 mod declaration;
 mod identity;
@@ -27,6 +28,7 @@ mod recall;
 mod records;
 mod selection;
 
+pub use change::*;
 pub use classifier::*;
 pub use declaration::*;
 pub use identity::*;

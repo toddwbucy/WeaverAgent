@@ -54,6 +54,7 @@ vocabulary!(Kind {
     StateMarkPosition => "state.mark.position", StatePlacement => "state.placement",
     InputOffered => "input.offered", StateFlow => "state.flow",
     StateStoreMeasurement => "state.store.measurement", Ste100Result => "ste100.result",
+    EmissionChange => "emission.change",
 });
 
 /// The finite selectable shape, not a decoder for event-specific metadata.
@@ -108,7 +109,8 @@ pub fn content_schema(kind: Kind) -> ContentSchema {
         | K::InputOffered
         | K::StateFlow
         | K::StateStoreMeasurement
-        | K::Ste100Result => S::None,
+        | K::Ste100Result
+        | K::EmissionChange => S::None,
     }
 }
 
@@ -138,7 +140,8 @@ pub fn turn_rule(kind: Kind) -> TurnRule {
         | K::ModelField
         | K::ModelUnrecoveredCall
         | K::StepOutcome
-        | K::StateMark => T::Required,
+        | K::StateMark
+        | K::EmissionChange => T::Required,
         K::Load
         | K::Unload
         | K::SessionClosed

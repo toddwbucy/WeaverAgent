@@ -421,6 +421,7 @@ fn convert_shared(
         | K::Recall
         | K::ToolReturnRejected
         | K::LoopInstruction
+        | K::EmissionChange
         | K::SortDecision
         | K::StateSortMeasurement
         | K::StepOutcome
@@ -458,6 +459,7 @@ fn convert_shared(
             | P::PairEnded(_)
             | P::RejectedReturn(_)
             | P::LoopInstruction(_)
+            | P::EmissionChange(_)
             | P::SortDecision(_)
             | P::SortMeasurement(_)
             | P::StepOutcome(_)

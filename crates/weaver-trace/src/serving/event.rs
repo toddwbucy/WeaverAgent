@@ -59,6 +59,7 @@ pub enum Payload {
     PairEnded(Box<PairEnded>),
     RejectedReturn(Box<RejectedReturn>),
     LoopInstruction(Box<LoopInstructionRecord>),
+    EmissionChange(Box<EmissionChangeRecord>),
     SortDecision(Box<SortDecisionRecord>),
     SortMeasurement(Box<SortMeasurement>),
     StepOutcome(Box<StepOutcomeRecord>),
@@ -135,6 +136,7 @@ fn channel_origin_licensed(envelope: &Envelope) -> bool {
         K::PlanBreak
         | K::StatePlanMeasurement
         | K::LoopInstruction
+        | K::EmissionChange
         | K::SortDecision
         | K::StateSortMeasurement
         | K::StepOutcome
@@ -226,6 +228,18 @@ fn payload_licensed(envelope: &Envelope, payload: &Payload) -> bool {
         (K::LoopInstruction, P::LoopInstruction(record)) => {
             user_text(&record.message, true)
                 && (turn || matches!(record.instruction, LoopInstructionMeta::WindDown {}))
+        }
+        (K::EmissionChange, P::EmissionChange(record)) => {
+            let parent = match &record.method {
+                EmissionChangeMethod::Splice {} => record
+                    .matched
+                    .previous_change
+                    .unwrap_or(record.matched.source.sequence),
+                EmissionChangeMethod::Offer { reemission, .. } => reemission.sequence,
+            };
+            envelope.subsystem == Subsystem::Harness
+                && turn
+                && envelope.causal_parent == Some(Sequence(parent.0))
         }
         (K::SortDecision, P::SortDecision(record)) => user_text(&record.message, true),
         (K::StateSortMeasurement, P::SortMeasurement(_)) => true,

@@ -7,6 +7,9 @@
 use weaver_trace::serving::payloads as trace;
 use weaver_types::state_flow as shared;
 
+#[path = "mirror_change.rs"]
+pub(super) mod change;
+
 #[path = "mirror_plan.rs"]
 mod plan;
 pub(super) use plan::{
