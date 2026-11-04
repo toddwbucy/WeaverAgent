@@ -199,6 +199,15 @@ impl Checker {
         Ok(result)
     }
 
+    /// Workflow 6.03 counts lost occurrences, including a repeated source marker.
+    pub(crate) fn lost_placeholder(&self, output: &str, source: &str) -> Result<bool> {
+        let want = self.matches(&self.placeholder, source)?;
+        let got = self.matches(&self.placeholder, output)?;
+        Ok(want.iter().any(|p| {
+            got.iter().filter(|x| *x == p).count() < want.iter().filter(|x| *x == p).count()
+        }))
+    }
+
     fn matches(&self, pattern: &Regex, text: &str) -> Result<Vec<String>> {
         pattern
             .find_iter(text)

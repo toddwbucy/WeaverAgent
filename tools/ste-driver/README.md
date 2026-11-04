@@ -2,7 +2,8 @@
 
 This tool builds outside the agent workspace. It has its own lock file and no
 dependency on an agent organ. It implements the external driver's pinned masking,
-language and literal checks. It does not yet send requests or assemble dataset rows.
+language and literal checks. Its run library sends requests through `deploy/turn.py`
+and keeps the external results. The executable and agent composition are later work.
 
 The authority is `docs/crates/weaver-harness/Loops/ste-conversion-loop.md`:
 
@@ -11,6 +12,12 @@ The authority is `docs/crates/weaver-harness/Loops/ste-conversion-loop.md`:
 - 6.06: restore the exact codes after the caller's checks pass.
 - 6.01: apply the pinned word, sentence, placeholder and meaning guards.
 - 6.08: render the pinned repair notes before the request wrapper.
+- 4.01, 4.05 and 4.06: send one user block and retain the gate's exact reply.
+- 6.03, 6.04 and 6.07: share the request allowance across both retry kinds.
+- 7.01 and 7.07: persist attempts, losses and a void evaluation's record.
+
+The tool compiles the pure request owner from the harness's development-driver
+directory as source. It links no harness or other agent library.
 
 `Masker::mask` returns the masked text and exact code spans in their original
 insertion order. Some spans contain earlier placeholders. Restore them in reverse
@@ -40,6 +47,43 @@ It elects no classifier and creates no lookup or filing grant. `repair_note`
 accepts results produced by this checker, with their typed finding values.
 `repair_notes_with_guards` adds the copied-example and word-ratio notes and the
 empty-note fallback. The request owner still supplies the 6.08 wrapper.
+
+`source_examples` verifies the original system text and the source bundle hash.
+It returns only the four assistant texts, in source order. Its bundle encoding
+matches `ste_prompt.main` at the pinned revision. `verify_folded_prompt` checks
+the approved seed file separately. Fold headings never enter the judge.
+
+`Kit::read` accepts already-masked narration and final segments. It preserves
+their locators and exact input-file bytes, and refuses repeated IDs or long text.
+Kit selection, the 100-item R0 roster and its mask-table deposit remain caller
+duties. `prepare_text` rejects raw source marker collisions before masking.
+The preparation caller must record each exclusion and persist the returned codes.
+
+`evaluate` needs explicit R0 parameters of 2 repairs, 1 offer and 0 stops.
+It writes and syncs the parameters before the first request. Each request is
+recorded before `TurnClient` calls the gate script. The complete stdout, stderr,
+exit status, answer identity, checks and notes stay with the attempt. A stopped
+or invalid gate close stops the text and voids this R0 evaluation. A completed
+answer with no text or a lost placeholder occurrence uses the shape retry path.
+Extra or repeated placeholders use language repair with the checker's notes.
+Truncation and other hard language findings use the repair path. There is no
+automatic restart of a stopped pass and no earlier-output fallback.
+
+Each run uses a new directory. `run.json` records its inputs and parameters,
+`journal.jsonl` records requests and replies, and `attempts.jsonl` keeps each
+completed segment's full history. `first-gate-answers.jsonl` keeps attempt zero.
+`summary.json` holds all terminal counts and no kill-line verdict. Only a complete,
+nonvoid run publishes `output.jsonl` for the pinned scorer. Final shape and
+language failures keep their available last outputs and their refusal records.
+Literal checks mark assembly eligibility and never start another request.
+
+This library does not seed or load an agent. Before a live run, the composition
+owner must verify the loaded prompt, model, caps, boot cut and frozen kit.
+The report's prompt hash is the expected approved identity, not a measurement
+of a live agent. Trace enrichment, first model emissions, token use, generation
+counts and offer parent links remain owed. These fields stay null and marked
+incomplete. The library makes no estimate from a gate-request count.
+It does not assemble dataset trajectories or call the scorer or meaning reviewer.
 
 Run these commands from the repository root. Use a target owned by this checkout.
 
