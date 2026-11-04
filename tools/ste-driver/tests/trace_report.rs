@@ -112,6 +112,71 @@ fn turn(report: &Value) -> &Value {
     &report["requests"][0]["trace"]
 }
 
+fn assert_incomplete(events: &[Value], reason: &str) {
+    let result = report(&lines(events), &lines(&journal())).unwrap();
+    assert_eq!(result["complete"], false);
+    let trace = turn(&result);
+    assert_eq!(trace["trace_complete"], false);
+    assert!(trace["recorded_generation_count"].is_null());
+    assert!(
+        trace["incomplete_reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(reason)),
+        "expected {reason}, got {}",
+        trace["incomplete_reasons"]
+    );
+}
+
+#[test]
+fn gapless_run_requires_a_load_before_its_turn() {
+    let mut events = fixture();
+    events[0]["kind"] = json!("fault");
+    assert_incomplete(&events, "run has no load at its start");
+}
+
+#[test]
+fn later_assistant_requires_an_offer_even_with_complete_measurements() {
+    let mut events = fixture();
+    events[7]["kind"] = json!("fault");
+    events[11].as_object_mut().unwrap().remove("causal_parent");
+    assert_incomplete(&events, "later assistant message has no offer parent");
+}
+
+#[test]
+fn sequence_decimal_requires_canonical_spelling() {
+    let mut events = fixture();
+    events[1]["sequence"] = json!("01");
+    assert_incomplete(&events, "trace line 2: invalid sequence");
+}
+
+#[test]
+fn trace_subsystem_requires_a_declared_name() {
+    let mut events = fixture();
+    events[2]["subsystem"] = json!("unknown");
+    assert_incomplete(&events, "trace line 3: invalid trace identity or counter");
+}
+
+#[test]
+fn measurement_requires_its_channel_and_origin() {
+    for (field, value) in [("channel", "output"), ("origin", "model")] {
+        let mut events = fixture();
+        events[5][field] = json!(value);
+        assert_incomplete(&events, "generation measurement evidence is incomplete");
+    }
+}
+
+#[test]
+fn measurement_timings_require_canonical_decimal_strings() {
+    for field in ["prefill_ns", "decode_ns"] {
+        for value in ["1.5", "-1", "01"] {
+            let mut events = fixture();
+            events[5]["payload"]["timings"][field] = json!(value);
+            assert_incomplete(&events, "generation measurement evidence is incomplete");
+        }
+    }
+}
+
 #[test]
 fn trace_report_counts_outcomes_and_keeps_producer_evidence_and_offer_links() {
     let events = fixture();
