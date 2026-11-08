@@ -187,31 +187,42 @@ tensor-parallel design (Spec 4.1, `native_pair.rs`).
 **PAIR-4.** For a GGUF artifact, admission judges each device against its own
 share, not an even fraction of the file. Replace the even shard
 (`residency.rs`, file length divided by device count) with a share computed
-from the header's tensor directory, which admission already reads at no device
-cost:
+from the artifact's tensor directories.
+
+Today the header read walks only the metadata of the first pinned file
+(`artifact.rs::read_gguf_header`). Extend it to walk the tensor directory of
+every pinned file, in split order: each tensor's name, shape and type, from
+which its byte size follows. This still reads no tensor data and touches no
+device, so it stays among the free steps before the room judgment. A tensor
+directory that does not parse refuses as the header read refuses today.
 
 | Term | Content |
 | --- | --- |
-| Layer weights | The bytes of every `blk.N.*` tensor for the layers PAIR-3 gives the device |
-| Output | The output and output-norm tensors, on the last device only |
+| Layer weights | The bytes of every `blk.N.*` tensor, from every shard, for the layers PAIR-3 gives the device |
+| Output | The output and output-norm tensors, on the last device only. Where the artifact has no separate `output.weight`, the engine duplicates `token_embd.weight` onto the output device, so its bytes are charged to the last device |
+| KV cache | For each layer on the device: 2 x context positions x KV head count x head dimension x 2 bytes (the engine's default F16 cache), from the header's `attention.head_count_kv`, key and value lengths, and the effective context |
 | Adapter | Under the LoRA fixture, the adapter tensors whose base layer is on the device |
-| Headroom | The existing staged headroom parameter, unchanged |
+| Headroom | The existing staged headroom parameter, unchanged. It now covers compute buffers and the engine's own overhead, not the cache |
+
+For Granite at 32768 positions, the KV term is 4096 MiB per device, which the
+2026-11-08 load check measured. The default 512 MiB headroom left that cache
+uncharged, so the room judgment under-asked by about 4 GiB per device.
+
+The KV formula describes full-attention layers only. For an architecture with
+recurrent or hybrid layers, or sliding-window attention, admission charges the
+full-attention layers it can identify and leaves the rest of the cache in the
+headroom term. The fixture report names which applied.
 
 The native (candle) pair keeps the existing even-fraction judgment. Its
 tensor-parallel path shards the projections of every layer across both
 devices (`native_pair.rs::ShardedModel::load`), so no device holds whole
 `blk.N.*` layers and the table above does not describe its residency.
 
-The input layer is not charged to any device. It is host memory, and the SPU
-makes no host-memory judgment. The fixture report records its size.
+The input layer is not otherwise charged to any device. It is host memory, and
+the SPU makes no host-memory judgment. The fixture report records its size.
 
-The KV cache stays inside the headroom term, as today. Charging it per layer is
-a later measurement, not a zero cost. The gap is real: the default headroom is
-512 MiB, while the 2026-11-08 load check measured, for Granite at 32768
-positions, an F16 cache of 4096 MiB per device plus compute buffers of 376 to
-544 MiB. The room judgment under-asks by about 4 GiB per device at that
-context. The pair passed only because the room was there. Room is still judged against the driver's
-current free figure, and the room refusal still carries the device's capacity.
+Room is still judged against the driver's current free figure, and the room
+refusal still carries the device's capacity.
 
 ## 5. Instruments and evidence
 
@@ -226,7 +237,7 @@ current free figure, and the room refusal still carries the device's capacity.
 | Mixed members refuse | A recording device query returning two different names, capabilities or totals | Judge only the name, or skip the judgment for pairs |
 | The split is deterministic | Hardware-free arithmetic over L and N, including odd L and N = 3, checked against the engine's cumulative mapping | Pass proportional halves, or put a value on a boundary edge |
 | The split reaches the engine | The parameters built for a pair carry the computed tensor split | Leave the split unset |
-| Room is per device for GGUF | A directory fixture with unequal layer sizes and an output tensor, plus a native artifact that keeps the even fraction | Judge the even file fraction for GGUF, or apply the GGUF table to a native artifact |
+| Room is per device for GGUF | Directory fixtures with unequal layer sizes; a split artifact whose later shard holds assigned tensors; a tied-embedding artifact with no `output.weight`; a KV term checked against the 4096 MiB Granite measurement; and a native artifact that keeps the even fraction | Read only the first shard, omit the duplicated embedding or the KV term, or apply the GGUF table to a native artifact |
 | The observed division matches | On a device pair, under the LORA-3 log capture at debug level: exactly one `load_tensors: layer N assigned to device` record for each layer and for the output (`layer L`), and exactly one KV `layer N: dev =` record for each layer, all matching PAIR-3. A KV record reading "does not have KV cache" or "filtered" counts as missing | Accept a missing or duplicated record, or a layer on the wrong device |
 
 The observed-division instrument is an explicit accelerator test, like the
@@ -255,7 +266,7 @@ declared division that clause waited for.
 | --- | --- |
 | Row split | A fork change so the split buffer reads the model's device list, not every visible device by ordinal (possibly moot where the PAIR-1 mask makes the visible set the binding; to be confirmed); then a GPU proof with an adapter whose rank is below the engine's row rounding |
 | Tensor split | A measurement on hardware that represents the targeted deployments, and the operator's ruling |
-| KV cache in the room judgment | A per-layer charge of the cache on each device. Measured gap at 32768 positions: about 4 GiB per device for Granite (PAIR-4) |
+| KV cache beyond full attention | A charge for recurrent, hybrid and sliding-window caches, which PAIR-4 leaves in the headroom term |
 | Host memory for the input layer | A host-room election, if the operator wants one |
 | Host memory at load | Measure the SPU's own load. A llama.cpp server with mmap off peaked near the model's size in host memory (55 GiB for Granite), then fell to under 2 GiB |
 | KV cache precision | The engine's default KV cache is F16, where the Python reference runs bf16. A known source of drift for the operator's ruling, not a defect here |
