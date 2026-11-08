@@ -28,6 +28,8 @@
 pub mod artifact;
 pub mod channel;
 pub mod decoder;
+pub mod devices;
+pub mod division;
 pub mod family;
 /// The device queries the admission judgment reads. Compiled only under the
 /// `cuda` feature, because it is the one module that requires a driver.
@@ -37,6 +39,7 @@ pub mod lora;
 pub mod measurement;
 pub mod readout;
 pub mod residency;
+pub mod room;
 pub mod sampling;
 pub mod ste100;
 

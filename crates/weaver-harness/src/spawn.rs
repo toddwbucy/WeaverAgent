@@ -19,7 +19,7 @@
 //! that died between the fork and the arming would otherwise leave a child
 //! the signal was armed too late to reach.
 
-use std::ffi::CString;
+use std::ffi::{CString, OsString};
 use std::path::Path;
 
 use std::os::fd::BorrowedFd;
@@ -43,6 +43,7 @@ pub unsafe fn fork_organ(
     binary: &Path,
     ends: &[BorrowedFd<'_>],
     arguments: &[String],
+    overrides: &[(&str, String)],
     stderr: Option<std::os::fd::RawFd>,
 ) -> Result<nix::unistd::Pid, nix::Error> {
     let program =
@@ -62,18 +63,12 @@ pub unsafe fn fork_organ(
     argv.push(std::ptr::null());
     // **The organ starts as the agent is constituted**, per `weaver-harness-Spec`
     // section 2.2 and the operator's ruling of 2026-10-01: the worker's
-    // environment, which is the agent's unit as configured, `Environment=`
-    // included. Read and built here in the parent for the reason the vector
-    // above is, so the child reads a finished array rather than the process's
+    // environment, which admin's start step composes for it, with each
+    // override the caller names replacing any inherited value of that name.
+    // Read and built here in the parent for the reason the vector above is,
+    // so the child reads a finished array rather than the process's
     // `environ`, which another thread of the worker could be changing.
-    let environment: Vec<CString> = std::env::vars_os()
-        .filter_map(|(name, value)| {
-            let mut pair = name.into_encoded_bytes();
-            pair.push(b'=');
-            pair.extend(value.into_encoded_bytes());
-            CString::new(pair).ok()
-        })
-        .collect();
+    let environment = organ_environment(std::env::vars_os(), overrides)?;
     let mut envp: Vec<*const nix::libc::c_char> = Vec::with_capacity(environment.len() + 1);
     envp.extend(environment.iter().map(|pair| pair.as_ptr()));
     envp.push(std::ptr::null());
@@ -143,6 +138,59 @@ pub unsafe fn fork_organ(
             }
         }
     }
+}
+
+/// The variable that fixes the CUDA driver's device numbering.
+pub const DEVICE_ORDER: &str = "CUDA_DEVICE_ORDER";
+/// The variable that masks the devices a process can see.
+pub const VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";
+
+/// **The two variables a device organ's launch sets**, per the device pair
+/// amendment PAIR-1: the PCI bus order, and the binding's ordinals in binding
+/// order, comma-separated. Under them the organ sees exactly its binding's
+/// devices, renumbered from zero, and no context of it lands on a device
+/// outside the binding. The harness reads only the ordinals and interprets
+/// nothing else in the binding.
+pub fn device_environment(devices: &[weaver_types::DeviceOrdinal]) -> [(&'static str, String); 2] {
+    let visible = devices
+        .iter()
+        .map(|device| device.0.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    [
+        (DEVICE_ORDER, "PCI_BUS_ID".to_string()),
+        (VISIBLE_DEVICES, visible),
+    ]
+}
+
+/// The environment an organ is exec'd with: every inherited pair whose name no
+/// override names, in inherited order, then the overrides in theirs. A name or
+/// value with an interior NUL cannot cross `execve`: an inherited one is
+/// dropped as it always was, and an override refuses the fork, because a
+/// variable the caller meant to set is not one to lose silently.
+pub fn organ_environment(
+    inherited: impl IntoIterator<Item = (OsString, OsString)>,
+    overrides: &[(&str, String)],
+) -> Result<Vec<CString>, nix::Error> {
+    let pair = |name: &[u8], value: &[u8]| {
+        let mut pair = name.to_vec();
+        pair.push(b'=');
+        pair.extend_from_slice(value);
+        CString::new(pair).ok()
+    };
+    let mut environment: Vec<CString> = inherited
+        .into_iter()
+        .filter(|(name, _)| {
+            !overrides
+                .iter()
+                .any(|(set, _)| name.as_encoded_bytes() == set.as_bytes())
+        })
+        .filter_map(|(name, value)| pair(name.as_encoded_bytes(), value.as_encoded_bytes()))
+        .collect();
+    for (name, value) in overrides {
+        environment.push(pair(name.as_bytes(), value.as_bytes()).ok_or(nix::Error::EINVAL)?);
+    }
+    Ok(environment)
 }
 
 /// The worker's end of an organ's stderr: a tee that loses the journal
@@ -363,3 +411,6 @@ mod last_word_tests;
 
 #[cfg(test)]
 mod death_tests;
+
+#[cfg(test)]
+mod environment_tests;

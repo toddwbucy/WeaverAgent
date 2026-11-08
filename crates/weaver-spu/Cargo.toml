@@ -120,8 +120,17 @@ walkdir = "2"
 # crates resolve to two distinct types for one C library and the flash-attention
 # policy type stops typechecking across them, which the archived tree recorded
 # against itself.
-llama-cpp-2 = { git = "https://github.com/toddwbucy/llama-cpp-rs", rev = "ecce255bcb14dd6d88f184cc8776c23a85afafeb", optional = true, default-features = false, features = ["dynamic-link"] }
-llama-cpp-sys-2 = { git = "https://github.com/toddwbucy/llama-cpp-rs", rev = "ecce255bcb14dd6d88f184cc8776c23a85afafeb", optional = true, default-features = false }
+#
+# The revision is the fork's branch `weaver/tensor-split-on-ecce255`: ecce255
+# plus two upstream utilityai cherry-picks, per device-pair amendment PAIR-3.
+# 4b2cf8eb carries ef551b0 (overrides append instead of writing slot 0) and
+# bebe55d6 carries e7af607 (`with_tensor_split`). Both touch only
+# `llama-cpp-2/src/model/params.rs`. The vendored llama.cpp submodule stays at
+# e21cdc11, so the engine every ecce255 engine citation names is unchanged.
+# The branch is never deleted or force-pushed, because this revision must stay
+# reachable.
+llama-cpp-2 = { git = "https://github.com/toddwbucy/llama-cpp-rs", rev = "bebe55d6a90069e13bc6c38eefc707a700014550", optional = true, default-features = false, features = ["dynamic-link"] }
+llama-cpp-sys-2 = { git = "https://github.com/toddwbucy/llama-cpp-rs", rev = "bebe55d6a90069e13bc6c38eefc707a700014550", optional = true, default-features = false }
 
 # The candle fork, taken for `forward_with_intermediates`, the readout's
 # working path. candle-flash-attn shares the pin and is NOT declared: no path

@@ -92,6 +92,10 @@ fn tokenizer_failure_remains_a_component_fault_and_empty_input_keeps_the_opener(
 }
 
 #[cfg(feature = "cuda")]
+#[path = "../tests/common/mod.rs"]
+mod common;
+
+#[cfg(feature = "cuda")]
 mod device {
     use super::*;
     use crate::placement::{DeltaMeasured, OpenFacts, OpenedSession};
@@ -145,6 +149,11 @@ mod device {
 
     /// One admit per process, matching the serving lifecycle and avoiding the
     /// engine's known free-then-reload hazard. The wrapper serializes backends.
+    ///
+    /// **Each child holds the device pair amendment PAIR-1 mask for its
+    /// binding**, `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0`, the
+    /// way the harness launches the SPU, and the wrapper reads the lease for
+    /// ordinal 0 rather than touching a device.
     #[test]
     fn real_residencies_measure_cut_and_generate_without_observable_mutation() {
         let kinds = if cfg!(feature = "gguf") {
@@ -157,7 +166,7 @@ mod device {
                 eprintln!("SKIP placement {kind}: no implicit fixture artifact");
                 continue;
             }
-            if cudarc::driver::CudaContext::new(0).is_err() {
+            if let Err(why) = super::common::lease(&[0]) {
                 let variable = if *kind == "gguf" {
                     "WEAVER_TEST_GGUF"
                 } else {
@@ -165,9 +174,9 @@ mod device {
                 };
                 assert!(
                     std::env::var_os(variable).is_none(),
-                    "{variable} explicitly elected an artifact but no CUDA device is available"
+                    "{variable} explicitly elected an artifact but no CUDA device is available: {why}"
                 );
-                eprintln!("SKIP placement {kind}: no CUDA device");
+                eprintln!("SKIP placement {kind}: {why}");
                 continue;
             }
             let result = std::process::Command::new(std::env::current_exe().unwrap())
@@ -178,6 +187,8 @@ mod device {
                     "--test-threads=1",
                 ])
                 .env(CHILD, kind)
+                .env("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+                .env("CUDA_VISIBLE_DEVICES", "0")
                 .output()
                 .expect("start one residency process");
             assert!(
@@ -185,6 +196,13 @@ mod device {
                 "placement {kind} failed: {}\n{}",
                 String::from_utf8_lossy(&result.stdout),
                 String::from_utf8_lossy(&result.stderr),
+            );
+            // A filter that reaches no test also exits 0, so the summary is
+            // what says the child ran.
+            assert!(
+                String::from_utf8_lossy(&result.stdout).contains("test result: ok. 1 passed"),
+                "placement {kind}: the child did not run: {}",
+                String::from_utf8_lossy(&result.stdout),
             );
             eprintln!(
                 "placement {kind}: real residency, shared preparation, cuts and generation passed"
@@ -791,6 +809,7 @@ mod device {
                     devices: vec![DeviceOrdinal(0)],
                 },
                 Headroom(64 * 1024 * 1024),
+                512,
                 ReadoutElection(true),
                 true,
             )

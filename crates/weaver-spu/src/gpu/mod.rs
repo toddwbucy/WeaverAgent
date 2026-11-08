@@ -24,94 +24,45 @@
 use std::sync::Arc;
 
 use cudarc::driver::{CudaContext, sys};
-use weaver_types::DeviceOrdinal;
 
-/// Why the driver refused a device set.
-#[derive(Debug, Clone, PartialEq)]
-pub enum DeviceRefusal {
-    /// The ordinal names no device, or the driver would not open it.
-    Unreachable { ordinal: u32 },
-    /// The one inequality, read per device: room for this device's shard plus
-    /// the residency's headroom.
-    ///
-    /// **`total` is carried because `free` alone cannot say why.** Seven
-    /// gibibytes free against a thirty-five gibibyte need is a card too small
-    /// where the capacity is eight, and a card held by something else where
-    /// the capacity is forty-eight. One is a binding to change and the other
-    /// is a machine to clear, and the driver answers both figures in the same
-    /// call, so keeping one discarded the distinction for nothing.
-    ///
-    /// **No case is added and none is classified**, per Spec section 5. A
-    /// reader with all three figures can tell, and a `Contended` case would be
-    /// a judgment this crate has no ground to make: an occupant may be a
-    /// second agent the operator wants there.
-    NoRoom {
-        ordinal: u32,
-        free: u64,
-        needed: u64,
-        total: u64,
-    },
-    /// A sharded forward exchanges activations across the set, so a set without
-    /// peer access is a set that cannot serve. Discovered at admit rather than
-    /// at the first turn.
-    NoPeerAccess { from: u32, to: u32 },
-}
+pub use crate::devices::DeviceRefusal;
+use crate::devices::{DeviceQuery, Identity};
 
-/// Judge room and reach across the assigned set.
+/// The driver, asked by position under the PAIR-1 mask.
 ///
-/// Room first, per device, then reach across each pair. A single-device set is
-/// judged on room alone: there is no pair to exchange activations across, so
-/// asking the driver about peer access would be asking a question the topology
-/// does not pose.
-pub fn room_and_reach(
-    devices: &[DeviceOrdinal],
-    shard_bytes: u64,
-    headroom_bytes: u64,
-) -> Result<(), DeviceRefusal> {
-    let mut contexts = Vec::with_capacity(devices.len());
-    for device in devices {
-        let context =
-            context_for(device.0).ok_or(DeviceRefusal::Unreachable { ordinal: device.0 })?;
-        contexts.push((device.0, context));
+/// **A position is an index into the binding, not a device ordinal.** Under
+/// the mask the harness sets, the process sees the binding's devices
+/// renumbered from zero in binding order, so position i is the device at
+/// binding index i. The judgments in `crate::devices` turn a position back
+/// into the binding's ordinal for every refusal.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Driver;
+
+impl DeviceQuery for Driver {
+    fn identity(&self, position: usize) -> Option<Identity> {
+        let context = context_for(position)?;
+        Some(Identity {
+            name: context.name().ok()?,
+            capability: context.compute_capability().ok()?,
+            total: context.total_mem().ok()? as u64,
+        })
     }
 
-    let needed = shard_bytes.saturating_add(headroom_bytes);
-    for (ordinal, context) in &contexts {
-        let (free, total) = context
-            .mem_get_info()
-            .map_err(|_| DeviceRefusal::Unreachable { ordinal: *ordinal })?;
-        let (free, total) = (free as u64, total as u64);
-        if free < needed {
-            return Err(DeviceRefusal::NoRoom {
-                ordinal: *ordinal,
-                free,
-                needed,
-                total,
-            });
+    fn memory(&self, position: usize) -> Option<(u64, u64)> {
+        let (free, total) = context_for(position)?.mem_get_info().ok()?;
+        Some((free as u64, total as u64))
+    }
+
+    fn can_access_peer(&self, from: usize, to: usize) -> bool {
+        match (context_for(from), context_for(to)) {
+            (Some(from), Some(to)) => can_access_peer(&from, &to),
+            _ => false,
         }
     }
-
-    // Reach, across each ordered pair. Peer access is not guaranteed symmetric
-    // by the driver's interface, so both directions are asked rather than one
-    // being inferred from the other.
-    for (from_ordinal, from_context) in &contexts {
-        for (to_ordinal, to_context) in &contexts {
-            if from_ordinal == to_ordinal {
-                continue;
-            }
-            if !can_access_peer(from_context, to_context) {
-                return Err(DeviceRefusal::NoPeerAccess {
-                    from: *from_ordinal,
-                    to: *to_ordinal,
-                });
-            }
-        }
-    }
-
-    Ok(())
 }
 
-/// One primary-context handle per ordinal, held for the life of the process.
+/// One primary-context handle per position, held for the life of the
+/// process.
 ///
 /// **The judge must not churn primary contexts, and the ground is a measured
 /// corruption.** `CudaContext::new` retains the device's primary context and
@@ -123,17 +74,17 @@ pub fn room_and_reach(
 /// weights byte-exact and every operation exact in isolation. Holding the
 /// handle once removes the zero-crossing, and repeated admits stop paying a
 /// context build besides.
-fn context_for(ordinal: u32) -> Option<Arc<CudaContext>> {
+fn context_for(position: usize) -> Option<Arc<CudaContext>> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
-    static HELD: OnceLock<Mutex<HashMap<u32, Arc<CudaContext>>>> = OnceLock::new();
+    static HELD: OnceLock<Mutex<HashMap<usize, Arc<CudaContext>>>> = OnceLock::new();
     let held = HELD.get_or_init(|| Mutex::new(HashMap::new()));
     let mut held = held.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(context) = held.get(&ordinal) {
+    if let Some(context) = held.get(&position) {
         return Some(context.clone());
     }
-    let context = CudaContext::new(ordinal as usize).ok()?;
-    held.insert(ordinal, context.clone());
+    let context = CudaContext::new(position).ok()?;
+    held.insert(position, context.clone());
     Some(context)
 }
 

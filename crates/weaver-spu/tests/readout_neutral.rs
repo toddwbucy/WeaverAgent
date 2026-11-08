@@ -24,7 +24,16 @@
 //! runs on a backend whose scheduler has one backend and no fusion to lose.
 //! Both are kept, because a failure here and a pass there would localise the
 //! defect to the device path immediately.
+//!
+//! **The admissions run in a masked child.** The device pair amendment PAIR-1
+//! has the SPU refuse a binding whose ordinals its process mask does not
+//! name, so the comparison runs in a process of this binary holding
+//! `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0` (`common::run_masked`),
+//! and the binary runs under any lease that holds ordinal 0, or no mask at
+//! all. With the cards hidden it skips.
 #![cfg(all(feature = "gguf", feature = "cuda"))]
+
+mod common;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -168,12 +177,12 @@ fn draw(resident: &weaver_spu::residency::Resident, seed: u64) -> (Vec<TokenId>,
 /// residency admits once and the two halves of this comparison are two
 /// admissions: the election is fixed for a residency at admit, which is the
 /// property that makes it judgeable there.
-fn binding_for(path: &Path) -> (Residency, ModelBinding) {
+fn binding_for(path: &Path, devices: &[DeviceOrdinal]) -> (Residency, ModelBinding) {
     (
         Residency::new(),
         ModelBinding {
             artifact: ArtifactRef(path.to_string_lossy().into_owned()),
-            devices: vec![DeviceOrdinal(0)],
+            devices: devices.to_vec(),
         },
     )
 }
@@ -185,15 +194,32 @@ fn binding_for(path: &Path) -> (Residency, ModelBinding) {
 /// diverge here while every count in the host-side tests stays right.
 #[test]
 fn an_elected_readout_changes_no_token_on_the_device() {
-    let Some(path) = artifact() else {
+    if artifact().is_none() {
         eprintln!("SKIP an_elected_readout_changes_no_token: no artifact at {ARTIFACT}");
         return;
-    };
-    if cudarc::driver::CudaContext::new(0).is_err() {
-        eprintln!("SKIP an_elected_readout_changes_no_token: no CUDA device 0");
+    }
+    if let Err(why) = common::lease(&[0]) {
+        eprintln!("SKIP an_elected_readout_changes_no_token: {why}");
         return;
     }
     let _device = device_lock();
+    common::run_masked(
+        "an_elected_readout_changes_no_token_on_the_device_child",
+        &[0],
+    );
+}
+
+/// The masked child of [`an_elected_readout_changes_no_token_on_the_device`]:
+/// its body, under the binding's mask.
+#[test]
+#[ignore = "a masked child, run by its parent"]
+fn an_elected_readout_changes_no_token_on_the_device_child() {
+    let Some(devices) =
+        common::masked_child("an_elected_readout_changes_no_token_on_the_device_child")
+    else {
+        return;
+    };
+    let path = artifact().expect("the parent found the artifact");
     // **Two seeds, and the pair is what makes the comparison mean
     // something.** Each seed is its own neutrality reading, and the two
     // together are the sensitivity check: a comparison that cannot tell two
@@ -204,11 +230,12 @@ fn an_elected_readout_changes_no_token_on_the_device() {
 
     // Unelected first, so the comparison's reference is taken by the path
     // that has no tap in it at all rather than by a tap asked to stand down.
-    let (mut residency, binding) = binding_for(&path);
+    let (mut residency, binding) = binding_for(&path, &devices);
     let resident = residency
         .admit(
             &binding,
             Headroom(2 * 1024 * 1024 * 1024),
+            4096,
             ReadoutElection(false),
             false,
         )
@@ -233,11 +260,12 @@ fn an_elected_readout_changes_no_token_on_the_device() {
     // drop.
     drop(residency);
 
-    let (mut residency, binding) = binding_for(&path);
+    let (mut residency, binding) = binding_for(&path, &devices);
     let resident = residency
         .admit(
             &binding,
             Headroom(2 * 1024 * 1024 * 1024),
+            4096,
             ReadoutElection(true),
             false,
         )
@@ -327,4 +355,5 @@ fn an_elected_readout_changes_no_token_on_the_device() {
         norms.len() / layers(),
         layers(),
     );
+    common::report(&serde_json::json!("done"));
 }

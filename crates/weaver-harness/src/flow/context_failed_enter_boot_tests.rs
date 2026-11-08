@@ -15,6 +15,7 @@ fn provision() -> (OpenFixture, FailedEnterResources) {
         resources.spawn_spu(
             &mut run.context,
             &std::env::current_exe().unwrap(),
+            &[],
             &cleanup_fixture::child_arguments("failed_enter_process_open_then_release_peer"),
             &mut run.clock,
         )

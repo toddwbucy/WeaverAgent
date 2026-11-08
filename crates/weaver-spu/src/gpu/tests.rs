@@ -1,4 +1,6 @@
 use super::*;
+use crate::devices::judge_room_and_reach;
+use weaver_types::DeviceOrdinal;
 
 /// These run against whatever device this machine has, and skip where it
 /// has none. A skip is printed rather than silent, because a suite that
@@ -19,7 +21,7 @@ fn a_shard_that_fits_is_admitted() {
         return;
     }
     assert_eq!(
-        room_and_reach(&[DeviceOrdinal(0)], 1024 * 1024, 1024 * 1024),
+        judge_room_and_reach(&[DeviceOrdinal(0)], &[1024 * 1024], 1024 * 1024, &Driver),
         Ok(())
     );
 }
@@ -28,7 +30,7 @@ fn a_shard_that_fits_is_admitted() {
 /// the refusal names the device and both numbers, so an operator meeting it
 /// knows whether to free a card or reassign the binding.
 ///
-/// Perturbation: change the `free < needed` comparison in `room_and_reach`
+/// Perturbation: change the `free < needed` comparison in `judge_room_and_reach`
 /// to `free < shard_bytes`, dropping the headroom term, and this test still
 /// passes, which is why the headroom's presence is argued at its own clause
 /// rather than rested on this test. Deleting the comparison entirely fails
@@ -40,7 +42,7 @@ fn a_shard_larger_than_the_device_refuses_on_room() {
         return;
     }
     let absurd = 1024u64 * 1024 * 1024 * 1024; // a terabyte
-    match room_and_reach(&[DeviceOrdinal(0)], absurd, 0) {
+    match judge_room_and_reach(&[DeviceOrdinal(0)], &[absurd], 0, &Driver) {
         Err(DeviceRefusal::NoRoom {
             ordinal, needed, ..
         }) => {
@@ -79,7 +81,7 @@ fn the_room_refusal_says_which_reading_applies() {
         needed,
         total,
         ..
-    }) = room_and_reach(&[DeviceOrdinal(0)], absurd, 0)
+    }) = judge_room_and_reach(&[DeviceOrdinal(0)], &[absurd], 0, &Driver)
     else {
         panic!("a terabyte shard refuses on room");
     };
@@ -107,13 +109,34 @@ fn the_room_refusal_says_which_reading_applies() {
     );
 }
 
-/// An ordinal naming no device refuses as unreachable rather than as a room
-/// condition, because the two send an operator to different places.
+/// **A position past the visible set answers nothing**, so a binding whose
+/// mask names a device the machine lacks refuses as unreachable rather than
+/// as a room condition. The refusal's ordinal is the binding's, which
+/// `devices::tests` pins with a recording query; this pins the driver half.
+///
+/// Under the PAIR-1 mask the visible set is the binding, so the first
+/// position past it is the first position the driver cannot open, whatever
+/// this machine holds.
 #[test]
-fn an_ordinal_naming_no_device_refuses_as_unreachable() {
-    let absent = DeviceOrdinal(250);
-    assert_eq!(
-        room_and_reach(&[absent], 1024, 0),
-        Err(DeviceRefusal::Unreachable { ordinal: 250 })
-    );
+fn a_position_past_the_visible_set_is_unreachable() {
+    let past = CudaContext::device_count().map_or(0, |n| n.max(0) as usize);
+    assert_eq!(Driver.memory(past), None);
+    assert_eq!(Driver.identity(past), None);
+    assert!(!Driver.can_access_peer(0, past));
+}
+
+/// **The driver answers the three PAIR-2 facts** for a device it holds:
+/// a name, a compute capability and a total that agrees with the room
+/// query's own total.
+#[test]
+fn the_driver_answers_the_identity_facts() {
+    if !device_present() {
+        eprintln!("SKIP the_driver_answers_the_identity_facts: no device");
+        return;
+    }
+    let identity = Driver.identity(0).expect("an identity");
+    assert!(!identity.name.is_empty());
+    assert!(identity.capability.0 > 0);
+    let (_, total) = Driver.memory(0).expect("memory");
+    assert_eq!(identity.total, total);
 }

@@ -258,7 +258,13 @@ whose build script accepts the CUDA 13.4 toolkit.
 **The pins, recorded here because no document of this corpus carried them
 until 2026-08-06.** `llama-cpp-2` and `llama-cpp-sys-2` both resolve to
 `https://github.com/toddwbucy/llama-cpp-rs` at revision
-`ecce255bcb14dd6d88f184cc8776c23a85afafeb`, moved 2026-08-17 from `277e4100`
+`bebe55d6a90069e13bc6c38eefc707a700014550`, the fork's branch
+`weaver/tensor-split-on-ecce255`, moved 2026-11-08 from `ecce255b` by the
+device pair amendment (PAIR-3). It adds two upstream cherry-picks on
+`params.rs` alone: `with_tensor_split` (`e7af607`) and override appends that
+no longer overwrite slot 0 (`ef551b0`). The vendored llama.cpp stays at
+`e21cdc11`, so an engine citation at `ecce255` still names this engine.
+`ecce255bcb14dd6d88f184cc8776c23a85afafeb` had moved 2026-08-17 from `277e4100`
 by the split-artifact ruling: the fork gains `load_from_splits`, the
 explicit-set door llama.cpp holds for callers whose paths carry no sibling
 pattern, which is what a descriptor path is, and the build script's DLL
@@ -457,6 +463,18 @@ Process section 6 names the two invocations that reach them.
 | `loaded.rs` | `cuda` and `gguf` | `WEAVER_TEST_GGUF`, `WEAVER_ARTIFACT_QWEN25_SAFETENSORS`, `WEAVER_ARTIFACT_COLUMN_LAYERS`, `WEAVER_ARTIFACT_COLUMN_WIDTH` |
 | `two_card.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_TWO_CARD`, `WEAVER_ARTIFACT_SPLIT` |
 | `readout_neutral.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_READOUT`, `WEAVER_ARTIFACT_READOUT_LAYERS` |
+| `observed_division.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_DIVISION` |
+
+**A device target holds the device mask of each binding it admits.** The SPU refuses
+a binding whose ordinals its process mask does not name in binding order (device pair
+amendment PAIR-1), and one process holds one mask. So each device target admits in a
+process of its own binary under that binding's
+`CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<ordinals>`, or sets the mask on the
+SPU binary it spawns, as the harness's fork does. The targets run under the lease line
+`CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1`, or with no mask. A run with the
+cards hidden (`CUDA_VISIBLE_DEVICES=`) skips every device test, except
+`observed_division.rs`: it is an explicit accelerator instrument run with `--ignored`,
+and it fails by name without its artifact or the device pair.
 
 **Two targets name a fixture they do not read, and the first form of this
 table recorded the mention as a read.** `seam.rs` cites `WEAVER_TEST_GGUF` in a

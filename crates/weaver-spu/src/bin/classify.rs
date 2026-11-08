@@ -35,14 +35,37 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let ordinal: usize = match device.parse() {
+    let ordinal: u32 = match device.parse() {
         Ok(ordinal) => ordinal,
         Err(_) => {
             refuse_admission(&seam, format!("device ordinal unparsable: {device}"));
             return ExitCode::FAILURE;
         }
     };
-    let device = match candle_core::Device::new_cuda(ordinal) {
+    // **The mask before any device query, then position 0**, per the device
+    // pair amendment PAIR-1: the harness launches this process with the
+    // single device of its binding visible, so that device is CUDA's device
+    // 0, and a launch that does not number it so refuses naming both values.
+    let binding = [weaver_types::DeviceOrdinal(ordinal)];
+    let visibility = weaver_spu::devices::Visibility::of_process();
+    if let Err(refusal) = weaver_spu::devices::judge_mask(&binding, &visibility) {
+        refuse_admission(
+            &seam,
+            format!(
+                "device mask: {}={:?} {}={:?}, expected {}={:?} {}={:?}",
+                weaver_spu::devices::ORDER_VARIABLE,
+                refusal.found.order,
+                weaver_spu::devices::VISIBLE_VARIABLE,
+                refusal.found.visible,
+                weaver_spu::devices::ORDER_VARIABLE,
+                weaver_spu::devices::ORDER_VALUE,
+                weaver_spu::devices::VISIBLE_VARIABLE,
+                refusal.expected,
+            ),
+        );
+        return ExitCode::FAILURE;
+    }
+    let device = match candle_core::Device::new_cuda(0) {
         Ok(device) => device,
         Err(error) => {
             refuse_admission(&seam, format!("device {ordinal} unavailable: {error}"));

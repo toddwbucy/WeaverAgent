@@ -100,12 +100,17 @@ impl FailedEnterResources {
         Arc::ptr_eq(&self.origin, &context.read_origin)
     }
 
+    /// `devices` is the decoder binding's ordinals, composed into the SPU's
+    /// mask (device pair amendment PAIR-1): the SPU refuses a load whose
+    /// mask is not its binding, so the cutover that calls this supplies them.
+    ///
     /// # Safety
     /// The caller satisfies spawn::fork_organ's serving-thread lifetime rule.
     pub(in crate::flow) unsafe fn spawn_spu(
         &mut self,
         context: &mut RecordingContext,
         binary: &Path,
+        devices: &[weaver_types::DeviceOrdinal],
         arguments: &[String],
         io: &mut impl PumpIo,
     ) -> Result<(), String> {
@@ -134,6 +139,7 @@ impl FailedEnterResources {
                 binary,
                 &[child_residency.as_fd(), child_decode.as_fd()],
                 arguments,
+                &crate::spawn::device_environment(devices),
             )
         }?;
         self.spu = Some(SpuResource {
@@ -185,7 +191,9 @@ impl FailedEnterResources {
             bootstrap.instruction.max_wire_bytes.0.to_string(),
         ];
         // SAFETY: forwarded from this method's serving-thread contract.
-        let child = unsafe { OwnedChild::spawn(binary, &[far.as_fd()], &arguments) }?;
+        // The STE100 classifier is no device organ, so its launch sets no
+        // mask (PAIR-1).
+        let child = unsafe { OwnedChild::spawn(binary, &[far.as_fd()], &arguments, &[]) }?;
         self.classifier = Some(child);
         drop(far);
         context
@@ -382,6 +390,12 @@ impl FailedEnterResources {
     }
     pub(in crate::flow) fn spu_child(&self) -> Option<ChildState> {
         self.spu.as_ref().map(|spu| spu.child.state())
+    }
+    #[cfg(test)]
+    pub(in crate::flow::context) fn spu_last_word_for_test(
+        &self,
+    ) -> Option<crate::spawn::LastWordSnapshot> {
+        self.spu.as_ref()?.child.last_word_snapshot()
     }
     #[cfg(test)]
     pub(in crate::flow::context) fn children_ended_or_signalled_for_test(&self) -> bool {

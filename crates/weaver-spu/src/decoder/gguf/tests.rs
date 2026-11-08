@@ -608,3 +608,27 @@ fn a_closed_engine_serves_nothing() {
     assert!(engine.truncate_to(0).is_err());
     assert!(engine.reestablish().is_err());
 }
+
+/// **The split reaches the engine**, per the device pair amendment PAIR-3: the
+/// parameters built for a pair carry layer split mode, the division's tensor
+/// split zero-padded to the engine's device limit, and every layer offloaded
+/// (at least L + 1), so the engine maps the split as the division computed.
+/// A single device carries split mode none and no split.
+///
+/// Perturbation: leave the tensor split unset, or pass proportional halves,
+/// and this test fails.
+#[test]
+fn the_parameters_for_a_pair_carry_the_division() {
+    let pair = Division::even(64, 2).expect("a division");
+    let params = placement_params(&pair).expect("parameters");
+    assert_eq!(params.split_mode().ok(), Some(LlamaSplitMode::Layer));
+    let split = params.tensor_split();
+    assert_eq!(&split[..2], [31.5, 33.5]);
+    assert!(split[2..].iter().all(|v| *v == 0.0));
+    assert!(params.n_gpu_layers() >= 65);
+
+    let single = placement_params(&Division::even(64, 1).expect("a division")).expect("parameters");
+    assert_eq!(single.split_mode().ok(), Some(LlamaSplitMode::None));
+    assert!(single.tensor_split().is_empty());
+    assert_eq!(single.main_gpu(), 0);
+}
