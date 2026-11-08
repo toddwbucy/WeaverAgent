@@ -247,17 +247,23 @@ seed turn leaves an assistant message.
 
 The rule: **where the open seated a non-empty identity prefix, the loop pushes
 no compiled prompt**, on the first turn or at re-entry. The predicate is the
-Open's own fact, not the assembled prompt's: `Prompt.identity`
-(`assembly.rs:29`) is filled from the worker's positional identity argument
-(`worker/main.rs`, `lifecycle.rs::serve_one_frame`), which admin's start step
-never supplies (`weaver-admin/src/start.rs::worker_arguments`), so it is empty
-on every agent loaded through admin whatever the state member seated. The
-seated prefix reaches the SPU separately, as the state member's identity
-answer at admission, and the Open evidence the harness already verifies
-carries its length (`prefix_tokens`, `open_evidence.rs`). The harness exposes
-that fact to the loop through its ports as the seated-prefix token count, and
-the predicate is that count being non-zero. The positional identity argument
-is the pre-ruling path and is retired by the same act, with its usage line.
+seated prompt's own fact, not the assembled prompt's and not the Open's token
+count. `Prompt.identity` (`assembly.rs:29`) is filled from the worker's
+positional identity argument (`worker/main.rs`, `lifecycle.rs::serve_one_frame`),
+which admin's start step never supplies
+(`weaver-admin/src/start.rs::worker_arguments`), so it is empty on every agent
+loaded through admin whatever the state member seated. The Open's
+`prefix_tokens` is not it either: the llama, gemma4 and mistral3 renderers
+prepend the family's BOS marker to an empty identity
+(`family/llama.rs::render_identity`, `gemma4.rs`, `mistral3.rs`), and
+`placement.rs::prepare_identity` tokenizes that rendering, so an unseeded agent
+of those families opens with a non-zero prefix and nothing seated. The seated
+prefix reaches the SPU as the state member's identity answer at admission
+(`lifecycle.rs`, the seeding bound check), and the predicate is whether that
+answer carried any identity message, which the harness holds at admission and
+exposes to the loop through its ports as a seated flag. The positional
+identity argument is the pre-ruling path and is retired by the same act, with
+its usage line.
 The re-entry
 after a flush is the recall text alone, the seated prefix having been kept by
 the flush. Where nothing is seated (an agent before its seeding turn), the
@@ -321,7 +327,7 @@ The request type derives `PartialEq` so the one-path row can compare.
 | Replay judges the adapter before the walk | A record whose adapter differs from the loaded binding's refuses at `refuse_identity` | Compare the model alone |
 | Replay judges the adapter per generation | A re-fed measurement whose adapter differs from the source's returns `IdentityBroken` | Compare the weights hash alone |
 | The projection follows | Once the contract and WeaverAnalysis carry it, the state member's projection includes `adapter`, and the `SELECTION` oracle pins it | Leave the path list unchanged |
-| The loop yields (ADP-4) | With a seated prefix, the first turn's delta carries no compiled prompt and no continuity line, and neither does a re-entry. Without one, it carries both. The seated case is driven with an empty positional identity and a non-zero Open `prefix_tokens`, as admin loads it | Push the compiled prompt unconditionally, or read `Prompt.identity` as the predicate |
+| The loop yields (ADP-4) | With a seated prefix, the first turn's delta carries no compiled prompt and no continuity line, and neither does a re-entry. Without one, it carries both. The seated case is driven with an empty positional identity and a non-empty identity answer, as admin loads it. The unseeded case includes a BOS-prefixing family (llama), whose Open prefix is non-zero with nothing seated, and it still carries the compiled prompt | Push the compiled prompt unconditionally, read `Prompt.identity` as the predicate, or read `prefix_tokens` as the predicate |
 | The script declares it | `create-agent.sh --adapter ...` renders the table and parses, three of the four flags refuse, a 63-character digest refuses, and `--adapter-scale nan` refuses | Default a flag, or write the value unchecked |
 
 The projection row and the two replay rows that read a recall wait on the
