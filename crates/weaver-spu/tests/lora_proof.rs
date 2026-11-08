@@ -1,11 +1,13 @@
 //! **The real 30B application proof of LORA-7, on one pinned input.**
 //!
 //! `weaver-spu-lora-loading-Spec-amendment` section 7: a base-only control,
-//! repeated, and an adapted run, on the fixed base, fixture, input and
-//! settings, under the backend's layer split on the binding's devices. The
-//! adapted run must change at least one output token, the control must repeat,
-//! and all three arms must show the same division and the same KV cache
-//! records. Each arm runs in its own process (see `lora/fixture.rs`).
+//! repeated, and an adapted run, repeated, on the fixed base, fixture, input
+//! and settings, under the backend's layer split on the binding's devices. The
+//! adapted run must change at least one output token, each pair must repeat
+//! its ids exactly, and all four arms must show the same division. The adapted
+//! pair repeats because the adapted model is the one served (the operator's
+//! ruling of 2026-11-08, the adapter is the point). Each arm runs in its own
+//! process (see `lora/fixture.rs`).
 //!
 //! An explicit accelerator instrument, run with `--ignored` under the
 //! variables `lora/fixture.rs` reads and `WEAVER_LORA_PINNED_ID`, the entry to
@@ -46,26 +48,29 @@ fn the_adapter_changes_the_pinned_greedy_output_on_the_binding() {
     let control = run_arm(TEST, &inputs, "control", false, Some(&ids));
     let repeat = run_arm(TEST, &inputs, "control-repeat", false, Some(&ids));
     let adapted = run_arm(TEST, &inputs, "adapted", true, Some(&ids));
+    let adapted_repeat = run_arm(TEST, &inputs, "adapted-repeat", true, Some(&ids));
 
-    assert_covers(&control, &ids);
-    assert_covers(&repeat, &ids);
-    assert_covers(&adapted, &ids);
-    assert_same_division(&control, &repeat);
-    assert_same_division(&control, &adapted);
+    for arm in [&control, &repeat, &adapted, &adapted_repeat] {
+        assert_covers(arm, &ids);
+        assert_same_division(&control, arm);
+    }
 
+    // The summary is written before the assertions, so a pair that does not
+    // repeat leaves its first difference in the report.
     let base = &control.outputs[&pinned];
-    assert_eq!(
-        first_difference(base, &repeat.outputs[&pinned]),
-        None,
-        "the base-only control did not repeat"
-    );
-    let changed = first_difference(base, &adapted.outputs[&pinned]);
+    let tuned = &adapted.outputs[&pinned];
+    let control_departs = first_difference(base, &repeat.outputs[&pinned]);
+    let adapted_departs = first_difference(tuned, &adapted_repeat.outputs[&pinned]);
+    let changed = first_difference(base, tuned);
     let summary = serde_json::json!({
         "pinned": pinned,
         "control_tokens": base.len(),
-        "adapted_tokens": adapted.outputs[&pinned].len(),
+        "adapted_tokens": tuned.len(),
         "first_changed_position": changed,
-        "control_repeated": true,
+        "control_repeated": control_departs.is_none(),
+        "control_repeat_first_difference": control_departs,
+        "adapted_repeated": adapted_departs.is_none(),
+        "adapted_repeat_first_difference": adapted_departs,
         "same_division": true,
     });
     std::fs::write(
@@ -73,6 +78,11 @@ fn the_adapter_changes_the_pinned_greedy_output_on_the_binding() {
         serde_json::to_string_pretty(&summary).expect("the summary serializes"),
     )
     .expect("the summary writes");
+    assert_eq!(
+        control_departs, None,
+        "the base-only control did not repeat"
+    );
+    assert_eq!(adapted_departs, None, "the adapted run did not repeat");
     assert!(
         changed.is_some(),
         "the adapted run changed no output token on {pinned}"

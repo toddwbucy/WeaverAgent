@@ -517,8 +517,8 @@ an adapted run) is a child process of its target's own binary, marked by
 `LORA_PROOF_ARM`, which carries no `WEAVER_` prefix because it is not a fixture.
 Each arm's command carries its binding's PAIR-1 mask. The arms keep their own spawner
 rather than `common::run_masked`, so a held-out arm's progress lines stream as it
-decodes. `lora_proof.rs` is the gate: one pinned entry, the control twice and the
-adapted run once. `lora_heldout.rs` is the long run: every entry, base-only and adapted.
+decodes. `lora_proof.rs` is the gate: one pinned entry, the base-only control twice and
+the adapted run twice, each pair repeating its ids exactly. `lora_heldout.rs` is the long run: every entry, base-only and adapted.
 Both write their report outside the repository (LORA-6). Each arm judges the observed
 division of every session as it closes, the load's records with the session's own, with
 `lora::observation::judge_division` (PAIR-5), and the parent asserts the same computed
