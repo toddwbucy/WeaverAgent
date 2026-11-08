@@ -13,14 +13,15 @@ more than one device. The operator ruled its content on 2026-11-08. The ground
 is reproducibility: a different division of layers is a different numerical
 path, so the division must not depend on what a device holds at load time.
 
-Amend SPU Spec sections 1.2, 3, 4.1 and 10 as mapped below.
+Amend SPU Spec sections 1.2, 3, 4.1 and 10, and `weaver-harness-Spec` section
+2.2, as mapped below.
 The grounds are SPU PRD sections 4.1, 7 and 13.6.
 These clauses authorize code after merge. They do not claim that the mechanic
 exists at the source baseline.
 
 | Clause | Destination | Addition |
 | --- | --- | --- |
-| PAIR-1 | Spec 3 | Device numbering by PCI bus, and refusal of a renumbered device space |
+| PAIR-1 | Spec 3, and `weaver-harness-Spec` 2.2 | PCI bus numbering and a visibility mask set by the harness from the binding |
 | PAIR-2 | Spec 3 | The members of a multi-device set must be identical |
 | PAIR-3 | Spec 4.1 | A deterministic even layer split for the GGUF backend |
 | PAIR-4 | Spec 3 | Room judged per device from that device's actual share |
@@ -44,28 +45,54 @@ the record, so a replay can derive the division without a new member.
 The source survey is the hub report "SPU device placement: step-0 survey"
 of 2026-11-08. It is evidence for this document. It is not normative.
 
-## 1. Device numbering
+## 1. Device numbering and visibility
 
 **PAIR-1.** A device ordinal in a binding means the device at that index in
-PCI bus order. That is the order the operator's device tools list.
+PCI bus order. That is the order the operator's device tools list. A device
+outside the binding is not visible to the organ at all.
 
-Each SPU binary sets `CUDA_DEVICE_ORDER=PCI_BUS_ID` in its own process
-environment at entry, before any driver, runtime or backend call. This applies
-to `weaver-spu`, `weaver-spu-classify` and every other binary the crate builds
-that can open a device. An inherited value is replaced, not trusted. Without
-this setting, the driver numbers devices fastest first, which need not match
-bus order. On a box with mixed devices, a binding ordinal could then name a
-device the operator did not choose.
+Naming devices to the engine does not keep other devices out of the process.
+On 2026-11-08, a llama.cpp server given two of three devices still opened a
+context on the third, because the CUDA backend initializes every visible
+device. Only the visibility mask kept the third device out. On a box that
+runs two agents, each SPU would otherwise hold a context on the other's
+device.
 
-Admin and the harness do not change. Admin's start step clears the environment
-(`weaver-admin` `start.rs`), and the harness passes the worker's environment to
-the SPU unchanged (`weaver-harness` `spawn.rs`). The SPU's own entry is the one
-place that controls the value for every launch path.
+**The harness sets the environment when it launches a device organ.** When
+the worker forks the SPU, it sets two variables in the child's environment,
+replacing any inherited value:
 
-The agent does not set `CUDA_VISIBLE_DEVICES`. If the SPU's environment carries
-that variable at entry, admission refuses before any device query. A visible
-set renumbers ordinals, so the binding's ordinals would no longer name the
-devices the operator listed. The refusal names the variable and its value.
+| Variable | Value |
+| --- | --- |
+| `CUDA_DEVICE_ORDER` | `PCI_BUS_ID` |
+| `CUDA_VISIBLE_DEVICES` | The decoder binding's ordinals, in binding order, comma-separated |
+
+The worker holds the decoder binding before the fork, in the load payload's
+SPU instruction, so no new channel is needed. The classify organ's launch does
+the same with its single device. No other organ gets these variables set. The
+harness reads only the ordinals, which it already reads for the trace mirror
+and the classify launch. It interprets nothing else in the binding. This
+amends `weaver-harness-Spec` section 2.2 and `spawn.rs`'s environment
+construction.
+
+**Inside the organ, ordinals are positions.** Under that mask, the process sees
+exactly the binding's devices, renumbered from zero in binding order. The SPU
+uses position i for the device at binding index i, in every driver and engine
+call. Every refusal, account and evidence record names the binding's own
+ordinal, never the position, so the operator reads the numbers the device tools
+show.
+
+**The SPU checks the mask at admission, before any device query.** If
+`CUDA_DEVICE_ORDER` is not `PCI_BUS_ID`, or `CUDA_VISIBLE_DEVICES` does not equal
+the instruction's ordinals in order, admission refuses. The refusal names both
+values. This catches a launch path that does not go through the harness, such
+as a test or a fixture driver, so the SPU never judges or loads under a
+numbering the binding does not mean.
+
+Admin does not change. Its start step clears the environment, and the harness
+sets these two variables after that. A kernel-level guarantee, denying the
+agent's processes the device nodes outside its binding, is a separate act
+(PAIR-6, #479).
 
 ## 2. Identical members
 
@@ -173,8 +200,10 @@ current free figure, and the room refusal still carries the device's capacity.
 
 | Claim | Instrument | Deliberate change that must fail |
 | --- | --- | --- |
-| Bus numbering is set before any device call | A test that reads the SPU's entry order, plus a run whose inherited value differs | Set the variable after a driver call, or keep an inherited value |
-| A visible set refuses | Admission with `CUDA_VISIBLE_DEVICES` present | Admit anyway |
+| The harness sets the mask from the binding | The environment built for an SPU fork, with an inherited value of each variable present | Keep an inherited value, or set the mask out of binding order |
+| A wrong mask refuses | Admission under a missing order variable and under a mask that differs from the instruction | Admit anyway, or query a device first |
+| Positions map back to ordinals | A binding of non-zero ordinals, whose refusal names the binding's ordinals | Report the position |
+| No context on a non-member device | On a box with a device outside the binding: the device lists no SPU process after load | Launch without the mask |
 | Mixed members refuse | A recording device query returning two different names, capabilities or totals | Judge only the name, or skip the judgment for pairs |
 | The split is deterministic | Hardware-free arithmetic over L and N, including odd L and N = 3, checked against the engine's cumulative mapping | Pass proportional halves, or put a value on a boundary edge |
 | The split reaches the engine | The parameters built for a pair carry the computed tensor split | Leave the split unset |
@@ -209,6 +238,9 @@ declared division that clause waited for.
 | Tensor split | A measurement on hardware that represents the targeted deployments, and the operator's ruling |
 | KV cache in the room judgment | A per-layer measurement of the cache on each device |
 | Host memory for the input layer | A host-room election, if the operator wants one |
+| Host memory at load | Measure the SPU's own load. A llama.cpp server with mmap off peaked near the model's size in host memory (55 GiB for Granite), then fell to under 2 GiB |
+| KV cache precision | The engine's default KV cache is F16, where the Python reference runs bf16. A known source of drift for the operator's ruling, not a defect here |
+| Kernel device wall | Admin's start step denies the agent's processes the device nodes outside its binding, by cgroup device control. #479 |
 
 Row and tensor split depend on a fast interconnect, because they synchronize
 every layer. The targeted workstation devices have no such link, so a result on
@@ -227,6 +259,7 @@ that the mechanic exists.
 | `lora/observation.rs::judge` | Accepts a buffer on any device of the set |
 | `tests/two_card.rs` | Two-device admission and serving under the free-memory default |
 | `weaver-admin` `start.rs` and `weaver-harness` `spawn.rs` | Environment cleared by admin, passed unchanged to the SPU |
+| `weaver-harness` `lifecycle.rs`, the SPU and classify forks | The decoder binding is in hand before the SPU fork; classify already reads its device |
 | Pinned `llama-model.cpp`, the split step | Free-memory default, cumulative fractions over L + 1 slots, input layer on the host |
 | Pinned `llama-kv-cache.cpp` | The KV cache follows the layer's assigned device |
 | Pinned `llama.cpp`, device list | Layer mode is confined to the listed devices |
