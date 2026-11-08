@@ -4,7 +4,7 @@
 
 **Landing PR:** #475
 
-**Version:** 0.1
+**Version:** 0.2
 **Date filed:** 2026-11-04
 **Document ID:** `weaver-spu-lora-loading-Spec-amendment`
 **Parent:** `weaver-spu-PRD`
@@ -30,7 +30,7 @@ merge. They do not claim that the mechanic exists at the source baseline.
 | LORA-4 | Spec 4.2 and 9 | Context attachment before the first forward |
 | LORA-5 | Spec 3 and 4.1 | Release and failure cleanup |
 | LORA-6 | Spec 6 | Fixture evidence, separate from production measurement |
-| LORA-7 | Spec 1.2 and 10 | Mechanical tests and the real 4B application proof |
+| LORA-7 | Spec 1.2 and 10 | Mechanical tests and the real 30B application proofs |
 | LORA-8 | Spec 10 | Qualification cells and the limit of a fixture pass |
 
 The baseline is main at `aa863f5bb3cfcee2f0c444bd075283bf94ccec79`.
@@ -45,8 +45,11 @@ to item 3, with the corresponding record and replay changes. Item 4 waits.
 This boundary avoids a temporary public single-adapter binding before the
 declared-set design is specified.
 
-The ThinkPad proof is the 4B lane. Its fixture source remains the operator's
-choice. The 30B family entry and R1 emitter adapter test remain on olympus.
+Two application proofs follow, in order, on the operator's word of 2026-11-08.
+The first is Granite 4.2 30B, a dense transformer. The second is Nemotron 3
+Nano 30B-A3B, a hybrid of Mamba-2, attention and expert layers. Each proof uses
+a WeaverTrain adapter trained on its base. The operator selects that adapter.
+The 4B fixture is set aside. It is not part of either proof.
 This document supplies no download authority, fixture artifact or drift limit.
 
 ## 1. The fixture admission input
@@ -74,10 +77,15 @@ A present incomplete request fails before admission. Invalid digest syntax or
 non-finite scale also fails before admission. Do not replace presence with
 absence after an error.
 
-The expected base hash pins the runtime GGUF, including its quantization.
+The expected base hash pins the runtime GGUF, including its tensor types.
 It does not prove the adapter's training ancestry. The fixture's provenance
 must link the training base, source adapter and converted runtime artifacts.
 The operator chooses that fixture, and #435 records its conversion.
+
+Each proof's runtime base is a bf16 GGUF converted from the pinned revision
+of its training base. A quantized base is a different model. It does not
+stand for the proof base, on the operator's word of 2026-11-08. The converted
+adapter keeps the precision its source tensors were saved in.
 
 ## 2. Acquisition and pre-load judgment
 
@@ -181,10 +189,12 @@ resident under the selected backend. Admission does not yet claim that a
 decode context has the adapter attached. LORA-4 owns that separate fact.
 With absence, preserve the existing base-only load and result.
 
-The 4B family must resolve through the same family registry as normal decode.
-Do not build a fixture-only family selector or hard-code a second template.
-Any missing 4B registration needs its measured artifact facts in the later
-implementation act. This amendment asserts no new 30B family support.
+Each proof base must resolve through the same family registry as normal
+decode. Do not build a fixture-only family selector or hard-code a second
+template. Main at `4493be6b` has no registry entry for the `granite`
+architecture. A missing registration needs its measured artifact facts in the
+later implementation act, under SPU Spec 5. This amendment asserts no new
+family support.
 
 ## 4. Context attachment and fixed residency
 
@@ -268,7 +278,7 @@ failed attempts. Mark unavailable observations absent, not zero.
 | Exact input | Rendered input bytes, template and tokenizer identities, input token IDs and effective generation settings |
 | Output and resources | Output token IDs and text, stop reason, elapsed load and decode times, and measured allocation or peak-memory evidence |
 | Refusal and cleanup | Failed stage, typed result, backend detail and release observations, including partial-load and attach failures |
-| Comparison | Base-only and adapted outputs, the Python reference, conversion and quantization differences, and the operator's drift ruling if one exists |
+| Comparison | Base-only and adapted outputs, the Python reference, conversion and backend differences, and the operator's drift ruling if one exists |
 
 The report must distinguish loaded, attached, output changed and accepted
 Python/SPU agreement. None implies the next. With drift still open, report
@@ -282,7 +292,7 @@ these consumers together before a production adapter binding is admitted.
 This separation leaves the trace-floor question open while retaining the
 fixture evidence needed to judge the mechanic.
 
-## 7. Instruments and the 4B proof
+## 7. Instruments and the 30B proofs
 
 **LORA-7.** The implementation supplies the following instruments inside the
 SPU's existing test surface. A fake backend can prove ordering and refusal,
@@ -297,7 +307,7 @@ but cannot stand for the real adapter application proof.
 | Attachment precedes prefix | Backend call order plus an injected attachment failure | Decode any prefix token before attachment or continue after failure |
 | Residency remains fixed | Exercise generation, cancel, flush and elision, including any context recreation | Lose or change the adapter while rebuilding kept tokens |
 | Cleanup | Inject failures during adapter allocation and context attachment, then inspect owned-resource release | Leak a resource, double-free or complete release early |
-| Real 4B application | Fixed base, fixture, input and settings, comparing base-only and adapted output | Omit adapter attachment or disable a target contribution used by the proof |
+| Real 30B application | Fixed base, fixture, input and settings, comparing base-only and adapted output, once for each proof base | Omit adapter attachment or disable a target contribution used by the proof |
 | Production boundary | Parser and normal admission tests, plus a caller census | Admit an adapter through an unamended declaration or production call |
 
 The real proof uses an operator-selected fixture trained on the same base.
@@ -308,11 +318,18 @@ output-change requirement.
 
 The perturbation that removes attachment must make the application assertion
 fail. Do not merely assert that a handle exists or that a load log was emitted.
-Name the target classes exercised by the fixture. Do not claim Mamba coverage
-from an attention-only adapter or extend a 4B result to the 30B family.
+Name the target classes exercised by the fixture. The Granite proof exercises
+dense attention and MLP projections only. Do not claim Mamba or expert
+coverage from it, and do not extend it to the Nemotron family.
+
+At bf16, neither 30B base fits on one device. Each proof runs on its assigned
+device pair. The fixture records the device of every base layer and every
+adapter tensor. How a pair divides the layers is the subject of a separate
+SPU amendment. Until that amendment merges, the fixture records the backend's
+observed layer division and does not claim a declared placement.
 
 Run the Python comparison with matched input tokens and recorded settings.
-Record unavoidable differences, including base quantization and conversion.
+Record unavoidable differences, including conversion and backend arithmetic.
 The operator decides whether the measured drift is acceptable.
 A successful load or changed output does not settle that decision.
 
@@ -327,11 +344,12 @@ the run with their names. No test downloads or trains its own fixture.
 
 | Cell | Evidence or ruling that closes it |
 | --- | --- |
-| 4B fixture source | Operator selects the compatible artifact or authorizes its production and any download, then pins its provenance and digests |
+| Proof adapter source | Operator selects the WeaverTrain adapter for each proof base, then pins its provenance and digests |
 | Accepted Python/SPU drift | Operator names the comparison and tolerance after reading the pinned base-only and adapted measurements |
-| Mamba target support | #435 conversion and application evidence for each relevant target class, including in_proj to ssm_in where present |
-| 4B resource need | Actual base, adapter, context and device measurements, including adapter allocation and transient peak use |
-| Missing 4B family facts | The selected base's metadata, tokenizer, renderer and stop behavior verified for the registry entry |
+| Mamba and expert target support | The Nemotron proof's #435 conversion and application evidence for each relevant target class, including in_proj to ssm_in where present |
+| 30B resource need | Actual base, adapter, context and per-device measurements on the assigned pair, including adapter allocation and transient peak use |
+| Missing proof family facts | Each proof base's metadata, tokenizer, template, renderer and stop behavior verified for its registry entry, with the scale metadata its architecture carries |
+| Declared device placement | The separate placement amendment's merged policy for a device pair, followed by its implementation |
 | Production adapter serving | Item 3's merged binding, request selection, role contracts, evidence and replay amendments, followed by their implementation |
 
 The trace-floor ruling remains with the operator under item 1.
@@ -358,6 +376,7 @@ and are not claims that the new mechanic has already been implemented.
 | Pinned llama-adapter.cpp and llama.h | Metadata and tensor checks, skipped tensor path, buffer placement and model-owned adapter lifetime |
 | Pinned llama-impl.h, llama-impl.cpp and llama_log_set | DEBUG and WARN delivery to the fixture's placement observer |
 | Pinned models/mamba-base.cpp::build_mamba2_layer | LoRA graph paths for ssm_in and ssm_out, separate from conversion proof |
+| Pinned models/granite.cpp and convert_hf_to_gguf.py::GraniteModel | The attention scale is read from GGUF metadata, written from the source config's attention multiplier |
 
 Production identity consumers held for item 3 are listed below. The source
 paths are under crates/. Their inclusion records the boundary that prevents
