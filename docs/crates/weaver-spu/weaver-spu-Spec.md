@@ -258,7 +258,13 @@ whose build script accepts the CUDA 13.4 toolkit.
 **The pins, recorded here because no document of this corpus carried them
 until 2026-08-06.** `llama-cpp-2` and `llama-cpp-sys-2` both resolve to
 `https://github.com/toddwbucy/llama-cpp-rs` at revision
-`ecce255bcb14dd6d88f184cc8776c23a85afafeb`, moved 2026-08-17 from `277e4100`
+`bebe55d6a90069e13bc6c38eefc707a700014550`, the fork's branch
+`weaver/tensor-split-on-ecce255`, moved 2026-11-08 from `ecce255b` by the
+device pair amendment (PAIR-3). It adds two upstream cherry-picks on
+`params.rs` alone: `with_tensor_split` (`e7af607`) and override appends that
+no longer overwrite slot 0 (`ef551b0`). The vendored llama.cpp stays at
+`e21cdc11`, so an engine citation at `ecce255` still names this engine.
+`ecce255bcb14dd6d88f184cc8776c23a85afafeb` had moved 2026-08-17 from `277e4100`
 by the split-artifact ruling: the fork gains `load_from_splits`, the
 explicit-set door llama.cpp holds for callers whose paths carry no sibling
 pattern, which is what a descriptor path is, and the build script's DLL
