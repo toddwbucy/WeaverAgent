@@ -24,7 +24,7 @@ exists at the source baseline.
 | PAIR-1 | Spec 3, and `weaver-harness-Spec` 2.2 | PCI bus numbering and a visibility mask set by the harness from the binding |
 | PAIR-2 | Spec 3 | The members of a multi-device set must be identical |
 | PAIR-3 | Spec 4.1 | A deterministic even layer split for the GGUF backend |
-| PAIR-4 | Spec 3 | Room judged per device from that device's actual share |
+| PAIR-4 | Spec 3 | Room judged per device from its actual share, for GGUF |
 | PAIR-5 | Spec 1.2 and 10 | Instruments, including the observed division |
 | PAIR-6 | Spec 10 | Open cells: row and tensor split |
 
@@ -184,10 +184,11 @@ tensor-parallel design (Spec 4.1, `native_pair.rs`).
 
 ## 4. Room per device
 
-**PAIR-4.** Admission judges each device against its own share, not an even
-fraction of the file. Replace the even shard (`residency.rs`, file length
-divided by device count) with a share computed from the header's tensor
-directory, which admission already reads at no device cost:
+**PAIR-4.** For a GGUF artifact, admission judges each device against its own
+share, not an even fraction of the file. Replace the even shard
+(`residency.rs`, file length divided by device count) with a share computed
+from the header's tensor directory, which admission already reads at no device
+cost:
 
 | Term | Content |
 | --- | --- |
@@ -195,6 +196,11 @@ directory, which admission already reads at no device cost:
 | Output | The output and output-norm tensors, on the last device only |
 | Adapter | Under the LoRA fixture, the adapter tensors whose base layer is on the device |
 | Headroom | The existing staged headroom parameter, unchanged |
+
+The native (candle) pair keeps the existing even-fraction judgment. Its
+tensor-parallel path shards the projections of every layer across both
+devices (`native_pair.rs::ShardedModel::load`), so no device holds whole
+`blk.N.*` layers and the table above does not describe its residency.
 
 The input layer is not charged to any device. It is host memory, and the SPU
 makes no host-memory judgment. The fixture report records its size.
@@ -220,7 +226,7 @@ current free figure, and the room refusal still carries the device's capacity.
 | Mixed members refuse | A recording device query returning two different names, capabilities or totals | Judge only the name, or skip the judgment for pairs |
 | The split is deterministic | Hardware-free arithmetic over L and N, including odd L and N = 3, checked against the engine's cumulative mapping | Pass proportional halves, or put a value on a boundary edge |
 | The split reaches the engine | The parameters built for a pair carry the computed tensor split | Leave the split unset |
-| Room is per device | A directory fixture with unequal layer sizes and an output tensor | Judge the even file fraction |
+| Room is per device for GGUF | A directory fixture with unequal layer sizes and an output tensor, plus a native artifact that keeps the even fraction | Judge the even file fraction for GGUF, or apply the GGUF table to a native artifact |
 | The observed division matches | On a device pair, under the LORA-3 log capture at debug level: exactly one `load_tensors: layer N assigned to device` record for each layer and for the output (`layer L`), and exactly one KV `layer N: dev =` record for each layer, all matching PAIR-3. A KV record reading "does not have KV cache" or "filtered" counts as missing | Accept a missing or duplicated record, or a layer on the wrong device |
 
 The observed-division instrument is an explicit accelerator test, like the
