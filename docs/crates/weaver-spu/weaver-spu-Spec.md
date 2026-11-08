@@ -519,9 +519,10 @@ Each arm's command carries its binding's PAIR-1 mask. The arms keep their own sp
 rather than `common::run_masked`, so a held-out arm's progress lines stream as it
 decodes. `lora_proof.rs` is the gate: one pinned entry, the control twice and the
 adapted run once. `lora_heldout.rs` is the long run: every entry, base-only and adapted.
-Both write their report outside the repository (LORA-6). Each arm judges its observed
-division with `lora::observation::judge_division` (PAIR-5), and the parent asserts the
-same computed and observed division across arms.
+Both write their report outside the repository (LORA-6). Each arm judges the observed
+division of every session as it closes, the load's records with the session's own, with
+`lora::observation::judge_division` (PAIR-5), and the parent asserts the same computed
+and observed division across arms.
 
 **`WEAVER_DECODE_GGUF` is the decode module's own and is not a test target's.** It
 points the engine's unit suite at an artifact whose vocabulary those tests read, which

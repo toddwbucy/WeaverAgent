@@ -22,7 +22,7 @@ mod fixture;
 
 use fixture::{Inputs, assert_covers, assert_same_division, first_difference, run_arm};
 use weaver_spu::division::Division;
-use weaver_spu::lora::observation::{Record, judge_division};
+use weaver_spu::lora::observation::Record;
 use weaver_spu::room::Caches;
 use weaver_types::DeviceOrdinal;
 
@@ -103,60 +103,59 @@ const TWO_SESSIONS: &[&str] = &[
     "llama_kv_cache: layer   0: dev = CUDA0",
     "llama_kv_cache: layer   1: dev = CUDA1",
 ];
+/// Where the load's records end, and each session's.
+const LOAD: usize = 3;
+const FIRST: std::ops::Range<usize> = 3..5;
+const SECOND: std::ops::Range<usize> = 5..7;
 
-fn judge(records: &[Record]) -> Result<(), String> {
+fn session(records: &[Record], range: std::ops::Range<usize>) -> Result<Vec<u32>, String> {
     let devices = [DeviceOrdinal(0), DeviceOrdinal(1)];
     let division = Division::even(2, 2).expect("two layers over two devices");
     let caches = [Caches {
         attention: true,
         recurrent: false,
     }; 2];
-    judge_division(records, &devices, &division, &caches).map(|_| ())
+    fixture::judge_session(records, LOAD, range, &devices, &division, &caches)
+        .map(|observed| observed.slots.iter().map(|d| d.0).collect())
 }
 
-/// **The held-out arm's cut keeps the load and the first session**, so the
-/// SPU's own judgment passes on a capture of several sessions.
+/// **Each session is judged with the load's records and its own**, so the
+/// SPU's judgment passes on every session of a capture of several.
 #[test]
-fn the_first_session_cut_judges_a_capture_of_two_sessions() {
+fn each_session_judges_with_the_load_records() {
     let records = records(TWO_SESSIONS);
-    let first = fixture::first_session(&records);
-    assert_eq!(first.len(), 5);
-    judge(first).expect("the load and the first session judge clean");
+    assert_eq!(session(&records, FIRST), Ok(vec![0, 1, 1]));
+    assert_eq!(session(&records, SECOND), Ok(vec![0, 1, 1]));
 }
 
-/// Perturbation of the above: without the cut, the second session's records
-/// are repeats, and the judgment refuses them.
+/// Perturbation of the above: judged whole, the second session's records are
+/// repeats, and the judgment refuses them.
 #[test]
-fn an_uncut_capture_of_two_sessions_refuses() {
-    let faults = judge(&records(TWO_SESSIONS)).expect_err("repeats refuse");
+fn a_capture_judged_whole_refuses_its_repeats() {
+    let records = records(TWO_SESSIONS);
+    let faults = session(&records, FIRST.start..SECOND.end).expect_err("repeats refuse");
     assert!(faults.contains("recorded 2 times"), "{faults}");
 }
 
-/// The cut does not hide a fault inside the first session: a layer 1 record
-/// repeated there still refuses.
+/// A later session's cache on the wrong device refuses, which a judgment of
+/// the first session alone would not see.
 #[test]
-fn a_repeat_inside_the_first_session_still_refuses() {
-    let mut lines = TWO_SESSIONS[..5].to_vec();
-    lines.push("llama_kv_cache: layer   1: dev = CUDA1");
-    lines.extend_from_slice(&TWO_SESSIONS[5..]);
+fn a_later_session_off_its_layer_refuses() {
+    let mut lines = TWO_SESSIONS.to_vec();
+    lines[6] = "llama_kv_cache: layer   1: dev = CUDA0";
     let records = records(&lines);
-    let faults = judge(fixture::first_session(&records)).expect_err("the repeat refuses");
+    assert!(session(&records, FIRST).is_ok());
+    let faults = session(&records, SECOND).expect_err("the misplaced cache refuses");
     assert!(faults.contains("layer 1"), "{faults}");
 }
 
-/// A capture of one session is judged whole.
+/// The boundaries are counts, not a reading of the log: a session whose cache
+/// also prints a filtered layer 0 line, as a sliding-window model's second
+/// cache does, is judged whole.
 #[test]
-fn a_capture_of_one_session_is_not_cut() {
-    let records = records(&TWO_SESSIONS[..5]);
-    assert_eq!(fixture::first_session(&records).len(), 5);
-}
-
-/// The cut reads a record lossily: a second session's layer 0 cache record
-/// that is not UTF-8 still begins the second session, where a skip would
-/// leave the second session's records in the judged slice.
-#[test]
-fn a_cache_record_that_is_not_utf8_still_opens_a_session() {
-    let mut records = records(TWO_SESSIONS);
-    records[5].bytes = b"llama_kv_cache: layer   0: dev = CUDA0 \xE2\x82\n".to_vec();
-    assert_eq!(fixture::first_session(&records).len(), 5);
+fn a_filtered_cache_line_does_not_move_the_boundaries() {
+    let mut lines = TWO_SESSIONS[..5].to_vec();
+    lines.insert(4, "llama_kv_cache: layer   0: filtered");
+    let records = records(&lines);
+    assert_eq!(session(&records, 3..6), Ok(vec![0, 1, 1]));
 }

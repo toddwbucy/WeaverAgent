@@ -380,7 +380,7 @@ pub fn child() -> bool {
     let request = inputs.request();
     stage("admit");
     let admit_started = Instant::now();
-    let resident = match fixture.admit(
+    match fixture.admit(
         &inputs.binding(),
         Headroom(HEADROOM_BYTES),
         CAPACITY,
@@ -388,13 +388,18 @@ pub fn child() -> bool {
         false,
         adapted.then_some(&request),
     ) {
-        Ok(resident) => resident,
+        Ok(_) => {}
         Err(refusal) => {
             stage(&format!("admit refused: {refusal:?}"));
             dump_records(&inputs.report, name, &fixture.records().unwrap_or_default());
             panic!("arm {name} admission refused: {refusal:?}")
         }
     };
+    // Shared from here, so the capture reads between sessions.
+    let resident = fixture.resident().expect("the admission stands");
+    // The load's records end here: the assignment and adapter records. Each
+    // session's context then writes the cache records again.
+    let load_end = fixture.records().expect("the capture reads").len();
     let admit_seconds = admit_started.elapsed().as_secs_f64();
     stage("decode");
     let family = (resident.declaration.renderer)();
@@ -431,6 +436,14 @@ pub fn child() -> bool {
         adapted,
         "arm {name}: adapter residency does not match the arm"
     );
+    // LORA-3's per-target evidence: an adapted arm placed every target, which
+    // the load's judge already matched to its layer's device, and a base arm
+    // placed none.
+    assert_eq!(
+        placement.as_ref().is_some_and(|p| !p.is_empty()),
+        adapted,
+        "arm {name}: adapter placement does not match the arm"
+    );
 
     let mut lines = String::new();
     // LORA-6: the exact inputs this arm decoded, archived beside its outputs.
@@ -445,6 +458,11 @@ pub fn child() -> bool {
     }
     std::fs::write(inputs.report.join(format!("{name}.inputs.jsonl")), consumed)
         .expect("the consumed inputs write");
+    // **Every session's division is judged when it closes**, against the
+    // load's records and that session's own, so a departure fails the arm at
+    // the session that shows it rather than after the whole run.
+    let mut session_start = load_end;
+    let mut observed = None;
     for entry in &selected {
         let started = Instant::now();
         let mut session = resident
@@ -486,6 +504,33 @@ pub fn child() -> bool {
             other => panic!("entry {} ended {other:?}", entry.id),
         };
         drop(session);
+        let captured = fixture.records().expect("the capture reads");
+        match judge_session(
+            &captured,
+            load_end,
+            session_start..captured.len(),
+            &inputs.devices,
+            &division,
+            &caches,
+        ) {
+            Ok(this) => match &observed {
+                None => observed = Some(this),
+                Some(first) => assert_eq!(
+                    first, &this,
+                    "arm {name}: entry {} observed another division",
+                    entry.id
+                ),
+            },
+            Err(faults) => {
+                stage(&format!("division refused at {}: {faults}", entry.id));
+                dump_records(&inputs.report, name, &captured);
+                panic!(
+                    "arm {name}: the observed division departs from PAIR-3 at {}: {faults}",
+                    entry.id
+                )
+            }
+        }
+        session_start = captured.len();
         let row = json!({
             "id": entry.id,
             "output": text,
@@ -500,21 +545,7 @@ pub fn child() -> bool {
     stage("observe");
     let records = fixture.records().expect("the capture holds every record");
     dump_records(&inputs.report, name, &records);
-    // An arm of one entry opened one session and judges every record. An arm
-    // of several opened one session per entry, each writing the cache records
-    // again, so it judges the load and its first session.
-    let judged = if selected.len() == 1 {
-        &records[..]
-    } else {
-        first_session(&records)
-    };
-    let observed = match judge_division(judged, &inputs.devices, &division, &caches) {
-        Ok(observed) => observed,
-        Err(faults) => {
-            stage(&format!("division refused: {faults}"));
-            panic!("arm {name}: the observed division departs from PAIR-3: {faults}")
-        }
-    };
+    let observed = observed.expect("an arm decodes at least one entry");
     let ordinals = |devices: &[Option<DeviceOrdinal>]| -> Vec<Option<u32>> {
         devices.iter().map(|d| d.as_ref().map(|d| d.0)).collect()
     };
@@ -567,7 +598,8 @@ pub fn child() -> bool {
             "attention": ordinals(&observed.attention),
             "recurrent": ordinals(&observed.recurrent),
         },
-        "records_judged": judged.len(),
+        "sessions_judged": selected.len(),
+        "records_of_load": load_end,
         "records_captured": records.len(),
         "placement": {
             "visible": placement_judged.visible,
@@ -584,6 +616,7 @@ pub fn child() -> bool {
                 .collect::<Vec<_>>()),
             "input_bytes": placement_judged.input_bytes,
         },
+        "input_layer": "token_embd stays in host memory under every assignment; the pinned engine emits no assignment record for it (placement.input_bytes is its size)",
         "interconnect": interconnect(),
         "libllama": libllama(),
     });
@@ -639,36 +672,27 @@ fn source() -> Value {
     })
 }
 
-/// **The records through an arm's first session.** Each session's context
-/// writes the KV cache records again, so an arm that opens one session per
-/// entry repeats them, and `judge_division` refuses a repeat. The cut falls at
-/// the second attention cache record of layer 0, where the second session's
-/// records begin. A layer 0 record repeated inside the first session is cut
-/// rather than caught here; the gate's arms open one session each and judge
-/// every record, so they catch it.
-///
-/// **A record is read lossily**, as `lora::observation::judge` and
-/// `judge_division` read it: a record that is not UTF-8 still opens a session
-/// when it carries a layer 0 cache line, and whether an invalid record that
-/// carries placement evidence refuses is the judgment's rule, applied to the
-/// records this keeps.
-pub fn first_session(records: &[Record]) -> &[Record] {
-    let opens_a_cache = |record: &Record| {
-        String::from_utf8_lossy(&record.bytes).lines().any(|line| {
-            line.strip_prefix("llama_kv_cache: layer ")
-                .and_then(|rest| rest.split_once(':'))
-                .is_some_and(|(layer, _)| layer.trim() == "0")
-        })
-    };
-    match records
+/// **One session's observed division**, per PAIR-5: the load's records
+/// (`..load_end`, the assignment and adapter records) with the session's own
+/// (`session`, its context's cache records), judged by
+/// `lora::observation::judge_division`. The boundaries are record counts the
+/// driver took as it opened and closed each session, not a reading of the
+/// log, so a cache that prints a layer more than once per session (a
+/// sliding-window model's two caches) does not move them.
+pub fn judge_session(
+    records: &[Record],
+    load_end: usize,
+    session: std::ops::Range<usize>,
+    devices: &[DeviceOrdinal],
+    division: &weaver_spu::division::Division,
+    caches: &[weaver_spu::room::Caches],
+) -> Result<weaver_spu::lora::observation::ObservedDivision, String> {
+    let judged: Vec<Record> = records[..load_end]
         .iter()
-        .enumerate()
-        .filter(|(_, record)| opens_a_cache(record))
-        .nth(1)
-    {
-        Some((index, _)) => &records[..index],
-        None => records,
-    }
+        .chain(&records[session])
+        .cloned()
+        .collect();
+    judge_division(&judged, devices, division, caches)
 }
 
 /// The topology between the devices, evidence only (PAIR-5): admission does
