@@ -153,6 +153,12 @@ impl Fixture {
             .admit_with_adapter(binding, headroom, positions, readout, surprisal, request)
     }
 
+    /// The residency this fixture admitted, `None` before an admission. A
+    /// shared borrow, so a driver can read the capture between its sessions.
+    pub fn resident(&self) -> Option<&crate::residency::Resident> {
+        self.residency.resident()
+    }
+
     pub fn records(&self) -> Result<Vec<observation::Record>, String> {
         observation::records()
     }

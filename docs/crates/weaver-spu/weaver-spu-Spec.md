@@ -464,6 +464,8 @@ Process section 6 names the two invocations that reach them.
 | `two_card.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_TWO_CARD`, `WEAVER_ARTIFACT_SPLIT` |
 | `readout_neutral.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_READOUT`, `WEAVER_ARTIFACT_READOUT_LAYERS` |
 | `observed_division.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_DIVISION` |
+| `lora_proof.rs` | `cuda` and `gguf` | `WEAVER_LORA_BASE`, `WEAVER_LORA_BASE_BLAKE3`, `WEAVER_LORA_ADAPTER`, `WEAVER_LORA_ADAPTER_SHA256`, `WEAVER_LORA_SCALE`, `WEAVER_LORA_DEVICES`, `WEAVER_LORA_ENTRIES`, `WEAVER_LORA_REPORT`, `WEAVER_LORA_PINNED_ID` |
+| `lora_heldout.rs` | `cuda` and `gguf` | `WEAVER_LORA_BASE`, `WEAVER_LORA_BASE_BLAKE3`, `WEAVER_LORA_ADAPTER`, `WEAVER_LORA_ADAPTER_SHA256`, `WEAVER_LORA_SCALE`, `WEAVER_LORA_DEVICES`, `WEAVER_LORA_ENTRIES`, `WEAVER_LORA_REPORT` |
 
 **A device target holds the device mask of each binding it admits.** The SPU refuses
 a binding whose ordinals its process mask does not name in binding order (device pair
@@ -473,8 +475,9 @@ process of its own binary under that binding's
 SPU binary it spawns, as the harness's fork does. The targets run under the lease line
 `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1`, or with no mask. A run with the
 cards hidden (`CUDA_VISIBLE_DEVICES=`) skips every device test, except
-`observed_division.rs`: it is an explicit accelerator instrument run with `--ignored`,
-and it fails by name without its artifact or the device pair.
+`observed_division.rs`, `lora_proof.rs` and `lora_heldout.rs`: each is an explicit
+accelerator instrument run with `--ignored`, and each fails by name without its
+artifacts or the device pair.
 
 **Two targets name a fixture they do not read, and the first form of this
 table recorded the mention as a read.** `seam.rs` cites `WEAVER_TEST_GGUF` in a
@@ -506,6 +509,23 @@ manifest test therefore checks the shape rather than the roster.
 re-renders the R1 held-out prompts through the granite renderer and compares their
 token ids with the deposit's, so it needs the same artifact `markers.rs` probes, and one
 name for one artifact keeps the two from pointing at different files.
+
+**The two LORA-7 targets share one arm runner**, `tests/lora/fixture.rs`, per
+`weaver-spu-lora-loading-Spec-amendment` section 7. A residency admits once per process
+and the LORA-3 observer installs once per process, so each arm (a base-only control or
+an adapted run) is a child process of its target's own binary, marked by
+`LORA_PROOF_ARM`, which carries no `WEAVER_` prefix because it is not a fixture.
+Each arm's command carries its binding's PAIR-1 mask. The arms keep their own spawner
+rather than `common::run_masked`, so a held-out arm's progress lines stream as it
+decodes. `lora_proof.rs` is the gate: one pinned entry, the base-only control twice and
+the adapted run twice, each pair replaying bitwise: identical token ids, bit-identical
+entropy and surprisal at every position (LORA-6's numerical trace), and the same
+termination. `lora_heldout.rs` is the long run: every entry, base-only and adapted.
+Both write their report outside the repository (LORA-6), with the numerical trace
+of every entry, so a later run of the held-out set can be compared bitwise. Each arm judges the observed
+division of every session as it closes, the load's records with the session's own, with
+`lora::observation::judge_division` (PAIR-5), and the parent asserts the same computed
+and observed division across arms.
 
 **`WEAVER_DECODE_GGUF` is the decode module's own and is not a test target's.** It
 points the engine's unit suite at an artifact whose vocabulary those tests read, which
