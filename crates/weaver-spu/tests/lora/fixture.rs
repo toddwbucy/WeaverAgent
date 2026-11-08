@@ -30,6 +30,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use serde_json::{Value, json};
+use sha2::Digest as _;
 use weaver_spu::decoder::backend::TokenId;
 use weaver_spu::decoder::session::{
     NeverCancels, PositionedSinks, SamplerBuild, StopCondition, Stopped,
@@ -364,6 +365,20 @@ pub fn child() -> bool {
     let placement = model.adapter_placement().cloned();
     let weights_hash = resident.weights_hash.0.clone();
     let family_name = resident.declaration.family;
+    // The layer count is the artifact's own (`block_count`), not one read back
+    // from the capture, so a capture that lost a suffix cannot vouch for itself.
+    let n_layer = u32::try_from(
+        resident
+            .header
+            .layer_count
+            .expect("the base declares its block count"),
+    )
+    .expect("a layer count fits u32");
+    let template_sha256 = resident
+        .header
+        .chat_template
+        .as_ref()
+        .map(|t| format!("{:x}", sha2::Sha256::digest(t.as_bytes())));
     assert_eq!(
         identity.is_some(),
         adapted,
@@ -371,6 +386,18 @@ pub fn child() -> bool {
     );
 
     let mut lines = String::new();
+    // LORA-6: the exact inputs this arm decoded, archived beside its outputs.
+    let mut consumed = String::new();
+    for entry in &selected {
+        let row = json!({
+            "id": entry.id,
+            "input_ids": entry.input_ids.iter().map(|t| t.0).collect::<Vec<u32>>(),
+            "max_new_tokens": entry.max_new_tokens,
+        });
+        writeln!(consumed, "{row}").expect("a string takes a line");
+    }
+    std::fs::write(inputs.report.join(format!("{name}.inputs.jsonl")), consumed)
+        .expect("the consumed inputs write");
     for entry in &selected {
         let started = Instant::now();
         let mut session = resident
@@ -426,7 +453,7 @@ pub fn child() -> bool {
     stage("observe");
     let records = fixture.records().expect("the capture holds every record");
     dump_records(&inputs.report, name, &records);
-    let (division, kv) = division(&records);
+    let (division, kv) = division(&records, n_layer);
     let observation = json!({
         "arm": name,
         "adapted": adapted,
@@ -434,6 +461,11 @@ pub fn child() -> bool {
         "base_weights_hash": weights_hash,
         "devices": inputs.devices.iter().map(|d| d.0).collect::<Vec<_>>(),
         "family": family_name,
+        "n_layer": n_layer,
+        "chat_template_sha256": template_sha256,
+        "entries_sha256": format!("{:x}", sha2::Sha256::digest(
+            std::fs::read(&inputs.entries).expect("the entries file reads again"),
+        )),
         "terminator": terminator.0,
         "stop_tokens": [terminator.0],
         "serving_stop_tokens": serving_stops,
@@ -520,6 +552,7 @@ fn source() -> Value {
 /// sessions; the division must be non-empty.
 pub fn division(
     records: &[weaver_spu::lora::observation::Record],
+    n_layer: u32,
 ) -> (BTreeMap<u32, String>, BTreeMap<u32, String>) {
     let mut division = BTreeMap::new();
     let mut kv = BTreeMap::new();
@@ -555,11 +588,8 @@ pub fn division(
     // LORA-7: an assignment for every repeating layer and for the output
     // layer, which the engine counts as n_layer, and a KV record for every
     // repeating layer. A partial or empty capture fails rather than comparing
-    // equal to another partial one.
-    let last = *division
-        .keys()
-        .last()
-        .expect("no assignment record was captured");
+    // equal to another partial one. `n_layer` is the artifact's own count.
+    let last = n_layer;
     assert!(
         division.keys().copied().eq(0..=last),
         "the assignment records are not one per layer 0..={last}: {:?}",
@@ -570,6 +600,15 @@ pub fn division(
         "the KV records are not one per repeating layer 0..{last}: {:?}",
         kv.keys().collect::<Vec<_>>()
     );
+    // A layer's KV cache lives with its layer: membership in the binding is
+    // not enough, the device must be the one the layer is assigned to.
+    for (layer, device) in &kv {
+        assert_eq!(
+            &division[layer], device,
+            "layer {layer}'s KV cache is on {device}, and the layer is assigned to {}",
+            division[layer]
+        );
+    }
     (division, kv)
 }
 
@@ -624,6 +663,47 @@ pub fn assert_division_on_binding(arm: &Arm, devices: &[DeviceOrdinal]) {
                 arm.name
             );
         }
+    }
+}
+
+/// The layer an adapter target belongs to: `blk.N.` is repeating layer N, and
+/// `output.` is the output layer, which the engine numbers `n_layer`. A target
+/// in neither is refused rather than judged against no layer.
+pub fn adapter_layer(target: &str, n_layer: u32) -> u32 {
+    if let Some(rest) = target.strip_prefix("blk.") {
+        let layer = rest.split('.').next().unwrap_or_default();
+        return layer
+            .parse()
+            .unwrap_or_else(|_| panic!("adapter target {target} names no layer"));
+    }
+    if target.starts_with("output.") {
+        return n_layer;
+    }
+    panic!("adapter target {target} is outside every assigned layer");
+}
+
+/// LORA-3: each adapter target's buffer is the device its layer is assigned
+/// to, not merely a device of the binding.
+pub fn assert_adapter_on_its_layers(arm: &Arm) {
+    let Some(placement) = arm.observation["adapter_placement"].as_object() else {
+        panic!("arm {} carries no adapter placement", arm.name);
+    };
+    let n_layer = arm.observation["n_layer"].as_u64().expect("n_layer") as u32;
+    let division = &arm.observation["division"];
+    assert!(
+        !placement.is_empty(),
+        "arm {} placed no adapter target",
+        arm.name
+    );
+    for (target, buffer) in placement {
+        let layer = adapter_layer(target, n_layer);
+        assert_eq!(
+            division[layer.to_string()],
+            *buffer,
+            "arm {}: adapter target {target} is on {buffer}, and its layer {layer} is assigned to {}",
+            arm.name,
+            division[layer.to_string()]
+        );
     }
 }
 
