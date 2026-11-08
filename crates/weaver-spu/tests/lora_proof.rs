@@ -150,3 +150,13 @@ fn a_capture_of_one_session_is_not_cut() {
     let records = records(&TWO_SESSIONS[..5]);
     assert_eq!(fixture::first_session(&records).len(), 5);
 }
+
+/// The cut reads a record lossily: a second session's layer 0 cache record
+/// that is not UTF-8 still begins the second session, where a skip would
+/// leave the second session's records in the judged slice.
+#[test]
+fn a_cache_record_that_is_not_utf8_still_opens_a_session() {
+    let mut records = records(TWO_SESSIONS);
+    records[5].bytes = b"llama_kv_cache: layer   0: dev = CUDA0 \xE2\x82\n".to_vec();
+    assert_eq!(fixture::first_session(&records).len(), 5);
+}

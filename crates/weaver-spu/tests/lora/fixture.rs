@@ -646,14 +646,18 @@ fn source() -> Value {
 /// records begin. A layer 0 record repeated inside the first session is cut
 /// rather than caught here; the gate's arms open one session each and judge
 /// every record, so they catch it.
+///
+/// **A record is read lossily**, as `lora::observation::judge` and
+/// `judge_division` read it: a record that is not UTF-8 still opens a session
+/// when it carries a layer 0 cache line, and whether an invalid record that
+/// carries placement evidence refuses is the judgment's rule, applied to the
+/// records this keeps.
 pub fn first_session(records: &[Record]) -> &[Record] {
     let opens_a_cache = |record: &Record| {
-        std::str::from_utf8(&record.bytes).is_ok_and(|text| {
-            text.lines().any(|line| {
-                line.strip_prefix("llama_kv_cache: layer ")
-                    .and_then(|rest| rest.split_once(':'))
-                    .is_some_and(|(layer, _)| layer.trim() == "0")
-            })
+        String::from_utf8_lossy(&record.bytes).lines().any(|line| {
+            line.strip_prefix("llama_kv_cache: layer ")
+                .and_then(|rest| rest.split_once(':'))
+                .is_some_and(|(layer, _)| layer.trim() == "0")
         })
     };
     match records
