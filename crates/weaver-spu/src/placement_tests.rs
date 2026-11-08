@@ -197,6 +197,13 @@ mod device {
                 String::from_utf8_lossy(&result.stdout),
                 String::from_utf8_lossy(&result.stderr),
             );
+            // A filter that reaches no test also exits 0, so the summary is
+            // what says the child ran.
+            assert!(
+                String::from_utf8_lossy(&result.stdout).contains("test result: ok. 1 passed"),
+                "placement {kind}: the child did not run: {}",
+                String::from_utf8_lossy(&result.stdout),
+            );
             eprintln!(
                 "placement {kind}: real residency, shared preparation, cuts and generation passed"
             );

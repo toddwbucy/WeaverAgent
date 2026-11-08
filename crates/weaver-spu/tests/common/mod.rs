@@ -255,6 +255,19 @@ pub fn report(value: &serde_json::Value) {
     println!("{MASKED_RESULT}{value}");
 }
 
+/// The values a masked child reported, in order, from its stdout. Under
+/// `--nocapture` the harness prints `test <name> ... ` and the test's first
+/// line follows on the same line, so a report is found anywhere in a line,
+/// not only at its start: the first live run of the masked children, on
+/// 2026-11-08, failed a passing child on exactly that.
+pub fn reported(stdout: &str) -> Vec<serde_json::Value> {
+    stdout
+        .lines()
+        .filter_map(|line| line.split_once(MASKED_RESULT).map(|(_, json)| json))
+        .map(|json| serde_json::from_str(json).expect("a reported value"))
+        .collect()
+}
+
 /// **Run test `name` of this binary in its own process under the PAIR-1 mask
 /// for `devices`**, the way the harness launches the SPU, and answer the
 /// values it reported. A child that fails, or that the filter did not reach,
@@ -286,11 +299,7 @@ pub fn run_masked(name: &str, devices: &[u32]) -> Vec<serde_json::Value> {
         String::from_utf8_lossy(&output.stderr)
     );
     eprint!("{}", String::from_utf8_lossy(&output.stderr));
-    let values: Vec<serde_json::Value> = stdout
-        .lines()
-        .filter_map(|line| line.strip_prefix(MASKED_RESULT))
-        .map(|json| serde_json::from_str(json).expect("a reported value"))
-        .collect();
+    let values = reported(&stdout);
     // `--nocapture` interleaves the child's own lines with the harness's
     // per-test line, so the summary is what says the one test ran and passed.
     assert!(

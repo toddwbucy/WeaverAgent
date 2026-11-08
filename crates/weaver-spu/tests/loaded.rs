@@ -146,6 +146,29 @@ fn free_bytes(context: &cudarc::driver::CudaContext) -> u64 {
     free as u64
 }
 
+/// **A masked child's report is read where the harness puts it**: under
+/// `--nocapture` the child's first stdout line shares the harness's
+/// `test <name> ... ` line. The shape here is the one the first live run
+/// printed. No device is touched.
+///
+/// Perturbation: read reports only at the start of a line and this test
+/// fails.
+#[test]
+fn a_masked_report_is_read_after_the_harness_prefix() {
+    let stdout = "\nrunning 1 test\n\
+        test a_real_admit_holds_the_device_and_release_frees_it_child ... MASKED-RESULT \"done\"\n\
+        MASKED-RESULT {\"tokens\":[1,2]}\n\
+        ok\n\n\
+        test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out\n";
+    assert_eq!(
+        common::reported(stdout),
+        vec![
+            serde_json::json!("done"),
+            serde_json::json!({"tokens": [1, 2]})
+        ]
+    );
+}
+
 /// **Admit holds the weights on the device, and release frees them before it
 /// answers.** The Spec carries the release ordering as review's, the instrument
 /// being priced against a driver seam the Spec does not introduce. This build
