@@ -451,3 +451,25 @@ fn native_and_hybrid_artifacts_keep_the_even_fraction() {
     assert_eq!(hybrid.shares, None);
     assert_eq!(hybrid.needs, [500, 500]);
 }
+
+/// **A tensor directory that does not parse keeps its account**: the
+/// refusal carries no detail, so the typed standard-error line names the
+/// shard and the reader's own words.
+///
+/// Perturbation: drop the detail from the line and this test fails.
+#[test]
+fn a_layout_fault_line_names_the_shard_and_the_detail() {
+    let line = layout_fault_line(
+        Path::new("/models/m-00002-of-00003.gguf"),
+        "tensor blk.7.attn_q.weight has type 99",
+    );
+    let value: serde_json::Value = serde_json::from_str(&line).expect("one typed line");
+    assert_eq!(
+        value,
+        serde_json::json!({"layout_fault": {
+            "shard": "/models/m-00002-of-00003.gguf",
+            "detail": "tensor blk.7.attn_q.weight has type 99",
+        }})
+    );
+    assert!(!line.contains('\n'));
+}

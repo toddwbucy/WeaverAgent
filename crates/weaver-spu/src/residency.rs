@@ -727,10 +727,13 @@ impl Residency {
         // **PAIR-4: the header read reaches every shard's tensor directory**,
         // still reading no tensor data and touching no device. A directory
         // that does not parse refuses as the header read refuses, naming the
-        // shard.
+        // shard. The floor's refusal carries no detail, so the fault's own
+        // account goes to standard error as one typed line, the operator's
+        // record of why.
         let layout = match header.container {
             artifact::Container::Gguf => Some(Layout::read(&pinned.paths()).map_err(|fault| {
                 let shard = pinned.names().get(fault.shard).unwrap_or(&path);
+                eprintln!("{}", layout_fault_line(shard, &fault.detail));
                 AdmitRefusal::on_artifact(LifecycleRefusal::ArtifactUnreadable, shard, "header")
             })?),
             artifact::Container::Safetensors => None,
@@ -905,6 +908,15 @@ fn judge_distinct(devices: &[DeviceOrdinal]) -> Result<(), AdmitRefusal> {
     Ok(())
 }
 
+/// The typed standard-error line for a tensor directory that does not parse:
+/// the shard and the reader's own account, which the refusal cannot carry.
+fn layout_fault_line(shard: &Path, detail: &str) -> String {
+    serde_json::json!({
+        "layout_fault": {"shard": shard.display().to_string(), "detail": detail}
+    })
+    .to_string()
+}
+
 /// The environment and driver an admission judges against.
 pub(crate) struct DeviceSide<'a> {
     pub visibility: Visibility,
@@ -937,10 +949,13 @@ struct Plan {
 /// device's PAIR-4 share, from the header and the directories, reading no
 /// device.
 ///
-/// A GGUF artifact divides by its layer count. Its devices are charged their
-/// own shares, unless its architecture is recurrent or hybrid
-/// ([`Layout::deferred`]), which keeps the even fraction of the file until
-/// the second child act. A native artifact keeps the even fraction: its
+/// A GGUF artifact divides by its layer count, and the load places every
+/// architecture by that division. Its devices are charged their own shares,
+/// unless its architecture is recurrent or hybrid ([`Layout::deferred`]):
+/// then the room judgment keeps the even fraction of the file until the
+/// second child act, while the load already places the layers by the
+/// division, so the last device, which takes the output layer, can be asked
+/// for less than it holds. A native artifact keeps the even fraction: its
 /// tensor-parallel pair shards every layer across both devices, so no device
 /// holds whole layers. The even fraction charges each device the whole
 /// adapter, the preflight bound LORA-2 set before placement was declared.

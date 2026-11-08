@@ -24,7 +24,6 @@
 use std::sync::Arc;
 
 use cudarc::driver::{CudaContext, sys};
-use weaver_types::DeviceOrdinal;
 
 pub use crate::devices::DeviceRefusal;
 use crate::devices::{DeviceQuery, Identity};
@@ -60,21 +59,6 @@ impl DeviceQuery for Driver {
             _ => false,
         }
     }
-}
-
-/// Judge room and reach across the assigned set with one even shard per
-/// device, through [`Driver`].
-///
-/// Admission judges each device against its own share
-/// (`crate::devices::judge_room_and_reach`). This even form stays for the
-/// tests that probe the driver with a uniform need.
-pub fn room_and_reach(
-    devices: &[DeviceOrdinal],
-    shard_bytes: u64,
-    headroom_bytes: u64,
-) -> Result<(), DeviceRefusal> {
-    let needs = vec![shard_bytes; devices.len()];
-    crate::devices::judge_room_and_reach(devices, &needs, headroom_bytes, &Driver)
 }
 
 /// One primary-context handle per position, held for the life of the

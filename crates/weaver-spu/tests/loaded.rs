@@ -297,8 +297,8 @@ mod seam_success {
             eprintln!("SKIP an_admit_electing_readout_refuses: no model at {UNTAPPED_MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP an_admit_electing_readout_refuses: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP an_admit_electing_readout_refuses: {why}");
             return;
         }
         let _device = device_lock();
@@ -374,8 +374,8 @@ mod seam_success {
             eprintln!("SKIP admit_then_release_round_trips: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP admit_then_release_round_trips: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP admit_then_release_round_trips: {why}");
             return;
         }
         // Held across the whole spawn-and-wait, because the child process is
@@ -483,8 +483,8 @@ mod seam_success {
             eprintln!("SKIP the_declared_ceiling: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP the_declared_ceiling: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP the_declared_ceiling: {why}");
             return;
         }
         let _device = device_lock();
@@ -619,8 +619,8 @@ mod seam_success {
             eprintln!("SKIP an_elected_surprisal: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP an_elected_surprisal: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP an_elected_surprisal: {why}");
             return;
         }
         let _device = device_lock();
@@ -760,8 +760,8 @@ mod seam_success {
             eprintln!("SKIP an_opened_session_generates: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP an_opened_session_generates: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP an_opened_session_generates: {why}");
             return;
         }
         let _device = device_lock();
@@ -998,8 +998,8 @@ mod seam_success {
             eprintln!("SKIP a_serving_load_never_opens: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP a_serving_load_never_opens: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP a_serving_load_never_opens: {why}");
             return;
         }
         let _device = device_lock();
@@ -1142,8 +1142,8 @@ mod seam_success {
     fn check_cancelled_refeed(model: PathBuf) {
         use weaver_traits::{ContentBlock, Message, Role};
         use weaver_types::{SessionId, TokenAnswer, TokenDirective, TurnKey};
-        if device_context().is_none() {
-            eprintln!("SKIP a_cancelled_refeed_retains_zero_prefix: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP a_cancelled_refeed_retains_zero_prefix: {why}");
             return;
         }
         let _device = device_lock();
@@ -1394,8 +1394,8 @@ mod seam_success {
             eprintln!("SKIP the_null_refeed_recomputes: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP the_null_refeed_recomputes: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP the_null_refeed_recomputes: {why}");
             return;
         }
         let _device = device_lock();
@@ -1674,8 +1674,8 @@ mod seam_success {
             eprintln!("SKIP the_column_crosses: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP the_column_crosses: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP the_column_crosses: {why}");
             return;
         }
         let _device = device_lock();
@@ -1840,8 +1840,8 @@ mod seam_success {
             eprintln!("SKIP no_vector_crosses_unasked: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP no_vector_crosses_unasked: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP no_vector_crosses_unasked: {why}");
             return;
         }
         let _device = device_lock();

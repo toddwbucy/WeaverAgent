@@ -1,4 +1,6 @@
 use super::*;
+use crate::devices::judge_room_and_reach;
+use weaver_types::DeviceOrdinal;
 
 /// These run against whatever device this machine has, and skip where it
 /// has none. A skip is printed rather than silent, because a suite that
@@ -19,7 +21,7 @@ fn a_shard_that_fits_is_admitted() {
         return;
     }
     assert_eq!(
-        room_and_reach(&[DeviceOrdinal(0)], 1024 * 1024, 1024 * 1024),
+        judge_room_and_reach(&[DeviceOrdinal(0)], &[1024 * 1024], 1024 * 1024, &Driver),
         Ok(())
     );
 }
@@ -28,7 +30,7 @@ fn a_shard_that_fits_is_admitted() {
 /// the refusal names the device and both numbers, so an operator meeting it
 /// knows whether to free a card or reassign the binding.
 ///
-/// Perturbation: change the `free < needed` comparison in `room_and_reach`
+/// Perturbation: change the `free < needed` comparison in `judge_room_and_reach`
 /// to `free < shard_bytes`, dropping the headroom term, and this test still
 /// passes, which is why the headroom's presence is argued at its own clause
 /// rather than rested on this test. Deleting the comparison entirely fails
@@ -40,7 +42,7 @@ fn a_shard_larger_than_the_device_refuses_on_room() {
         return;
     }
     let absurd = 1024u64 * 1024 * 1024 * 1024; // a terabyte
-    match room_and_reach(&[DeviceOrdinal(0)], absurd, 0) {
+    match judge_room_and_reach(&[DeviceOrdinal(0)], &[absurd], 0, &Driver) {
         Err(DeviceRefusal::NoRoom {
             ordinal, needed, ..
         }) => {
@@ -79,7 +81,7 @@ fn the_room_refusal_says_which_reading_applies() {
         needed,
         total,
         ..
-    }) = room_and_reach(&[DeviceOrdinal(0)], absurd, 0)
+    }) = judge_room_and_reach(&[DeviceOrdinal(0)], &[absurd], 0, &Driver)
     else {
         panic!("a terabyte shard refuses on room");
     };
