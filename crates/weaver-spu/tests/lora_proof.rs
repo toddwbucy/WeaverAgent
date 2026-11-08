@@ -267,3 +267,46 @@ fn a_longer_trace_does_not_replay() {
         Some("position 3: token None against Some(13)")
     );
 }
+
+/// **A failed arm keeps the entries it completed** (LORA-6, Codex round 1 on
+/// #492): two entries appended, then a failure on the third, leave both on
+/// disk in the outputs and the trace, and the failure record's count names the
+/// second as the last.
+#[test]
+fn a_failed_arm_keeps_its_completed_entries() {
+    let report = std::env::temp_dir().join(format!(
+        "lora-entry-log-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is past the epoch")
+            .as_nanos()
+    ));
+    std::fs::create_dir(&report).expect("a scratch report directory");
+    let path = report.clone();
+    let failed = std::panic::catch_unwind(move || {
+        let mut log = fixture::EntryLog::create(&path, "arm");
+        for id in ["t001", "t002"] {
+            log.append(
+                &serde_json::json!({"id": id, "token_ids": [1, 2]}),
+                &trace().to_json(id),
+            );
+        }
+        panic!("entry t003 failed");
+    });
+    assert!(failed.is_err());
+    let lines = |file: &str| -> Vec<String> {
+        std::fs::read_to_string(report.join(file))
+            .expect("the file is on disk")
+            .lines()
+            .map(str::to_string)
+            .collect()
+    };
+    assert_eq!(lines("arm.jsonl").len(), 2);
+    assert_eq!(lines("arm.trace.jsonl").len(), 2);
+    assert_eq!(
+        fixture::completed_entries(&report, "arm"),
+        (2, Some("t002".to_string()))
+    );
+    std::fs::remove_dir_all(&report).expect("the scratch directory goes");
+}

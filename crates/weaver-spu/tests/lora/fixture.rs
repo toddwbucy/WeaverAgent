@@ -430,13 +430,68 @@ pub fn run_arm(
     if !status.success() {
         // LORA-6 keeps a failed attempt's facts: the stage the child reached
         // is in its stage file, and the parent records the exit.
+        // The entries it completed are on disk already (see [`EntryLog`]),
+        // and the record names how far it got.
+        let (completed, last) = completed_entries(&inputs.report, name);
         let _ = std::fs::write(
             inputs.report.join(format!("{name}.failed")),
-            format!("{status}\n"),
+            format!(
+                "{status}\nentries completed: {completed}\nlast completed: {}\n",
+                last.as_deref().unwrap_or("none")
+            ),
         );
-        panic!("arm {name} failed: {status}");
+        panic!(
+            "arm {name} failed: {status} after {completed} entries (last {})",
+            last.as_deref().unwrap_or("none")
+        );
     }
     read_arm(&inputs.report, name)
+}
+
+/// **Each entry's output and numerical trace, on disk as the entry
+/// completes** (LORA-6: a failed attempt keeps its evidence). Both files are
+/// created fresh, and every append is written, flushed and synced before the
+/// next session opens, so an arm that fails on a later entry leaves every
+/// completed entry behind.
+pub struct EntryLog {
+    outputs: std::fs::File,
+    traces: std::fs::File,
+}
+
+impl EntryLog {
+    pub fn create(report: &Path, name: &str) -> EntryLog {
+        let open = |file: String| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(report.join(&file))
+                .unwrap_or_else(|e| panic!("{file} in {}: {e}", report.display()))
+        };
+        EntryLog {
+            outputs: open(format!("{name}.jsonl")),
+            traces: open(format!("{name}.trace.jsonl")),
+        }
+    }
+
+    pub fn append(&mut self, output: &Value, trace: &Value) {
+        use std::io::Write as _;
+        for (file, row) in [(&mut self.outputs, output), (&mut self.traces, trace)] {
+            writeln!(file, "{row}").expect("an entry line writes");
+            file.flush().expect("an entry line flushes");
+            file.sync_data().expect("an entry line reaches the disk");
+        }
+    }
+}
+
+/// How many entries an arm left on disk, and the last one's id.
+pub fn completed_entries(report: &Path, name: &str) -> (usize, Option<String>) {
+    let text = std::fs::read_to_string(report.join(format!("{name}.jsonl"))).unwrap_or_default();
+    let ids: Vec<String> = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|row| row["id"].as_str().map(str::to_string))
+        .collect();
+    (ids.len(), ids.last().cloned())
 }
 
 fn read_arm(report: &Path, name: &str) -> Arm {
@@ -596,8 +651,7 @@ pub fn child() -> bool {
         "arm {name}: adapter placement does not match the arm"
     );
 
-    let mut lines = String::new();
-    let mut trace_lines = String::new();
+    let mut log = EntryLog::create(&inputs.report, name);
     // LORA-6: the exact inputs this arm decoded, archived beside its outputs.
     let mut consumed = String::new();
     for entry in &selected {
@@ -616,6 +670,7 @@ pub fn child() -> bool {
     let mut session_start = load_end;
     let mut observed = None;
     for entry in &selected {
+        stage(&format!("decode {}", entry.id));
         let started = Instant::now();
         let mut session = resident
             .open_session(&KNOBS, CAPACITY)
@@ -680,7 +735,15 @@ pub fn child() -> bool {
             trace.surprisal.len(),
             trace.tokens.len()
         );
-        writeln!(trace_lines, "{}", trace.to_json(&entry.id)).expect("a string takes a line");
+        // On disk before the judgment and before the next session opens.
+        let row = json!({
+            "id": entry.id,
+            "output": text,
+            "token_ids": ids,
+            "finish_reason": finish,
+            "wall_seconds": started.elapsed().as_secs_f64(),
+        });
+        log.append(&row, &trace.to_json(&entry.id));
         drop(session);
         let captured = fixture.records().expect("the capture reads");
         match judge_session(
@@ -709,14 +772,9 @@ pub fn child() -> bool {
             }
         }
         session_start = captured.len();
-        let row = json!({
-            "id": entry.id,
-            "output": text,
-            "token_ids": ids,
-            "finish_reason": finish,
-            "wall_seconds": started.elapsed().as_secs_f64(),
-        });
-        writeln!(lines, "{row}").expect("a string takes a line");
+        // The raw records so far, so a later failure keeps every judged
+        // session's placement evidence too.
+        dump_records(&inputs.report, name, &captured);
         eprintln!("arm {name}: {} {} tokens, {finish}", entry.id, ids.len());
     }
 
@@ -807,9 +865,6 @@ pub fn child() -> bool {
         "libllama": libllama(),
     });
     let report = &inputs.report;
-    std::fs::write(report.join(format!("{name}.jsonl")), lines).expect("the outputs write");
-    std::fs::write(report.join(format!("{name}.trace.jsonl")), trace_lines)
-        .expect("the numerical trace writes");
     std::fs::write(
         report.join(format!("{name}.json")),
         serde_json::to_string_pretty(&observation).expect("the observation serializes"),
