@@ -165,7 +165,10 @@ and cannot unwind across the C boundary. Run no unrelated load in that process.
 Preserve the raw callback records in the fixture report. Parse the pinned
 llama_adapter_lora_init_impl records that map each target to its buffer type.
 Require one placement observation for every requested target pair. Match each
-buffer to the declared backend placement and assigned devices. Missing,
+target's buffer to the device that the backend's assignment record (LORA-7)
+gives that target's layer. That device must be a member of the assigned set.
+Until the placement amendment merges, no declared placement exists to match
+against. Missing,
 ambiguous or unmapped observations fail qualification, rather than implying
 device placement from the absence of a warning.
 
@@ -191,10 +194,10 @@ With absence, preserve the existing base-only load and result.
 
 Each proof base must resolve through the same family registry as normal
 decode. Do not build a fixture-only family selector or hard-code a second
-template. Main at `4493be6b` has no registry entry for the `granite`
-architecture. A missing registration needs its measured artifact facts in the
-later implementation act, under SPU Spec 5. This amendment asserts no new
-family support.
+template. Main at `4493be6b`, later than this amendment's baseline, has no
+registry entry for the `granite` architecture. A missing registration needs
+its measured artifact facts in the later implementation act, under SPU Spec 5.
+This amendment asserts no new family support.
 
 ## 4. Context attachment and fixed residency
 
@@ -272,7 +275,7 @@ failed attempts. Mark unavailable observations absent, not zero.
 
 | Evidence | Required content |
 | --- | --- |
-| Source and build | WeaverAgent commit, llama-cpp-rs pin, backend features, host and effective device assignment |
+| Source and build | WeaverAgent commit, llama-cpp-rs pin, backend features, host, effective device assignment, the observed layer division and the visible CUDA device set |
 | Artifact provenance | Training-base identity, runtime-base BLAKE3 identity, source adapter identity, conversion command and version, converted adapter SHA-256 |
 | Adapter operation | Scale, stored alpha, target names, ranks, loaded tensor pairs, raw placement callback records, parsed per-target buffers, and attachment outcome |
 | Exact input | Rendered input bytes, template and tokenizer identities, input token IDs and effective generation settings |
@@ -320,13 +323,26 @@ The perturbation that removes attachment must make the application assertion
 fail. Do not merely assert that a handle exists or that a load log was emitted.
 Name the target classes exercised by the fixture. The Granite proof exercises
 dense attention and MLP projections only. Do not claim Mamba or expert
-coverage from it, and do not extend it to the Nemotron family.
+coverage from it, and do not extend it to the Nemotron family. The proofs
+run under the backend's layer split. No result extends to row or tensor
+split.
 
-At bf16, neither 30B base fits on one device. Each proof runs on its assigned
-device pair. The fixture records the device of every base layer and every
-adapter tensor. How a pair divides the layers is the subject of a separate
-SPU amendment. Until that amendment merges, the fixture records the backend's
-observed layer division and does not claim a declared placement.
+At bf16, neither 30B base fits on one 48 GB device. Each proof runs on its
+assigned device pair under the GGUF backend's layer split. From the LORA-3
+callback capture, the fixture records the pinned backend's assignment record
+for every repeating layer and for the output layer, which the backend counts
+as layer n_layer. It also records the per-layer KV cache records. These are
+assignments, not per-tensor placements. Each adapter tensor's buffer comes
+from the LORA-3 per-target records. The pinned backend keeps the input layer,
+token_embd, in host memory under every assignment and emits no assignment
+record for it. The fixture records that fact. It does not report the input
+layer as resident on the pair.
+
+How a pair divides the layers is the subject of a separate SPU amendment.
+Until that amendment merges, the division is the backend's free-memory
+default. The fixture records it as observed and claims no declared placement.
+The base-only control and the adapted run must show the same division. A run
+whose division differs from its control's fails the comparison.
 
 Run the Python comparison with matched input tokens and recorded settings.
 Record unavoidable differences, including conversion and backend arithmetic.
@@ -347,8 +363,8 @@ the run with their names. No test downloads or trains its own fixture.
 | Proof adapter source | Operator selects the WeaverTrain adapter for each proof base, then pins its provenance and digests |
 | Accepted Python/SPU drift | Operator names the comparison and tolerance after reading the pinned base-only and adapted measurements |
 | Mamba and expert target support | The Nemotron proof's #435 conversion and application evidence for each relevant target class, including in_proj to ssm_in where present |
-| 30B resource need | Actual base, adapter, context and per-device measurements on the assigned pair, including adapter allocation and transient peak use |
-| Missing proof family facts | Each proof base's metadata, tokenizer, template, renderer and stop behavior verified for its registry entry, with the scale metadata its architecture carries |
+| 30B resource need | Actual base, adapter, context and per-device measurements on the assigned pair, including adapter allocation and transient peak use, host memory for the input layer, and the per-device share the backend's division places, which the admission's even-share judgment does not model |
+| Missing proof family facts | Each proof base's metadata, tokenizer, template, renderer and stop behavior verified for its registry entry, with the scale metadata its architecture carries, present and nonzero |
 | Declared device placement | The separate placement amendment's merged policy for a device pair, followed by its implementation |
 | Production adapter serving | Item 3's merged binding, request selection, role contracts, evidence and replay amendments, followed by their implementation |
 
@@ -376,7 +392,7 @@ and are not claims that the new mechanic has already been implemented.
 | Pinned llama-adapter.cpp and llama.h | Metadata and tensor checks, skipped tensor path, buffer placement and model-owned adapter lifetime |
 | Pinned llama-impl.h, llama-impl.cpp and llama_log_set | DEBUG and WARN delivery to the fixture's placement observer |
 | Pinned models/mamba-base.cpp::build_mamba2_layer | LoRA graph paths for ssm_in and ssm_out, separate from conversion proof |
-| Pinned models/granite.cpp and convert_hf_to_gguf.py::GraniteModel | The attention scale is read from GGUF metadata, written from the source config's attention multiplier |
+| Pinned models/granite.cpp and convert_hf_to_gguf.py::GraniteModel | The attention scale is read from GGUF metadata, written from the source config's attention multiplier; an absent or zero key falls back silently to 1/sqrt(head dimension) (granite.cpp:125) |
 
 Production identity consumers held for item 3 are listed below. The source
 paths are under crates/. Their inclusion records the boundary that prevents
