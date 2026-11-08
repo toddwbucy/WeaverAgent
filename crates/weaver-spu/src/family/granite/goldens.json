@@ -1,0 +1,75 @@
+{
+  "source_revision": "9e668ce1c538387ef24d3644e9b0606647762636",
+  "template_sha256": "f0ba43f79b3cabca5e5a7584c77aec92f49feae45cdf7779c87d9fc54cd90258",
+  "oracle": "Jinja2 3.1.6, Transformers whitespace settings, tools none, thinking false",
+  "cases": [
+    {
+      "name": "system_user",
+      "messages": [
+        {
+          "role": "system",
+          "content": "Use STE."
+        },
+        {
+          "role": "user",
+          "content": "<<<TEXT\nRead the file.\nTEXT>>>"
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\nUse STE.<|im_end|>\n<|im_start|>user\n<<<TEXT\nRead the file.\nTEXT>>><|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
+      "name": "user_only",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Read."
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\n<|im_end|>\n<|im_start|>user\nRead.<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
+      "name": "history",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "user",
+          "content": "U"
+        },
+        {
+          "role": "assistant",
+          "content": "Answer."
+        },
+        {
+          "role": "user",
+          "content": "Next."
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>user\nU<|im_end|>\n<|im_start|>assistant\n<think></think>Answer.<|im_end|>\n<|im_start|>user\nNext.<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
+      "name": "tool_result",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "user",
+          "content": "U"
+        },
+        {
+          "role": "tool",
+          "content": "Result."
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>user\nU<|im_end|>\n<|im_start|>user\n<tool_response>\nResult.\n</tool_response>\n<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    }
+  ]
+}

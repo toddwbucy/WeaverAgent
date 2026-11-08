@@ -62,6 +62,7 @@ use crate::decoder::backend::FlushMechanism;
 
 pub mod gemma4;
 pub mod gpt_oss;
+pub mod granite;
 pub mod llama;
 pub mod mistral3;
 pub mod modernbert;
@@ -1044,6 +1045,33 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: gpt_oss::GENERATION_OPENER,
         renderer: gpt_oss::renderer,
         selecting_markers: gpt_oss::RENDERED_MARKERS,
+        flush: FlushMechanism::TruncateToPosition,
+        taps_readout: false,
+        taps_column: false,
+    },
+    Declaration {
+        // **qwen2's turns under its own module**, because the pinned template
+        // opens the model's turn with an empty thought and qwen2's opener does
+        // not. The turns are qwen2's template byte for byte, so the template
+        // cited is qwen2's and the renderer calls qwen2's for them. The opener
+        // and the two thought markers it renders are the granite module's.
+        //
+        // Measured on Granite 4.2 30B, 2026-11-08: its header declares this
+        // architecture, its template re-renders the R1 held-out prompts with
+        // this opener, and its `<think>` pair is `USER_DEFINED` and promotes
+        // to one token each. The marker probe of `tests/markers.rs` reads the
+        // set against the artifact.
+        //
+        // The flush is by truncation: `granite` is a dense attention
+        // architecture, absent from `llm_arch_is_hybrid` and from
+        // `llm_arch_is_recurrent`, and the probe's cross-check reads that
+        // against the artifact.
+        family: "granite",
+        shard_widths: &[1, 2],
+        template: qwen2::TEMPLATE,
+        generation_opener: granite::GENERATION_OPENER,
+        renderer: granite::renderer,
+        selecting_markers: granite::SELECTING_MARKERS,
         flush: FlushMechanism::TruncateToPosition,
         taps_readout: false,
         taps_column: false,
