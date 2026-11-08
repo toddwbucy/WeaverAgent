@@ -457,8 +457,6 @@ Process section 6 names the two invocations that reach them.
 | `loaded.rs` | `cuda` and `gguf` | `WEAVER_TEST_GGUF`, `WEAVER_ARTIFACT_QWEN25_SAFETENSORS`, `WEAVER_ARTIFACT_COLUMN_LAYERS`, `WEAVER_ARTIFACT_COLUMN_WIDTH` |
 | `two_card.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_TWO_CARD`, `WEAVER_ARTIFACT_SPLIT` |
 | `readout_neutral.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_READOUT`, `WEAVER_ARTIFACT_READOUT_LAYERS` |
-| `lora_proof.rs` | `cuda` and `gguf` | `WEAVER_LORA_BASE`, `WEAVER_LORA_BASE_BLAKE3`, `WEAVER_LORA_ADAPTER`, `WEAVER_LORA_ADAPTER_SHA256`, `WEAVER_LORA_SCALE`, `WEAVER_LORA_DEVICES`, `WEAVER_LORA_ENTRIES`, `WEAVER_LORA_REPORT`, `WEAVER_LORA_PINNED_ID` |
-| `lora_heldout.rs` | `cuda` and `gguf` | `WEAVER_LORA_BASE`, `WEAVER_LORA_BASE_BLAKE3`, `WEAVER_LORA_ADAPTER`, `WEAVER_LORA_ADAPTER_SHA256`, `WEAVER_LORA_SCALE`, `WEAVER_LORA_DEVICES`, `WEAVER_LORA_ENTRIES`, `WEAVER_LORA_REPORT` |
 
 **Two targets name a fixture they do not read, and the first form of this
 table recorded the mention as a read.** `seam.rs` cites `WEAVER_TEST_GGUF` in a
@@ -490,15 +488,6 @@ manifest test therefore checks the shape rather than the roster.
 re-renders the R1 held-out prompts through the granite renderer and compares their
 token ids with the deposit's, so it needs the same artifact `markers.rs` probes, and one
 name for one artifact keeps the two from pointing at different files.
-
-**The two LORA-7 targets share one arm runner**, `tests/lora/fixture.rs`, per
-`weaver-spu-lora-loading-Spec-amendment` section 7. A residency admits once per process
-and the LORA-3 observer installs once per process, so each arm (a base-only control or
-an adapted run) is a child process of its target's own binary, marked by
-`LORA_PROOF_ARM`, which carries no `WEAVER_` prefix because it is not a fixture.
-`lora_proof.rs` is the gate: one pinned entry, the control twice and the adapted run
-once. `lora_heldout.rs` is the long run: every entry, base-only and adapted. Both write
-their report outside the repository (LORA-6) and assert the same division across arms.
 
 **`WEAVER_DECODE_GGUF` is the decode module's own and is not a test target's.** It
 points the engine's unit suite at an artifact whose vocabulary those tests read, which
