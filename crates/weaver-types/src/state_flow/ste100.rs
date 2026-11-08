@@ -721,6 +721,7 @@ mod tests {
             model_binding: ModelBinding {
                 artifact: crate::ArtifactRef("/models/checker".into()),
                 devices: vec![crate::DeviceOrdinal(0)],
+                adapter: None,
             },
             model_artifact_sha256: digest(),
             instances: 1,

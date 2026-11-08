@@ -342,6 +342,24 @@ fn judge_config(
             )),
         });
     }
+    // **The adapter's artifact is checked the same way and no further**, per
+    // the adapter binding amendment ADP-1: present or refused by name, never
+    // resolved, read, hashed or opened here. Its digests are the declaration's
+    // claims, and the SPU checks them at admission under the agent's identity.
+    if config
+        .spu_instruction
+        .decoder
+        .model_binding
+        .adapter
+        .as_ref()
+        .is_some_and(|adapter| adapter.artifact.0.is_empty())
+    {
+        return Err(LifecycleRefusal::ConfigInvalid {
+            field: Some(FieldName(
+                "spu-instruction.decoder.model-binding.adapter.artifact".into(),
+            )),
+        });
+    }
 
     // The agent's home exists.
     if !boundary.home.is_dir() {

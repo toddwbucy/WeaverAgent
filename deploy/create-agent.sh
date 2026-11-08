@@ -11,7 +11,15 @@
 # engine retired on the operator's ruling of 2026-10-02 on #1), --session <name>
 # (default <name>-001), --spu <path> (this agent's SPU, in place of the
 # stack record's `spu-binary`), --connector-role operator|observer (default
-# operator: which command lines the connector's sudo rule grants).
+# operator: which command lines the connector's sudo rule grants), and
+# --adapter <path> --adapter-sha256 <hex> --adapter-scale <number>
+# --base-blake3 <hex>, all four or none, which write the binding's `adapter`
+# table (weaver-spu adapter binding amendment ADP-1 and ADP-5).
+#
+# **The adapter's digests are the operator's declared claims**, taken from the
+# conversion record and the fixture report, and this script computes nothing:
+# the SPU checks both at admission (ADP-2). The adapter file takes the base's
+# custody: owned outside the agent's uid, readable by it, not writable by it.
 #
 # Run it as the operator, never under sudo: the root's `operator` key names
 # the uid this script runs as, and `--apply` asks for sudo itself for every
@@ -112,6 +120,10 @@ SESSION=""
 ENGINE=sqlite
 SPU_OVERRIDE=""
 CONNECTOR_ROLE=operator
+ADAPTER=""
+ADAPTER_SHA256=""
+ADAPTER_SCALE=""
+BASE_BLAKE3=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply)    APPLY=1 ;;
@@ -131,6 +143,10 @@ while [ $# -gt 0 ]; do
    the declaration lives in the agent's territory, <agent-directory>/weaver-<name>/agent.toml,
    root's, edited with sudoedit, and nothing is written into the operator's home." ;;
     --connector-role) [ $# -ge 2 ] || die "--connector-role needs operator or observer"; CONNECTOR_ROLE=$2; shift ;;
+    --adapter)        [ $# -ge 2 ] || die "--adapter needs a path"; ADAPTER=$2; shift ;;
+    --adapter-sha256) [ $# -ge 2 ] || die "--adapter-sha256 needs a digest"; ADAPTER_SHA256=$2; shift ;;
+    --adapter-scale)  [ $# -ge 2 ] || die "--adapter-scale needs a number"; ADAPTER_SCALE=$2; shift ;;
+    --base-blake3)    [ $# -ge 2 ] || die "--base-blake3 needs a digest"; BASE_BLAKE3=$2; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -154,12 +170,41 @@ SESSION=${SESSION:-$NAME-001}
 # reader in the suite, admin's parser, this script's shell and the harness,
 # must agree on what a path is, and admin refuses a declared path carrying
 # one by name.
-for pair in "session:$SESSION" "artifact:$ARTIFACT"; do
+# **An adapter is declared whole or not at all**, per ADP-1: the table is
+# closed and every member required, so a partial set is refused here, naming
+# what is missing, rather than by the parse after every account is made.
+ADAPTER_GIVEN=0
+for given in "$ADAPTER" "$ADAPTER_SHA256" "$ADAPTER_SCALE" "$BASE_BLAKE3"; do
+  [ -z "$given" ] || ADAPTER_GIVEN=$((ADAPTER_GIVEN + 1))
+done
+if [ "$ADAPTER_GIVEN" -ne 0 ] && [ "$ADAPTER_GIVEN" -ne 4 ]; then
+  missing=""
+  [ -n "$ADAPTER" ] || missing="$missing --adapter"
+  [ -n "$ADAPTER_SHA256" ] || missing="$missing --adapter-sha256"
+  [ -n "$ADAPTER_SCALE" ] || missing="$missing --adapter-scale"
+  [ -n "$BASE_BLAKE3" ] || missing="$missing --base-blake3"
+  die "an adapter takes all four of --adapter, --adapter-sha256, --adapter-scale and --base-blake3, and this run is missing:$missing"
+fi
+TOML_STRINGS=("session:$SESSION" "artifact:$ARTIFACT")
+[ "$ADAPTER_GIVEN" -eq 0 ] || TOML_STRINGS+=("adapter:$ADAPTER")
+for pair in "${TOML_STRINGS[@]}"; do
   field=${pair%%:*} value=${pair#*:}
   if [[ "$value" == *[\"\\]* || "$value" =~ [[:cntrl:]] ]]; then
     die "the $field '$value' carries a double quote, a backslash or a control character, which the declaration's TOML string cannot hold as written"
   fi
 done
+if [ "$ADAPTER_GIVEN" -eq 4 ]; then
+  # The digests are written as the parse requires them, 64 lowercase
+  # hexadecimal characters. The scale is written bare into TOML, which would
+  # take `nan` or `inf` as floats the parse then refuses with a worse account,
+  # so it is a finite decimal that narrows to a finite f32.
+  command -v python3 >/dev/null || die "python3 is not on PATH, and the adapter's scale is checked with it"
+  [[ "$ADAPTER_SHA256" =~ ^[0-9a-f]{64}$ ]] || die "--adapter-sha256 is 64 lowercase hexadecimal characters: '$ADAPTER_SHA256'"
+  [[ "$BASE_BLAKE3" =~ ^[0-9a-f]{64}$ ]] || die "--base-blake3 is 64 lowercase hexadecimal characters: '$BASE_BLAKE3'"
+  [[ "$ADAPTER_SCALE" =~ ^[+-]?[0-9]+(\.[0-9]+)?$ ]] \
+    && python3 -c 'import sys; sys.exit(0 if abs(float(sys.argv[1])) <= 3.4028234663852886e38 else 1)' "$ADAPTER_SCALE" 2>/dev/null \
+    || die "--adapter-scale is a finite decimal number within f32's range, such as 1.0 or 0.7: '$ADAPTER_SCALE'"
+fi
 # The SPU path is one line of a key file admin reads, so it is absolute and
 # carries no control character, on the ground the paragraph above gives.
 if [ -n "$SPU_OVERRIDE" ]; then
@@ -372,6 +417,18 @@ SAVE_POINTS="$HOME_DIR/save-points"
 # The format is TOML, per weaver-types-Spec section 2: the top-level keys come
 # first and each section is its own table after them, since TOML reads a bare
 # key after a table header as that table's.
+# The adapter table, written only when declared: an absent adapter is an
+# omitted table (ADP-1), never an empty one.
+ADAPTER_TABLE=""
+if [ "$ADAPTER_GIVEN" -eq 4 ]; then
+  ADAPTER_TABLE="
+
+[spu-instruction.decoder.model-binding.adapter]
+artifact = \"$ADAPTER\"
+sha256 = \"$ADAPTER_SHA256\"
+base-blake3 = \"$BASE_BLAKE3\"
+scale = $ADAPTER_SCALE"
+fi
 render_declaration() {
 cat <<TOML
 session = "$SESSION"
@@ -391,7 +448,7 @@ tunable-values = { context-capacity = 32768, max-tokens-per-turn = 4096, seed = 
 
 [spu-instruction.decoder.model-binding]
 artifact = "$ARTIFACT"
-devices = [0]
+devices = [0]$ADAPTER_TABLE
 
 [gate-instruction.access-rule]
 allowed-uids = [$(id -u "$OPERATOR")]
@@ -495,6 +552,7 @@ plan "spu-binary      $SPU_BINARY$( [ -n "$SPU_OVERRIDE" ] && printf '  (--spu, 
 plan "operator key    $OPERATOR_UID ($OPERATOR)"
 plan "roles.toml      trace-reader = $CONNECTOR_USER"
 plan "declaration     $DECLARATION     root:$ACCESS_GROUP 0640, session $SESSION, artifact $ARTIFACT; edited with sudoedit"
+[ "$ADAPTER_GIVEN" -eq 0 ] || plan "adapter         $ADAPTER at scale $ADAPTER_SCALE, declared sha256 $ADAPTER_SHA256 over base blake3 $BASE_BLAKE3; checked by the SPU at admission"
 plan "prompt draft    $PROMPT     root:$ACCESS_GROUP 0640, sent by deploy/turn.py $NAME --system after the first load"
 plan "logs            $HOME_DIR/admin.log and worker.log, made by admin at the first verb"
 plan "sudo rule       $SUDO_RULE      $CONNECTOR_USER, $CONNECTOR_ROLE: $VERBS, !pam_session"
@@ -528,6 +586,7 @@ refuse_existing "$AGENT_ROOT" "agent root"
 refuse_existing "$STAGE" "a partial agent root from an earlier run (remove it by hand)"
 refuse_existing "$SUDO_RULE" "sudo rule"
 [ -r "$ARTIFACT" ] || printf '   WARNING: the artifact is not readable from this shell: %s\n' "$ARTIFACT"
+[ "$ADAPTER_GIVEN" -eq 0 ] || [ -r "$ADAPTER" ] || printf '   WARNING: the adapter is not readable from this shell: %s\n' "$ADAPTER"
 [ -z "$SPU_OVERRIDE" ] || [ -x "$SPU_OVERRIDE" ] || printf '   WARNING: the --spu path is not executable from this shell: %s\n' "$SPU_OVERRIDE"
 if [ "$APPLY" -eq 0 ]; then
   printf '   no collision found in accounts and paths visible to this uid\n'

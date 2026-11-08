@@ -653,3 +653,42 @@ fn common_operational_checks_and_inventory_boundaries_are_unchanged() {
     assert!(super::super::parse(&full()).is_err());
     assert!(super::super::parse(COMMON).is_ok());
 }
+
+/// **The serving draft judges the adapter as the declaration parse does**
+/// (ADP-1): a declared table parses whole, a malformed digest refuses naming
+/// the member, and a table on the classify binding refuses.
+///
+/// Perturbation: drop `check_adapters` from `parse_serving_draft` and both
+/// refusals parse. Watched to fail under exactly that removal.
+#[test]
+fn the_serving_draft_judges_the_declared_adapter() {
+    let adapter = format!(
+        "spu-instruction.decoder.model-binding.adapter.artifact = \"/models/adapter.gguf\"\n\
+         spu-instruction.decoder.model-binding.adapter.sha256 = \"{}\"\n\
+         spu-instruction.decoder.model-binding.adapter.base-blake3 = \"{}\"\n\
+         spu-instruction.decoder.model-binding.adapter.scale = 0.7\n",
+        "d".repeat(64),
+        "e".repeat(64)
+    );
+    let source = format!("{adapter}{}", full());
+    let draft = parse_serving_draft(&source).expect("an adapted draft parses");
+    let parsed = draft
+        .agent
+        .spu_instruction
+        .decoder
+        .model_binding
+        .adapter
+        .expect("the table is present");
+    assert_eq!(parsed.scale, 0.7_f32);
+    assert_eq!(parsed.sha256, "d".repeat(64));
+
+    let malformed = source.replace(&"d".repeat(64), &"d".repeat(63));
+    assert_bad(&malformed, "model-binding.adapter.sha256");
+
+    let classify = format!(
+        "{}{}",
+        adapter.replace("decoder.model-binding", "classify.model-binding"),
+        full()
+    );
+    assert_bad(&classify, "classify.model-binding.adapter");
+}

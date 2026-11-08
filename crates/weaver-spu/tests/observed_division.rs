@@ -161,6 +161,7 @@ fn the_observed_division_matches_the_computed_one_on_the_pair_child() {
     let binding = ModelBinding {
         artifact: reference,
         devices,
+        adapter: None,
     };
     let (placement, held) = {
         let resident = fixture

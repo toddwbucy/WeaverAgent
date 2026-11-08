@@ -352,6 +352,7 @@ fn refused_enter_leaves_the_state_at_before_enter() {
                         model_binding: weaver_types::ModelBinding {
                             artifact: weaver_types::ArtifactRef("qwen".into()),
                             devices: vec![weaver_types::DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: false,
                         field_election: None,
@@ -624,6 +625,7 @@ fn serving_enter(session: &str, bounds: (Option<u64>, Option<u64>)) -> Lifecycle
                     model_binding: weaver_types::ModelBinding {
                         artifact: weaver_types::ArtifactRef("unreachable".into()),
                         devices: vec![weaver_types::DeviceOrdinal(0)],
+                        adapter: None,
                     },
                     residual_readout_election: false,
                     field_election: None,

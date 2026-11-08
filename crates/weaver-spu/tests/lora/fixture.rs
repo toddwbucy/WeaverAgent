@@ -165,10 +165,11 @@ impl Inputs {
         ModelBinding {
             artifact: ArtifactRef(self.base.to_string_lossy().into_owned()),
             devices: self.devices.clone(),
+            adapter: None,
         }
     }
 
-    fn request(&self) -> Request {
+    pub fn request(&self) -> Request {
         Request {
             artifact: self.adapter.clone(),
             sha256: self.adapter_sha256.clone(),

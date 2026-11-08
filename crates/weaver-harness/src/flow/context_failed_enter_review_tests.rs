@@ -144,6 +144,7 @@ pub(super) fn prior_admission() -> LifecycleDirective {
                 model_binding: weaver_types::ModelBinding {
                     artifact: weaver_types::ArtifactRef("fixture-model".into()),
                     devices: vec![weaver_types::DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: false,
                 field_election: None,

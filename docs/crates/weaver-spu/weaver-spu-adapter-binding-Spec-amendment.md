@@ -17,7 +17,7 @@ half. The operator ruled on 2026-11-08 that the adapter is the point: a model
 served without its adapter is only the first step to one served with it.
 
 Amend SPU Spec sections 3 and 6, `weaver-types-Spec` section 2,
-`weaver-admin-Spec` section 7, the `weaver-harness-spu` contract (the
+`weaver-admin-Spec` section 4, the `weaver-harness-spu` contract (the
 `model-binding` draw), `weaver-trace`'s serving payloads, the harness replay
 and Open evidence, the diagnostic identity carrier, the
 `weaver-analysis-state` contract (this repository's copy, the authoritative
@@ -28,7 +28,7 @@ declaration carries no adapter and every production load is base-only.
 
 | Clause | Destination | Addition |
 | --- | --- | --- |
-| ADP-1 | `weaver-types-Spec` 2, `weaver-admin-Spec` 7, the harness-spu contract, `weaver-trace` serving payloads | The optional `adapter` table in the model binding, carried wherever the binding is |
+| ADP-1 | `weaver-types-Spec` 2, `weaver-admin-Spec` 4, the harness-spu contract, `weaver-trace` serving payloads | The optional `adapter` table in the model binding, carried wherever the binding is |
 | ADP-2 | SPU Spec 3 | Admission builds the adapter request from the declaration, on the fixture's path, with the observer installed for serving |
 | ADP-3 | SPU Spec 6, the harness replay and Open evidence, diagnostic, the analysis-state contract | The adapter identity in every record that carries the base identity |
 | ADP-4 | `weaver-harness` dev_loop (`Loops/`) | The loop's compiled prompt yields to a seated one |
@@ -88,7 +88,8 @@ The table is closed: an unknown key is a parse error, as everywhere in the
 declaration. A present table with any member missing is a parse error, never a
 base-only fallback (LORA-1: do not replace presence with absence after an
 error). The `ModelBinding` type stays one type, with `adapter:
-Option<AdapterBinding>`. The floor parse in `weaver-types` is the one
+Option<Box<AdapterBinding>>`, boxed so the binding keeps its size inside the
+organ channel's payloads. The floor parse in `weaver-types` is the one
 authority on the table's shape, and every other party reads the parsed type.
 
 **Absence is omission, not `null`.** Wherever the binding is serialized (the
@@ -102,7 +103,7 @@ A reader that meets `"adapter": null` refuses, since the record (ADP-3) uses
 adapter table, so the load facts in the record say what was declared.
 
 Admin checks the adapter's `artifact` for presence the way it checks the
-base's (`weaver-admin-Spec` section 7): an empty member refuses
+base's (`weaver-admin-Spec` section 4): an empty member refuses
 `ConfigInvalid` naming
 `spu-instruction.decoder.model-binding.adapter.artifact`, and admin resolves
 neither path, because resolution runs under the agent's identity at admission.

@@ -446,7 +446,26 @@ fn render_measurement(
         measurement["residual_layers"] = serde_json::json!(reduction.layers());
         measurement["residual_forwards"] = serde_json::json!(reduction.forwards());
     }
-    measurement.to_string()
+    lead_with_adapter(resident.adapter().as_ref(), &measurement)
+}
+
+/// **The adapter identity leads every generation's measurement, written
+/// typed**, per the adapter binding amendment ADP-3: the actual loaded
+/// identity, `null` for base-only. It is spliced ahead of the generic object
+/// rather than set in it, because a generic value would widen the f32 scale
+/// to f64. The object always holds `model`, so the splice joins two
+/// non-empty member lists.
+fn lead_with_adapter(
+    adapter: Option<&weaver_spu::lora::RecordedAdapter>,
+    measurement: &serde_json::Value,
+) -> String {
+    let rest = measurement.to_string();
+    let mut rendered = b"{\"adapter\":".to_vec();
+    weaver_spu::lora::RecordedAdapter::write_member(adapter, &mut rendered)
+        .expect("writing to a vector cannot fail");
+    rendered.push(b',');
+    rendered.extend_from_slice(&rest.as_bytes()[1..]);
+    String::from_utf8(rendered).expect("both halves are serde_json's own UTF-8")
 }
 
 /// The decode phase, entered once residency confirms and served until the
@@ -1312,6 +1331,20 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // **The placement observer is a serving fact**, per the adapter binding
+    // amendment ADP-2: installed before any backend call, whether or not the
+    // binding carries an adapter, keeping lines only inside the placement
+    // window and forwarding every line to standard error.
+    #[cfg(feature = "gguf")]
+    if let Err(detail) =
+        weaver_spu::lora::observation::install(weaver_spu::lora::observation::Retention::Window)
+    {
+        eprintln!(
+            "{}",
+            serde_json::json!({"refusal": "placement_observer", "detail": detail})
+        );
+        return ExitCode::FAILURE;
+    }
     serve(inherited, headroom)
 }
 
@@ -1377,8 +1410,27 @@ fn admit_refusal_line(refusal: &weaver_spu::residency::AdmitRefusal) -> Option<S
             .to_string(),
         ),
         AdmitRefusal::DeviceRefused(refusal) => Some(device_refusal_line(refusal)),
+        // **The adapter's artifact and the check that refused it**, per the
+        // adapter binding amendment ADP-2: the floor answers one of three
+        // refusals the base also meets, and this line says it was the
+        // adapter, at which stage, and as which identity.
+        AdmitRefusal::Adapter(failure) => Some(adapter_refusal_line(failure)),
         _ => None,
     }
+}
+
+/// The account of an adapter refusal: its artifact as declared, its LORA-2
+/// stage and detail, and the effective pair the checks ran as.
+fn adapter_refusal_line(failure: &weaver_spu::lora::Failure) -> String {
+    serde_json::json!({
+        "refusal": "adapter",
+        "path": failure.path.to_string_lossy(),
+        "stage": failure.stage,
+        "detail": failure.detail,
+        "uid": failure.uid,
+        "gid": failure.gid,
+    })
+    .to_string()
 }
 
 /// The account of a refusal the driver answered, by binding ordinal.

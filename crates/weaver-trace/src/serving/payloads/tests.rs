@@ -596,6 +596,7 @@ pub(crate) fn load_record() -> LoadRecord {
                 model_binding: ModelBinding {
                     artifact: "checker".into(),
                     devices: vec![0],
+                    adapter: None,
                 },
                 model_artifact_sha256: "m".repeat(64),
                 instances: 1,
@@ -1226,4 +1227,34 @@ fn replacement_release_omits_only_absent_organs_and_keeps_legacy_spu_required() 
         state_flow_failure: None,
     };
     assert_eq!(json(&unload), r#"{"forced":true,"release":{}}"#);
+}
+
+/// ADP-1: the serving copy of the binding carries a declared adapter whole,
+/// its scale rendered as the f32 itself, and omits an absent one rather than
+/// writing `null`.
+#[test]
+fn the_binding_copy_carries_an_adapter_whole_and_omits_an_absent_one() {
+    let base = ModelBinding {
+        artifact: "base.gguf".into(),
+        devices: vec![0, 1],
+        adapter: None,
+    };
+    assert_eq!(json(&base), r#"{"artifact":"base.gguf","devices":[0,1]}"#);
+    let adapted = ModelBinding {
+        adapter: Some(AdapterBinding {
+            artifact: "adapter.gguf".into(),
+            sha256: "a".repeat(64),
+            base_blake3: "b".repeat(64),
+            scale: 0.7,
+        }),
+        ..base
+    };
+    assert_eq!(
+        json(&adapted),
+        format!(
+            r#"{{"artifact":"base.gguf","devices":[0,1],"adapter":{{"artifact":"adapter.gguf","sha256":"{}","base_blake3":"{}","scale":0.7}}}}"#,
+            "a".repeat(64),
+            "b".repeat(64)
+        )
+    );
 }

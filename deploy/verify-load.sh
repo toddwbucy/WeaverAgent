@@ -119,9 +119,24 @@ SINK_KIND=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1],
 # FIFO standing where a file sink is declared counts as nothing.
 lines() { if [ -f "$1" ] && [ ! -L "$1" ]; then wc -l < "$1"; else echo 0; fi; }
 
+# **The adapter beside the base**, per the weaver-spu adapter binding
+# amendment ADP-5: the binding as declared, `none` where the table is
+# omitted. What the load measured is read from the events below.
+# Admin validated the declaration above, so a binding it lacks is printed as
+# absent rather than refused here.
+BINDING=$(python3 -c 'import sys, tomllib
+d = tomllib.load(open(sys.argv[1], "rb"))
+b = d.get("spu-instruction", {}).get("decoder", {}).get("model-binding", {})
+a = b.get("adapter")
+print(b.get("artifact", "<no binding declared>"))
+print("none" if a is None else "{} sha256 {} scale {} over base blake3 {}".format(
+    a["artifact"], a["sha256"], a["scale"], a["base-blake3"]))' "$DECL" 2>/dev/null) \
+  || BINDING=$'<unread>\n<unread>'
 say "$AGENT"
 plan "declaration $DECL"
 plan "sink        $SINK ($SINK_KIND)"
+plan "base        $(sed -n 1p <<<"$BINDING") (declared)"
+plan "adapter     $(sed -n 2p <<<"$BINDING") (declared)"
 plan "validate    $VERDICT"
 # **The state member's last words**, beside a load that did not stand. Read as
 # the member, whose room it is, never as root: the member can put a link at
@@ -168,9 +183,11 @@ tail -n "$NEW" "$SINK" | python3 -c '
 import sys, json, collections
 kinds = collections.Counter()
 load = None
+events = []
 for line in sys.stdin:
     try: ev = json.loads(line)
     except ValueError: kinds["<unparsed>"] += 1; continue
+    events.append(ev)
     k = ev.get("kind") or ev.get("event") or ev.get("type") or "?"
     kinds[k] += 1
     if load is None and k == "load": load = ev
@@ -178,6 +195,24 @@ for k, n in kinds.most_common(): print(f"   {n:4d}  {k}")
 if load is None: sys.exit("   no load event among them")
 keep = {k: v for k, v in load.items() if k not in ("content",)}
 print("   load event:", json.dumps(keep)[:600])
+# The Open measurement, wherever an event carries it (ADP-3): its adapter
+# member beside the base identity it measured.
+def opens(value):
+    if isinstance(value, dict):
+        evidence = value.get("open_evidence")
+        if isinstance(evidence, dict) and isinstance(evidence.get("measurement"), dict):
+            yield evidence["measurement"]
+        for inner in value.values():
+            yield from opens(inner)
+    elif isinstance(value, list):
+        for inner in value:
+            yield from opens(inner)
+found = [m for ev in events for m in opens(ev)]
+for m in found[:1]:
+    print("   open measurement: model", m.get("model"), "weights_hash", m.get("weights_hash"),
+          "adapter", json.dumps(m.get("adapter", "<absent>")))
+if not found:
+    print("   open measurement: none in the new events (the live record does not carry it), so the adapter above is the declared one")
 ' || { admin unload "$AGENT" >/dev/null; die "$AGENT: the new events carry no load event, so the run is unloaded"; }
 fi
 # **The constituents, from `show`, judged where they run.** Each is recorded

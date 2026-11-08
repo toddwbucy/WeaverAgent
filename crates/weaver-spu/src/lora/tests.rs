@@ -169,6 +169,7 @@ fn normal_admission_does_not_validate_or_acquire_an_adapter() {
     let binding = ModelBinding {
         artifact: ArtifactRef(files.path("absent-base").to_string_lossy().into_owned()),
         devices: vec![DeviceOrdinal(0)],
+        adapter: None,
     };
     let mut normal = Residency::new();
     assert!(matches!(
@@ -858,4 +859,195 @@ fn the_observed_division_judges_recurrent_caches() {
     let six = Some(weaver_types::DeviceOrdinal(6));
     assert_eq!(observed.recurrent, [None, None, None, six.clone()]);
     assert_eq!(observed.attention[3], six);
+}
+
+fn declared(artifact: &Path, sha256: String, base_blake3: String) -> weaver_types::AdapterBinding {
+    weaver_types::AdapterBinding {
+        artifact: weaver_types::ArtifactRef(artifact.to_string_lossy().into_owned()),
+        sha256,
+        base_blake3,
+        scale: 0.7,
+    }
+}
+
+/// **The request is the declared table, member for member**, per the
+/// adapter binding amendment ADP-2: the path as written, the digests as the
+/// operator's claims, and the scale bit for bit.
+///
+/// Perturbation: compute either digest, or carry the scale through f64 text,
+/// and this fails.
+#[test]
+fn the_declared_table_becomes_the_request_member_for_member() {
+    let table = declared(
+        Path::new("/models/adapter.gguf"),
+        "a".repeat(64),
+        "b".repeat(64),
+    );
+    let request = Request::from(&table);
+    assert_eq!(
+        request,
+        Request {
+            artifact: PathBuf::from("/models/adapter.gguf"),
+            sha256: "a".repeat(64),
+            expected_base_weights_hash: "b".repeat(64),
+            scale: 0.7,
+        }
+    );
+    assert_eq!(request.scale.to_bits(), 0.7_f32.to_bits());
+}
+
+/// **The declaration's claims are checked, not trusted**, per ADP-2's table:
+/// a request built from the declared table passes against the pinned file it
+/// names, a declared `sha256` the file does not hash to refuses
+/// `ArtifactUnreadable` at `adapter-hash`, and a declared `base-blake3` that
+/// is not the base's refuses `DeviceCannotAdmit` at `adapter-base-identity`.
+/// The prepared adapter is built here rather than by `prepare`, because the
+/// custody check refuses a file this test's uid owns, as it must.
+///
+/// Perturbation: skip the digest comparison in `Prepared::verify` (trust the
+/// declared digest), or the base comparison, and this fails.
+#[test]
+fn the_declared_claims_are_checked_against_the_pinned_file() {
+    let files = Files::new();
+    let (base, adapter) = artifacts(&files);
+    let digest = format!("{:x}", Sha256::digest(std::fs::read(&adapter).unwrap()));
+    let base_hash = "b".repeat(64);
+    let prepared = |table: &weaver_types::AdapterBinding| {
+        let request = Request::from(table);
+        Prepared {
+            identity: inspect(&adapter, std::slice::from_ref(&base), "llama", &request).unwrap(),
+            file: File::open(&adapter).unwrap(),
+            request,
+        }
+    };
+    prepared(&declared(&adapter, digest.clone(), base_hash.clone()))
+        .verify(&base_hash)
+        .expect("true claims pass");
+
+    let wrong_digest = prepared(&declared(&adapter, "c".repeat(64), base_hash.clone()))
+        .verify(&base_hash)
+        .unwrap_err();
+    assert_eq!(
+        (wrong_digest.stage, wrong_digest.lifecycle()),
+        ("adapter-hash", LifecycleRefusal::ArtifactUnreadable)
+    );
+    assert_eq!(
+        wrong_digest.path, adapter,
+        "the account names the declared path"
+    );
+
+    let wrong_base = prepared(&declared(&adapter, digest, "d".repeat(64)))
+        .verify(&base_hash)
+        .unwrap_err();
+    assert_eq!(
+        (wrong_base.stage, wrong_base.lifecycle()),
+        ("adapter-base-identity", LifecycleRefusal::DeviceCannotAdmit)
+    );
+}
+
+/// **The capture is bounded by its window**, per ADP-2: a serving capture
+/// keeps nothing before the load, keeps the load's lines and the first
+/// session's, and once the placement judgment ends it drops them and keeps
+/// nothing more, so a later session open adds no kept record. A read borrows
+/// the kept lines in place. The fixture's capture keeps every line whatever
+/// the window does.
+///
+/// Perturbation: keep lines after the window closes, keep them before it
+/// opens, or read through a copy, and this fails.
+#[cfg(feature = "gguf")]
+#[test]
+fn the_serving_capture_keeps_lines_only_inside_the_window() {
+    use observation::{Capture, Record, Retention};
+    let line = |text: &str| Record {
+        level: 1,
+        bytes: text.as_bytes().to_vec(),
+    };
+    let mut serving = Capture::new(Retention::Window);
+    serving.offer(line("before the load"));
+    assert!(serving.records().is_empty());
+    serving.open_window();
+    serving.offer(line("load_tensors: layer 0 assigned to device CUDA0"));
+    serving.offer(line("llama_kv_cache: layer 0: dev = CUDA0"));
+    assert_eq!(serving.records().len(), 2);
+    assert_eq!(
+        serving.records().as_ptr(),
+        serving.records().as_ptr(),
+        "a read borrows the kept lines rather than copying them"
+    );
+    serving.close_window();
+    assert!(
+        serving.records().is_empty(),
+        "the closed window drops its lines"
+    );
+    serving.offer(line("llama_kv_cache: layer 0: dev = CUDA0"));
+    assert!(
+        serving.records().is_empty(),
+        "a session opened after the judgment adds no kept record"
+    );
+
+    let mut fixture = Capture::new(Retention::Whole);
+    fixture.offer(line("before"));
+    fixture.close_window();
+    fixture.offer(line("after"));
+    assert_eq!(fixture.records().len(), 2);
+}
+
+/// **The engine log keeps flowing**, per ADP-2: in an isolated process, the
+/// serving install takes the engine's callback, and every line it is handed
+/// reaches standard error verbatim, kept or not, while it keeps only the
+/// line inside the window.
+///
+/// Perturbation: drop the forward in the callback (swallow the line), or
+/// forward only the kept lines, and this fails.
+#[cfg(feature = "gguf")]
+#[test]
+fn the_serving_capture_forwards_every_line_to_stderr() {
+    if std::env::var_os("WEAVER_LORA_FORWARD_CHILD").is_some() {
+        observation::install(observation::Retention::Window).unwrap();
+        let mut callback = None;
+        let mut userdata = std::ptr::null_mut();
+        unsafe { llama_cpp_sys_2::ggml_log_get(&mut callback, &mut userdata) };
+        let callback = callback.expect("llama_log_set installs the shared GGML callback");
+        let say =
+            |level, text: &std::ffi::CStr| unsafe { callback(level, text.as_ptr(), userdata) };
+        say(
+            llama_cpp_sys_2::GGML_LOG_LEVEL_INFO,
+            c"forward-before-window\n",
+        );
+        observation::open_window();
+        say(
+            llama_cpp_sys_2::GGML_LOG_LEVEL_DEBUG,
+            c"forward-inside-window\n",
+        );
+        assert_eq!(observation::with_records(<[_]>::len).unwrap(), 1);
+        observation::close_window();
+        say(
+            llama_cpp_sys_2::GGML_LOG_LEVEL_WARN,
+            c"forward-after-window\n",
+        );
+        assert_eq!(observation::with_records(<[_]>::len).unwrap(), 0);
+        assert!(
+            observation::install(observation::Retention::Whole).is_err(),
+            "the capture is installed once"
+        );
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "lora::tests::the_serving_capture_forwards_every_line_to_stderr",
+            "--nocapture",
+        ])
+        .env("WEAVER_LORA_FORWARD_CHILD", "1")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    let at = |line: &str| {
+        stderr
+            .find(line)
+            .unwrap_or_else(|| panic!("{line} did not reach stderr: {stderr}"))
+    };
+    assert!(at("forward-before-window\n") < at("forward-inside-window\n"));
+    assert!(at("forward-inside-window\n") < at("forward-after-window\n"));
 }

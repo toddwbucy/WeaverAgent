@@ -52,6 +52,7 @@ fn duty() -> (s::Ste100Bootstrap, s::SchemeDeclaration, s::Ste100Ready) {
         model_binding: ModelBinding {
             artifact: ArtifactRef("/synthetic/input-transaction-manifest.json".into()),
             devices: vec![DeviceOrdinal(0)],
+            adapter: None,
         },
         model_artifact_sha256: seed.checker_artifact_sha256,
         instances: 1,

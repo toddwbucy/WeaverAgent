@@ -12,9 +12,9 @@ use weaver_types::state_flow::{
     StateStartConfig, Ste100Instruction, ToolPolicies, ToolPolicy,
 };
 use weaver_types::{
-    AccessRule, AgentConfig, BindingKind, ClassifyInstruction, DecoderInstruction, FieldElection,
-    GateInstruction, Lifecycle, ModelBinding, ServingDeclaration, SpuInstruction, StateStore,
-    StoreEngine, TraceSink,
+    AccessRule, AdapterBinding, AgentConfig, BindingKind, ClassifyInstruction, DecoderInstruction,
+    FieldElection, GateInstruction, Lifecycle, ModelBinding, ServingDeclaration, SpuInstruction,
+    StateStore, StoreEngine, TraceSink,
 };
 
 #[derive(Debug)]
@@ -240,12 +240,31 @@ impl Writer {
     }
 
     fn model(&mut self, prefix: &str, value: &ModelBinding) -> Result<(), RenderError> {
-        let ModelBinding { artifact, devices } = value;
+        let ModelBinding {
+            artifact,
+            devices,
+            adapter,
+        } = value;
         self.string(&format!("{prefix}.artifact"), &artifact.0)?;
         self.integers(
             &format!("{prefix}.devices"),
             devices.iter().map(|value| value.0),
         );
+        // ADP-1: a declared adapter is rendered member for member, and an
+        // absent one writes no key, so the saved declaration loads what the
+        // operator declared.
+        if let Some(AdapterBinding {
+            artifact,
+            sha256,
+            base_blake3,
+            scale,
+        }) = adapter.as_deref()
+        {
+            self.string(&format!("{prefix}.adapter.artifact"), &artifact.0)?;
+            self.string(&format!("{prefix}.adapter.sha256"), sha256)?;
+            self.string(&format!("{prefix}.adapter.base-blake3"), base_blake3)?;
+            self.line(&format!("{prefix}.adapter.scale"), &finite_scale(*scale)?);
+        }
         Ok(())
     }
 
@@ -486,6 +505,17 @@ fn native_integer(value: u64) -> Result<String, RenderError> {
 fn finite_float(value: f64) -> Result<String, RenderError> {
     if !value.is_finite() {
         return Err(RenderError::Unsupported("tunable-values"));
+    }
+    serde_json::to_string(&value).map_err(RenderError::Encoding)
+}
+
+/// The adapter's scale as the f32 itself, never its f64 widening, so the
+/// saved declaration reads back to the same f32 (ADP-3's rule for the scale).
+/// The encoder writes an integral value with its decimal point, which TOML
+/// reads as a float.
+fn finite_scale(value: f32) -> Result<String, RenderError> {
+    if !value.is_finite() {
+        return Err(RenderError::Unsupported("model-binding.adapter.scale"));
     }
     serde_json::to_string(&value).map_err(RenderError::Encoding)
 }

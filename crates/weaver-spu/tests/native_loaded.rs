@@ -134,6 +134,7 @@ fn a_safetensors_artifact_generates_through_the_native_engine_child() {
     let binding = ModelBinding {
         artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
         devices,
+        adapter: None,
     };
     let resident = residency
         .admit(
@@ -258,6 +259,7 @@ fn the_surprisal_election_governs_the_native_session_child() {
         let binding = ModelBinding {
             artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
             devices: devices.clone(),
+            adapter: None,
         };
         let resident = residency
             .admit(
@@ -429,6 +431,7 @@ fn the_pair_agrees_with_the_single_card_child() {
     let binding = ModelBinding {
         artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
         devices,
+        adapter: None,
     };
     let resident = residency
         .admit(
@@ -559,6 +562,7 @@ fn the_single_card_keeps_its_rotary_angle_past_position_256_child() {
     let binding = ModelBinding {
         artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
         devices,
+        adapter: None,
     };
     let resident = residency
         .admit(
@@ -666,6 +670,7 @@ fn an_elected_readout_travels_with_the_generation_child() {
         let binding = ModelBinding {
             artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
             devices,
+            adapter: None,
         };
         let resident = residency
             .admit(
@@ -780,6 +785,7 @@ fn an_elected_readout_refuses_a_gguf_residency_at_admit() {
     let binding = ModelBinding {
         artifact: ArtifactRef(gguf.to_string_lossy().into_owned()),
         devices: vec![DeviceOrdinal(0)],
+        adapter: None,
     };
     let refusal = residency
         .admit(
@@ -859,6 +865,7 @@ fn an_elected_readout_is_admitted_by_a_gguf_family_that_declares_a_tap_child() {
     let binding = ModelBinding {
         artifact: ArtifactRef(gguf.to_string_lossy().into_owned()),
         devices,
+        adapter: None,
     };
     let resident = residency
         .admit(
@@ -982,6 +989,7 @@ fn the_pair_reports_its_pace_child() {
         let binding = ModelBinding {
             artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
             devices,
+            adapter: None,
         };
         let resident = residency
             .admit(
@@ -1099,6 +1107,7 @@ fn a_large_sharded_safetensors_probe_child() {
     let single = ModelBinding {
         artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
         devices,
+        adapter: None,
     };
     let refused = probe.admit(
         &single,
@@ -1128,6 +1137,7 @@ fn a_large_sharded_safetensors_serves_across_the_pair_child() {
     let binding = ModelBinding {
         artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
         devices,
+        adapter: None,
     };
     let resident = residency
         .admit(

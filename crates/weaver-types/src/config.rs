@@ -325,12 +325,61 @@ crate::state_flow::codec::closed_object! {
     /// declaration the operator did not finish, and defaulting it to device zero is
     /// the placement decision this crate exists not to make. Whether the devices
     /// exist and can shard is admission's; this crate answers well-formed only.
+    ///
+    /// **The adapter is optional and its absence is an omitted key**, per the
+    /// adapter binding amendment ADP-1: absent, the load is base-only.
+    /// Serialized, an absent adapter writes no `adapter` key, and a reader
+    /// meeting `"adapter": null` refuses, since the record uses `null` for a
+    /// stated absence and the binding does not. The table is boxed so a
+    /// binding stays the size it was, since it rides inside the organ
+    /// channel's payload enums.
     #[derive(Debug, Clone, PartialEq, Serialize)]
     #[serde(rename_all = "kebab-case")]
     pub struct ModelBinding {
         pub artifact: ArtifactRef,
         pub devices: Vec<DeviceOrdinal>,
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "present_adapter"
+        )]
+        pub adapter: Option<Box<AdapterBinding>>,
     }
+}
+
+crate::state_flow::codec::closed_object! {
+    /// One LoRA adapter declared beside the base, per ADP-1: the four members
+    /// LORA-1 names for the fixture request, in the declaration's grammar.
+    ///
+    /// The table is closed and every member is required: a present table with
+    /// a member missing is a parse error, never a base-only fallback. The
+    /// digests are the declaration's claims, which the SPU checks at
+    /// admission. The shape is judged at the parse (`check_adapter`): each
+    /// digest is 64 lowercase hexadecimal characters and the scale is finite.
+    #[derive(Debug, Clone, PartialEq, Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub struct AdapterBinding {
+        /// One GGUF LoRA file, named explicitly, in the base's grammar.
+        pub artifact: ArtifactRef,
+        /// The adapter file's complete-bytes SHA-256.
+        pub sha256: String,
+        /// The base's SPU Spec 3 BLAKE3 identity the adapter was converted
+        /// against.
+        pub base_blake3: String,
+        /// Read from a TOML float or integer and stored as f32. No default.
+        pub scale: f32,
+    }
+}
+
+/// **A present `adapter` is an adapter and never `null`**, per ADP-1: the
+/// table deserializes as itself, so a `null` meets the closed object's
+/// refusal rather than reading as absence. Absence is the omitted key, which
+/// the field's `default` answers.
+fn present_adapter<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Box<AdapterBinding>>, D::Error> {
+    <AdapterBinding as serde::Deserialize>::deserialize(deserializer)
+        .map(|table| Some(Box::new(table)))
 }
 
 /// The instruction the gate resolves and never interprets beyond its fields.
@@ -490,6 +539,7 @@ pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
             kind: ConfigErrorKind::BadValue,
         });
     }
+    check_adapters(&config.spu_instruction)?;
     check_tunable_values(&config.spu_instruction.decoder.tunable_values)?;
     check_trace_sink_surface(source, &config.trace_sink)?;
     check_declared_paths(&config)?;
@@ -583,6 +633,59 @@ fn check_lifecycle_bounds(source: &str) -> Result<(), ConfigError> {
 /// is where they part, a shell's command substitution dropping a trailing
 /// newline this parser keeps. The trace sink's path is refused by its own
 /// name. The restore's save point is a bare name with its own check below.
+/// **An adapter is the decoder's alone**, per the adapter binding amendment
+/// ADP-0, which serves decode and leaves the classifier as an adapter role
+/// open (ADP-7): the classify binding is the same type, so a table declared
+/// there would parse and then load nothing, a declaration that says something
+/// untrue. It refuses `BadValue` naming `classify.model-binding.adapter`, on
+/// the ground `check_tool_set` refuses a shell a diagnostic binding elects.
+#[cfg(feature = "config")]
+fn check_adapters(spu: &SpuInstruction) -> Result<(), ConfigError> {
+    if let Some(adapter) = &spu.decoder.model_binding.adapter {
+        check_adapter(adapter)?;
+    }
+    if spu
+        .classify
+        .as_ref()
+        .is_some_and(|classify| classify.model_binding.adapter.is_some())
+    {
+        return Err(ConfigError {
+            field: Some(FieldName("classify.model-binding.adapter".to_string())),
+            kind: ConfigErrorKind::BadValue,
+        });
+    }
+    Ok(())
+}
+
+/// **The adapter table's shape is the parse's**, per ADP-1: each digest is 64
+/// lowercase hexadecimal characters and the scale is finite, refusing
+/// `BadValue` naming the member otherwise. A non-finite scale includes a value
+/// TOML wrote as `nan` or `inf` and a float past f32's range, which narrows to
+/// an infinity.
+#[cfg(feature = "config")]
+fn check_adapter(adapter: &AdapterBinding) -> Result<(), ConfigError> {
+    let refused = |member: &str| ConfigError {
+        field: Some(FieldName(format!("model-binding.adapter.{member}"))),
+        kind: ConfigErrorKind::BadValue,
+    };
+    let digest = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    };
+    if !digest(&adapter.sha256) {
+        return Err(refused("sha256"));
+    }
+    if !digest(&adapter.base_blake3) {
+        return Err(refused("base-blake3"));
+    }
+    if !adapter.scale.is_finite() {
+        return Err(refused("scale"));
+    }
+    Ok(())
+}
+
 #[cfg(feature = "config")]
 fn check_declared_paths(config: &AgentConfig) -> Result<(), ConfigError> {
     let sink = match &config.trace_sink {

@@ -403,6 +403,10 @@ mod device {
                 prepared.rendered.len(),
             ))
             .unwrap();
+            assert!(
+                report["adapter"].is_null(),
+                "a base-only load states its absent adapter (ADP-3)"
+            );
             assert_eq!(
                 report["input_tokens"].as_array().unwrap().len(),
                 prepared.tokens.len()
@@ -512,7 +516,7 @@ mod device {
             assert_eq!(
                 measurement,
                 serde_json::json!({
-                    "model":model, "weights_hash":weights_hash, "prefix_token_ids":prefix_tokens,
+                    "model":model, "weights_hash":weights_hash, "adapter":null, "prefix_token_ids":prefix_tokens,
                     "blocks":[{"label":"identity-prefix","start":0,"end":prefix.len()}]
                 })
             );
@@ -807,6 +811,7 @@ mod device {
                 &ModelBinding {
                     artifact: ArtifactRef(path.to_string_lossy().into_owned()),
                     devices: vec![DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 Headroom(64 * 1024 * 1024),
                 512,

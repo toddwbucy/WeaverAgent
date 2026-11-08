@@ -133,8 +133,9 @@ No parser in admin or the harness acquires a second artifact-reading duty.
 | Weight or adapter allocation fails after device work begins | DeviceCannotAdmit only after cleanup, with the backend's account |
 
 These are the existing internal admission result mappings. No new lifecycle
-wire case is added. The ordinary production caller cannot exercise an adapter
-request under this amendment. The fixture records the detailed stage so that
+wire case is added. The production caller is the declaration (adapter binding
+amendment ADP-2), whose adapter table admission builds the request from, on this
+path. The fixture records the detailed stage so that
 the broad result is never presented as a more specific cause.
 
 ## 3. Backend load and ownership
@@ -161,6 +162,9 @@ Keep the capture alive for the isolated process's entire lifetime, including
 model teardown and every in-flight callback. Do not replace it during the run.
 The callback copies the supplied text and level. It calls no backend function
 and cannot unwind across the C boundary. Run no unrelated load in that process.
+The serving SPU installs the same capture at process start, keeping records only
+inside a placement window and forwarding every line to its standard error
+(adapter binding amendment ADP-2).
 
 Preserve the raw callback records in the fixture report. Parse the pinned
 llama_adapter_lora_init_impl records that map each target to its buffer type.

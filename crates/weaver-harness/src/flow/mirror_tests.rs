@@ -680,3 +680,42 @@ fn flag_readings_keep_their_measured_snapshot_or_typed_unavailability() {
         );
     }
 }
+
+/// **The trace carries the binding whole** (ADP-1, ADP-6): the serving copy of
+/// an adapted binding carries the adapter table member for member, and a
+/// base-only binding's copy carries none.
+///
+/// Perturbation: keep the two-field copy (`adapter: None` in `model_binding`) and
+/// the adapted case loses its table. Watched to fail under exactly that.
+#[test]
+fn the_binding_copy_carries_a_declared_adapter() {
+    let base = weaver_types::ModelBinding {
+        artifact: weaver_types::ArtifactRef("/models/base.gguf".into()),
+        devices: vec![
+            weaver_types::DeviceOrdinal(0),
+            weaver_types::DeviceOrdinal(1),
+        ],
+        adapter: None,
+    };
+    assert_eq!(model_binding(&base).adapter, None);
+    let adapted = weaver_types::ModelBinding {
+        adapter: Some(Box::new(weaver_types::AdapterBinding {
+            artifact: weaver_types::ArtifactRef("/models/adapter.gguf".into()),
+            sha256: "a".repeat(64),
+            base_blake3: "b".repeat(64),
+            scale: 0.7,
+        })),
+        ..base
+    };
+    let copy = model_binding(&adapted);
+    assert_eq!(copy.devices, vec![0, 1]);
+    assert_eq!(
+        copy.adapter,
+        Some(trace::AdapterBinding {
+            artifact: "/models/adapter.gguf".into(),
+            sha256: "a".repeat(64),
+            base_blake3: "b".repeat(64),
+            scale: 0.7,
+        })
+    );
+}

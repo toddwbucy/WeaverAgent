@@ -24,6 +24,23 @@ fn object<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Map<String, Value>>
         .then_some(object)
 }
 
+/// **The adapter member is stated either way**, per the adapter binding
+/// amendment ADP-3: `null` for a base-only load, or the closed object
+/// `artifact`, `sha256`, `scale` for an adapted one, the scale a number that
+/// narrows to a finite f32. An absent member fails the five-member shape.
+fn adapter_shape(adapter: &Value) -> bool {
+    if adapter.is_null() {
+        return true;
+    }
+    object(adapter, &["artifact", "sha256", "scale"]).is_some_and(|adapter| {
+        adapter["artifact"].is_string()
+            && adapter["sha256"].is_string()
+            && adapter["scale"]
+                .as_f64()
+                .is_some_and(|scale| (scale as f32).is_finite())
+    })
+}
+
 pub(crate) fn validate(opened: &Opened, session: &SessionId) -> Result<(), OpenEvidenceError> {
     if &opened.session != session {
         return Err(OpenEvidenceError::Session);
@@ -46,10 +63,19 @@ pub(crate) fn validate(opened: &Opened, session: &SessionId) -> Result<(), OpenE
         decode_strict(opened.measurement.get()).map_err(|_| OpenEvidenceError::Measurement)?;
     let measurement = object(
         &measurement,
-        &["model", "weights_hash", "prefix_token_ids", "blocks"],
+        &[
+            "model",
+            "weights_hash",
+            "adapter",
+            "prefix_token_ids",
+            "blocks",
+        ],
     )
     .ok_or(OpenEvidenceError::Measurement)?;
-    if !measurement["model"].is_string() || !measurement["weights_hash"].is_string() {
+    if !measurement["model"].is_string()
+        || !measurement["weights_hash"].is_string()
+        || !adapter_shape(&measurement["adapter"])
+    {
         return Err(OpenEvidenceError::Measurement);
     }
     let tokens = measurement["prefix_token_ids"]

@@ -43,6 +43,7 @@ fn ready_classifier() -> (Classifier<SocketPort>, Channel, Ste100Request) {
         model_binding: ModelBinding {
             artifact: ArtifactRef("/synthetic/wire-manifest.json".into()),
             devices: vec![DeviceOrdinal(0)],
+            adapter: None,
         },
         model_artifact_sha256: seed.checker_artifact_sha256.clone(),
         instances: 1,

@@ -100,6 +100,9 @@ pub struct ResidentModel {
 
 struct ResidentAdapter {
     handle: std::cell::RefCell<LlamaLoraAdapter>,
+    /// The path the request named, which the record carries for the reader
+    /// (ADP-3) and never compares.
+    artifact: std::path::PathBuf,
     identity: crate::lora::Identity,
     placement: std::collections::BTreeMap<String, weaver_types::DeviceOrdinal>,
 }
@@ -125,9 +128,10 @@ impl ResidentModel {
     /// breaks the coincidence and puts weights on a device the admission
     /// never judged.
     pub fn load(admission: &Admission<'_>) -> Result<ResidentModel, AdmitRefusal> {
+        use crate::lora::observation;
         // LORA-3: refuse absent observation before any backend allocation.
         if let Some(prepared) = admission.adapter() {
-            crate::lora::observation::records().map_err(|detail| {
+            observation::with_records(|_| ()).map_err(|detail| {
                 AdmitRefusal::Adapter(prepared.failure(
                     crate::lora::FailureKind::Load,
                     "adapter-observer",
@@ -135,6 +139,17 @@ impl ResidentModel {
                 ))
             })?;
         }
+        // ADP-2: the placement window opens at load. A failed load ends the
+        // judgment, and the first session's context ends it otherwise.
+        observation::open_window();
+        let loaded = Self::load_observed(admission);
+        if loaded.is_err() {
+            observation::close_window();
+        }
+        loaded
+    }
+
+    fn load_observed(admission: &Admission<'_>) -> Result<ResidentModel, AdmitRefusal> {
         let backend = backend()?;
         let devices = admission.devices();
         let division = admission
@@ -180,20 +195,25 @@ impl ResidentModel {
             let failure = |detail| {
                 AdmitRefusal::Adapter(prepared.failure(FailureKind::Load, "adapter-load", detail))
             };
-            let start = observation::records().map_err(&failure)?.len();
+            let start = observation::with_records(<[_]>::len).map_err(&failure)?;
+            // The capture's lock is not held across the engine call, whose
+            // log lines the capture takes.
             let handle = model
                 .lora_adapter_init(prepared.path())
                 .map_err(|error| failure(format!("lora_adapter_init: {error}")))?;
-            let records = observation::records().map_err(&failure)?;
-            let placement = observation::judge(
-                &records[start..],
-                &prepared.identity.targets,
-                devices,
-                division,
-            )
+            let placement = observation::with_records(|records| {
+                observation::judge(
+                    records.get(start..).unwrap_or_default(),
+                    &prepared.identity.targets,
+                    devices,
+                    division,
+                )
+            })
+            .and_then(|judged| judged)
             .map_err(&failure)?;
             Some(ResidentAdapter {
                 handle: std::cell::RefCell::new(handle),
+                artifact: prepared.artifact().to_path_buf(),
                 identity: prepared.identity.clone(),
                 placement,
             })
@@ -201,6 +221,18 @@ impl ResidentModel {
             None
         };
         Ok(ResidentModel { adapter, model })
+    }
+
+    /// The adapter as the record states it (ADP-3), `None` for a base-only
+    /// load.
+    pub fn adapter_record(&self) -> Option<crate::lora::RecordedAdapter> {
+        self.adapter
+            .as_ref()
+            .map(|adapter| crate::lora::RecordedAdapter {
+                artifact: adapter.artifact.display().to_string(),
+                sha256: adapter.identity.sha256.clone(),
+                scale: adapter.identity.scale,
+            })
     }
 
     pub fn adapter_identity(&self) -> Option<&crate::lora::Identity> {
@@ -366,6 +398,9 @@ impl<'a> GgufEngine<'a> {
                 .map_err(|error| DecodeFault::Engine {
                     detail: format!("new_context: {error}"),
                 });
+        // ADP-2: the first session's cache records are in, and the placement
+        // window closes. Every later open finds it closed.
+        crate::lora::observation::close_window();
         let context = match context_result {
             Ok(context) => context,
             Err(error) => {

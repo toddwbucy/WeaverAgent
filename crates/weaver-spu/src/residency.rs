@@ -615,6 +615,19 @@ impl Resident {
     fn flush_mechanism(&self) -> Result<FlushMechanism, DecodeFault> {
         Ok(self.declaration.flush)
     }
+
+    /// **The adapter this residency holds, as the record states it**, per
+    /// the adapter binding amendment ADP-3: `None` for a base-only load. The
+    /// identity is the resident's own (LORA-5), so the record names what was
+    /// loaded rather than what was declared.
+    pub fn adapter(&self) -> Option<crate::lora::RecordedAdapter> {
+        match &self.model {
+            #[cfg(feature = "gguf")]
+            LoadedModel::Gguf(model) => model.adapter_record(),
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
+    }
 }
 
 /// The residency, which begins empty and admits once.
@@ -648,17 +661,44 @@ impl Residency {
         readout: ReadoutElection,
         surprisal_elected: bool,
     ) -> Result<&Resident, AdmitRefusal> {
-        // LORA-1: production callers share admission with absent adapter input.
-        self.admit_with_adapter(
+        self.admit_declared_on(
             binding,
             headroom,
             positions,
             readout,
             surprisal_elected,
-            None,
+            &DeviceSide::of_process(),
         )
     }
 
+    /// **The declaration is the caller**, per the adapter binding amendment
+    /// ADP-2: the adapter request is the binding's declared table, member
+    /// for member, admitted on the one path LORA-1 has the fixture share. A
+    /// base-only binding admits with no request.
+    pub(crate) fn admit_declared_on(
+        &mut self,
+        binding: &ModelBinding,
+        headroom: Headroom,
+        positions: u32,
+        readout: ReadoutElection,
+        surprisal_elected: bool,
+        side: &DeviceSide<'_>,
+    ) -> Result<&Resident, AdmitRefusal> {
+        let request = binding.adapter.as_deref().map(crate::lora::Request::from);
+        self.admit_on(
+            binding,
+            headroom,
+            positions,
+            readout,
+            surprisal_elected,
+            request.as_ref(),
+            side,
+        )
+    }
+
+    /// The fixture's admission with a supplied request (LORA-1), and the
+    /// lora tests'. No production caller reaches it.
+    #[cfg(any(feature = "gguf", test))]
     pub(crate) fn admit_with_adapter(
         &mut self,
         binding: &ModelBinding,
@@ -746,7 +786,7 @@ impl Residency {
                 request,
                 crate::lora::FailureKind::Incompatible,
                 "adapter-backend",
-                "the fixture requires the GGUF backend",
+                "an adapter requires the GGUF backend",
             )));
         }
 

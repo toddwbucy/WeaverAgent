@@ -57,6 +57,7 @@ pub(super) fn load_record() -> LoadRecord {
                 model_binding: ModelBinding {
                     artifact: "checker".into(),
                     devices: vec![0],
+                    adapter: None,
                 },
                 model_artifact_sha256: "m".repeat(64),
                 instances: 1,

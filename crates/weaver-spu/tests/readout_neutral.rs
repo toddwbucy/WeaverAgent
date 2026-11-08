@@ -183,6 +183,7 @@ fn binding_for(path: &Path, devices: &[DeviceOrdinal]) -> (Residency, ModelBindi
         ModelBinding {
             artifact: ArtifactRef(path.to_string_lossy().into_owned()),
             devices: devices.to_vec(),
+            adapter: None,
         },
     )
 }

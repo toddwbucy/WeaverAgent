@@ -113,6 +113,7 @@ impl Fixture {
                     model_binding: ModelBinding {
                         artifact: ArtifactRef(path.to_str().unwrap().into()),
                         devices: vec![DeviceOrdinal(0)],
+                        adapter: None,
                     },
                     model_artifact_sha256: sha(&manifest),
                     instances: 2,

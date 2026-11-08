@@ -213,6 +213,7 @@ fn a_split_artifact_probe_child() {
     let single = ModelBinding {
         artifact: ArtifactRef(path.to_string_lossy().into_owned()),
         devices,
+        adapter: None,
     };
     let refused = probe.admit(
         &single,
@@ -283,6 +284,7 @@ fn a_split_artifact_larger_than_any_card_admits_across_the_pair_child() {
     let binding = ModelBinding {
         artifact: ArtifactRef(path.to_string_lossy().into_owned()),
         devices,
+        adapter: None,
     };
     let resident = residency
         .admit(
@@ -378,6 +380,7 @@ fn a_pair_binding_admits_split_by_layer_and_serves_child() {
     let binding = ModelBinding {
         artifact: ArtifactRef(path.to_string_lossy().into_owned()),
         devices,
+        adapter: None,
     };
     let resident = match residency.admit(
         &binding,

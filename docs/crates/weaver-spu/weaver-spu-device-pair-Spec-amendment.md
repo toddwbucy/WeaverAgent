@@ -273,7 +273,8 @@ refusal still carries the device's capacity.
 
 The observed-division instrument is an explicit accelerator test, like the
 LORA-7 fixture. It runs only in an isolated process with the LORA-3 observer.
-The production path does not install a log callback. A missing device or
+The serving SPU installs the capture at process start and keeps records only
+inside the placement window (adapter binding amendment ADP-2). A missing device or
 artifact fails the test by name and is not a pass.
 
 The existing two-device tests (`tests/two_card.rs`) rest on the free-memory

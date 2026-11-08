@@ -49,7 +49,7 @@ fn diagnostic_open_retains_each_evidence_cause_and_the_original_refusal() {
         serde_json::value::RawValue::from_string(value.to_string()).unwrap()
     };
     let measurement = serde_json::json!({
-        "model": "private-model", "weights_hash": "private-hash", "prefix_token_ids": [7],
+        "model": "private-model", "weights_hash": "private-hash", "adapter": null, "prefix_token_ids": [7],
         "blocks": [{ "label": "identity-prefix", "start": 0, "end": "private-evidence".len() }],
     });
     let valid = weaver_types::Opened {
@@ -520,6 +520,7 @@ fn the_declared_election_reaches_the_tee() {
                 model_binding: weaver_types::ModelBinding {
                     artifact: weaver_types::ArtifactRef("unreachable".into()),
                     devices: vec![weaver_types::DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: false,
                 field_election: None,
@@ -644,6 +645,7 @@ fn a_refused_enter_leaves_its_reason_in_the_record() {
                 model_binding: weaver_types::ModelBinding {
                     artifact: weaver_types::ArtifactRef("unreachable".into()),
                     devices: vec![weaver_types::DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: false,
                 field_election: None,
@@ -805,6 +807,7 @@ fn the_load_names_the_member_it_was_handed_and_the_composer_serve_set() {
                     model_binding: weaver_types::ModelBinding {
                         artifact: weaver_types::ArtifactRef("unreachable".into()),
                         devices: vec![weaver_types::DeviceOrdinal(0)],
+                        adapter: None,
                     },
                     residual_readout_election: false,
                     field_election: None,
@@ -920,6 +923,7 @@ fn an_enter_naming_a_lineage_with_no_member_refuses_before_the_load() {
                 model_binding: weaver_types::ModelBinding {
                     artifact: weaver_types::ArtifactRef("unreachable".into()),
                     devices: vec![weaver_types::DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: false,
                 field_election: None,
@@ -1120,6 +1124,7 @@ fn enter_against_a_member_leaving(
                 model_binding: weaver_types::ModelBinding {
                     artifact: weaver_types::ArtifactRef("unreachable".into()),
                     devices: vec![weaver_types::DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: false,
                 field_election: None,
@@ -2314,6 +2319,7 @@ fn an_enter_with_no_member_seats_no_prefix() {
                 model_binding: weaver_types::ModelBinding {
                     artifact: weaver_types::ArtifactRef("unreachable".into()),
                     devices: vec![weaver_types::DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: false,
                 field_election: None,
@@ -2417,6 +2423,7 @@ fn the_declared_elections_reach_the_load_record() {
                     model_binding: weaver_types::ModelBinding {
                         artifact: weaver_types::ArtifactRef("unreachable".into()),
                         devices: vec![weaver_types::DeviceOrdinal(0)],
+                        adapter: None,
                     },
                     residual_readout_election: elected,
                     field_election: elected.then_some(weaver_types::FieldElection { depth: 50 }),
@@ -2578,6 +2585,7 @@ fn the_diagnostic_enter_forks_no_gate() {
                 model_binding: weaver_types::ModelBinding {
                     artifact: weaver_types::ArtifactRef(fixture.to_string_lossy().into_owned()),
                     devices: vec![weaver_types::DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: false,
                 field_election: None,
@@ -2694,6 +2702,7 @@ fn the_turn_rehearses_on_the_device() {
                 model_binding: weaver_types::ModelBinding {
                     artifact: weaver_types::ArtifactRef(fixture.to_string_lossy().into_owned()),
                     devices: vec![weaver_types::DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: false,
                 field_election: None,
@@ -9364,7 +9373,7 @@ fn containment_an_undelivered_unwind_sweep_is_its_own_fault() {
 /// It owns no placement budget. The foundation boot owner supplies that check.
 #[test]
 fn opening_requires_the_complete_paired_answer_and_not_a_measurement() {
-    let opened = r#"{"kind":"opened","body":{"session":"paired-open","prefix_tokens":1,"capacity":4096,"generation_limit":128,"terminal_tokens":1,"request":{"rendered":"x","template":"t"},"measurement":{"model":"m","weights_hash":"h","prefix_token_ids":[7],"blocks":[{"label":"identity-prefix","start":0,"end":1}]}}}"#;
+    let opened = r#"{"kind":"opened","body":{"session":"paired-open","prefix_tokens":1,"capacity":4096,"generation_limit":128,"terminal_tokens":1,"request":{"rendered":"x","template":"t"},"measurement":{"model":"m","weights_hash":"h","adapter":null,"prefix_token_ids":[7],"blocks":[{"label":"identity-prefix","start":0,"end":1}]}}}"#;
     let cases = [
         (opened, Ok(())),
         (r#"{"kind":"opened"}"#, Err(LifecycleRefusal::NoResidency)),
