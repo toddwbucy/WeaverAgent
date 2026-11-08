@@ -20,7 +20,8 @@
 mod fixture;
 
 use fixture::{
-    Inputs, assert_division_on_binding, assert_same_division, first_difference, run_arm,
+    Inputs, assert_covers, assert_division_on_binding, assert_same_division, first_difference,
+    run_arm,
 };
 
 const TEST: &str = "the_adapter_changes_the_pinned_greedy_output_on_the_binding";
@@ -37,10 +38,13 @@ fn the_adapter_changes_the_pinned_greedy_output_on_the_binding() {
     fixture::fresh_report(&inputs.report);
     let ids = vec![pinned.clone()];
 
-    let control = run_arm(TEST, &inputs, "control", false, &ids);
-    let repeat = run_arm(TEST, &inputs, "control-repeat", false, &ids);
-    let adapted = run_arm(TEST, &inputs, "adapted", true, &ids);
+    let control = run_arm(TEST, &inputs, "control", false, Some(&ids));
+    let repeat = run_arm(TEST, &inputs, "control-repeat", false, Some(&ids));
+    let adapted = run_arm(TEST, &inputs, "adapted", true, Some(&ids));
 
+    assert_covers(&control, &ids);
+    assert_covers(&repeat, &ids);
+    assert_covers(&adapted, &ids);
     for arm in [&control, &repeat, &adapted] {
         assert_division_on_binding(arm, &inputs.devices);
     }
@@ -72,4 +76,48 @@ fn the_adapter_changes_the_pinned_greedy_output_on_the_binding() {
         "the adapted run changed no output token on {pinned}"
     );
     eprintln!("LORA-7 proof: {summary}");
+}
+
+fn records(lines: &[&str]) -> Vec<weaver_spu::lora::observation::Record> {
+    lines
+        .iter()
+        .map(|line| weaver_spu::lora::observation::Record {
+            level: 1,
+            bytes: format!("{line}\n").into_bytes(),
+        })
+        .collect()
+}
+
+/// **The division parse reads the pinned engine's record wording.** The lines
+/// are the shapes the pinned engine wrote on 2026-11-08 for a two-device
+/// layer split (`load_tensors` and `llama_kv_cache`), so a reworded record
+/// fails here on the host rather than as an empty division on the device.
+#[test]
+fn the_division_parse_reads_the_engine_records() {
+    let (division, kv) = fixture::division(&records(&[
+        "load_tensors: layer   0 assigned to device CUDA0, is_swa = 0",
+        "load_tensors: layer   1 assigned to device CUDA1, is_swa = 0",
+        "load_tensors: layer   2 assigned to device CUDA1, is_swa = 0",
+        "load_tensors: layer   0 assigned to device CUDA0, is_swa = 0",
+        "llama_kv_cache: layer   0: dev = CUDA0",
+        "llama_kv_cache: layer   1: dev = CUDA1",
+        "llama_kv_cache: layer   0: dev = CUDA0",
+    ]));
+    assert_eq!(division.len(), 3);
+    assert_eq!(division[&2], "CUDA1");
+    assert_eq!(kv.len(), 2);
+    assert_eq!(kv[&1], "CUDA1");
+}
+
+/// Perturbation of the above: a capture missing a repeating layer's KV
+/// record refuses, where a set comparison of two such captures would pass.
+#[test]
+#[should_panic(expected = "KV records are not one per repeating layer")]
+fn a_partial_capture_refuses() {
+    fixture::division(&records(&[
+        "load_tensors: layer   0 assigned to device CUDA0, is_swa = 0",
+        "load_tensors: layer   1 assigned to device CUDA1, is_swa = 0",
+        "load_tensors: layer   2 assigned to device CUDA1, is_swa = 0",
+        "llama_kv_cache: layer   0: dev = CUDA0",
+    ]));
 }

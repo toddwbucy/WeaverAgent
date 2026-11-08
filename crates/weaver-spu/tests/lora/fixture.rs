@@ -142,11 +142,21 @@ pub struct Entry {
     pub max_new_tokens: usize,
 }
 
-/// The entries file, in its own order.
+/// A token id from JSON, refused rather than wrapped when it does not fit.
+fn token(value: &Value) -> u32 {
+    value
+        .as_u64()
+        .and_then(|t| u32::try_from(t).ok())
+        .unwrap_or_else(|| panic!("{value} is not a token id"))
+}
+
+/// The entries file, in its own order. A repeated id refuses, since the
+/// comparison is keyed by id.
 pub fn entries(path: &Path) -> Vec<Entry> {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("{} is unreadable: {e}", path.display()));
-    text.lines()
+    let entries: Vec<Entry> = text
+        .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             let row: Value = serde_json::from_str(line)
@@ -157,7 +167,7 @@ pub fn entries(path: &Path) -> Vec<Entry> {
                     .as_array()
                     .expect("an entry carries its input ids")
                     .iter()
-                    .map(|t| TokenId(t.as_u64().expect("a token id is unsigned") as u32))
+                    .map(|t| TokenId(token(t)))
                     .collect(),
                 max_new_tokens: row["max_new_tokens"]
                     .as_u64()
@@ -165,7 +175,17 @@ pub fn entries(path: &Path) -> Vec<Entry> {
                     as usize,
             }
         })
-        .collect()
+        .collect();
+    let mut seen = std::collections::BTreeSet::new();
+    for entry in &entries {
+        assert!(
+            seen.insert(entry.id.as_str()),
+            "{} repeats the id {}",
+            path.display(),
+            entry.id
+        );
+    }
+    entries
 }
 
 /// The report directory, made fresh and refused inside this repository.
@@ -175,20 +195,33 @@ pub fn fresh_report(report: &Path) {
         .canonicalize()
         .expect("the repository root resolves");
     assert!(
+        report.is_absolute(),
+        "WEAVER_LORA_REPORT names {}, which is not an absolute path",
+        report.display()
+    );
+    assert!(
         !report.exists(),
         "WEAVER_LORA_REPORT names {}, which already exists; a report is never reused",
         report.display()
     );
-    std::fs::create_dir_all(report)
-        .unwrap_or_else(|e| panic!("the report directory {}: {e}", report.display()));
-    let resolved = report
+    // Judged on the nearest existing ancestor, before anything is created.
+    let mut ancestor = report.to_path_buf();
+    while !ancestor.exists() {
+        ancestor = ancestor
+            .parent()
+            .expect("an absolute path has an existing ancestor")
+            .to_path_buf();
+    }
+    let resolved = ancestor
         .canonicalize()
-        .expect("the report directory resolves");
+        .expect("the report's ancestor resolves");
     assert!(
         !resolved.starts_with(&repository),
         "the report directory {} is inside the repository; LORA-6 keeps it outside",
-        resolved.display()
+        report.display()
     );
+    std::fs::create_dir_all(report)
+        .unwrap_or_else(|e| panic!("the report directory {}: {e}", report.display()));
 }
 
 /// One arm's outcome as the parent reads it back.
@@ -199,9 +232,17 @@ pub struct Arm {
 }
 
 /// Run one arm in a child process of this test binary, and read its files.
-pub fn run_arm(test: &str, inputs: &Inputs, name: &str, adapted: bool, ids: &[String]) -> Arm {
+/// `ids` of `None` decodes every entry, which the child reads itself.
+pub fn run_arm(
+    test: &str,
+    inputs: &Inputs,
+    name: &str,
+    adapted: bool,
+    ids: Option<&[String]>,
+) -> Arm {
     let exe = std::env::current_exe().expect("the test binary names itself");
-    let status = Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .args([
             test,
             "--exact",
@@ -212,11 +253,20 @@ pub fn run_arm(test: &str, inputs: &Inputs, name: &str, adapted: bool, ids: &[St
         .env(
             ARM,
             format!("{name}:{}", if adapted { "adapted" } else { "base" }),
-        )
-        .env(IDS, ids.join(","))
-        .status()
-        .expect("the arm process starts");
-    assert!(status.success(), "arm {name} failed: {status}");
+        );
+    if let Some(ids) = ids {
+        command.env(IDS, ids.join("\n"));
+    }
+    let status = command.status().expect("the arm process starts");
+    if !status.success() {
+        // LORA-6 keeps a failed attempt's facts: the stage the child reached
+        // is in its stage file, and the parent records the exit.
+        let _ = std::fs::write(
+            inputs.report.join(format!("{name}.failed")),
+            format!("{status}\n"),
+        );
+        panic!("arm {name} failed: {status}");
+    }
     read_arm(&inputs.report, name)
 }
 
@@ -232,7 +282,7 @@ fn read_arm(report: &Path, name: &str) -> Arm {
             .as_array()
             .expect("an output carries token ids")
             .iter()
-            .map(|t| t.as_u64().expect("a token id") as u32)
+            .map(token)
             .collect();
         outputs.insert(row["id"].as_str().expect("an id").to_string(), ids);
     }
@@ -256,12 +306,11 @@ pub fn child() -> bool {
     let (name, kind) = arm.split_once(':').expect("the arm marker is name:kind");
     let adapted = kind == "adapted";
     let inputs = Inputs::from_env();
-    let wanted: Vec<String> = std::env::var(IDS)
-        .expect("the parent names the arm's ids")
-        .split(',')
-        .map(str::to_string)
-        .collect();
     let all = entries(&inputs.entries);
+    let wanted: Vec<String> = match std::env::var(IDS) {
+        Ok(ids) => ids.lines().map(str::to_string).collect(),
+        Err(_) => all.iter().map(|e| e.id.clone()).collect(),
+    };
     let selected: Vec<&Entry> = wanted
         .iter()
         .map(|id| {
@@ -271,8 +320,17 @@ pub fn child() -> bool {
         })
         .collect();
 
+    let stage = |reached: &str| {
+        let _ = std::fs::write(
+            inputs.report.join(format!("{name}.stage")),
+            format!("{reached}\n"),
+        );
+    };
+    stage("observer");
     let mut fixture = Fixture::new().expect("the LORA-3 observer installs first");
     let request = inputs.request();
+    stage("admit");
+    let admit_started = Instant::now();
     let resident = match fixture.admit(
         &inputs.binding(),
         Headroom(HEADROOM_BYTES),
@@ -281,13 +339,24 @@ pub fn child() -> bool {
         adapted.then_some(&request),
     ) {
         Ok(resident) => resident,
-        Err(refusal) => panic!("arm {name} admission refused: {refusal:?}"),
+        Err(refusal) => {
+            stage(&format!("admit refused: {refusal:?}"));
+            dump_records(&inputs.report, name, &fixture.records().unwrap_or_default());
+            panic!("arm {name} admission refused: {refusal:?}")
+        }
     };
+    let admit_seconds = admit_started.elapsed().as_secs_f64();
+    stage("decode");
     let family = (resident.declaration.renderer)();
     let stops = resident
         .stop_set(family)
         .expect("the family's stop set promotes");
+    // **The arm stops on the turn's close alone**, which is what the
+    // reference's generation stopped on (its end-of-turn token as the only
+    // eos). The serving stop set adds the artifact's declared end of sequence
+    // as a backstop, and the report records it beside the one used.
     let terminator = stops.terminator;
+    let serving_stops: Vec<u32> = stops.tokens.iter().map(|t| t.0).collect();
     let LoadedModel::Gguf(model) = resident.model() else {
         panic!("the base is not served by the GGUF engine");
     };
@@ -354,7 +423,9 @@ pub fn child() -> bool {
         eprintln!("arm {name}: {} {} tokens, {finish}", entry.id, ids.len());
     }
 
+    stage("observe");
     let records = fixture.records().expect("the capture holds every record");
+    dump_records(&inputs.report, name, &records);
     let (division, kv) = division(&records);
     let observation = json!({
         "arm": name,
@@ -365,9 +436,19 @@ pub fn child() -> bool {
         "family": family_name,
         "terminator": terminator.0,
         "stop_tokens": [terminator.0],
+        "serving_stop_tokens": serving_stops,
         "capacity": CAPACITY,
         "headroom_bytes": HEADROOM_BYTES,
-        "knobs": {"temperature": 0.0, "top_k": 1, "top_p": 1.0, "repetition_penalty": 1.0},
+        "knobs": {
+            "temperature": KNOBS.temperature,
+            "top_k": KNOBS.top_k,
+            "top_p": KNOBS.top_p,
+            "repetition_penalty": KNOBS.repetition_penalty,
+            "repetition_window": KNOBS.repetition_window,
+            "seed": KNOBS.seed,
+        },
+        "admit_seconds": admit_seconds,
+        "source": source(),
         "adapter": identity.map(|i| json!({
             "sha256": i.sha256,
             "base_weights_hash": i.base_weights_hash,
@@ -390,13 +471,54 @@ pub fn child() -> bool {
     )
     .expect("the observation writes");
     fixture.release().expect("the arm releases");
+    stage("released");
     true
+}
+
+/// Every captured engine record, verbatim, for LORA-6's raw placement evidence.
+fn dump_records(report: &Path, name: &str, records: &[weaver_spu::lora::observation::Record]) {
+    let mut text = String::new();
+    for record in records {
+        let _ = writeln!(
+            text,
+            "{}\t{}",
+            record.level,
+            String::from_utf8_lossy(&record.bytes).trim_end()
+        );
+    }
+    let _ = std::fs::write(report.join(format!("{name}.records.txt")), text);
+}
+
+/// The build and environment facts LORA-6 names, read at run time.
+fn source() -> Value {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let git = |args: &[&str]| {
+        Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    };
+    let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap_or_default();
+    let engine = lock
+        .lines()
+        .find(|line| line.contains("llama-cpp-rs") && line.contains("rev="))
+        .map(str::to_string);
+    json!({
+        "commit": git(&["rev-parse", "HEAD"]),
+        "dirty": git(&["status", "--porcelain"]).map(|s| !s.is_empty()),
+        "engine_pin": engine,
+        "host": std::fs::read_to_string("/proc/sys/kernel/hostname").ok().map(|h| h.trim().to_string()),
+        "cuda_visible_devices": std::env::var("CUDA_VISIBLE_DEVICES").ok(),
+        "cuda_device_order": std::env::var("CUDA_DEVICE_ORDER").ok(),
+    })
 }
 
 /// The division and the per-layer KV cache devices, from the engine's records.
 /// Every KV record for one layer must name one device across the arm's
 /// sessions; the division must be non-empty.
-fn division(
+pub fn division(
     records: &[weaver_spu::lora::observation::Record],
 ) -> (BTreeMap<u32, String>, BTreeMap<u32, String>) {
     let mut division = BTreeMap::new();
@@ -412,10 +534,9 @@ fn division(
                     .expect("an assignment record names its device");
                 let device = device.split(',').next().unwrap().to_string();
                 let layer: u32 = layer.trim().parse().expect("an assignment names its layer");
-                assert!(
-                    division.insert(layer, device).is_none(),
-                    "layer {layer} was assigned twice in one admission"
-                );
+                if let Some(seen) = division.insert(layer, device.clone()) {
+                    assert_eq!(seen, device, "layer {layer} was assigned to two devices");
+                }
             } else if let Some((_, rest)) = line.split_once(": layer ")
                 && let Some((layer, device)) = rest.split_once(": dev = ")
                 && line.contains("kv_cache")
@@ -431,7 +552,24 @@ fn division(
             }
         }
     }
-    assert!(!division.is_empty(), "no assignment record was captured");
+    // LORA-7: an assignment for every repeating layer and for the output
+    // layer, which the engine counts as n_layer, and a KV record for every
+    // repeating layer. A partial or empty capture fails rather than comparing
+    // equal to another partial one.
+    let last = *division
+        .keys()
+        .last()
+        .expect("no assignment record was captured");
+    assert!(
+        division.keys().copied().eq(0..=last),
+        "the assignment records are not one per layer 0..={last}: {:?}",
+        division.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        kv.keys().copied().eq(0..last),
+        "the KV records are not one per repeating layer 0..{last}: {:?}",
+        kv.keys().collect::<Vec<_>>()
+    );
     (division, kv)
 }
 
@@ -476,15 +614,27 @@ pub fn assert_same_division(control: &Arm, other: &Arm) {
 /// Every assignment record names a device in the binding.
 pub fn assert_division_on_binding(arm: &Arm, devices: &[DeviceOrdinal]) {
     let names: Vec<String> = devices.iter().map(|d| format!("CUDA{}", d.0)).collect();
-    let division = arm.observation["division"]
-        .as_object()
-        .expect("the division is a map");
-    for (layer, device) in division {
-        let device = device.as_str().expect("a device name");
-        assert!(
-            names.iter().any(|n| n == device),
-            "arm {}: layer {layer} is assigned to {device}, outside the binding {names:?}",
-            arm.name
-        );
+    for key in ["division", "kv_cache"] {
+        let map = arm.observation[key].as_object().expect("a per-layer map");
+        for (layer, device) in map {
+            let device = device.as_str().expect("a device name");
+            assert!(
+                names.iter().any(|n| n == device),
+                "arm {}: {key} puts layer {layer} on {device}, outside the binding {names:?}",
+                arm.name
+            );
+        }
     }
+}
+
+/// An arm answered every id it was asked for, and no other.
+pub fn assert_covers(arm: &Arm, ids: &[String]) {
+    let asked: std::collections::BTreeSet<&str> = ids.iter().map(String::as_str).collect();
+    let answered: std::collections::BTreeSet<&str> =
+        arm.outputs.keys().map(String::as_str).collect();
+    assert_eq!(
+        answered, asked,
+        "arm {} did not answer exactly the ids asked",
+        arm.name
+    );
 }
