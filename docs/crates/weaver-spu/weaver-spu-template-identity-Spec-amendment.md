@@ -251,10 +251,12 @@ is dropped refuses at its next load, so a drop is listed, never silent.
   only pins in the ChatML and `[INST]` classes, where detector evidence is
   blind. Until ruled, both evidence forms admit, and the code act reports which
   form each pin used.
-- **Trace member.** The admitted digest is not recorded in the trace. The
-  trace carries the artifact path, not a content digest, and a safetensors
-  chat template is a sidecar read by name, so a replay can recompute the
-  digest only while the bytes are unchanged.
+- **Trace member.** The admitted digest is not recorded in the trace as its
+  own member. The record's `weights_hash` already covers the chat template's
+  bytes, inside a GGUF or as a sidecar in the safetensors directory walk, so
+  the template an artifact carried is identified by the record and a replay
+  can recompute its digest from the same bytes. A member would repeat that
+  fact.
 - **Named-template lists.** A `chat_template` list refuses (TID-4) until a
   ruling says which named template serves.
 - **Qwen release lines.** Whether `qwen2`, `qwen3`, `qwen3moe`, `qwen35` and
