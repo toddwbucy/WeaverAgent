@@ -392,7 +392,7 @@ and are not claims that the new mechanic has already been implemented.
 | Pinned llama-adapter.cpp and llama.h | Metadata and tensor checks, skipped tensor path, buffer placement and model-owned adapter lifetime |
 | Pinned llama-impl.h, llama-impl.cpp and llama_log_set | DEBUG and WARN delivery to the fixture's placement observer |
 | Pinned models/mamba-base.cpp::build_mamba2_layer | LoRA graph paths for ssm_in and ssm_out, separate from conversion proof |
-| Pinned models/granite.cpp and convert_hf_to_gguf.py::GraniteModel | The attention scale is read from GGUF metadata, written from the source config's attention multiplier; an absent or zero key falls back silently to 1/sqrt(head dimension) (granite.cpp:125) |
+| Pinned models/granite.cpp and convert_hf_to_gguf.py::GraniteModel | The attention scale is read from GGUF metadata, written from the source config's attention multiplier. An absent or zero key falls back silently to 1/sqrt(head dimension) (granite.cpp:125) |
 
 Production identity consumers held for item 3 are listed below. The source
 paths are under crates/. Their inclusion records the boundary that prevents
