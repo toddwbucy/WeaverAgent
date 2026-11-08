@@ -451,6 +451,7 @@ Process section 6 names the two invocations that reach them.
 | `manifest.rs` | none | none |
 | `seam.rs` | none | none |
 | `markers.rs` | `gguf` | `WEAVER_VOCAB_<FAMILY>`, one per registry entry |
+| `granite_heldout.rs` | `gguf` | `WEAVER_GRANITE_R1_HELDOUT`, `WEAVER_VOCAB_GRANITE` |
 | `selection.rs` | `gguf` | `WEAVER_ARTIFACT_GEMMA4`, `WEAVER_ARTIFACT_MISTRAL_SMALL`, `WEAVER_ARTIFACT_PHI4`, `WEAVER_ARTIFACT_PHI4_MINI`, `WEAVER_ARTIFACT_SMOLLM2` |
 | `native_loaded.rs` | `cuda` | `WEAVER_ARTIFACT_QWEN25_SAFETENSORS`, `WEAVER_ARTIFACT_QWEN25_32B`, `WEAVER_MEASURE_PACE` |
 | `loaded.rs` | `cuda` and `gguf` | `WEAVER_TEST_GGUF`, `WEAVER_ARTIFACT_QWEN25_SAFETENSORS`, `WEAVER_ARTIFACT_COLUMN_LAYERS`, `WEAVER_ARTIFACT_COLUMN_WIDTH` |
@@ -482,6 +483,11 @@ artifact needs none of them.
 entry for its own artifact under `WEAVER_VOCAB_<FAMILY>`, so the set grows with the
 registry and a table listing thirteen names would be stale on the next family. The
 manifest test therefore checks the shape rather than the roster.
+
+**`granite_heldout.rs` reads the granite vocabulary under the probe's own name.** It
+re-renders the R1 held-out prompts through the granite renderer and compares their
+token ids with the deposit's, so it needs the same artifact `markers.rs` probes, and one
+name for one artifact keeps the two from pointing at different files.
 
 **`WEAVER_DECODE_GGUF` is the decode module's own and is not a test target's.** It
 points the engine's unit suite at an artifact whose vocabulary those tests read, which

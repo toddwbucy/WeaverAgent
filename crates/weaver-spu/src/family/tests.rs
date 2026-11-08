@@ -117,6 +117,7 @@ fn no_two_registry_spellings_fold_to_one_key() {
         ("mistral3", "mistral3"),
         ("phi3", "phi3"),
         ("gpt-oss", "gptoss"),
+        ("granite", "granite"),
     ];
     for row in REGISTRY {
         let folded = normalised_key(row.family);
@@ -531,7 +532,7 @@ fn one_module_serves_keys_whose_flush_mechanisms_differ() {
         );
     }
 
-    // All five render through the one module, which is the half that makes
+    // All six render through the one module, which is the half that makes
     // the differing flush interesting rather than incidental.
     for shared in [
         "qwen2",
@@ -1178,6 +1179,7 @@ fn each_familys_grammar_names_its_registry_row() {
         (Box::new(gemma4::Gemma4), gemma4::CALL_OPEN),
         (Box::new(mistral3::Mistral3), mistral3::CALL_OPEN),
         (Box::new(gpt_oss::GptOss), gpt_oss::CALL_OPEN),
+        (Box::new(granite::Granite), granite::CALL_OPEN),
     ];
     for (family, open) in families {
         let parsed = family.parse(&format!("{open}garbage"), None);
@@ -1370,6 +1372,7 @@ fn every_familys_declaration_answers_its_own_row() {
         (Box::new(gemma4::Gemma4), gemma4::TEMPLATE),
         (Box::new(mistral3::Mistral3), mistral3::TEMPLATE),
         (Box::new(gpt_oss::GptOss), gpt_oss::TEMPLATE),
+        (Box::new(granite::Granite), granite::TEMPLATE),
     ];
     for (family, template) in families {
         assert_eq!(family.declaration().template, template);

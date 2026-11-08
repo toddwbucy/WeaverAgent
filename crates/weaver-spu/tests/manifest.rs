@@ -47,6 +47,13 @@ const TABLE: &[(&str, &[&str], &[&str])] = &[
     // its first run.
     ("seam.rs", &[], &[]),
     ("markers.rs", &["gguf"], &[VOCAB_PREFIX]),
+    // The held-out re-render reads the granite vocabulary under the probe's
+    // own name, so one artifact has one name across the two targets.
+    (
+        "granite_heldout.rs",
+        &["gguf"],
+        &["WEAVER_GRANITE_R1_HELDOUT", "WEAVER_VOCAB_GRANITE"],
+    ),
     (
         "selection.rs",
         &["gguf"],

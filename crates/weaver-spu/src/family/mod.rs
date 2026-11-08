@@ -62,6 +62,7 @@ use crate::decoder::backend::FlushMechanism;
 
 pub mod gemma4;
 pub mod gpt_oss;
+pub mod granite;
 pub mod llama;
 pub mod mistral3;
 pub mod modernbert;
@@ -1044,6 +1045,34 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: gpt_oss::GENERATION_OPENER,
         renderer: gpt_oss::renderer,
         selecting_markers: gpt_oss::RENDERED_MARKERS,
+        flush: FlushMechanism::TruncateToPosition,
+        taps_readout: false,
+        taps_column: false,
+    },
+    Declaration {
+        // **ChatML turns under its own module, every fact its own copy.** IBM
+        // adopted ChatML for this lineage by choice, and the pinned template
+        // opens the model's turn with an empty thought. Model configurations
+        // stay segregated by family (the operator's ruling of 2026-11-08), so
+        // the template, the markers, the opener and the renderer cited here
+        // are the granite module's and no other family's change moves them.
+        //
+        // Measured on Granite 4.2 30B, 2026-11-08: its header declares this
+        // architecture, its template re-renders the R1 held-out prompts with
+        // this opener, and its `<think>` pair is `USER_DEFINED` and promotes
+        // to one token each. The marker probe of `tests/markers.rs` reads the
+        // set against the artifact.
+        //
+        // The flush is by truncation: `granite` is a dense attention
+        // architecture, absent from `llm_arch_is_hybrid` and from
+        // `llm_arch_is_recurrent`, and the probe's cross-check reads that
+        // against the artifact.
+        family: "granite",
+        shard_widths: &[1, 2],
+        template: granite::TEMPLATE,
+        generation_opener: granite::GENERATION_OPENER,
+        renderer: granite::renderer,
+        selecting_markers: granite::SELECTING_MARKERS,
         flush: FlushMechanism::TruncateToPosition,
         taps_readout: false,
         taps_column: false,

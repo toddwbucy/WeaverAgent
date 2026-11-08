@@ -29,6 +29,11 @@
 //! settle and the probe table is where the artifacts are named. Both tests ask
 //! the same question in the same way: the family declares, the artifact
 //! answers, and the two must agree.
+//!
+//! **It also holds granite's scale-metadata check**, an explicit instrument
+//! that reads the same probe table's granite vocabulary: the four scales the
+//! architecture reads must be present and nonzero, per the LoRA loading
+//! amendment's family-facts cell.
 #![cfg(feature = "gguf")]
 
 use std::path::{Path, PathBuf};
@@ -37,7 +42,7 @@ use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
 
-use weaver_spu::family::{FamilyName, gemma4, gpt_oss, llama, mistral3, phi, qwen2};
+use weaver_spu::family::{FamilyName, gemma4, gpt_oss, granite, llama, mistral3, phi, qwen2};
 
 /// A family, its rendered markers, and where a tokenizer for it is found.
 ///
@@ -178,6 +183,17 @@ const PROBES: &[Probe] = &[
         env: "WEAVER_VOCAB_NEMOTRON_H_MOE",
         default_path: "/opt/weaver/models/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-heretic.i1-IQ4_XS.gguf",
         rendered: qwen2::RENDERED_MARKERS,
+    },
+    Probe {
+        // **ChatML turn markers and a thought pair the opener renders.** The
+        // generation opener ends in `<think></think>`, so the pair is inbound
+        // here, unlike the outbound pairs of qwen3 and nemotron_h_moe. Both
+        // are `USER_DEFINED` in the artifact's token table and must still
+        // promote to one token each.
+        family: "granite",
+        env: "WEAVER_VOCAB_GRANITE",
+        default_path: "/opt/weaver/models/granite-4.2-30b-bf16.gguf",
+        rendered: granite::RENDERED_MARKERS,
     },
 ];
 
@@ -469,4 +485,63 @@ fn a_truncating_family_is_not_served_by_an_engine_that_cannot_roll_back() {
     if !absent.is_empty() {
         eprintln!("flush declaration unverified for: {}", absent.join(", "));
     }
+}
+
+/// **The granite artifact carries the four scales its architecture reads,
+/// each present and nonzero**, per the LoRA loading amendment's family-facts
+/// cell.
+///
+/// The pinned engine reads the residual, embedding and attention scales as
+/// optional keys. An absent or zero attention scale falls back to
+/// 1/sqrt(head dimension) without a word (`models/granite.cpp`), so a
+/// conversion that dropped the key would load and decode under the wrong
+/// scale. The logit scale is a required key and is read here beside them.
+///
+/// What it proves is presence and a nonzero value as llama.cpp prints it, to
+/// six decimals: a scale below 5e-7 would read as zero, and a wrong nonzero
+/// value passes. Granite 4.2's attention scale, 0.0078125, prints 0.007812.
+///
+/// An explicit instrument: it reads the probe table's granite vocabulary and
+/// fails by name when that file is not there, rather than passing having read
+/// nothing. Run it with `WEAVER_VOCAB_GRANITE` set and `--ignored`.
+///
+/// Perturbation: name a key the artifact does not carry, such as
+/// `granite.attention.scale_missing`, and this fails naming it.
+#[test]
+#[ignore = "needs the granite GGUF; set WEAVER_VOCAB_GRANITE"]
+fn granite_carries_its_scale_metadata_present_and_nonzero() {
+    let probe = PROBES
+        .iter()
+        .find(|probe| probe.family == "granite")
+        .expect("the probe table carries granite");
+    let (path, _) = probe.path();
+    assert!(
+        path.is_file(),
+        "{} names no regular file at {}, so no scale was read",
+        probe.env,
+        path.display()
+    );
+    let model = vocab_only(backend(), &path).expect("the granite vocabulary loads");
+    let mut failures: Vec<String> = Vec::new();
+    for key in [
+        "granite.attention.scale",
+        "granite.embedding_scale",
+        "granite.residual_scale",
+        "granite.logit_scale",
+    ] {
+        match model.meta_val_str(key) {
+            Ok(value) => match value.trim().parse::<f32>() {
+                Ok(scale) if scale != 0.0 && scale.is_finite() => {}
+                Ok(scale) => failures.push(format!("{key} is {scale}")),
+                Err(error) => failures.push(format!("{key} reads {value:?}: {error}")),
+            },
+            Err(error) => failures.push(format!("{key} is absent: {error}")),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "granite scale metadata missing or zero in {}:\n  {}",
+        path.display(),
+        failures.join("\n  ")
+    );
 }
