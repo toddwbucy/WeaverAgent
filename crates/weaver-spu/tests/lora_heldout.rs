@@ -23,8 +23,8 @@
 mod fixture;
 
 use fixture::{
-    Inputs, assert_covers, assert_division_on_binding, assert_same_division, first_difference,
-    run_arm,
+    Inputs, assert_adapter_on_its_layers, assert_covers, assert_division_on_binding,
+    assert_same_division, first_difference, run_arm,
 };
 
 const TEST: &str = "the_held_out_set_decodes_base_only_and_adapted_on_one_division";
@@ -51,6 +51,7 @@ fn the_held_out_set_decodes_base_only_and_adapted_on_one_division() {
     assert_division_on_binding(&base, &inputs.devices);
     assert_division_on_binding(&adapted, &inputs.devices);
     assert_same_division(&base, &adapted);
+    assert_adapter_on_its_layers(&adapted);
     let changed = ids
         .iter()
         .filter(|id| first_difference(&base.outputs[*id], &adapted.outputs[*id]).is_some())
