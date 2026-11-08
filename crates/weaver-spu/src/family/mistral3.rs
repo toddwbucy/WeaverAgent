@@ -106,6 +106,16 @@ pub const GENERATION_OPENER: &str = "";
 /// `eos_token_id`, token 2.
 const STOP: &[&str] = &[TURN_END];
 
+/// The chat-template digests pinned for the `mistral3` entry, per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const PINNED: &[super::PinnedTemplate] = &[];
+
+/// The chat-template digests pinned for the `llama` `[INST]` entry, interim home (TID-1), per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const LLAMA_INST_PINNED: &[super::PinnedTemplate] = &[];
+
 /// This family's renderer, cited by its registry entry.
 pub fn renderer() -> &'static dyn Family {
     &Mistral3

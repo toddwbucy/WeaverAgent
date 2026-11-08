@@ -463,10 +463,10 @@ pub trait Family {
     /// **A module serving several architecture keys answers for the key it is
     /// named after, not for the artifact in hand.** [`qwen2`] serves seven keys,
     /// so `Qwen2::declaration()` is qwen2's row whichever of them was admitted.
-    /// A per-artifact fact is read from the entry admission resolved instead: by
-    /// [`lookup`] against the architecture the header declares, or by [`select`]
-    /// against the artifact's chat template where that architecture is contested,
-    /// and that entry is retained for the session.
+    /// A per-artifact fact is read from the entry admission resolved instead:
+    /// by [`select`], against the architecture the header declares and the
+    /// digest of the artifact's chat template, and that entry is retained for
+    /// the session.
     fn declaration(&self) -> &'static Declaration;
 }
 
@@ -588,6 +588,38 @@ pub fn scan(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FamilyName(pub String);
 
+/// **A chat-template digest an entry serves, and why**, per the template
+/// identity amendment TID-2.
+///
+/// The digest is the lowercase hexadecimal SHA-256 of the chat template
+/// exactly as the artifact carries it (TID-4). The source and the evidence
+/// are recorded beside it, so every admission traces to a reviewed act.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PinnedTemplate {
+    /// The lowercase hexadecimal SHA-256 of the chat-template text.
+    pub sha256: &'static str,
+    /// The artifact the text came from: a published repository and
+    /// revision, or the workshop artifact's name.
+    pub source: &'static str,
+    /// What shows this entry's renderer serves the text.
+    pub evidence: Evidence,
+}
+
+/// **The two forms of evidence TID-2 admits for a pin.**
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Evidence {
+    /// The chat template, rendered by its own reference engine over the
+    /// golden conversations, matches this entry's renderer byte for byte on
+    /// the served path. `variables` names the template variables the render
+    /// was given. The renders are `tests/fixtures/templates/goldens.json`,
+    /// which `tests/template_identity.rs` reads.
+    Golden { variables: &'static str },
+    /// The template detector's class for the text at pinning time, with a
+    /// probe render through this entry's renderer. Blind within a detector
+    /// class (TID-2), so it does not close substitution there.
+    Detector { class: &'static str },
+}
+
 /// What one family declares about itself, at compile time.
 ///
 /// **No [`PartialEq`], and the reason is [`Declaration::renderer`].** A
@@ -622,19 +654,30 @@ pub struct Declaration {
     /// two:** a second map from family name to renderer would be the same fact
     /// in two places with no authority named, which G5 files as a defect.
     pub renderer: fn() -> &'static dyn Family,
-    /// **The markers this entry renders, which select it among the entries
-    /// sharing its architecture**, per Spec section 5.
+    /// **The markers that tell this entry apart from the others sharing its
+    /// architecture**, per Spec section 5.
     ///
     /// Cited from the family module rather than written here, for the reason
     /// [`Declaration::template`] is cited: the module is the authority for
     /// what it emits, and a second spelling here would be one fact in two
     /// places with no authority named.
     ///
-    /// **Read only where an architecture is contested.** An architecture
-    /// carrying one entry selects on the architecture and never renders, which
-    /// is what keeps a family the template detector does not recognise
-    /// admissible. Gemma4 is such a family today.
+    /// **An instrument, not a selector**, per the template identity amendment
+    /// TID-3 and TID-5. Admission selects by [`Declaration::pinned`]. The
+    /// marker probe of `tests/markers.rs` reads this set against the
+    /// template detector's rendering of each pinned chat template the
+    /// detector recognises, and the build still refuses two entries of one
+    /// architecture whose sets cannot be told apart.
     pub selecting_markers: &'static [&'static str],
+    /// **The digests of the chat templates this entry serves**, each with
+    /// its source and evidence, per TID-2.
+    ///
+    /// Cited from the family module, which holds the set beside its renderer
+    /// (TID-1), or for an entry citing another family's module, from a
+    /// per-entry constant in that module until #484 moves it. Admission
+    /// admits an artifact to this entry only where the digest of its chat
+    /// template is in this set (TID-3). An empty set admits nothing.
+    pub pinned: &'static [PinnedTemplate],
     /// **How this family's flush reaches its fixed outcome**, per Spec section
     /// 4.4. Declared here rather than inferred from a version string, because
     /// a truncation that returns success while recurrent state stays is the
@@ -720,6 +763,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: llama::GENERATION_OPENER,
         renderer: llama::renderer,
         selecting_markers: llama::RENDERED_MARKERS,
+        pinned: llama::PINNED,
         flush: FlushMechanism::TruncateToPosition,
         taps_readout: false,
         taps_column: false,
@@ -742,6 +786,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: qwen2::GENERATION_OPENER,
         renderer: qwen2::renderer,
         selecting_markers: qwen2::RENDERED_MARKERS,
+        pinned: qwen2::LLAMA_CHATML_PINNED,
         flush: FlushMechanism::TruncateToPosition,
         taps_readout: false,
         taps_column: false,
@@ -764,6 +809,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: mistral3::GENERATION_OPENER,
         renderer: mistral3::renderer,
         selecting_markers: mistral3::SELECTING_MARKERS,
+        pinned: mistral3::LLAMA_INST_PINNED,
         flush: FlushMechanism::TruncateToPosition,
         taps_readout: false,
         taps_column: false,
@@ -775,6 +821,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: qwen2::GENERATION_OPENER,
         renderer: qwen2::renderer,
         selecting_markers: qwen2::RENDERED_MARKERS,
+        pinned: qwen2::PINNED,
         flush: FlushMechanism::TruncateToPosition,
         // The native tap stands for this family, 2026-08-19: the fork's
         // forward_with_intermediates for qwen2 on the single device and the
@@ -806,6 +853,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: qwen2::GENERATION_OPENER,
         renderer: qwen2::renderer,
         selecting_markers: qwen2::RENDERED_MARKERS,
+        pinned: qwen2::QWEN3_PINNED,
         flush: FlushMechanism::TruncateToPosition,
         // **Declared on a measurement, 2026-09-02**, per charter section
         // 13.7's bar and the rule that flipping this is a claim about the
@@ -835,6 +883,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: qwen2::GENERATION_OPENER,
         renderer: qwen2::renderer,
         selecting_markers: qwen2::RENDERED_MARKERS,
+        pinned: qwen2::QWEN3MOE_PINNED,
         flush: FlushMechanism::TruncateToPosition,
         taps_readout: false,
         taps_column: false,
@@ -870,6 +919,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: qwen2::GENERATION_OPENER,
         renderer: qwen2::renderer,
         selecting_markers: qwen2::RENDERED_MARKERS,
+        pinned: qwen2::QWEN35_PINNED,
         flush: FlushMechanism::ReestablishAndReprefill,
         taps_readout: false,
         taps_column: false,
@@ -887,6 +937,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: qwen2::GENERATION_OPENER,
         renderer: qwen2::renderer,
         selecting_markers: qwen2::RENDERED_MARKERS,
+        pinned: qwen2::QWEN35MOE_PINNED,
         flush: FlushMechanism::ReestablishAndReprefill,
         // **Declared on a measurement, 2026-08-23**, per charter section
         // 13.7's bar and the Spec's rule that flipping this is a claim about
@@ -925,6 +976,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: gemma4::GENERATION_OPENER,
         renderer: gemma4::renderer,
         selecting_markers: gemma4::RENDERED_MARKERS,
+        pinned: gemma4::PINNED,
         flush: FlushMechanism::TruncateToPosition,
         taps_readout: false,
         taps_column: false,
@@ -953,6 +1005,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: qwen2::GENERATION_OPENER,
         renderer: qwen2::renderer,
         selecting_markers: qwen2::RENDERED_MARKERS,
+        pinned: qwen2::NEMOTRON_H_MOE_PINNED,
         flush: FlushMechanism::ReestablishAndReprefill,
         taps_readout: false,
         taps_column: false,
@@ -991,6 +1044,7 @@ pub const REGISTRY: &[Declaration] = &[
         // value that is only read when the architecture is contested must
         // still be one that can be read.
         selecting_markers: mistral3::SELECTING_MARKERS,
+        pinned: mistral3::PINNED,
         flush: FlushMechanism::TruncateToPosition,
         taps_readout: false,
         taps_column: false,
@@ -1016,6 +1070,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: phi::TAG_GENERATION_OPENER,
         renderer: phi::tag_renderer,
         selecting_markers: phi::TAG_RENDERED_MARKERS,
+        pinned: phi::TAG_PINNED,
         flush: FlushMechanism::TruncateToPosition,
         taps_readout: false,
         taps_column: false,
@@ -1031,6 +1086,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: phi::SEP_GENERATION_OPENER,
         renderer: phi::sep_renderer,
         selecting_markers: phi::SEP_RENDERED_MARKERS,
+        pinned: phi::SEP_PINNED,
         flush: FlushMechanism::TruncateToPosition,
         taps_readout: false,
         taps_column: false,
@@ -1045,6 +1101,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: gpt_oss::GENERATION_OPENER,
         renderer: gpt_oss::renderer,
         selecting_markers: gpt_oss::RENDERED_MARKERS,
+        pinned: gpt_oss::PINNED,
         flush: FlushMechanism::TruncateToPosition,
         taps_readout: false,
         taps_column: false,
@@ -1073,6 +1130,7 @@ pub const REGISTRY: &[Declaration] = &[
         generation_opener: granite::GENERATION_OPENER,
         renderer: granite::renderer,
         selecting_markers: granite::SELECTING_MARKERS,
+        pinned: granite::PINNED,
         flush: FlushMechanism::TruncateToPosition,
         taps_readout: false,
         taps_column: false,
@@ -1126,22 +1184,26 @@ pub enum FamilyRefusal {
     /// table's order the selector, so this is a refusal rather than a first
     /// match. The caller holding the artifact's template reaches [`select`].
     ArchitectureContested(FamilyName),
-    /// The architecture is contested and the artifact declares no chat
-    /// template, so the fact that would choose between the entries is absent.
+    /// **The artifact carries two different chat templates**, per TID-3 step
+    /// 2 and the TID-4 case table: a safetensors export whose
+    /// `tokenizer_config.json` key and `chat_template.jinja` disagree, or a
+    /// non-string key beside a sidecar. The two upstream readers would take
+    /// different texts, so the artifact declares two behaviours and neither
+    /// is picked.
+    TemplateConflict(FamilyName),
+    /// The artifact carries no chat template, so the fact that selects an
+    /// entry is absent (TID-3 step 3).
     TemplateAbsent(FamilyName),
-    /// The architecture is contested and the template detector did not
-    /// recognise this artifact's template, so no marker set was derived.
-    TemplateUnrecognised(FamilyName),
-    /// The artifact rendered, and its markers match no entry sharing its
-    /// architecture. The refusal names the architecture it declared, per Spec
-    /// section 5, rather than reporting the family as uncarried.
-    MarkersMatchNoEntry(FamilyName),
-    /// **The artifact's markers match more than one entry.** The compile-time
-    /// uniqueness pin should make this unreachable, and it is carried because
-    /// a table this crate cannot read unambiguously is one it must not read by
-    /// position. Belt and braces, per Spec section 5: order decides nothing at
+    /// **The template's digest is in more than one candidate's set** (TID-3
+    /// step 5). The compile-time pin should make this unreachable, and it is
+    /// carried because a table this crate cannot read unambiguously is one it
+    /// must not read by position. Belt and braces: order decides nothing at
     /// either.
-    MarkersAmbiguous(FamilyName),
+    TemplateAmbiguous(FamilyName),
+    /// **No candidate pins the template's digest** (TID-3 step 6). The
+    /// refusal carries the architecture and the digest, which is what an
+    /// operator brings to a pinning act.
+    TemplateUnpinned { family: FamilyName, digest: String },
     /// **The registry carries this family and the named backend does not serve
     /// it.** Distinct from [`FamilyRefusal::UnknownFamily`], which says the
     /// binary carries no such family at all: a reader told that about a family
@@ -1174,10 +1236,10 @@ impl From<FamilyRefusal> for LifecycleRefusal {
             // and the operator's to read in the refusal, and none of them is a
             // device condition, so none maps to `DeviceCannotAdmit`.
             | FamilyRefusal::ArchitectureContested(_)
+            | FamilyRefusal::TemplateConflict(_)
             | FamilyRefusal::TemplateAbsent(_)
-            | FamilyRefusal::TemplateUnrecognised(_)
-            | FamilyRefusal::MarkersMatchNoEntry(_)
-            | FamilyRefusal::MarkersAmbiguous(_)
+            | FamilyRefusal::TemplateAmbiguous(_)
+            | FamilyRefusal::TemplateUnpinned { .. }
             // A family one peer serves and the other does not is a fact about
             // the artifact and the backend it was handed to, and no more a
             // device condition than the rest.
@@ -1300,18 +1362,16 @@ const fn contained_in(inner: &[&str], outer: &[&str]) -> bool {
     true
 }
 
-/// **Whether the table can be read unambiguously**, which is the compile-time
-/// property Spec section 5 requires of it.
+/// **Whether the marker sets of one architecture can be told apart**, which
+/// Spec section 5 requires of the table and the template identity amendment
+/// keeps for the marker probe, now an instrument rather than a selector.
 ///
 /// **The pin is subset-freedom rather than inequality, and the difference is
-/// what makes the guarantee true.** Selection matches an entry when every one
-/// of its markers appears in what the artifact rendered, so two entries whose
+/// what makes the guarantee true.** The probe matches an entry when every one
+/// of its markers appears in what the detector rendered, so two entries whose
 /// sets merely differ can still both match: where one set is contained in the
-/// other, an artifact rendering the larger satisfies both. Pinning inequality
-/// alone would leave ambiguity reachable while reading as though it were
-/// closed, and section 5 says the compile-time check is what makes ambiguity
-/// unreachable. Equal sets are contained in each other, so this subsumes the
-/// uniqueness the section names rather than replacing it.
+/// other, a rendering of the larger satisfies both. Equal sets are contained
+/// in each other, so this subsumes uniqueness rather than replacing it.
 ///
 /// Marker sets are compared only within one architecture, because entries that
 /// declare different architectures never compete. Sharing is judged by
@@ -1372,73 +1432,95 @@ const _: () = assert!(
      table carries one architecture under two names"
 );
 
-/// The conversation every contested artifact is asked to render.
-///
-/// **Frozen here rather than built where it is called**, per Spec section 5. A
-/// derivation whose input varies by call site compares two artifacts against
-/// two different questions, and the comparison is only meaningful where every
-/// artifact answered the same one. The contents carry no meaning: what is read
-/// is the scaffolding the template puts around them, so the bodies are single
-/// characters and the roles are the three the canonical shape names.
-///
-/// Read only by the detector arm below, so a build carrying no engine has no
-/// reader for it. The allow says that rather than widening the build's surface
-/// to quiet a lint, which is the form [`crate::residency`] already uses for the
-/// flush mechanism.
-#[cfg_attr(not(feature = "gguf"), allow(dead_code))]
-const PROBE_CONVERSATION: &[(&str, &str)] = &[("system", "s"), ("user", "u"), ("assistant", "a")];
-
-/// Render the probe through the template detector and return what it emits.
-///
-/// **This is a detector rather than an evaluator**, per Spec section 5: it
-/// matches the template text against a table of families it carries and emits
-/// its own rendering of the one it settles on. It is not a jinja parser and
-/// upstream says so. It takes no model handle, so this reaches no weights.
-#[cfg(feature = "gguf")]
-fn render_probe(template: &str) -> Option<String> {
-    use std::ffi::CString;
-    let template = CString::new(template).ok()?;
-    let held: Vec<(CString, CString)> = PROBE_CONVERSATION
-        .iter()
-        .map(|(role, body)| (CString::new(*role).unwrap(), CString::new(*body).unwrap()))
-        .collect();
-    let chat: Vec<llama_cpp_sys_2::llama_chat_message> = held
-        .iter()
-        .map(|(role, body)| llama_cpp_sys_2::llama_chat_message {
-            role: role.as_ptr(),
-            content: body.as_ptr(),
-        })
-        .collect();
-    // The rendering is the probe's scaffolding around six bytes of body, so a
-    // fixed buffer is sufficient and a refusal is what an overrun becomes.
-    let mut buffer = vec![0u8; 8192];
-    // SAFETY: the template and the messages outlive the call, `chat` describes
-    // its own length, and the buffer's length is passed as written.
-    let written = unsafe {
-        llama_cpp_sys_2::llama_chat_apply_template(
-            template.as_ptr(),
-            chat.as_ptr(),
-            chat.len(),
-            true,
-            buffer.as_mut_ptr().cast::<std::os::raw::c_char>(),
-            buffer.len() as i32,
-        )
-    };
-    let written = usize::try_from(written).ok()?;
-    if written > buffer.len() {
-        return None;
+/// **Whether every pinned digest is well formed**: sixty-four lowercase
+/// hexadecimal characters, the form [`template_digest`] produces, so a pin
+/// that could never equal a computed digest stops the build.
+pub const fn digests_well_formed(table: &[Declaration]) -> bool {
+    let mut i = 0;
+    while i < table.len() {
+        let mut k = 0;
+        while k < table[i].pinned.len() {
+            let digest = table[i].pinned[k].sha256.as_bytes();
+            if digest.len() != 64 {
+                return false;
+            }
+            let mut at = 0;
+            while at < digest.len() {
+                if !matches!(digest[at], b'0'..=b'9' | b'a'..=b'f') {
+                    return false;
+                }
+                at += 1;
+            }
+            k += 1;
+        }
+        i += 1;
     }
-    buffer.truncate(written);
-    String::from_utf8(buffer).ok()
+    true
 }
 
-/// **A build carrying no GGUF backend carries no detector**, so a contested
-/// architecture has no derivation available and refuses rather than picking.
-/// Such a build serves no GGUF artifact at all, so nothing that could reach
-/// this is admissible for other reasons first.
-#[cfg(not(feature = "gguf"))]
-fn render_probe(_template: &str) -> Option<String> {
-    None
+/// **Whether a digest appears at most once among the entries of one
+/// architecture key**, per TID-2: the compile-time half of TID-3 step 5. The
+/// same digest under two different keys is allowed, because the key is
+/// judged first. A digest pinned twice in one entry is refused as well,
+/// since it says nothing the first did not and reads as a second source.
+pub const fn digests_unique_per_key(table: &[Declaration]) -> bool {
+    let mut i = 0;
+    while i < table.len() {
+        let mut j = i;
+        while j < table.len() {
+            if same_key(table[i].family, table[j].family) {
+                let mut a = 0;
+                while a < table[i].pinned.len() {
+                    // Within one entry, compare only the later pins.
+                    let mut b = if i == j { a + 1 } else { 0 };
+                    while b < table[j].pinned.len() {
+                        if same_text(table[i].pinned[a].sha256, table[j].pinned[b].sha256) {
+                            return false;
+                        }
+                        b += 1;
+                    }
+                    a += 1;
+                }
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    true
+}
+
+const _: () = assert!(
+    digests_well_formed(REGISTRY),
+    "a pinned digest is not sixty-four lowercase hexadecimal characters"
+);
+
+const _: () = assert!(
+    digests_unique_per_key(REGISTRY),
+    "one chat-template digest is pinned twice within one architecture key, so \
+     the table's order would be the selector"
+);
+
+/// **The digest a chat template is pinned and selected by**: the lowercase
+/// hexadecimal SHA-256 of the text exactly as the artifact carries it, with
+/// no normalization of whitespace, line endings or encoding (TID-4).
+pub fn template_digest(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// **The chat template an artifact presents to selection**, by the TID-4
+/// case table, which [`crate::artifact::ChatTemplates::reading`] applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateReading<'a> {
+    /// The artifact carries no chat template.
+    Absent,
+    /// One text, to be hashed.
+    One(&'a str),
+    /// Two texts that disagree, or a non-string key beside a sidecar.
+    Conflict,
 }
 
 /// Look a family up in the compile-time table.
@@ -1446,11 +1528,15 @@ fn render_probe(_template: &str) -> Option<String> {
 /// **No silent substitution.** A miss is a refusal naming the family, never a
 /// nearest match and never a default declaration.
 ///
+/// **Not an admission door.** Admission resolves an entry by [`select`], which
+/// judges the artifact's chat template for every architecture (TID-3). This
+/// answers a family module's own `declaration()` and the tests that reach a
+/// row by name.
+///
 /// **A contested architecture refuses here rather than answering by position.**
 /// Where more than one entry declares the name, this function cannot choose
 /// between them and returning the first would make the table's order the
-/// selector. [`select`] is the door that can choose, because it holds the
-/// artifact's template as well as its architecture.
+/// selector.
 ///
 /// **The name is matched by key rather than by spelling**, per Spec section 5:
 /// [`same_key`] folds the entry's spelling and the header's alike, so a
@@ -1469,20 +1555,27 @@ pub fn lookup(name: &FamilyName) -> Result<&'static Declaration, FamilyRefusal> 
     found.ok_or_else(|| FamilyRefusal::UnknownFamily(name.clone()))
 }
 
-/// Select the entry this artifact belongs to, from its architecture and, where
-/// the architecture is contested, the marker set it renders.
+/// **Select the entry this artifact belongs to, by its architecture and the
+/// digest of its chat template**, per the template identity amendment TID-3,
+/// for every architecture key, contested or not.
 ///
-/// **Where one architecture carries one entry the key is unchanged and nothing
-/// is rendered**, per Spec section 5. That is every family this binary carried
-/// before the act that added this function, and it is what keeps a family the
-/// detector does not recognise admissible: gemma4's template returns an error
-/// rather than a rendering, so an unconditional render would refuse a family
-/// the registry serves.
+/// The order is the amendment's, and each step refuses before the next reads
+/// anything:
 ///
-/// **Where it is contested the artifact's own rendering decides**, and a
-/// derivation that produces no set refuses rather than falling back to the
-/// architecture, because falling back is the silent substitution this reached
-/// for the template to prevent.
+/// 1. The architecture names the candidates. None refuses `UnknownFamily`.
+/// 2. Two disagreeing texts refuse `TemplateConflict`, after the key, so an
+///    uncarried architecture refuses by name whatever its template files hold.
+/// 3. No text refuses `TemplateAbsent`.
+/// 4. The digest in exactly one candidate's pinned set admits that entry.
+/// 5. The digest in more than one refuses `TemplateAmbiguous`, which the
+///    compile-time pin makes unreachable.
+/// 6. The digest in none refuses `TemplateUnpinned`, naming the digest.
+///
+/// **Nothing is rendered.** The template detector left the admission path
+/// with this act: it collapses every `<|im_start|>` template to one ChatML
+/// class and could not read gemma4's at all, so it decided neither the
+/// substitution within a class nor the uncontested keys. A digest is compared
+/// instead, and a build with no engine selects exactly as one with.
 ///
 /// **The candidates are gathered by key rather than by spelling**, per Spec
 /// section 5, so the two containers' spellings of one architecture reach one
@@ -1492,35 +1585,41 @@ pub fn lookup(name: &FamilyName) -> Result<&'static Declaration, FamilyRefusal> 
 /// rather than a wider fold.
 pub fn select(
     name: &FamilyName,
-    chat_template: Option<&str>,
+    template: TemplateReading<'_>,
 ) -> Result<&'static Declaration, FamilyRefusal> {
-    let candidates: Vec<&'static Declaration> = REGISTRY
+    select_from(REGISTRY, name, template)
+}
+
+/// [`select`] against a given table, so a test can reach step 5 with a table
+/// the compile-time pin would refuse.
+pub(crate) fn select_from(
+    table: &'static [Declaration],
+    name: &FamilyName,
+    template: TemplateReading<'_>,
+) -> Result<&'static Declaration, FamilyRefusal> {
+    let candidates: Vec<&'static Declaration> = table
         .iter()
         .filter(|declaration| same_key(declaration.family, &name.0))
         .collect();
-    match candidates.as_slice() {
-        [] => return Err(FamilyRefusal::UnknownFamily(name.clone())),
-        [only] => return Ok(only),
-        _ => {}
+    if candidates.is_empty() {
+        return Err(FamilyRefusal::UnknownFamily(name.clone()));
     }
-
-    let Some(template) = chat_template else {
-        return Err(FamilyRefusal::TemplateAbsent(name.clone()));
+    let text = match template {
+        TemplateReading::Conflict => return Err(FamilyRefusal::TemplateConflict(name.clone())),
+        TemplateReading::Absent => return Err(FamilyRefusal::TemplateAbsent(name.clone())),
+        TemplateReading::One(text) => text,
     };
-    let Some(rendered) = render_probe(template) else {
-        return Err(FamilyRefusal::TemplateUnrecognised(name.clone()));
-    };
-
-    let mut matched = candidates.iter().filter(|declaration| {
-        declaration
-            .selecting_markers
-            .iter()
-            .all(|marker| rendered.contains(marker))
-    });
+    let digest = template_digest(text);
+    let mut matched = candidates
+        .iter()
+        .filter(|declaration| declaration.pinned.iter().any(|pin| pin.sha256 == digest));
     match (matched.next(), matched.next()) {
         (Some(one), None) => Ok(one),
-        (Some(_), Some(_)) => Err(FamilyRefusal::MarkersAmbiguous(name.clone())),
-        (None, _) => Err(FamilyRefusal::MarkersMatchNoEntry(name.clone())),
+        (Some(_), Some(_)) => Err(FamilyRefusal::TemplateAmbiguous(name.clone())),
+        (None, _) => Err(FamilyRefusal::TemplateUnpinned {
+            family: name.clone(),
+            digest,
+        }),
     }
 }
 

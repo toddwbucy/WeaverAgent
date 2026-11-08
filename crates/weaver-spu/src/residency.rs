@@ -329,11 +329,11 @@ pub struct Resident {
     pub artifact: PathBuf,
     pub header: ArtifactHeader,
     /// **The registry entry this artifact was selected against, held rather
-    /// than looked up again.** The selection reads the artifact's template
-    /// where its architecture is contested, so re-deriving it on the decode
-    /// path would render the same answer once per turn. It is judged once, at
-    /// admit, where Spec section 7 puts the family judgment, and what follows
-    /// reads the answer.
+    /// than looked up again.** The selection hashes the artifact's chat
+    /// template for every architecture (template identity amendment TID-3),
+    /// so re-deriving it on the decode path would hash the same text once per
+    /// turn. It is judged once, at admit, where Spec section 7 puts the family
+    /// judgment, and what follows reads the answer.
     pub declaration: &'static family::Declaration,
     pub devices: Vec<DeviceOrdinal>,
     pub weights_hash: WeightsHash,
@@ -676,10 +676,11 @@ impl Residency {
         // **The entry is selected here, at the first step that needs it.**
         // This step already resolved the family, because the width it compares
         // against is a property of an entry rather than of an architecture.
-        // Selecting reads the artifact's template where the architecture is
-        // contested, which is a string this step already holds and no device
-        // query, so the cheapest-first ordering is unchanged.
-        let declaration = family::select(&header.family, header.chat_template.as_deref())
+        // Selecting hashes the artifact's chat template for every key
+        // (template identity amendment TID-3), which is text the header read
+        // already holds and no device query, so the cheapest-first ordering
+        // is unchanged.
+        let declaration = family::select(&header.family, header.chat_templates.reading())
             .map_err(AdmitRefusal::Family)?;
         family::judge_width(declaration, binding.devices.len() as u32)
             .map_err(AdmitRefusal::Family)?;

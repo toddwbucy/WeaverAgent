@@ -45,6 +45,11 @@ pub const GENERATION_OPENER: &str = "<|start_header_id|>assistant<|end_header_id
 
 const STOP: &[&str] = &[TURN_END, CALL_CLOSE];
 
+/// The chat-template digests pinned for the Llama 3 entry. Empty: the census found no Llama 3 instruct artifact carrying a chat template, so the entry admits nothing until an act pins one (TID-2), per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const PINNED: &[super::PinnedTemplate] = &[];
+
 /// This family's renderer, cited by its registry entry.
 pub fn renderer() -> &'static dyn Family {
     &Llama

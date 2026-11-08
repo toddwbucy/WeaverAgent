@@ -196,3 +196,13 @@ impl Family for PhiSep {
         row_selecting(SEP_RENDERED_MARKERS)
     }
 }
+
+/// The chat-template digests pinned for the `phi3` tag entry, per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const TAG_PINNED: &[super::PinnedTemplate] = &[];
+
+/// The chat-template digests pinned for the `phi3` separator entry, per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const SEP_PINNED: &[super::PinnedTemplate] = &[];

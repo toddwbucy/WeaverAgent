@@ -503,9 +503,9 @@ fn serve_decode(
                 // resident now carries what admit selected, so there is no
                 // second derivation to disagree with the first and no miss to
                 // report: the incoherence that branch described is no longer
-                // expressible. A contested architecture is also not
-                // answerable by architecture alone, so the lookup this
-                // replaces could not have served one.
+                // expressible. No architecture is answerable by architecture
+                // alone, since admission selects by the chat template's digest
+                // for every key (template identity amendment TID-3).
                 let declaration = resident.declaration;
                 // **The open's registry, three arms and no others**, per
                 // `weaver-spu-PRD` section 13.7 and `weaver-spu-Spec`
@@ -1349,9 +1349,8 @@ fn admit_refusal_line(refusal: &weaver_spu::residency::AdmitRefusal) -> Option<S
         // **The family the artifact declared and the peer that was asked**,
         // per issue #507: the floor's word for it is `ArtifactUnreadable`,
         // which says nothing about either, and an operator told only that
-        // reads it as a corrupt file. The other family refusals predate this
-        // arm and none of them has a producer this act built, so widening it
-        // to them is orthogonal work with its own branch.
+        // reads it as a corrupt file. The template refusals follow; the
+        // remaining family refusals leave no line.
         AdmitRefusal::Family(family::FamilyRefusal::BackendDoesNotServe { family, backend }) => {
             Some(
                 serde_json::json!({
@@ -1362,6 +1361,28 @@ fn admit_refusal_line(refusal: &weaver_spu::residency::AdmitRefusal) -> Option<S
                 .to_string(),
             )
         }
+        // **The template refusals of the template identity amendment**, per
+        // TID-3's account line: each crosses the seam as `ArtifactUnreadable`,
+        // which names neither the architecture nor the template. An unpinned
+        // template carries its digest, which is what an operator brings to a
+        // pinning act.
+        AdmitRefusal::Family(family::FamilyRefusal::TemplateUnpinned { family, digest }) => Some(
+            serde_json::json!({
+                "refusal": "template_unpinned",
+                "family": family.0,
+                "digest": digest,
+            })
+            .to_string(),
+        ),
+        AdmitRefusal::Family(family::FamilyRefusal::TemplateConflict(family)) => Some(
+            serde_json::json!({"refusal": "template_conflict", "family": family.0}).to_string(),
+        ),
+        AdmitRefusal::Family(family::FamilyRefusal::TemplateAbsent(family)) => {
+            Some(serde_json::json!({"refusal": "template_absent", "family": family.0}).to_string())
+        }
+        AdmitRefusal::Family(family::FamilyRefusal::TemplateAmbiguous(family)) => Some(
+            serde_json::json!({"refusal": "template_ambiguous", "family": family.0}).to_string(),
+        ),
         _ => None,
     }
 }

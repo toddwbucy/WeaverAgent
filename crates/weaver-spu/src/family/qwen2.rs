@@ -53,6 +53,41 @@ pub const GENERATION_OPENER: &str = "<|im_start|>assistant\n";
 
 const STOP: &[&str] = &[TURN_CLOSE];
 
+/// The chat-template digests pinned for the `qwen2` entry, per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const PINNED: &[super::PinnedTemplate] = &[];
+
+/// The chat-template digests pinned for the `llama` ChatML entry, held here as its interim home (TID-1) until #484 moves it, per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const LLAMA_CHATML_PINNED: &[super::PinnedTemplate] = &[];
+
+/// The chat-template digests pinned for the `qwen3` entry, interim home (TID-1), per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const QWEN3_PINNED: &[super::PinnedTemplate] = &[];
+
+/// The chat-template digests pinned for the `qwen3moe` entry, interim home (TID-1), per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const QWEN3MOE_PINNED: &[super::PinnedTemplate] = &[];
+
+/// The chat-template digests pinned for the `qwen35` entry, interim home (TID-1), per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const QWEN35_PINNED: &[super::PinnedTemplate] = &[];
+
+/// The chat-template digests pinned for the `qwen35moe` entry, interim home (TID-1), per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const QWEN35MOE_PINNED: &[super::PinnedTemplate] = &[];
+
+/// The chat-template digests pinned for the `nemotron_h_moe` entry, interim home (TID-1), per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const NEMOTRON_H_MOE_PINNED: &[super::PinnedTemplate] = &[];
+
 /// This family's renderer, cited by every registry entry it serves.
 pub fn renderer() -> &'static dyn Family {
     &Qwen2

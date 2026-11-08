@@ -121,3 +121,8 @@ impl Family for GptOss {
         lookup(&FamilyName("gpt-oss".into())).expect("the registry carries gpt-oss")
     }
 }
+
+/// The chat-template digests pinned for the `gpt-oss` entry, per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const PINNED: &[super::PinnedTemplate] = &[];

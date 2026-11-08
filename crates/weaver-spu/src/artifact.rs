@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use weaver_types::{ArtifactRef, LifecycleRefusal};
 
-use crate::family::FamilyName;
+use crate::family::{FamilyName, TemplateReading};
 
 /// What an artifact declares about itself, read from its header alone.
 #[derive(Debug, Clone, PartialEq)]
@@ -31,14 +31,76 @@ pub struct ArtifactHeader {
     pub hidden_size: Option<u64>,
     /// The layer count, where the header declares one.
     pub layer_count: Option<u64>,
-    /// **The chat template the artifact's builder trained it on**, where the
-    /// header declares one, per Spec section 5.
+    /// **The chat-template texts the artifact carries**, exactly as it
+    /// carries them, per the template identity amendment TID-4.
     ///
-    /// Read but not parsed here. It selects among registry entries sharing an
-    /// architecture, and the selection renders it rather than reading it,
-    /// because a template is a program and a marker it emits need not appear
-    /// in its source.
-    pub chat_template: Option<String>,
+    /// Read but not judged here. Selection hashes the one text these yield,
+    /// and a disagreement between two texts is judged there, after the
+    /// architecture, so an uncarried architecture refuses by name whatever
+    /// its template files hold (TID-3).
+    pub chat_templates: ChatTemplates,
+}
+
+/// **What an artifact's metadata says under its chat-template key**, per
+/// TID-4: the GGUF `tokenizer.chat_template` value, or the `chat_template`
+/// value in a safetensors export's `tokenizer_config.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TemplateKey {
+    /// No key, or a JSON `null`, which TID-4 reads as no key.
+    Absent,
+    /// A string value, held byte for byte.
+    Text(String),
+    /// A value that is neither a string nor `null`: a list of named
+    /// templates, for example. Which named template would serve is not
+    /// ruled (TID-7), so no text is taken from it.
+    NotText,
+}
+
+/// **Every chat-template text an artifact carries**, held apart so that
+/// selection, not the header read, judges whether they agree (TID-3 step 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatTemplates {
+    /// The metadata key. A GGUF reads only this.
+    pub key: TemplateKey,
+    /// The full contents of a safetensors export's `chat_template.jinja`.
+    /// Always `None` for a GGUF. `chat_template.json` is not read.
+    pub sidecar: Option<String>,
+}
+
+impl ChatTemplates {
+    /// One text under the metadata key and no sidecar: a GGUF's shape, and
+    /// a test's.
+    pub fn from_key(text: &str) -> Self {
+        ChatTemplates {
+            key: TemplateKey::Text(text.to_string()),
+            sidecar: None,
+        }
+    }
+
+    /// No text at all.
+    pub fn absent() -> Self {
+        ChatTemplates {
+            key: TemplateKey::Absent,
+            sidecar: None,
+        }
+    }
+
+    /// **The text these yield, by the TID-4 case table**, or the absence or
+    /// disagreement that selection refuses on. Nothing is normalized: two
+    /// texts differing by a trailing newline disagree.
+    pub fn reading(&self) -> TemplateReading<'_> {
+        match (&self.key, self.sidecar.as_deref()) {
+            (TemplateKey::Absent, None) | (TemplateKey::NotText, None) => TemplateReading::Absent,
+            (TemplateKey::Text(text), None) => TemplateReading::One(text),
+            (TemplateKey::Absent, Some(sidecar)) => TemplateReading::One(sidecar),
+            (TemplateKey::Text(text), Some(sidecar)) if text == sidecar => {
+                TemplateReading::One(text)
+            }
+            (TemplateKey::Text(_), Some(_)) | (TemplateKey::NotText, Some(_)) => {
+                TemplateReading::Conflict
+            }
+        }
+    }
 }
 
 /// The two containers this crate reads, which are peers rather than a default
@@ -421,7 +483,7 @@ fn read_gguf_header<R: Read>(reader: &mut R) -> Result<ArtifactHeader, Lifecycle
     let mut family = None;
     let mut hidden_size = None;
     let mut layer_count = None;
-    let mut chat_template = None;
+    let mut chat_template = TemplateKey::Absent;
 
     for _ in 0..kv_count {
         let key = read_gguf_string(reader)?;
@@ -433,7 +495,7 @@ fn read_gguf_header<R: Read>(reader: &mut R) -> Result<ArtifactHeader, Lifecycle
             }
             (k, GgufValue::Number(n)) if k.ends_with(".block_count") => layer_count = Some(*n),
             ("tokenizer.chat_template", GgufValue::Text(text)) => {
-                chat_template = Some(text.clone());
+                chat_template = TemplateKey::Text(text.clone());
             }
             _ => {}
         }
@@ -444,7 +506,10 @@ fn read_gguf_header<R: Read>(reader: &mut R) -> Result<ArtifactHeader, Lifecycle
         family: FamilyName(family.ok_or(LifecycleRefusal::ArtifactUnreadable)?),
         hidden_size,
         layer_count,
-        chat_template,
+        chat_templates: ChatTemplates {
+            key: chat_template,
+            sidecar: None,
+        },
     })
 }
 
@@ -495,21 +560,26 @@ fn read_safetensors_header<R: Read>(
         })
         .ok_or(LifecycleRefusal::ArtifactUnreadable)?;
 
-    // The chat template lives in `tokenizer_config.json` for this container,
-    // read for the same reason the GGUF read carries it: where an
-    // architecture is contested, the template is the second half of the key.
-    let chat_template = read_sidecar_json(sidecars, "tokenizer_config.json")?.and_then(|c| {
-        c.get("chat_template")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-    });
+    // **This container carries its chat template in two places**, per TID-4:
+    // the `chat_template` key of `tokenizer_config.json`, and the full
+    // contents of `chat_template.jinja` beside it. Both are read and held
+    // apart, and selection judges them. `chat_template.json` is not read.
+    let key = match read_sidecar_json(sidecars, "tokenizer_config.json")?
+        .as_ref()
+        .and_then(|config| config.get("chat_template"))
+    {
+        None | Some(serde_json::Value::Null) => TemplateKey::Absent,
+        Some(serde_json::Value::String(text)) => TemplateKey::Text(text.clone()),
+        Some(_) => TemplateKey::NotText,
+    };
+    let sidecar = read_sidecar_text(sidecars, "chat_template.jinja")?;
 
     Ok(ArtifactHeader {
         container: Container::Safetensors,
         family: FamilyName(family),
         hidden_size: read("hidden_size").as_ref().and_then(json_number),
         layer_count: read("num_hidden_layers").as_ref().and_then(json_number),
-        chat_template,
+        chat_templates: ChatTemplates { key, sidecar },
     })
 }
 
@@ -533,6 +603,25 @@ fn read_sidecar_json(
     }
     let text = std::fs::read_to_string(&path).map_err(|_| LifecycleRefusal::ArtifactUnreadable)?;
     serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|_| LifecycleRefusal::ArtifactUnreadable)
+}
+
+/// One sidecar as text, byte for byte: absent is `None`, present but
+/// unreadable or not UTF-8 refuses, for the reason [`read_sidecar_json`]
+/// gives. The bytes are not normalized, so CRLF endings stay CRLF (TID-4).
+fn read_sidecar_text(
+    sidecars: Option<&Path>,
+    name: &str,
+) -> Result<Option<String>, LifecycleRefusal> {
+    let Some(path) = sidecars.map(|dir| dir.join(name)) else {
+        return Ok(None);
+    };
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let bytes = std::fs::read(&path).map_err(|_| LifecycleRefusal::ArtifactUnreadable)?;
+    String::from_utf8(bytes)
         .map(Some)
         .map_err(|_| LifecycleRefusal::ArtifactUnreadable)
 }

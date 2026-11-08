@@ -189,3 +189,8 @@ impl Family for Granite {
 
 #[cfg(test)]
 mod tests;
+
+/// The chat-template digests pinned for the `granite` entry, per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const PINNED: &[super::PinnedTemplate] = &[];

@@ -103,6 +103,11 @@ pub const ASSISTANT_ROLE: &str = "model";
 /// declares: `tokenizer.ggml.eot_token_id` is 106, which is [`TURN_CLOSE`].
 const STOP: &[&str] = &[TURN_CLOSE];
 
+/// The chat-template digests pinned for the `gemma4` entry, per the template identity
+/// amendment TID-2. Parked empty on 2026-11-08: the census pins land with
+/// the rest of the #483 act.
+pub const PINNED: &[super::PinnedTemplate] = &[];
+
 /// This family's renderer, cited by its registry entry.
 pub fn renderer() -> &'static dyn Family {
     &Gemma4
