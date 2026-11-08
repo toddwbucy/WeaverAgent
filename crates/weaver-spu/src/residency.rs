@@ -496,8 +496,18 @@ impl Resident {
     }
 
     /// The emission verbatim: the sampled tokens back as text, before any
-    /// parse, which is what the record's `model.output` carries.
+    /// parse, which is what the record's `model.output` carries. The text
+    /// conversion is strict, so bytes that are not UTF-8 fault here.
     pub fn detokenize(&self, tokens: &[TokenId]) -> Result<String, DecodeFault> {
+        String::from_utf8(self.emission_bytes(tokens)?).map_err(|error| DecodeFault::Engine {
+            detail: error.to_string(),
+        })
+    }
+
+    /// The emission's bytes before any text conversion: each sampled token's
+    /// piece, concatenated. [`Self::detokenize`] is these bytes converted
+    /// strictly.
+    pub fn emission_bytes(&self, tokens: &[TokenId]) -> Result<Vec<u8>, DecodeFault> {
         #[cfg(not(feature = "gguf"))]
         let _ = tokens;
         match &self.model {
@@ -506,9 +516,9 @@ impl Resident {
                 // The whole sequence decodes together: a multi-byte character
                 // split across two tokens is ordinary under a byte-pair
                 // vocabulary, and per-token conversion would break it where
-                // the split fell. The bytes are gathered per token and the
-                // text conversion is one pass over the concatenation, so a
-                // split character still fails as incomplete rather than
+                // the split fell. The bytes are gathered per token here and
+                // `detokenize` converts the concatenation in one pass, so a
+                // split character fails there as incomplete rather than
                 // rendering wrong, which is the failure the stream's pending
                 // buffer waits on. The engine reports a too-small buffer as
                 // the negative of the size it needed, so one retry at that
@@ -534,12 +544,13 @@ impl Resident {
                     })?;
                     bytes.extend_from_slice(&piece);
                 }
-                String::from_utf8(bytes).map_err(|error| DecodeFault::Engine {
-                    detail: error.to_string(),
-                })
+                Ok(bytes)
             }
+            // The tokenizer decodes to text itself and replaces what is not
+            // UTF-8 as it does, so on this container the bytes are always
+            // UTF-8 and the emission's raw bytes are not recoverable.
             #[cfg(feature = "cuda")]
-            LoadedModel::Native(model) => model.detokenize(tokens),
+            LoadedModel::Native(model) => model.detokenize(tokens).map(String::into_bytes),
             #[allow(unreachable_patterns)]
             _ => Err(DecodeFault::ContainerNotBuilt {
                 container: self.header.container,
