@@ -72,6 +72,29 @@
       "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>user\nU<|im_end|>\n<|im_start|>assistant\n<think></think>Answer.<|im_end|>\n"
     },
     {
+      "name": "history_with_thought",
+      "messages": [
+        {
+          "role": "system",
+          "content": "S"
+        },
+        {
+          "role": "user",
+          "content": "U"
+        },
+        {
+          "role": "assistant",
+          "content": "<think>x</think>A1"
+        },
+        {
+          "role": "user",
+          "content": "Next."
+        }
+      ],
+      "generation": true,
+      "rendered": "<|im_start|>system\nS<|im_end|>\n<|im_start|>user\nU<|im_end|>\n<|im_start|>assistant\n<think></think>A1<|im_end|>\n<|im_start|>user\nNext.<|im_end|>\n<|im_start|>assistant\n<think></think>"
+    },
+    {
       "name": "tool_result",
       "messages": [
         {

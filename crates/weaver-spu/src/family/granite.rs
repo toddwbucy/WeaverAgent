@@ -11,10 +11,22 @@
 //! a live turn the opener puts `<think></think>` in front of what the model
 //! emits, so a turn rebuilt from its message after a flush, a recall or a
 //! reload must carry the same prefix, or it rebuilds a turn the model never
-//! had (Spec section 5). This module prefixes the assistant's text with the
-//! pair when the text holds neither marker, as the pinned template does. It
-//! does not trim, because the live cache holds the emission untrimmed, where
-//! the template trims.
+//! had (Spec section 5). Every assistant turn this module renders followed
+//! its own opener, so every one gains the pair, whatever its text holds, and
+//! none is trimmed: the live cache held the emission as emitted.
+//!
+//! **That departs from the pinned template for two kinds of text**, where the
+//! template follows a rule of its own and the cache did not:
+//!
+//! - Text that holds a thought marker anywhere. The template adds no pair to
+//!   it, so a turn quoting `</think>` would rebuild two tokens short of the
+//!   cache. This module adds the pair.
+//! - A closed thought in a turn before the last user turn. The template
+//!   (`truncate_history_thinking`, default true) keeps only what follows the
+//!   last `</think>`, so `<think>x</think>A1` renders as `<think></think>A1`.
+//!   This module keeps the emission as the cache held it, after the pair.
+//!
+//! The template also trims assistant text, and this module does not.
 //!
 //! **The R1 path is the one served.** It is one system turn, one user turn and
 //! this opener, with no tools. The pinned template departs from qwen2's
@@ -79,8 +91,9 @@ pub const RENDERED_MARKERS: &[&str] =
 /// probe conversation, not against this module's. The pinned llama.cpp
 /// classifies any template containing `<|im_start|>` as ChatML
 /// (`llama-chat.cpp`, `llm_chat_detect_template`) and renders the probe with
-/// no generation opener, so the thought pair never appears there. A selecting
-/// set carrying it could never match.
+/// its own ChatML turns and generation prompt, `<|im_start|>assistant\n`,
+/// which carry no thought pair. A selecting set carrying the pair could never
+/// match.
 pub const SELECTING_MARKERS: &[&str] = qwen2::RENDERED_MARKERS;
 
 /// **The assistant's turn, opened, with thinking off.** It is qwen2's opener
@@ -114,15 +127,13 @@ impl Family for Granite {
     /// calls tools in XML. Each refusal stands in for a rendering this module
     /// does not build.
     ///
-    /// An assistant turn whose text holds neither thought marker gains the
-    /// empty thought as a leading text block, so qwen2 renders it in front of
-    /// the turn's own blocks, unchanged and untrimmed.
+    /// Every assistant turn gains the empty thought as a leading text block,
+    /// so qwen2 renders it in front of the turn's own blocks, unchanged and
+    /// untrimmed. The condition is the role alone: text that quotes a thought
+    /// marker followed the opener as well.
     fn render_delta(&self, message: &Message) -> Result<String, RenderRefusal> {
-        let text = text_content(message)?;
-        if message.role == Role::Assistant
-            && !text.contains(THINK_OPEN)
-            && !text.contains(THINK_CLOSE)
-        {
+        text_content(message)?;
+        if message.role == Role::Assistant {
             let mut content = Vec::with_capacity(message.content.len() + 1);
             content.push(ContentBlock::Text {
                 text: format!("{THINK_OPEN}{THINK_CLOSE}"),

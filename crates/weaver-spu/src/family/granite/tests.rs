@@ -42,7 +42,7 @@ fn golden_with(name: &str, generation: bool) -> (Vec<Message>, String) {
     assert_eq!(goldens["source_revision"], SOURCE_REVISION);
     assert_eq!(goldens["template_sha256"], TEMPLATE_SHA256);
     let cases = goldens["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 5, "a case added to regenerate.py needs a test");
+    assert_eq!(cases.len(), 6, "a case added to regenerate.py needs a test");
     let case = cases
         .iter()
         .find(|case| case["name"] == name)
@@ -104,13 +104,14 @@ fn limit_no_empty_system_turn_is_inserted() {
 /// **An assistant turn carries the empty thought the opener gave it**, per
 /// Spec section 5: a turn rebuilt from its message gives the model what it
 /// had. Live, the cache holds the opener, the emission and the stop that
-/// ended it, and the rebuilt turn opens with exactly those bytes. Both of the
-/// template's assistant branches agree: the turn before the last user turn
-/// and the turn after it.
+/// ended it, and the rebuilt turn opens with exactly those bytes. For text
+/// with no thought marker, both of the template's assistant branches agree:
+/// the turn before the last user turn and the turn after it.
 ///
 /// The prefix is not trimmed, because the live cache holds the emission
-/// untrimmed, and text that already holds a thought marker is left as it is,
-/// as the template leaves it.
+/// untrimmed. Text that holds a thought marker gains the prefix too, because
+/// it followed the opener like any other emission, where the template adds
+/// none.
 ///
 /// Perturbation: drop the prefix from `render_delta` and every assertion on
 /// the empty thought fails.
@@ -141,11 +142,63 @@ fn an_assistant_turn_carries_the_openers_empty_thought() {
 
     for already in ["<think>x</think>Answer.", "</think>Answer.", "<think>x"] {
         assert_eq!(
-            renderer().render_delta(&message(Role::Assistant, already)),
-            qwen2::renderer().render_delta(&message(Role::Assistant, already)),
+            renderer()
+                .render_delta(&message(Role::Assistant, already))
+                .unwrap(),
+            render_template(
+                qwen2::TEMPLATE,
+                "assistant",
+                &format!("{THINK_OPEN}{THINK_CLOSE}{already}")
+            ),
             "{already}"
         );
     }
+}
+
+/// **A marker quoted inside the text does not cost the turn its prefix.** An
+/// STE input can quote `</think>` and the rewrite copy it, and the live cache
+/// still held the opener's pair before that emission. A condition that
+/// skipped the prefix when the text held a marker anywhere would rebuild the
+/// turn two tokens short, silently.
+///
+/// Perturbation: restore a condition skipping the prefix for text holding a
+/// marker and this fails.
+#[test]
+fn a_quoted_marker_keeps_the_turns_prefix() {
+    let quoted = "Write the tag </think> as text, then <think> too.";
+    let live = format!("{GENERATION_OPENER}{quoted}{}", qwen2::TURN_CLOSE);
+    let rebuilt = renderer()
+        .render_delta(&message(Role::Assistant, quoted))
+        .unwrap();
+    assert!(rebuilt.starts_with(&live), "{rebuilt:?} against {live:?}");
+}
+
+/// **Named limit: a closed thought in history is kept, not stripped.** The
+/// pinned template keeps only what follows the last `</think>` in a turn
+/// before the last user turn, so `<think>x</think>A1` renders as
+/// `<think></think>A1`. This module keeps the emission as the cache held it,
+/// after the opener's pair. The rendering differs from the template's by
+/// exactly the stripped thought.
+///
+/// Perturbation: strip a historical thought in `render_delta` and the first
+/// assertion fails, which is the signal to retire this limit.
+#[test]
+fn limit_a_historical_thought_is_kept() {
+    let (messages, expected) = golden("history_with_thought");
+    let ours = rendered(&messages).unwrap();
+    assert_ne!(ours, expected);
+    let kept = render_template(
+        qwen2::TEMPLATE,
+        "assistant",
+        &format!("{THINK_OPEN}{THINK_CLOSE}{THINK_OPEN}x{THINK_CLOSE}A1"),
+    );
+    let stripped = render_template(
+        qwen2::TEMPLATE,
+        "assistant",
+        &format!("{THINK_OPEN}{THINK_CLOSE}A1"),
+    );
+    assert_eq!(ours.matches(&kept).count(), 1);
+    assert_eq!(ours.replacen(&kept, &stripped, 1), expected);
 }
 
 /// **Named limit: admission reads no template for `granite`.** It is the only

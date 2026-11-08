@@ -69,6 +69,13 @@ case(
     True,
 )
 case("assistant_last", [m("system", "S"), m("user", "U"), m("assistant", "Answer.")], False)
+# The template keeps only what follows the last </think> in a turn before
+# the last user turn (truncate_history_thinking, default true).
+case(
+    "history_with_thought",
+    [m("system", "S"), m("user", "U"), m("assistant", "<think>x</think>A1"), m("user", "Next.")],
+    True,
+)
 # The template closes a tool response with a newline before the turn close.
 case("tool_result", [m("system", "S"), m("user", "U"), m("tool", "Result.")], True)
 

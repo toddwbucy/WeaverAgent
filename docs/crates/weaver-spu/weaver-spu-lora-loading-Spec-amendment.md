@@ -194,9 +194,9 @@ With absence, preserve the existing base-only load and result.
 
 Each proof base must resolve through the same family registry as normal
 decode. Do not build a fixture-only family selector or hard-code a second
-template. Main at `4493be6b`, later than this amendment's baseline, has no
-registry entry for the `granite` architecture. A missing registration needs
-its measured artifact facts in the later implementation act, under SPU Spec 5.
+template. #481 registers the `granite` architecture under SPU Spec 5, with
+its measured artifact facts. Any other proof base without a registry entry
+needs those facts in its own implementation act, under SPU Spec 5.
 This amendment asserts no new family support.
 
 ## 4. Context attachment and fixed residency
