@@ -37,9 +37,10 @@ impl OwnedChild {
         let (last_word, stderr) =
             crate::spawn::LastWord::stand().map_err(|error| format!("child stderr: {error}"))?;
         // SAFETY: the caller carries fork_organ's serving-thread obligation.
-        let pid =
-            unsafe { crate::spawn::fork_organ(binary, ends, arguments, Some(stderr.as_raw_fd())) }
-                .map_err(|error| format!("child fork: {error}"))?;
+        let pid = unsafe {
+            crate::spawn::fork_organ(binary, ends, arguments, &[], Some(stderr.as_raw_fd()))
+        }
+        .map_err(|error| format!("child fork: {error}"))?;
         // Retain the PID before any further fallible action, and close the
         // parent's write copy so child exit can deliver stderr EOF.
         let child = Self {
