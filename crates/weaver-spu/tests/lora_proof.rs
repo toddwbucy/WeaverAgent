@@ -16,13 +16,15 @@
 //! third arm decodes the control again.
 #![cfg(all(feature = "gguf", feature = "cuda"))]
 
+mod common;
 #[path = "lora/fixture.rs"]
 mod fixture;
 
-use fixture::{
-    Inputs, assert_adapter_on_its_layers, assert_covers, assert_division_on_binding,
-    assert_same_division, first_difference, run_arm,
-};
+use fixture::{Inputs, assert_covers, assert_same_division, first_difference, run_arm};
+use weaver_spu::division::Division;
+use weaver_spu::lora::observation::{Record, judge_division};
+use weaver_spu::room::Caches;
+use weaver_types::DeviceOrdinal;
 
 const TEST: &str = "the_adapter_changes_the_pinned_greedy_output_on_the_binding";
 
@@ -35,6 +37,9 @@ fn the_adapter_changes_the_pinned_greedy_output_on_the_binding() {
     let inputs = Inputs::from_env();
     let pinned = std::env::var("WEAVER_LORA_PINNED_ID")
         .expect("WEAVER_LORA_PINNED_ID is not set, so the fixture did not run");
+    if let Err(why) = common::lease(&inputs.ordinals()) {
+        panic!("the binding's devices are not leased, so the fixture did not run: {why}");
+    }
     fixture::fresh_report(&inputs.report);
     let ids = vec![pinned.clone()];
 
@@ -45,12 +50,8 @@ fn the_adapter_changes_the_pinned_greedy_output_on_the_binding() {
     assert_covers(&control, &ids);
     assert_covers(&repeat, &ids);
     assert_covers(&adapted, &ids);
-    for arm in [&control, &repeat, &adapted] {
-        assert_division_on_binding(arm, &inputs.devices);
-    }
     assert_same_division(&control, &repeat);
     assert_same_division(&control, &adapted);
-    assert_adapter_on_its_layers(&adapted);
 
     let base = &control.outputs[&pinned];
     assert_eq!(
@@ -79,108 +80,73 @@ fn the_adapter_changes_the_pinned_greedy_output_on_the_binding() {
     eprintln!("LORA-7 proof: {summary}");
 }
 
-fn records(lines: &[&str]) -> Vec<weaver_spu::lora::observation::Record> {
+fn records(lines: &[&str]) -> Vec<Record> {
     lines
         .iter()
-        .map(|line| weaver_spu::lora::observation::Record {
-            level: 1,
+        .map(|line| Record {
+            level: llama_cpp_sys_2::GGML_LOG_LEVEL_DEBUG as i32,
             bytes: format!("{line}\n").into_bytes(),
         })
         .collect()
 }
 
-/// The shapes the pinned engine wrote on 2026-11-08 for a two-device layer
-/// split, for a model of two repeating layers: assignments for layers 0, 1
-/// and the output layer 2, KV records for layers 0 and 1. A repeated record
-/// naming the same device is a second session's, and is accepted.
-const TWO_LAYERS: &[&str] = &[
+/// The shapes the pinned engine writes for a two-device layer split of a
+/// model with two repeating layers, opened in two sessions. The assignment
+/// records come from the load, once: layers 0 and 1 and the output layer 2.
+/// Each session's context writes the KV records of layers 0 and 1 again.
+const TWO_SESSIONS: &[&str] = &[
     "load_tensors: layer   0 assigned to device CUDA0, is_swa = 0",
     "load_tensors: layer   1 assigned to device CUDA1, is_swa = 0",
     "load_tensors: layer   2 assigned to device CUDA1, is_swa = 0",
-    "load_tensors: layer   0 assigned to device CUDA0, is_swa = 0",
     "llama_kv_cache: layer   0: dev = CUDA0",
     "llama_kv_cache: layer   1: dev = CUDA1",
     "llama_kv_cache: layer   0: dev = CUDA0",
+    "llama_kv_cache: layer   1: dev = CUDA1",
 ];
 
-/// **The division parse reads the pinned engine's record wording**, so a
-/// reworded record fails here on the host rather than on the device.
-#[test]
-fn the_division_parse_reads_the_engine_records() {
-    let (division, kv) = fixture::division(&records(TWO_LAYERS), 2);
-    assert_eq!(division.len(), 3);
-    assert_eq!(division[&2], "CUDA1");
-    assert_eq!(kv.len(), 2);
-    assert_eq!(kv[&1], "CUDA1");
+fn judge(records: &[Record]) -> Result<(), String> {
+    let devices = [DeviceOrdinal(0), DeviceOrdinal(1)];
+    let division = Division::even(2, 2).expect("two layers over two devices");
+    let caches = [Caches {
+        attention: true,
+        recurrent: false,
+    }; 2];
+    judge_division(records, &devices, &division, &caches).map(|_| ())
 }
 
-/// Perturbation of the above: a capture missing a repeating layer's KV
-/// record refuses, where a comparison of two such captures would pass.
+/// **The held-out arm's cut keeps the load and the first session**, so the
+/// SPU's own judgment passes on a capture of several sessions.
 #[test]
-#[should_panic(expected = "KV records are not one per repeating layer")]
-fn a_capture_missing_a_kv_record_refuses() {
-    fixture::division(&records(&TWO_LAYERS[..5]), 2);
+fn the_first_session_cut_judges_a_capture_of_two_sessions() {
+    let records = records(TWO_SESSIONS);
+    let first = fixture::first_session(&records);
+    assert_eq!(first.len(), 5);
+    judge(first).expect("the load and the first session judge clean");
 }
 
-/// A capture that lost a suffix refuses against the artifact's own layer
-/// count, which a count read back from the capture would have accepted.
+/// Perturbation of the above: without the cut, the second session's records
+/// are repeats, and the judgment refuses them.
 #[test]
-#[should_panic(expected = "assignment records are not one per layer")]
-fn a_capture_missing_a_suffix_refuses_against_the_artifact_count() {
-    fixture::division(&records(TWO_LAYERS), 64);
+fn an_uncut_capture_of_two_sessions_refuses() {
+    let faults = judge(&records(TWO_SESSIONS)).expect_err("repeats refuse");
+    assert!(faults.contains("recorded 2 times"), "{faults}");
 }
 
-/// Adapter targets map to the layer whose assignment judges their buffer.
+/// The cut does not hide a fault inside the first session: a layer 1 record
+/// repeated there still refuses.
 #[test]
-fn adapter_targets_map_to_their_layers() {
-    assert_eq!(fixture::adapter_layer("blk.12.attn_k.weight", 64), 12);
-    assert_eq!(fixture::adapter_layer("output.weight", 64), 64);
+fn a_repeat_inside_the_first_session_still_refuses() {
+    let mut lines = TWO_SESSIONS[..5].to_vec();
+    lines.push("llama_kv_cache: layer   1: dev = CUDA1");
+    lines.extend_from_slice(&TWO_SESSIONS[5..]);
+    let records = records(&lines);
+    let faults = judge(fixture::first_session(&records)).expect_err("the repeat refuses");
+    assert!(faults.contains("layer 1"), "{faults}");
 }
 
-/// A target outside every assigned layer refuses rather than passing unjudged.
+/// A capture of one session is judged whole.
 #[test]
-#[should_panic(expected = "outside every assigned layer")]
-fn an_adapter_target_outside_every_layer_refuses() {
-    fixture::adapter_layer("token_embd.weight", 64);
-}
-
-/// A layer's KV cache on another device than its layer refuses, though both
-/// devices are in the binding.
-#[test]
-#[should_panic(expected = "KV cache is on CUDA0, and the layer is assigned to CUDA1")]
-fn a_kv_cache_off_its_layer_refuses() {
-    let mut lines = TWO_LAYERS[..5].to_vec();
-    lines.push("llama_kv_cache: layer   1: dev = CUDA0");
-    fixture::division(&records(&lines), 2);
-}
-
-fn adapted_arm(placement: serde_json::Value) -> fixture::Arm {
-    fixture::Arm {
-        name: "adapted".into(),
-        outputs: Default::default(),
-        observation: serde_json::json!({
-            "n_layer": 2,
-            "division": {"0": "CUDA0", "1": "CUDA1", "2": "CUDA1"},
-            "adapter_placement": placement,
-        }),
-    }
-}
-
-/// An adapter target on its layer's device passes.
-#[test]
-fn an_adapter_target_on_its_layer_passes() {
-    fixture::assert_adapter_on_its_layers(&adapted_arm(serde_json::json!({
-        "blk.0.attn_q.weight": "CUDA0",
-        "blk.1.ffn_up.weight": "CUDA1",
-    })));
-}
-
-/// An adapter target on the binding's other device than its layer refuses.
-#[test]
-#[should_panic(expected = "adapter target blk.1.ffn_up.weight is on")]
-fn an_adapter_target_off_its_layer_refuses() {
-    fixture::assert_adapter_on_its_layers(&adapted_arm(serde_json::json!({
-        "blk.0.attn_q.weight": "CUDA0",
-        "blk.1.ffn_up.weight": "CUDA0",
-    })));
+fn a_capture_of_one_session_is_not_cut() {
+    let records = records(&TWO_SESSIONS[..5]);
+    assert_eq!(fixture::first_session(&records).len(), 5);
 }

@@ -515,9 +515,13 @@ name for one artifact keeps the two from pointing at different files.
 and the LORA-3 observer installs once per process, so each arm (a base-only control or
 an adapted run) is a child process of its target's own binary, marked by
 `LORA_PROOF_ARM`, which carries no `WEAVER_` prefix because it is not a fixture.
-`lora_proof.rs` is the gate: one pinned entry, the control twice and the adapted run
-once. `lora_heldout.rs` is the long run: every entry, base-only and adapted. Both write
-their report outside the repository (LORA-6) and assert the same division across arms.
+Each arm's command carries its binding's PAIR-1 mask. The arms keep their own spawner
+rather than `common::run_masked`, so a held-out arm's progress lines stream as it
+decodes. `lora_proof.rs` is the gate: one pinned entry, the control twice and the
+adapted run once. `lora_heldout.rs` is the long run: every entry, base-only and adapted.
+Both write their report outside the repository (LORA-6). Each arm judges its observed
+division with `lora::observation::judge_division` (PAIR-5), and the parent asserts the
+same computed and observed division across arms.
 
 **`WEAVER_DECODE_GGUF` is the decode module's own and is not a test target's.** It
 points the engine's unit suite at an artifact whose vocabulary those tests read, which

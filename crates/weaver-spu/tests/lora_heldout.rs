@@ -19,13 +19,11 @@
 //! output-change assertion fails.
 #![cfg(all(feature = "gguf", feature = "cuda"))]
 
+mod common;
 #[path = "lora/fixture.rs"]
 mod fixture;
 
-use fixture::{
-    Inputs, assert_adapter_on_its_layers, assert_covers, assert_division_on_binding,
-    assert_same_division, first_difference, run_arm,
-};
+use fixture::{Inputs, assert_covers, assert_same_division, first_difference, run_arm};
 
 const TEST: &str = "the_held_out_set_decodes_base_only_and_adapted_on_one_division";
 
@@ -36,6 +34,9 @@ fn the_held_out_set_decodes_base_only_and_adapted_on_one_division() {
         return;
     }
     let inputs = Inputs::from_env();
+    if let Err(why) = common::lease(&inputs.ordinals()) {
+        panic!("the binding's devices are not leased, so the fixture did not run: {why}");
+    }
     fixture::fresh_report(&inputs.report);
     let ids: Vec<String> = fixture::entries(&inputs.entries)
         .into_iter()
@@ -48,10 +49,7 @@ fn the_held_out_set_decodes_base_only_and_adapted_on_one_division() {
 
     assert_covers(&base, &ids);
     assert_covers(&adapted, &ids);
-    assert_division_on_binding(&base, &inputs.devices);
-    assert_division_on_binding(&adapted, &inputs.devices);
     assert_same_division(&base, &adapted);
-    assert_adapter_on_its_layers(&adapted);
     let changed = ids
         .iter()
         .filter(|id| first_difference(&base.outputs[*id], &adapted.outputs[*id]).is_some())

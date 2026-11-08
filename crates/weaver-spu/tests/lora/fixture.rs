@@ -15,12 +15,23 @@
 //! backend or device is not a pass). The report directory must be fresh and
 //! outside this repository (LORA-6).
 //!
-//! **The records this reads are the pinned engine's debug log lines**, through
-//! the LORA-3 capture: `load_tensors: layer N assigned to device D` for the
-//! division, `llama_kv_cache: layer N: dev = D` for the per-layer KV cache,
-//! and the adapter placement lines that `lora::observation::judge` already
-//! reads. A change to their wording in the engine pin breaks this parse, and
-//! the parse fails rather than reporting an empty division.
+//! **Each arm runs under its binding's device mask**, per the device pair
+//! amendment PAIR-1: the admission refuses a process whose
+//! `CUDA_DEVICE_ORDER` and `CUDA_VISIBLE_DEVICES` do not name the binding's
+//! ordinals in order. [`run_arm`] sets both on the arm's command, as the
+//! harness's fork does. The arms keep this runner rather than
+//! `common::run_masked`, which collects a child's output when it exits: an
+//! arm of the held-out run decodes for about an hour, and its per-entry
+//! progress lines reach the console as they happen only through an inherited
+//! stderr.
+//!
+//! **The division is judged by the SPU's own instrument**,
+//! `lora::observation::judge_division` (PAIR-5), over the LORA-3 capture,
+//! against the division the admission computed (`resident.placement`) and the
+//! cache records the artifact's PAIR-4 classification predicts. Each target
+//! placement is judged at load by `lora::observation::judge`, which refuses a
+//! target off its layer's device, so this runner records the placement and
+//! does not judge it again.
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
@@ -31,13 +42,16 @@ use std::time::Instant;
 
 use serde_json::{Value, json};
 use sha2::Digest as _;
+use weaver_spu::artifact;
 use weaver_spu::decoder::backend::TokenId;
 use weaver_spu::decoder::session::{
     NeverCancels, PositionedSinks, SamplerBuild, StopCondition, Stopped,
 };
+use weaver_spu::lora::observation::{Record, judge_division};
 use weaver_spu::lora::{Fixture, Request};
 use weaver_spu::readout::ReadoutElection;
 use weaver_spu::residency::{Headroom, LoadedModel};
+use weaver_spu::room::Layout;
 use weaver_spu::sampling::EffectiveKnobs;
 use weaver_types::{ArtifactRef, DeviceOrdinal, ModelBinding};
 
@@ -48,7 +62,8 @@ pub const ARM: &str = "LORA_PROOF_ARM";
 const IDS: &str = "LORA_PROOF_IDS";
 
 /// The session capacity, the reference run's own sequence limit. The longest
-/// held-out prompt and its reply budget fit well inside it.
+/// held-out prompt and its reply budget fit well inside it. The admission
+/// charges each device the KV cache of this many positions (PAIR-4).
 pub const CAPACITY: u32 = 32768;
 
 /// No admission headroom. Every arm runs with the same value, so it moves no
@@ -117,6 +132,20 @@ impl Inputs {
             report: PathBuf::from(required("WEAVER_LORA_REPORT")),
             devices,
         }
+    }
+
+    /// The binding's ordinals, as the leases and the PAIR-1 mask name them.
+    pub fn ordinals(&self) -> Vec<u32> {
+        self.devices.iter().map(|d| d.0).collect()
+    }
+
+    /// The PAIR-1 mask: the binding's ordinals in order, comma-separated.
+    fn mask(&self) -> String {
+        self.ordinals()
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
     }
 
     fn binding(&self) -> ModelBinding {
@@ -254,7 +283,10 @@ pub fn run_arm(
         .env(
             ARM,
             format!("{name}:{}", if adapted { "adapted" } else { "base" }),
-        );
+        )
+        // PAIR-1: the binding's numbering, as the harness's fork sets it.
+        .env("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+        .env("CUDA_VISIBLE_DEVICES", inputs.mask());
     if let Some(ids) = ids {
         command.env(IDS, ids.join("\n"));
     }
@@ -327,6 +359,22 @@ pub fn child() -> bool {
             format!("{reached}\n"),
         );
     };
+    // The cache records the judgment predicts, from the artifact's own
+    // directory through the pin the admission takes. File reads only.
+    stage("classify");
+    let caches = {
+        let reference = ArtifactRef(inputs.base.to_string_lossy().into_owned());
+        let resolved = artifact::resolve(&reference).expect("the base resolves");
+        let pinned = artifact::pin(&resolved).expect("the base pins");
+        let layout = Layout::read(&pinned.paths()).expect("the base's layout reads");
+        layout.caches().unwrap_or_else(|| {
+            panic!(
+                "{} is recurrent or hybrid, whose cache classification is the device \
+                 pair work's second child act, so its records are not predicted here",
+                layout.architecture()
+            )
+        })
+    };
     stage("observer");
     let mut fixture = Fixture::new().expect("the LORA-3 observer installs first");
     let request = inputs.request();
@@ -335,6 +383,7 @@ pub fn child() -> bool {
     let resident = match fixture.admit(
         &inputs.binding(),
         Headroom(HEADROOM_BYTES),
+        CAPACITY,
         ReadoutElection(false),
         false,
         adapted.then_some(&request),
@@ -365,15 +414,13 @@ pub fn child() -> bool {
     let placement = model.adapter_placement().cloned();
     let weights_hash = resident.weights_hash.0.clone();
     let family_name = resident.declaration.family;
-    // The layer count is the artifact's own (`block_count`), not one read back
-    // from the capture, so a capture that lost a suffix cannot vouch for itself.
-    let n_layer = u32::try_from(
-        resident
-            .header
-            .layer_count
-            .expect("the base declares its block count"),
-    )
-    .expect("a layer count fits u32");
+    // What the admission judged: the visible set, the PAIR-3 division and each
+    // device's PAIR-4 share (LORA-6 as PAIR-5 extends it).
+    let placement_judged = resident.placement.clone();
+    let division = placement_judged
+        .division
+        .clone()
+        .expect("a GGUF residency carries its division");
     let template_sha256 = resident
         .header
         .chat_template
@@ -453,7 +500,24 @@ pub fn child() -> bool {
     stage("observe");
     let records = fixture.records().expect("the capture holds every record");
     dump_records(&inputs.report, name, &records);
-    let (division, kv) = division(&records, n_layer);
+    // An arm of one entry opened one session and judges every record. An arm
+    // of several opened one session per entry, each writing the cache records
+    // again, so it judges the load and its first session.
+    let judged = if selected.len() == 1 {
+        &records[..]
+    } else {
+        first_session(&records)
+    };
+    let observed = match judge_division(judged, &inputs.devices, &division, &caches) {
+        Ok(observed) => observed,
+        Err(faults) => {
+            stage(&format!("division refused: {faults}"));
+            panic!("arm {name}: the observed division departs from PAIR-3: {faults}")
+        }
+    };
+    let ordinals = |devices: &[Option<DeviceOrdinal>]| -> Vec<Option<u32>> {
+        devices.iter().map(|d| d.as_ref().map(|d| d.0)).collect()
+    };
     let observation = json!({
         "arm": name,
         "adapted": adapted,
@@ -461,7 +525,7 @@ pub fn child() -> bool {
         "base_weights_hash": weights_hash,
         "devices": inputs.devices.iter().map(|d| d.0).collect::<Vec<_>>(),
         "family": family_name,
-        "n_layer": n_layer,
+        "n_layer": division.layers(),
         "chat_template_sha256": template_sha256,
         "entries_sha256": format!("{:x}", sha2::Sha256::digest(
             std::fs::read(&inputs.entries).expect("the entries file reads again"),
@@ -489,10 +553,38 @@ pub fn child() -> bool {
             "targets": i.targets,
             "tensor_bytes": i.tensor_bytes,
         })),
-        "adapter_placement": placement,
-        "division": division,
-        "kv_cache": kv,
-        "input_layer": "token_embd stays in host memory under every assignment; the pinned engine emits no assignment record for it",
+        "adapter_placement": placement.map(|p| p
+            .into_iter()
+            .map(|(target, device)| (target, device.0))
+            .collect::<BTreeMap<String, u32>>()),
+        "computed_division": {
+            "layers": division.layers(),
+            "counts": division.counts(),
+            "split_values": division.split_values(),
+        },
+        "observed_division": {
+            "slots": observed.slots.iter().map(|d| d.0).collect::<Vec<_>>(),
+            "attention": ordinals(&observed.attention),
+            "recurrent": ordinals(&observed.recurrent),
+        },
+        "records_judged": judged.len(),
+        "records_captured": records.len(),
+        "placement": {
+            "visible": placement_judged.visible,
+            "needs": placement_judged.needs,
+            "shares": placement_judged.shares.as_ref().map(|shares| shares
+                .iter()
+                .map(|s| json!({
+                    "weights": s.weights,
+                    "output": s.output,
+                    "every_device": s.every_device,
+                    "cache": s.cache,
+                    "adapter": s.adapter,
+                }))
+                .collect::<Vec<_>>()),
+            "input_bytes": placement_judged.input_bytes,
+        },
+        "interconnect": interconnect(),
         "libllama": libllama(),
     });
     let report = &inputs.report;
@@ -547,69 +639,45 @@ fn source() -> Value {
     })
 }
 
-/// The division and the per-layer KV cache devices, from the engine's records.
-/// Every KV record for one layer must name one device across the arm's
-/// sessions; the division must be non-empty.
-pub fn division(
-    records: &[weaver_spu::lora::observation::Record],
-    n_layer: u32,
-) -> (BTreeMap<u32, String>, BTreeMap<u32, String>) {
-    let mut division = BTreeMap::new();
-    let mut kv = BTreeMap::new();
-    for record in records {
-        let Ok(text) = std::str::from_utf8(&record.bytes) else {
-            continue;
-        };
-        for line in text.lines() {
-            if let Some(rest) = line.strip_prefix("load_tensors: layer ") {
-                let (layer, device) = rest
-                    .split_once(" assigned to device ")
-                    .expect("an assignment record names its device");
-                let device = device.split(',').next().unwrap().to_string();
-                let layer: u32 = layer.trim().parse().expect("an assignment names its layer");
-                if let Some(seen) = division.insert(layer, device.clone()) {
-                    assert_eq!(seen, device, "layer {layer} was assigned to two devices");
-                }
-            } else if let Some((_, rest)) = line.split_once(": layer ")
-                && let Some((layer, device)) = rest.split_once(": dev = ")
-                && line.contains("kv_cache")
-            {
-                let layer: u32 = layer.trim().parse().expect("a KV record names its layer");
-                let device = device.trim().to_string();
-                if let Some(seen) = kv.insert(layer, device.clone()) {
-                    assert_eq!(
-                        seen, device,
-                        "layer {layer}'s KV cache moved between sessions"
-                    );
-                }
-            }
+/// **The records through an arm's first session.** Each session's context
+/// writes the KV cache records again, so an arm that opens one session per
+/// entry repeats them, and `judge_division` refuses a repeat. The cut falls at
+/// the second attention cache record of layer 0, where the second session's
+/// records begin. A layer 0 record repeated inside the first session is cut
+/// rather than caught here; the gate's arms open one session each and judge
+/// every record, so they catch it.
+pub fn first_session(records: &[Record]) -> &[Record] {
+    let opens_a_cache = |record: &Record| {
+        std::str::from_utf8(&record.bytes).is_ok_and(|text| {
+            text.lines().any(|line| {
+                line.strip_prefix("llama_kv_cache: layer ")
+                    .and_then(|rest| rest.split_once(':'))
+                    .is_some_and(|(layer, _)| layer.trim() == "0")
+            })
+        })
+    };
+    match records
+        .iter()
+        .enumerate()
+        .filter(|(_, record)| opens_a_cache(record))
+        .nth(1)
+    {
+        Some((index, _)) => &records[..index],
+        None => records,
+    }
+}
+
+/// The topology between the devices, evidence only (PAIR-5): admission does
+/// not judge it. Read through `nvidia-smi`, which ignores the process mask
+/// and lists every device in its own numbering.
+fn interconnect() -> Value {
+    match Command::new("nvidia-smi").args(["topo", "-m"]).output() {
+        Ok(output) if output.status.success() => {
+            Value::String(String::from_utf8_lossy(&output.stdout).into_owned())
         }
+        Ok(output) => json!({"unread": String::from_utf8_lossy(&output.stderr)}),
+        Err(error) => json!({"unread": error.to_string()}),
     }
-    // LORA-7: an assignment for every repeating layer and for the output
-    // layer, which the engine counts as n_layer, and a KV record for every
-    // repeating layer. A partial or empty capture fails rather than comparing
-    // equal to another partial one. `n_layer` is the artifact's own count.
-    let last = n_layer;
-    assert!(
-        division.keys().copied().eq(0..=last),
-        "the assignment records are not one per layer 0..={last}: {:?}",
-        division.keys().collect::<Vec<_>>()
-    );
-    assert!(
-        kv.keys().copied().eq(0..last),
-        "the KV records are not one per repeating layer 0..{last}: {:?}",
-        kv.keys().collect::<Vec<_>>()
-    );
-    // A layer's KV cache lives with its layer: membership in the binding is
-    // not enough, the device must be the one the layer is assigned to.
-    for (layer, device) in &kv {
-        assert_eq!(
-            &division[layer], device,
-            "layer {layer}'s KV cache is on {device}, and the layer is assigned to {}",
-            division[layer]
-        );
-    }
-    (division, kv)
 }
 
 /// The libllama this process mapped, so the report names the library it ran.
@@ -639,70 +707,13 @@ pub fn first_difference(a: &[u32], b: &[u32]) -> Option<usize> {
     )
 }
 
-/// The division and KV records of two arms must agree, per LORA-7.
+/// The computed and observed divisions of two arms must agree, per LORA-7.
 pub fn assert_same_division(control: &Arm, other: &Arm) {
-    for key in ["division", "kv_cache"] {
+    for key in ["computed_division", "observed_division"] {
         assert_eq!(
             control.observation[key], other.observation[key],
             "{key} differs between {} and {}; the comparison fails",
             control.name, other.name
-        );
-    }
-}
-
-/// Every assignment record names a device in the binding.
-pub fn assert_division_on_binding(arm: &Arm, devices: &[DeviceOrdinal]) {
-    let names: Vec<String> = devices.iter().map(|d| format!("CUDA{}", d.0)).collect();
-    for key in ["division", "kv_cache"] {
-        let map = arm.observation[key].as_object().expect("a per-layer map");
-        for (layer, device) in map {
-            let device = device.as_str().expect("a device name");
-            assert!(
-                names.iter().any(|n| n == device),
-                "arm {}: {key} puts layer {layer} on {device}, outside the binding {names:?}",
-                arm.name
-            );
-        }
-    }
-}
-
-/// The layer an adapter target belongs to: `blk.N.` is repeating layer N, and
-/// `output.` is the output layer, which the engine numbers `n_layer`. A target
-/// in neither is refused rather than judged against no layer.
-pub fn adapter_layer(target: &str, n_layer: u32) -> u32 {
-    if let Some(rest) = target.strip_prefix("blk.") {
-        let layer = rest.split('.').next().unwrap_or_default();
-        return layer
-            .parse()
-            .unwrap_or_else(|_| panic!("adapter target {target} names no layer"));
-    }
-    if target.starts_with("output.") {
-        return n_layer;
-    }
-    panic!("adapter target {target} is outside every assigned layer");
-}
-
-/// LORA-3: each adapter target's buffer is the device its layer is assigned
-/// to, not merely a device of the binding.
-pub fn assert_adapter_on_its_layers(arm: &Arm) {
-    let Some(placement) = arm.observation["adapter_placement"].as_object() else {
-        panic!("arm {} carries no adapter placement", arm.name);
-    };
-    let n_layer = arm.observation["n_layer"].as_u64().expect("n_layer") as u32;
-    let division = &arm.observation["division"];
-    assert!(
-        !placement.is_empty(),
-        "arm {} placed no adapter target",
-        arm.name
-    );
-    for (target, buffer) in placement {
-        let layer = adapter_layer(target, n_layer);
-        assert_eq!(
-            division[layer.to_string()],
-            *buffer,
-            "arm {}: adapter target {target} is on {buffer}, and its layer {layer} is assigned to {}",
-            arm.name,
-            division[layer.to_string()]
         );
     }
 }
