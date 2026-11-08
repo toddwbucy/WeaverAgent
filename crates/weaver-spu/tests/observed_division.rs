@@ -62,11 +62,13 @@ fn required_artifact() -> PathBuf {
     path
 }
 
-/// The PCI-bus ordinals of the devices whose driver process table lists
-/// `pid`. The ordinal is the device's place among all devices sorted by bus
-/// id, the numbering PAIR-1 gives a binding, read from `nvidia-smi`, which
-/// answers for every device whatever this process's mask.
-fn devices_holding(pid: u32) -> BTreeSet<u32> {
+/// The devices whose driver process table lists `pid`, by PCI-bus ordinal,
+/// each with the memory the driver says `pid` holds there, in MiB (`None`
+/// where the driver does not say). The ordinal is the device's place among
+/// all devices sorted by bus id, the numbering PAIR-1 gives a binding, read
+/// from `nvidia-smi`, which answers for every device whatever this process's
+/// mask.
+fn memory_held(pid: u32) -> BTreeMap<u32, Option<u64>> {
     let query = |args: &[&str]| -> String {
         let output = Command::new("nvidia-smi")
             .args(args)
@@ -95,17 +97,22 @@ fn devices_holding(pid: u32) -> BTreeSet<u32> {
         .enumerate()
         .map(|(index, (_, uuid))| (uuid, index as u32))
         .collect();
-    query(&["--query-compute-apps=pid,gpu_uuid", "--format=csv,noheader"])
-        .lines()
-        .filter_map(|line| {
-            let (holder, uuid) = line.split_once(',')?;
-            (holder.trim().parse::<u32>().ok()? == pid).then(|| {
-                *ordinal
-                    .get(uuid.trim())
-                    .unwrap_or_else(|| panic!("a process on an unlisted device {uuid}"))
-            })
+    query(&[
+        "--query-compute-apps=pid,gpu_uuid,used_memory",
+        "--format=csv,noheader,nounits",
+    ])
+    .lines()
+    .filter_map(|line| {
+        let mut fields = line.split(',').map(str::trim);
+        let (holder, uuid, used) = (fields.next()?, fields.next()?, fields.next()?);
+        (holder.parse::<u32>().ok()? == pid).then(|| {
+            let device = *ordinal
+                .get(uuid)
+                .unwrap_or_else(|| panic!("a process on an unlisted device {uuid}"));
+            (device, used.parse::<u64>().ok())
         })
-        .collect()
+    })
+    .collect()
 }
 
 #[test]
@@ -155,7 +162,7 @@ fn the_observed_division_matches_the_computed_one_on_the_pair_child() {
         artifact: reference,
         devices,
     };
-    let (placement, holding) = {
+    let (placement, held) = {
         let resident = fixture
             .admit(
                 &binding,
@@ -178,14 +185,14 @@ fn the_observed_division_matches_the_computed_one_on_the_pair_child() {
         let session = resident
             .open_session(&knobs, POSITIONS)
             .expect("a session opens, allocating the cache");
-        drop(session);
         // **No context on a non-member device**, read while the model is
-        // resident.
-        (
-            resident.placement.clone(),
-            devices_holding(std::process::id()),
-        )
+        // resident and its cache allocated, so the driver's figure on each
+        // device is what this load holds there.
+        let held = memory_held(std::process::id());
+        drop(session);
+        (resident.placement.clone(), held)
     };
+    let holding: BTreeSet<u32> = held.keys().copied().collect();
     let bound: BTreeSet<u32> = binding.devices.iter().map(|d| d.0).collect();
     assert_eq!(
         holding, bound,
@@ -212,9 +219,21 @@ fn the_observed_division_matches_the_computed_one_on_the_pair_child() {
             line.starts_with("load_tensors: layer ")
                 || line.starts_with("llama_kv_cache: layer ")
                 || line.starts_with("llama_memory_recurrent, layer ")
+                || line.contains("buffer size")
         }) {
             eprintln!("record (level {}): {line}", record.level);
         }
+    }
+    // What the room judgment charged each device beside what the driver says
+    // this process holds there, the engine's buffer lines above being the
+    // itemized account.
+    for (device, need) in binding.devices.iter().zip(&placement.needs) {
+        eprintln!(
+            "ordinal {}: charged {need} bytes ({} MiB), held {:?} MiB",
+            device.0,
+            need / (1024 * 1024),
+            held.get(&device.0).copied().flatten()
+        );
     }
 
     // Records that are not UTF-8, counted and shown: the division judgment
@@ -240,6 +259,8 @@ fn the_observed_division_matches_the_computed_one_on_the_pair_child() {
         "attention": observed.attention.iter().map(|d| d.as_ref().map(|d| d.0)).collect::<Vec<_>>(),
         "visible": placement.visible,
         "holding": holding,
+        "needs": placement.needs,
+        "held_mib": held,
         "records_not_utf8": invalid.len(),
     }));
     fixture.release().expect("the release succeeds");
