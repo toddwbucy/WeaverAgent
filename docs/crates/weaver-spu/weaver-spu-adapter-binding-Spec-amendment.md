@@ -137,15 +137,23 @@ the SPU binary installs the capture at process start, before any backend
 call, whether or not the binding carries an adapter. Three consequences are
 stated rather than left to be found:
 
-- **The capture is bounded.** It holds the records of the current residency
-  and is cleared when that residency is released, so it does not grow for the
-  life of a serving process.
+- **The capture is bounded by a window, not by the residency.** One serving
+  SPU process holds exactly one residency for the agent's life (`Released` is
+  terminal), and every session open and every flush-and-reopen logs context
+  and cache lines, so a capture cleared at release would still grow for the
+  life of the process. The window opens at load and closes when the placement
+  judgment ends: after the load's assignment records and the first session's
+  cache records have been judged. Outside the window the capture forwards
+  every line and keeps none. The read of the kept records does not clone them
+  on every call.
 - **The engine log keeps flowing.** The capture takes the engine's log
   callback for the life of the process. It forwards every line it does not
   keep, and every line it keeps, to the SPU's stderr at the engine's own
   level, so `worker.log` loses nothing to the capture.
 - **The fixture keeps its own install** for the isolated test process, as
-  LORA-7 says. The two installs are one function.
+  LORA-7 says. The two installs are one function, and its accounts name the
+  observer, not the fixture, since they now reach `admin.log` from a serving
+  SPU.
 
 If the placement child lands the serving install first, this paragraph
 becomes a citation of it.
@@ -178,6 +186,21 @@ absence is stated, and an object for an adapted one:
 **What compares.** An identity comparison reads `sha256` and `scale`. The
 `artifact` path is a per-box fact, carried for the reader and never compared,
 as the base's `model` path is handled today.
+
+**The scale compares as f32.** Every writer serializes the f32 value itself,
+never through a generic JSON value, and every comparison parses the text and
+narrows to f32 before comparing. Measured on the locked `serde_json`: an f32
+0.7 built through a generic value renders `0.699999988079071`, and serialized
+as f32 renders `0.7`. Read back as f64 the two differ, so a comparison as f64
+would break the identity of an identical load at any scale that is not
+dyadic.
+
+**Two conventions, one fact, both deliberate.** In the binding (ADP-1) an
+absent adapter is an omitted key, because the binding is the operator's
+declaration and a key the operator did not write is not written for them. In
+the record (ADP-3) an absent adapter is `null`, because the record states what
+was loaded and a stated absence is a measurement. A reader meeting the other
+convention in either place refuses.
 
 The LORA-8 consumer list moves together, in one act, because the Open
 measurement is a closed shape and a member added at one site is a refusal at
@@ -278,7 +301,8 @@ The request type derives `PartialEq` so the one-path row can compare.
 | One path | The request admission builds from the declaration is equal to the one the LORA-7 fixture builds for the same artifacts | Build a second request type |
 | The declaration's claims are checked | A wrong `sha256` refuses `ArtifactUnreadable`, and a wrong `base-blake3` refuses `DeviceCannotAdmit`, each with its account | Trust the declared digest |
 | The serving binary observes | The SPU binary installs the capture before any backend call, and an adapted admit through the binary does not refuse at `adapter-observer` | Install only in the fixture |
-| The capture is bounded | After a residency is released, the capture holds no records of it | Keep the process-lifetime vector |
+| The capture is bounded | After the placement judgment, a further session open adds no kept record, and the kept records are not cloned per read | Keep lines after the window closes |
+| A non-dyadic scale replays clean | An adapted load at scale 0.7 replays with its identity intact, Open against generation and record against declaration | Compare the scale as f64 |
 | The engine log keeps flowing | A line the engine logs under the capture reaches the SPU's stderr | Swallow it |
 | The identity is recorded | A base-only Open measurement carries `"adapter": null`, and an adapted one (the LORA-7 fixture) carries the object | Omit the member for base-only |
 | The shape stays closed | The harness refuses an Open measurement without `adapter` | Accept the four-member shape |
@@ -290,7 +314,11 @@ The request type derives `PartialEq` so the one-path row can compare.
 | The script declares it | `create-agent.sh --adapter ...` renders the table and parses, three of the four flags refuse, a 63-character digest refuses, and `--adapter-scale nan` refuses | Default a flag, or write the value unchecked |
 
 The projection row and the two replay rows that read a recall wait on the
-WeaverAnalysis precondition (ADP-0). The rest do not.
+WeaverAnalysis precondition (ADP-0), and land in the same act as the contract
+change, so there is no interim in which every replay refuses. Until that act,
+replay compares the base identity as today and judges no adapter, and an
+adapted agent's replay is therefore unjudged on its adapter. That interim is
+stated here so it is not read as a pass. The rest of the rows do not wait.
 
 The live proof is the agent turn check of the Granite proof plan: the same
 agent restored to the same save point, loaded base-only and then adapted, with
