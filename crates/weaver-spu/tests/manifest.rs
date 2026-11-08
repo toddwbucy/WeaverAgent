@@ -92,6 +92,37 @@ const TABLE: &[(&str, &[&str], &[&str])] = &[
         &["cuda", "gguf"],
         &["WEAVER_ARTIFACT_SPLIT", "WEAVER_ARTIFACT_TWO_CARD"],
     ),
+    // The LORA-7 accelerator pair shares its arm runner, so the two read the
+    // same fixture inputs and the gate target adds the entry it pins.
+    (
+        "lora_proof.rs",
+        &["cuda", "gguf"],
+        &[
+            "WEAVER_LORA_ADAPTER",
+            "WEAVER_LORA_ADAPTER_SHA256",
+            "WEAVER_LORA_BASE",
+            "WEAVER_LORA_BASE_BLAKE3",
+            "WEAVER_LORA_DEVICES",
+            "WEAVER_LORA_ENTRIES",
+            "WEAVER_LORA_PINNED_ID",
+            "WEAVER_LORA_REPORT",
+            "WEAVER_LORA_SCALE",
+        ],
+    ),
+    (
+        "lora_heldout.rs",
+        &["cuda", "gguf"],
+        &[
+            "WEAVER_LORA_ADAPTER",
+            "WEAVER_LORA_ADAPTER_SHA256",
+            "WEAVER_LORA_BASE",
+            "WEAVER_LORA_BASE_BLAKE3",
+            "WEAVER_LORA_DEVICES",
+            "WEAVER_LORA_ENTRIES",
+            "WEAVER_LORA_REPORT",
+            "WEAVER_LORA_SCALE",
+        ],
+    ),
     (
         "readout_neutral.rs",
         &["cuda", "gguf"],
