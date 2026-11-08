@@ -7,12 +7,19 @@
 //! differs: the thinking-off generation opener, the two thought markers that
 //! opener renders, and the parse that names this family's grammar.
 //!
+//! **An assistant turn carries the empty thought the opener gave it.** During
+//! a live turn the opener puts `<think></think>` in front of what the model
+//! emits, so a turn rebuilt from its message after a flush, a recall or a
+//! reload must carry the same prefix, or it rebuilds a turn the model never
+//! had (Spec section 5). This module prefixes the assistant's text with the
+//! pair when the text holds neither marker, as the pinned template does. It
+//! does not trim, because the live cache holds the emission untrimmed, where
+//! the template trims.
+//!
 //! **The R1 path is the one served.** It is one system turn, one user turn and
 //! this opener, with no tools. The pinned template departs from qwen2's
-//! rendering in four further places, and this module builds none of them:
+//! rendering in three further places, and this module builds none of them:
 //!
-//! - It prefixes every assistant turn with `<think></think>` and trims it.
-//!   This module renders an assistant turn as qwen2 does, without the prefix.
 //! - It writes an empty system turn when no system message leads. This module
 //!   writes no turn that the messages do not carry.
 //! - It closes a tool response with a newline before the turn close, and
@@ -31,10 +38,19 @@
 //! trailing user message, which reaches this renderer as plain text and
 //! renders as a qwen2 user turn. A renderer cannot tell that message from a
 //! user's, so the limit is named here rather than refused.
+//!
+//! **Admission does not tell Granite 4 from Granite 3.** This is the only
+//! entry for the `granite` architecture, so `select` returns it without reading
+//! the artifact's template, per Spec section 5's rule for an uncontested
+//! architecture. Granite 3 dense artifacts declare the same architecture and
+//! render `<|start_of_role|>` turns. Such an artifact is admitted and prompted
+//! in this module's ChatML, with no refusal. Closing that is the operator's
+//! ruling: a selection that judges an uncontested template, or a measured
+//! second row. A test pins today's behaviour.
 
 use super::{
-    Declaration, Family, FamilyName, Markers, Message, Parsed, RenderRefusal, lookup, qwen2,
-    render_each, scan, text_content,
+    ContentBlock, Declaration, Family, FamilyName, Markers, Message, Parsed, RenderRefusal, Role,
+    lookup, qwen2, render_each, scan, text_content,
 };
 
 /// The Hugging Face revision whose `chat_template.jinja` the goldens render.
@@ -89,16 +105,34 @@ impl Family for Granite {
         render_each(self, messages)
     }
 
-    /// **qwen2's rendering behind the text-only guard.** [`text_content`]
-    /// accepts text, and an unrecovered call in the assistant's turn, and
-    /// refuses every other block. That refuses a tool result, because the
-    /// template's tool response differs from qwen2's by a newline and by
-    /// merging. It refuses a recovered call, because qwen2 would write it as
-    /// JSON and this model calls tools in XML. Each refusal stands in for a
-    /// rendering this module does not build. What the guard accepts reaches
-    /// qwen2's renderer unchanged.
+    /// **qwen2's rendering behind the text-only guard, with the assistant's
+    /// empty thought restored.** [`text_content`] accepts text, and an
+    /// unrecovered call in the assistant's turn, and refuses every other
+    /// block. That refuses a tool result, because the template's tool
+    /// response differs from qwen2's by a newline and by merging. It refuses
+    /// a recovered call, because qwen2 would write it as JSON and this model
+    /// calls tools in XML. Each refusal stands in for a rendering this module
+    /// does not build.
+    ///
+    /// An assistant turn whose text holds neither thought marker gains the
+    /// empty thought as a leading text block, so qwen2 renders it in front of
+    /// the turn's own blocks, unchanged and untrimmed.
     fn render_delta(&self, message: &Message) -> Result<String, RenderRefusal> {
-        text_content(message)?;
+        let text = text_content(message)?;
+        if message.role == Role::Assistant
+            && !text.contains(THINK_OPEN)
+            && !text.contains(THINK_CLOSE)
+        {
+            let mut content = Vec::with_capacity(message.content.len() + 1);
+            content.push(ContentBlock::Text {
+                text: format!("{THINK_OPEN}{THINK_CLOSE}"),
+            });
+            content.extend(message.content.iter().cloned());
+            return qwen2::renderer().render_delta(&Message {
+                role: Role::Assistant,
+                content,
+            });
+        }
         qwen2::renderer().render_delta(message)
     }
 

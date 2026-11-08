@@ -35,22 +35,28 @@ fn messages_of(case: &serde_json::Value) -> Vec<Message> {
         .collect()
 }
 
-/// The pinned template's rendering of one named case, and its messages.
-fn golden(name: &str) -> (Vec<Message>, String) {
+/// The pinned template's rendering of one named case, and its messages. The
+/// caller states whether the case ends at the generation opener.
+fn golden_with(name: &str, generation: bool) -> (Vec<Message>, String) {
     let goldens: serde_json::Value = serde_json::from_str(include_str!("goldens.json")).unwrap();
     assert_eq!(goldens["source_revision"], SOURCE_REVISION);
     assert_eq!(goldens["template_sha256"], TEMPLATE_SHA256);
     let cases = goldens["cases"].as_array().unwrap();
-    assert_eq!(cases.len(), 4, "a case added to regenerate.py needs a test");
+    assert_eq!(cases.len(), 5, "a case added to regenerate.py needs a test");
     let case = cases
         .iter()
         .find(|case| case["name"] == name)
         .unwrap_or_else(|| panic!("goldens.json has no case {name}"));
-    assert!(case["generation"].as_bool().unwrap());
+    assert_eq!(case["generation"].as_bool().unwrap(), generation, "{name}");
     (
         messages_of(case),
         case["rendered"].as_str().unwrap().to_owned(),
     )
+}
+
+/// A case that ends at the generation opener.
+fn golden(name: &str) -> (Vec<Message>, String) {
+    golden_with(name, true)
 }
 
 /// What this module renders for a whole sequence, with the opener.
@@ -95,26 +101,77 @@ fn limit_no_empty_system_turn_is_inserted() {
     );
 }
 
-/// **Named limit: an assistant turn renders without the empty thought.** The
-/// pinned template prefixes every assistant turn with `<think></think>` and
-/// trims it, and this module renders the turn as qwen2 does. The rendering
-/// differs from the template's by exactly that prefix.
+/// **An assistant turn carries the empty thought the opener gave it**, per
+/// Spec section 5: a turn rebuilt from its message gives the model what it
+/// had. Live, the cache holds the opener, the emission and the stop that
+/// ended it, and the rebuilt turn opens with exactly those bytes. Both of the
+/// template's assistant branches agree: the turn before the last user turn
+/// and the turn after it.
 ///
-/// Perturbation: prefix the assistant's text in `render_delta` and the first
-/// assertion fails, which is the signal to retire this limit.
+/// The prefix is not trimmed, because the live cache holds the emission
+/// untrimmed, and text that already holds a thought marker is left as it is,
+/// as the template leaves it.
+///
+/// Perturbation: drop the prefix from `render_delta` and every assertion on
+/// the empty thought fails.
 #[test]
-fn limit_an_assistant_turn_renders_without_the_empty_thought() {
+fn an_assistant_turn_carries_the_openers_empty_thought() {
     let (messages, expected) = golden("history");
-    let ours = rendered(&messages).unwrap();
-    assert_ne!(ours, expected);
-    let assistant = render_template(qwen2::TEMPLATE, "assistant", "Answer.");
-    let with_thought = render_template(
-        qwen2::TEMPLATE,
-        "assistant",
-        &format!("{THINK_OPEN}{THINK_CLOSE}Answer."),
+    assert_eq!(rendered(&messages).unwrap(), expected);
+    let (messages, expected) = golden_with("assistant_last", false);
+    assert_eq!(renderer().render_identity(&messages).unwrap(), expected);
+
+    let live = format!("{GENERATION_OPENER}Answer.{}", qwen2::TURN_CLOSE);
+    let rebuilt = renderer()
+        .render_delta(&message(Role::Assistant, "Answer."))
+        .unwrap();
+    assert!(rebuilt.starts_with(&live), "{rebuilt:?} against {live:?}");
+
+    let spaced = renderer()
+        .render_delta(&message(Role::Assistant, " Answer.\n"))
+        .unwrap();
+    assert_eq!(
+        spaced,
+        render_template(
+            qwen2::TEMPLATE,
+            "assistant",
+            &format!("{THINK_OPEN}{THINK_CLOSE} Answer.\n")
+        )
     );
-    assert_eq!(ours.matches(&assistant).count(), 1);
-    assert_eq!(ours.replacen(&assistant, &with_thought, 1), expected);
+
+    for already in ["<think>x</think>Answer.", "</think>Answer.", "<think>x"] {
+        assert_eq!(
+            renderer().render_delta(&message(Role::Assistant, already)),
+            qwen2::renderer().render_delta(&message(Role::Assistant, already)),
+            "{already}"
+        );
+    }
+}
+
+/// **Named limit: admission reads no template for `granite`.** It is the only
+/// entry for its architecture, so `select` returns it whatever template the
+/// artifact carries, a Granite 3 `<|start_of_role|>` template included. The
+/// operator's ruling on judging an uncontested template, or on a measured
+/// second row, retires this test.
+///
+/// Perturbation: make `select` judge a lone candidate's selecting markers
+/// against the probe rendering and the Granite 3 template is refused.
+#[test]
+fn limit_an_uncontested_granite_key_admits_any_template() {
+    let granite3 = concat!(
+        "{%- for message in messages %}",
+        "{{- '<|start_of_role|>' + message['role'] + '<|end_of_role|>' ",
+        "+ message['content'] + '<|end_of_text|>\n' }}",
+        "{%- endfor %}",
+        "{%- if add_generation_prompt %}",
+        "{{- '<|start_of_role|>assistant<|end_of_role|>' }}",
+        "{%- endif %}"
+    );
+    let name = FamilyName("granite".into());
+    let admitted = select(&name, Some(granite3)).expect("today's selection admits it");
+    let entry = lookup(&name).unwrap();
+    assert!(std::ptr::eq(admitted, entry));
+    assert_eq!(admitted.template, qwen2::TEMPLATE);
 }
 
 /// **Refusal: a tool result.** The pinned template closes a tool response
@@ -142,7 +199,8 @@ fn refusal_a_tool_result() {
 /// `<function=...>` inside `<tool_call>`. The parse reports such a call as
 /// unrecovered under this family's grammar and never as text. A recovered
 /// call in a prompt refuses, because qwen2 would write it as JSON. An
-/// unrecovered call still renders back as written, per Spec section 5.
+/// unrecovered call still renders back as written, per Spec section 5, after
+/// the empty thought the opener gave the turn.
 ///
 /// Perturbation: parse with qwen2's grammar and the grammar's family reads
 /// `qwen2`; remove the `text_content` guard in `render_delta` and the
@@ -181,7 +239,11 @@ fn xml_tool_calls_are_unrecovered_and_a_recovered_call_refuses() {
     };
     assert_eq!(
         renderer().render_delta(&unrecovered).unwrap(),
-        render_template(qwen2::TEMPLATE, "assistant", fragment)
+        render_template(
+            qwen2::TEMPLATE,
+            "assistant",
+            &format!("{THINK_OPEN}{THINK_CLOSE}{fragment}")
+        )
     );
 }
 

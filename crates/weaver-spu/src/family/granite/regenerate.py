@@ -61,12 +61,14 @@ def case(name, messages, generation):
 case("system_user", [m("system", "Use STE."), m("user", "<<<TEXT\nRead the file.\nTEXT>>>")], True)
 # The template inserts an empty system turn when none leads.
 case("user_only", [m("user", "Read.")], True)
-# The template prefixes every assistant turn with an empty thought.
+# The template prefixes every assistant turn with an empty thought, the
+# turn before the last user turn and the turn after it alike.
 case(
     "history",
     [m("system", "S"), m("user", "U"), m("assistant", "Answer."), m("user", "Next.")],
     True,
 )
+case("assistant_last", [m("system", "S"), m("user", "U"), m("assistant", "Answer.")], False)
 # The template closes a tool response with a newline before the turn close.
 case("tool_result", [m("system", "S"), m("user", "U"), m("tool", "Result.")], True)
 
