@@ -411,6 +411,29 @@ fn a_short_per_layer_array_refuses() {
     assert!(Layout::read(&[path]).is_err());
 }
 
+/// **A dense header with no head count refuses and names the layer**
+/// (PAIR-4, a kind the header does not identify), rather than charging the
+/// architecture no cache.
+///
+/// Perturbation: read a missing head count as zero heads and this test
+/// fails.
+#[test]
+fn a_missing_head_count_refuses_naming_the_layer() {
+    let scratch = Scratch::new("noheads");
+    let meta: Vec<_> = dense_meta("llama", 3)
+        .into_iter()
+        .filter(|(name, _)| *name != "llama.attention.head_count")
+        .collect();
+    let path = scratch.write("noheads.gguf", &gguf(&meta, &[]));
+    let fault = Layout::read(&[path]).expect_err("an unidentified kind refuses");
+    assert_eq!(fault.shard, 0);
+    assert!(
+        fault.detail.contains("layer 0") && fault.detail.contains("llama.attention.head_count"),
+        "the refusal names the layer and the key: {}",
+        fault.detail
+    );
+}
+
 /// A header with no block count refuses: there is no division to compute.
 #[test]
 fn no_block_count_refuses() {

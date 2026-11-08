@@ -74,6 +74,15 @@ pub(crate) fn records() -> Result<Vec<Record>, String> {
 /// some member. Under the PAIR-1 mask the engine names the device at binding
 /// index i `CUDA{i}`, and the placement returned names the binding's own
 /// ordinal.
+///
+/// **An adapter placement line that is not UTF-8 refuses**, read by the
+/// rule [`judge_division`] states: a record that is not UTF-8 is read
+/// lossily, and only a placement line in it is placement evidence. The
+/// capture holds the loader's metadata dump, whose values are cut at 37
+/// bytes and can end inside a character, so refusing every invalid record
+/// would refuse a sound load over a vocabulary. A placement line whose
+/// prefix is the corrupted part is not read, and its target then has no
+/// observation, which refuses.
 pub(crate) fn judge(
     records: &[Record],
     targets: &BTreeMap<String, u64>,
@@ -83,12 +92,15 @@ pub(crate) fn judge(
     use crate::room::{Placed, placed};
     let mut placement = BTreeMap::new();
     for record in records {
-        let text = std::str::from_utf8(&record.bytes)
-            .map_err(|_| "non-UTF-8 backend placement evidence")?;
+        let valid = std::str::from_utf8(&record.bytes).is_ok();
+        let text = String::from_utf8_lossy(&record.bytes);
         for line in text.lines() {
             let Some(value) = line.strip_prefix("llama_adapter_lora_init_impl: lora for '") else {
                 continue;
             };
+            if !valid && line.contains(char::REPLACEMENT_CHARACTER) {
+                return Err(format!("non-UTF-8 adapter placement record: {line}"));
+            }
             if value.contains("cannot use buft") && value.contains("fallback to CPU") {
                 return Err("adapter fell back to CPU despite successful load".into());
             }
@@ -157,6 +169,13 @@ const RECURRENT: &str = "llama_memory_recurrent, layer ";
 /// classification does not predict, a second record from the same cache, a
 /// record at another level, or a layer past the depth fails.
 ///
+/// **A placement line that is not UTF-8 fails, and no record is skipped.**
+/// A record that is not UTF-8 is read lossily, line by line: an assignment
+/// or cache line in it fails, and any other line is not placement evidence.
+/// [`judge`] reads adapter placement lines by the same rule. The loader cuts each metadata value it
+/// prints at 37 bytes (`llama-model-loader.cpp`), which can split a
+/// character, so an invalid record is not by that alone a placement fault.
+///
 /// Every fault is named, not only the first, because the instrument runs on
 /// a leased device pair and one run should carry the whole account.
 pub fn judge_division(
@@ -184,9 +203,8 @@ pub fn judge_division(
     let mut attention: Vec<Vec<String>> = vec![Vec::new(); layers];
     let mut recurrent: Vec<Vec<String>> = vec![Vec::new(); layers];
     for record in records {
-        let Ok(text) = std::str::from_utf8(&record.bytes) else {
-            continue;
-        };
+        let valid = std::str::from_utf8(&record.bytes).is_ok();
+        let text = String::from_utf8_lossy(&record.bytes);
         for line in text.lines() {
             let (kind, slot, device) = if let Some(rest) = line.strip_prefix(ASSIGNED) {
                 let Some((slot, rest)) = rest.split_once(" assigned to device ") else {
@@ -210,6 +228,10 @@ pub fn judge_division(
             } else {
                 continue;
             };
+            if !valid && line.contains(char::REPLACEMENT_CHARACTER) {
+                faults.push(format!("{kind} record is not UTF-8: {line}"));
+                continue;
+            }
             // "does not have KV cache", "filtered" and "skipped" place
             // nothing, so they count toward no layer and leave it missing.
             let Some(device) = device else {

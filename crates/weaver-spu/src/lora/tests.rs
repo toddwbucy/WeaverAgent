@@ -607,6 +607,45 @@ fn each_target_is_matched_to_its_layer_device() {
     }
 }
 
+/// **The observer refuses an adapter placement line that is not UTF-8, and
+/// only that**: a metadata value the loader cut at 37 bytes inside a
+/// character is in the same capture and is no placement evidence.
+///
+/// Perturbation: skip an invalid record, or refuse every invalid record,
+/// and this test fails.
+#[cfg(feature = "gguf")]
+#[test]
+fn the_observer_refuses_only_an_invalid_placement_line() {
+    use observation::{Record, judge};
+    let targets = BTreeMap::from([("blk.0.attn_q.weight".into(), 2)]);
+    let devices = [weaver_types::DeviceOrdinal(4)];
+    let division = crate::division::Division::even(1, 1).unwrap();
+    let placed = Record {
+        level: llama_cpp_sys_2::GGML_LOG_LEVEL_DEBUG as i32,
+        bytes: b"llama_adapter_lora_init_impl: lora for 'blk.0.attn_q.weight' -> 'CUDA0'\n"
+            .to_vec(),
+    };
+    let cut = Record {
+        level: llama_cpp_sys_2::GGML_LOG_LEVEL_INFO as i32,
+        bytes: b"llama_model_loader: - kv  19: tokenizer.ggml.merges arr[str,3] = [\"\xc4\xa0 \xc4...\n"
+            .to_vec(),
+    };
+    let placement = judge(
+        &[cut.clone(), placed.clone()],
+        &targets,
+        &devices,
+        &division,
+    )
+    .expect("a cut metadata value is no placement evidence");
+    assert_eq!(placement["blk.0.attn_q.weight"], devices[0]);
+    let mut invalid = placed.clone();
+    invalid.bytes =
+        b"llama_adapter_lora_init_impl: lora for 'blk.0.attn_q.weight' -> 'CUDA0'\xff\n".to_vec();
+    let refused = judge(&[cut, invalid], &targets, &devices, &division)
+        .expect_err("an invalid placement line refuses");
+    assert!(refused.contains("non-UTF-8"), "{refused}");
+}
+
 /// The records of a pair whose division is right: four layers over two
 /// devices, two each, the output on the second, every layer one attention
 /// cache. The iSWA cache's "filtered" lines and a multi-line record ride
@@ -763,6 +802,18 @@ fn the_observed_division_refuses_a_missing_duplicated_or_misplaced_record() {
             "a layer past the depth",
             with(debug("llama_kv_cache: layer   4: dev = CUDA1\n")),
         ),
+        (
+            "a placement record that is not UTF-8",
+            [
+                without("layer   1 assigned"),
+                vec![Record {
+                    level: llama_cpp_sys_2::GGML_LOG_LEVEL_DEBUG as i32,
+                    bytes: b"load_tensors: layer   1 assigned to device CUDA0, is_swa = 0\xff\n"
+                        .to_vec(),
+                }],
+            ]
+            .concat(),
+        ),
     ];
     for (case, records) in cases {
         assert!(
@@ -771,6 +822,15 @@ fn the_observed_division_refuses_a_missing_duplicated_or_misplaced_record() {
         );
     }
     assert!(judge_division(&division_records(), &devices, &division, &dense(3)).is_err());
+    // A record that is not UTF-8 and holds no placement line, here a
+    // metadata value the loader cut at 37 bytes inside a character, is no
+    // placement fault.
+    let cut = Record {
+        level: llama_cpp_sys_2::GGML_LOG_LEVEL_INFO as i32,
+        bytes: b"llama_model_loader: - kv  19: tokenizer.ggml.merges arr[str,3] = [\"\xc4\xa0 \xc4...\n"
+            .to_vec(),
+    };
+    assert!(judge_division(&with(cut), &devices, &division, &dense(4)).is_ok());
 }
 
 /// **A recurrent cache is judged like an attention cache**: a layer the

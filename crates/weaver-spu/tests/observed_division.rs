@@ -15,11 +15,11 @@
 //! `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1` or no mask at all.
 //!
 //! **It runs in an isolated process with the observer.** The observer is
-//! installed before any admission and never removed, and production serving
-//! installs no log callback, so the parent here judges only the lease and
-//! the child, a process of this binary under the binding's PAIR-1 mask
-//! (`common::run_masked`), installs the observer, admits, opens one session
-//! so the KV cache is allocated, and judges the records.
+//! installed before any admission and never removed, and one process holds
+//! one mask, so the parent here judges only the lease. The child, a process
+//! of this binary under the binding's PAIR-1 mask (`common::run_masked`),
+//! installs the observer, admits, opens one session so the KV cache is
+//! allocated, and judges the records.
 //!
 //! **It also makes PAIR-5's non-member check**: with the model loaded, the
 //! driver's process table lists this process on the binding's devices and on
@@ -217,6 +217,21 @@ fn the_observed_division_matches_the_computed_one_on_the_pair_child() {
         }
     }
 
+    // Records that are not UTF-8, counted and shown: the division judgment
+    // reads them lossily, but the LORA-3 observer refuses any, so the count
+    // says whether an adapter load over this artifact would meet one.
+    let invalid: Vec<_> = records
+        .iter()
+        .filter(|record| std::str::from_utf8(&record.bytes).is_err())
+        .collect();
+    for record in &invalid {
+        eprintln!(
+            "record not UTF-8 (level {}): {}",
+            record.level,
+            String::from_utf8_lossy(&record.bytes).trim_end()
+        );
+    }
+
     let observed = judge_division(&records, &binding.devices, division, &caches)
         .unwrap_or_else(|faults| panic!("the observed division departs from PAIR-3: {faults}"));
     common::report(&serde_json::json!({
@@ -225,6 +240,7 @@ fn the_observed_division_matches_the_computed_one_on_the_pair_child() {
         "attention": observed.attention.iter().map(|d| d.as_ref().map(|d| d.0)).collect::<Vec<_>>(),
         "visible": placement.visible,
         "holding": holding,
+        "records_not_utf8": invalid.len(),
     }));
     fixture.release().expect("the release succeeds");
 }

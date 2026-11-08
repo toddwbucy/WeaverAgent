@@ -471,10 +471,18 @@ fn per_layer(directory: &Directory, key: &str, layers: u32) -> Result<Option<Vec
 /// `load_hparams`): the KV-head count defaults to the head count, and each
 /// head length defaults to the embedding width over the first layer's head
 /// count, the sliding-window lengths to the full ones.
+///
+/// **A missing head count refuses, naming the layer** (PAIR-4, a kind the
+/// header does not identify): read as zero heads, it would charge an
+/// attention architecture no cache and say nothing.
 fn attention(directory: &Directory, architecture: &str, layers: u32) -> Result<Cache, String> {
     let key = |suffix: &str| format!("{architecture}.{suffix}");
-    let heads = per_layer(directory, &key("attention.head_count"), layers)?
-        .unwrap_or_else(|| vec![0; layers as usize]);
+    let head_count = key("attention.head_count");
+    let heads = per_layer(directory, &head_count, layers)?.ok_or_else(|| {
+        format!(
+            "layer 0 has no {head_count}, so its kind is not identified and its cache has no bound"
+        )
+    })?;
     let kv_heads =
         per_layer(directory, &key("attention.head_count_kv"), layers)?.unwrap_or(heads.clone());
     let (key_full, value_full) = if heads[0] > 0 {

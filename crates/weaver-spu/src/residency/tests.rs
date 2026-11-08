@@ -167,7 +167,7 @@ fn resolvable_gguf() -> Fixture {
     file.extend_from_slice(b"GGUF");
     file.extend_from_slice(&3u32.to_le_bytes());
     file.extend_from_slice(&0u64.to_le_bytes());
-    file.extend_from_slice(&2u64.to_le_bytes());
+    file.extend_from_slice(&4u64.to_le_bytes());
     let key = b"general.architecture";
     file.extend_from_slice(&(key.len() as u64).to_le_bytes());
     file.extend_from_slice(key);
@@ -175,11 +175,18 @@ fn resolvable_gguf() -> Fixture {
     let value = b"qwen2";
     file.extend_from_slice(&(value.len() as u64).to_le_bytes());
     file.extend_from_slice(value);
-    let key = b"qwen2.block_count";
-    file.extend_from_slice(&(key.len() as u64).to_le_bytes());
-    file.extend_from_slice(key);
-    file.extend_from_slice(&4u32.to_le_bytes());
-    file.extend_from_slice(&2u32.to_le_bytes());
+    // The block count and the attention shape PAIR-4's room reads: a header
+    // with no head count leaves the layer kind unidentified and refuses.
+    for (key, value) in [
+        (&b"qwen2.block_count"[..], 2u32),
+        (b"qwen2.embedding_length", 8),
+        (b"qwen2.attention.head_count", 2),
+    ] {
+        file.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        file.extend_from_slice(key);
+        file.extend_from_slice(&4u32.to_le_bytes());
+        file.extend_from_slice(&value.to_le_bytes());
+    }
     let mut handle = std::fs::File::create(&path).expect("a fixture file");
     handle.write_all(&file).expect("the fixture is written");
     Fixture { dir, path }
