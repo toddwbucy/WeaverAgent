@@ -38,6 +38,7 @@ fn spawn_peer(fx: &mut Fixture, name: &str) -> FailedEnterResources {
         resources.spawn_spu(
             &mut fx.context,
             &std::env::current_exe().unwrap(),
+            &[],
             &child_arguments_review(name),
             &mut fx.clock,
         )

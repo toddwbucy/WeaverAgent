@@ -25,6 +25,10 @@ pub(in crate::flow::context) struct OwnedChild {
 }
 
 impl OwnedChild {
+    /// `overrides` are set in the child's environment over the inherited
+    /// values, as `spawn::fork_organ` sets them: a device organ's mask
+    /// (device pair amendment PAIR-1), or nothing.
+    ///
     /// # Safety
     /// The caller is the serving thread and remains alive until this child's
     /// custody is returned/reaped or the whole worker exits failed. This is the
@@ -33,12 +37,13 @@ impl OwnedChild {
         binary: &Path,
         ends: &[BorrowedFd<'_>],
         arguments: &[String],
+        overrides: &[(&str, String)],
     ) -> Result<Self, String> {
         let (last_word, stderr) =
             crate::spawn::LastWord::stand().map_err(|error| format!("child stderr: {error}"))?;
         // SAFETY: the caller carries fork_organ's serving-thread obligation.
         let pid = unsafe {
-            crate::spawn::fork_organ(binary, ends, arguments, &[], Some(stderr.as_raw_fd()))
+            crate::spawn::fork_organ(binary, ends, arguments, overrides, Some(stderr.as_raw_fd()))
         }
         .map_err(|error| format!("child fork: {error}"))?;
         // Retain the PID before any further fallible action, and close the

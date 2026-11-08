@@ -243,6 +243,7 @@ impl<'a> ResidencyComposition<'a> {
                     self.resources.spawn_spu(
                         self.context,
                         &self.request.binary,
+                        &self.request.instruction.decoder.model_binding.devices,
                         &self.request.arguments,
                         io,
                     )
