@@ -220,8 +220,21 @@ by a bound that is never lower than what the engine allocates:
 | --- | --- |
 | Sliding-window attention | As a full-attention layer at the full context. The engine allocates no more than this, so the charge over-asks and never under-asks |
 | Recurrent (state-space) | The layer's fixed state size for one sequence, from the header's state-space keys |
-| No cache (the header gives the layer zero KV heads and no state-space role, as for a Nemotron-H feed-forward layer) | Nothing. The engine allocates no cache for the layer, and its weights are charged as for any layer |
+| No cache (a layer the engine's filter excludes from both caches, as for a Nemotron-H feed-forward layer) | Nothing. Its weights are charged as for any layer |
 | A kind the header does not identify | No bound exists, so admission refuses the binding and names the layer |
+
+For a hybrid architecture, a layer's kind is the engine's own per-architecture
+classification (the layer filters in `llama-model.cpp`), read from the header's
+per-layer arrays, never from one scalar key:
+
+| Architecture | Classification |
+| --- | --- |
+| Nemotron-H and Nemotron-H MoE | A layer with a nonzero per-layer feed-forward length holds no cache. Otherwise a layer the header marks recurrent is recurrent, and any other layer is attention |
+| Falcon-H1 | Every layer holds both caches and is charged both |
+| Any other hybrid architecture | No classification is written here, so admission refuses the binding and names the architecture |
+
+A new hybrid architecture is admitted by adding its row to this table from the
+engine's filter.
 
 The fixture report names which charge each layer took.
 
@@ -249,7 +262,7 @@ refusal still carries the device's capacity.
 | Mixed members refuse | A recording device query returning two different names, capabilities or totals | Judge only the name, or skip the judgment for pairs |
 | The split is deterministic | Hardware-free arithmetic over L and N, including odd L and N = 3, checked against the engine's cumulative mapping | Pass proportional halves, or put a value on a boundary edge |
 | The split reaches the engine | The parameters built for a pair carry the computed tensor split | Leave the split unset |
-| Room is per device for GGUF | Directory fixtures with unequal layer sizes, a split artifact whose later shard holds assigned tensors, a tied-embedding artifact with no `output.weight`, a KV term checked against the 4096 MiB Granite measurement, a sliding-window and a recurrent layer charged by their bounds, a cacheless layer charged no cache, an unidentified layer kind that refuses, and a native artifact that keeps the even fraction | Read only the first shard, omit the duplicated embedding or the KV term, or apply the GGUF table to a native artifact |
+| Room is per device for GGUF | Directory fixtures with unequal layer sizes, a split artifact whose later shard holds assigned tensors, a tied-embedding artifact with no `output.weight`, a KV term checked against the 4096 MiB Granite measurement, a sliding-window and a recurrent layer charged by their bounds, a Nemotron-H feed-forward layer with a nonzero scalar KV-head count classified as cacheless by its feed-forward length, a Falcon-H1 layer charged both caches, an unlisted hybrid architecture that refuses, an unidentified layer kind that refuses, and a native artifact that keeps the even fraction | Read only the first shard, omit the duplicated embedding or the KV term, or apply the GGUF table to a native artifact |
 | The observed division matches | On a device pair, under the LORA-3 log capture at debug level: exactly one `load_tensors: layer N assigned to device` record for each layer and for the output (`layer L`), and exactly one cache record for each layer that holds a cache: the KV cache's `layer N: dev =` for an attention layer, and the recurrent cache's `layer N: dev =` (`llama-memory-recurrent.cpp`) for a recurrent layer, all matching PAIR-3. For an attention layer, a KV record reading "does not have KV cache" or "filtered" counts as missing. For a recurrent layer, a recurrent record reading "skipped" counts as missing. A layer that holds no cache (a Nemotron-H feed-forward layer, for example) has no `dev =` cache record, and none is expected. Its `load_tensors` record alone judges its device. A record of the other cache kind is expected to be absent for every layer | Accept a missing or duplicated record, or a layer on the wrong device |
 
 The observed-division instrument is an explicit accelerator test, like the
