@@ -118,14 +118,14 @@ fn a_second_admit_refuses_on_the_ordering() {
         devices: vec![DeviceOrdinal(0)],
     };
     let first = residency
-        .admit(&binding, Headroom(0), ReadoutElection(false), false)
+        .admit(&binding, Headroom(0), 4096, ReadoutElection(false), false)
         .err();
     assert!(
         matches!(first, Some(AdmitRefusal::Unresolvable { .. })),
         "the fixture refuses at step one, got {first:?}"
     );
     let second = residency
-        .admit(&binding, Headroom(0), ReadoutElection(false), false)
+        .admit(&binding, Headroom(0), 4096, ReadoutElection(false), false)
         .err();
     assert_eq!(
         second,
@@ -141,9 +141,11 @@ fn release_without_residency_refuses() {
     assert_eq!(residency.release(), Err(LifecycleRefusal::NoResidency));
 }
 
-/// A minimal GGUF whose header carries exactly the one key the family
-/// lookup needs and resolves to exactly one registry entry, so an admit
-/// against it walks past steps one and two.
+/// A minimal GGUF whose header carries exactly the two keys the free steps
+/// need, the architecture the family lookup reads and the block count the
+/// layer division reads (device pair amendment PAIR-3 and PAIR-4), and
+/// resolves to exactly one registry entry, so an admit against it walks past
+/// steps one and two.
 ///
 /// **It declares an uncontested architecture on purpose.** The fixture
 /// carries a header and no chat template, and a contested architecture
@@ -165,7 +167,7 @@ fn resolvable_gguf() -> Fixture {
     file.extend_from_slice(b"GGUF");
     file.extend_from_slice(&3u32.to_le_bytes());
     file.extend_from_slice(&0u64.to_le_bytes());
-    file.extend_from_slice(&1u64.to_le_bytes());
+    file.extend_from_slice(&2u64.to_le_bytes());
     let key = b"general.architecture";
     file.extend_from_slice(&(key.len() as u64).to_le_bytes());
     file.extend_from_slice(key);
@@ -173,6 +175,11 @@ fn resolvable_gguf() -> Fixture {
     let value = b"qwen2";
     file.extend_from_slice(&(value.len() as u64).to_le_bytes());
     file.extend_from_slice(value);
+    let key = b"qwen2.block_count";
+    file.extend_from_slice(&(key.len() as u64).to_le_bytes());
+    file.extend_from_slice(key);
+    file.extend_from_slice(&4u32.to_le_bytes());
+    file.extend_from_slice(&2u32.to_le_bytes());
     let mut handle = std::fs::File::create(&path).expect("a fixture file");
     handle.write_all(&file).expect("the fixture is written");
     Fixture { dir, path }
@@ -214,7 +221,7 @@ fn a_duplicate_ordinal_refuses_on_the_admit_path() {
     };
     assert_eq!(
         residency
-            .admit(&binding, Headroom(0), ReadoutElection(false), false)
+            .admit(&binding, Headroom(0), 4096, ReadoutElection(false), false)
             .err(),
         Some(AdmitRefusal::DuplicateDevice { ordinal: 0 }),
         "the refusal is the set's shape, before any driver condition"
@@ -231,4 +238,216 @@ fn a_family_refusal_crosses_the_seam_as_a_floor_case() {
         LifecycleRefusal::from(refusal),
         LifecycleRefusal::ArtifactUnreadable
     );
+}
+
+/// A fixture file in its own scratch directory, removed on drop.
+fn written(tag: &str, bytes: &[u8]) -> Fixture {
+    let dir =
+        std::env::temp_dir().join(format!("weaver-spu-residency-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch dir");
+    let path = dir.join(format!("{tag}.gguf"));
+    std::fs::write(&path, bytes).expect("a fixture file");
+    Fixture { dir, path }
+}
+
+/// A dense qwen2 artifact of two layers whose first layer is four times its
+/// second, with one KV head of width 32 per layer.
+fn dense_pair_artifact(tag: &str) -> Fixture {
+    use crate::room::tests::{Meta, gguf};
+    let meta = [
+        ("general.architecture", Meta::Text("qwen2")),
+        ("qwen2.block_count", Meta::U32(2)),
+        ("qwen2.embedding_length", Meta::U32(64)),
+        ("qwen2.attention.head_count", Meta::U32(2)),
+        ("qwen2.attention.head_count_kv", Meta::U32(1)),
+    ];
+    let tensors: &[(&str, &[u64], u32)] = &[
+        ("blk.0.ffn_up.weight", &[64, 256], 1),
+        ("blk.1.ffn_up.weight", &[64, 64], 1),
+        ("output.weight", &[64, 32], 1),
+    ];
+    written(tag, &gguf(&meta, tensors))
+}
+
+/// Admit `binding` against a stated environment and a recording driver,
+/// answering the refusal.
+fn refusal_on(
+    binding: &ModelBinding,
+    headroom: u64,
+    visibility: Visibility,
+    query: &crate::devices::tests::Recording,
+) -> Option<AdmitRefusal> {
+    let side = DeviceSide {
+        visibility,
+        query: Some(query),
+    };
+    Residency::new()
+        .admit_on(
+            binding,
+            Headroom(headroom),
+            4096,
+            ReadoutElection(false),
+            false,
+            None,
+            &side,
+        )
+        .err()
+}
+
+fn bound(fixture: &Fixture, devices: &[u32]) -> ModelBinding {
+    ModelBinding {
+        artifact: ArtifactRef(fixture.path.to_string_lossy().into_owned()),
+        devices: devices.iter().copied().map(DeviceOrdinal).collect(),
+    }
+}
+
+/// **A wrong mask refuses at admission, before any device query**, per the
+/// device pair amendment PAIR-1: a missing order variable, and a mask that
+/// is not the binding's, for a single device and for a pair. The recording
+/// driver was asked nothing. The pair is what watches the identity
+/// judgment's place, since a single device asks no identity.
+///
+/// Perturbation: drop the `judge_mask` call, or move it after the identity
+/// or room judgment, and this test fails.
+#[test]
+fn a_wrong_mask_refuses_before_any_device_query() {
+    use crate::devices::tests::{Recording, masked};
+    let fixture = dense_pair_artifact("mask");
+    let unordered = |mask: &str| Visibility {
+        order: None,
+        visible: Some(mask.into()),
+    };
+    let cases = [
+        (&[0][..], "0", vec![unordered("0"), masked("1"), masked("")]),
+        (
+            &[0, 1][..],
+            "0,1",
+            vec![unordered("0,1"), masked("1,0"), masked("0")],
+        ),
+    ];
+    for (devices, expected, wrong) in cases {
+        let binding = bound(&fixture, devices);
+        for found in wrong {
+            let query = Recording::uniform(devices.len(), u64::MAX);
+            let refusal = refusal_on(&binding, 0, found.clone(), &query);
+            assert_eq!(
+                refusal,
+                Some(AdmitRefusal::Mask(crate::devices::MaskRefusal {
+                    found,
+                    expected: expected.into(),
+                }))
+            );
+            assert!(query.asked.borrow().is_empty(), "{:?}", query.asked);
+            assert_eq!(
+                LifecycleRefusal::from(refusal.unwrap()),
+                LifecycleRefusal::DeviceCannotAdmit
+            );
+        }
+    }
+}
+
+/// **Mixed members refuse after the mask and before room**, per PAIR-2: a
+/// pair whose second member differs in name refuses naming both members,
+/// and the driver was asked for identities and nothing else.
+///
+/// Perturbation: skip the identity judgment for pairs, or judge room
+/// first, and this test fails.
+#[test]
+fn mixed_members_refuse_before_room() {
+    use crate::devices::tests::{Recording, card, masked};
+    let fixture = dense_pair_artifact("mixed");
+    let binding = bound(&fixture, &[0, 2]);
+    let mut query = Recording::uniform(2, u64::MAX);
+    query.identities[1] = Some(card("RTX 2000 Ada"));
+    assert_eq!(
+        refusal_on(&binding, 0, masked("0,2"), &query),
+        Some(AdmitRefusal::DeviceRefused(DeviceRefusal::Mismatched {
+            members: vec![(0, card("RTX A6000")), (2, card("RTX 2000 Ada"))],
+        }))
+    );
+    assert_eq!(*query.asked.borrow(), ["identity 0", "identity 1"]);
+}
+
+/// **A refusal names the binding's ordinal, never the position**, on the
+/// admit path: a binding of ordinal 7 whose device the driver cannot open
+/// refuses as unreachable naming 7, though the driver was asked for
+/// position 0.
+///
+/// Perturbation: report the position and this test fails.
+#[test]
+fn an_admit_refusal_names_the_binding_ordinal() {
+    use crate::devices::tests::{Recording, masked};
+    let fixture = dense_pair_artifact("ordinal");
+    let query = Recording::uniform(0, 0);
+    assert_eq!(
+        refusal_on(&bound(&fixture, &[7]), 0, masked("7"), &query),
+        Some(AdmitRefusal::DeviceRefused(DeviceRefusal::Unreachable {
+            ordinal: 7
+        }))
+    );
+    assert_eq!(*query.asked.borrow(), ["memory 0"]);
+}
+
+/// **Each device is judged against its own share on the admit path**, per
+/// PAIR-4. The fixture's first layer is four times its second and the
+/// output sits on the second device, with each layer's cache at 4096
+/// positions. The second device is given one byte less than its share plus
+/// the headroom and refuses, naming its ordinal and that need.
+///
+/// Perturbation: judge each device against the file over the width (the
+/// even fraction) and this test fails: the even need is far below the
+/// share, so the second device passes.
+#[test]
+fn each_device_is_judged_against_its_own_share() {
+    use crate::devices::tests::{Recording, masked};
+    let fixture = dense_pair_artifact("share");
+    let binding = bound(&fixture, &[3, 5]);
+    // One KV head of width 32, key and value, 4096 positions, F16.
+    let cache = (32 + 32) * 4096 * 2;
+    let first = 64 * 256 * 2 + cache;
+    let second = 64 * 64 * 2 + 64 * 32 * 2 + cache;
+    let headroom = 100;
+    let mut query = Recording::uniform(2, 0);
+    query.memory[0] = Some((first + headroom, 48 << 30));
+    query.memory[1] = Some((second + headroom - 1, 48 << 30));
+    assert_eq!(
+        refusal_on(&binding, headroom, masked("3,5"), &query),
+        Some(AdmitRefusal::DeviceRefused(DeviceRefusal::NoRoom {
+            ordinal: 5,
+            free: second + headroom - 1,
+            needed: second + headroom,
+            total: 48 << 30,
+        }))
+    );
+}
+
+/// **The native artifact and the recurrent or hybrid GGUF keep the even
+/// fraction**, each device charged the file over the width plus the whole
+/// adapter, as before this act. The GGUF still divides by its layer count,
+/// because the PAIR-3 split binds every multi-device GGUF load; only its
+/// room charge is deferred to the second child act.
+///
+/// Perturbation: charge the hybrid by its attention shares, or give the
+/// native artifact a division, and this test fails.
+#[test]
+fn native_and_hybrid_artifacts_keep_the_even_fraction() {
+    use crate::room::tests::{Meta, gguf};
+    let devices = [DeviceOrdinal(0), DeviceOrdinal(1)];
+    let native = plan(None, &devices, 4096, None, || Ok(1000)).expect("a plan");
+    assert_eq!(native.division, None);
+    assert_eq!(native.shares, None);
+    assert_eq!(native.needs, [500, 500]);
+
+    let meta = [
+        ("general.architecture", Meta::Text("qwen35")),
+        ("qwen35.block_count", Meta::U32(4)),
+        ("qwen35.embedding_length", Meta::U32(64)),
+        ("qwen35.attention.head_count", Meta::U32(2)),
+    ];
+    let fixture = written("hybrid", &gguf(&meta, &[]));
+    let layout = Layout::read(&[&fixture.path]).expect("the layout reads");
+    let hybrid = plan(Some(&layout), &devices, 4096, None, || Ok(1000)).expect("a plan");
+    assert_eq!(hybrid.division, Division::even(4, 2));
+    assert_eq!(hybrid.shares, None);
+    assert_eq!(hybrid.needs, [500, 500]);
 }

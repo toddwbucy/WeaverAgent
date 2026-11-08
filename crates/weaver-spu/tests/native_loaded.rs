@@ -3,17 +3,55 @@
 //! `loaded.rs` and this file mirrors its discipline: real artifact, skipped
 //! where the workshop lacks it, failing where an operator named one that is
 //! not there.
+//!
+//! **Every test that admits runs each binding in a masked child.** The device
+//! pair amendment PAIR-1 has the SPU refuse a binding whose ordinals its
+//! process mask does not name, in order, and one process holds one mask. So a
+//! test runs each width in its own process of this binary under that
+//! binding's `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<ordinals>`
+//! (`common::run_masked`), the way the harness launches the SPU. The parent
+//! reads the lease and compares what its children report; the per-width
+//! assertions run in the child, unchanged. Run the binary with the pair
+//! leased, `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1` or no mask
+//! at all. With the cards hidden every admitting test skips.
 #![cfg(feature = "cuda")]
+
+mod common;
 
 use std::path::PathBuf;
 
 use weaver_spu::artifact;
+use weaver_spu::decoder::backend::TokenId;
 use weaver_spu::decoder::session::{NeverCancels, PositionedSinks, SamplerBuild, StopCondition};
 use weaver_spu::family::FamilyName;
 use weaver_spu::readout::ReadoutElection;
 use weaver_spu::residency::{Headroom, Residency};
 use weaver_spu::sampling::EffectiveKnobs;
 use weaver_types::{ArtifactRef, DeviceOrdinal, ModelBinding};
+
+/// The single card and the pair, by the ordinals a test leases.
+const SINGLE: &[u32] = &[0];
+const PAIR: &[u32] = &[0, 1];
+
+/// The token ids a masked child reported as `{"tokens": [...]}`.
+fn reported_tokens(values: &[serde_json::Value]) -> Vec<TokenId> {
+    let [value] = values else {
+        panic!("one report per child, got {values:?}");
+    };
+    value["tokens"]
+        .as_array()
+        .expect("the child reports its tokens")
+        .iter()
+        .map(|t| TokenId(t.as_u64().expect("a token id") as u32))
+        .collect()
+}
+
+/// The report a child makes of its tokens.
+fn report_tokens(tokens: &[TokenId]) {
+    common::report(&serde_json::json!({
+        "tokens": tokens.iter().map(|t| t.0).collect::<Vec<_>>()
+    }));
+}
 
 /// The safetensors artifact, a directory the resolution walks into. The
 /// override follows the per-fixture pattern of `selection.rs`: unset and
@@ -67,24 +105,41 @@ fn the_header_reads_the_sidecars() {
 /// the same session loop.
 #[test]
 fn a_safetensors_artifact_generates_through_the_native_engine() {
-    let Some(dir) = artifact_dir() else {
+    if artifact_dir().is_none() {
         eprintln!("SKIP a_safetensors_artifact_generates: no safetensors artifact");
         return;
-    };
-    if !cuda_present() {
-        eprintln!("SKIP a_safetensors_artifact_generates: no CUDA device");
+    }
+    if let Err(why) = common::lease(SINGLE) {
+        eprintln!("SKIP a_safetensors_artifact_generates: {why}");
         return;
     }
+    common::run_masked(
+        "a_safetensors_artifact_generates_through_the_native_engine_child",
+        SINGLE,
+    );
+}
+
+/// The masked child of [`a_safetensors_artifact_generates_through_the_native_engine`]: its body, under the binding's mask.
+#[test]
+#[ignore = "a masked child, run by its parent"]
+fn a_safetensors_artifact_generates_through_the_native_engine_child() {
+    let Some(devices) =
+        common::masked_child("a_safetensors_artifact_generates_through_the_native_engine_child")
+    else {
+        return;
+    };
+    let dir = artifact_dir().expect("the parent found the artifact");
 
     let mut residency = Residency::new();
     let binding = ModelBinding {
         artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
-        devices: vec![DeviceOrdinal(0)],
+        devices,
     };
     let resident = residency
         .admit(
             &binding,
             Headroom(64 * 1024 * 1024),
+            512,
             ReadoutElection(false),
             false,
         )
@@ -153,6 +208,7 @@ fn a_safetensors_artifact_generates_through_the_native_engine() {
         "the emission renders to text: {text:?}"
     );
     eprintln!("native emission: {text:?}");
+    common::report(&serde_json::json!("done"));
 }
 
 /// **The surprisal's election reaches the native engine's session and
@@ -169,14 +225,30 @@ fn a_safetensors_artifact_generates_through_the_native_engine() {
 /// keeping differs.
 #[test]
 fn the_surprisal_election_governs_the_native_session() {
-    let Some(dir) = artifact_dir() else {
+    if artifact_dir().is_none() {
         eprintln!("SKIP the_surprisal_election_governs_the_native_session: no artifact");
         return;
-    };
-    if !cuda_present() {
-        eprintln!("SKIP the_surprisal_election_governs_the_native_session: no CUDA device");
+    }
+    if let Err(why) = common::lease(SINGLE) {
+        eprintln!("SKIP the_surprisal_election_governs_the_native_session: {why}");
         return;
     }
+    common::run_masked(
+        "the_surprisal_election_governs_the_native_session_child",
+        SINGLE,
+    );
+}
+
+/// The masked child of [`the_surprisal_election_governs_the_native_session`]: its body, under the binding's mask.
+#[test]
+#[ignore = "a masked child, run by its parent"]
+fn the_surprisal_election_governs_the_native_session_child() {
+    let Some(devices) =
+        common::masked_child("the_surprisal_election_governs_the_native_session_child")
+    else {
+        return;
+    };
+    let dir = artifact_dir().expect("the parent found the artifact");
 
     let prompt =
         "<|im_start|>user\nReply with exactly one word: hello<|im_end|>\n<|im_start|>assistant\n";
@@ -185,12 +257,13 @@ fn the_surprisal_election_governs_the_native_session() {
         let mut residency = Residency::new();
         let binding = ModelBinding {
             artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
-            devices: vec![DeviceOrdinal(0)],
+            devices: devices.clone(),
         };
         let resident = residency
             .admit(
                 &binding,
                 Headroom(64 * 1024 * 1024),
+                512,
                 ReadoutElection(false),
                 elected,
             )
@@ -288,6 +361,7 @@ fn the_surprisal_election_governs_the_native_session() {
          governed what was kept rather than what was computed: {declined} \
          against {elected}, relative spread {spread}"
     );
+    common::report(&serde_json::json!("done"));
 }
 
 /// The pair serves the same artifact the single card serves, and greedy
@@ -298,78 +372,23 @@ fn the_surprisal_election_governs_the_native_session() {
 /// rest is reported.
 #[test]
 fn the_pair_agrees_with_the_single_card() {
-    let Some(dir) = artifact_dir() else {
+    if artifact_dir().is_none() {
         eprintln!("SKIP the_pair_agrees: no safetensors artifact");
         return;
-    };
-    if cudarc::driver::CudaContext::new(1).is_err() {
-        eprintln!("SKIP the_pair_agrees: fewer than two CUDA devices");
+    }
+    if let Err(why) = common::lease(PAIR) {
+        eprintln!("SKIP the_pair_agrees: {why}");
         return;
     }
-    let knobs = EffectiveKnobs {
-        temperature: 0.0,
-        top_k: 1,
-        top_p: 1.0,
-        repetition_penalty: 1.0,
-        repetition_window: 0,
-        seed: 11,
-    };
-    let prompt =
-        "<|im_start|>user\nReply with exactly one word: hello<|im_end|>\n<|im_start|>assistant\n";
-
-    let mut emissions = Vec::new();
-    for devices in [
-        vec![DeviceOrdinal(0)],
-        vec![DeviceOrdinal(0), DeviceOrdinal(1)],
-    ] {
-        let width = devices.len();
-        let mut residency = Residency::new();
-        let binding = ModelBinding {
-            artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
-            devices,
-        };
-        let resident = residency
-            .admit(
-                &binding,
-                Headroom(64 * 1024 * 1024),
-                ReadoutElection(false),
-                false,
-            )
-            .unwrap_or_else(|refusal| panic!("the admit at width {width}: {refusal:?}"));
-        let prefix = resident.tokenize(prompt).expect("tokenizes");
-        let mut session = resident.open_session(&knobs, 512).expect("session opens");
-        session.open(&prefix).expect("prefix decodes");
-        let close = resident.tokenize("<|im_end|>").expect("close tokenizes");
-        let [terminator] = close.as_slice() else {
-            panic!("the turn close promotes to one token, got {close:?}");
-        };
-        let generated = session
-            .append_and_generate(
-                &[],
-                &StopCondition {
-                    stop_tokens: close.clone(),
-                    terminator: *terminator,
-                    max_tokens: 8,
-                },
-                &mut NeverCancels,
-                &mut |_| {},
-                PositionedSinks {
-                    field: None,
-                    on_column: &mut |_, _| {},
-                },
-                SamplerBuild {
-                    seed: 11,
-                    penalty_window: 64,
-                },
-            )
-            .expect("generates");
-        let text = resident.detokenize(&generated.tokens).expect("detokenizes");
-        eprintln!(
-            "width {width} emission: {text:?} tokens: {:?}",
-            generated.tokens
-        );
-        emissions.push(generated.tokens.clone());
-    }
+    let emissions: Vec<Vec<TokenId>> = [SINGLE, PAIR]
+        .into_iter()
+        .map(|devices| {
+            reported_tokens(&common::run_masked(
+                "the_pair_agrees_with_the_single_card_child",
+                devices,
+            ))
+        })
+        .collect();
     // Greedy at temperature zero over the same weights: the full sequences
     // agree, measured, and the whole sequence is the pin. A future flake
     // here would mean two candidates tied close enough for reduction order
@@ -383,6 +402,76 @@ fn the_pair_agrees_with_the_single_card() {
         emissions[0], emissions[1],
         "the pair's greedy sequence agrees with the single card's"
     );
+}
+
+/// The masked child of [`the_pair_agrees_with_the_single_card`]: one width's
+/// generation, reported.
+#[test]
+#[ignore = "a masked child, run by its parent"]
+fn the_pair_agrees_with_the_single_card_child() {
+    let Some(devices) = common::masked_child("the_pair_agrees_with_the_single_card_child") else {
+        return;
+    };
+    let dir = artifact_dir().expect("the parent found the artifact");
+    let knobs = EffectiveKnobs {
+        temperature: 0.0,
+        top_k: 1,
+        top_p: 1.0,
+        repetition_penalty: 1.0,
+        repetition_window: 0,
+        seed: 11,
+    };
+    let prompt =
+        "<|im_start|>user\nReply with exactly one word: hello<|im_end|>\n<|im_start|>assistant\n";
+
+    let width = devices.len();
+    let mut residency = Residency::new();
+    let binding = ModelBinding {
+        artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
+        devices,
+    };
+    let resident = residency
+        .admit(
+            &binding,
+            Headroom(64 * 1024 * 1024),
+            512,
+            ReadoutElection(false),
+            false,
+        )
+        .unwrap_or_else(|refusal| panic!("the admit at width {width}: {refusal:?}"));
+    let prefix = resident.tokenize(prompt).expect("tokenizes");
+    let mut session = resident.open_session(&knobs, 512).expect("session opens");
+    session.open(&prefix).expect("prefix decodes");
+    let close = resident.tokenize("<|im_end|>").expect("close tokenizes");
+    let [terminator] = close.as_slice() else {
+        panic!("the turn close promotes to one token, got {close:?}");
+    };
+    let generated = session
+        .append_and_generate(
+            &[],
+            &StopCondition {
+                stop_tokens: close.clone(),
+                terminator: *terminator,
+                max_tokens: 8,
+            },
+            &mut NeverCancels,
+            &mut |_| {},
+            PositionedSinks {
+                field: None,
+                on_column: &mut |_, _| {},
+            },
+            SamplerBuild {
+                seed: 11,
+                penalty_window: 64,
+            },
+        )
+        .expect("generates");
+    let text = resident.detokenize(&generated.tokens).expect("detokenizes");
+    eprintln!(
+        "width {width} emission: {text:?} tokens: {:?}",
+        generated.tokens
+    );
+    report_tokens(&generated.tokens);
 }
 
 /// The single card keeps its rotary angle past the first position BF16
@@ -408,14 +497,46 @@ fn the_pair_agrees_with_the_single_card() {
 /// draws. Recorded in the act that landed this test.
 #[test]
 fn the_single_card_keeps_its_rotary_angle_past_position_256() {
-    let Some(dir) = artifact_dir() else {
+    if artifact_dir().is_none() {
         eprintln!("SKIP the_single_card_keeps_its_rotary_angle: no safetensors artifact");
         return;
-    };
-    if cudarc::driver::CudaContext::new(1).is_err() {
-        eprintln!("SKIP the_single_card_keeps_its_rotary_angle: fewer than two CUDA devices");
+    }
+    if let Err(why) = common::lease(PAIR) {
+        eprintln!("SKIP the_single_card_keeps_its_rotary_angle: {why}");
         return;
     }
+    let emissions: Vec<Vec<TokenId>> = [SINGLE, PAIR]
+        .into_iter()
+        .map(|devices| {
+            reported_tokens(&common::run_masked(
+                "the_single_card_keeps_its_rotary_angle_past_position_256_child",
+                devices,
+            ))
+        })
+        .collect();
+    assert!(
+        !emissions[0].is_empty() && !emissions[1].is_empty(),
+        "both widths generated"
+    );
+    assert_eq!(
+        emissions[0], emissions[1],
+        "past position 256 the single card's greedy sequence agrees with the pair's, \
+         whose rotary tables are pinned"
+    );
+}
+
+/// The masked child of
+/// [`the_single_card_keeps_its_rotary_angle_past_position_256`]: one width's
+/// generation past position 256, reported.
+#[test]
+#[ignore = "a masked child, run by its parent"]
+fn the_single_card_keeps_its_rotary_angle_past_position_256_child() {
+    let Some(devices) =
+        common::masked_child("the_single_card_keeps_its_rotary_angle_past_position_256_child")
+    else {
+        return;
+    };
+    let dir = artifact_dir().expect("the parent found the artifact");
     let knobs = EffectiveKnobs {
         temperature: 0.0,
         top_k: 1,
@@ -433,75 +554,61 @@ fn the_single_card_keeps_its_rotary_angle_past_position_256() {
     }
     prompt.push_str("<|im_end|>\n<|im_start|>assistant\n");
 
-    let mut emissions = Vec::new();
-    for devices in [
-        vec![DeviceOrdinal(0)],
-        vec![DeviceOrdinal(0), DeviceOrdinal(1)],
-    ] {
-        let width = devices.len();
-        let mut residency = Residency::new();
-        let binding = ModelBinding {
-            artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
-            devices,
-        };
-        let resident = residency
-            .admit(
-                &binding,
-                Headroom(64 * 1024 * 1024),
-                ReadoutElection(false),
-                false,
-            )
-            .unwrap_or_else(|refusal| panic!("the admit at width {width}: {refusal:?}"));
-        let prefix = resident.tokenize(&prompt).expect("tokenizes");
-        assert!(
-            prefix.len() > 256,
-            "the prefix must run past position 256 for the watch to see a rounded \
-             position, and it holds {} tokens",
-            prefix.len()
-        );
-        let mut session = resident.open_session(&knobs, 1024).expect("session opens");
-        session.open(&prefix).expect("prefix decodes");
-        let close = resident.tokenize("<|im_end|>").expect("close tokenizes");
-        let [terminator] = close.as_slice() else {
-            panic!("the turn close promotes to one token, got {close:?}");
-        };
-        let generated = session
-            .append_and_generate(
-                &[],
-                &StopCondition {
-                    stop_tokens: close.clone(),
-                    terminator: *terminator,
-                    max_tokens: 8,
-                },
-                &mut NeverCancels,
-                &mut |_| {},
-                PositionedSinks {
-                    field: None,
-                    on_column: &mut |_, _| {},
-                },
-                SamplerBuild {
-                    seed: 11,
-                    penalty_window: 64,
-                },
-            )
-            .expect("generates");
-        let text = resident.detokenize(&generated.tokens).expect("detokenizes");
-        eprintln!(
-            "width {width} at prefix {}: emission {text:?} tokens: {:?}",
-            prefix.len(),
-            generated.tokens
-        );
-        emissions.push(generated.tokens.clone());
-    }
+    let width = devices.len();
+    let mut residency = Residency::new();
+    let binding = ModelBinding {
+        artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
+        devices,
+    };
+    let resident = residency
+        .admit(
+            &binding,
+            Headroom(64 * 1024 * 1024),
+            1024,
+            ReadoutElection(false),
+            false,
+        )
+        .unwrap_or_else(|refusal| panic!("the admit at width {width}: {refusal:?}"));
+    let prefix = resident.tokenize(&prompt).expect("tokenizes");
     assert!(
-        !emissions[0].is_empty() && !emissions[1].is_empty(),
-        "both widths generated"
+        prefix.len() > 256,
+        "the prefix must run past position 256 for the watch to see a rounded \
+         position, and it holds {} tokens",
+        prefix.len()
     );
-    assert_eq!(
-        emissions[0], emissions[1],
-        "past position 256 the single card's greedy sequence agrees with the pair's, \
-         whose rotary tables are pinned"
+    let mut session = resident.open_session(&knobs, 1024).expect("session opens");
+    session.open(&prefix).expect("prefix decodes");
+    let close = resident.tokenize("<|im_end|>").expect("close tokenizes");
+    let [terminator] = close.as_slice() else {
+        panic!("the turn close promotes to one token, got {close:?}");
+    };
+    let generated = session
+        .append_and_generate(
+            &[],
+            &StopCondition {
+                stop_tokens: close.clone(),
+                terminator: *terminator,
+                max_tokens: 8,
+            },
+            &mut NeverCancels,
+            &mut |_| {},
+            PositionedSinks {
+                field: None,
+                on_column: &mut |_, _| {},
+            },
+            SamplerBuild {
+                seed: 11,
+                penalty_window: 64,
+            },
+        )
+        .expect("generates");
+    let text = resident.detokenize(&generated.tokens).expect("detokenizes");
+    eprintln!(
+        "width {width} at prefix {}: emission {text:?} tokens: {:?}",
+        prefix.len(),
+        generated.tokens
     );
+    report_tokens(&generated.tokens);
 }
 
 /// An elected readout travels with the generation, at both widths: one
@@ -511,11 +618,38 @@ fn the_single_card_keeps_its_rotary_angle_past_position_256() {
 /// discipline, asserted against the same artifact in the same breath.
 #[test]
 fn an_elected_readout_travels_with_the_generation() {
-    let Some(dir) = artifact_dir() else {
+    if artifact_dir().is_none() {
         eprintln!("SKIP an_elected_readout: no safetensors artifact");
         return;
+    }
+    if let Err(why) = common::lease(SINGLE) {
+        eprintln!("SKIP an_elected_readout: {why}");
+        return;
+    }
+    let mut widths = vec![SINGLE];
+    match common::lease(PAIR) {
+        Ok(()) => widths.push(PAIR),
+        Err(why) => eprintln!("SKIP an_elected_readout pair half: {why}"),
+    }
+    for devices in widths {
+        common::run_masked(
+            "an_elected_readout_travels_with_the_generation_child",
+            devices,
+        );
+    }
+}
+
+/// The masked child of [`an_elected_readout_travels_with_the_generation`]:
+/// both elections at one width.
+#[test]
+#[ignore = "a masked child, run by its parent"]
+fn an_elected_readout_travels_with_the_generation_child() {
+    let Some(devices) =
+        common::masked_child("an_elected_readout_travels_with_the_generation_child")
+    else {
+        return;
     };
-    let both = cudarc::driver::CudaContext::new(1).is_ok();
+    let dir = artifact_dir().expect("the parent found the artifact");
     let knobs = EffectiveKnobs {
         temperature: 0.0,
         top_k: 1,
@@ -526,16 +660,7 @@ fn an_elected_readout_travels_with_the_generation() {
     };
     let prompt =
         "<|im_start|>user\nReply with exactly one word: hello<|im_end|>\n<|im_start|>assistant\n";
-    let mut widths = vec![vec![DeviceOrdinal(0)]];
-    if both {
-        widths.push(vec![DeviceOrdinal(0), DeviceOrdinal(1)]);
-    } else {
-        eprintln!("SKIP an_elected_readout pair half: fewer than two CUDA devices");
-    }
-    for (devices, elected) in widths
-        .into_iter()
-        .flat_map(|devices| [(devices.clone(), true), (devices, false)])
-    {
+    for (devices, elected) in [(devices.clone(), true), (devices, false)] {
         let width = devices.len();
         let mut residency = Residency::new();
         let binding = ModelBinding {
@@ -546,6 +671,7 @@ fn an_elected_readout_travels_with_the_generation() {
             .admit(
                 &binding,
                 Headroom(64 * 1024 * 1024),
+                512,
                 ReadoutElection(elected),
                 false,
             )
@@ -625,6 +751,7 @@ fn an_elected_readout_travels_with_the_generation() {
             }
         }
     }
+    common::report(&serde_json::json!("done"));
 }
 
 /// An elected readout against a family that declares no tap refuses at
@@ -658,6 +785,7 @@ fn an_elected_readout_refuses_a_gguf_residency_at_admit() {
         .admit(
             &binding,
             Headroom(64 * 1024 * 1024),
+            512,
             ReadoutElection(true),
             false,
         )
@@ -687,16 +815,41 @@ fn an_elected_readout_refuses_a_gguf_residency_at_admit() {
 /// counted against the artifact's own layer count.
 #[test]
 fn an_elected_readout_is_admitted_by_a_gguf_family_that_declares_a_tap() {
-    let gguf = PathBuf::from(
-        "/bulk-store/models/Qwen--Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q8_0.gguf",
-    );
-    if !gguf.is_file() {
+    if !tapped_gguf().is_file() {
         eprintln!(
             "SKIP an_elected_readout_is_admitted: no GGUF artifact from a family \
              that declares a tap"
         );
         return;
     }
+    if let Err(why) = common::lease(SINGLE) {
+        eprintln!("SKIP an_elected_readout_is_admitted: {why}");
+        return;
+    }
+    common::run_masked(
+        "an_elected_readout_is_admitted_by_a_gguf_family_that_declares_a_tap_child",
+        SINGLE,
+    );
+}
+
+fn tapped_gguf() -> PathBuf {
+    PathBuf::from(
+        "/bulk-store/models/Qwen--Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q8_0.gguf",
+    )
+}
+
+/// The masked child of
+/// [`an_elected_readout_is_admitted_by_a_gguf_family_that_declares_a_tap`]:
+/// its body, under the binding's mask.
+#[test]
+#[ignore = "a masked child, run by its parent"]
+fn an_elected_readout_is_admitted_by_a_gguf_family_that_declares_a_tap_child() {
+    let Some(devices) = common::masked_child(
+        "an_elected_readout_is_admitted_by_a_gguf_family_that_declares_a_tap_child",
+    ) else {
+        return;
+    };
+    let gguf = tapped_gguf();
     // The artifact's own `qwen2.block_count`, named rather than derived from
     // the reduction under test, which would agree with itself whatever the
     // tap did.
@@ -705,12 +858,13 @@ fn an_elected_readout_is_admitted_by_a_gguf_family_that_declares_a_tap() {
     let mut residency = Residency::new();
     let binding = ModelBinding {
         artifact: ArtifactRef(gguf.to_string_lossy().into_owned()),
-        devices: vec![DeviceOrdinal(0)],
+        devices,
     };
     let resident = residency
         .admit(
             &binding,
             Headroom(64 * 1024 * 1024),
+            512,
             ReadoutElection(true),
             false,
         )
@@ -776,6 +930,7 @@ fn an_elected_readout_is_admitted_by_a_gguf_family_that_declares_a_tap() {
         norms.iter().all(|n| n.is_finite() && *n > 0.0),
         "the figures are the model's rather than an unwritten buffer"
     );
+    common::report(&serde_json::json!("done"));
 }
 
 /// The measurement instrument for the reduction's cost, not a gate: run
@@ -790,14 +945,27 @@ fn the_pair_reports_its_pace() {
         eprintln!("SKIP the_pair_reports_its_pace: WEAVER_MEASURE_PACE unset");
         return;
     }
-    let Some(dir) = artifact_dir() else {
+    if artifact_dir().is_none() {
         eprintln!("SKIP the_pair_reports_its_pace: no safetensors artifact");
         return;
-    };
-    if cudarc::driver::CudaContext::new(1).is_err() {
-        eprintln!("SKIP the_pair_reports_its_pace: fewer than two CUDA devices");
+    }
+    if let Err(why) = common::lease(PAIR) {
+        eprintln!("SKIP the_pair_reports_its_pace: {why}");
         return;
     }
+    for devices in [SINGLE, PAIR] {
+        common::run_masked("the_pair_reports_its_pace_child", devices);
+    }
+}
+
+/// The masked child of [`the_pair_reports_its_pace`]: one width's pace.
+#[test]
+#[ignore = "a masked child, run by its parent"]
+fn the_pair_reports_its_pace_child() {
+    let Some(devices) = common::masked_child("the_pair_reports_its_pace_child") else {
+        return;
+    };
+    let dir = artifact_dir().expect("the parent found the artifact");
     let knobs = EffectiveKnobs {
         temperature: 0.0,
         top_k: 1,
@@ -808,10 +976,7 @@ fn the_pair_reports_its_pace() {
     };
     let prompt = "<|im_start|>user\nCount upward from one, comma separated, \
                   for as long as you can.<|im_end|>\n<|im_start|>assistant\n";
-    for devices in [
-        vec![DeviceOrdinal(0)],
-        vec![DeviceOrdinal(0), DeviceOrdinal(1)],
-    ] {
+    {
         let width = devices.len();
         let mut residency = Residency::new();
         let binding = ModelBinding {
@@ -822,6 +987,7 @@ fn the_pair_reports_its_pace() {
             .admit(
                 &binding,
                 Headroom(64 * 1024 * 1024),
+                2048,
                 ReadoutElection(false),
                 false,
             )
@@ -861,6 +1027,7 @@ fn the_pair_reports_its_pace() {
             count as f64 / elapsed
         );
     }
+    common::report(&serde_json::json!("done"));
 }
 
 /// The model the pair exists for: larger than any single card, sharded
@@ -869,8 +1036,39 @@ fn the_pair_reports_its_pace() {
 /// container.
 #[test]
 fn a_large_sharded_safetensors_serves_across_the_pair() {
-    let overridden = std::env::var_os("WEAVER_ARTIFACT_QWEN25_32B").is_some();
-    let dir = match std::env::var_os("WEAVER_ARTIFACT_QWEN25_32B") {
+    let Some(_) = large_artifact() else {
+        eprintln!("SKIP a_large_sharded_safetensors: artifact absent or incomplete");
+        return;
+    };
+    if let Err(why) = common::lease(PAIR) {
+        eprintln!("SKIP a_large_sharded_safetensors: {why}");
+        return;
+    }
+
+    // The premise, asserted the way the GGUF split test asserts it: either
+    // card alone refuses for room.
+    for ordinal in [0u32, 1] {
+        let reported = common::run_masked("a_large_sharded_safetensors_probe_child", &[ordinal]);
+        let [refused] = reported.as_slice() else {
+            panic!("one report per probe, got {reported:?}");
+        };
+        let refused = refused["refused"].as_bool().expect("the probe reports");
+        assert!(
+            refused,
+            "the 32B fits no single card, so ordinal {ordinal} alone refuses"
+        );
+    }
+
+    common::run_masked(
+        "a_large_sharded_safetensors_serves_across_the_pair_child",
+        PAIR,
+    );
+}
+
+/// The 32B directory and whether an operator named it, `None` where the
+/// default is absent or incomplete.
+fn large_artifact() -> Option<(PathBuf, bool)> {
+    match std::env::var_os("WEAVER_ARTIFACT_QWEN25_32B") {
         Some(named) => {
             let path = PathBuf::from(named);
             assert!(
@@ -878,51 +1076,64 @@ fn a_large_sharded_safetensors_serves_across_the_pair() {
                 "WEAVER_ARTIFACT_QWEN25_32B names {}, which is not a directory",
                 path.display()
             );
-            path
+            Some((path, true))
         }
         None => {
             let path = PathBuf::from("/bulk-store/models/Qwen--Qwen2.5-32B-Instruct");
-            if !path.is_dir() || !path.join("model-00001-of-00017.safetensors").is_file() {
-                eprintln!("SKIP a_large_sharded_safetensors: artifact absent or incomplete");
-                return;
-            }
-            path
+            (path.is_dir() && path.join("model-00001-of-00017.safetensors").is_file())
+                .then_some((path, false))
         }
-    };
-    if cudarc::driver::CudaContext::new(1).is_err() {
-        eprintln!("SKIP a_large_sharded_safetensors: fewer than two CUDA devices");
+    }
+}
+
+/// A masked child of [`a_large_sharded_safetensors_serves_across_the_pair`]:
+/// the 32B on one card, reporting whether it refused.
+#[test]
+#[ignore = "a masked child, run by its parent"]
+fn a_large_sharded_safetensors_probe_child() {
+    let Some(devices) = common::masked_child("a_large_sharded_safetensors_probe_child") else {
         return;
+    };
+    let (dir, _) = large_artifact().expect("the parent found the artifact");
+    let mut probe = Residency::new();
+    let single = ModelBinding {
+        artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
+        devices,
+    };
+    let refused = probe.admit(
+        &single,
+        Headroom(2 * 1024 * 1024 * 1024),
+        1024,
+        ReadoutElection(false),
+        false,
+    );
+    if let Err(refusal) = &refused {
+        eprintln!("probe refused: {refusal:?}");
     }
+    common::report(&serde_json::json!({ "refused": refused.is_err() }));
+}
 
-    // The premise, asserted the way the GGUF split test asserts it: either
-    // card alone refuses for room.
-    for ordinal in [0u32, 1] {
-        let mut probe = Residency::new();
-        let single = ModelBinding {
-            artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
-            devices: vec![DeviceOrdinal(ordinal)],
-        };
-        let refused = probe.admit(
-            &single,
-            Headroom(2 * 1024 * 1024 * 1024),
-            ReadoutElection(false),
-            false,
-        );
-        assert!(
-            refused.is_err(),
-            "the 32B fits no single card, so ordinal {ordinal} alone refuses"
-        );
-    }
-
+/// A masked child of [`a_large_sharded_safetensors_serves_across_the_pair`]:
+/// the 32B across the pair, served.
+#[test]
+#[ignore = "a masked child, run by its parent"]
+fn a_large_sharded_safetensors_serves_across_the_pair_child() {
+    let Some(devices) =
+        common::masked_child("a_large_sharded_safetensors_serves_across_the_pair_child")
+    else {
+        return;
+    };
+    let (dir, overridden) = large_artifact().expect("the parent found the artifact");
     let mut residency = Residency::new();
     let binding = ModelBinding {
         artifact: ArtifactRef(dir.to_string_lossy().into_owned()),
-        devices: vec![DeviceOrdinal(0), DeviceOrdinal(1)],
+        devices,
     };
     let resident = residency
         .admit(
             &binding,
             Headroom(2 * 1024 * 1024 * 1024),
+            1024,
             ReadoutElection(false),
             false,
         )
@@ -983,8 +1194,5 @@ fn a_large_sharded_safetensors_serves_across_the_pair() {
         assert_eq!(generated.tokens.len(), 1, "one word, one token");
         assert_eq!(text.trim(), "hello", "the instruction is followed exactly");
     }
-}
-
-fn cuda_present() -> bool {
-    cudarc::driver::CudaContext::new(0).is_ok()
+    common::report(&serde_json::json!("done"));
 }

@@ -107,13 +107,34 @@ fn the_room_refusal_says_which_reading_applies() {
     );
 }
 
-/// An ordinal naming no device refuses as unreachable rather than as a room
-/// condition, because the two send an operator to different places.
+/// **A position past the visible set answers nothing**, so a binding whose
+/// mask names a device the machine lacks refuses as unreachable rather than
+/// as a room condition. The refusal's ordinal is the binding's, which
+/// `devices::tests` pins with a recording query; this pins the driver half.
+///
+/// Under the PAIR-1 mask the visible set is the binding, so the first
+/// position past it is the first position the driver cannot open, whatever
+/// this machine holds.
 #[test]
-fn an_ordinal_naming_no_device_refuses_as_unreachable() {
-    let absent = DeviceOrdinal(250);
-    assert_eq!(
-        room_and_reach(&[absent], 1024, 0),
-        Err(DeviceRefusal::Unreachable { ordinal: 250 })
-    );
+fn a_position_past_the_visible_set_is_unreachable() {
+    let past = CudaContext::device_count().map_or(0, |n| n.max(0) as usize);
+    assert_eq!(Driver.memory(past), None);
+    assert_eq!(Driver.identity(past), None);
+    assert!(!Driver.can_access_peer(0, past));
+}
+
+/// **The driver answers the three PAIR-2 facts** for a device it holds:
+/// a name, a compute capability and a total that agrees with the room
+/// query's own total.
+#[test]
+fn the_driver_answers_the_identity_facts() {
+    if !device_present() {
+        eprintln!("SKIP the_driver_answers_the_identity_facts: no device");
+        return;
+    }
+    let identity = Driver.identity(0).expect("an identity");
+    assert!(!identity.name.is_empty());
+    assert!(identity.capability.0 > 0);
+    let (_, total) = Driver.memory(0).expect("memory");
+    assert_eq!(identity.total, total);
 }

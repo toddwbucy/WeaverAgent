@@ -11,6 +11,15 @@
 //! safetensors. Each absent implicit fixture skips loudly: a suite that reports
 //! success for tests it did not run is the failure mode this corpus treats as
 //! worse than a red result.
+//!
+//! **Every SPU here holds the device pair amendment PAIR-1 mask for its
+//! binding**, ordinal 0: a spawned binary is given
+//! `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0` on its command
+//! ([`spu_command`]), as the harness's fork gives it, and the one in-process
+//! admission runs in a masked child of this binary (`common::run_masked`). So
+//! the binary runs under any lease that holds ordinal 0,
+//! `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0` or `=0,1` or no mask
+//! at all. With the cards hidden every device test skips.
 
 #![cfg(all(feature = "cuda", feature = "gguf"))]
 
@@ -31,6 +40,16 @@ use weaver_types::{ArtifactRef, DecoderInstruction, DeviceOrdinal, ModelBinding,
 /// on size alone. `WEAVER_TEST_GGUF` overrides the location for a machine laid
 /// out differently.
 const MODEL: &str = "/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf";
+
+/// The SPU binary under the PAIR-1 mask for ordinal 0, the binding every
+/// test here names, as the harness's fork composes it.
+fn spu_command() -> std::process::Command {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+    command
+        .env("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+        .env("CUDA_VISIBLE_DEVICES", "0");
+    command
+}
 
 fn assert_opened(answer: weaver_types::TokenAnswer) {
     let weaver_types::TokenAnswer::Opened(weaver_types::Opened {
@@ -148,26 +167,45 @@ fn free_bytes(context: &cudarc::driver::CudaContext) -> u64 {
 /// stay on the device. Watched under exactly that change.
 #[test]
 fn a_real_admit_holds_the_device_and_release_frees_it() {
-    let Some(model) = model_present() else {
+    if model_present().is_none() {
         eprintln!("SKIP a_real_admit_holds_the_device: no model at {MODEL}");
         return;
-    };
-    let Some(context) = device_context() else {
-        eprintln!("SKIP a_real_admit_holds_the_device: no CUDA device");
+    }
+    if let Err(why) = common::lease(&[0]) {
+        eprintln!("SKIP a_real_admit_holds_the_device: {why}");
+        return;
+    }
+    let _device = device_lock();
+    common::run_masked(
+        "a_real_admit_holds_the_device_and_release_frees_it_child",
+        &[0],
+    );
+}
+
+/// The masked child of [`a_real_admit_holds_the_device_and_release_frees_it`]:
+/// its body, under the binding's mask.
+#[test]
+#[ignore = "a masked child, run by its parent"]
+fn a_real_admit_holds_the_device_and_release_frees_it_child() {
+    let Some(devices) =
+        common::masked_child("a_real_admit_holds_the_device_and_release_frees_it_child")
+    else {
         return;
     };
-    let _device = device_lock();
+    let model = model_present().expect("the parent found the model");
+    let context = device_context().expect("the device under the mask");
     let before = free_bytes(&context);
 
     let mut residency = Residency::new();
     let binding = ModelBinding {
         artifact: ArtifactRef(model.to_string_lossy().into_owned()),
-        devices: vec![DeviceOrdinal(0)],
+        devices,
     };
 
     let admitted = residency.admit(
         &binding,
         Headroom(64 * 1024 * 1024),
+        4096,
         ReadoutElection(false),
         false,
     );
@@ -196,6 +234,7 @@ fn a_real_admit_holds_the_device_and_release_frees_it() {
     let second = residency.admit(
         &binding,
         Headroom(64 * 1024 * 1024),
+        4096,
         ReadoutElection(false),
         false,
     );
@@ -213,6 +252,7 @@ fn a_real_admit_holds_the_device_and_release_frees_it() {
         after.saturating_sub(held) > 100 * 1024 * 1024,
         "the release returns the memory before answering: held {held}, after {after}"
     );
+    common::report(&serde_json::json!("done"));
 }
 
 mod seam_success {
@@ -223,7 +263,7 @@ mod seam_success {
 
     use super::*;
     use std::os::fd::AsRawFd;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
     use crate::common::{ask, bound_receives, place_inherited, seqpacket_pair, wait_bounded};
     use weaver_types::{LifecycleAnswer, LifecycleDirective, LifecycleRefusal, Payload};
@@ -265,7 +305,7 @@ mod seam_success {
 
         let (lifecycle, child_lifecycle) = seqpacket_pair();
         let (_decode, child_decode) = seqpacket_pair();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -344,7 +384,7 @@ mod seam_success {
 
         let (lifecycle, child_lifecycle) = seqpacket_pair();
         let (decode_parent, child_decode) = seqpacket_pair();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         // The streams go to a file rather than pipes: llama.cpp writes model
         // metadata to stderr during the load, nothing here drains a pipe until
         // after the exchanges, and a load chatty enough to fill the buffer
@@ -456,7 +496,7 @@ mod seam_success {
             std::process::id()
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -592,7 +632,7 @@ mod seam_success {
             std::process::id()
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -733,7 +773,7 @@ mod seam_success {
             std::process::id()
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -971,7 +1011,7 @@ mod seam_success {
             std::process::id()
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1116,7 +1156,7 @@ mod seam_success {
             if model.is_dir() { "native" } else { "gguf" }
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1397,7 +1437,7 @@ mod seam_success {
                 std::process::id()
             ));
             let log = std::fs::File::create(&log_path).expect("a child log file");
-            let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+            let mut command = spu_command();
             command
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -1647,7 +1687,7 @@ mod seam_success {
             std::process::id()
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1836,7 +1876,7 @@ mod seam_success {
             std::process::id()
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1933,7 +1973,7 @@ mod seam_success {
         let log_path =
             std::env::temp_dir().join(format!("weaver-spu-arm2-child-{}.log", std::process::id()));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())

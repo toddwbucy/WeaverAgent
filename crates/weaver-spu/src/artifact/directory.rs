@@ -1,27 +1,38 @@
-//! Metadata and tensor-directory checks for LORA-2. No tensor data is loaded.
+//! A GGUF file's metadata and tensor directory, read without loading any
+//! tensor data.
+//!
+//! Two readers share it: the LoRA fixture's directory checks (LORA-2), which
+//! read the adapter and the base, and the device pair amendment's room
+//! judgment (PAIR-4), which reads every pinned shard of the base at the header
+//! step. It moved here from `lora/` when the second reader arrived.
 
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 #[derive(Debug, Clone)]
-pub(super) enum Value {
+pub(crate) enum Value {
     Text(String),
     Number(u64, u32),
     Float(f32),
+    /// An integer array of at most [`ARRAY_CAPTURE`] elements, which is how a
+    /// per-layer hyperparameter travels (`attention.head_count_kv` as one
+    /// value per layer). Longer integer arrays, such as a vocabulary's token
+    /// types, are skipped as [`Value::Other`].
+    Integers(Vec<i64>),
     Other,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct Tensor {
+pub(crate) struct Tensor {
     pub dims: [u64; 4],
     pub kind: u32,
     pub offset: u64,
 }
 
 #[derive(Debug)]
-pub(super) struct Directory {
+pub(crate) struct Directory {
     pub values: BTreeMap<String, Value>,
     pub tensors: BTreeMap<String, Tensor>,
     pub data_offset: u64,
@@ -57,9 +68,9 @@ impl Reader {
     fn skip(&mut self, count: u64) -> Result<(), String> {
         self.remaining = self.remaining.checked_sub(count).ok_or("truncated GGUF")?;
         let count = i64::try_from(count).map_err(|_| "GGUF offset overflow")?;
-        self.input
-            .seek(SeekFrom::Current(count))
-            .map_err(|e| e.to_string())?;
+        // `seek_relative` keeps the buffer where the skip lands inside it, so
+        // a vocabulary's string array costs no system call per entry.
+        self.input.seek_relative(count).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -81,6 +92,23 @@ impl Reader {
             return Err("GGUF string contains NUL".into());
         }
         Ok(text)
+    }
+
+    /// One element of an integer array, sign-extended for the signed types.
+    /// An unsigned 64-bit element past `i64::MAX` is refused rather than
+    /// wrapped.
+    fn integer(&mut self, element: u32) -> Result<i64, String> {
+        Ok(match element {
+            0 => self.bytes::<1>()?[0] as i64,
+            1 => self.bytes::<1>()?[0] as i8 as i64,
+            2 => u16::from_le_bytes(self.bytes()?) as i64,
+            3 => i16::from_le_bytes(self.bytes()?) as i64,
+            4 => self.u32()? as i64,
+            5 => self.u32()? as i32 as i64,
+            10 => i64::try_from(self.u64()?).map_err(|_| "GGUF array element overflow")?,
+            11 => self.u64()? as i64,
+            _ => return Err("invalid GGUF integer array type".into()),
+        })
     }
 
     fn value(&mut self, kind: u32) -> Result<Value, String> {
@@ -109,6 +137,14 @@ impl Reader {
                         10..=12 => 8,
                         _ => return Err("invalid GGUF array type".into()),
                     };
+                    let integer = matches!(element, 0..=5 | 10 | 11);
+                    if integer && count <= ARRAY_CAPTURE {
+                        let mut values = Vec::with_capacity(count as usize);
+                        for _ in 0..count {
+                            values.push(self.integer(element)?);
+                        }
+                        return Ok(Value::Integers(values));
+                    }
                     self.skip(
                         count
                             .checked_mul(size)
@@ -127,7 +163,70 @@ impl Reader {
     }
 }
 
-pub(super) fn read(path: &Path) -> Result<Directory, String> {
+/// The longest integer array captured as [`Value::Integers`]. A per-layer
+/// array has one element per layer, far below this.
+pub(crate) const ARRAY_CAPTURE: u64 = 4096;
+
+/// The tensor types the pinned engine defines (`ggml.h` at the vendored
+/// `e21cdc11`), each with its block's element count and byte size, from
+/// `ggml.c`'s type traits. The test pins every row against the engine's own
+/// `ggml_blck_size` and `ggml_type_size`.
+pub(crate) const TYPE_SIZES: [(u32, u64, u64); 34] = [
+    (0, 1, 4),      // F32
+    (1, 1, 2),      // F16
+    (2, 32, 18),    // Q4_0
+    (3, 32, 20),    // Q4_1
+    (6, 32, 22),    // Q5_0
+    (7, 32, 24),    // Q5_1
+    (8, 32, 34),    // Q8_0
+    (9, 32, 36),    // Q8_1
+    (10, 256, 84),  // Q2_K
+    (11, 256, 110), // Q3_K
+    (12, 256, 144), // Q4_K
+    (13, 256, 176), // Q5_K
+    (14, 256, 210), // Q6_K
+    (15, 256, 292), // Q8_K
+    (16, 256, 66),  // IQ2_XXS
+    (17, 256, 74),  // IQ2_XS
+    (18, 256, 98),  // IQ3_XXS
+    (19, 256, 50),  // IQ1_S
+    (20, 32, 18),   // IQ4_NL
+    (21, 256, 110), // IQ3_S
+    (22, 256, 82),  // IQ2_S
+    (23, 256, 136), // IQ4_XS
+    (24, 1, 1),     // I8
+    (25, 1, 2),     // I16
+    (26, 1, 4),     // I32
+    (27, 1, 8),     // I64
+    (28, 1, 8),     // F64
+    (29, 256, 56),  // IQ1_M
+    (30, 1, 2),     // BF16
+    (34, 256, 54),  // TQ1_0
+    (35, 256, 66),  // TQ2_0
+    (39, 32, 17),   // MXFP4
+    (40, 64, 36),   // NVFP4
+    (41, 128, 18),  // Q1_0
+];
+
+impl Tensor {
+    /// The tensor's bytes as the engine lays it out, from its shape and type:
+    /// the first dimension in whole blocks, times the rest. `None` for a type
+    /// the table does not carry, a first dimension that is not a whole number
+    /// of blocks, or an overflow.
+    pub(crate) fn bytes(&self) -> Option<u64> {
+        let (_, block, size) = TYPE_SIZES.iter().find(|(kind, _, _)| *kind == self.kind)?;
+        if !self.dims[0].is_multiple_of(*block) {
+            return None;
+        }
+        self.dims[1..]
+            .iter()
+            .try_fold((self.dims[0] / block).checked_mul(*size)?, |n, dim| {
+                n.checked_mul(*dim)
+            })
+    }
+}
+
+pub(crate) fn read(path: &Path) -> Result<Directory, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let file_bytes = file.metadata().map_err(|e| e.to_string())?.len();
     let mut r = Reader {
@@ -187,11 +286,13 @@ pub(super) fn read(path: &Path) -> Result<Directory, String> {
         * alignment;
     if tensors
         .values()
-        .any(|t| t.offset % alignment != 0 || !matches!(t.kind, 0..=3 | 6..=30 | 34..=35 | 39..=41))
+        .any(|t| t.offset % alignment != 0 || !TYPE_SIZES.iter().any(|(kind, ..)| *kind == t.kind))
     {
         return Err("unaligned or unsupported GGML tensor".into());
     }
-    if data_offset > file_bytes {
+    // A directory with no tensor has no data section, so its rounded offset
+    // may sit past the end without anything being missing.
+    if data_offset > file_bytes && !tensors.is_empty() {
         return Err("GGUF data offset exceeds the file".into());
     }
     Ok(Directory {
@@ -201,3 +302,6 @@ pub(super) fn read(path: &Path) -> Result<Directory, String> {
         file_bytes,
     })
 }
+
+#[cfg(test)]
+mod tests;

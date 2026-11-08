@@ -172,7 +172,7 @@ fn normal_admission_does_not_validate_or_acquire_an_adapter() {
     };
     let mut normal = Residency::new();
     assert!(matches!(
-        normal.admit(&binding, Headroom(0), ReadoutElection(false), false),
+        normal.admit(&binding, Headroom(0), 4096, ReadoutElection(false), false),
         Err(AdmitRefusal::Unresolvable {
             step: "resolve",
             ..
@@ -185,6 +185,7 @@ fn normal_admission_does_not_validate_or_acquire_an_adapter() {
         supplied.admit_with_adapter(
             &binding,
             Headroom(0),
+            4096,
             ReadoutElection(false),
             false,
             Some(&r)
@@ -516,6 +517,7 @@ fn successful_load_still_fails_on_fallback_missing_or_ambiguous_placement() {
     use observation::{Record, judge};
     let targets = BTreeMap::from([("blk.0.attn_q.weight".into(), 2)]);
     let devices = [weaver_types::DeviceOrdinal(0)];
+    let division = crate::division::Division::even(1, 1).unwrap();
     let record = |text: &str| Record {
         level: llama_cpp_sys_2::GGML_LOG_LEVEL_DEBUG as i32,
         bytes: text.as_bytes().into(),
@@ -524,7 +526,7 @@ fn successful_load_still_fails_on_fallback_missing_or_ambiguous_placement() {
     let mut wrong_level = good.clone();
     wrong_level.level = llama_cpp_sys_2::GGML_LOG_LEVEL_WARN as i32;
     assert_eq!(
-        judge(std::slice::from_ref(&good), &targets, &devices)
+        judge(std::slice::from_ref(&good), &targets, &devices, &division)
             .unwrap()
             .len(),
         1
@@ -546,6 +548,254 @@ fn successful_load_still_fails_on_fallback_missing_or_ambiguous_placement() {
             ),
         ],
     ] {
-        assert!(judge(&records, &targets, &devices).is_err());
+        assert!(judge(&records, &targets, &devices, &division).is_err());
     }
+}
+
+/// **Each target is matched to the device its layer is divided onto**, per
+/// LORA-3 and PAIR-5: over a pair bound to ordinals 4 and 6, layer 0's
+/// target on `CUDA0` and layer 1's on `CUDA1` pass and report the binding's
+/// ordinals; layer 1's target on `CUDA0` is a layer on the wrong device and
+/// refuses, as does a device outside the set.
+///
+/// Perturbation: accept any member device for a layer's target, or report
+/// the position, and this test fails.
+#[cfg(feature = "gguf")]
+#[test]
+fn each_target_is_matched_to_its_layer_device() {
+    use observation::{Record, judge};
+    let targets = BTreeMap::from([
+        ("blk.0.attn_q.weight".into(), 2),
+        ("blk.1.attn_q.weight".into(), 2),
+    ]);
+    let devices = [
+        weaver_types::DeviceOrdinal(4),
+        weaver_types::DeviceOrdinal(6),
+    ];
+    let division = crate::division::Division::even(2, 2).unwrap();
+    let record = |target: &str, buffer: &str| Record {
+        level: llama_cpp_sys_2::GGML_LOG_LEVEL_DEBUG as i32,
+        bytes: format!("llama_adapter_lora_init_impl: lora for '{target}' -> '{buffer}'\n")
+            .into_bytes(),
+    };
+    let placement = judge(
+        &[
+            record("blk.0.attn_q.weight", "CUDA0"),
+            record("blk.1.attn_q.weight", "CUDA1"),
+        ],
+        &targets,
+        &devices,
+        &division,
+    )
+    .unwrap();
+    assert_eq!(placement["blk.0.attn_q.weight"], devices[0]);
+    assert_eq!(placement["blk.1.attn_q.weight"], devices[1]);
+    for wrong in ["CUDA0", "CUDA2"] {
+        assert!(
+            judge(
+                &[
+                    record("blk.0.attn_q.weight", "CUDA0"),
+                    record("blk.1.attn_q.weight", wrong),
+                ],
+                &targets,
+                &devices,
+                &division,
+            )
+            .is_err(),
+            "layer 1 on {wrong}"
+        );
+    }
+}
+
+/// The records of a pair whose division is right: four layers over two
+/// devices, two each, the output on the second, every layer one attention
+/// cache. The iSWA cache's "filtered" lines and a multi-line record ride
+/// along, as the engine prints them.
+#[cfg(feature = "gguf")]
+fn division_records() -> Vec<observation::Record> {
+    let debug = |text: String| observation::Record {
+        level: llama_cpp_sys_2::GGML_LOG_LEVEL_DEBUG as i32,
+        bytes: text.into_bytes(),
+    };
+    let mut records: Vec<_> = (0..=4)
+        .map(|slot| {
+            debug(format!(
+                "load_tensors: layer {slot:>3} assigned to device CUDA{}, is_swa = 0\n",
+                usize::from(slot >= 2)
+            ))
+        })
+        .collect();
+    records.push(debug(
+        "llama_kv_cache: layer   0: dev = CUDA0\nllama_kv_cache: layer   1: dev = CUDA0\n".into(),
+    ));
+    for layer in 2..4 {
+        records.push(debug(format!(
+            "llama_kv_cache: layer {layer:>3}: dev = CUDA1\n"
+        )));
+        records.push(debug(format!(
+            "llama_kv_cache: layer {layer:>3}: filtered\n"
+        )));
+    }
+    records
+}
+
+/// The pair the division records are judged against: binding ordinals 4 and
+/// 6, so a report of the position rather than the ordinal reads wrong.
+#[cfg(feature = "gguf")]
+const PAIR_AT: [u32; 2] = [4, 6];
+
+#[cfg(feature = "gguf")]
+fn pair_at() -> Vec<weaver_types::DeviceOrdinal> {
+    PAIR_AT.map(weaver_types::DeviceOrdinal).to_vec()
+}
+
+#[cfg(feature = "gguf")]
+fn dense(layers: usize) -> Vec<crate::room::Caches> {
+    vec![
+        crate::room::Caches {
+            attention: true,
+            recurrent: false,
+        };
+        layers
+    ]
+}
+
+/// **The observed division matches the computed one**, per PAIR-5: one
+/// assignment record per slot, the output's included, and one attention
+/// cache record per layer, each on the device PAIR-3 gives it.
+#[cfg(feature = "gguf")]
+#[test]
+fn the_observed_division_matches_the_computed_one() {
+    let division = crate::division::Division::even(4, 2).unwrap();
+    let observed =
+        observation::judge_division(&division_records(), &pair_at(), &division, &dense(4)).unwrap();
+    let [first, second] = PAIR_AT;
+    assert_eq!(
+        observed.slots,
+        [first, first, second, second, second].map(weaver_types::DeviceOrdinal)
+    );
+    assert_eq!(
+        observed.attention,
+        [first, first, second, second].map(|o| Some(weaver_types::DeviceOrdinal(o)))
+    );
+    assert_eq!(observed.recurrent, [const { None }; 4]);
+}
+
+/// **Every deliberate change PAIR-5 names fails**: a missing record (the
+/// output's, or a cache record that reads "does not have KV cache" or
+/// "filtered"), a duplicated record, a layer on the wrong device, a record
+/// the classification does not predict, a record at another level, a layer
+/// past the depth, and a classification of another depth.
+///
+/// Perturbation: accept a missing or duplicated record, or a layer on the
+/// wrong device, and this test fails.
+#[cfg(feature = "gguf")]
+#[test]
+fn the_observed_division_refuses_a_missing_duplicated_or_misplaced_record() {
+    use observation::{Record, judge_division};
+    let division = crate::division::Division::even(4, 2).unwrap();
+    let devices = pair_at();
+    let debug = |text: &str| Record {
+        level: llama_cpp_sys_2::GGML_LOG_LEVEL_DEBUG as i32,
+        bytes: text.as_bytes().into(),
+    };
+    let without = |needle: &str| -> Vec<Record> {
+        division_records()
+            .into_iter()
+            .filter(|r| !String::from_utf8_lossy(&r.bytes).contains(needle))
+            .collect()
+    };
+    let with = |extra: Record| -> Vec<Record> {
+        let mut records = division_records();
+        records.push(extra);
+        records
+    };
+    let mut warned = debug("load_tensors: layer   4 assigned to device CUDA1, is_swa = 0\n");
+    warned.level = llama_cpp_sys_2::GGML_LOG_LEVEL_WARN as i32;
+    let cases: Vec<(&str, Vec<Record>)> = vec![
+        (
+            "the output's assignment missing",
+            without("layer   4 assigned"),
+        ),
+        (
+            "a cache that has none",
+            [
+                without("layer   3: dev"),
+                vec![debug("llama_kv_cache: layer   3: does not have KV cache\n")],
+            ]
+            .concat(),
+        ),
+        ("a cache filtered only", without("layer   3: dev")),
+        (
+            "an assignment twice",
+            with(debug(
+                "load_tensors: layer   1 assigned to device CUDA0, is_swa = 0\n",
+            )),
+        ),
+        (
+            "a cache twice",
+            with(debug("llama_kv_cache: layer   2: dev = CUDA1\n")),
+        ),
+        (
+            "a layer on the wrong device",
+            [
+                without("layer   2 assigned"),
+                vec![debug(
+                    "load_tensors: layer   2 assigned to device CUDA0, is_swa = 0\n",
+                )],
+            ]
+            .concat(),
+        ),
+        (
+            "a cache on the host",
+            [
+                without("layer   2: dev"),
+                vec![debug("llama_kv_cache: layer   2: dev = CPU\n")],
+            ]
+            .concat(),
+        ),
+        (
+            "a recurrent cache not predicted",
+            with(debug("llama_memory_recurrent, layer   0: dev = CUDA0\n")),
+        ),
+        ("a record at another level", with(warned)),
+        (
+            "a layer past the depth",
+            with(debug("llama_kv_cache: layer   4: dev = CUDA1\n")),
+        ),
+    ];
+    for (case, records) in cases {
+        assert!(
+            judge_division(&records, &devices, &division, &dense(4)).is_err(),
+            "{case} passed"
+        );
+    }
+    assert!(judge_division(&division_records(), &devices, &division, &dense(3)).is_err());
+}
+
+/// **A recurrent cache is judged like an attention cache**: a layer the
+/// classification gives a recurrent cache needs exactly one recurrent
+/// record on its device, a "skipped" record is missing, and a layer with
+/// both caches needs one record from each.
+#[cfg(feature = "gguf")]
+#[test]
+fn the_observed_division_judges_recurrent_caches() {
+    use observation::{Record, judge_division};
+    let division = crate::division::Division::even(4, 2).unwrap();
+    let devices = pair_at();
+    let debug = |text: &str| Record {
+        level: llama_cpp_sys_2::GGML_LOG_LEVEL_DEBUG as i32,
+        bytes: text.as_bytes().into(),
+    };
+    let mut caches = dense(4);
+    caches[3].recurrent = true;
+    let mut records = division_records();
+    assert!(judge_division(&records, &devices, &division, &caches).is_err());
+    records.push(debug("llama_memory_recurrent, layer   3: skipped\n"));
+    assert!(judge_division(&records, &devices, &division, &caches).is_err());
+    records.push(debug("llama_memory_recurrent, layer   3: dev = CUDA1\n"));
+    let observed = judge_division(&records, &devices, &division, &caches).unwrap();
+    let six = Some(weaver_types::DeviceOrdinal(6));
+    assert_eq!(observed.recurrent, [None, None, None, six.clone()]);
+    assert_eq!(observed.attention[3], six);
 }

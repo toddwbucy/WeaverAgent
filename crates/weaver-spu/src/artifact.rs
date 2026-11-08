@@ -20,6 +20,8 @@ use weaver_types::{ArtifactRef, LifecycleRefusal};
 
 use crate::family::FamilyName;
 
+pub(crate) mod directory;
+
 /// What an artifact declares about itself, read from its header alone.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArtifactHeader {
@@ -185,6 +187,12 @@ impl PinnedArtifact {
                 .map(|f| PathBuf::from(format!("/proc/self/fd/{}", f.as_raw_fd()))),
         );
         paths
+    }
+
+    /// The names the pin opened, in the order of [`paths`](Self::paths), for
+    /// an account that names a shard the way the operator does.
+    pub fn names(&self) -> &[PathBuf] {
+        &self.names
     }
 
     pub fn is_empty(&self) -> bool {

@@ -107,10 +107,12 @@ impl ResidentModel {
         let declared = read_declaration(&config_path)?;
         judge_family(&declared).map_err(AdmitRefusal::Family)?;
 
-        let device =
-            Device::new_cuda(ordinals[0] as usize).map_err(|error| AdmitRefusal::LoadFailed {
-                detail: format!("cuda device {}: {error}", ordinals[0]),
-            })?;
+        // **Positions, not ordinals**, per the device pair amendment PAIR-1:
+        // under the mask the admission judged, the device at binding index i
+        // is CUDA's device i. The account names the binding's ordinal.
+        let device = Device::new_cuda(0).map_err(|error| AdmitRefusal::LoadFailed {
+            detail: format!("cuda device {}: {error}", ordinals[0]),
+        })?;
 
         let config = read_config(&config_path)?;
         let eos = read_eos(&config_path)?;
@@ -122,10 +124,9 @@ impl ResidentModel {
             })?;
 
         let model = if let [_, second] = ordinals.as_slice() {
-            let second =
-                Device::new_cuda(*second as usize).map_err(|error| AdmitRefusal::LoadFailed {
-                    detail: format!("cuda device {second}: {error}"),
-                })?;
+            let second = Device::new_cuda(1).map_err(|error| AdmitRefusal::LoadFailed {
+                detail: format!("cuda device {second}: {error}"),
+            })?;
             Forward::Pair(super::native_pair::ShardedModel::load(
                 admission.paths(),
                 &config,

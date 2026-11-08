@@ -59,6 +59,7 @@ use crate::decoder::gguf_tap;
 use crate::sampling::EffectiveKnobs;
 use llama_cpp_2::model::params::{LlamaModelParams, LlamaSplitMode};
 
+use crate::division::Division;
 use crate::residency::{Admission, AdmitRefusal};
 
 /// The one llama.cpp backend this process holds.
@@ -100,29 +101,29 @@ pub struct ResidentModel {
 struct ResidentAdapter {
     handle: std::cell::RefCell<LlamaLoraAdapter>,
     identity: crate::lora::Identity,
-    placement: std::collections::BTreeMap<String, String>,
+    placement: std::collections::BTreeMap<String, weaver_types::DeviceOrdinal>,
 }
 
 impl ResidentModel {
     /// Load the admission's artifact onto the admission's devices.
     ///
-    /// The devices are the binding's and this crate selects none: one device
-    /// pins `main_gpu` with no split, and a pair splits by layer across
-    /// exactly the named ordinals, never whatever else the driver can see.
-    /// The parameter shapes carry the archived tree's own working
-    /// configuration forward.
+    /// The devices are the binding's and this crate selects none. **Under the
+    /// PAIR-1 mask they are positions**: the process sees exactly the
+    /// binding's devices, renumbered from zero in binding order, and the
+    /// admission judged the mask before any device query. One device loads
+    /// with no split. A wider binding splits by layer across positions 0 to
+    /// N - 1 with the PAIR-3 tensor split, never the engine's free-memory
+    /// default.
     ///
-    /// **An assumption crosses here and is named rather than silent.** The
-    /// admission judges room and reach against CUDA ordinals, while
-    /// `main_gpu` and `with_devices` index ggml's registered-device
-    /// enumeration. The two numberings coincide while the libllama this
-    /// build links registers CUDA devices only and in ordinal order, which
-    /// holds for the library the pinned build script compiles. A deployment
-    /// linking a libllama with another backend registered, RPC or Vulkan or
-    /// SYCL, breaks the coincidence and puts weights on a card the admission
-    /// never judged. The mapping through the ggml device registry belongs to
-    /// the decode act, which touches the engine's device surface anyway, and
-    /// until then this paragraph is the boundary of what is verified.
+    /// **An assumption crosses here and is named rather than silent.**
+    /// `with_devices` indexes ggml's registered-device enumeration, and under
+    /// the mask the admission's position i is CUDA's device i. The two
+    /// numberings coincide while the libllama this build links registers
+    /// CUDA devices first and in CUDA's order, which holds for the library
+    /// the pinned build script compiles. A deployment linking a libllama with
+    /// another backend registered ahead of CUDA, RPC or Vulkan or SYCL,
+    /// breaks the coincidence and puts weights on a device the admission
+    /// never judged.
     pub fn load(admission: &Admission<'_>) -> Result<ResidentModel, AdmitRefusal> {
         // LORA-3: refuse absent observation before any backend allocation.
         if let Some(prepared) = admission.adapter() {
@@ -136,23 +137,19 @@ impl ResidentModel {
         }
         let backend = backend()?;
         let devices = admission.devices();
-
-        // Every layer goes to the device: a partial offload would leave part
-        // of the model in host memory, a residency the admission never judged.
-        let mut params = LlamaModelParams::default()
-            .with_n_gpu_layers(u32::MAX)
-            .with_main_gpu(devices[0].0 as i32)
-            .with_split_mode(if devices.len() == 1 {
-                LlamaSplitMode::None
-            } else {
-                LlamaSplitMode::Layer
-            });
+        let division = admission
+            .division()
+            .ok_or_else(|| AdmitRefusal::LoadFailed {
+                detail: "a GGUF admission carries no layer division".into(),
+            })?;
+        let mut params =
+            placement_params(division).map_err(|detail| AdmitRefusal::LoadFailed { detail })?;
         if devices.len() > 1 {
-            let ordinals: Vec<usize> = devices.iter().map(|d| d.0 as usize).collect();
+            let positions: Vec<usize> = (0..devices.len()).collect();
             params = params
-                .with_devices(&ordinals)
+                .with_devices(&positions)
                 .map_err(|error| AdmitRefusal::LoadFailed {
-                    detail: format!("device set {ordinals:?}: {error}"),
+                    detail: format!("device positions {positions:?}: {error}"),
                 })?;
         }
 
@@ -188,9 +185,13 @@ impl ResidentModel {
                 .lora_adapter_init(prepared.path())
                 .map_err(|error| failure(format!("lora_adapter_init: {error}")))?;
             let records = observation::records().map_err(&failure)?;
-            let placement =
-                observation::judge(&records[start..], &prepared.identity.targets, devices)
-                    .map_err(&failure)?;
+            let placement = observation::judge(
+                &records[start..],
+                &prepared.identity.targets,
+                devices,
+                division,
+            )
+            .map_err(&failure)?;
             Some(ResidentAdapter {
                 handle: std::cell::RefCell::new(handle),
                 identity: prepared.identity.clone(),
@@ -206,7 +207,10 @@ impl ResidentModel {
         self.adapter.as_ref().map(|a| &a.identity)
     }
 
-    pub fn adapter_placement(&self) -> Option<&std::collections::BTreeMap<String, String>> {
+    /// Each adapter target's observed device, by binding ordinal.
+    pub fn adapter_placement(
+        &self,
+    ) -> Option<&std::collections::BTreeMap<String, weaver_types::DeviceOrdinal>> {
         self.adapter.as_ref().map(|a| &a.placement)
     }
 
@@ -219,6 +223,39 @@ impl ResidentModel {
     pub(crate) fn model(&self) -> &LlamaModel {
         &self.model
     }
+}
+
+/// **The model parameters every GGUF load sets before its device list**, per
+/// the device pair amendment PAIR-3.
+///
+/// Every layer is offloaded: a partial offload would leave part of the model
+/// in host memory, a residency the admission never judged, and the PAIR-3
+/// mapping holds only with at least L + 1 layers offloaded, because the
+/// engine's first offloaded slot is L + 1 minus the count. `u32::MAX` crosses
+/// as `i32::MAX`.
+///
+/// One device loads with split mode none, where `main_gpu` selects the
+/// device among those visible; under the mask position 0 is the only one. A
+/// wider binding loads with layer split mode and the division's tensor split,
+/// where `main_gpu` has no effect. The split is never empty for a
+/// multi-device set, because an empty split restores the engine's
+/// free-memory default.
+///
+/// One defect stays on the pinned fork and upstream: `add_cpu_buft_override`
+/// stores its pattern's pointer with no lifetime tied to the parameters, so a
+/// pattern freed before load dangles. Nothing here calls it, and any later
+/// use of buffer-type overrides must fix it first.
+pub(crate) fn placement_params(division: &Division) -> Result<LlamaModelParams, String> {
+    let params = LlamaModelParams::default()
+        .with_n_gpu_layers(u32::MAX)
+        .with_main_gpu(0);
+    if division.counts().len() == 1 {
+        return Ok(params.with_split_mode(LlamaSplitMode::None));
+    }
+    params
+        .with_split_mode(LlamaSplitMode::Layer)
+        .with_tensor_split(&division.split_values())
+        .map_err(|error| format!("tensor split {:?}: {error}", division.split_values()))
 }
 
 /// The GGUF engine, per `weaver-spu-Spec` section 4.

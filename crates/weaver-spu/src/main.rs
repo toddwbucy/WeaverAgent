@@ -1362,8 +1362,61 @@ fn admit_refusal_line(refusal: &weaver_spu::residency::AdmitRefusal) -> Option<S
                 .to_string(),
             )
         }
+        // **The placement refusals name the binding's ordinals and every
+        // figure the judgment read**, per the device pair amendment: the
+        // operator meets DeviceCannotAdmit for each, and this line says
+        // which device and which condition.
+        AdmitRefusal::Mask(refusal) => Some(
+            serde_json::json!({
+                "refusal": "device_mask",
+                "order": refusal.found.order,
+                "visible": refusal.found.visible,
+                "expected_order": weaver_spu::devices::ORDER_VALUE,
+                "expected_visible": refusal.expected,
+            })
+            .to_string(),
+        ),
+        AdmitRefusal::DeviceRefused(refusal) => Some(device_refusal_line(refusal)),
         _ => None,
     }
+}
+
+/// The account of a refusal the driver answered, by binding ordinal.
+fn device_refusal_line(refusal: &weaver_spu::devices::DeviceRefusal) -> String {
+    use weaver_spu::devices::DeviceRefusal;
+    match refusal {
+        DeviceRefusal::Unreachable { ordinal } => {
+            serde_json::json!({"refusal": "device_unreachable", "ordinal": ordinal})
+        }
+        DeviceRefusal::NoRoom {
+            ordinal,
+            free,
+            needed,
+            total,
+        } => serde_json::json!({
+            "refusal": "device_no_room",
+            "ordinal": ordinal,
+            "free": free,
+            "needed": needed,
+            "total": total,
+        }),
+        DeviceRefusal::NoPeerAccess { from, to } => {
+            serde_json::json!({"refusal": "device_no_peer_access", "from": from, "to": to})
+        }
+        DeviceRefusal::Mismatched { members } => serde_json::json!({
+            "refusal": "device_members_differ",
+            "members": members
+                .iter()
+                .map(|(ordinal, identity)| serde_json::json!({
+                    "ordinal": ordinal,
+                    "name": identity.name,
+                    "compute_capability": [identity.capability.0, identity.capability.1],
+                    "total": identity.total,
+                }))
+                .collect::<Vec<_>>(),
+        }),
+    }
+    .to_string()
 }
 
 /// A refusal before any channel is trusted goes to standard error, because the
@@ -1600,6 +1653,7 @@ fn dispatch(
             match residency.admit(
                 &decoder.model_binding,
                 Headroom(headroom),
+                resolved.session.context_capacity,
                 ReadoutElection(decoder.residual_readout_election),
                 decoder.surprisal_election,
             ) {

@@ -174,3 +174,134 @@ pub fn ask(end: &OwnedFd, ordinal: u64, directive: LifecycleDirective) -> OrganE
     buffer.truncate(read);
     serde_json::from_slice(&buffer).expect("the answer is an envelope")
 }
+
+/// The marker a masked child carries: the name of the test it runs. A test
+/// binary sets it for its own child, so it is not a fixture, and it stays
+/// outside the `WEAVER_` names `weaver-spu-Spec` section 1.2 enumerates.
+pub const MASKED_CHILD: &str = "SPU_MASKED_CHILD";
+
+/// The prefix of a line a masked child reports to its parent on stdout.
+pub const MASKED_RESULT: &str = "MASKED-RESULT ";
+
+/// **Whether this test process may take `devices`**, read from its own
+/// `CUDA_VISIBLE_DEVICES`, the box's lease rule. A set and empty mask hides
+/// the cards, so nothing is leased. A list leases its ordinals, read in PCI
+/// bus order. No mask leases every device the driver counts. `Err` carries
+/// the reason, for a skip line.
+///
+/// A device test admits under the device pair amendment PAIR-1 mask, which
+/// one process can hold for one binding only, so a test of several bindings
+/// runs each in its own child ([`run_masked`]) and the parent reads the lease
+/// here rather than touching a device.
+pub fn lease(devices: &[u32]) -> Result<(), String> {
+    match std::env::var("CUDA_VISIBLE_DEVICES") {
+        Ok(mask) if mask.trim().is_empty() => Err("the cards are hidden".into()),
+        Ok(mask) => {
+            if std::env::var("CUDA_DEVICE_ORDER").as_deref() != Ok("PCI_BUS_ID") {
+                return Err(format!(
+                    "CUDA_VISIBLE_DEVICES={mask} without CUDA_DEVICE_ORDER=PCI_BUS_ID \
+                     names no ordinals"
+                ));
+            }
+            let held: Vec<&str> = mask.split(',').map(str::trim).collect();
+            match devices
+                .iter()
+                .find(|d| !held.contains(&d.to_string().as_str()))
+            {
+                Some(missing) => Err(format!("ordinal {missing} is not leased ({mask})")),
+                None => Ok(()),
+            }
+        }
+        Err(_) => {
+            let count = cudarc_device_count();
+            match devices.iter().find(|d| **d as usize >= count) {
+                Some(missing) => Err(format!(
+                    "ordinal {missing} is past the {count} devices the driver counts"
+                )),
+                None => Ok(()),
+            }
+        }
+    }
+}
+
+/// The driver's device count with no context created, zero where it cannot
+/// answer.
+#[cfg(feature = "cuda")]
+fn cudarc_device_count() -> usize {
+    cudarc::driver::CudaContext::device_count().map_or(0, |n| n.max(0) as usize)
+}
+
+#[cfg(not(feature = "cuda"))]
+fn cudarc_device_count() -> usize {
+    0
+}
+
+/// The binding this process holds as the masked child for test `name`, the
+/// ordinals of its mask in order, or `None` when it is not that child.
+pub fn masked_child(name: &str) -> Option<Vec<weaver_types::DeviceOrdinal>> {
+    if std::env::var(MASKED_CHILD).as_deref() != Ok(name) {
+        return None;
+    }
+    let mask = std::env::var("CUDA_VISIBLE_DEVICES").expect("a masked child holds a mask");
+    Some(
+        mask.split(',')
+            .map(|ordinal| weaver_types::DeviceOrdinal(ordinal.parse().expect("a decimal ordinal")))
+            .collect(),
+    )
+}
+
+/// Report a value from a masked child to its parent.
+pub fn report(value: &serde_json::Value) {
+    println!("{MASKED_RESULT}{value}");
+}
+
+/// **Run test `name` of this binary in its own process under the PAIR-1 mask
+/// for `devices`**, the way the harness launches the SPU, and answer the
+/// values it reported. A child that fails, or that the filter did not reach,
+/// fails the parent with its output. The child's stderr is passed through,
+/// so its emissions read in the parent's output.
+pub fn run_masked(name: &str, devices: &[u32]) -> Vec<serde_json::Value> {
+    let mask = devices
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    let output = Command::new(std::env::current_exe().expect("this test binary"))
+        .args([
+            "--exact",
+            name,
+            "--include-ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+        .env("CUDA_VISIBLE_DEVICES", &mask)
+        .env(MASKED_CHILD, name)
+        .output()
+        .expect("the masked child starts");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "masked child {name} on {mask} failed:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    let values: Vec<serde_json::Value> = stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix(MASKED_RESULT))
+        .map(|json| serde_json::from_str(json).expect("a reported value"))
+        .collect();
+    // `--nocapture` interleaves the child's own lines with the harness's
+    // per-test line, so the summary is what says the one test ran and passed.
+    assert!(
+        stdout.contains("test result: ok. 1 passed"),
+        "masked child {name} did not run:\n{stdout}"
+    );
+    // A child returns early unless it is the child named, so one that ran
+    // and reported nothing never reached its body.
+    assert!(
+        !values.is_empty(),
+        "masked child {name} reported nothing:\n{stdout}"
+    );
+    values
+}

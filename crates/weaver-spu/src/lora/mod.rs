@@ -3,7 +3,7 @@
 //! The fixture accepts ordinary F32, F16 and BF16 matrix pairs. Other adapter
 //! features refuse. Artifact selection and real application proof remain LORA-8 cells.
 
-mod gguf;
+use crate::artifact::directory as gguf;
 #[cfg(feature = "gguf")]
 pub mod observation;
 
@@ -116,6 +116,10 @@ pub struct Identity {
     /// Stored alpha, absent when the artifact leaves the backend default in use.
     pub alpha: Option<f32>,
     pub targets: BTreeMap<String, u64>,
+    /// Each target's adapter bytes (its `lora_a` and `lora_b` together), which
+    /// the room judgment charges to the device holding the target's base
+    /// (device pair amendment PAIR-4).
+    pub target_bytes: BTreeMap<String, u64>,
     pub tensor_bytes: u64,
 }
 
@@ -140,12 +144,13 @@ impl Fixture {
         &mut self,
         binding: &weaver_types::ModelBinding,
         headroom: crate::residency::Headroom,
+        positions: u32,
         readout: crate::readout::ReadoutElection,
         surprisal: bool,
         request: Option<&Request>,
     ) -> Result<&crate::residency::Resident, crate::residency::AdmitRefusal> {
         self.residency
-            .admit_with_adapter(binding, headroom, readout, surprisal, request)
+            .admit_with_adapter(binding, headroom, positions, readout, surprisal, request)
     }
 
     pub fn records(&self) -> Result<Vec<observation::Record>, String> {
@@ -351,6 +356,7 @@ fn inspect(
     let mut pairs: BTreeMap<String, [Option<&gguf::Tensor>; 2]> = BTreeMap::new();
     let mut ranges = Vec::new();
     let mut tensor_bytes = 0u64;
+    let mut target_bytes: BTreeMap<String, u64> = BTreeMap::new();
     for (name, tensor) in &adapter.tensors {
         let (target, side) = if let Some(target) = name.strip_suffix(".lora_a") {
             (target, 0)
@@ -389,6 +395,10 @@ fn inspect(
         }
         ranges.push((tensor.offset, end));
         tensor_bytes = tensor_bytes
+            .checked_add(size)
+            .ok_or("adapter storage overflow")?;
+        let per_target = target_bytes.entry(target.into()).or_default();
+        *per_target = per_target
             .checked_add(size)
             .ok_or("adapter storage overflow")?;
         pairs.entry(target.into()).or_default()[side] = Some(tensor);
@@ -435,6 +445,7 @@ fn inspect(
         scale: request.scale,
         alpha,
         targets,
+        target_bytes,
         tensor_bytes,
     })
 }

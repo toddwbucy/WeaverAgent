@@ -97,6 +97,11 @@ const TABLE: &[(&str, &[&str], &[&str])] = &[
         &["cuda", "gguf"],
         &["WEAVER_ARTIFACT_READOUT", "WEAVER_ARTIFACT_READOUT_LAYERS"],
     ),
+    (
+        "observed_division.rs",
+        &["cuda", "gguf"],
+        &["WEAVER_ARTIFACT_DIVISION"],
+    ),
 ];
 
 /// The prefix `markers.rs` builds its per-family names from.
