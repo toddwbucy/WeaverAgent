@@ -66,13 +66,13 @@ fn rendered(messages: &[Message]) -> Result<String, RenderRefusal> {
     Ok(rendered)
 }
 
-/// **The R1 layout renders as the pinned template renders it**, which is the
-/// claim that lets this module call qwen2's renderer for its system and user
-/// turns. It is read both as one sequence and as the SPU renders it: the system turn as the identity prefix
+/// **The R1 layout renders as the pinned template renders it**, byte for byte,
+/// through this module's own template and renderer. It is read both as one
+/// sequence and as the SPU renders it: the system turn as the identity prefix
 /// at the open, then the user turn and the opener as the delta at the append.
 ///
-/// Perturbation: render with `qwen2::GENERATION_OPENER` and both comparisons
-/// fail at the missing thought.
+/// Perturbation: drop the thought pair from `GENERATION_OPENER` and both
+/// comparisons fail at the missing thought.
 #[test]
 fn the_r1_layout_matches_the_pinned_template_with_thinking_off() {
     let (messages, expected) = golden("system_user");
@@ -96,7 +96,7 @@ fn limit_no_empty_system_turn_is_inserted() {
     let ours = rendered(&messages).unwrap();
     assert_ne!(ours, expected);
     assert_eq!(
-        format!("{}{ours}", render_template(qwen2::TEMPLATE, "system", "")),
+        format!("{}{ours}", render_template(TEMPLATE, "system", "")),
         expected
     );
 }
@@ -122,7 +122,7 @@ fn an_assistant_turn_carries_the_openers_empty_thought() {
     let (messages, expected) = golden_with("assistant_last", false);
     assert_eq!(renderer().render_identity(&messages).unwrap(), expected);
 
-    let live = format!("{GENERATION_OPENER}Answer.{}", qwen2::TURN_CLOSE);
+    let live = format!("{GENERATION_OPENER}Answer.{}", TURN_CLOSE);
     let rebuilt = renderer()
         .render_delta(&message(Role::Assistant, "Answer."))
         .unwrap();
@@ -134,7 +134,7 @@ fn an_assistant_turn_carries_the_openers_empty_thought() {
     assert_eq!(
         spaced,
         render_template(
-            qwen2::TEMPLATE,
+            TEMPLATE,
             "assistant",
             &format!("{THINK_OPEN}{THINK_CLOSE} Answer.\n")
         )
@@ -146,7 +146,7 @@ fn an_assistant_turn_carries_the_openers_empty_thought() {
                 .render_delta(&message(Role::Assistant, already))
                 .unwrap(),
             render_template(
-                qwen2::TEMPLATE,
+                TEMPLATE,
                 "assistant",
                 &format!("{THINK_OPEN}{THINK_CLOSE}{already}")
             ),
@@ -166,7 +166,7 @@ fn an_assistant_turn_carries_the_openers_empty_thought() {
 #[test]
 fn a_quoted_marker_keeps_the_turns_prefix() {
     let quoted = "Write the tag </think> as text, then <think> too.";
-    let live = format!("{GENERATION_OPENER}{quoted}{}", qwen2::TURN_CLOSE);
+    let live = format!("{GENERATION_OPENER}{quoted}{}", TURN_CLOSE);
     let rebuilt = renderer()
         .render_delta(&message(Role::Assistant, quoted))
         .unwrap();
@@ -188,12 +188,12 @@ fn limit_a_historical_thought_is_kept() {
     let ours = rendered(&messages).unwrap();
     assert_ne!(ours, expected);
     let kept = render_template(
-        qwen2::TEMPLATE,
+        TEMPLATE,
         "assistant",
         &format!("{THINK_OPEN}{THINK_CLOSE}{THINK_OPEN}x{THINK_CLOSE}A1"),
     );
     let stripped = render_template(
-        qwen2::TEMPLATE,
+        TEMPLATE,
         "assistant",
         &format!("{THINK_OPEN}{THINK_CLOSE}A1"),
     );
@@ -224,40 +224,53 @@ fn limit_an_uncontested_granite_key_admits_any_template() {
     let admitted = select(&name, Some(granite3)).expect("today's selection admits it");
     let entry = lookup(&name).unwrap();
     assert!(std::ptr::eq(admitted, entry));
-    assert_eq!(admitted.template, qwen2::TEMPLATE);
+    assert_eq!(admitted.template, TEMPLATE);
 }
 
-/// **Refusal: a tool result.** The pinned template closes a tool response
-/// with a newline before the turn close, where qwen2's renderer closes it
-/// without one, so delegating would render a form this model was not tuned
-/// on. The refusal reaches both rendering paths.
+/// **Refusal: a tool result.** The pinned template renders a tool response
+/// as a user turn wrapping it in `<tool_response>` with a newline before the
+/// turn close, a form this module does not build. The refusal reaches both
+/// rendering paths, and a tool result carrying plain text or no blocks at all
+/// refuses by its role, so it never renders as a turn the template does not
+/// write.
 ///
-/// Perturbation: remove the `text_content` guard in `render_delta` and the
-/// refusals become qwen2's rendering.
+/// Perturbation: remove the role check in `render_delta` and the text-bodied
+/// tool result renders as a `tool` turn.
 #[test]
 fn refusal_a_tool_result() {
     let (messages, expected) = golden("tool_result");
     let result = &messages[2];
-    let qwen2_form = qwen2::renderer().render_delta(result).unwrap();
+    assert!(expected.contains("<|im_start|>user\n<tool_response>\nResult."));
     assert!(expected.contains("\n</tool_response>\n<|im_end|>"));
-    assert!(qwen2_form.ends_with("</tool_response><|im_end|>\n"));
     assert_eq!(
         renderer().render_delta(result),
         Err(RenderRefusal::MalformedForFamily)
     );
     assert_eq!(rendered(&messages), Err(RenderRefusal::MalformedForFamily));
+    assert_eq!(
+        renderer().render_delta(&message(Role::ToolResult, "Result.")),
+        Err(RenderRefusal::MalformedForFamily)
+    );
+    let empty = Message {
+        role: Role::ToolResult,
+        content: Vec::new(),
+    };
+    assert_eq!(
+        renderer().render_delta(&empty),
+        Err(RenderRefusal::MalformedForFamily)
+    );
 }
 
 /// **Refusal and limit: XML tool calls.** This model calls tools as
 /// `<function=...>` inside `<tool_call>`. The parse reports such a call as
 /// unrecovered under this family's grammar and never as text. A recovered
-/// call in a prompt refuses, because qwen2 would write it as JSON. An
-/// unrecovered call still renders back as written, per Spec section 5, after
-/// the empty thought the opener gave the turn.
+/// call in a prompt refuses, because this module does not build the XML
+/// form. An unrecovered call still renders back as written, per Spec section
+/// 5, after the empty thought the opener gave the turn.
 ///
-/// Perturbation: parse with qwen2's grammar and the grammar's family reads
-/// `qwen2`; remove the `text_content` guard in `render_delta` and the
-/// recovered call renders as qwen2's JSON.
+/// Perturbation: name another family in the parse's `Markers` and the
+/// grammar's family assertion fails; render a recovered call in
+/// `render_delta` instead of refusing it and the refusal assertion fails.
 #[test]
 fn xml_tool_calls_are_unrecovered_and_a_recovered_call_refuses() {
     let fragment = concat!(
@@ -269,7 +282,7 @@ fn xml_tool_calls_are_unrecovered_and_a_recovered_call_refuses() {
     assert_eq!(parsed.unrecovered.len(), 1);
     assert_eq!(parsed.unrecovered[0].fragment, fragment);
     assert_eq!(parsed.unrecovered[0].grammar.family, "granite");
-    assert_eq!(parsed.unrecovered[0].grammar.open, qwen2::CALL_OPEN);
+    assert_eq!(parsed.unrecovered[0].grammar.open, CALL_OPEN);
 
     let recovered = Message {
         role: Role::Assistant,
@@ -278,7 +291,6 @@ fn xml_tool_calls_are_unrecovered_and_a_recovered_call_refuses() {
             arguments: "{\"path\":\"source.txt\"}".into(),
         })],
     };
-    assert!(qwen2::renderer().render_delta(&recovered).is_ok());
     assert_eq!(
         renderer().render_delta(&recovered),
         Err(RenderRefusal::MalformedForFamily)
@@ -293,7 +305,7 @@ fn xml_tool_calls_are_unrecovered_and_a_recovered_call_refuses() {
     assert_eq!(
         renderer().render_delta(&unrecovered).unwrap(),
         render_template(
-            qwen2::TEMPLATE,
+            TEMPLATE,
             "assistant",
             &format!("{THINK_OPEN}{THINK_CLOSE}{fragment}")
         )
@@ -311,18 +323,22 @@ fn granite_entry_keeps_its_opener_markers_stop_set_and_truncating_flush() {
     assert!(std::ptr::eq(entry, renderer().declaration()));
     assert!(std::ptr::eq((entry.renderer)(), renderer()));
     assert_eq!(entry.family, "granite");
-    assert_eq!(entry.template, qwen2::TEMPLATE);
+    assert_eq!(entry.template, TEMPLATE);
     assert_eq!(entry.generation_opener, GENERATION_OPENER);
     assert_eq!(
         GENERATION_OPENER,
-        format!("{}{THINK_OPEN}{THINK_CLOSE}", qwen2::GENERATION_OPENER)
+        format!("{TURN_OPEN}assistant\n{THINK_OPEN}{THINK_CLOSE}")
+    );
+    assert_eq!(
+        TEMPLATE,
+        format!("{TURN_OPEN}{{role}}\n{{message}}{TURN_CLOSE}\n")
     );
     assert!(!GENERATION_OPENER.ends_with('\n'));
     assert_eq!(entry.selecting_markers, SELECTING_MARKERS);
-    assert_eq!(SELECTING_MARKERS, qwen2::RENDERED_MARKERS);
-    assert_eq!(&RENDERED_MARKERS[..2], qwen2::RENDERED_MARKERS);
+    assert_eq!(SELECTING_MARKERS, &[TURN_OPEN, TURN_CLOSE]);
+    assert_eq!(&RENDERED_MARKERS[..2], SELECTING_MARKERS);
     assert_eq!(&RENDERED_MARKERS[2..], &[THINK_OPEN, THINK_CLOSE]);
-    assert_eq!(renderer().stop_conditions(), &[qwen2::TURN_CLOSE]);
+    assert_eq!(renderer().stop_conditions(), &[TURN_CLOSE]);
     assert_eq!(entry.flush, FlushMechanism::TruncateToPosition);
     assert!(entry.permits_truncation());
     assert!(entry.shards_across(1));
@@ -330,4 +346,22 @@ fn granite_entry_keeps_its_opener_markers_stop_set_and_truncating_flush() {
     assert!(!entry.shards_across(3));
     assert!(!entry.taps_readout);
     assert!(!entry.taps_column);
+}
+
+/// **This module borrows nothing from qwen2**, per the operator's ruling of
+/// 2026-11-08 that model configurations stay segregated by family: a qwen2
+/// change must not move Granite. The pin reads the module's source and
+/// refuses any code line naming qwen2, a `use` included; prose in comments may
+/// name it.
+///
+/// Perturbation: point `STOP` at `super::qwen2::TURN_CLOSE` and this fails.
+#[test]
+fn the_module_names_no_qwen2_item() {
+    let source = include_str!("../granite.rs");
+    let naming: Vec<&str> = source
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .filter(|line| line.contains("qwen2"))
+        .collect();
+    assert!(naming.is_empty(), "granite.rs names qwen2: {naming:?}");
 }

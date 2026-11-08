@@ -1179,7 +1179,7 @@ fn each_familys_grammar_names_its_registry_row() {
         (Box::new(gemma4::Gemma4), gemma4::CALL_OPEN),
         (Box::new(mistral3::Mistral3), mistral3::CALL_OPEN),
         (Box::new(gpt_oss::GptOss), gpt_oss::CALL_OPEN),
-        (Box::new(granite::Granite), qwen2::CALL_OPEN),
+        (Box::new(granite::Granite), granite::CALL_OPEN),
     ];
     for (family, open) in families {
         let parsed = family.parse(&format!("{open}garbage"), None);
@@ -1372,7 +1372,7 @@ fn every_familys_declaration_answers_its_own_row() {
         (Box::new(gemma4::Gemma4), gemma4::TEMPLATE),
         (Box::new(mistral3::Mistral3), mistral3::TEMPLATE),
         (Box::new(gpt_oss::GptOss), gpt_oss::TEMPLATE),
-        (Box::new(granite::Granite), qwen2::TEMPLATE),
+        (Box::new(granite::Granite), granite::TEMPLATE),
     ];
     for (family, template) in families {
         assert_eq!(family.declaration().template, template);

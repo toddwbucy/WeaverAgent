@@ -67,8 +67,8 @@ fn ids(model: &LlamaModel, rendered: &str) -> Vec<i64> {
         .collect()
 }
 
-/// Perturbation: render the delta with `qwen2::GENERATION_OPENER` and every
-/// prompt fails, two ids short at its end.
+/// Perturbation: drop the thought pair from `granite::GENERATION_OPENER` and
+/// every prompt fails, two ids short at its end.
 #[test]
 #[ignore = "needs the R1 held-out deposit and the granite GGUF"]
 fn the_granite_renderer_reproduces_the_r1_held_out_prompt_ids() {

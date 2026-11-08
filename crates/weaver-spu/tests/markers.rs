@@ -185,7 +185,7 @@ const PROBES: &[Probe] = &[
         rendered: qwen2::RENDERED_MARKERS,
     },
     Probe {
-        // **qwen2's turn markers and a thought pair the opener renders.** The
+        // **ChatML turn markers and a thought pair the opener renders.** The
         // generation opener ends in `<think></think>`, so the pair is inbound
         // here, unlike the outbound pairs of qwen3 and nemotron_h_moe. Both
         // are `USER_DEFINED` in the artifact's token table and must still

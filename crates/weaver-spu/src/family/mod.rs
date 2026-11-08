@@ -1050,11 +1050,12 @@ pub const REGISTRY: &[Declaration] = &[
         taps_column: false,
     },
     Declaration {
-        // **qwen2's turns under its own module**, because the pinned template
-        // opens the model's turn with an empty thought and qwen2's opener does
-        // not. The turns are qwen2's template byte for byte, so the template
-        // cited is qwen2's and the renderer calls qwen2's for them. The opener
-        // and the two thought markers it renders are the granite module's.
+        // **ChatML turns under its own module, every fact its own copy.** IBM
+        // adopted ChatML for this lineage by choice, and the pinned template
+        // opens the model's turn with an empty thought. Model configurations
+        // stay segregated by family (the operator's ruling of 2026-11-08), so
+        // the template, the markers, the opener and the renderer cited here
+        // are the granite module's and no other family's change moves them.
         //
         // Measured on Granite 4.2 30B, 2026-11-08: its header declares this
         // architecture, its template re-renders the R1 held-out prompts with
@@ -1068,7 +1069,7 @@ pub const REGISTRY: &[Declaration] = &[
         // against the artifact.
         family: "granite",
         shard_widths: &[1, 2],
-        template: qwen2::TEMPLATE,
+        template: granite::TEMPLATE,
         generation_opener: granite::GENERATION_OPENER,
         renderer: granite::renderer,
         selecting_markers: granite::SELECTING_MARKERS,
