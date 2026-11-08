@@ -52,9 +52,9 @@ PCI bus order. That is the order the operator's device tools list. A device
 outside the binding is not visible to the organ at all.
 
 Naming devices to the engine does not keep other devices out of the process.
-On 2026-11-08, a llama.cpp server given two of three devices still opened a
-context on the third, because the CUDA backend initializes every visible
-device. Only the visibility mask kept the third device out. On a box that
+On 2026-11-08, a llama.cpp server given two of three devices (`--device`)
+still held a context on the third. Only the visibility mask kept the third
+device out. On a box that
 runs two agents, each SPU would otherwise hold a context on the other's
 device.
 
@@ -83,8 +83,9 @@ ordinal, never the position, so the operator reads the numbers the device tools
 show.
 
 **The SPU checks the mask at admission, before any device query.** If
-`CUDA_DEVICE_ORDER` is not `PCI_BUS_ID`, or `CUDA_VISIBLE_DEVICES` does not equal
-the instruction's ordinals in order, admission refuses. The refusal names both
+`CUDA_DEVICE_ORDER` is not `PCI_BUS_ID`, or `CUDA_VISIBLE_DEVICES` is not exactly
+the instruction's ordinals in order, written in decimal and comma-separated
+with no spaces (`0,1`), admission refuses. The refusal names both
 values. This catches a launch path that does not go through the harness, such
 as a test or a fixture driver, so the SPU never judges or loads under a
 numbering the binding does not mean.
@@ -106,8 +107,8 @@ identical in these three facts, read from the driver:
 | Total memory | The driver's total-memory figure, in bytes |
 
 Admission judges this after `judge_distinct` and before the room judgment.
-It costs one driver query per device, the same queries the room judgment
-already makes. A set that differs in any fact refuses as `DeviceCannotAdmit`.
+It costs a name query and a compute-capability query per device, beside the
+total-memory figure the room judgment already reads. A set that differs in any fact refuses as `DeviceCannotAdmit`.
 The account names each device's ordinal and its three facts, so the operator
 sees which member differs.
 
@@ -132,8 +133,9 @@ run to run.
 Let L be the artifact's repeating layer count, read from its header, and let
 N be the number of devices. Assign contiguous blocks of repeating layers in
 binding order. Each device takes either floor(L/N) or ceil(L/N) layers. The
-first L mod N devices take the larger count. The engine always places the
-output layer on the last device. The input layer (`token_embd`) stays in host
+first L mod N devices take the larger count. Under the split values below,
+the output layer (slot L) falls in the last device's interval, and the split
+test shows it. The input layer (`token_embd`) stays in host
 memory under every split, because the engine never offloads it.
 
 For Granite 4.2 30B (L = 64, N = 2) the division is 32 and 32, with the output
@@ -142,11 +144,18 @@ layer on the second device.
 The engine maps a tensor split to layers by cumulative fraction over L + 1
 slots, the output layer counted as slot L. A proportional split such as
 `[0.5, 0.5]` therefore gives 33 and 31 for L = 64, not 32 and 32. The
-implementation converts the counts to split values that fall strictly inside
-each boundary interval, never on its edge. For device i with cumulative count
-C(i), the boundary value is C(i) - 0.5. The implementation must show by test
-that the values reproduce the counts under the engine's own mapping. It must
-not assume it.
+implementation converts the counts to split values whose boundaries fall
+strictly inside each interval, never on its edge. Let C(i) be the cumulative
+repeating-layer count through device i, over L + 1 slots. The cumulative
+boundary for device i < N - 1 is C(i) - 0.5, and the last device's is L + 1.
+Each device's split value is its boundary minus the previous one:
+v(0) = C(0) - 0.5; v(i) = C(i) - C(i-1) for 0 < i < N - 1; and
+v(N-1) = L + 1 - (C(N-2) - 0.5). For L = 64 and N = 2 this gives 31.5 and 33.5,
+which the 2026-11-08 load check observed as 32 and 32 with the output on the
+second device. The mapping holds only with every layer offloaded (n_gpu_layers
+at least L + 1); a smaller value shifts the engine's first offloaded layer, and
+the parameters set it so. The implementation must show by test that the values
+reproduce the counts under the engine's own mapping. It must not assume it.
 
 The binding order fixes which device takes the first block. The pinned
 `llama-cpp-2` exposes no tensor split setter. Upstream `utilityai/llama-cpp-rs`
@@ -191,7 +200,11 @@ The input layer is not charged to any device. It is host memory, and the SPU
 makes no host-memory judgment. The fixture report records its size.
 
 The KV cache stays inside the headroom term, as today. Charging it per layer is
-a later measurement, not a zero cost. Room is still judged against the driver's
+a later measurement, not a zero cost. The gap is real: the default headroom is
+512 MiB, while the 2026-11-08 load check measured, for Granite at 32768
+positions, an F16 cache of 4096 MiB per device plus compute buffers of 376 to
+544 MiB. The room judgment under-asks by about 4 GiB per device at that
+context. The pair passed only because the room was there. Room is still judged against the driver's
 current free figure, and the room refusal still carries the device's capacity.
 
 ## 5. Instruments and evidence
@@ -208,7 +221,7 @@ current free figure, and the room refusal still carries the device's capacity.
 | The split is deterministic | Hardware-free arithmetic over L and N, including odd L and N = 3, checked against the engine's cumulative mapping | Pass proportional halves, or put a value on a boundary edge |
 | The split reaches the engine | The parameters built for a pair carry the computed tensor split | Leave the split unset |
 | Room is per device | A directory fixture with unequal layer sizes and an output tensor | Judge the even file fraction |
-| The observed division matches | On a device pair, under the LORA-3 log capture: every `load_tensors: layer N assigned to device` record and every KV `layer N: dev =` record matches PAIR-3 | Accept a missing record or a layer on the wrong device |
+| The observed division matches | On a device pair, under the LORA-3 log capture at debug level: exactly one `load_tensors: layer N assigned to device` record for each layer and for the output (`layer L`), and exactly one KV `layer N: dev =` record for each layer, all matching PAIR-3. A KV record reading "does not have KV cache" or "filtered" counts as missing | Accept a missing or duplicated record, or a layer on the wrong device |
 
 The observed-division instrument is an explicit accelerator test, like the
 LORA-7 fixture. It runs only in an isolated process with the LORA-3 observer.
@@ -234,9 +247,9 @@ declared division that clause waited for.
 
 | Cell | What closes it |
 | --- | --- |
-| Row split | A fork change so the split buffer reads the model's device list, not every visible device by ordinal; then a GPU proof with an adapter whose rank is below the engine's row rounding |
+| Row split | A fork change so the split buffer reads the model's device list, not every visible device by ordinal (possibly moot where the PAIR-1 mask makes the visible set the binding; to be confirmed); then a GPU proof with an adapter whose rank is below the engine's row rounding |
 | Tensor split | A measurement on hardware that represents the targeted deployments, and the operator's ruling |
-| KV cache in the room judgment | A per-layer measurement of the cache on each device |
+| KV cache in the room judgment | A per-layer charge of the cache on each device. Measured gap at 32768 positions: about 4 GiB per device for Granite (PAIR-4) |
 | Host memory for the input layer | A host-room election, if the operator wants one |
 | Host memory at load | Measure the SPU's own load. A llama.cpp server with mmap off peaked near the model's size in host memory (55 GiB for Granite), then fell to under 2 GiB |
 | KV cache precision | The engine's default KV cache is F16, where the Python reference runs bf16. A known source of drift for the operator's ruling, not a defect here |
