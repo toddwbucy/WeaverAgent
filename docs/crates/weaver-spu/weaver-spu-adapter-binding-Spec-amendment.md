@@ -156,7 +156,11 @@ stated rather than left to be found:
   SPU.
 
 If the placement child lands the serving install first, this paragraph
-becomes a citation of it.
+becomes a citation of it. The device-pair amendment's PAIR-5 sentence that
+the production path installs no log callback is replaced by this clause: the
+serving SPU installs the capture, and keeps records only inside the window.
+The observed-division instrument's doc comment, which repeats that sentence,
+goes with whichever act lands second.
 
 The LORA-2 sentence "the ordinary production caller cannot exercise an adapter
 request under this amendment" is retired. The caller is the declaration. The
