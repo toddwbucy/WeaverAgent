@@ -80,6 +80,19 @@ pub const KNOBS: EffectiveKnobs = EffectiveKnobs {
     seed: 0,
 };
 
+/// **The numerical trace's calculation, as `weaver-spu-Spec` section 6 states
+/// it**, written into every report beside the values it names.
+pub const CALCULATION: &str = "per retained step, from the step's logits over the full \
+vocabulary (llama_get_logits_ith), before temperature and every sampling transform: \
+entropy_bits = -sum(p * ln p) / ln 2 and surprisal_bits = -ln p(drawn) / ln 2, in f32, in \
+the log-sum-exp-stable form (logits shifted by their maximum); the drawn stop token is not \
+retained and carries no step";
+
+/// How the trace writes a value: the IEEE 754 binary32 bit pattern
+/// (`f32::to_bits`), eight lowercase hex digits.
+pub const REPRESENTATION: &str =
+    "IEEE 754 binary32 bit pattern (f32::to_bits), eight lowercase hex digits";
+
 /// The fixture inputs, read once from the environment.
 pub struct Inputs {
     pub base: PathBuf,
@@ -258,7 +271,130 @@ pub fn fresh_report(report: &Path) {
 pub struct Arm {
     pub name: String,
     pub outputs: BTreeMap<String, Vec<u32>>,
+    pub traces: BTreeMap<String, Trace>,
     pub observation: Value,
+}
+
+/// **One entry's numerical trace**: per retained step, the token and the f32
+/// bit patterns of its entropy and surprisal (see [`CALCULATION`]), then the
+/// termination. Positions are the retained tokens' own; the drawn stop is in
+/// `stop`, not in the steps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Trace {
+    pub tokens: Vec<u32>,
+    pub entropy: Vec<u32>,
+    pub surprisal: Vec<u32>,
+    pub finish: String,
+    pub stop: Option<u32>,
+}
+
+impl Trace {
+    /// The trace as one report line, values in [`REPRESENTATION`].
+    pub fn to_json(&self, id: &str) -> Value {
+        let hex = |values: &[u32]| {
+            values
+                .iter()
+                .map(|v| format!("{v:08x}"))
+                .collect::<Vec<_>>()
+        };
+        json!({
+            "id": id,
+            "tokens": self.tokens,
+            "entropy_bits_f32": hex(&self.entropy),
+            "surprisal_bits_f32": hex(&self.surprisal),
+            "finish_reason": self.finish,
+            "stop_token": self.stop,
+        })
+    }
+
+    /// The trace read back from its report line.
+    pub fn from_json(row: &Value) -> Trace {
+        let bits = |key: &str| -> Vec<u32> {
+            row[key]
+                .as_array()
+                .unwrap_or_else(|| panic!("a trace carries {key}"))
+                .iter()
+                .map(|v| {
+                    let text = v.as_str().expect("a bit pattern is a string");
+                    assert_eq!(text.len(), 8, "a bit pattern is eight hex digits: {text}");
+                    u32::from_str_radix(text, 16).expect("a bit pattern is hex")
+                })
+                .collect()
+        };
+        Trace {
+            tokens: row["tokens"]
+                .as_array()
+                .expect("a trace carries its tokens")
+                .iter()
+                .map(token)
+                .collect(),
+            entropy: bits("entropy_bits_f32"),
+            surprisal: bits("surprisal_bits_f32"),
+            finish: row["finish_reason"]
+                .as_str()
+                .expect("a finish reason")
+                .into(),
+            stop: row["stop_token"]
+                .as_u64()
+                .map(|t| u32::try_from(t).expect("a token id")),
+        }
+    }
+}
+
+/// **The first place two traces differ, bit for bit**, or `None` when they
+/// are bitwise identical. Read position by position (token, then entropy,
+/// then surprisal), then the termination. The account names the position and
+/// both values, as bit patterns and as the f32 they encode.
+pub fn first_numerical_difference(a: &Trace, b: &Trace) -> Option<String> {
+    let value = |bits: Option<&u32>| match bits {
+        Some(bits) => format!("{bits:08x} ({})", f32::from_bits(*bits)),
+        None => "absent".into(),
+    };
+    let steps = a.tokens.len().max(b.tokens.len());
+    for position in 0..steps {
+        if a.tokens.get(position) != b.tokens.get(position) {
+            return Some(format!(
+                "position {position}: token {:?} against {:?}",
+                a.tokens.get(position),
+                b.tokens.get(position)
+            ));
+        }
+        for (name, x, y) in [
+            ("entropy_bits", &a.entropy, &b.entropy),
+            ("surprisal_bits", &a.surprisal, &b.surprisal),
+        ] {
+            if x.get(position) != y.get(position) {
+                return Some(format!(
+                    "position {position}: {name} {} against {}",
+                    value(x.get(position)),
+                    value(y.get(position))
+                ));
+            }
+        }
+    }
+    if (a.entropy.len(), a.surprisal.len()) != (b.entropy.len(), b.surprisal.len()) {
+        return Some("the signal vectors differ in length past the tokens".into());
+    }
+    if (&a.finish, a.stop) != (&b.finish, b.stop) {
+        return Some(format!(
+            "termination: {} with stop {:?} against {} with stop {:?}",
+            a.finish, a.stop, b.finish, b.stop
+        ));
+    }
+    None
+}
+
+/// **Bitwise numerical replay of one entry across a repeat pair** (the
+/// operator's ruling of 2026-11-08): identical token ids, bit-identical
+/// entropy and surprisal at every position, and the same termination. A
+/// departure fails naming the first differing position and both values.
+pub fn assert_bitwise_replay(first: &Arm, second: &Arm, id: &str) {
+    if let Some(difference) = first_numerical_difference(&first.traces[id], &second.traces[id]) {
+        panic!(
+            "{} and {} do not replay bitwise on {id}: {difference}",
+            first.name, second.name
+        );
+    }
 }
 
 /// Run one arm in a child process of this test binary, and read its files.
@@ -319,6 +455,18 @@ fn read_arm(report: &Path, name: &str) -> Arm {
             .collect();
         outputs.insert(row["id"].as_str().expect("an id").to_string(), ids);
     }
+    let mut traces = BTreeMap::new();
+    for line in std::fs::read_to_string(report.join(format!("{name}.trace.jsonl")))
+        .unwrap_or_else(|e| panic!("arm {name} wrote no numerical trace: {e}"))
+        .lines()
+    {
+        let row: Value = serde_json::from_str(line).expect("a trace line is JSON");
+        let id = row["id"]
+            .as_str()
+            .expect("a trace names its entry")
+            .to_string();
+        traces.insert(id, Trace::from_json(&row));
+    }
     let observation = serde_json::from_str(
         &std::fs::read_to_string(report.join(format!("{name}.json")))
             .unwrap_or_else(|e| panic!("arm {name} wrote no observation: {e}")),
@@ -327,6 +475,7 @@ fn read_arm(report: &Path, name: &str) -> Arm {
     Arm {
         name: name.into(),
         outputs,
+        traces,
         observation,
     }
 }
@@ -385,7 +534,9 @@ pub fn child() -> bool {
         Headroom(HEADROOM_BYTES),
         CAPACITY,
         ReadoutElection(false),
-        false,
+        // The surprisal is elected so the numerical trace carries it. Every
+        // arm elects it, so the election moves no comparison.
+        true,
         adapted.then_some(&request),
     ) {
         Ok(_) => {}
@@ -446,6 +597,7 @@ pub fn child() -> bool {
     );
 
     let mut lines = String::new();
+    let mut trace_lines = String::new();
     // LORA-6: the exact inputs this arm decoded, archived beside its outputs.
     let mut consumed = String::new();
     for entry in &selected {
@@ -503,6 +655,32 @@ pub fn child() -> bool {
             Stopped::LimitReached => "length",
             other => panic!("entry {} ended {other:?}", entry.id),
         };
+        // The numerical trace: one entropy and one surprisal per retained
+        // token, or none where nothing was retained. Anything else is a
+        // measurement this run cannot replay, so the arm fails.
+        let bits = |values: &Option<weaver_spu::measurement::NonEmpty<f32>>| -> Vec<u32> {
+            values
+                .as_ref()
+                .map(|v| v.iter().map(|x| x.to_bits()).collect())
+                .unwrap_or_default()
+        };
+        let trace = Trace {
+            tokens: generated.tokens.iter().map(|t| t.0).collect(),
+            entropy: bits(&generated.signals.entropy_bits),
+            surprisal: bits(&generated.signals.surprisal_bits),
+            finish: finish.into(),
+            stop: generated.drawn_stop.map(|t| t.0),
+        };
+        assert!(
+            trace.entropy.len() == trace.tokens.len()
+                && trace.surprisal.len() == trace.tokens.len(),
+            "arm {name}: entry {} measured {} entropies and {} surprisals for {} tokens",
+            entry.id,
+            trace.entropy.len(),
+            trace.surprisal.len(),
+            trace.tokens.len()
+        );
+        writeln!(trace_lines, "{}", trace.to_json(&entry.id)).expect("a string takes a line");
         drop(session);
         let captured = fixture.records().expect("the capture reads");
         match judge_session(
@@ -618,10 +796,20 @@ pub fn child() -> bool {
         },
         "input_layer": "token_embd stays in host memory under every assignment; the pinned engine emits no assignment record for it (placement.input_bytes is its size)",
         "interconnect": interconnect(),
+        "numerical_trace": {
+            "file": format!("{name}.trace.jsonl"),
+            "calculation": CALCULATION,
+            "representation": REPRESENTATION,
+            "comparison": "bitwise between arms of this deployment (the operator's ruling of \
+    2026-11-08, bitwise numerical replay); a Python reference is another deployment, so it is \
+    compared by token identity only and its numbers are not compared",
+        },
         "libllama": libllama(),
     });
     let report = &inputs.report;
     std::fs::write(report.join(format!("{name}.jsonl")), lines).expect("the outputs write");
+    std::fs::write(report.join(format!("{name}.trace.jsonl")), trace_lines)
+        .expect("the numerical trace writes");
     std::fs::write(
         report.join(format!("{name}.json")),
         serde_json::to_string_pretty(&observation).expect("the observation serializes"),

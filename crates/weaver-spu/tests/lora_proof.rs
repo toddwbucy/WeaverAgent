@@ -3,11 +3,19 @@
 //! `weaver-spu-lora-loading-Spec-amendment` section 7: a base-only control,
 //! repeated, and an adapted run, repeated, on the fixed base, fixture, input
 //! and settings, under the backend's layer split on the binding's devices. The
-//! adapted run must change at least one output token, each pair must repeat
-//! its ids exactly, and all four arms must show the same division. The adapted
-//! pair repeats because the adapted model is the one served (the operator's
-//! ruling of 2026-11-08, the adapter is the point). Each arm runs in its own
-//! process (see `lora/fixture.rs`).
+//! adapted run must change at least one output token, each pair must replay
+//! bitwise, and all four arms must show the same division. The adapted pair
+//! repeats because the adapted model is the one served (the operator's ruling
+//! of 2026-11-08, the adapter is the point).
+//!
+//! **Bitwise numerical replay, not token identity alone** (the operator's
+//! ruling of 2026-11-08): a pair must carry identical token ids,
+//! bit-identical entropy and surprisal at every position (the f32 values
+//! `weaver-spu-Spec` section 6 computes before the sampler, see
+//! `fixture::CALCULATION`), and the same termination. A pair that matches its
+//! ids and differs in one bit fails, naming the position and both values:
+//! that is a finding for the operator's drift ruling, not a test defect. Each
+//! arm runs in its own process (see `lora/fixture.rs`).
 //!
 //! An explicit accelerator instrument, run with `--ignored` under the
 //! variables `lora/fixture.rs` reads and `WEAVER_LORA_PINNED_ID`, the entry to
@@ -22,7 +30,10 @@ mod common;
 #[path = "lora/fixture.rs"]
 mod fixture;
 
-use fixture::{Inputs, assert_covers, assert_same_division, first_difference, run_arm};
+use fixture::{
+    Inputs, Trace, assert_covers, assert_same_division, first_difference,
+    first_numerical_difference, run_arm,
+};
 use weaver_spu::division::Division;
 use weaver_spu::lora::observation::Record;
 use weaver_spu::room::Caches;
@@ -59,18 +70,25 @@ fn the_adapter_changes_the_pinned_greedy_output_on_the_binding() {
     // repeat leaves its first difference in the report.
     let base = &control.outputs[&pinned];
     let tuned = &adapted.outputs[&pinned];
-    let control_departs = first_difference(base, &repeat.outputs[&pinned]);
-    let adapted_departs = first_difference(tuned, &adapted_repeat.outputs[&pinned]);
+    let control_departs =
+        first_numerical_difference(&control.traces[&pinned], &repeat.traces[&pinned]);
+    let adapted_departs =
+        first_numerical_difference(&adapted.traces[&pinned], &adapted_repeat.traces[&pinned]);
     let changed = first_difference(base, tuned);
     let summary = serde_json::json!({
         "pinned": pinned,
         "control_tokens": base.len(),
         "adapted_tokens": tuned.len(),
         "first_changed_position": changed,
-        "control_repeated": control_departs.is_none(),
-        "control_repeat_first_difference": control_departs,
-        "adapted_repeated": adapted_departs.is_none(),
-        "adapted_repeat_first_difference": adapted_departs,
+        "replay": "bitwise: token ids, entropy and surprisal f32 bit patterns at every position, and termination",
+        "control_replayed_bitwise": control_departs.is_none(),
+        "control_first_difference": control_departs,
+        "adapted_replayed_bitwise": adapted_departs.is_none(),
+        "adapted_first_difference": adapted_departs,
+        "steps_compared": {
+            "control": control.traces[&pinned].tokens.len(),
+            "adapted": adapted.traces[&pinned].tokens.len(),
+        },
         "same_division": true,
     });
     std::fs::write(
@@ -78,11 +96,12 @@ fn the_adapter_changes_the_pinned_greedy_output_on_the_binding() {
         serde_json::to_string_pretty(&summary).expect("the summary serializes"),
     )
     .expect("the summary writes");
-    assert_eq!(
-        control_departs, None,
-        "the base-only control did not repeat"
-    );
-    assert_eq!(adapted_departs, None, "the adapted run did not repeat");
+    if let Some(difference) = &control_departs {
+        panic!("the base-only control does not replay bitwise on {pinned}: {difference}");
+    }
+    if let Some(difference) = &adapted_departs {
+        panic!("the adapted run does not replay bitwise on {pinned}: {difference}");
+    }
     assert!(
         changed.is_some(),
         "the adapted run changed no output token on {pinned}"
@@ -168,4 +187,83 @@ fn a_filtered_cache_line_does_not_move_the_boundaries() {
     lines.insert(4, "llama_kv_cache: layer   0: filtered");
     let records = records(&lines);
     assert_eq!(session(&records, 3..6), Ok(vec![0, 1, 1]));
+}
+
+fn trace() -> Trace {
+    Trace {
+        tokens: vec![10, 11, 12],
+        entropy: vec![1.5f32.to_bits(), 0.25f32.to_bits(), 3.0f32.to_bits()],
+        surprisal: vec![0.5f32.to_bits(), 0.125f32.to_bits(), 2.0f32.to_bits()],
+        finish: "stop".into(),
+        stop: Some(100257),
+    }
+}
+
+/// **Two bitwise-identical traces replay**, and a trace survives its own
+/// report line.
+#[test]
+fn identical_traces_replay_bitwise() {
+    let a = trace();
+    let b = Trace::from_json(&a.to_json("t001"));
+    assert_eq!(a, b);
+    assert_eq!(first_numerical_difference(&a, &b), None);
+}
+
+/// Perturbation of the above: one bit of one recorded value flipped, with the
+/// ids unchanged, fails naming the position and both values.
+#[test]
+fn one_flipped_bit_fails_naming_its_position() {
+    let a = trace();
+    let mut b = trace();
+    b.surprisal[1] ^= 1;
+    let difference = first_numerical_difference(&a, &b).expect("one bit differs");
+    assert!(
+        difference.starts_with("position 1: surprisal_bits 3e000000"),
+        "{difference}"
+    );
+    assert!(difference.contains("3e000001"), "{difference}");
+    let mut c = trace();
+    c.entropy[2] ^= 1 << 31;
+    let difference = first_numerical_difference(&a, &c).expect("the sign bit differs");
+    assert!(
+        difference.starts_with("position 2: entropy_bits"),
+        "{difference}"
+    );
+}
+
+/// A differing token is named before its values.
+#[test]
+fn a_differing_token_is_named_at_its_position() {
+    let a = trace();
+    let mut b = trace();
+    b.tokens[0] = 99;
+    assert_eq!(
+        first_numerical_difference(&a, &b).as_deref(),
+        Some("position 0: token Some(10) against Some(99)")
+    );
+}
+
+/// The same steps with another termination do not replay.
+#[test]
+fn a_differing_termination_does_not_replay() {
+    let a = trace();
+    let mut b = trace();
+    b.finish = "length".into();
+    b.stop = None;
+    let difference = first_numerical_difference(&a, &b).expect("the termination differs");
+    assert!(difference.starts_with("termination:"), "{difference}");
+}
+
+/// A trace one step longer does not replay, and the account names the step.
+#[test]
+fn a_longer_trace_does_not_replay() {
+    let a = trace();
+    let mut b = trace();
+    b.tokens.push(13);
+    b.entropy.push(1.0f32.to_bits());
+    b.surprisal.push(1.0f32.to_bits());
+    assert_eq!(
+        first_numerical_difference(&a, &b).as_deref(),
+        Some("position 3: token None against Some(13)")
+    );
 }

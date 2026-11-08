@@ -518,8 +518,11 @@ an adapted run) is a child process of its target's own binary, marked by
 Each arm's command carries its binding's PAIR-1 mask. The arms keep their own spawner
 rather than `common::run_masked`, so a held-out arm's progress lines stream as it
 decodes. `lora_proof.rs` is the gate: one pinned entry, the base-only control twice and
-the adapted run twice, each pair repeating its ids exactly. `lora_heldout.rs` is the long run: every entry, base-only and adapted.
-Both write their report outside the repository (LORA-6). Each arm judges the observed
+the adapted run twice, each pair replaying bitwise: identical token ids, bit-identical
+entropy and surprisal at every position (LORA-6's numerical trace), and the same
+termination. `lora_heldout.rs` is the long run: every entry, base-only and adapted.
+Both write their report outside the repository (LORA-6), with the numerical trace
+of every entry, so a later run of the held-out set can be compared bitwise. Each arm judges the observed
 division of every session as it closes, the load's records with the session's own, with
 `lora::observation::judge_division` (PAIR-5), and the parent asserts the same computed
 and observed division across arms.

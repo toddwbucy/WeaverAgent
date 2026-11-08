@@ -280,6 +280,7 @@ failed attempts. Mark unavailable observations absent, not zero.
 | Adapter operation | Scale, stored alpha, target names, ranks, loaded tensor pairs, raw placement callback records, parsed per-target buffers, and attachment outcome |
 | Exact input | Rendered input bytes, template and tokenizer identities, input token IDs and effective generation settings |
 | Output and resources | Output token IDs and text, stop reason, elapsed load and decode times, and measured allocation or peak-memory evidence |
+| Numerical trace | Per arm and per entry, for each retained step: the token ID, and the entropy and the drawn token's surprisal as IEEE 754 binary32 bit patterns (eight hex digits). Both are computed as Spec section 6 states: from the step's logits over the full vocabulary, before temperature and every sampling transform, in f32, in the log-sum-exp-stable form. The drawn stop carries no step. The termination is recorded with the steps. A repeat within one deployment compares bit for bit. A reference from another deployment (the Python stack) compares by token identity only |
 | Refusal and cleanup | Failed stage, typed result, backend detail and release observations, including partial-load and attach failures |
 | Comparison | Base-only and adapted outputs, the Python reference, conversion and backend differences, and the operator's drift ruling if one exists |
 
