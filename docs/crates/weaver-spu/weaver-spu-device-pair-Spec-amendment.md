@@ -130,7 +130,17 @@ current pin, so the vendored llama.cpp does not move. A rebase onto upstream
 moves the engine pin, which requalifies the LORA-3 observer and every engine
 citation here, and is out of scope. An empty slice restores the free-memory
 default in that setter, so the SPU never passes one for a multi-device set.
-No other fork change is needed. `with_main_gpu` has no effect in layer split mode; the code
+
+Cherry-pick upstream commit `ef551b0563` with it. On the pin,
+`append_kv_override` and `add_cpu_buft_override` always write slot 0, so a
+second call fails an assertion. That commit appends instead. The SPU calls
+neither today, so the fix is carried, not relied on.
+
+One defect stays, upstream and on the fork. `add_cpu_buft_override` stores the
+pattern's pointer with no lifetime tied to the parameters, so a pattern freed
+before load leaves a dangling pointer. The SPU does not call it. Any later use
+of buffer overrides must fix it first. No other fork change is needed, on the
+operator's word of 2026-11-08 that no issue is filed for these. `with_main_gpu` has no effect in layer split mode; the code
 may keep or drop the call, but no comment may claim it selects a device.
 
 This rule binds the GGUF backend only. The native (candle) pair keeps its own
@@ -222,3 +232,4 @@ that the mechanic exists.
 | Pinned `llama.cpp`, device list | Layer mode is confined to the listed devices |
 | Pinned `llama-cpp-2` `params.rs` | No tensor split setter |
 | Upstream `llama-cpp-rs` `e7af607` | The `with_tensor_split` setter to cherry-pick |
+| Upstream `llama-cpp-rs` `ef551b0` | Overrides appended instead of written to slot 0 |
