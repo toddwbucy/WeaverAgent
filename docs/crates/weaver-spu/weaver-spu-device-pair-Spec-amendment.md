@@ -223,18 +223,20 @@ by a bound that is never lower than what the engine allocates:
 | No cache (a layer the engine's filter excludes from both caches, as for a Nemotron-H feed-forward layer) | Nothing. Its weights are charged as for any layer |
 | A kind the header does not identify | No bound exists, so admission refuses the binding and names the layer |
 
-For a hybrid architecture, a layer's kind is the engine's own per-architecture
-classification (the layer filters in `llama-model.cpp`), read from the header's
-per-layer arrays, never from one scalar key:
+For a hybrid architecture, a layer's kind is the pinned engine's own
+per-architecture classification (`llama-model.cpp` at the vendored `ecce255`:
+the hyperparameter load that marks recurrent layers, and the hybrid cache's
+layer filters), read from the same header keys the engine reads:
 
 | Architecture | Classification |
 | --- | --- |
-| Nemotron-H and Nemotron-H MoE | A layer with a nonzero per-layer feed-forward length holds no cache. Otherwise a layer the header marks recurrent is recurrent, and any other layer is attention |
+| Nemotron-H and Nemotron-H MoE | A layer with a nonzero per-layer feed-forward length holds no cache. Otherwise a layer with a zero per-layer KV-head count is recurrent, and any other layer is attention |
+| Qwen3.5 and Qwen3.5 MoE | A layer whose one-based index is a multiple of the full-attention interval (default 4) is attention, and every other layer is recurrent |
 | Falcon-H1 | Every layer holds both caches and is charged both |
 | Any other hybrid architecture | No classification is written here, so admission refuses the binding and names the architecture |
 
 A new hybrid architecture is admitted by adding its row to this table from the
-engine's filter.
+pinned engine. A change of the engine pin re-reads every row.
 
 The fixture report names which charge each layer took.
 
@@ -262,7 +264,7 @@ refusal still carries the device's capacity.
 | Mixed members refuse | A recording device query returning two different names, capabilities or totals | Judge only the name, or skip the judgment for pairs |
 | The split is deterministic | Hardware-free arithmetic over L and N, including odd L and N = 3, checked against the engine's cumulative mapping | Pass proportional halves, or put a value on a boundary edge |
 | The split reaches the engine | The parameters built for a pair carry the computed tensor split | Leave the split unset |
-| Room is per device for GGUF | Directory fixtures with unequal layer sizes, a split artifact whose later shard holds assigned tensors, a tied-embedding artifact with no `output.weight`, a KV term checked against the 4096 MiB Granite measurement, a sliding-window and a recurrent layer charged by their bounds, a Nemotron-H feed-forward layer with a nonzero scalar KV-head count classified as cacheless by its feed-forward length, a Falcon-H1 layer charged both caches, an unlisted hybrid architecture that refuses, an unidentified layer kind that refuses, and a native artifact that keeps the even fraction | Read only the first shard, omit the duplicated embedding or the KV term, or apply the GGUF table to a native artifact |
+| Room is per device for GGUF | Directory fixtures with unequal layer sizes, a split artifact whose later shard holds assigned tensors, a tied-embedding artifact with no `output.weight`, a KV term checked against the 4096 MiB Granite measurement, a sliding-window and a recurrent layer charged by their bounds, a Nemotron-H feed-forward layer with a nonzero scalar KV-head count classified as cacheless by its feed-forward length, a Qwen3.5 artifact classified by its full-attention interval, a Falcon-H1 layer charged both caches, an unlisted hybrid architecture that refuses, an unidentified layer kind that refuses, and a native artifact that keeps the even fraction | Read only the first shard, omit the duplicated embedding or the KV term, or apply the GGUF table to a native artifact |
 | The observed division matches | On a device pair, under the LORA-3 log capture at debug level: exactly one `load_tensors: layer N assigned to device` record for each layer and for the output (`layer L`), and, for each layer, the cache records its PAIR-4 classification predicts, each matching PAIR-3: exactly one KV cache `layer N: dev =` record for a layer that holds an attention cache, and exactly one recurrent cache `layer N: dev =` record (`llama-memory-recurrent.cpp`) for a layer that holds a recurrent cache. A Falcon-H1 layer therefore has one record from each cache, and a Nemotron-H feed-forward layer has none, so its `load_tensors` record alone judges its device. A predicted record reading "does not have KV cache", "filtered" or "skipped" counts as missing. A `dev =` record that the classification does not predict, or a second record from the same cache, fails the check | Accept a missing or duplicated record, or a layer on the wrong device |
 
 The observed-division instrument is an explicit accelerator test, like the
