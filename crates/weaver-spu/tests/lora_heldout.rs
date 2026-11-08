@@ -23,7 +23,8 @@
 mod fixture;
 
 use fixture::{
-    Inputs, assert_division_on_binding, assert_same_division, first_difference, run_arm,
+    Inputs, assert_covers, assert_division_on_binding, assert_same_division, first_difference,
+    run_arm,
 };
 
 const TEST: &str = "the_held_out_set_decodes_base_only_and_adapted_on_one_division";
@@ -42,9 +43,11 @@ fn the_held_out_set_decodes_base_only_and_adapted_on_one_division() {
         .collect();
     assert!(!ids.is_empty(), "WEAVER_LORA_ENTRIES holds no entry");
 
-    let base = run_arm(TEST, &inputs, "base", false, &ids);
-    let adapted = run_arm(TEST, &inputs, "adapted", true, &ids);
+    let base = run_arm(TEST, &inputs, "base", false, None);
+    let adapted = run_arm(TEST, &inputs, "adapted", true, None);
 
+    assert_covers(&base, &ids);
+    assert_covers(&adapted, &ids);
     assert_division_on_binding(&base, &inputs.devices);
     assert_division_on_binding(&adapted, &inputs.devices);
     assert_same_division(&base, &adapted);
