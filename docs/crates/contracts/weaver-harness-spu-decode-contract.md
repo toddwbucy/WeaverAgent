@@ -172,8 +172,9 @@ token**, per `weaver-spu-Spec` section 6 on the ruling of 2026-11-08
 that completes it (on the Native container, where the tokenizer renders
 each token's piece itself, it crosses as replaced halves), a sequence
 that is not UTF-8 crosses as U+FFFD, and a piece the engine cannot render
-ends the phase as a decode fault rather than holding the stream. The answer closes the exchange as it always did, carrying
-the generation whole, the model.request content beside the measurement
+ends the phase as a decode fault rather than holding the stream. The
+answer closes the exchange as it always did, carrying the generation
+whole, the model.request content beside the measurement
 because each splices into its own box of the record, the request being the
 turn's delta as rendered with its template and effective sampling per the
 ruling of 2026-08-12, the SPU

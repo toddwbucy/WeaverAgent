@@ -5,7 +5,7 @@
 //!
 //! **An emission that is not UTF-8 is not a fault** (section 9). The model
 //! drew the tokens and their identifiers are the record, so the text keeps
-//! them: each maximal sequence that is not UTF-8 becomes U+FFFD, the
+//! them: each maximal subpart that is not UTF-8 becomes U+FFFD, the
 //! conversion `String::from_utf8_lossy` makes, and the mark keeps the bytes
 //! it replaced so the record loses nothing.
 

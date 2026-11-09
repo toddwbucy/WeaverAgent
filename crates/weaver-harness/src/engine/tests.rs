@@ -5014,7 +5014,12 @@ fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
         )
         .unwrap();
         send_answer(&weaver_types::TokenAnswer::ReFed(Generation {
-            invalid_utf8: Vec::new(),
+            // The re-feed's mark, read below on the re-feed's own
+            // authoring site (#493).
+            invalid_utf8: vec![weaver_types::InvalidUtf8 {
+                at: 8,
+                bytes: "ff".into(),
+            }],
             content: vec![
                 weaver_traits::ContentBlock::Text {
                     text: "one word".into(),
@@ -5132,5 +5137,26 @@ fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
             Kind::MessageAssistant,
         ],
         "the re-feed authors the report at its answer"
+    );
+
+    // **The re-feed's output carries the generation's mark**, per
+    // `weaver-trace-Spec` section 3 and `weaver-spu-Spec` section 6 (#493).
+    //
+    // Perturbation: author `invalid_utf8: Vec::new()` at the re-feed's
+    // site, and this fails.
+    let output_line = recorder
+        .structure()
+        .expect("the serving record")
+        .by_kind(Kind::ModelOutput)
+        .next()
+        .expect("the output authored")
+        .line
+        .to_string();
+    let output: serde_json::Value =
+        serde_json::from_str(&output_line).expect("the output line is one value");
+    assert_eq!(
+        output["payload"]["invalid_utf8"],
+        serde_json::json!([{"at": 8, "bytes": "ff"}]),
+        "the re-feed's mark reaches the record: {output_line}"
     );
 }

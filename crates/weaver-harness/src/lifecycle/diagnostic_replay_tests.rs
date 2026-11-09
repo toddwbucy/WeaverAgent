@@ -694,3 +694,67 @@ fn diagnostic_replay_stop_during_a_clean_close_keeps_the_pass() {
         });
     });
 }
+
+/// **The replay's output carries the re-fed generation's mark**, per
+/// `weaver-trace-Spec` section 3 and `weaver-spu-Spec` section 6 (#493):
+/// the diagnostic record's `model.output` is authored at this site, the
+/// fourth of the kind's authors, and forwards the SPU's `invalid_utf8`
+/// unread.
+///
+/// Perturbation: author `invalid_utf8: Vec::new()` at the replay's site,
+/// and this fails.
+#[test]
+fn diagnostic_replay_output_carries_the_emission_mark() {
+    use std::io::Read;
+    use std::os::unix::net::UnixStream;
+    fixture("emission-mark", |owner, _far| {
+        let turn = TurnKey("original-turn".into());
+        owner.replay.as_mut().unwrap().turn = Some(turn.clone());
+        let (decode, _spu) = DecodeChannel::pair().unwrap();
+        let (sink, mut reader) = UnixStream::pair().unwrap();
+        let mut recorder = recorder(sink);
+        let author = Author::new(&SessionId("s".into()), &weaver_types::RunId("r".into()));
+        let raw = |s: &str| serde_json::value::RawValue::from_string(s.to_string()).unwrap();
+        let generation = weaver_types::Generation {
+            invalid_utf8: vec![weaver_types::InvalidUtf8 {
+                at: 2,
+                bytes: "ff".into(),
+            }],
+            content: vec![weaver_traits::ContentBlock::Text {
+                text: "hi\u{fffd}".into(),
+            }],
+            unrecovered: vec![],
+            emission: "hi\u{fffd}".into(),
+            finish: weaver_types::Finish::Completed,
+            request: raw(r#"{"rendered":"r","template":"t"}"#),
+            measurement: raw(
+                r#"{"model":"m","weights_hash":"w","input_tokens":[1],"output_tokens":[2]}"#,
+            ),
+            resident: 5,
+            capacity: 64,
+        };
+        let mut ports = ReplayPorts {
+            management: owner,
+            decode: &decode,
+            author: &author,
+            recorder: &mut recorder,
+            state: None,
+            failed: false,
+        };
+        ports.generation(&turn, &generation).unwrap();
+        // Closing the sink ends the reader's read at the record's end.
+        drop(recorder);
+        let mut text = String::new();
+        reader.read_to_string(&mut text).unwrap();
+        let output = text
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .find(|event| event["kind"] == "model.output")
+            .expect("the replay authored its output");
+        assert_eq!(
+            output["payload"]["invalid_utf8"],
+            serde_json::json!([{"at": 2, "bytes": "ff"}]),
+            "the replay's mark reaches the record: {output}"
+        );
+    });
+}
