@@ -365,6 +365,7 @@ fn an_emission_that_is_not_utf8_lands_replaced_and_flagged() {
     assert_eq!(row["output"], "Perfect! \u{fffd}(\u{fffd}89");
     assert_eq!(row["output_utf8_valid"], false);
     assert_eq!(row["output_utf8_fault"], fault.unwrap().as_str());
+    assert_eq!(row["output_bytes_hex"], "506572666563742120e228a13839");
     std::fs::remove_dir_all(&report).expect("the scratch directory goes");
 }
 
@@ -385,6 +386,7 @@ fn a_utf8_emission_lands_unchanged() {
     assert_eq!(row["output"], "caf\u{e9}");
     assert_eq!(row["output_utf8_valid"], true);
     assert!(row.get("output_utf8_fault").is_none());
+    assert!(row.get("output_bytes_hex").is_none());
     std::fs::remove_dir_all(&report).expect("the scratch directory goes");
 }
 
@@ -433,9 +435,53 @@ fn a_short_measurement_lands_its_trace_and_no_output() {
             || b"text".to_vec(),
         );
     });
-    assert!(failed.is_err());
+    let message = panic_text(failed.expect_err("the short measurement fails the arm"));
+    assert!(
+        message.starts_with("arm arm: entry t004 measured 2 entropies"),
+        "{message}"
+    );
     assert_eq!(rows(&report.join("arm.trace.jsonl")), vec![line]);
     assert!(rows(&report.join("arm.jsonl")).is_empty());
     assert_eq!(fixture::completed_entries(&report, "arm"), (0, None));
+    std::fs::remove_dir_all(&report).expect("the scratch directory goes");
+}
+
+/// A caught panic's message.
+fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+/// **An end the reference never had keeps its entry** (Executor-2's read of
+/// #494): a session that reached its capacity is recorded by the variant's
+/// name in the trace and the output row, and only then fails the arm.
+#[test]
+fn an_unexpected_finish_lands_the_entry_then_fails() {
+    let report = scratch("finish");
+    let path = report.clone();
+    let mut ended = trace();
+    ended.finish = "CapacityReached".into();
+    ended.stop = None;
+    let line = ended.to_json("t005");
+    let failed = std::panic::catch_unwind(move || {
+        let mut log = fixture::EntryLog::create(&path, "arm");
+        fixture::record_entry(
+            &mut log,
+            "t005",
+            &ended,
+            serde_json::json!({"id": "t005", "finish_reason": "CapacityReached"}),
+            || b"cut".to_vec(),
+        );
+    });
+    let message = panic_text(failed.expect_err("an unexpected finish fails the arm"));
+    assert_eq!(message, "arm arm: entry t005 ended CapacityReached");
+    assert_eq!(rows(&report.join("arm.trace.jsonl")), vec![line]);
+    let outputs = rows(&report.join("arm.jsonl"));
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0]["finish_reason"], "CapacityReached");
+    assert_eq!(outputs[0]["output"], "cut");
     std::fs::remove_dir_all(&report).expect("the scratch directory goes");
 }

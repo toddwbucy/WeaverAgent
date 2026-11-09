@@ -504,9 +504,12 @@ impl Resident {
         })
     }
 
-    /// The emission's bytes before any text conversion: each sampled token's
-    /// piece, concatenated. [`Self::detokenize`] is these bytes converted
-    /// strictly.
+    /// The emission's bytes: each sampled token's piece, concatenated, before
+    /// any text conversion on the GGUF container. [`Self::detokenize`] is
+    /// these bytes converted strictly. **On the Native container the
+    /// tokenizer decodes to text itself and replaces what is not UTF-8 as it
+    /// does**, so there the bytes are that text's, always UTF-8, and the
+    /// model's raw bytes are not recoverable.
     pub fn emission_bytes(&self, tokens: &[TokenId]) -> Result<Vec<u8>, DecodeFault> {
         #[cfg(not(feature = "gguf"))]
         let _ = tokens;
@@ -546,9 +549,7 @@ impl Resident {
                 }
                 Ok(bytes)
             }
-            // The tokenizer decodes to text itself and replaces what is not
-            // UTF-8 as it does, so on this container the bytes are always
-            // UTF-8 and the emission's raw bytes are not recoverable.
+            // The tokenizer's text, already replaced (see the doc above).
             #[cfg(feature = "cuda")]
             LoadedModel::Native(model) => model.detokenize(tokens).map(String::into_bytes),
             #[allow(unreachable_patterns)]
