@@ -329,6 +329,46 @@ fn a_request_line_decodes_typed_with_each_member_once() {
     }
 }
 
+/// **A refusal reason quotes at most `ECHO_BOUND` octets of client
+/// content**, per `weaver-types-Spec` section 4 (#504): content within the
+/// bound is quoted whole, longer content is cut on a character boundary
+/// with a marker naming the full length, and the parse's own refusal of an
+/// unknown member stays within the bound however long the member's name.
+/// Perturbation: return the content whole from `echoed` and the long cases
+/// fail.
+#[test]
+fn a_refusal_reason_quotes_client_content_within_the_echo_bound() {
+    use weaver_types::{ECHO_BOUND, echoed};
+    assert_eq!(ECHO_BOUND, 256);
+    let short = "x".repeat(ECHO_BOUND);
+    assert_eq!(echoed(&short), short.as_str(), "within the bound, whole");
+    let long = "x".repeat(ECHO_BOUND + 44);
+    assert_eq!(
+        echoed(&long),
+        format!("{}... [cut at 256 of 300 octets]", "x".repeat(ECHO_BOUND))
+    );
+    // A four-octet character straddling the bound is left out whole.
+    let straddle = format!("{}\u{1f600}tail", "x".repeat(ECHO_BOUND - 1));
+    assert_eq!(
+        echoed(&straddle),
+        format!(
+            "{}... [cut at 255 of 263 octets]",
+            "x".repeat(ECHO_BOUND - 1)
+        )
+    );
+    let line = format!(r#"{{"text":"","{}":0}}"#, "k".repeat(40_000));
+    let reason = weaver_types::TurnRequest::parse(line.as_bytes()).expect_err("unknown member");
+    assert!(
+        reason.len() < 2 * ECHO_BOUND,
+        "the reason stays near the bound: {} octets",
+        reason.len()
+    );
+    assert!(
+        reason.contains("... [cut at 256 of "),
+        "the cut is marked: {reason}"
+    );
+}
+
 /// **The dialer rides an inbound frame and is absent from a response**, per
 /// `weaver-harness-gate-contract` section 2 on the ruling of 2026-10-06: a
 /// frame carried from a dialer serializes the member, a frame carried with

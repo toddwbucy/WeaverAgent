@@ -880,26 +880,26 @@ bounded at 49,041 octets before the delimiter, the envelope's exact
 capacity**, on the operator's ruling of 2026-11-08. The derivation: the line
 rides the envelope encoded, 4 * ceil(N / 3) octets for N octets, and the
 envelope's other members (the exchange, the position, the frame's dialer and
-the JSON around them) take at most 147 octets, at an ordinal of `u64::MAX`
-and a dialer of `u32::MAX`. A line of 49,041 octets encodes to 65,388 and
-renders to 65,535, inside the bound of 65,536; a line of 49,042 encodes to
-65,392 and renders to 65,539, past it. So every line the gate admits reaches
-the harness, and no larger bound can. The ruling gives up the margin the
-earlier election of 32 kibibytes kept, knowingly, so that a seeding line of
-48,454 octets (the R1 system prompt of 47,214 bytes, encoded as the world
-contract's JSON line) seats through this door. **The bound is an interim.**
-Its destination is the seed verb, `ADMIN-SEED` in
-`docs/crates/state-management/weaver-admin-Spec-amendment.md`, which reads
-the prompt from the territory rather than off a line, while the gate
-amendment beside it retires the role-system seeding route at the gate
-(GATE-1), both at the foundation cutover. The bound is inclusive: a line of exactly the bound's octets followed by its delimiter is
-legal, and the connection closes when more than the bound stands undelimited,
-however many reads delivered it. A connection past the bound has left the
-protocol at the
-framing layer, below any turn, so the connection closes: there is no line to
-refuse and no turn to open, and a truncated relay would be the corpus-wide
-truncation fault worn as a feature. The world contract carries the case in
-its failure enumeration as of this act.
+the JSON around them) take at most 147 octets, at an ordinal of `u64::MAX` and
+a dialer of `u32::MAX`. A line of 49,041 octets encodes to 65,388 and renders
+to 65,535, inside the bound of 65,536; a line of 49,042 encodes to 65,392 and
+renders to 65,539, past it. So every line the gate admits reaches the harness,
+and no larger bound can. The ruling gives up the margin the earlier election
+of 32 kibibytes kept, knowingly, so that a seeding line of 48,454 octets (the
+R1 system prompt of 47,214 bytes, as `deploy/turn.py --system` encodes it,
+every non-ASCII character escaped) seats through this door. **The bound is an
+interim.** Its destination is the seed verb, `ADMIN-SEED` in
+`docs/crates/state-management/weaver-admin-Spec-amendment.md`, which reads the
+prompt from the territory rather than off a line, while the gate amendment
+beside it retires the role-system seeding route at the gate (GATE-1), both at
+the foundation cutover. The bound is inclusive: a line of exactly the bound's
+octets followed by its delimiter is legal, and the connection closes when more
+than the bound stands undelimited, however many reads delivered it. A
+connection past the bound has left the protocol at the framing layer, below
+any turn, so the connection closes: there is no line to refuse and no turn to
+open, and a truncated relay would be the corpus-wide truncation fault worn as
+a feature. The world contract carries the case in its failure enumeration as
+of this act.
 
 ```graph
 node: gate-line-bound-closes-the-connection

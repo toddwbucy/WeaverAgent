@@ -99,8 +99,12 @@ fn parse_request(frame: &weaver_types::TurnFrame) -> Result<Request, String> {
         None => false,
         Some(serde_json::Value::String(role)) if role == "system" => true,
         Some(role) => {
+            // The role as written, quoted within the echo bound (#504): a
+            // reason that quoted it whole could render the close past the
+            // organ envelope on the way back to the gate.
             return Err(format!(
-                "a request's role is system or absent, and {role} is neither"
+                "a request's role is system or absent, and {} is neither",
+                weaver_types::echoed(&role.to_string())
             ));
         }
     };

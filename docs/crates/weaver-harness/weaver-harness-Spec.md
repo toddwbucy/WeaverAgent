@@ -2535,7 +2535,12 @@ peer uid the gate read at accept and carries inward per
 `operator` of `weaver-types-Spec` section 4; a line whose dialer is absent or is any
 other uid, the connector's service user among them, or whose `role` is any other
 value, is a refused turn, the response frame's `refused` kind naming the role, and the
-channel stands. An admitted seeding line is one turn in the residency that seeds: this
+channel stands. **A refusal reason quotes at most 256 octets of client content**
+(`ECHO_BOUND`, `weaver-types-Spec` section 4, #504): the role as written, cut on a
+character boundary and marked with its full length where it runs longer. The close
+returns through the same 64 KiB organ envelope the line arrived in, base64-encoded, and
+a reason that quoted a line of the gate's bound whole would render past it, failing the
+send and the run with it rather than answering. An admitted seeding line is one turn in the residency that seeds: this
 crate authors the prompt, one `system` message of the line's text verbatim, turnless
 through the identity door so the record and the tee carry it, then appends it as the
 session's context, `AppendAndGenerate` with that one message and no user message, and
@@ -2562,8 +2567,9 @@ admin's `save-point` verb, or by the first leave's snapshot. **Because the seedi
 holds the model's first answer beside the prompt**: that answer is on the record as
 every `message.assistant` is, the tee lands it, and a save point taken after the
 seeding carries both, by design and not by leak. The line's bound is the gate's, 49,041 octets before the
-delimiter per `weaver-gate-Spec` section 4, the organ envelope's exact capacity: the R1
-system prompt, 48,454 octets as its seeding line, sits inside it with 587 to spare. A refused open is a refused enter, returned through the
+delimiter per `weaver-gate-Spec` section 4, the organ envelope's exact capacity, which
+the R1 system prompt's seeding line, 48,454 octets as `deploy/turn.py` encodes it,
+sits inside. A refused open is a refused enter, returned through the
 fan-out's after-load failure so the authored bracket stands for the forced leave of admin's rollback to unwind, the
 aggregate naming the decode seam as where the fan-out stopped. **Under a restoring load
 the store answers from the save point**, per the operator's rulings of 2026-10-02 on

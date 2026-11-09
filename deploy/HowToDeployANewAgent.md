@@ -372,9 +372,11 @@ only what the next seeding would send. Seeding again in a later residency replac
 prompt; seeding twice in one residency seats both, in order.
 
 **The seeding line has a bound: 49,041 octets before the delimiter**, the gate's line
-bound (`weaver-gate-Spec` section 4), measured on the JSON line, so newlines and quotes
-in the draft count as two octets each and a non-ASCII character as a six-octet escape
-(twelve above U+FFFF). `turn.py` measures the
+bound (`weaver-gate-Spec` section 4), measured on the JSON line `turn.py` writes. The
+line's wrapper takes 30 octets, so a draft of plain printable ASCII may run to 49,011
+octets. Each newline, carriage return, tab, quote and backslash in the draft counts two
+octets, any other control character six, and each non-ASCII character six (twelve
+above U+FFFF). `turn.py` measures the
 line before it dials and refuses an oversize draft with its size; the gate itself would
 close the connection unanswered. The bound is an interim, on the operator's ruling of
 2026-11-08: seeding moves off the gate to admin's seed verb at the state-management

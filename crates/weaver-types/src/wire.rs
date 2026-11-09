@@ -916,6 +916,32 @@ pub enum AgentState {
     Active,
 }
 
+/// The most octets of client content a refusal reason quotes, per
+/// `weaver-types-Spec` section 4 (#504). A refused turn's close carries its
+/// reason back through the organ envelope base64-encoded, so a reason that
+/// quoted a line whole could render past `MAX_ENVELOPE_BYTES` on the return
+/// leg, and the harness's send would fault rather than answer.
+pub const ECHO_BOUND: usize = 256;
+
+/// Client content as a refusal reason quotes it: whole when it is at most
+/// [`ECHO_BOUND`] octets, and otherwise its longest prefix within the bound
+/// that ends on a character boundary, followed by a marker naming the full
+/// length, so a reader knows the quote was cut and by how much.
+pub fn echoed(content: &str) -> std::borrow::Cow<'_, str> {
+    if content.len() <= ECHO_BOUND {
+        return std::borrow::Cow::Borrowed(content);
+    }
+    let mut end = ECHO_BOUND;
+    while !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    std::borrow::Cow::Owned(format!(
+        "{}... [cut at {end} of {} octets]",
+        &content[..end],
+        content.len()
+    ))
+}
+
 /// A request line as the harness parses it, per `weaver-gate-world-contract`
 /// section 2 and `weaver-gate-Spec` section 4: one JSON object carrying `text`,
 /// a string, and at most `role` beside it, each member once. **Typed rather
@@ -938,7 +964,9 @@ impl TurnRequest {
     /// the typed decode. serde reads a struct from a JSON array as well as
     /// from an object, by position, so `["x","system"]` would otherwise read
     /// as the seeding line; the line's first byte past whitespace must open an
-    /// object. The error is the refused turn's reason, as text.
+    /// object. The error is the refused turn's reason, as text, and serde's
+    /// part of it, which quotes an unknown member's name whole, is
+    /// [`echoed`] within [`ECHO_BOUND`] (#504).
     pub fn parse(octets: &[u8]) -> Result<TurnRequest, String> {
         match octets.iter().find(|byte| !byte.is_ascii_whitespace()) {
             Some(b'{') => {}
@@ -946,7 +974,8 @@ impl TurnRequest {
         }
         serde_json::from_slice::<TurnRequest>(octets).map_err(|error| {
             format!(
-                "a request is one JSON object carrying the text member, a string, and at most the role member beside it, each once: {error}"
+                "a request is one JSON object carrying the text member, a string, and at most the role member beside it, each once: {}",
+                echoed(&error.to_string())
             )
         })
     }

@@ -207,7 +207,7 @@ impl Channel {
 
 /// One envelope rendered and judged against the bound, the shared half of
 /// the two send paths so the encode and the assertion cannot drift apart.
-pub(crate) fn render(envelope: &OrganEnvelope) -> Result<Vec<u8>, ChannelFault> {
+fn render(envelope: &OrganEnvelope) -> Result<Vec<u8>, ChannelFault> {
     let body = serde_json::to_vec(envelope).map_err(|_| ChannelFault::Undecodable)?;
     if body.len() > MAX_ENVELOPE_BYTES {
         return Err(ChannelFault::Truncated {
@@ -215,6 +215,13 @@ pub(crate) fn render(envelope: &OrganEnvelope) -> Result<Vec<u8>, ChannelFault> 
         });
     }
     Ok(body)
+}
+
+/// The send paths' own encode and judgment, for the relay's suite, which
+/// derives the line bound through it rather than through a copy.
+#[cfg(test)]
+pub(crate) fn render_for_test(envelope: &OrganEnvelope) -> Result<Vec<u8>, ChannelFault> {
+    render(envelope)
 }
 
 /// Construct a channel from an already-owned descriptor, for the unit suite,

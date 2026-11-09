@@ -5437,6 +5437,23 @@ def docs_mirror_faults(root):
     return faults
 
 
+class LineBoundMirrorTests(unittest.TestCase):
+    """turn.py measures a line against the gate's bound before it dials, so
+    its copy of the bound is the gate's own `LINE_BOUND`: a copy that runs
+    high sends lines the gate closes unanswered, and one that runs low
+    refuses lines the gate carries. The gate's suite derives the number from
+    the envelope; this pins turn.py to the gate.
+    Perturbation: change either number alone and this fails."""
+
+    def test_turn_py_carries_the_gates_line_bound(self):
+        relay = (DEPLOY.parent / "crates" / "weaver-gate" / "src" / "relay.rs").read_text()
+        gate = re.findall(r"^pub const LINE_BOUND: usize = ([0-9_]+);$", relay, re.MULTILINE)
+        turn = re.findall(r"^LINE_BOUND = ([0-9_]+)$", (DEPLOY / "turn.py").read_text(), re.MULTILINE)
+        self.assertEqual(len(gate), 1, "relay.rs declares LINE_BOUND once, as a literal")
+        self.assertEqual(len(turn), 1, "turn.py declares LINE_BOUND once, as a literal")
+        self.assertEqual(int(turn[0].replace("_", "")), int(gate[0].replace("_", "")))
+
+
 class DocsMirrorTests(unittest.TestCase):
     """docs/crates/ has the shape of crates/, so a document maps to the code
     it governs (the layout ruling of 2026-10-13).

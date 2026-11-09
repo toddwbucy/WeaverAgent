@@ -411,14 +411,14 @@ fn the_bound_is_the_largest_line_the_envelope_carries() {
         position: Position::Open,
         payload: Payload::Frame(TurnFrame::carry_from(&vec![b'x'; octets], u32::MAX)),
     };
-    let rendered = crate::channel::render(&worst(LINE_BOUND));
+    let rendered = crate::channel::render_for_test(&worst(LINE_BOUND));
     assert!(
         rendered.is_ok(),
         "a line of the bound renders inside the envelope: {:?}",
         rendered.map(|body| body.len())
     );
     assert_eq!(
-        crate::channel::render(&worst(LINE_BOUND + 1)).map(|body| body.len()),
+        crate::channel::render_for_test(&worst(LINE_BOUND + 1)).map(|body| body.len()),
         Err(ChannelFault::Truncated {
             bound: weaver_types::MAX_ENVELOPE_BYTES
         }),
