@@ -22,7 +22,7 @@ import unittest
 
 DEPLOY = Path(__file__).resolve().parent
 DOUBLE = r'''#!/usr/bin/env python3
-import json, os, pathlib, shutil, subprocess, sys
+import json, os, pathlib, shutil, subprocess, sys, time
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 root = pathlib.Path(os.environ['FIXTURE_ROOT'])
@@ -58,10 +58,13 @@ if name == 'stat':
         print(0 if path.is_relative_to(root) else st.st_uid, format(st.st_mode & 0o7777, 'o'))
         sys.exit(0)
     os.execv('/usr/bin/stat', ['stat', *args])
+if name == 'mktemp' and args and '/weaver-deploy-messages-' in args[-1]:
+    # The build's messages file, made as the scripts make it; not logged.
+    os.execv('/usr/bin/mktemp', ['mktemp', *args])
 with open(os.environ['CALLS'], 'a') as log:
     log.write(json.dumps([name, *args]) + '\n')
 def mapped(value):
-    if value.startswith('/home/') or value.startswith('/etc/sudoers'):
+    if value.startswith('/home/') or value.startswith('/etc/sudoers') or value.startswith('/etc/ld.so.conf.d/'):
         return str(root / value.lstrip('/'))
     return value
 
@@ -128,7 +131,15 @@ elif name == 'nvidia-smi': print('fixture-driver')
 elif name == 'pacman': print('cccl 3.3.4-1')
 elif name == 'cargo':
     target = pathlib.Path(os.environ['CARGO_TARGET_DIR'])
-    if args[0] == 'metadata': print(json.dumps({'target_directory': str(target)}))
+    # The engine's package as the lock names it, beside another crate with a
+    # build script, so a reader that does not match the id exactly is caught.
+    if args[0] == 'metadata': print(json.dumps({'target_directory': str(target), 'packages': [
+        {'name': 'llama-cpp-sys-2', 'id': 'fixture-engine-source#llama-cpp-sys-2@0.1.0'},
+        {'name': 'fixture-other-sys', 'id': 'fixture-other-source#fixture-other-sys@0.1.0'}]}))
+    elif args[0] == 'pkgid':
+        # The lock's one package of the name, as `cargo pkgid` names it.
+        if 'llama-cpp-sys-2' not in args: sys.exit(101)
+        print('fixture-engine-source#llama-cpp-sys-2@0.1.0')
     elif args[0] == 'test': print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s')
     elif args[0] == 'build':
         if os.environ.get('BUILD_FAIL'):
@@ -137,6 +148,31 @@ elif name == 'cargo':
         target.joinpath('release').mkdir(parents=True)
         for member in ('worker', 'weaver-admin', 'weaver-trace-relay', 'weaver-gate', 'weaver-spu', 'weaver-state'):
             target.joinpath('release', member).write_text('fixture artifact ' + member)
+        # The engine's out/lib as llama-cpp-sys-2 lays it out: each versioned
+        # file beside its SONAME link and its bare link, and what the globs
+        # leave behind. ENGINE_BUILD names the build, so a test can move it.
+        out = target / 'release' / 'build' / 'llama-cpp-sys-2-fixture' / 'out'
+        lib = out / 'lib'
+        (lib / 'cmake').mkdir(parents=True)
+        (lib / 'pkgconfig').mkdir()
+        for stem, version in (('libllama', '0.0.1'), ('libggml', '0.9.1')):
+            (lib / f'{stem}.so.{version}').write_text(f"fixture {stem} {os.environ.get('ENGINE_BUILD', 'a')}")
+            (lib / f'{stem}.so.0').symlink_to(f'{stem}.so.{version}')
+            (lib / f'{stem}.so').symlink_to(f'{stem}.so.0')
+        # A second engine directory, newer by mtime, as a shared target holds
+        # one per engine pin it has built: the build did not use it.
+        if os.environ.get('DECOY_ENGINE'):
+            decoy = target / 'release' / 'build' / 'llama-cpp-sys-2-decoy' / 'out' / 'lib'
+            decoy.mkdir(parents=True)
+            for stem, version in (('libllama', '0.0.1'), ('libggml', '0.9.1')):
+                (decoy / f'{stem}.so.{version}').write_text(f'decoy {stem}')
+            later = time.time() + 3600
+            os.utime(decoy, (later, later))
+        if '--message-format=json-render-diagnostics' in args and not os.environ.get('NO_ENGINE_MESSAGE'):
+            for package, at in (('fixture-other-source#fixture-other-sys@0.1.0', target / 'release' / 'build' / 'other' / 'out'),
+                                ('fixture-engine-source#llama-cpp-sys-2@0.1.0', out)):
+                print(json.dumps({'reason': 'build-script-executed', 'package_id': package, 'out_dir': str(at)}))
+            print(json.dumps({'reason': 'build-finished', 'success': True}))
     else: sys.exit(99)
 elif name == 'sudo':
     if not os.environ.get('ALLOW_APPLY_CHECKS'): sys.exit(99)
@@ -172,12 +208,30 @@ elif name == 'sudo':
     elif op == 'cp':
         source, destination = (pathlib.Path(mapped(a)) for a in rest[-2:])
         assert source.is_relative_to(root) and destination.is_relative_to(root)
-        privileged([source, destination], lambda: shutil.copyfile(source, destination))
+        def copy():
+            # `-a` copies a link as a link; `--remove-destination` unlinks the
+            # name first, so the copy is a new file and never follows a link.
+            if '--remove-destination' in rest and (destination.exists() or destination.is_symlink()):
+                destination.unlink()
+            if '-a' in rest and source.is_symlink():
+                destination.symlink_to(os.readlink(source))
+            else:
+                shutil.copyfile(source, destination)
+        privileged([source, destination], copy)
     elif op == 'install':
         target = pathlib.Path(mapped(rest[-1]))
         assert target.is_relative_to(root), target
         if '-d' in rest: privileged([target], lambda: target.mkdir(parents=True, exist_ok=True))
-        else: privileged([target], target.touch)
+        else:
+            # A file installed from a source is a new file holding its bytes,
+            # as `install` unlinks the name first.
+            source = pathlib.Path(mapped(rest[-2]))
+            def place():
+                if source.is_relative_to(root) and source.is_file():
+                    if target.exists() or target.is_symlink(): target.unlink()
+                    shutil.copyfile(source, target)
+                else: target.touch()
+            privileged([target], place)
     elif op == 'mv':
         source, destination = (pathlib.Path(mapped(a)) for a in rest[-2:])
         assert source.is_relative_to(root) and destination.is_relative_to(root)
@@ -230,7 +284,7 @@ elif name == 'sudo':
             p = pathlib.Path(mapped(a))
             if a.startswith('/') and p.is_relative_to(root) and not privileged([p], lambda: os.path.lexists(p)):
                 sys.exit(1)
-    elif op in ('useradd', 'usermod', 'groupadd', 'chmod', 'setfacl'): pass
+    elif op in ('useradd', 'usermod', 'groupadd', 'chmod', 'setfacl', 'ldconfig'): pass
     else: sys.exit(99)
 elif name == 'mktemp':
     if not os.environ.get('ALLOW_APPLY_CHECKS'): sys.exit(99)
@@ -238,6 +292,21 @@ elif name == 'mktemp':
     probe.mkdir()
     print(probe)
 elif name == 'setfacl': sys.exit(1 if os.environ.get('ACL_FAIL') else 0)
+elif name == 'ldd':
+    # What the loader resolves for the installed SPU: the engine's SONAMEs
+    # from LD_LIBRARY_PATH, as the loader takes them, or from LDD_ELSEWHERE;
+    # LDD_MISSING names a library it cannot find, and LDD_STATIC answers as
+    # ldd does for a file that is not a dynamic executable.
+    if os.environ.get('LDD_STATIC'):
+        print('\tnot a dynamic executable')
+        sys.exit(1)
+    with open(os.environ['CALLS'], 'a') as seen:
+        seen.write(json.dumps(['ldd-env', os.environ.get('LD_LIBRARY_PATH', ''), os.environ.get('LD_PRELOAD', '')]) + '\n')
+    engine_dir = os.environ.get('LDD_ELSEWHERE') or os.environ.get('LD_LIBRARY_PATH', '/fixture/lib').split(':')[0]
+    for soname in ('libllama.so.0', 'libggml.so.0', 'libc.so.6'):
+        at = engine_dir if soname.startswith(('libllama', 'libggml')) else '/fixture/lib'
+        if soname == os.environ.get('LDD_MISSING'): print(f'\t{soname} => not found')
+        else: print(f'\t{soname} => {at}/{soname} (0x0000)')
 else: sys.exit(99)
 '''
 
@@ -308,6 +377,18 @@ class PlanTests(unittest.TestCase):
         }
         for key, value in self.stack_keys.items():
             (self.stack / key).write_text(value + ("" if value.endswith("\n") else "\n"))
+        # The engine's libraries as bootstrap-stack.sh leaves them, equal to
+        # what the cargo double builds by default, and the loader's entry it
+        # writes, which the double and the preamble map into the fixture.
+        self.lib_dir = self.root / "installed" / "lib"
+        self.install_libraries("a")
+        (self.root / "etc" / "ld.so.conf.d").mkdir(parents=True)
+        self.ldso_conf = self.root / "etc" / "ld.so.conf.d" / "weaver.conf"
+        # The CUDA directory the entry names, root's and closed as the stat
+        # double answers for the fixture.
+        self.cuda_lib = self.root / "cuda" / "lib64"
+        self.cuda_lib.mkdir(parents=True)
+        self.ldso_conf.write_text(f"{self.lib_dir}\n{self.cuda_lib}\n")
         self.hba = self.root / "pg_hba.conf"
         self.hba.write_text("local all all peer\n")
         self.ident = self.root / "pg_ident.conf"
@@ -316,7 +397,7 @@ class PlanTests(unittest.TestCase):
         self.artifact.touch()
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for name in ("sudo", "systemctl", "psql", "mktemp", "setfacl", "getent", "git", "cargo", "hostname", "nvidia-smi", "pacman", "sh", "id", "stat"):
+        for name in ("sudo", "systemctl", "psql", "mktemp", "setfacl", "getent", "git", "cargo", "hostname", "nvidia-smi", "pacman", "sh", "id", "stat", "ldd"):
             command = self.bin / name
             command.write_text(DOUBLE)
             command.chmod(0o755)
@@ -331,8 +412,11 @@ class PlanTests(unittest.TestCase):
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES",
                      "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
-                     "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF"):
+                     "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF", "ENGINE_BUILD", "NO_ENGINE_MESSAGE",
+                     "LDD_MISSING", "CUDA_LIB_DIR", "DECOY_ENGINE", "LDD_ELSEWHERE", "LDD_STATIC",
+                     "LD_LIBRARY_PATH", "LD_PRELOAD"):
             self.env.pop(name, None)
+        self.env["CUDA_LIB_DIR"] = str(self.cuda_lib)
         # Redirect even shell builtin /home probes, and the cgroup mount's
         # reads, into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -343,7 +427,7 @@ class PlanTests(unittest.TestCase):
   fixture_mapped=()
   for arg in "$@"; do
     case "$arg" in
-      /home/*|/run/systemd/system) arg="$FIXTURE_ROOT$arg";;
+      /home/*|/run/systemd/system|/etc/ld.so.conf.d/*) arg="$FIXTURE_ROOT$arg";;
       /sys/fs/cgroup/*) arg="$FIXTURE_ROOT/cgroup-fs${arg#/sys/fs/cgroup}";;
     esac
     fixture_mapped+=("$arg")
@@ -354,6 +438,17 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
 grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
 """)
         self.env["BASH_ENV"] = str(preamble)
+
+    def install_libraries(self, build):
+        """Lay the library directory out as an install of the cargo double's
+        engine build BUILD leaves it: the versioned files and their links."""
+        self.lib_dir.mkdir(parents=True, exist_ok=True)
+        for stem, version in (("libllama", "0.0.1"), ("libggml", "0.9.1")):
+            for name in (f"{stem}.so", f"{stem}.so.0", f"{stem}.so.{version}"):
+                (self.lib_dir / name).unlink(missing_ok=True)
+            (self.lib_dir / f"{stem}.so.{version}").write_text(f"fixture {stem} {build}")
+            (self.lib_dir / f"{stem}.so.0").symlink_to(f"{stem}.so.{version}")
+            (self.lib_dir / f"{stem}.so").symlink_to(f"{stem}.so.0")
 
     def run_script(self, name, *args):
         return subprocess.run(["bash", str(self.repo / "deploy" / name), *args],
@@ -1777,8 +1872,10 @@ esac
             self.assertIn("  " + shell_file, result.stdout)
         self.assertIn("plan only. rerun with --install", result.stdout)
         self.assert_unprivileged()
+        # The lock's id of the engine's package, for the build's messages
+        # (the library step).
         cargo_actions = [c[1] for c in self.calls() if c[0] == "cargo"]
-        self.assertEqual(cargo_actions, ["metadata", "test", "build"])
+        self.assertEqual(cargo_actions, ["metadata", "test", "build", "pkgid"])
 
     def test_stack_test_step_selects_no_package_that_left(self):
         # #33: weaver-analysis left the workspace and cargo refuses a package
@@ -1886,7 +1983,7 @@ esac
         self.assertEqual(len(calls), 2)
         self.assertLess(calls[0], text.index('cargo test --release --locked'))
         self.assertLess(text.index('sudo -v || die "--install needs sudo'), calls[1])
-        self.assertLess(calls[1], text.index('if [ ${#CHANGED[@]} -gt 0 ]; then\n  say "install"'))
+        self.assertLess(calls[1], text.index('if [ ${#CHANGED[@]} -gt 0 ] || [ ${#LIB_CHANGED[@]} -gt 0 ]'))
 
     def test_stack_plans_on_a_box_whose_systemd_is_not_running(self):
         # A systemctl client beside another init reaches no manager, so the box
@@ -2734,6 +2831,238 @@ esac
         self.assertIn("the stack record gains shell-binary", result.stdout)
         self.assertTrue([c for c in calls if c[:2] == ["sudo", "tee"] and c[-1].endswith("/shell-binary")],
                         calls)
+
+    def engine_digest(self, stem, build):
+        return hashlib.sha256(f"fixture {stem} {build}".encode()).hexdigest()[:12]
+
+    def test_the_plan_lists_each_engine_library_from_the_build_cargo_names(self):
+        """**The engine's libraries are planned as the members are** (the
+        operator's ruling of 2026-11-09): each versioned file of the out/lib
+        cargo reports for the engine's package is CHANGED, unchanged or NEW
+        by its digest against the library directory, with the 12-character
+        prefixes; the links are counted and not listed; the loader's entry
+        that stands is left. A newer engine directory beside it, as a shared
+        target holds one per pin, is not read. Perturbations: select the
+        out/lib by `ls -td` and the decoy's digest is planned; drop the link
+        comparison and no link is counted."""
+        self.env.update(ENGINE_BUILD="b", DECOY_ENGINE="1")
+        (self.lib_dir / "libggml.so.0").unlink()
+        (self.lib_dir / "libggml.so.0").symlink_to("libggml.so.0.9.0")
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        out = self.root / 'target with "quotes"' / "release" / "build" / "llama-cpp-sys-2-fixture" / "out" / "lib"
+        self.assertIn(f"  engine out    {out}\n", result.stdout)
+        self.assertNotIn("decoy", result.stdout)
+        self.assertIn(f"  {'libllama.so.0.0.1':<22} CHANGED  {self.engine_digest('libllama', 'a')} -> "
+                      f"{self.engine_digest('libllama', 'b')}\n", result.stdout)
+        self.assertIn(f"  {'libggml.so.0.9.1':<22} CHANGED  {self.engine_digest('libggml', 'a')} -> "
+                      f"{self.engine_digest('libggml', 'b')}\n", result.stdout)
+        for link in ("libllama.so ", "libllama.so.0 ", "libggml.so ", "libggml.so.0 "):
+            self.assertNotIn("  " + link, result.stdout)
+        self.assertIn(f"  {'(library links)':<22} 1 to carry with cp -a\n", result.stdout)
+        self.assertIn("/etc/ld.so.conf.d/weaver.conf stands; left as it is", result.stdout)
+        self.assertIn(f"  library dir   {self.lib_dir}\n", result.stdout)
+        self.assert_unprivileged()
+        # An unchanged engine plans unchanged and the box is current.
+        self.install_libraries("a")
+        installed = self.root / "installed"
+        for member in ("worker", "weaver-admin", "weaver-trace-relay", "weaver-gate", "weaver-spu", "weaver-state"):
+            installed.joinpath(member).write_text("fixture artifact " + member)
+        installed.joinpath("busybox").write_text("fixture busybox")
+        installed.joinpath("busybox.applets").write_text("ls\ncat\n")
+        shutil.rmtree(self.root / 'target with "quotes"')
+        self.env["ENGINE_BUILD"] = "a"
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"  {'libllama.so.0.0.1':<22} unchanged\n", result.stdout)
+        self.assertNotIn("(library links)", result.stdout)
+        self.assertIn("every deployed binary and engine library already matches the build", result.stdout)
+        self.assertIn("the box is current at", result.stdout)
+
+    def test_the_plan_refuses_where_the_library_step_cannot_be_named(self):
+        """**What cannot be named refuses before anything is planned**: a
+        build whose messages report no output directory for the engine's
+        package, and a stack record whose library-path is missing, relative,
+        or not a directory. Perturbation: fall back to the newest out/lib
+        when no message names one and the first case plans."""
+        self.env["NO_ENGINE_MESSAGE"] = "1"
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        target = self.root / 'target with "quotes"'
+        self.assertIn(f"the build reported no single output directory under {target}/release/build for llama-cpp-sys-2",
+                      result.stderr)
+        self.assertNotIn("== plan", result.stdout)
+        self.assertEqual(list(target.glob("weaver-deploy-messages-*")), [], "the messages file is removed")
+        self.env.pop("NO_ENGINE_MESSAGE")
+        for value, said in (("", "no absolute library-path"), ("relative/lib", "no absolute library-path"),
+                            (str(self.root / "no-such-lib"), "does not stand as a directory")):
+            with self.subTest(value=value):
+                self.log.unlink(missing_ok=True)
+                (self.stack / "library-path").write_text(value + "\n")
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertFalse(any(c[0] == "cargo" for c in self.calls()), self.calls())
+
+    def test_a_loader_entry_refuses_a_cuda_directory_root_does_not_hold_closed(self):
+        """**Where the plan would write the loader's entry, the CUDA directory
+        it names is judged first** (deploy/engine-libraries.sh): one absolute
+        path, held closed by root, or the plan refuses before any sudo. Where
+        the entry stands, the variable is not read. Perturbation: drop the
+        `loader_dir` call and each refused case plans the entry."""
+        open_dir = self.root / "open-cuda"
+        open_dir.mkdir()
+        open_dir.chmod(0o777)
+        self.ldso_conf.unlink()
+        for value, said in (("relative/lib64", "is not one absolute path"),
+                            (str(self.root / "no-such-cuda"), "is not held closed by root"),
+                            (str(open_dir), f"is not held closed by root at {open_dir}")):
+            with self.subTest(value=value):
+                self.log.unlink(missing_ok=True)
+                shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+                self.env["CUDA_LIB_DIR"] = value
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(f"CUDA_LIB_DIR {value} {said}", result.stderr)
+                self.assertNotIn("NEW      " + str(self.lib_dir), result.stdout)
+                self.assertFalse(any(c[0] == "sudo" for c in self.calls()), self.calls())
+        self.ldso_conf.write_text(f"{self.lib_dir}\n{self.cuda_lib}\n")
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        self.env["CUDA_LIB_DIR"] = str(open_dir)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("stands; left as it is", result.stdout)
+
+    def library_install(self, **env):
+        """An --install on a box with no agent, the engine moved to build b,
+        libggml's SONAME link at another target and libllama's bare link
+        absent, so one file is replaced, one link replaced and one added."""
+        shutil.rmtree(self.config / "existing")
+        (self.lib_dir / "libggml.so.0").unlink()
+        (self.lib_dir / "libggml.so.0").symlink_to("libggml.so.0.9.0")
+        (self.lib_dir / "libllama.so").unlink()
+        admin = self.root / "fixture-admin"
+        admin.write_text("#!/bin/sh\nexit 2\n")
+        admin.chmod(0o755)
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_ADMIN=str(admin), ENGINE_BUILD="b", **env)
+        return self.run_script("update-stack.sh", "--install")
+
+    def test_a_name_the_build_no_longer_makes_is_removed_and_put_back_by_a_rollback(self):
+        """**The library directory ends holding the build's engine and no
+        other**: a versioned file of a higher build number, which `ldconfig`
+        would point the SONAME link at, and a link the build does not make
+        are planned REMOVED, removed under the window into the backup's lib/,
+        and put back where the install rolls back. Perturbations: drop the
+        removal and the stale file stays; drop it from the restore and the
+        rollback leaves it gone."""
+        (self.lib_dir / "libllama.so.0.0.9").write_text("fixture libllama stale")
+        (self.lib_dir / "libllama.so.1").symlink_to("libllama.so.0.0.9")
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        digest = hashlib.sha256(b"fixture libllama stale").hexdigest()[:12]
+        self.assertIn(f"  {'libllama.so.0.0.9':<22} REMOVED  {digest}\n", result.stdout)
+        self.assertIn(f"  {'(stale links)':<22} 1 to remove\n", result.stdout)
+        self.assertFalse((self.lib_dir / "libllama.so.0.0.9").exists())
+        self.assertFalse((self.lib_dir / "libllama.so.1").is_symlink())
+        backup, = self.root.glob("backup-*")
+        self.assertEqual((backup / "lib" / "libllama.so.0.0.9").read_text(), "fixture libllama stale")
+        self.assertEqual(os.readlink(backup / "lib" / "libllama.so.1"), "libllama.so.0.0.9")
+        # The same box, rolled back by an unresolved library: a fresh fixture.
+        self.setUp()
+        (self.lib_dir / "libllama.so.0.0.9").write_text("fixture libllama stale")
+        (self.lib_dir / "libllama.so.1").symlink_to("libllama.so.0.0.9")
+        result = self.library_install(LDD_MISSING="libggml.so.0")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual((self.lib_dir / "libllama.so.0.0.9").read_text(), "fixture libllama stale")
+        self.assertEqual(os.readlink(self.lib_dir / "libllama.so.1"), "libllama.so.0.0.9")
+
+    def test_the_install_takes_the_engine_only_from_the_library_directory(self):
+        """**The resolution check is the agent's, not the operator's shell's**
+        (deploy/engine-libraries.sh): ldd runs with LD_LIBRARY_PATH the
+        library directory and no LD_PRELOAD, whatever the operator carries;
+        an engine resolved outside the directory, and an SPU ldd cannot read,
+        each roll the install back. Perturbations: run ldd in the operator's
+        environment and the outside directory passes; drop ldd's status and
+        the unreadable SPU passes."""
+        # A preload every process can load, so only its absence at ldd counts.
+        preload = "/usr/lib/libm.so.6" if os.path.exists("/usr/lib/libm.so.6") else ""
+        self.env.update(LD_LIBRARY_PATH="/operator/out/lib", LD_PRELOAD=preload)
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(["ldd-env", str(self.lib_dir), ""], self.calls())
+        self.assertIn(f"of them the engine's from {self.lib_dir}", result.stdout)
+        for env, said in (({"LDD_ELSEWHERE": "/operator/out/lib"}, "resolves its engine outside"),
+                          ({"LDD_STATIC": "1"}, "ldd could not read the installed weaver-spu (it exited 1)")):
+            with self.subTest(env=env):
+                self.setUp()
+                result = self.library_install(**env)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertEqual((self.lib_dir / "libllama.so.0.0.1").read_text(), "fixture libllama a")
+
+    def test_the_install_carries_the_engine_libraries_under_the_window(self):
+        """**The install carries each changed library and link, keeping the
+        old ones in the backup's lib/** and the loader's entry where it is
+        missing: a new file, root's without following a link, ldconfig, then
+        the SPU's every library resolved. Perturbations: drop the library
+        loop and libllama stays build a; copy without `-a` and the link
+        becomes a file; drop the backup and lib/ holds nothing."""
+        self.ldso_conf.unlink()
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"  {'/etc/ld.so.conf.d/weaver.conf':<22} NEW      {self.lib_dir} and {self.cuda_lib}, then ldconfig",
+                      result.stdout)
+        self.assertEqual((self.lib_dir / "libllama.so.0.0.1").read_text(), "fixture libllama b")
+        self.assertEqual((self.lib_dir / "libggml.so.0.9.1").read_text(), "fixture libggml b")
+        self.assertEqual(os.readlink(self.lib_dir / "libggml.so.0"), "libggml.so.0.9.1")
+        self.assertEqual(os.readlink(self.lib_dir / "libllama.so"), "libllama.so.0")
+        backup, = self.root.glob("backup-*")
+        self.assertEqual((backup / "lib" / "libllama.so.0.0.1").read_text(), "fixture libllama a")
+        self.assertEqual(os.readlink(backup / "lib" / "libggml.so.0"), "libggml.so.0.9.0")
+        self.assertFalse((backup / "lib" / "libllama.so").exists() or (backup / "lib" / "libllama.so").is_symlink())
+        self.assertEqual(self.ldso_conf.read_text(), f"{self.lib_dir}\n{self.cuda_lib}\n")
+        calls = self.calls()
+        # A file is installed root's from the moment it has a name; a link is
+        # carried as a link and made root's without following it.
+        out = self.root / 'target with "quotes"' / "release" / "build" / "llama-cpp-sys-2-fixture" / "out" / "lib"
+        for name in ("libllama.so.0.0.1", "libggml.so.0.9.1"):
+            self.assertIn(["sudo", "install", "-o", "root", "-g", "root", "-m", "0755", "--",
+                           str(out / name), str(self.lib_dir / name)], calls)
+        for name in ("libggml.so.0", "libllama.so"):
+            self.assertIn(["sudo", "chown", "-h", "root:root", "--", str(self.lib_dir / name)], calls)
+        placed = [c for c in calls if c[:2] in (["sudo", "cp"], ["sudo", "install"])
+                  and c[-1].startswith(str(self.lib_dir)) and "-d" not in c]
+        copies = [c for c in placed if c[1] == "cp"]
+        self.assertTrue(copies and all(c[2:4] == ["-a", "--remove-destination"] for c in copies), copies)
+        # The versioned files are carried before any link.
+        order = [Path(c[-1]).name for c in placed]
+        self.assertLess(max(order.index(n) for n in ("libllama.so.0.0.1", "libggml.so.0.9.1")),
+                        min(order.index(n) for n in ("libggml.so.0", "libllama.so")), order)
+        self.assertIn(["sudo", "ldconfig"], calls)
+        self.assertLess(calls.index(["sudo", "ldconfig"]), next(i for i, c in enumerate(calls) if c[0] == "ldd"))
+        self.assertIn(f"weaver-spu resolves every library it names, 2 of them the engine's from {self.lib_dir}",
+                      result.stdout)
+        self.assertIn("the box is at", result.stdout)
+
+    def test_an_unresolved_library_rolls_the_libraries_back(self):
+        """**A library the SPU cannot resolve after the install rolls back**,
+        the libraries with the binaries: the replaced file and link come back
+        from the backup, the added link goes, the loader's entry this run
+        wrote goes, and ldconfig runs over what stands. Perturbations: drop
+        the library restore and libllama stays build b; drop the removal and
+        the added link stays; drop the entry's removal and it stays."""
+        self.ldso_conf.unlink()
+        result = self.library_install(LDD_MISSING="libllama.so.0")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("libllama.so.0 => not found", result.stderr)
+        self.assertIn("weaver-spu has unresolved libraries after the install", result.stderr)
+        self.assertEqual((self.lib_dir / "libllama.so.0.0.1").read_text(), "fixture libllama a")
+        self.assertEqual((self.lib_dir / "libggml.so.0.9.1").read_text(), "fixture libggml a")
+        self.assertEqual(os.readlink(self.lib_dir / "libggml.so.0"), "libggml.so.0.9.0")
+        self.assertFalse((self.lib_dir / "libllama.so").is_symlink() or (self.lib_dir / "libllama.so").exists())
+        self.assertFalse(self.ldso_conf.exists())
+        self.assertEqual(self.calls().count(["sudo", "ldconfig"]), 2, self.calls())
+        self.assertNotIn("RESTORE INCOMPLETE", result.stderr)
 
     def window_admin(self, extra=""):
         """A stand-in admin for the install window: each verb logged with
@@ -5157,7 +5486,7 @@ class RoundOneOf79Tests(unittest.TestCase):
         script = (DEPLOY / "update-stack.sh").read_text()
         take = script.index('sudo -v || die "--install needs sudo')
         self.assertLess(script.index('say "plan only. rerun with --install"; exit 0; }'), take)
-        self.assertLess(take, script.index('if [ ${#CHANGED[@]} -gt 0 ]; then\n  say "install"'))
+        self.assertLess(take, script.index('if [ ${#CHANGED[@]} -gt 0 ] || [ ${#LIB_CHANGED[@]} -gt 0 ]'))
         self.assertEqual(script.count("sudo -v"), 1)
 
 
@@ -5514,6 +5843,174 @@ CARGO_COMPILE_FAILURE = (
     "  --> crates/weaver-harness/src/lifecycle.rs:10:5\n"
     "error: could not compile `weaver-harness` (lib test) due to 1 previous error\n"
 )
+
+
+class EngineLibrariesTests(unittest.TestCase):
+    """**Both stack scripts select, place and check the engine's libraries,
+    and judge the loader entry's directories, through
+    deploy/engine-libraries.sh**, run here as the scripts source it.
+    `engine_out` prints the out_dir of the one build-script-executed message
+    for the package `cargo pkgid` names, inside the build, and nothing
+    otherwise; `engine_resolved` passes only a report naming the engine and
+    resolving it inside the library directory with nothing missing; `spu_ldd`
+    runs ldd with the library directory as LD_LIBRARY_PATH and none of the
+    operator's loader variables; `loader_dir` refuses a directory that is not
+    one absolute path held closed by root. Perturbations: take the first
+    message rather than the single one and the two-directory case prints;
+    match any package's message and the decoy's directory counts; drop the
+    containment and the directory outside the build prints; compare
+    unresolved and the link out of the build prints; let `engine_resolved`
+    pass a report with no engine and the empty report passes; keep the
+    operator's LD_PRELOAD and it reaches ldd; drop the newline test and the
+    two-line value passes."""
+
+    ENGINE = "fixture-engine-source#llama-cpp-sys-2@0.1.0"
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-engine-libraries-")
+        self.addCleanup(self.scratch.cleanup)
+        self.dir = Path(self.scratch.name)
+        self.bin = self.dir / "bin"
+        self.bin.mkdir()
+        cargo = self.bin / "cargo"
+        cargo.write_text('#!/bin/sh\n[ "$1" = pkgid ] || exit 99\nprintf \'%s\' "$PKGID"\nexit "${PKGID_EXIT:-0}"\n')
+        cargo.chmod(0o755)
+        self.messages = self.dir / "messages.json"
+        self.build = self.dir / "target" / "release" / "build"
+
+    def run_bash(self, program, **env):
+        env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", **env}
+        env.pop("BASH_ENV", None)
+        source = f"source {shlex.quote(str(DEPLOY / 'engine-libraries.sh'))}\n"
+        return subprocess.run(["bash", "-c", "set -euo pipefail\n" + source + program],
+                              env=env, text=True, capture_output=True, timeout=20)
+
+    def engine_out(self, pkgid, *messages, status=0):
+        self.messages.write_text("".join(m if isinstance(m, str) else json.dumps(m) + "\n" for m in messages))
+        return self.run_bash(f"engine_out llama-cpp-sys-2 {shlex.quote(str(self.messages))} "
+                             f"{shlex.quote(str(self.build))}", PKGID=pkgid, PKGID_EXIT=str(status))
+
+    def test_engine_out_prints_the_one_directory_cargo_reported_for_the_engine(self):
+        a = self.build / "llama-cpp-sys-2-a" / "out"
+        b = self.build / "llama-cpp-sys-2-b" / "out"
+        elsewhere = self.dir / "elsewhere" / "out"
+        for d in (a, b, self.build / "decoy" / "out", elsewhere):
+            d.mkdir(parents=True)
+        (self.build / "leads-out").symlink_to(elsewhere)
+        mine = {"reason": "build-script-executed", "package_id": self.ENGINE, "out_dir": str(a)}
+        decoy = {"reason": "build-script-executed", "package_id": "1-source#decoy@0.1.0",
+                 "out_dir": str(self.build / "decoy" / "out")}
+        artifact = {"reason": "compiler-artifact", "package_id": self.ENGINE, "out_dir": str(elsewhere)}
+        ran = self.engine_out(self.ENGINE, decoy, "not json\n", artifact, mine, mine)
+        self.assertEqual((ran.returncode, ran.stdout), (0, f"{a}\n"), ran.stderr)
+        for label, pkgid, status, messages in (
+                ("two directories for the engine", self.ENGINE, 0, (mine, dict(mine, out_dir=str(b)))),
+                ("no message for the engine", self.ENGINE, 0, (decoy, artifact)),
+                ("an empty directory", self.ENGINE, 0, (dict(mine, out_dir=""),)),
+                ("a directory outside the build", self.ENGINE, 0, (dict(mine, out_dir=str(elsewhere)),)),
+                ("a link out of the build", self.ENGINE, 0, (dict(mine, out_dir=str(self.build / "leads-out")),)),
+                ("the build directory itself", self.ENGINE, 0, (dict(mine, out_dir=str(self.build)),)),
+                ("a directory that is not there", self.ENGINE, 0, (dict(mine, out_dir=str(self.build / "gone" / "out")),)),
+                ("a name beside the build", self.ENGINE, 0, (dict(mine, out_dir=str(self.build) + "-x/out"),)),
+                ("cargo refuses an ambiguous or absent name", "", 101, (mine,)),
+                ("cargo names nothing", "", 0, (mine,))):
+            with self.subTest(label):
+                ran = self.engine_out(pkgid, *messages, status=status)
+                self.assertEqual((ran.returncode, ran.stdout), (1, ""), ran.stderr)
+
+    def test_engine_resolved_passes_only_the_engine_from_the_library_directory(self):
+        lib = self.dir / "lib"
+        lib.mkdir()
+        (lib / "libllama.so.0.0.1").write_text("x")
+        (lib / "libllama.so.0").symlink_to("libllama.so.0.0.1")
+        other = self.dir / "other"
+        other.mkdir()
+        (other / "libllama.so.0").write_text("x")
+        good = (f"\tlinux-vdso.so.1 (0x0000)\n\tlibllama.so.0 => {lib}/libllama.so.0 (0x0000)\n"
+                f"\tlibc.so.6 => /usr/lib/libc.so.6 (0x0000)\n")
+        check = 'engine_resolved "$REPORT" "$LIB"'
+        ran = self.run_bash(check, REPORT=good, LIB=str(lib))
+        self.assertEqual((ran.returncode, ran.stdout), (0, ""), ran.stderr)
+        for label, report, said in (
+                ("a library not found", good + "\tlibcudart.so.13 => not found\n", "libcudart.so.13 => not found"),
+                ("the engine from elsewhere", good.replace(str(lib), str(other)), f"{other}/libllama.so.0"),
+                ("no engine named", "\tlibc.so.6 => /usr/lib/libc.so.6 (0x0000)\n", "no engine library is named"),
+                ("an empty report", "", "no engine library is named")):
+            with self.subTest(label):
+                ran = self.run_bash(check, REPORT=report, LIB=str(lib))
+                self.assertEqual(ran.returncode, 1, ran.stdout)
+                self.assertIn(said, ran.stdout)
+
+    def test_spu_ldd_runs_ldd_with_the_library_directory_and_no_operator_loader_variables(self):
+        ldd = self.bin / "ldd"
+        ldd.write_text('#!/bin/sh\nprintf "%s|%s|%s|%s\\n" "$LD_LIBRARY_PATH" "${LD_PRELOAD-unset}" '
+                       '"${LD_AUDIT-unset}" "$1"\n')
+        ldd.chmod(0o755)
+        ran = self.run_bash('spu_ldd /x/weaver-spu /opt/fixture/lib', LD_LIBRARY_PATH="/operator/out/lib",
+                            LD_PRELOAD="/operator/p.so", LD_AUDIT="/operator/a.so")
+        # The loader warns from `env` itself, which starts under the
+        # operator's variables before it clears them; ldd's own line is last.
+        self.assertEqual(ran.stdout.splitlines()[-1], "/opt/fixture/lib|unset|unset|/x/weaver-spu", ran.stderr)
+
+    def test_loader_dir_refuses_what_root_does_not_hold_closed(self):
+        update = (DEPLOY / "update-stack.sh").read_text()
+        helpers = ("die() { printf 'REFUSED: %s\\n' \"$*\" >&2; exit 1; }\n"
+                   + shell_function(update, "held_closed"))
+        mine = self.dir / "mine"
+        mine.mkdir()
+        for value, said in (("relative", "is not one absolute path"),
+                            ("/usr\n" + str(mine), "is not one absolute path"),
+                            (str(self.dir / "absent"), "is not held closed by root"),
+                            (str(mine), "is not held closed by root")):
+            with self.subTest(value=value):
+                ran = self.run_bash(helpers + f"loader_dir CUDA_LIB_DIR {shlex.quote(value)}; echo passed")
+                self.assertEqual(ran.returncode, 1, ran.stdout)
+                self.assertIn(f"REFUSED: CUDA_LIB_DIR {value} {said}", ran.stderr)
+                self.assertNotIn("passed", ran.stdout)
+        if os.stat("/usr").st_uid == 0 and not os.stat("/usr").st_mode & 0o022:
+            ran = self.run_bash(helpers + "loader_dir CUDA_LIB_DIR /usr; echo passed")
+            self.assertEqual(ran.stdout, "passed\n", ran.stderr)
+
+    def test_both_scripts_select_place_check_and_judge_through_the_one_file(self):
+        """Neither script keeps a copy of its own: each sources the file and
+        assigns none of its constants, makes its build's messages file with
+        mktemp under an exit trap, calls `engine_out` once and removes the
+        file, places every library through `install_library`, checks the SPU
+        through `spu_ldd` and `engine_resolved` and runs no bare ldd, judges
+        the CUDA directory before it writes the entry, and lists no `build/`
+        directory. Bootstrap's build sends its messages to the file and its
+        diagnostics to the kept log, and judges the CUDA directory before it
+        builds."""
+        call = 'SYS_OUT=$(engine_out "$ENGINE_CRATE" "$BUILD_MESSAGES" "$BUILT/build" || true)\n'
+        for name in ("bootstrap-stack.sh", "update-stack.sh"):
+            text = (DEPLOY / name).read_text()
+            with self.subTest(script=name):
+                self.assertIn('source "$REPO/deploy/engine-libraries.sh"', text)
+                for defined in ("engine_out() {", "loader_dir() {", "install_library() {", "spu_ldd() {",
+                                "engine_resolved() {"):
+                    self.assertNotIn(defined, text)
+                for constant in ("ENGINE_CRATE=", "LIB_GLOBS=", "LDSO_CONF=", "CUDA_LIB_DIR="):
+                    self.assertNotRegex(text, rf"(?m)^\s*{constant}")
+                self.assertEqual(text.count(call), 1)
+                take = text.index(call)
+                self.assertEqual(text.index('rm -f -- "$BUILD_MESSAGES"\ntrap - EXIT\n', take) - take, len(call))
+                self.assertEqual(text.count('BUILD_MESSAGES=$(mktemp "${BUILT%/release}/weaver-deploy-messages-XXXXXX")'), 1)
+                self.assertEqual(text.count("""trap 'rm -f -- "$BUILD_MESSAGES"' EXIT"""), 1)
+                self.assertNotRegex(text, r"ls [^\n]*build/")
+                self.assertNotRegex(text, r"(?m)^[^#\n]*\bldd \"")
+                self.assertIn("install_library ", text)
+                self.assertNotRegex(text, r'sudo cp -a[^\n]*\$SYS_OUT|sudo cp -a "\$\{LIBS')
+                self.assertIn("spu_ldd ", text)
+                self.assertIn("engine_resolved ", text)
+                self.assertIn("--message-format=json-render-diagnostics", text)
+                self.assertEqual(text.count('loader_dir CUDA_LIB_DIR "$CUDA_LIB_DIR"'), 1)
+                self.assertLess(text.index('loader_dir CUDA_LIB_DIR "$CUDA_LIB_DIR"'),
+                                text.index('| sudo tee "$LDSO_CONF"'))
+        bootstrap = (DEPLOY / "bootstrap-stack.sh").read_text()
+        build = shell_function(bootstrap, "run_build")
+        self.assertIn('>"$BUILD_MESSAGES" 2>"$log"', build)
+        self.assertIn('rm -f -- "$BUILD_MESSAGES"', build.split('if [ "$rc" -ne 0 ]; then', 1)[1])
+        self.assertLess(bootstrap.index('loader_dir CUDA_LIB_DIR "$CUDA_LIB_DIR"'), bootstrap.index("\nrun_build\n"))
 
 
 class CargoStepTests(unittest.TestCase):

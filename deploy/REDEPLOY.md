@@ -10,8 +10,11 @@ The scripts in this directory divide the work. `decommission.sh` takes down and
 archives, `bootstrap-stack.sh` builds and installs on a clean box, `create-agent.sh`
 makes one agent, `verify-load.sh` proves one agent loads and its constituents sit where
 they should. `update-stack.sh` is for every later install on a box this runbook has
-already stood up: it needs the stack record and at least one agent root to read and a
-git tree to name the build, and it refuses without them. Its `--install` unloads every
+already stood up: it needs the stack record to read and a git tree to name the build,
+and it refuses without them; a box with no agent root is updated all the same (#39).
+It plans and installs the members, the shell and the engine libraries alike, so the
+commit its closing line names is true of everything that commit builds (the
+operator's ruling of 2026-11-09). Its `--install` unloads every
 agent before it replaces a binary, waiting on each graceful unload up to 300 seconds
 (`--unload-timeout <s>`) and then joining it with `force-unload`, which still takes the
 leave's save point, and prints which ended the run. A box on the box-wide layout
@@ -51,7 +54,7 @@ something this runbook does not mention, the runbook is what gets amended.
 | Agent root: the agent's admin configuration, one file per key, copied from the stack record, plus `territory`, `operator` and `roles.toml` | `/etc/weaver/admin/<name>/` (root 0755, files 0644) | create-agent |
 | Sudo rule: the connector's fixed command lines | `/etc/sudoers.d/weaver-<name>` (root 0440) | create-agent |
 | Members: `worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state` | `<prefix>/bin/` | bootstrap, update-stack |
-| Engine libraries `libggml*`, `libllama*` | `<prefix>/lib/`, reached by `/etc/ld.so.conf.d/weaver.conf` and named by the record's `library-path`, which admin sets as the worker's `LD_LIBRARY_PATH` | bootstrap |
+| Engine libraries `libggml*`, `libllama*` | `<prefix>/lib/`, reached by `/etc/ld.so.conf.d/weaver.conf` and named by the record's `library-path`, which admin sets as the worker's `LD_LIBRARY_PATH` | bootstrap, update-stack |
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
 | Retired Python SPU, where an older install left it | `<prefix>/python-spu/` | archive and purge only, Python retirement below |
 | Accounts: the agent's `weaver-<name>` (home `/home/weaver-<name>`, 2750), the member's `weaver-<name>-state`, the relay's `weaver-<name>-relay`, the connector's `weaver-<name>-admincon`, and the groups `weaver-<name>-trace` and `weaver-<name>-admin` | passwd | create-agent |
