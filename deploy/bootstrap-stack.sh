@@ -236,7 +236,7 @@ say "test"
 # target directory never write each other's, and named as the step begins so
 # a long step can be followed.
 run_tests() {
-  local log="${BUILT%/release}/weaver-deploy-tests-$$.log" rc=0 totals passed failed
+  local log="${BUILT%/release}/weaver-deploy-tests-$$.log" rc=0 totals passed failed cause
   mkdir -p -- "${BUILT%/release}" || die "cannot make the target directory ${BUILT%/release} for the test step's log"
   printf '   output: %s\n' "$log"
   cargo test --release --locked \
@@ -265,14 +265,24 @@ run_tests() {
     # carried them, and the failures block a second time, before the
     # refusal. Echoed, in the log's order: each libtest `failures:` block
     # through its `test result:` line (a FAILED summary outside a block too),
+    # the block closed by a summary a child's line garbled (#507) as well;
     # then, outside those blocks, the first 12 of cargo's `error` lines with
-    # the 6 after each, which name a crate that did not compile or a test
-    # binary that died. The whole output stays in the kept log.
-    awk '
+    # the 6 after each, and of `panicked at` lines with the message after
+    # each, which name a crate that did not compile or a test binary that
+    # died. Where none of these stands (a run of no tests), the log's last
+    # 20 lines, which then carry no test's output. The whole output stays in
+    # the kept log.
+    cause=$(awk '
       /^failures:$/ {held = 1}
-      held || /^test result: FAILED\./ {print; if (/^test result: /) held = 0; next}
+      held || /^test result: FAILED\./ {print; if (/test result: /) held = 0; next}
       /^error(\[|:)/ && shown < 12 {after = 7; shown++}
-      after > 0 {print; after--}' "$log" >&2 || true
+      /panicked at / && shown < 12 {if (after < 2) after = 2; shown++}
+      after > 0 {print; after--}' "$log") || true
+    if [ -n "$cause" ]; then
+      printf '%s\n' "$cause" >&2
+    else
+      tail -n 20 -- "$log" >&2
+    fi
     die "the tests did not pass (cargo exited $rc, $passed passed, $failed failed); the whole output is kept in $log"
   fi
   rm -f -- "$log"

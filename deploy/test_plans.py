@@ -2301,6 +2301,16 @@ esac
                 self.assertEqual(tree, [f"  {said}", "  abcdef0 -> abcdef0"])
         self.env.pop("FIXTURE_BRANCH")
 
+    def test_the_agents_line_lines_up_with_the_box_facts(self):
+        """**The agents line sits in the box facts' column**: the list was
+        built with a leading space, so the live plan of 2026-11-09 printed
+        "agents         granite1", one column out. Perturbation: build the
+        list as "$AGENTS $agent" again and the line carries two spaces more
+        than its label's padding."""
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("\n  agents        existing\n", result.stdout)
+
     def test_the_will_install_line_names_every_file_the_plan_lists(self):
         """**The box section's install line names what the install
         installs**: the members, the shell's two files and the engine
@@ -2334,12 +2344,15 @@ esac
         self.assertIn("It plans and installs the members, the shell and the engine libraries alike", redeploy)
 
     def test_the_install_window_prints_once_under_install(self):
-        """**The install window is printed once**: a plan prints what
-        --install will do to the agents, and --install prints it as it does
-        it, so the preview is the plan's alone. The live install of
-        2026-11-09 printed both headers, each over the same "no agents"
-        body. Perturbation: print the preview under --install again and two
-        headers stand there."""
+        """**The install window is said once**: --install runs the plan
+        first, so its preview says what the window will do before the
+        credential prompt (#99 area 2 review, R2), and the act reports under
+        a header of its own only where an agent stands to hold and unload.
+        The live install of 2026-11-09, on a box with no agent, printed a
+        second install window header over the same "no agents" body.
+        Perturbation: put the act's old header and its "no agents" line back
+        and two headers and two bodies stand; print the preview in a plan
+        only and --install says nothing before it acts."""
         plan = self.run_script("update-stack.sh")
         self.assertEqual(plan.returncode, 0, plan.stdout + plan.stderr)
         self.assertEqual([l for l in plan.stdout.splitlines() if l.startswith("== the install window")],
@@ -2350,8 +2363,12 @@ esac
         result = self.library_install()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual([l for l in result.stdout.splitlines() if l.startswith("== the install window")],
-                         ["== the install window: connector rules held, agents unloaded"])
+                         ["== the install window"])
         self.assertEqual(result.stdout.count("no agents:"), 1, result.stdout)
+        self.assertIn("  no agents: --install holds no connector rule and unloads none\n", result.stdout)
+        self.assertNotIn("== holding the connector rules", result.stdout)
+        self.assertNotIn("plan only:", result.stdout)
+        self.assertLess(result.stdout.index("== the install window"), result.stdout.index("== install"))
 
     def test_stack_reads_each_declaration_from_its_territory(self):
         # The declaration lives in the territory the root names. One the
@@ -3005,7 +3022,9 @@ esac
                         ADMIN_CALLS=str(self.root / "admin-calls"))
         result = self.run_script("update-stack.sh", "--install")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        for said in ("no agents: no connector rule to hold, none to unload", "no agents to reconcile",
+        # The window is said once, by the plan --install runs first
+        # (test_the_install_window_prints_once_under_install).
+        for said in ("no agents: --install holds no connector rule and unloads none", "no agents to reconcile",
                      "no agents to verify", "the box is at"):
             self.assertIn(said, result.stdout)
         self.assertTrue([c for c in self.calls() if c[:2] == ["sudo", "install"]], self.calls())
@@ -3444,6 +3463,12 @@ esac
         self.log.unlink(missing_ok=True)
         result = self.run_script("update-stack.sh", "--install")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # The preview before the credential prompt, then the act under its
+        # own header (test_the_install_window_prints_once_under_install).
+        self.assertEqual([l for l in result.stdout.splitlines() if l.startswith("== the install window")],
+                         ["== the install window"])
+        self.assertLess(result.stdout.index("existing     --install holds /etc/sudoers.d/weaver-existing"),
+                        result.stdout.index("\n== holding the connector rules, unloading the agents\n"))
         self.assertIn(f"held /etc/sudoers.d/weaver-existing as /etc/sudoers.d/.weaver-existing.updating", result.stdout)
         self.assertIn("restored /etc/sudoers.d/weaver-existing", result.stdout)
         self.assertTrue(rule.exists())
@@ -6563,6 +6588,55 @@ exit "${CARGO_EXIT:-0}"
                 self.assertIn(f"the tests did not pass (cargo exited 101, 2 passed, 1 failed); "
                               f"the whole output is kept in {log}", ran.stderr)
                 log.unlink()
+
+    def test_the_echo_names_an_abort_a_garbled_close_and_a_run_of_no_tests(self):
+        """**The trimmed echo still names the cause where no failures block
+        does.** A test binary that aborts leaves no block: its panic and
+        cargo's `Caused by` are echoed, the noise is not. A summary a child's
+        line garbled (#507) still closes its block, so the noise after it is
+        not echoed. A run of no tests leaves nothing to match, and the log's
+        last lines are echoed instead. Perturbations: anchor the block's
+        close again and the noise after the garbled summary prints; drop the
+        panic rule and the abort's cause is missing; drop the fallback and
+        the run of no tests echoes nothing."""
+        noise = ('{"depth":1024,"mark":768,"organ":"harness","peak":1,"queue":"trace"}\n'
+                 "test lifecycle::tests::y ... ok\n")
+        abort = (noise * 20 + "thread 'lifecycle::tests::z' (9) panicked at "
+                 "crates/weaver-harness/src/lifecycle/tests.rs:7:3:\nthe abort's cause\n" + noise * 20)
+        abort_err = ("error: test failed, to rerun pass `-p weaver-harness --lib`\n\nCaused by:\n"
+                     "  process didn't exit successfully: `weaver_harness-0` "
+                     "(signal: 6, SIGABRT: process abort signal)\n")
+        garbled = ("\nfailures:\n    lifecycle::tests::x\n\n" + noise.splitlines()[0]
+                   + "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; "
+                   "finished in 0.10s\n" + "after the close\n" * 30)
+        none = ("   Compiling weaver-trace v0.1.0\n     Running unittests src/lib.rs\n\nrunning 0 tests\n\n"
+                "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n")
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script, case="abort"):
+                ran = self.step(script, "run_tests", stdout=abort, stderr=abort_err, status=101)
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertIn("panicked at crates/weaver-harness/src/lifecycle/tests.rs:7:3:\n"
+                              "the abort's cause\n", ran.stderr)
+                self.assertIn("(signal: 6, SIGABRT: process abort signal)", ran.stderr)
+                self.assertNotIn('"queue":"trace"', ran.stderr)
+                self.assertNotIn("test lifecycle::tests::y ... ok", ran.stderr)
+                for log in self.kept_logs():
+                    log.unlink()
+            with self.subTest(script=script, case="garbled close"):
+                ran = self.step(script, "run_tests", stdout=garbled, status=101)
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertIn("    lifecycle::tests::x\n", ran.stderr)
+                self.assertIn("test result: FAILED. 2 passed; 1 failed", ran.stderr)
+                self.assertNotIn("after the close", ran.stderr)
+                for log in self.kept_logs():
+                    log.unlink()
+            with self.subTest(script=script, case="no tests"):
+                ran = self.step(script, "run_tests", stdout=none)
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertIn("running 0 tests", ran.stderr.split("\nREFUSED: ", 1)[0])
+                self.assertIn("cargo exited 0, 0 passed, 0 failed", ran.stderr)
+                for log in self.kept_logs():
+                    log.unlink()
 
     def test_the_build_takes_the_cuda_host_compiler_update_stack_takes(self):
         ran = self.step("bootstrap-stack.sh", "run_build")

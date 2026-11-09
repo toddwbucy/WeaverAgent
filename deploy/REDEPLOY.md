@@ -296,8 +296,9 @@ What it does, so the log can say which step a failure was at:
    workspace-wide `cargo test --locked` also compiles and passes (#37). Cargo's output
    goes to a log in the target directory, named as the step begins: a crate that does
    not compile, a failed test or no test at all refuses, printing each `failures:`
-   block through its `test result:` line and the first `error` lines cargo prints, and
-   naming the log, which is kept (#128). `update-stack.sh`'s test step does the same.
+   block through its `test result:` line and the first `error` and `panicked at` lines
+   outside them (the log's last 20 where none stands), and naming the log, which is
+   kept (#128). `update-stack.sh`'s test step does the same.
 4. `cargo build --release --locked --workspace --features
    weaver-spu/cuda,weaver-state/sqlite`. The engine is named,
    though it is the default, or the member refuses an agent electing it at load
