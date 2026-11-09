@@ -431,13 +431,28 @@ pub fn run_arm(
         // LORA-6 keeps a failed attempt's facts: the stage the child reached
         // is in its stage file, and the parent records the exit.
         // The entries it completed are on disk already (see [`EntryLog`]),
-        // and the record names how far it got.
+        // and the record names how far it got. The trace file can hold one
+        // entry more than the outputs: an entry whose trace landed and whose
+        // measurement check or text step then failed.
         let (completed, last) = completed_entries(&inputs.report, name);
+        let trace_ids: Vec<String> =
+            std::fs::read_to_string(inputs.report.join(format!("{name}.trace.jsonl")))
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter_map(|row| row["id"].as_str().map(str::to_string))
+                .collect();
+        let trace_only = match trace_ids.last() {
+            Some(id) if trace_ids.len() > completed => id.as_str(),
+            _ => "none",
+        };
         let _ = std::fs::write(
             inputs.report.join(format!("{name}.failed")),
             format!(
-                "{status}\nentries completed: {completed}\nlast completed: {}\n",
-                last.as_deref().unwrap_or("none")
+                "{status}\nentries completed: {completed}\nlast completed: {}\n\
+                 trace lines on disk: {}\ntrace-only entry: {trace_only}\n",
+                last.as_deref().unwrap_or("none"),
+                trace_ids.len()
             ),
         );
         panic!(
@@ -454,6 +469,7 @@ pub fn run_arm(
 /// next session opens, so an arm that fails on a later entry leaves every
 /// completed entry behind.
 pub struct EntryLog {
+    arm: String,
     outputs: std::fs::File,
     traces: std::fs::File,
 }
@@ -468,18 +484,86 @@ impl EntryLog {
                 .unwrap_or_else(|e| panic!("{file} in {}: {e}", report.display()))
         };
         EntryLog {
+            arm: name.to_string(),
             outputs: open(format!("{name}.jsonl")),
             traces: open(format!("{name}.trace.jsonl")),
         }
     }
 
-    pub fn append(&mut self, output: &Value, trace: &Value) {
+    pub fn append_trace(&mut self, trace: &Value) {
+        Self::line(&mut self.traces, trace);
+    }
+
+    pub fn append_output(&mut self, output: &Value) {
+        Self::line(&mut self.outputs, output);
+    }
+
+    fn line(file: &mut std::fs::File, row: &Value) {
         use std::io::Write as _;
-        for (file, row) in [(&mut self.outputs, output), (&mut self.traces, trace)] {
-            writeln!(file, "{row}").expect("an entry line writes");
-            file.flush().expect("an entry line flushes");
-            file.sync_data().expect("an entry line reaches the disk");
-        }
+        writeln!(file, "{row}").expect("an entry line writes");
+        file.flush().expect("an entry line flushes");
+        file.sync_data().expect("an entry line reaches the disk");
+    }
+}
+
+/// **One entry onto the log, its ids and numerical trace first** (LORA-6):
+/// the trace line lands before the measurement check and any text step, so a
+/// failure in either cannot lose what was decoded. The check then requires
+/// one entropy and one surprisal per retained token, or none where nothing
+/// was retained: anything else is a measurement this run cannot replay, so
+/// the arm fails with no output row and the entry is not counted completed.
+/// The output row's text is [`emission_text`] over the emission's bytes,
+/// flagged where they are not UTF-8 and carried as hex beside, so the row
+/// holds what the model emitted. A finish other than the reference's two
+/// (`stop`, `length`) is recorded by its name and then fails the arm, the
+/// entry on disk. Returns the fault, `None` where the bytes were UTF-8.
+pub fn record_entry(
+    log: &mut EntryLog,
+    id: &str,
+    trace: &Trace,
+    mut row: Value,
+    emission: impl FnOnce() -> Vec<u8>,
+) -> Option<String> {
+    log.append_trace(&trace.to_json(id));
+    assert!(
+        trace.entropy.len() == trace.tokens.len() && trace.surprisal.len() == trace.tokens.len(),
+        "arm {}: entry {id} measured {} entropies and {} surprisals for {} tokens",
+        log.arm,
+        trace.entropy.len(),
+        trace.surprisal.len(),
+        trace.tokens.len()
+    );
+    let bytes = emission();
+    let (text, fault) = emission_text(&bytes);
+    row["output"] = Value::String(text);
+    row["output_utf8_valid"] = Value::Bool(fault.is_none());
+    if let Some(fault) = &fault {
+        row["output_utf8_fault"] = Value::String(fault.clone());
+        row["output_bytes_hex"] =
+            Value::String(bytes.iter().map(|byte| format!("{byte:02x}")).collect());
+    }
+    log.append_output(&row);
+    assert!(
+        matches!(trace.finish.as_str(), "stop" | "length"),
+        "arm {}: entry {id} ended {}",
+        log.arm,
+        trace.finish
+    );
+    fault
+}
+
+/// **The emission's text as the reference recorded it.** The reference
+/// decoded with replacement: a model can emit bytes that are not UTF-8 (base
+/// Granite does on held-out t004), and each invalid sequence became U+FFFD.
+/// Valid bytes come back unchanged with no fault; invalid ones come back
+/// replaced, with the strict conversion's first fault.
+pub fn emission_text(bytes: &[u8]) -> (String, Option<String>) {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => (text.to_string(), None),
+        Err(error) => (
+            String::from_utf8_lossy(bytes).into_owned(),
+            Some(error.to_string()),
+        ),
     }
 }
 
@@ -698,21 +782,19 @@ pub fn child() -> bool {
                 },
             )
             .expect("the entry generates");
-        let text = resident
-            .detokenize(&generated.tokens)
-            .expect("the output detokenizes");
         let mut ids: Vec<u32> = generated.tokens.iter().map(|t| t.0).collect();
+        // An end the reference never had (the session's capacity, a cancel)
+        // is carried by its name, and `record_entry` fails the arm on it once
+        // the entry is on disk.
         let finish = match generated.stopped {
             Stopped::Complete => {
                 ids.push(terminator.0);
-                "stop"
+                "stop".to_string()
             }
-            Stopped::LimitReached => "length",
-            other => panic!("entry {} ended {other:?}", entry.id),
+            Stopped::LimitReached => "length".to_string(),
+            other => format!("{other:?}"),
         };
-        // The numerical trace: one entropy and one surprisal per retained
-        // token, or none where nothing was retained. Anything else is a
-        // measurement this run cannot replay, so the arm fails.
+        // The numerical trace, checked by `record_entry` once it is on disk.
         let bits = |values: &Option<weaver_spu::measurement::NonEmpty<f32>>| -> Vec<u32> {
             values
                 .as_ref()
@@ -723,27 +805,27 @@ pub fn child() -> bool {
             tokens: generated.tokens.iter().map(|t| t.0).collect(),
             entropy: bits(&generated.signals.entropy_bits),
             surprisal: bits(&generated.signals.surprisal_bits),
-            finish: finish.into(),
+            finish: finish.clone(),
             stop: generated.drawn_stop.map(|t| t.0),
         };
-        assert!(
-            trace.entropy.len() == trace.tokens.len()
-                && trace.surprisal.len() == trace.tokens.len(),
-            "arm {name}: entry {} measured {} entropies and {} surprisals for {} tokens",
-            entry.id,
-            trace.entropy.len(),
-            trace.surprisal.len(),
-            trace.tokens.len()
-        );
-        // On disk before the judgment and before the next session opens.
+        // On disk before the text step, the judgment and the next session.
         let row = json!({
             "id": entry.id,
-            "output": text,
             "token_ids": ids,
             "finish_reason": finish,
             "wall_seconds": started.elapsed().as_secs_f64(),
         });
-        log.append(&row, &trace.to_json(&entry.id));
+        let utf8_fault = record_entry(&mut log, &entry.id, &trace, row, || {
+            resident
+                .emission_bytes(&generated.tokens)
+                .expect("the emission's pieces read")
+        });
+        if let Some(fault) = &utf8_fault {
+            eprintln!(
+                "arm {name}: {} emitted bytes that are not UTF-8 ({fault}); recorded replaced",
+                entry.id
+            );
+        }
         drop(session);
         let captured = fixture.records().expect("the capture reads");
         match judge_session(

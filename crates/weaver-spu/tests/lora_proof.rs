@@ -287,9 +287,12 @@ fn a_failed_arm_keeps_its_completed_entries() {
     let failed = std::panic::catch_unwind(move || {
         let mut log = fixture::EntryLog::create(&path, "arm");
         for id in ["t001", "t002"] {
-            log.append(
-                &serde_json::json!({"id": id, "token_ids": [1, 2]}),
-                &trace().to_json(id),
+            fixture::record_entry(
+                &mut log,
+                id,
+                &trace(),
+                serde_json::json!({"id": id, "token_ids": [1, 2]}),
+                || b"text".to_vec(),
             );
         }
         panic!("entry t003 failed");
@@ -308,5 +311,177 @@ fn a_failed_arm_keeps_its_completed_entries() {
         fixture::completed_entries(&report, "arm"),
         (2, Some("t002".to_string()))
     );
+    std::fs::remove_dir_all(&report).expect("the scratch directory goes");
+}
+
+/// A fresh scratch report directory for one host test.
+fn scratch(label: &str) -> std::path::PathBuf {
+    let report = std::env::temp_dir().join(format!(
+        "lora-{label}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is past the epoch")
+            .as_nanos()
+    ));
+    std::fs::create_dir(&report).expect("a scratch report directory");
+    report
+}
+
+fn rows(path: &std::path::Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .expect("the file is on disk")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a JSON line"))
+        .collect()
+}
+
+/// **An emission that is not UTF-8 is recorded as the reference recorded it**
+/// (held-out t004, base Granite): the ids and the numerical trace land, and
+/// the output row carries the U+FFFD replacement, `output_utf8_valid: false`
+/// and the strict conversion's fault, where the strict path faulted the arm
+/// and lost the entry.
+#[test]
+fn an_emission_that_is_not_utf8_lands_replaced_and_flagged() {
+    let report = scratch("utf8");
+    let mut log = fixture::EntryLog::create(&report, "arm");
+    // "Perfect! " then an invalid three-byte sequence (a lead byte whose
+    // continuation is not one), then "89".
+    let bytes = b"Perfect! \xe2\x28\xa189".to_vec();
+    let fault = fixture::record_entry(
+        &mut log,
+        "t004",
+        &trace(),
+        serde_json::json!({"id": "t004", "token_ids": [1, 2]}),
+        || bytes.clone(),
+    );
+    assert!(fault.is_some());
+    let traces = rows(&report.join("arm.trace.jsonl"));
+    assert_eq!(traces, vec![trace().to_json("t004")]);
+    let outputs = rows(&report.join("arm.jsonl"));
+    assert_eq!(outputs.len(), 1);
+    let row = &outputs[0];
+    assert_eq!(row["token_ids"], serde_json::json!([1, 2]));
+    assert_eq!(row["output"], "Perfect! \u{fffd}(\u{fffd}89");
+    assert_eq!(row["output_utf8_valid"], false);
+    assert_eq!(row["output_utf8_fault"], fault.unwrap().as_str());
+    assert_eq!(row["output_bytes_hex"], "506572666563742120e228a13839");
+    std::fs::remove_dir_all(&report).expect("the scratch directory goes");
+}
+
+/// A UTF-8 emission comes back unchanged, flagged valid, with no fault.
+#[test]
+fn a_utf8_emission_lands_unchanged() {
+    let report = scratch("utf8-valid");
+    let mut log = fixture::EntryLog::create(&report, "arm");
+    let fault = fixture::record_entry(
+        &mut log,
+        "t001",
+        &trace(),
+        serde_json::json!({"id": "t001"}),
+        || "caf\u{e9}".as_bytes().to_vec(),
+    );
+    assert!(fault.is_none());
+    let row = &rows(&report.join("arm.jsonl"))[0];
+    assert_eq!(row["output"], "caf\u{e9}");
+    assert_eq!(row["output_utf8_valid"], true);
+    assert!(row.get("output_utf8_fault").is_none());
+    assert!(row.get("output_bytes_hex").is_none());
+    std::fs::remove_dir_all(&report).expect("the scratch directory goes");
+}
+
+/// **The trace lands before any text step**: a text step that fails leaves
+/// the entry's ids and numerical trace on disk.
+#[test]
+fn a_failed_text_step_keeps_the_trace() {
+    let report = scratch("text-step");
+    let path = report.clone();
+    let failed = std::panic::catch_unwind(move || {
+        let mut log = fixture::EntryLog::create(&path, "arm");
+        fixture::record_entry(
+            &mut log,
+            "t004",
+            &trace(),
+            serde_json::json!({"id": "t004"}),
+            || panic!("the emission's pieces do not read"),
+        );
+    });
+    assert!(failed.is_err());
+    assert_eq!(
+        rows(&report.join("arm.trace.jsonl")),
+        vec![trace().to_json("t004")]
+    );
+    assert!(rows(&report.join("arm.jsonl")).is_empty());
+    std::fs::remove_dir_all(&report).expect("the scratch directory goes");
+}
+
+/// **A measurement that cannot replay lands its trace and is not counted
+/// completed**: an entry with one entropy short of its tokens fails the arm
+/// after its trace line is on disk and before any output row.
+#[test]
+fn a_short_measurement_lands_its_trace_and_no_output() {
+    let report = scratch("short");
+    let path = report.clone();
+    let mut short = trace();
+    short.entropy.pop();
+    let line = short.to_json("t004");
+    let failed = std::panic::catch_unwind(move || {
+        let mut log = fixture::EntryLog::create(&path, "arm");
+        fixture::record_entry(
+            &mut log,
+            "t004",
+            &short,
+            serde_json::json!({"id": "t004"}),
+            || b"text".to_vec(),
+        );
+    });
+    let message = panic_text(failed.expect_err("the short measurement fails the arm"));
+    assert!(
+        message.starts_with("arm arm: entry t004 measured 2 entropies"),
+        "{message}"
+    );
+    assert_eq!(rows(&report.join("arm.trace.jsonl")), vec![line]);
+    assert!(rows(&report.join("arm.jsonl")).is_empty());
+    assert_eq!(fixture::completed_entries(&report, "arm"), (0, None));
+    std::fs::remove_dir_all(&report).expect("the scratch directory goes");
+}
+
+/// A caught panic's message.
+fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+/// **An end the reference never had keeps its entry** (Executor-2's read of
+/// #494): a session that reached its capacity is recorded by the variant's
+/// name in the trace and the output row, and only then fails the arm.
+#[test]
+fn an_unexpected_finish_lands_the_entry_then_fails() {
+    let report = scratch("finish");
+    let path = report.clone();
+    let mut ended = trace();
+    ended.finish = "CapacityReached".into();
+    ended.stop = None;
+    let line = ended.to_json("t005");
+    let failed = std::panic::catch_unwind(move || {
+        let mut log = fixture::EntryLog::create(&path, "arm");
+        fixture::record_entry(
+            &mut log,
+            "t005",
+            &ended,
+            serde_json::json!({"id": "t005", "finish_reason": "CapacityReached"}),
+            || b"cut".to_vec(),
+        );
+    });
+    let message = panic_text(failed.expect_err("an unexpected finish fails the arm"));
+    assert_eq!(message, "arm arm: entry t005 ended CapacityReached");
+    assert_eq!(rows(&report.join("arm.trace.jsonl")), vec![line]);
+    let outputs = rows(&report.join("arm.jsonl"));
+    assert_eq!(outputs.len(), 1);
+    assert_eq!(outputs[0]["finish_reason"], "CapacityReached");
+    assert_eq!(outputs[0]["output"], "cut");
     std::fs::remove_dir_all(&report).expect("the scratch directory goes");
 }
