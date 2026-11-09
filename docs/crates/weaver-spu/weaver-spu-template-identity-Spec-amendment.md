@@ -98,7 +98,19 @@ Each digest is pinned by a code act that records, beside the digest:
 | Evidence form | What it shows | Closes substitution within a detector class |
 | --- | --- | --- |
 | Golden render | The chat template, rendered by its own reference engine over the family's golden conversations, matches the family's renderer byte for byte (the `granite` goldens and `regenerate.py` are the model) | Yes |
-| Detector reading | The detector's class for the chat template at pinning time, and a probe render through the family's renderer | No. The detector collapses every `<|im_start|>` template to one ChatML class, and every `[INST]` template to one class, so a thinking variant, another opener or a Llama-2 `[INST]` template reads the same as the entry's own |
+| Detector reading | The detector's class for the chat template at pinning time, and a probe render through the family's renderer | No. The detector collapses every `<\|im_start\|>` template to one ChatML class, and every `[INST]` template to one class, so a thinking variant, another opener or a Llama-2 `[INST]` template reads the same as the entry's own |
+
+A golden render matches on the served path: the conversations that carry a
+system message (a system and user turn, and a history), rendered in the mode
+the entry's ruling or opener implies, and, for an entry whose renderer serves
+tool calls and tool results, a history carrying a call and its result, the
+result rendered as the appended turn the family makes of it. A case off that
+path (a lone user turn, a final assistant turn, and a tool result for an entry
+whose renderer refuses them) is not evidence and not a failure: it is recorded
+beside the pin as the entry's named limit, with the reference's rendering and
+the renderer's, so the census can read what the family does not reproduce. The `granite` goldens are the model here too: their served-path
+rows pin the digest, and their `user_only` and `tool_result` rows are named
+limits.
 
 A chat template the detector refuses (Gemma4's, at `ecce255`) can only be
 pinned by a golden render.
@@ -140,6 +152,22 @@ The header read carries both safetensors texts where both exist, and the
 disagreement is judged at step 2, after the architecture. So an artifact of an
 uncarried architecture refuses `UnknownFamily` whatever its template files
 hold.
+
+**One read serves selection and identity.** The digest is computed from the
+bytes the header read. The artifact hash (`weights_hash`, SPU Spec 3) is taken
+later in admission and reads the same files again, so a sidecar that changed
+between the two reads would select one template and record another. The hash
+walk therefore checks both template sources against the header's reading:
+each source the header read must be present with the same bytes, and each
+source the header found absent must still be absent, or the walk refuses
+`ArtifactUnreadable`, naming the file. So a sidecar that appeared or vanished
+between the two reads refuses, and the recorded directory never holds a
+template the selection did not see. The same holds for a GGUF: the pinned
+descriptor keeps the file open but does not stop a write in place, so the hash
+walk reads `tokenizer.chat_template` again from the same descriptor and
+refuses `ArtifactUnreadable`, naming the file, where its bytes differ from the
+header's. The pinned-file rule of LORA-2 (hash and load through one pinned
+file) is the model.
 
 **The account line.** Every family refusal crosses the seam as
 `ArtifactUnreadable`, and today the admit account line (Spec 3) names only
@@ -195,6 +223,7 @@ carries it, with no normalization of whitespace, line endings or encoding:
 | A list or other non-string key beside a sidecar | `TemplateConflict` |
 | A sidecar that is not UTF-8 | `ArtifactUnreadable`, as for any unreadable sidecar |
 | `chat_template.json` | Not read |
+| A safetensors binding that names a file, not its directory | The architecture sidecar (`config.json`) may be read for the key, as today, since the key is judged first (TID-3 step 1) and an unknown one refuses `UnknownFamily`. No template sidecar is read. The binding then refuses `TemplateAbsent`, with an account naming the directory binding, because `weights_hash` covers only the named file and a template read from a sibling would not be identified by the record |
 
 The refusal of two different texts is the only answer that agrees with both
 upstream readers. Transformers takes the sidecar over the config (and on save
@@ -252,11 +281,13 @@ is dropped refuses at its next load, so a drop is listed, never silent.
   blind. Until ruled, both evidence forms admit, and the code act reports which
   form each pin used.
 - **Trace member.** The admitted digest is not recorded in the trace as its
-  own member. The record's `weights_hash` already covers the chat template's
-  bytes, inside a GGUF or as a sidecar in the safetensors directory walk, so
-  the template an artifact carried is identified by the record and a replay
-  can recompute its digest from the same bytes. A member would repeat that
-  fact.
+  own member. The record's `weights_hash` covers the chat template's bytes,
+  inside a GGUF or as a sidecar in the safetensors directory walk, and TID-4
+  admits no template the hash does not cover (a file-named safetensors binding
+  reads no sidecar). So the template an artifact carried is identified by the
+  record and a replay can recompute its digest from the same bytes. A member
+  would repeat that fact. The tuple act that records the deployment tuple in
+  the trace may still elect one, for the reader's sake.
 - **Named-template lists.** A `chat_template` list refuses (TID-4) until a
   ruling says which named template serves.
 - **Qwen release lines.** Whether `qwen2`, `qwen3`, `qwen3moe`, `qwen35` and

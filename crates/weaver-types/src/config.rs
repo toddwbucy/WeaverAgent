@@ -698,6 +698,8 @@ fn check_declared_paths(config: &AgentConfig) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// conforms: types-identity-role-is-system
+///
 /// **A restore names a save point by a bare name**, per `weaver-types-Spec`
 /// section 2 as of A3.2: the published name in the declaration's own
 /// directory or the digest, carrying no `/`, not `.` or `..`, not empty and
