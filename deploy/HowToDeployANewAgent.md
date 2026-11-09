@@ -340,6 +340,51 @@ payload names the session, the run, the store, the declaration's hash, the compo
 and writes nothing is the failure this step exists to catch, and the worker's own words
 are in `<territory>/worker.log`, the state member's in `<territory>/state/state.log`.
 
+**Then it prints the agent's deployment tuple**, through `deploy/agent_tuple.py` beside
+it, before the constituents are read. The rows are those of the tuple survey of
+2026-11-08 (1, 2, 3, 6, 7, 8 and 9), with the state engine and the restore rows.
+Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
+- **Row 1, the artifact and its weights hash.** The hash is admission's BLAKE3, which no
+  tool on the box computes. For an adapted agent it is the declared `base-blake3`, since
+  admission refuses a base that differs. For a base-only agent it is the sink's latest
+  `model.measurement` naming the path admission resolved (the declared file, or the
+  container a declared directory resolves to), and `absent` where the sink holds none:
+  the load itself records no hash.
+- **Rows 2 and 3, the family, the chat template and the formats**, from the artifact's
+  GGUF header. The header is read as the agent's own account, the one admission reads it
+  as, and never as root. A declared directory is first resolved to its one container by
+  admission's rule (a single `.gguf` or `.safetensors` file, or one split's first
+  shard), and row 1 names that container.
+- **Row 7, the devices.** Each declared ordinal names its card in the install tuple's
+  PCI-order list. That order is the one the SPU sees, under PAIR-1's
+  `CUDA_DEVICE_ORDER=PCI_BUS_ID` mask. The live cards are read with
+  `nvidia-smi --query-gpu=pci.bus_id,name,memory.total --format=csv,noheader`, put in
+  bus order. A difference from the install tuple's list in name, memory, count or order
+  is a `FAULT`: the install tuple is stale.
+- **Rows 8 and 9, the placement and the offload**, for a GGUF container: PAIR-3's even
+  split of the header's layer count over the declared devices, and every layer
+  offloaded. A container without the GGUF magic is served by the native path, and both
+  rows read `absent`, as they do where no container kind is known.
+- **The restore rows.** The declaration's `[restore]`, or none declared, and what the
+  load restored, from the load event's `lineage`. With no `[restore]` a reload restores
+  the manifest's latest save point. A declared save point the lineage does not name, by
+  digest or by published name, or a declared one with no lineage, is a `FAULT`.
+
+- **The box side and the binding.** The box side is the stack record's `install-tuple`,
+  written by each install. Its own sha256 is printed as the box's identity, the one value
+  a report cites for it. The record is then bound to the box:
+  - The declaration's sha256 against the load event's.
+  - The load event's `stack` digests against the install tuple's members, by name, with
+    a name only one side carries printed as not bound.
+  - Each engine library in the load event's library path against the install tuple's
+    digest, hashed on the spot.
+
+  A digest the install tuple reads `unknown` (the install could not hash that file) is
+  printed as not bound, never as a `FAULT`.
+
+A `FAULT` line unloads the run and fails the script, `--keep` included, like every other
+failed check.
+
 `deploy/verify-lifecycle.sh --agent <throwaway>`, run as the operator (it runs each load
 in a delegated scope itself), verifies a whole lifecycle end to end
 (create, load, seed, save points, restore, force-unload, crash recovery, the refusal by
@@ -363,13 +408,24 @@ directory, the state group passing you through the territory and the access grou
 letting you read the file, and sends it through the gate
 as the one line `{"role": "system", "text": ...}`. The harness takes a system line from
 the operator's uid alone, the one `allowed-uids` names and admin's `operator` key
-records: it writes the prompt into the record as the session's prefix, the tee carries
-it to the state member, and the model answers it as a turn, so what prints is the
-model's first answer under its prompt and the seeding has exercised the whole loop
-(gate, harness, model, trace, tee, state). The prompt is state from here: every later
+records: it writes the prompt into the record as the prefix the next load seats, the
+tee carries it to the state member, and the model answers it as a turn, so what prints
+is the model's first answer under its prompt and the seeding has exercised the whole
+loop (gate, harness, model, trace, tee, state). The prompt is state from here: every later
 load asks the member for it and seats what the member holds, and the draft on disk is
 only what the next seeding would send. Seeding again in a later residency replaces the
-prompt; seeding twice in one residency seats both, in order.
+prompt, and seeding twice in one residency seats both, in order.
+
+**The seeding line has a bound: 49,041 octets before the delimiter**, the gate's line
+bound (`weaver-gate-Spec` section 4), measured on the JSON line `turn.py` writes. The
+line's wrapper takes 30 octets, so a draft of plain printable ASCII may run to 49,011
+octets. Each newline, carriage return, tab, backspace, form feed, quote and backslash in
+the draft counts two octets, any other character below U+0020 and DEL six, and each
+non-ASCII character six (twelve above U+FFFF). `turn.py` measures the line before it
+dials and refuses an oversize draft with its size; the gate itself would close the
+connection unanswered. The bound is an interim, on the operator's ruling of 2026-11-08:
+seeding moves off the gate to admin's seed verb at the state-management foundation
+cutover.
 
 **An agent without a store (section 3) is seeded in every residency instead**, as its
 first turn: with no member, nothing holds the prompt across loads, the load seats
@@ -387,8 +443,13 @@ sudo /opt/weaver/bin/weaver-admin save-point <name>   # answers {"kind":"save_po
 sudo /opt/weaver/bin/weaver-admin unload <name>
 ```
 
-The first save point taken after the seeding is the agent's starting state, holding the
-prompt and the model's first answer beside it; `save-point` publishes it at once into
+The first save point taken after the seeding is the agent's starting state. It holds the
+prompt whole under every election, and the model's first answer as the declaration's
+election admits it (`weaver-trace-Spec` section 11): its text under the
+`[state-election]` `create-agent.sh` writes, which names `message.assistant`'s
+`content`, its envelope without the text under an election that admits the kind and
+names no `content` path for it, the default election among them, and nothing under one
+with `all-kinds = false` that does not name the kind. `save-point` publishes it at once into
 `<territory>/save-points/` as `<YYYYMMDDTHHMMSSZ>-<digest>.save-point`, named on one
 line of `save-points.manifest` there, which is root's and which you do not edit
 (section 5). The unload takes one more at the leave, and every
@@ -397,11 +458,22 @@ later load restores the latest the manifest names. A healthy seeding leaves a tu
 it. A seeding line from any other uid, or a frame the gate carried without its
 dialer, answers `{"kind":"refused", ...}` naming the role, and the agent stands.
 
-The compiled worker loop still carries its own `SYSTEM_PROMPT` constant
-(`crates/weaver-harness/src/bin/worker/dev_loop/mod.rs`) and prepends it on a
-residency's first turn and after a flush, so a seeded agent's first user turn in each
-residency reads both, the seeded prefix and the loop's constant. Retiring the constant
-is the loop act's, not this runbook's.
+**A seeded agent's production turns carry no loop prompt.** The compiled worker loop's
+`SYSTEM_PROMPT` (`crates/weaver-harness/src/bin/worker/dev_loop/mod.rs`) yields to a
+seated one, per ADP-4 and section 6 of
+`docs/crates/weaver-harness/Loops/basic-inference-loop.md`: where the member's identity
+answer seats a prefix at the load, the loop pushes no compiled prompt and no continuity
+line, on the run's first turn or at the re-entry after a flush, and the re-entry stays a
+system message, the recall text alone. The compiled prompt rides only where nothing is
+seated: it leads a run's first turn where the loop drives that turn, with the continuity
+line beneath it only where the member's session shape reports an earlier run (none on a
+session's first run, none where the shape is unavailable), and opens each re-entry
+without the line. In a seeded agent's trace the prompt appears only as the turnless
+`message.system` at the seeding, and no production turn carries the loop's prompt. A
+seeding is appended context in its own residency, so a flush there drops it (#502): the
+re-entry opens with the compiled prompt after a first seeding, and keeps the prefix the
+load seated after a later one. The sequence above (load, seed, save point, unload)
+avoids that, and an agent without a store, seeded in every residency, cannot.
 
 ## 5. Serving, stopping, unloading, and the connector's rule
 

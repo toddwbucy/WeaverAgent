@@ -520,6 +520,7 @@ fn generated(
     capacity: u64,
 ) -> Generation {
     Generation {
+        invalid_utf8: Vec::new(),
         emission: text.into(), finish,
         content: if text.is_empty() { vec![] } else { vec![ContentBlock::Text { text: text.into() }] },
         unrecovered: vec![],

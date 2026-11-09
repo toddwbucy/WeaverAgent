@@ -181,6 +181,7 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                     }));
                 }
                 let generation = Generation {
+                    invalid_utf8: Vec::new(),
                     emission: "Read result.".into(),
                     finish: Finish::Completed,
                     content,

@@ -12,8 +12,10 @@ fn texts(delta: &[Message]) -> Vec<&str> {
         .collect()
 }
 
-/// The one-time injection contract: a first turn leads with the prompt,
-/// in order, and every later turn contributes the request alone.
+/// The one-time injection contract where nothing is seated: a first turn
+/// leads with the compiled prompt, in order, and every later turn
+/// contributes the request alone. The seated case is
+/// `a_seated_prefix_takes_no_opening`.
 ///
 /// **The roles are asserted apart rather than together.** This read
 /// `all(|m| m.role == Role::User)` until 2026-08-28, which passed
@@ -23,7 +25,7 @@ fn texts(delta: &[Message]) -> Vec<&str> {
 /// they are two roles and the test names both.
 #[test]
 fn the_prompt_leads_the_first_turn_and_no_other() {
-    let first = contribution(true, None, None, "hello");
+    let first = contribution(true, false, None, None, "hello");
     assert_eq!(texts(&first), vec![SYSTEM_PROMPT, "hello"]);
     assert_eq!(
         first.iter().map(|m| m.role.clone()).collect::<Vec<_>>(),
@@ -31,16 +33,46 @@ fn the_prompt_leads_the_first_turn_and_no_other() {
         "the prompt is the field's framing and the request is not"
     );
 
-    let later = contribution(false, None, None, "and again");
+    let later = contribution(false, false, None, None, "and again");
     assert_eq!(texts(&later), vec!["and again"]);
     assert!(later.iter().all(|m| m.role == Role::User));
+}
+
+/// **A seated prefix takes no opening**, per ADP-4
+/// (`weaver-spu-adapter-binding-Spec-amendment` section 4): where the open
+/// seated the agent's prompt, the first turn carries neither the compiled
+/// prompt nor the continuity line, which pushed alone would still be a
+/// second system turn, and the re-entry carries the recall text alone, the
+/// seated prefix having survived the flush. The seat's half, the flag
+/// itself, is loop zero's suite's (`lifecycle/seated_tests.rs`).
+///
+/// Perturbation: push the opening or the re-entry's prompt whatever the
+/// flag and this fails.
+#[test]
+fn a_seated_prefix_takes_no_opening() {
+    let first = contribution(true, true, Some("Continuity: held."), None, "hello");
+    assert_eq!(texts(&first), vec!["hello"]);
+    assert_eq!(
+        first.iter().map(|m| m.role.clone()).collect::<Vec<_>>(),
+        vec![Role::User],
+        "no system turn rides the seated prefix"
+    );
+
+    let reentry = reentry_text(true, None);
+    assert!(
+        reentry.starts_with("The working context was reset"),
+        "the re-entry is the recall text alone: {reentry}"
+    );
+    assert!(!reentry.contains(SYSTEM_PROMPT), "{reentry}");
+    let flushed = contribution(false, true, None, Some(&reentry), "next ask");
+    assert_eq!(texts(&flushed), vec![reentry.as_str(), "next ask"]);
 }
 
 /// The continuity line rides beneath the prompt in the same opening
 /// message, so the injection stays one message and one narrowing.
 #[test]
 fn continuity_rides_beneath_the_prompt() {
-    let first = contribution(true, Some("Continuity: held."), None, "hello");
+    let first = contribution(true, false, Some("Continuity: held."), None, "hello");
     assert_eq!(first.len(), 2);
     let opening = &texts(&first)[0];
     assert!(opening.starts_with(SYSTEM_PROMPT), "{opening}");
@@ -95,19 +127,22 @@ fn the_reentry_composes_from_recall() {
             format!(r#"[{{"type":"text","text":"{text}"}}]"#),
         )],
     };
-    let text = reentry_text(Some(vec![
-        event("message.user", "what is the plan"),
-        event("message.assistant", "the plan is threefold"),
-        event("turn.closed", "not a message"),
-    ]));
+    let text = reentry_text(
+        false,
+        Some(vec![
+            event("message.user", "what is the plan"),
+            event("message.assistant", "the plan is threefold"),
+            event("turn.closed", "not a message"),
+        ]),
+    );
     assert!(text.starts_with(SYSTEM_PROMPT), "{text}");
     assert!(text.contains("user: what is the plan"), "{text}");
     assert!(text.contains("assistant: the plan is threefold"), "{text}");
     assert!(!text.contains("not a message"), "{text}");
-    let missing = reentry_text(None);
+    let missing = reentry_text(false, None);
     assert!(missing.contains("could not be reached"), "{missing}");
     let long = "word ".repeat(400);
-    let bounded = reentry_text(Some(vec![event("message.user", long.trim())]));
+    let bounded = reentry_text(false, Some(vec![event("message.user", long.trim())]));
     assert!(bounded.contains(" ..."), "the quote is bounded: {bounded}");
 }
 
@@ -129,7 +164,7 @@ fn the_quote_budget_spans_the_whole_recall() {
     };
     let long = "word ".repeat(60);
     let many: Vec<Recalled> = (0..10).map(|_| event(long.trim())).collect();
-    let text = reentry_text(Some(many));
+    let text = reentry_text(false, Some(many));
     assert!(
         text.len() < SYSTEM_PROMPT.len() + 2 * QUOTE_BOUND,
         "one budget bounds the whole re-entry, got {} chars: {text}",
@@ -146,8 +181,8 @@ fn the_quote_budget_spans_the_whole_recall() {
 /// the request, and an unflushed one carries no such member.
 #[test]
 fn the_reentry_rides_between_opening_and_request() {
-    let delta = contribution(false, None, Some("restored context"), "next ask");
+    let delta = contribution(false, false, None, Some("restored context"), "next ask");
     assert_eq!(texts(&delta), vec!["restored context", "next ask"]);
-    let plain = contribution(false, None, None, "next ask");
+    let plain = contribution(false, false, None, None, "next ask");
     assert_eq!(texts(&plain), vec!["next ask"]);
 }

@@ -19,6 +19,7 @@ fn answer(fd: i32, value: TokenAnswer) {
 }
 fn generation(mode: &str, pass: u64, stopped: bool) -> TokenAnswer {
     TokenAnswer::Generated(Generation {
+        invalid_utf8: Vec::new(),
         emission: "fixture return pass".into(),
         finish: if stopped {
             Finish::Stopped

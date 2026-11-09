@@ -281,17 +281,18 @@ the flush. Where nothing is seated (an agent before its seeding turn), the
 loop pushes its compiled prompt as today.
 
 **The continuity line goes with it in the seated case.** The line that counts
-prior runs (`continuity_line`, line 207) rides the compiled opening today. In
-the seated case it has no carrier: pushed alone it is still a second system
-turn, so it is not pushed, and the fact it carried is already in the record's
-lifecycle events. In the unseated case it rides the compiled opening as
-today. This is the operator's to confirm with the rule.
+prior runs (the function `continuity_line` in `dev_loop/mod.rs`) rides the
+compiled opening today. In the seated case it has no carrier: pushed alone it
+is still a second system turn, so it is not pushed, and the fact it carried is
+already in the record's lifecycle events. In the unseated case it rides the
+compiled opening as today, where the session shape reports an earlier run.
+This is the operator's to confirm with the rule.
 
-The comment at `dev_loop/mod.rs:81-83`, which still describes the system
-prompt as message content rather than the open's prefix, predates the ruling
-and goes with this act. The test
-`the_prompt_leads_the_first_turn_and_no_other` (`dev_loop/tests.rs:25`) moves
-to the unseated case, and a seated case joins it.
+The flush comment in `drive` (`dev_loop/mod.rs`), which still describes the
+system prompt as message content rather than the open's prefix, predates the
+ruling and goes with this act. The test
+`the_prompt_leads_the_first_turn_and_no_other` (`dev_loop/tests.rs`) moves to
+the unseated case, and a seated case joins it.
 
 This clause lands as its own pull request, since it is a loop change in the
 harness and not an SPU change, and it is the operator's to confirm: the loop
@@ -341,7 +342,7 @@ The request type derives `PartialEq` so the one-path row can compare.
 | Replay judges the adapter before the walk | A record whose adapter differs from the loaded binding's refuses at `refuse_identity` | Compare the model alone |
 | Replay judges the adapter per generation | A re-fed measurement whose adapter differs from the source's returns `IdentityBroken` | Compare the weights hash alone |
 | The projection follows | Once the contract and WeaverAnalysis carry it, the state member's projection includes `adapter`, and the `SELECTION` oracle pins it | Leave the path list unchanged |
-| The loop yields (ADP-4) | With a seated prefix, the first turn's delta carries no compiled prompt and no continuity line, and neither does a re-entry. Without one, it carries both. The seated case is driven with an empty positional identity and a non-empty identity answer, as admin loads it. The unseeded case includes a BOS-prefixing family (llama), whose Open prefix is non-zero with nothing seated, and it still carries the compiled prompt | Push the compiled prompt unconditionally, read `Prompt.identity` as the predicate, or read `prefix_tokens` as the predicate |
+| The loop yields (ADP-4) | With a seated prefix, the first turn's delta carries no compiled prompt and no continuity line, and neither does a re-entry. Without one, the first turn carries both where the session shape reports an earlier run, as the test's shape does, and a re-entry carries the compiled prompt alone. The seated case is driven with an empty positional identity and a non-empty identity answer, as admin loads it. The unseeded case includes a BOS-prefixing family (llama), whose Open prefix is non-zero with nothing seated, and it still carries the compiled prompt | Push the compiled prompt unconditionally, read `Prompt.identity` as the predicate, or read `prefix_tokens` as the predicate |
 | The script declares it | `create-agent.sh --adapter ...` renders the table and parses, three of the four flags refuse, a 63-character digest refuses, and `--adapter-scale nan` refuses | Default a flag, or write the value unchecked |
 
 The projection row and the two replay rows that read a recall wait on the
@@ -363,12 +364,13 @@ the declaration the only difference, read from the trace.
   and **the classifier as an SPU role** (item 4).
 - **The accepted Python/SPU drift**, the operator's ruling after the LORA-7
   fixture and the 100-source comparison.
-- **The gate's line bound.** The R1 system prompt is 47,214 bytes and the gate
-  refuses a line over 32 KiB (`weaver-gate-Spec` section 4, `relay.rs:42`),
-  so the adapter's own prompt cannot be seeded through the gate today. Seeding
-  it in two lines renders two system turns. Raising the bound is a gate Spec
-  act and a gate-world contract change, cross-repository, and the operator's
-  ruling.
+- **The gate's line bound**, ruled by the operator on 2026-11-08 and moved
+  outside this amendment. The R1 system prompt is 47,214 bytes, 48,454 octets
+  as its seeding line, and the gate refused a line over 32 KiB. The bound is
+  now the organ envelope's exact capacity, 49,041 octets (`weaver-gate-Spec`
+  section 4, with the gate-world contract), so the adapter's own prompt seeds
+  in one line. The bound is an interim. Its destination is the seed verb,
+  ADMIN-SEED.
 - **The trace floor** (#473 item 1).
 - **A save point's record of the adapter.** The published bound declaration
   carries the adapter table (the save-point renderer writes it member for

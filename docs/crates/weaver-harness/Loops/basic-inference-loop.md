@@ -307,6 +307,19 @@ interior step of a turn, and the loop runs until the model returns a final answe
 operator interrupts it, per `weaver-harness-PRD` section 2, the interrupt arriving as
 the stop exchange.
 
+**The loop's prompt rule, as `dev_loop` holds it today, is ADP-4's**
+(`weaver-spu-adapter-binding-Spec-amendment` section 4). The system prompt is state, so
+where the seat reads seated (`weaver-harness-Spec` section 6, the seated read) the loop
+pushes no compiled prompt and no continuity line, on a run's first turn or at the
+re-entry after a flush, and the re-entry is the recall text alone, the seated prefix
+having survived the flush. Where nothing is seated, an agent before its seeding turn,
+the loop leads a run's first turn with its compiled prompt (`SYSTEM_PROMPT`), the
+continuity line beneath it only where the state member's session shape reports an
+earlier run (none on a session's first run, none where the shape is unavailable), and
+opens each re-entry with the compiled prompt and no continuity line. The worker takes no
+identity argument: the prefix comes from the state member's answer at the enter and from
+nowhere else.
+
 What the harness does in this loop: it serves the contract's exchanges, it
 authors every event and places each at its position, it fans turn content to the
 decoder and the emission in parallel, and it returns the response to the gate. It

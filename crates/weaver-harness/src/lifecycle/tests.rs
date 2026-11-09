@@ -316,6 +316,7 @@ fn entered_run(turn: Option<&str>) -> (Run, OrganChannel, crate::scratch::Scratc
             session,
             operator: 1000,
             seeded_bytes: 0,
+            seated: false,
             run: weaver_types::RunId("r-1".into()),
             spu: Some(SpuChannels {
                 lifecycle,
@@ -2786,7 +2787,6 @@ fn the_turn_rehearses_on_the_device() {
     let mut verb_slot = None;
     harness
         .serve_gate_wake(
-            "",
             &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
                 let delta = vec![weaver_traits::Message {
                     role: weaver_traits::Role::User,
@@ -3639,6 +3639,7 @@ fn a_leave_against_late_stand_ins(
                 )
             });
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "the summary".into(),
@@ -4859,7 +4860,6 @@ fn a_frame_held_behind_a_turn_that_heard_a_leave_is_not_served() {
     let mut pending = None;
     harness
         .serve_shelf(
-            "identity",
             &mut |_: &mut crate::engine::Ports<'_>,
                   _: &str|
              -> Result<crate::engine::TurnOutcome, crate::engine::TurnError> {
@@ -5042,6 +5042,7 @@ fn a_leave_whose_gate_dies(
                 )
             });
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "the summary".into(),
@@ -5229,6 +5230,7 @@ fn a_turn_whose_gate_dies(
                 )
             });
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "late".into(),
@@ -5295,7 +5297,6 @@ fn a_turn_whose_gate_dies(
     let (mut harness, _dir) = harness_entered(run);
     let mut verb_slot = Some(verb_end);
     let served = harness.serve_gate_wake(
-        "identity",
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             ports.turn(vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -5489,6 +5490,7 @@ fn a_turn_refused_with_the_spu_alive_and_a_leave_held_stays_graceful() {
             .expect("the wind-down's append");
         assert!(n > 0, "the wind-down ran");
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "the summary".into(),
@@ -5565,7 +5567,6 @@ fn a_turn_refused_with_the_spu_alive_and_a_leave_held_stays_graceful() {
     let mut verb_slot = Some(verb_end);
     harness
         .serve_gate_wake(
-            "identity",
             &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
                 ports.turn(vec![weaver_traits::Message {
                     role: weaver_traits::Role::User,
@@ -5739,6 +5740,7 @@ fn answer_appends(far: crate::channel::ChildEnd, mark: impl Fn() + Send + 'stati
             };
             mark();
             let summary = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+                invalid_utf8: Vec::new(),
                 unrecovered: vec![],
                 content: vec![],
                 emission: "the summary".into(),
@@ -5848,11 +5850,9 @@ fn the_serve_loop_serves_on_past_an_organs_death_at_rest() {
     let (harness, dir) = harness_entered(run);
     std::thread::spawn(move || {
         let _dir = dir;
-        let _ = harness.serve(
-            "identity",
-            weaver_trace::LoopIdentity::compiled("test"),
-            |_, _| unreachable!("no frame arrives"),
-        );
+        let _ = harness.serve(weaver_trace::LoopIdentity::compiled("test"), |_, _| {
+            unreachable!("no frame arrives")
+        });
     });
     let faults = |stream: &str| stream.matches("\"kind\":\"fault\"").count();
     let read_until = |want: usize| {
@@ -5919,7 +5919,7 @@ fn a_request_after_the_spu_died_is_refused_no_model_is_resident() {
         .expect("frame sends");
     let mut verb_slot = None;
     harness
-        .serve_gate_wake("", &mut entry, &mut verb_slot)
+        .serve_gate_wake(&mut entry, &mut verb_slot)
         .expect("the wake serves");
     let answer = gate_peer.recv().expect("the refusal returns");
     let weaver_types::Payload::Frame(frame) = answer.payload else {
@@ -6067,7 +6067,7 @@ fn no_seat_is_granted_while_a_turn_is_in_flight() {
         composer: Some(weaver_trace::LoopIdentity::compiled("test")),
     };
     assert!(
-        harness.grant_seat("identity").is_none(),
+        harness.grant_seat().is_none(),
         "an active run hands nothing across the seam"
     );
 
@@ -6087,7 +6087,7 @@ fn no_seat_is_granted_while_a_turn_is_in_flight() {
         composer: Some(weaver_trace::LoopIdentity::compiled("test")),
     };
     assert!(
-        harness.grant_seat("identity").is_some(),
+        harness.grant_seat().is_some(),
         "a loaded-and-idle run grants the seat"
     );
 }
@@ -6164,9 +6164,7 @@ fn the_seat_offers_the_shell_schema_only_where_granted() {
             state: ChannelState::Entered(Box::new(run)),
             composer: Some(weaver_trace::LoopIdentity::compiled("test")),
         };
-        let seat = harness
-            .grant_seat("identity")
-            .expect("an idle run grants the seat");
+        let seat = harness.grant_seat().expect("an idle run grants the seat");
         let schemas = &seat.assembled().expect("the seat's prompt").tool_schemas;
         if granted == Some(true) {
             assert_eq!(schemas.len(), 1, "the shell's schema alone");
@@ -6260,7 +6258,7 @@ fn a_diagnostic_run_grants_no_frame_seat() {
         composer: Some(weaver_trace::LoopIdentity::compiled("test")),
     };
     assert!(
-        harness.grant_seat("identity").is_none(),
+        harness.grant_seat().is_none(),
         "a diagnostic run hands nothing across the frame seam"
     );
     let _ = std::fs::remove_file(&sink_path);
@@ -6385,7 +6383,6 @@ fn an_idle_gate_report_authors_without_a_turn_or_answer() {
         assert!(matches!(harness.wait(None), Ok(Wake::Gate)));
         harness
             .serve_gate_wake(
-                "",
                 &mut |_, _| panic!("an idle report must not grant the seat"),
                 &mut None,
             )
@@ -6517,6 +6514,7 @@ fn a_graceful_leave_heard_mid_turn_is_carried_out_after_the_turn() {
         )
         .unwrap();
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "one word".into(),
@@ -6597,7 +6595,6 @@ fn a_graceful_leave_heard_mid_turn_is_carried_out_after_the_turn() {
     let mut verb_slot = Some(verb_end);
     harness
         .serve_gate_wake(
-            "identity",
             &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
                 let delta = vec![weaver_traits::Message {
                     role: weaver_traits::Role::User,
@@ -6716,7 +6713,6 @@ fn a_turn_that_errors_with_a_leave_held_still_answers_left() {
     let (mut harness, _dir) = harness_entered(run);
     let mut verb_slot = Some(verb_end);
     let served = harness.serve_gate_wake(
-        "identity",
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             let delta = vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -6808,6 +6804,7 @@ fn a_gate_dying_during_a_call_with_a_leave_held_forces_the_leave() {
         let mut buf = vec![0u8; 65536];
         let _ = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("the append");
         let call = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
@@ -6874,7 +6871,6 @@ fn a_gate_dying_during_a_call_with_a_leave_held_forces_the_leave() {
     let (mut harness, _dir) = harness_entered(run);
     let mut verb_slot = Some(verb_end);
     let served = harness.serve_gate_wake(
-        "identity",
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             let delta = vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -6967,7 +6963,7 @@ fn the_spu_dying_mid_turn_fails_the_turn_and_the_run_stands() {
         }];
         ports.turn(delta)
     };
-    let served = harness.serve_gate_wake("identity", &mut entry, &mut None);
+    let served = harness.serve_gate_wake(&mut entry, &mut None);
     decode_peer.join().expect("the decode peer");
     assert!(served.is_ok(), "the run stands: {served:?}");
     let answered = gate_peer.recv().expect("the dialer's answer");
@@ -6978,7 +6974,7 @@ fn the_spu_dying_mid_turn_fails_the_turn_and_the_run_stands() {
     // A later request meets no model.
     gate_peer.send(&frame(2)).expect("frame sends");
     harness
-        .serve_gate_wake("identity", &mut entry, &mut None)
+        .serve_gate_wake(&mut entry, &mut None)
         .expect("the wake serves");
     let refused = gate_peer.recv().expect("the refusal");
     let weaver_types::Payload::Frame(refused) = refused.payload else {
@@ -7088,7 +7084,6 @@ fn a_lost_channel_with_no_hang_up_ends_service_and_tears_nothing_down() {
     let (mut harness, _dir) = harness_entered(run);
     let mut verb_slot = Some(verb_end);
     let served = harness.serve_gate_wake(
-        "identity",
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             let delta = vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -7170,7 +7165,6 @@ fn an_organ_death_met_with_the_record_broken_ends_service() {
         .expect("frame sends");
     let (mut harness, _dir) = harness_entered(run);
     let served = harness.serve_gate_wake(
-        "identity",
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             let delta = vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -7226,7 +7220,6 @@ fn a_gate_dying_at_rest_with_the_record_broken_ends_service() {
     });
     let (mut harness, _dir) = harness_entered(run);
     let served = harness.serve_gate_wake(
-        "identity",
         &mut |_: &mut crate::engine::Ports<'_>, _: &str| unreachable!("no frame"),
         &mut None,
     );
@@ -7287,6 +7280,7 @@ fn a_frame_grants_the_seat_and_is_answered() {
         )
         .unwrap();
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "one word".into(),
@@ -7330,7 +7324,6 @@ fn a_frame_grants_the_seat_and_is_answered() {
 
     harness
         .serve_gate_wake(
-            "identity",
             &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
                 let delta = vec![weaver_traits::Message {
                     role: weaver_traits::Role::User,
@@ -7438,7 +7431,7 @@ fn an_unparseable_line_refuses_and_the_channel_stands() {
         .expect("frame sends");
     let mut verb_slot = None;
     harness
-        .serve_gate_wake("", &mut entry, &mut verb_slot)
+        .serve_gate_wake(&mut entry, &mut verb_slot)
         .expect("the wake serves");
     let answer = gate_peer.recv().expect("the refusal returns");
     let weaver_types::Payload::Frame(frame) = answer.payload else {
@@ -7462,7 +7455,7 @@ fn an_unparseable_line_refuses_and_the_channel_stands() {
         })
         .expect("frame sends");
     harness
-        .serve_gate_wake("", &mut entry, &mut verb_slot)
+        .serve_gate_wake(&mut entry, &mut verb_slot)
         .expect("the channel stands");
     let answer = gate_peer.recv().expect("the second refusal returns");
     let weaver_types::Payload::Frame(frame) = answer.payload else {
@@ -7593,7 +7586,7 @@ fn a_system_line_from_any_other_dialer_refuses_and_the_channel_stands() {
             })
             .expect("frame sends");
         harness
-            .serve_gate_wake("", &mut entry, &mut verb_slot)
+            .serve_gate_wake(&mut entry, &mut verb_slot)
             .expect("the channel stands");
         let answer = gate_peer.recv().expect("the refusal returns");
         assert_eq!(answer.exchange.ordinal, ordinal);
@@ -7688,6 +7681,7 @@ fn a_seeding_past_the_answer_bound_refuses_and_one_that_fits_seats() {
         )
         .unwrap();
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "I am Karl.".into(),
@@ -7732,7 +7726,7 @@ fn a_seeding_past_the_answer_bound_refuses_and_one_that_fits_seats() {
             })
             .expect("frame sends");
         harness
-            .serve_gate_wake("identity", &mut entry, &mut verb_slot)
+            .serve_gate_wake(&mut entry, &mut verb_slot)
             .expect("the wake serves");
         let answer = gate_peer.recv().expect("the response returns");
         let weaver_types::Payload::Frame(frame) = answer.payload else {
@@ -7849,6 +7843,7 @@ fn the_operators_system_line_seats_the_prompt_and_turns() {
         )
         .unwrap();
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "I am Karl.".into(),
@@ -7889,7 +7884,6 @@ fn the_operators_system_line_seats_the_prompt_and_turns() {
         .expect("frame sends");
     harness
         .serve_gate_wake(
-            "identity",
             &mut |_: &mut crate::engine::Ports<'_>, _: &str| {
                 panic!("the seeding turn is loop 0's own and never enters the loop")
             },
@@ -8014,6 +8008,7 @@ fn the_turn_key_stands_while_a_turn_runs() {
         )
         .unwrap();
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "one word".into(),
@@ -8079,7 +8074,7 @@ fn the_turn_key_stands_while_a_turn_runs() {
             })
             .expect("frame sends");
         harness
-            .serve_gate_wake("identity", &mut entry, &mut None)
+            .serve_gate_wake(&mut entry, &mut None)
             .expect("the wake serves");
         let answer = gate_peer.recv().expect("the response frame returns");
         assert_eq!(answer.exchange.ordinal, ordinal);
@@ -8279,7 +8274,6 @@ fn a_gate_fault_at_rest_with_the_record_broken_ends_service() {
         .expect("the report sends");
     let (mut harness, _dir) = harness_entered(run);
     let served = harness.serve_gate_wake(
-        "identity",
         &mut |_: &mut crate::engine::Ports<'_>, _: &str| unreachable!("no frame"),
         &mut None,
     );
@@ -8318,7 +8312,6 @@ fn a_dialer_is_not_answered_over_a_latched_record() {
         .expect("frame sends");
     let (mut harness, _dir) = harness_entered(run);
     let served = harness.serve_gate_wake(
-        "identity",
         &mut |_: &mut crate::engine::Ports<'_>, _: &str| unreachable!("the parse refuses"),
         &mut None,
     );
@@ -8353,11 +8346,9 @@ fn the_serve_loop_does_not_wait_over_a_latched_record() {
     let (sent, served) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _dir = dir;
-        let outcome = harness.serve(
-            "identity",
-            weaver_trace::LoopIdentity::compiled("test"),
-            |_, _| unreachable!("no frame arrives"),
-        );
+        let outcome = harness.serve(weaver_trace::LoopIdentity::compiled("test"), |_, _| {
+            unreachable!("no frame arrives")
+        });
         let _ = sent.send(outcome.is_err());
     });
     assert_eq!(
@@ -8554,7 +8545,6 @@ fn a_held_frame_is_not_served_over_a_latched_record() {
     });
     let (mut harness, _dir) = harness_entered(run);
     let served = harness.serve_shelf(
-        "identity",
         &mut |_: &mut crate::engine::Ports<'_>, _: &str| panic!("the held frame's turn ran"),
         &mut None,
     );
@@ -8630,7 +8620,6 @@ fn a_gate_report_that_will_not_render_ends_service() {
         .expect("the report sends");
     let (mut harness, _dir) = harness_entered(run);
     let served = harness.serve_gate_wake(
-        "identity",
         &mut |_: &mut crate::engine::Ports<'_>, _: &str| unreachable!("no frame"),
         &mut None,
     );
@@ -8644,7 +8633,7 @@ fn no_seat_is_granted_over_a_latched_record() {
     let (mut run, _spare, _sink) = entered_run(None);
     latch_by_refusal(&mut run);
     let (mut harness, _dir) = harness_entered(run);
-    assert!(harness.grant_seat("identity").is_none());
+    assert!(harness.grant_seat().is_none());
 }
 
 /// **C1, the gate's death: a gate dying with a call open leaves `tools/`
@@ -8695,6 +8684,7 @@ fn containment_a_gate_dying_with_a_call_open_leaves_tools_empty() {
         let mut buf = vec![0u8; 65536];
         let _ = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("the append");
         let call = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
@@ -8747,7 +8737,6 @@ fn containment_a_gate_dying_with_a_call_open_leaves_tools_empty() {
     let (mut harness, _dir) = harness_entered(run);
     let mut verb_slot = Some(verb_end);
     let served = harness.serve_gate_wake(
-        "identity",
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             ports.turn(vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -8996,6 +8985,7 @@ fn a_forced_leave_closes_a_call_its_gate_never_answers_within_the_lower_bound() 
         let mut buf = vec![0u8; 65536];
         let _ = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("the append");
         let call = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
@@ -9076,7 +9066,6 @@ fn a_forced_leave_closes_a_call_its_gate_never_answers_within_the_lower_bound() 
     let began = std::time::Instant::now();
     let mut verb_slot = Some(verb_end);
     let served = harness.serve_gate_wake(
-        "identity",
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             let delta = vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -9152,6 +9141,7 @@ fn containment_a_live_gates_bad_frame_kills_nothing() {
         let mut buf = vec![0u8; 65536];
         let _ = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("the append");
         let call = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
@@ -9203,7 +9193,6 @@ fn containment_a_live_gates_bad_frame_kills_nothing() {
     let (mut harness, _dir) = harness_entered(run);
     let mut verb_slot = Some(verb_end);
     let _ = harness.serve_gate_wake(
-        "identity",
         &mut |ports: &mut crate::engine::Ports<'_>, text: &str| {
             ports.turn(vec![weaver_traits::Message {
                 role: weaver_traits::Role::User,
@@ -9450,3 +9439,69 @@ fn diagnostic_open_uses_the_same_evidence_corpus_and_rejects_wrong_echo() {
         task.join().unwrap();
     }
 }
+
+/// **A parse refusal for any line the inbound envelope could carry fits the
+/// return leg** (#504). The parse's two refusals are the frame path's only
+/// reasons that quote client content: the others are fixed text, the
+/// seeding bound's numbers and the identity door's static names, swept in
+/// #504. The gate admits a line up to its bound, the organ
+/// envelope's exact capacity (`weaver-gate-Spec` section 4), and a refused
+/// line's close travels back through the same 64 KiB envelope
+/// base64-encoded. With the reason quoting client content within
+/// `ECHO_BOUND`, every refusal close renders inside `MAX_ENVELOPE_BYTES`,
+/// at the worst-case ordinal, for lines longer than any gate could admit:
+/// an unknown role plain and escaped (Display re-escapes it and the close
+/// escapes it again), and an unknown member's name plain and as control
+/// characters (serde quotes the name decoded, and the close escapes each to
+/// six octets).
+///
+/// Perturbation: return the content whole from `weaver_types::echoed` and
+/// every case renders past the envelope.
+#[test]
+fn a_parse_refusal_for_any_carried_line_fits_the_return_envelope() {
+    use weaver_types::{
+        ExchangeId, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload, Position, TurnFrame,
+    };
+    let size = MAX_ENVELOPE_BYTES;
+    let filled = |head: &str, unit: &str, tail: &str| {
+        let room = size - head.len() - tail.len();
+        format!("{head}{}{tail}", unit.repeat(room / unit.len())).into_bytes()
+    };
+    let lines = [
+        ("plain role", filled(r#"{"text":"","role":""#, "x", r#""}"#)),
+        (
+            "escaped role",
+            filled(r#"{"text":"","role":""#, r"\\", r#""}"#),
+        ),
+        (
+            "control-character role",
+            filled(r#"{"text":"","role":""#, r"\u0001", r#""}"#),
+        ),
+        ("plain member", filled(r#"{"text":"",""#, "k", r#"":0}"#)),
+        (
+            "control-character member",
+            filled(r#"{"text":"",""#, r"\u0001", r#"":0}"#),
+        ),
+    ];
+    for (name, line) in lines {
+        let reason = parse_request(&TurnFrame::carry(&line)).expect_err(name);
+        let close = render_close("refused", "reason", &reason, None);
+        let envelope = OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal: u64::MAX,
+            },
+            position: Position::Close,
+            payload: Payload::Frame(TurnFrame::carry(close.as_bytes())),
+        };
+        let rendered = serde_json::to_vec(&envelope).expect("renders").len();
+        assert!(
+            rendered <= MAX_ENVELOPE_BYTES,
+            "{name}: a {}-octet line's refusal renders to {rendered} octets",
+            line.len()
+        );
+    }
+}
+
+#[path = "seated_tests.rs"]
+mod seated;

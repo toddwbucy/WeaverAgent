@@ -34,12 +34,21 @@ use weaver_types::{ExchangeId, Opener, OrganEnvelope, Payload, Position, TurnFra
 use crate::channel::{Channel, ChannelFault};
 use crate::hook::Admitted;
 
-/// The client line's bound: 32 kibibytes of octets before the delimiter,
-/// inclusive, per `weaver-gate-Spec` section 4. A line of exactly the bound
-/// followed by its delimiter is legal, and a connection holding one octet
-/// more with no delimiter found has left the protocol at the framing layer,
-/// below any turn.
-pub const LINE_BOUND: usize = 32 * 1024;
+/// The client line's bound: 49,041 octets before the delimiter, inclusive,
+/// per `weaver-gate-Spec` section 4. A line of exactly the bound followed by
+/// its delimiter is legal, and a connection holding one octet more with no
+/// delimiter found has left the protocol at the framing layer, below any
+/// turn.
+///
+/// **The bound is the organ envelope's exact capacity**, on the operator's
+/// ruling of 2026-11-08, an interim until the seed verb takes the system
+/// role off the gate. The line rides the envelope encoded, 4 * ceil(N / 3)
+/// octets, and the envelope's other members take at most 147 octets (the
+/// ordinal at `u64::MAX`, the dialer at `u32::MAX`): 49,041 octets encode to
+/// 65,388 and render to 65,535, inside `MAX_ENVELOPE_BYTES` (65,536), and
+/// 49,042 encode to 65,392 and render to 65,539, past it.
+/// `the_bound_is_the_largest_line_the_envelope_carries` derives it.
+pub const LINE_BOUND: usize = 49_041;
 
 /// The delimiter, the world contract's framing: one request per line. The
 /// scan compares bytes against it and parses nothing.

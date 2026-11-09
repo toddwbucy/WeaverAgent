@@ -537,6 +537,21 @@ pub struct ModelOutput {
     /// the record and the loop take one reading rather than two.
     pub resident: u64,
     pub capacity: u64,
+    /// Each sequence of the emission's bytes that was not UTF-8, as the SPU
+    /// answered it, per `weaver-trace-Spec` section 3 and `weaver-spu-Spec`
+    /// section 6 (#493): the emission is the replaced decode and this says
+    /// where, so the record holds the model's bytes exactly. Absent where
+    /// the emission was UTF-8.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub invalid_utf8: Vec<InvalidUtf8>,
+}
+
+/// One replaced sequence of an emission: the byte offset of its U+FFFD in
+/// the emission text and the replaced bytes in lowercase hexadecimal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InvalidUtf8 {
+    pub at: u64,
+    pub bytes: String,
 }
 
 /// One decode position's probability field, per `weaver-trace-Spec`

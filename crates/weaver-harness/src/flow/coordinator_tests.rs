@@ -1446,6 +1446,7 @@ fn template_and_unselected_model_results_never_enter_the_filing_ledger() {
         Kind::ModelOutput,
         AuthoredSource::Model,
         Payload::ModelOutput(weaver_trace::ModelOutput {
+            invalid_utf8: Vec::new(),
             emission: "not conforming".into(),
             finish: weaver_trace::Finish::Completed,
             resident: 10,

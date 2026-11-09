@@ -315,6 +315,7 @@ fn a_refused_turn_closes_once_and_names_the_refusal() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.turn(vec![Message {
             role: Role::User,
@@ -449,6 +450,7 @@ fn a_refused_ask_reaches_the_record() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.elide(41, 57)
     };
@@ -578,6 +580,7 @@ fn the_elision_event_carries_the_span_the_loop_named() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let counts = ports.elide(41, 57).expect("the elision holds");
         assert_eq!(
@@ -664,11 +667,18 @@ fn a_turn_authors_the_whole_bracket() {
         )
         .unwrap();
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            // A byte the model drew that was not UTF-8, kept replaced and
+            // marked by the SPU (#493), so the mark's forwarding is read
+            // below on the same turn as the counts'.
+            invalid_utf8: vec![weaver_types::InvalidUtf8 {
+                at: 8,
+                bytes: "ff".into(),
+            }],
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::Text {
-                text: "one word".into(),
+                text: "one word\u{fffd}".into(),
             }],
-            emission: "one word".into(),
+            emission: "one word\u{fffd}".into(),
             finish: Finish::Completed,
             // Deliberately unroundable: a site forwarding a zero, a
             // default, or the other member would fail the assertion
@@ -735,6 +745,7 @@ fn a_turn_authors_the_whole_bracket() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -746,7 +757,10 @@ fn a_turn_authors_the_whole_bracket() {
     };
     peer.join().expect("the decode peer finishes");
 
-    assert_eq!(outcome.emission, "one word", "loop 1 receives the emission");
+    assert_eq!(
+        outcome.emission, "one word\u{fffd}",
+        "loop 1 receives the emission"
+    );
     assert!(!outcome.stopped, "a clean generation is not stopped");
 
     // The bracket, in order: the turn's user message, the three model
@@ -797,6 +811,21 @@ fn a_turn_authors_the_whole_bracket() {
     assert_eq!(
         output["payload"]["capacity"], 8191,
         "and its capacity: {output_line}"
+    );
+    // **The emission's mark is the generation's**, per `weaver-trace-Spec`
+    // section 3 and `weaver-spu-Spec` section 6 (#493): the record keeps
+    // the replaced text and where each replacement stands.
+    //
+    // Perturbation: author `invalid_utf8: Vec::new()` at the turn's site,
+    // and this fails.
+    assert_eq!(
+        output["payload"]["emission"], "one word\u{fffd}",
+        "the replaced emission reaches the record: {output_line}"
+    );
+    assert_eq!(
+        output["payload"]["invalid_utf8"],
+        serde_json::json!([{"at": 8, "bytes": "ff"}]),
+        "and its mark: {output_line}"
     );
 
     // The model events splice what the peer rendered: the request carries
@@ -932,6 +961,7 @@ fn a_fault_emission_lands_inside_the_bracket_before_the_close() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1021,6 +1051,7 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
             weaver_types::TokenDirective::AppendAndGenerate { .. }
         ));
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
@@ -1057,6 +1088,7 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
             delta[0].content
         );
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::Text {
                 text: "37 * 43 is 1591.".into(),
@@ -1156,6 +1188,7 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1270,6 +1303,7 @@ fn an_ungranted_call(name: &str, shell_granted: bool) {
             weaver_types::TokenDirective::AppendAndGenerate { .. }
         ));
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
@@ -1308,6 +1342,7 @@ fn an_ungranted_call(name: &str, shell_granted: bool) {
             delta[0].content
         );
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::Text {
                 text: "refused.".into(),
@@ -1395,6 +1430,7 @@ fn an_ungranted_call(name: &str, shell_granted: bool) {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1521,6 +1557,7 @@ fn each_field_intermediate_authors_its_event() {
         )
         .unwrap();
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::Text { text: "hi".into() }],
             emission: "hi".into(),
@@ -1585,6 +1622,7 @@ fn each_field_intermediate_authors_its_event() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1675,6 +1713,7 @@ fn a_supplied_tool_result_refuses_at_the_door() {
         None,
         &mut fullness,
         &mut pressure_reported,
+        false,
     );
     let delta = vec![Message {
         role: Role::ToolResult,
@@ -1825,6 +1864,7 @@ fn dial_mid_stream(
         )
         .unwrap();
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "par".into(),
@@ -1894,6 +1934,7 @@ fn dial_mid_stream(
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -2037,6 +2078,7 @@ fn leave_during_turn(
     let (gate_near, gate_child) = crate::channel::OrganChannel::pair().unwrap();
     let generated = |content, finish| {
         weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content,
             emission: "tool emission".into(),
@@ -2246,6 +2288,7 @@ fn leave_during_turn(
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.hold_leave(&mut held, None);
         ports.turn(vec![Message {
@@ -2305,6 +2348,7 @@ fn a_directive_mid_turn_with_a_leave_held(
         let _: TokenDirective = serde_json::from_slice(&buf[..n]).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(300));
         let answer = weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "done".into(),
@@ -2374,6 +2418,7 @@ fn a_directive_mid_turn_with_a_leave_held(
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.hold_leave(&mut held, None);
         ports.turn(vec![Message {
@@ -2463,6 +2508,7 @@ fn a_join_during_the_wind_down_cancels_it_and_turns_the_leave_forced() {
                 )
             });
         let answer = weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "summary".into(),
@@ -2541,6 +2587,7 @@ fn a_join_during_the_wind_down_cancels_it_and_turns_the_leave_forced() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.hold_leave(&mut held, None);
         ports.wind_down(None, weaver_types::Cause { uid: 7 })
@@ -2615,6 +2662,7 @@ fn a_leave_dialed_while_the_spu_streams_is_heard() {
             while send(far.as_raw_fd(), &token, MsgFlags::MSG_DONTWAIT).is_ok() {}
         };
         let answer = weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "streamed".into(),
@@ -2679,6 +2727,7 @@ fn a_leave_dialed_while_the_spu_streams_is_heard() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.hold_leave(&mut held, None);
         ports.turn(vec![Message {
@@ -2750,6 +2799,7 @@ fn a_bound_passing_while_the_spu_streams_cancels_the_turn() {
             while send(far.as_raw_fd(), &token, MsgFlags::MSG_DONTWAIT).is_ok() {}
         };
         let answer = weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "streamed".into(),
@@ -2807,6 +2857,7 @@ fn a_bound_passing_while_the_spu_streams_cancels_the_turn() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.hold_leave(&mut held, Some(1));
         ports.turn(vec![Message {
@@ -2866,6 +2917,7 @@ fn a_drain_bound_passing_mid_turn_cancels_the_turn_and_turns_the_leave_forced() 
                 )
             });
         let answer = weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "late".into(),
@@ -2923,6 +2975,7 @@ fn a_drain_bound_passing_mid_turn_cancels_the_turn_and_turns_the_leave_forced() 
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.hold_leave(&mut held, Some(1));
         ports.turn(vec![Message {
@@ -3053,6 +3106,7 @@ fn a_call_asked_in_the_wind_down_is_never_sent() {
     )
     .expect("socketpair");
     let asked = weaver_types::TokenAnswer::Generated(Generation {
+        invalid_utf8: Vec::new(),
         unrecovered: vec![],
         content: vec![ContentBlock::ToolCall(weaver_traits::ToolCall {
             name: "sh".into(),
@@ -3095,6 +3149,7 @@ fn a_call_asked_in_the_wind_down_is_never_sent() {
         None,
         &mut fullness,
         &mut pressure_reported,
+        false,
     )
     .wind_down(None, weaver_types::Cause { uid: 7 })
     .0;
@@ -3183,6 +3238,7 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
     let (gate_near, gate_child) = crate::channel::OrganChannel::pair().unwrap();
     let generated = |content, finish| {
         weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content,
             emission: "tool emission".into(),
@@ -3416,6 +3472,7 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.turn(vec![Message {
             role: Role::User,
@@ -3579,6 +3636,7 @@ fn stop_dialed_mid_stream(latched: bool) {
         )
         .unwrap();
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "par".into(),
@@ -3666,6 +3724,7 @@ fn stop_dialed_mid_stream(latched: bool) {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -3799,8 +3858,10 @@ fn a_stop_is_not_answered_after_a_close_over_a_latched_record() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let generation = Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "par".into(),
@@ -3917,6 +3978,7 @@ fn a_column_on_the_generate_stream_authors_rather_than_kills() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.turn(vec![Message {
             role: Role::User,
@@ -3982,6 +4044,7 @@ fn with_seat<R>(
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ask(&mut ports)
     };
@@ -4196,6 +4259,7 @@ fn the_recall_after_a_flush_is_recorded_before_the_loop_holds_it() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         assert_eq!(ports.flush(0), Some((27196, 712)), "the flush holds");
         let answered = ports.recall(Some(4)).expect("custody answered");
@@ -4325,6 +4389,7 @@ fn a_replay_answer_is_recorded_by_its_bounds_and_count() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.replay(2_000).expect("custody answered")
     };
@@ -4394,6 +4459,7 @@ fn a_recall_the_member_did_not_answer_records_no_recall() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         assert!(
             ports.recall(Some(4)).is_none(),
@@ -4494,6 +4560,7 @@ fn an_unrecovered_call_is_authored_at_the_answer_and_handed_to_the_loop() {
         )
         .unwrap();
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             content: vec![
                 weaver_traits::ContentBlock::Text {
                     text: "one word".into(),
@@ -4576,6 +4643,7 @@ fn an_unrecovered_call_is_authored_at_the_answer_and_handed_to_the_loop() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -4703,6 +4771,7 @@ fn an_unrecovered_call_opens_no_execution_exchange() {
             weaver_types::TokenDirective::AppendAndGenerate { .. }
         ));
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             content: vec![
                 weaver_traits::ContentBlock::ToolCall(weaver_traits::ToolCall {
                     name: "sh".into(),
@@ -4742,6 +4811,7 @@ fn an_unrecovered_call_opens_no_execution_exchange() {
             delta[0].content
         );
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
+            invalid_utf8: Vec::new(),
             content: vec![weaver_traits::ContentBlock::Text {
                 text: "37 * 43 is 1591.".into(),
             }],
@@ -4841,6 +4911,7 @@ fn an_unrecovered_call_opens_no_execution_exchange() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -4970,9 +5041,15 @@ fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
         )
         .unwrap();
         send_answer(&weaver_types::TokenAnswer::ReFed(Generation {
+            // The re-feed's mark, read below on the re-feed's own
+            // authoring site (#493).
+            invalid_utf8: vec![weaver_types::InvalidUtf8 {
+                at: 8,
+                bytes: "ff".into(),
+            }],
             content: vec![
                 weaver_traits::ContentBlock::Text {
-                    text: "one word".into(),
+                    text: "one word\u{fffd}".into(),
                 },
                 weaver_traits::ContentBlock::UnrecoveredCall {
                     fragment: "<tool_call>x</tool_call>".into(),
@@ -4985,7 +5062,7 @@ fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
                 unrecovered_entry("<tool_call>x</tool_call>", false),
                 unrecovered_entry("<tool_call>y", true),
             ],
-            emission: "one word".into(),
+            emission: "one word\u{fffd}".into(),
             finish: Finish::Completed,
             // Deliberately unroundable: a site forwarding a zero, a
             // default, or the other member would fail the assertion
@@ -5052,6 +5129,7 @@ fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let turn = weaver_types::TurnKey("t-1".into());
         ports
@@ -5087,5 +5165,35 @@ fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
             Kind::MessageAssistant,
         ],
         "the re-feed authors the report at its answer"
+    );
+
+    // **The re-feed's output carries the generation's mark**, per
+    // `weaver-trace-Spec` section 3 and `weaver-spu-Spec` section 6 (#493).
+    //
+    // Perturbation: author `invalid_utf8: Vec::new()` at the re-feed's
+    // site, and this fails.
+    let output_line = recorder
+        .structure()
+        .expect("the serving record")
+        .by_kind(Kind::ModelOutput)
+        .next()
+        .expect("the output authored")
+        .line
+        .to_string();
+    let output: serde_json::Value =
+        serde_json::from_str(&output_line).expect("the output line is one value");
+    assert_eq!(
+        output["payload"]["invalid_utf8"],
+        serde_json::json!([{"at": 8, "bytes": "ff"}]),
+        "the re-feed's mark reaches the record: {output_line}"
+    );
+    // The mark's contract: its offset names a U+FFFD in the recorded text.
+    let emission = output["payload"]["emission"]
+        .as_str()
+        .expect("the output carries its emission");
+    assert_eq!(emission, "one word\u{fffd}", "{output_line}");
+    assert!(
+        emission[8..].starts_with('\u{fffd}'),
+        "the mark at 8 names the replacement character: {output_line}"
     );
 }

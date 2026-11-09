@@ -484,6 +484,7 @@ fn the_output_carries_the_counts() {
         Kind::ModelOutput,
         Some("t-1"),
         Some(Payload::ModelOutput(weaver_trace::ModelOutput {
+            invalid_utf8: Vec::new(),
             emission: "the answer".into(),
             finish: weaver_trace::Finish::Completed,
             resident: 26_214,
@@ -511,6 +512,54 @@ fn the_output_carries_the_counts() {
         payload.get("capacity").and_then(|v| v.as_u64()),
         Some(32_768),
         "the capacity reaches the record: {line}"
+    );
+    assert!(
+        payload.get("invalid_utf8").is_none(),
+        "a UTF-8 emission carries no mark, so earlier lines read unchanged: {line}"
+    );
+}
+
+/// **The output carries the emission's mark**, per `weaver-trace-Spec`
+/// section 3 and `weaver-spu-Spec` section 6 (#493): an emission that was
+/// not UTF-8 is kept as the replaced decode, and the record says where each
+/// replacement stands and which bytes it replaced.
+///
+/// Perturbation: drop `invalid_utf8` from `ModelOutput`, or skip it
+/// unconditionally, and this fails.
+#[test]
+fn the_output_carries_the_emission_mark() {
+    let (mut r, _path) = recorder();
+    r.submit(event(Kind::Load, None, Some(elections())))
+        .unwrap();
+    r.submit(event(Kind::TurnStarted, Some("t-1"), None))
+        .unwrap();
+    r.submit(event(
+        Kind::ModelOutput,
+        Some("t-1"),
+        Some(Payload::ModelOutput(weaver_trace::ModelOutput {
+            invalid_utf8: vec![weaver_trace::InvalidUtf8 {
+                at: 9,
+                bytes: "e2".into(),
+            }],
+            emission: "Perfect! \u{fffd}".into(),
+            finish: weaver_trace::Finish::Completed,
+            resident: 26_214,
+            capacity: 32_768,
+        })),
+    ))
+    .unwrap();
+    let line = r
+        .structure()
+        .by_kind(Kind::ModelOutput)
+        .next()
+        .unwrap()
+        .line
+        .clone();
+    let rendered: serde_json::Value = serde_json::from_str(&line).expect("the line is one value");
+    assert_eq!(
+        rendered["payload"]["invalid_utf8"],
+        serde_json::json!([{"at": 9, "bytes": "e2"}]),
+        "the mark reaches the record: {line}"
     );
 }
 

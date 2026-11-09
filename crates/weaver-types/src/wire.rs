@@ -916,6 +916,34 @@ pub enum AgentState {
     Active,
 }
 
+/// The most octets of client content a refusal reason quotes, per
+/// `weaver-types-Spec` section 4 (#504). A refused turn's close carries its
+/// reason back through the organ envelope base64-encoded, so a reason that
+/// quoted a line whole could render past `MAX_ENVELOPE_BYTES` on the return
+/// leg, and the harness's send would fault rather than answer.
+pub const ECHO_BOUND: usize = 256;
+
+/// Client content as a refusal reason quotes it: whole when it is at most
+/// [`ECHO_BOUND`] octets, and otherwise its longest prefix within the bound
+/// that ends on a character boundary, followed by a marker naming the
+/// quoted text's full length, so a reader knows the quote was cut and by how
+/// much. The cut knows characters and not JSON, so a quote of a rendering
+/// may end inside an escape; the marker says it was cut.
+pub fn echoed(content: &str) -> std::borrow::Cow<'_, str> {
+    if content.len() <= ECHO_BOUND {
+        return std::borrow::Cow::Borrowed(content);
+    }
+    let mut end = ECHO_BOUND;
+    while !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    std::borrow::Cow::Owned(format!(
+        "{}... [cut at {end} of {} octets]",
+        &content[..end],
+        content.len()
+    ))
+}
+
 /// A request line as the harness parses it, per `weaver-gate-world-contract`
 /// section 2 and `weaver-gate-Spec` section 4: one JSON object carrying `text`,
 /// a string, and at most `role` beside it, each member once. **Typed rather
@@ -938,7 +966,9 @@ impl TurnRequest {
     /// the typed decode. serde reads a struct from a JSON array as well as
     /// from an object, by position, so `["x","system"]` would otherwise read
     /// as the seeding line; the line's first byte past whitespace must open an
-    /// object. The error is the refused turn's reason, as text.
+    /// object. The error is the refused turn's reason, as text, and serde's
+    /// part of it, which quotes an unknown member's name whole, is
+    /// [`echoed`] within [`ECHO_BOUND`] (#504).
     pub fn parse(octets: &[u8]) -> Result<TurnRequest, String> {
         match octets.iter().find(|byte| !byte.is_ascii_whitespace()) {
             Some(b'{') => {}
@@ -946,7 +976,8 @@ impl TurnRequest {
         }
         serde_json::from_slice::<TurnRequest>(octets).map_err(|error| {
             format!(
-                "a request is one JSON object carrying the text member, a string, and at most the role member beside it, each once: {error}"
+                "a request is one JSON object carrying the text member, a string, and at most the role member beside it, each once: {}",
+                echoed(&error.to_string())
             )
         })
     }
@@ -1774,6 +1805,26 @@ pub struct Generation {
     /// section 4.4. Plain counts with no judgment.
     pub resident: u64,
     pub capacity: u64,
+    /// Each sequence of the emission's bytes that was not UTF-8, in emission
+    /// order, per `weaver-spu-Spec` section 6 on the operator's ruling of
+    /// 2026-11-08 (#493): the emission is the replaced decode and this says
+    /// where. Absent where the bytes were UTF-8 as the SPU saw them (on the
+    /// Native container the tokenizer replaces first and no mark is made),
+    /// and defaulted at the read so an answer written before the member
+    /// parses with it empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invalid_utf8: Vec<InvalidUtf8>,
+}
+
+/// One replaced sequence of an emission, per `weaver-spu-Spec` section 6:
+/// `at` is the byte offset of its U+FFFD in the emission text, and `bytes`
+/// the sequence it replaced, in lowercase hexadecimal. Putting each entry's
+/// bytes back at its offset restores the model's bytes exactly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvalidUtf8 {
+    pub at: u64,
+    pub bytes: String,
 }
 
 /// A call the emission attempted and the family parse could not recover,

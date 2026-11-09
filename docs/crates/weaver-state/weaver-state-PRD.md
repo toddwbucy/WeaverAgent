@@ -265,13 +265,14 @@ The input is the inspected artifact's lineage: canonical event JSON as the trace
 it, selected per event by the tee's key-based filter, fixed at load. **The tee's rulings
 of 2026-08-18**: the envelope always rides and is not electable, session, run, turn,
 kind, and sequence crossing on every distilled event so no election can produce an
-unattributable row, and the election ranges over payload keys alone, with one exception
-ruled 2026-09-04 and stated below. An elected kind with no payload keys is a meaningful
-election, because presence itself is state. **The default election is the envelope of
-every kind and nothing more**, the operator electing payload keys on top of it, so a
-deployment that elects nothing still holds the session's shape - what happened, in what
-order, in which turn - and pays for no payload it never asked to keep. An event the
-election does not match costs nothing and is dropped at the tee, the trace remaining
+unattributable row, and the election ranges over payload keys alone, with two exceptions
+in `weaver-trace-PRD` section 11: the identity prefix, ruled 2026-09-04 and stated
+below, and a restored message, ruled 2026-09-26. An elected kind with no payload keys is
+a meaningful election, because presence itself is state. **The default election is the
+envelope of every kind and nothing more**, the operator electing payload keys on top of
+it, so a deployment that elects nothing still holds the session's shape - what happened,
+in what order, in which turn - and pays for no payload it never asked to keep. An event
+the election does not match costs nothing and is dropped at the tee, the trace remaining
 complete regardless, because the tee reads the stream and never thins it. The run
 identifies itself in that stream since the ruling of 2026-08-14, admin's run reference
 having replaced the ordinal, so what state receives is attributable to the run that
@@ -281,26 +282,33 @@ produced it without this crate minting any identity of its own.
 ruling of 2026-10-06 (#1) that the system prompt is state, which supersedes the ruling
 of 2026-10-02 that the prompt file was authoritative. The system prompt is the first
 bounding of the possibility space the decoder samples from, which is to say it is
-context, and context is this crate's material: the prompt enters through the gate as
-the agent's first turn, the harness authors it as the turnless `message.system` event
-of that turn and the tee lands it here, every later load asks this crate for it and
-seats the answer, authoring nothing, the run's `load` event naming its save point and
-the ask's `recall` naming the answer, on the operator's ruling of 2026-10-06 (later, #1)
+context, and context is this crate's material: the prompt enters through the gate as the
+agent's first turn, the harness authors it as a turnless `message.system` event ahead of
+that turn and the tee lands it here, every later load asks this crate for it and seats
+the answer, authoring nothing, the run's `load` event naming its save point and the
+ask's `recall` naming the answer, on the operator's ruling of 2026-10-06 (later, #1)
 that a session's trace and the state it loaded from are not tied together once the agent
-is unloaded, and a save point carries it across loads; **the rebuild at a load is the
+is unloaded, and a save point carries it across loads. **The rebuild at a load is the
 prefix alone, this crate's identity answer, and nothing else is replayed**, on the
 operator's clarification of the same day, the rest of the context being the operator's
-turn by turn with recall on demand, the first save point after the seeding turn being the agent's
-starting state, which holds the model's first answer beside the prompt, because the
-seeding turn generates and every event of it lands here like any other. What this crate holds under that kind is the history of the identities
-entered and seated, and the newest run's is the one in force; it decides none of them. **The identity's kind cannot be elected
-out**: the seated prefix crosses the tee whole under every election, per
-`weaver-trace-PRD` section 11, the one exception to the key-based rule, so no election
-produces a load whose identity this crate never held. Within a residency the prefix is
-permanent, the decode seam holding it from open to release, so a revised prompt takes
-effect at the next load, or at an SPU session reopened with the new prefix as a live
-restore that needs one does, per section 4. An identity rewritten by consolidation is
-the memory leg's and stays out, per apex section 9.
+turn by turn with recall on demand, the first save point after the seeding turn being
+the agent's starting state. It holds the prompt whole, since a turnless `message.system`
+crosses the tee under every election, and the model's first answer as the declaration's
+election admits it, since the seeding turn generates and its answer crosses as any
+`message.assistant` does: the answer's text where the election names
+`message.assistant`'s `content`, its envelope without the text where the election admits
+the kind and names no `content` path for it, as the default election does, and nothing
+where `all-kinds` is false and the election does not name the kind, per
+`weaver-trace-Spec` section 11. What this crate holds under `message.system` is the
+history of the identities entered and seated, and the newest run's is the one in force.
+It decides none of them. **The identity's kind cannot be elected out**: the seated
+prefix crosses the tee whole under every election, per `weaver-trace-PRD` section 11,
+one of the two exceptions to the key-based rule, so no election produces a load whose
+identity this crate never held. Within a residency the prefix is permanent, the decode
+seam holding it from open to release, so a revised prompt takes effect at the next load,
+or at an SPU session reopened with the new prefix as a live restore that needs one does,
+per section 4. An identity rewritten by consolidation is the memory leg's and stays out,
+per apex section 9.
 
 **A session branches from a record offline, through a save point**, on the operator's
 ruling of 2026-10-02 on #58, which retires the record restore of 2026-09-04 (issue

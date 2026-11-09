@@ -6,9 +6,9 @@
 #   deploy/bootstrap-stack.sh --install    then install under sudo
 #
 # **This is the first install; `update-stack.sh` is every later one.** That
-# script diffs the built members against the installed ones and reads every
-# path out of the stack record, so on a box with neither it has nothing to
-# read and refuses. This one writes both from the facts below and then hands
+# script diffs the built members and engine libraries against the installed
+# ones and reads every path out of the stack record, so on a box with neither
+# it has nothing to read and refuses. This one writes both from the facts below and then hands
 # over: after it, `create-agent.sh` makes each agent and `update-stack.sh`
 # carries the box forward. It refuses to run where a stack record already
 # stands, because two writers of one record is how a box drifts.
@@ -18,7 +18,9 @@
 # `/etc/weaver/stack/` holds the box-wide defaults, one file per key, which
 # `create-agent.sh` copies into each new agent's root: `worker-binary`,
 # `spu-binary`, `gate-binary`, `shell-binary`, `coordination-root` and `library-path`, and for
-# the scripts alone `prefix` and `agent-directory`. `headroom-bytes` and
+# the scripts alone `prefix`, `agent-directory` and `install-tuple`, the
+# box-side half of the deployment tuple (deploy/install-tuple.sh), which
+# update-stack.sh rewrites after each verified install. `headroom-bytes` and
 # `load-bound-seconds` are optional, and this script writes neither. An
 # operator who writes one into the record has it copied into every agent made
 # after. The admin base is created empty here, root-owned 0755, and gains one
@@ -36,7 +38,7 @@
 #   WEAVER_STACK_RECORD  /etc/weaver/stack      the scripts' record of this install
 #   WEAVER_OPERATOR      $SUDO_USER or $USER    named in the plan; owns nothing this makes
 #   WEAVER_AGENT_DIR     /var/lib/weaver-agent
-#   CUDA_LIB_DIR         /opt/cuda/lib64        joins the ld.so.conf.d entry
+#   CUDA_LIB_DIR         /opt/cuda/lib64        joins the ld.so.conf.d entry; held closed by root
 #   CARGO_TARGET_DIR     honoured; give the install its own, never a gate's
 #
 # The feature set and the member list are update-stack.sh's, stated again
@@ -51,6 +53,8 @@ die()  { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 source "$REPO/deploy/retired-python.sh"
+source "$REPO/deploy/engine-libraries.sh"
+source "$REPO/deploy/install-tuple.sh"
 
 # The operator's cargo, rustup and PATH do the building; root has none of
 # them. Measured 2026-09-30: under sudo the toolchain read empty and nvcc
@@ -69,7 +73,6 @@ ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 OPERATOR=${WEAVER_OPERATOR:-${SUDO_USER:-$USER}}
 AGENT_DIR=${WEAVER_AGENT_DIR:-/var/lib/weaver-agent}
-CUDA_LIB_DIR=${CUDA_LIB_DIR:-/opt/cuda/lib64}
 
 refuse_python_install "$PREFIX" "$PREFIX/bin"
 
@@ -77,15 +80,9 @@ MEMBERS="worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-st
 MEMBER_FEATURES=weaver-state/sqlite
 SPU_FEATURES=weaver-spu/cuda
 FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
-# The engine's shared objects. llama-cpp-sys builds them into its own
-# `out/lib` under the target's `build/` directory, with the versioned file,
-# the SONAME link and the bare link side by side; the copies at the target
-# root are bare links that dangle. The members carry no RUNPATH and name the
-# SONAMEs, so the install writes an `ld.so.conf.d` entry for the lib
-# directory, and the record's `library-path` names it as well, which admin
-# judges and sets as the worker's LD_LIBRARY_PATH (weaver-admin-Spec section 6).
-LIB_GLOBS='libggml*.so* libllama*.so*'
-LDSO_CONF=/etc/ld.so.conf.d/weaver.conf
+# The engine's shared objects, the crate that builds them, the loader's
+# entry and the CUDA directory it names are deploy/engine-libraries.sh's,
+# which update-stack.sh sources as well.
 
 # ---------------------------------------------------------------- 1. box facts
 say "box"
@@ -190,13 +187,23 @@ for placed in "$ADMIN_BASE" "$STACK" "$AGENT_DIR"; do
     bad=$(creatable_in "$at") || die "$placed would be made under $bad, where another principal could claim the missing name first"
   fi
 done
+# The CUDA directory joins the loader's entry beside $PREFIX/lib, so it is
+# judged as admin judges the library path (deploy/engine-libraries.sh).
+loader_dir CUDA_LIB_DIR "$CUDA_LIB_DIR"
 
 say "tree"
+# The install tuple names the commit in full, read here and not after the
+# build, since the checkout may move during it. A status that cannot be read
+# refuses rather than reading as a clean tree.
 if git -C "$REPO" rev-parse --short HEAD >/dev/null 2>&1; then
   REV=$(git -C "$REPO" rev-parse --short HEAD)
-  [ -z "$(git -C "$REPO" status --porcelain=v1 --untracked-files=all)" ] || REV="$REV-dirty"
+  COMMIT=$(git -C "$REPO" rev-parse HEAD)
+  TREE_STATUS=$(git -C "$REPO" status --porcelain=v1 --untracked-files=all) \
+    || die "cannot read the tree's status, so whether $REV is the tree built is unknown"
+  [ -z "$TREE_STATUS" ] || { REV="$REV-dirty"; COMMIT="$COMMIT-dirty"; }
 else
   REV="nogit-$(sha256sum Cargo.lock | cut -c1-12)"
+  COMMIT=$REV
 fi
 plan "revision      $REV"
 BUILT=$(cargo metadata --format-version 1 --no-deps --offline --locked 2>/dev/null \
@@ -268,12 +275,23 @@ say "build"
 # update-stack.sh's default too**, the two scripts building one workspace:
 # a failed build no longer passing on stale binaries, a host compiler the
 # kernels refuse would otherwise stop a bootstrap the update builds.
+# The build's machine messages go to BUILD_MESSAGES, a file mktemp makes,
+# which `engine_out` reads for the engine's output directory
+# (deploy/engine-libraries.sh); its rendered diagnostics and progress go to
+# the log.
 run_build() {
   local log="${BUILT%/release}/weaver-deploy-build-$$.log" rc=0
+  BUILD_MESSAGES=$(mktemp "${BUILT%/release}/weaver-deploy-messages-XXXXXX") \
+    || die "no file for the build's messages could be made beside $BUILT"
+  # No other exit trap stands, so a signal during the long build still
+  # removes the file.
+  trap 'rm -f -- "$BUILD_MESSAGES"' EXIT
   printf '   output: %s\n' "$log"
   NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
-    cargo build --release --locked --workspace --features "$FEATURES" >"$log" 2>&1 || rc=$?
+    cargo build --release --locked --workspace --message-format=json-render-diagnostics \
+      --features "$FEATURES" >"$BUILD_MESSAGES" 2>"$log" || rc=$?
   if [ "$rc" -ne 0 ]; then
+    rm -f -- "$BUILD_MESSAGES"
     # The cause first, where cargo names one, then the run's end: a long
     # captured output can push the panic or the first error out of the tail.
     grep -m 12 -E -A 6 '^(error(\[|:)|failures:|---- )|panicked at' -- "$log" >&2 || true
@@ -285,6 +303,14 @@ run_build() {
   rm -f -- "$log"
 }
 run_build
+# **The engine's output directory is the one cargo names for this build**,
+# never the newest by time (deploy/engine-libraries.sh).
+SYS_OUT=$(engine_out "$ENGINE_CRATE" "$BUILD_MESSAGES" "$BUILT/build" || true)
+rm -f -- "$BUILD_MESSAGES"
+trap - EXIT
+[ -n "$SYS_OUT" ] || die "the build reported no single output directory under $BUILT/build for $ENGINE_CRATE, the lock's one package of that name, so which engine libraries it built is unknown"
+SYS_OUT="$SYS_OUT/lib"
+[ -d "$SYS_OUT" ] || die "the engine's output directory names no lib/ at $SYS_OUT, so the build made no engine libraries to install"
 for b in $MEMBERS; do [ -x "$BUILT/$b" ] || die "$BUILT/$b was not built"; done
 # **The agent's shell, built from its pinned source and configuration** (#29,
 # weaver-gate-Spec 8.1): a static busybox and its applet list, written beside
@@ -299,15 +325,14 @@ build_busybox() {
   fi
 }
 build_busybox || die "the shell's busybox did not build"
-# `sed -n 1p` reads the whole listing, where `head -1` closed the pipe on
-# `ls` and `pipefail` with `set -e` ended the script; `|| true` lets no match
-# reach the `die` below rather than exit unexplained.
-SYS_OUT=$(ls -td "$BUILT"/build/llama-cpp-sys-2-*/out/lib 2>/dev/null | sed -n 1p || true)
-[ -n "$SYS_OUT" ] || die "no llama-cpp-sys output under $BUILT/build; the engine was not built"
 LIBS=()
+LIB_NAMES=()
 for g in $LIB_GLOBS; do for f in "$SYS_OUT"/$g; do [ -e "$f" ] && LIBS+=("$f"); done; done
+# The versioned files, which the install tuple names by digest; the links
+# carry no content of their own.
+for f in "${LIBS[@]}"; do [ -L "$f" ] || LIB_NAMES+=("${f##*/}"); done
 [ ${#LIBS[@]} -gt 0 ] || die "no engine libraries matched $LIB_GLOBS under $SYS_OUT"
-plan "engine out     $SYS_OUT"
+plan "engine out    $SYS_OUT"
 plan "members       $MEMBERS"
 plan "libraries     $(printf '%s ' "${LIBS[@]##*/}")"
 
@@ -318,7 +343,7 @@ for b in $MEMBERS; do plan "install $b -> $PREFIX/bin/$b  $(sha256sum "$BUILT/$b
 plan "cp -a ${#LIBS[@]} library files and links -> $PREFIX/lib"
 plan "write $LDSO_CONF = $PREFIX/lib and $CUDA_LIB_DIR, then ldconfig"
 plan "install busybox -> $PREFIX/bin/busybox (root, 0755) and busybox.applets beside it (root, 0644)"
-plan "write $STACK/{worker-binary,spu-binary,gate-binary,shell-binary,coordination-root,library-path,prefix,agent-directory}  (root, 0755 / 0644)"
+plan "write $STACK/{worker-binary,spu-binary,gate-binary,shell-binary,coordination-root,library-path,prefix,agent-directory,install-tuple}  (root, 0755 / 0644)"
 plan "install -d $ADMIN_BASE (root:root 0755): empty; create-agent.sh adds one root per agent"
 plan "install -d $AGENT_DIR (root:root 0755): territories, each root:weaver-<name>-state 0710, not setgid, its trace root:weaver-<name>-trace 0640"
 [ -d "$PREFIX/models" ] && plan "$PREFIX/models stands: $(ls "$PREFIX/models" | wc -l) entries" || plan "$PREFIX/models is absent: copy the artifacts before declaring an agent"
@@ -335,21 +360,27 @@ done
 sudo install -o root -g root -m 0755 "$BUILT/busybox" "$PREFIX/bin/busybox"
 sudo install -o root -g root -m 0644 "$BUILT/busybox.applets" "$PREFIX/bin/busybox.applets"
 plan "installed busybox and busybox.applets"
-sudo cp -a "${LIBS[@]}" "$PREFIX/lib/"
-sudo chown -h root:root "$PREFIX"/lib/*
+# Each placed by `install_library` (deploy/engine-libraries.sh), root's from
+# the moment it has a name.
+for f in "${LIBS[@]}"; do install_library "$f" "$PREFIX/lib/${f##*/}"; done
 plan "installed ${#LIBS[@]} library files and links"
 printf '%s\n%s\n' "$PREFIX/lib" "$CUDA_LIB_DIR" | sudo tee "$LDSO_CONF" >/dev/null
 sudo chmod 0644 "$LDSO_CONF"
 sudo ldconfig
 plan "wrote $LDSO_CONF ($PREFIX/lib, $CUDA_LIB_DIR) and ran ldconfig"
-# Read whole, then searched: `ldd | grep -q` under `pipefail` answered false
-# where grep's early exit killed ldd, passing an unresolved library.
-LDD_SAID=$(ldd "$PREFIX/bin/weaver-spu" 2>/dev/null || true)
-if grep -q 'not found' <<<"$LDD_SAID"; then
-  ldd "$PREFIX/bin/weaver-spu" | grep 'not found' >&2
-  die "weaver-spu has unresolved libraries after ldconfig"
+# **The SPU resolves its engine from the library directory**, as admin's
+# start step will run it (deploy/engine-libraries.sh): ldd's status, no
+# library not found, and every engine library a file in $PREFIX/lib. Read
+# whole, then searched: `ldd | grep -q` under `pipefail` answered false where
+# grep's early exit killed ldd, passing an unresolved library.
+rc=0
+LDD_SAID=$(spu_ldd "$PREFIX/bin/weaver-spu" "$PREFIX/lib") || rc=$?
+[ "$rc" -eq 0 ] || { printf '%s\n' "$LDD_SAID" >&2; die "ldd could not read the installed weaver-spu (it exited $rc)"; }
+if ! UNRESOLVED=$(engine_resolved "$LDD_SAID" "$PREFIX/lib"); then
+  printf '%s\n' "$UNRESOLVED" >&2
+  die "weaver-spu has unresolved libraries after ldconfig, or resolves its engine outside $PREFIX/lib"
 fi
-plan "weaver-spu resolves: $(ldd "$PREFIX/bin/weaver-spu" | grep -cE 'ggml|llama') engine objects from $PREFIX/lib"
+plan "weaver-spu resolves: $(grep -cE '^[[:space:]]*lib(ggml|llama)' <<<"$LDD_SAID" || true) engine objects from $PREFIX/lib"
 
 say "stack record"
 sudo install -d -o root -g root -m 0755 "$STACK"
@@ -369,6 +400,15 @@ plan "admin base $ADMIN_BASE (empty)"
 # The territories' base is root's, so no other principal can make a name in it
 # and each territory is reached by group, never by an access entry (#28).
 sudo install -d -o root -g root -m 0755 "$AGENT_DIR"
+
+# **The install tuple** (deploy/install-tuple.sh), read from what this run
+# installed, the same record update-stack.sh writes after each install.
+say "tuple"
+TUPLE=$(install_tuple "$REPO" "$COMMIT" "$PREFIX/bin" "$PREFIX/lib" "$FEATURES" "$MEMBERS busybox busybox.applets" "${LIB_NAMES[*]}")
+printf '%s\n' "$TUPLE" | sed 's/^/   /'
+printf '%s\n' "$TUPLE" | sudo tee "$STACK/install-tuple" >/dev/null
+sudo chmod 0644 "$STACK/install-tuple"
+plan "written to $STACK/install-tuple"
 
 say "installed at $REV"
 plan "next: deploy/create-agent.sh <name> --artifact <path> [--apply], one agent at a time"

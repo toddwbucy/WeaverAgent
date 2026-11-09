@@ -120,6 +120,13 @@ mod tools_cgroup;
 #[cfg(test)]
 extern crate self as weaver_harness;
 
+// The worker's loop, compiled once into this crate's tests: the flow suite
+// drives its foundation owner and the seated suite (`lifecycle/seated_tests.rs`)
+// its deployed `drive`, each through the seat loop zero grants.
+#[cfg(test)]
+#[path = "bin/worker/dev_loop/mod.rs"]
+mod dev_loop;
+
 pub use assembly::{Prompt, assemble};
 pub use authorship::{Author, licensed};
 pub use channel::{

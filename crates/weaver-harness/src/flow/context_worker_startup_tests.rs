@@ -19,8 +19,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use weaver_types::state_flow as s;
 
-#[path = "../bin/worker/dev_loop/foundation.rs"]
-pub(super) mod worker;
+pub(super) use crate::dev_loop::foundation as worker;
 
 #[path = "context_worker_admission_process_tests.rs"]
 pub(super) mod admission_process;

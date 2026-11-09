@@ -1696,7 +1696,11 @@ determinism. The two stay two records because the byte-for-byte comparison
 holds whatever order landed and cannot see the order move, which is the reason
 the order was given a claim of its own. **Assembly reads the identity prefix and
 never its source**: where the prefix comes from is decided at one site, section
-6.1's open, and named there.
+6.1's open, and named there. **The serving path assembles with an empty identity**
+since the worker's positional identity argument retired (ADP-4 of
+`weaver-spu-adapter-binding-Spec-amendment` section 4): the prefix is the open's, seated
+at the SPU from the state member's answer, and is not assembled again, and a loop that
+needs to know whether one stands reads the seat's seated read of section 6.
 
 ```graph
 node: harness-prompt-part-order
@@ -2045,7 +2049,8 @@ again at the leave, and the `unload` event carries the comparison, per
 boundary its state sits behind. The fifth, `identity` of the same date, is the seat's
 own for the opposite reason: it is asked once at the enter, before the decode open, and
 its answer is the open's material rather than a loop's, so no loop composes a prefix and
-no `Ports` call exists to hand one out. The seam's ask end lives in `src/state.rs`, a
+no `Ports` call exists to hand one out. The seated read below answers only whether the
+answer carried any identity message. The seam's ask end lives in `src/state.rs`, a
 clone of the standing state channel held on the run beside the tee the enter attaches,
 that channel arriving in the enter directive as the harness half of the pair admin
 created, per the operator's ruling of 2026-08-26, dialed nowhere and derived from
@@ -2133,6 +2138,27 @@ frame is skipped against it rather than taken for the exchange's answer, so a sk
 frame does not renew the bound and a stream of them cannot postpone the retirement. A
 loop asking about many positions in a turn waits up to the bound on each, since the asks
 are serial and each one blocks.
+
+**The seat carries the seated read, 2026-11-08, with ADP-4 of
+`weaver-spu-adapter-binding-Spec-amendment` section 4.** `Ports` grows one call,
+`seated`, answering whether the open seated a prefix: true where the state member's
+`identity` answer at the enter carried any identity message, false where the answer was
+empty (an agent before its seeding turn), and false where no member is elected. The run
+holds the fact from the moment the answer is read, before the open, and every seat
+granted over the run lends it, the frame path's, `grant_seat`'s and the wind-down's
+alike, as an argument of the grant that no grant can leave out. The read is a
+boolean and never the prefix: the identity's source stays the open's alone (section
+6.1), and no loop composes or reads a prefix. **The predicate is the answer's and nothing
+else's.** It is not the assembled prompt's identity part, which the serving path leaves
+empty (section 5), and not the Open's `prefix_tokens`, which a family whose renderer
+prepends a start marker to an empty identity (llama, gemma4, mistral3) makes non-zero
+with nothing seated. A loop reads it to yield a prompt of its own to the seated one,
+and the deployed loop's use of it is its workflow document's
+(`Loops/basic-inference-loop.md` section 6). `src/lifecycle/seated_tests.rs` drives the
+read through a real enter against a stand-in SPU process, up to the gate's fork, and
+then the deployed loop through the frame path, and each of the three perturbations
+fails it: push the compiled prompt unconditionally, read the assembled identity, or read
+`prefix_tokens`.
 
 **The loop these ports serve is state management**, per the operator's rulings of
 2026-10-02 on issue #1 and `weaver-agent-PRD` section 5.5. **One loop is deployed, the
@@ -2509,7 +2535,13 @@ peer uid the gate read at accept and carries inward per
 `operator` of `weaver-types-Spec` section 4; a line whose dialer is absent or is any
 other uid, the connector's service user among them, or whose `role` is any other
 value, is a refused turn, the response frame's `refused` kind naming the role, and the
-channel stands. An admitted seeding line is one turn in the residency that seeds: this
+channel stands. **A refusal reason quotes at most 256 octets of client content**
+(`ECHO_BOUND`, `weaver-types-Spec` section 4, #504): the role's JSON rendering as the
+harness decoded it, cut on a character boundary where it runs longer and marked with
+the rendering's full length. The close returns through the same 64 KiB organ envelope
+the line arrived in, base64-encoded, and a reason that quoted a line of the gate's
+bound whole would render past it, failing the send and the run with it rather than
+answering. An admitted seeding line is one turn in the residency that seeds: this
 crate authors the prompt, one `system` message of the line's text verbatim, turnless
 through the identity door so the record and the tee carry it, then appends it as the
 session's context, `AppendAndGenerate` with that one message and no user message, and
@@ -2532,13 +2564,23 @@ prefix, so a flush there would drop it from the context, which is why the runboo
 that residency at the save point: load, seed, save point, unload, and the production
 session is the next load. The first save point taken after the seeding is the agent's
 starting state, per `weaver-state-PRD` section 4, taken on the operator's demand with
-admin's `save-point` verb, or by the first leave's snapshot. **Because the seeding turn generates, the agent's starting state
-holds the model's first answer beside the prompt**: that answer is on the record as
-every `message.assistant` is, the tee lands it, and a save point taken after the
-seeding carries both, by design and not by leak. The line's bound is the gate's, 32 kibibytes of octets before the
-delimiter per `weaver-gate-Spec` section 4, which a prompt written as prose sits well
-inside. A refused open is a refused enter, returned through the
-fan-out's after-load failure so the authored bracket stands for the forced leave of admin's rollback to unwind, the
+admin's `save-point` verb, or by the first leave's snapshot. **Because the seeding turn
+generates, the record holds the model's first answer beside the prompt**: the answer is
+on the record whole, as every `message.assistant` is. The agent's starting state holds
+the prompt whole, since a turnless `message.system` crosses the tee under every
+election, per `weaver-trace-Spec` section 11. It holds the first answer as the
+declaration's election admits it, per the same section and `weaver-types-Spec` section 2:
+the answer's text where the election names `message.assistant`'s `content`, as the
+declaration `create-agent.sh` writes does, its envelope without the text where the
+election admits the kind and names no `content` path for it, as the default election
+does, and nothing where `all-kinds` is false and the election does not name the kind.
+A save point taken after the seeding carries what the tee landed, by design
+and not by leak.
+The line's bound is the gate's, 49,041 octets before the delimiter per
+`weaver-gate-Spec` section 4, the organ envelope's exact capacity, which the R1 system
+prompt's seeding line, 48,454 octets as `deploy/turn.py` encodes it, sits inside. A
+refused open is a refused enter, returned through the fan-out's after-load failure so
+the authored bracket stands for the forced leave of admin's rollback to unwind, the
 aggregate naming the decode seam as where the fan-out stopped. **Under a restoring load
 the store answers from the save point**, per the operator's rulings of 2026-10-02 on
 #58: admin hands the member the save point at spawn, per `weaver-admin-Spec`, the member
@@ -2563,9 +2605,10 @@ on for 120 seconds** (`RESTORED_ANSWER_BOUND_MS`, the operator's ruling of 2026-
 #99): the member judges and seats the save point only after the opener reaches it, up to
 the save point's 1 GiB bound, and answers after that, so the two seconds of the small
 asks would refuse every load of a large save point. Admin's load bound
-(`load-bound-seconds`, 900 by default) spends this wait with the rest of the enter. **The reset rides the `load`
-event**: where the enter carries `reset`, beside its lineage and whether or not a save
-point stands, resolved by admin from its clean-unload marker per `weaver-admin-Spec`
+(`load-bound-seconds`, 900 by default) spends this wait with the rest of the enter.
+**The reset rides the `load` event**: where the enter carries `reset`, beside its
+lineage and whether or not a save point stands, resolved by admin from its clean-unload
+marker per `weaver-admin-Spec`
 section 4, this crate copies it onto the `load` event beside the lineage, per
 `weaver-trace-Spec` section 3, the prior run and the reason, the save point reset to
 being the lineage's or none where the store stands empty, so a rebuild from the record

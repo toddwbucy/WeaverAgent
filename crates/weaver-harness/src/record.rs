@@ -269,6 +269,20 @@ impl Record {
     }
 }
 
+/// The emission's marks as `model.output` carries them, per
+/// `weaver-trace-Spec` section 3 and `weaver-spu-Spec` section 6 (#493): the
+/// one conversion site for the four authors of the kind, so the member
+/// reaches the record from every one of them unread.
+pub(crate) fn invalid_utf8(marks: &[weaver_types::InvalidUtf8]) -> Vec<weaver_trace::InvalidUtf8> {
+    marks
+        .iter()
+        .map(|mark| weaver_trace::InvalidUtf8 {
+            at: mark.at,
+            bytes: mark.bytes.clone(),
+        })
+        .collect()
+}
+
 /// The legacy event rendered into the diagnostic one. The sixteen shared
 /// kinds map by spelling and explicitly licensed payload variant. The
 /// converter preserves the supplied session, run and sequence. On submission the

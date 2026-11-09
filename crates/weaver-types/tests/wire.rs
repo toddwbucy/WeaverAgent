@@ -143,6 +143,7 @@ fn the_measurement_splices_and_never_quotes() {
     )
     .expect("valid JSON splices");
     let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+        invalid_utf8: Vec::new(),
         content: vec![weaver_traits::ContentBlock::ToolCall(
             weaver_traits::ToolCall {
                 name: "calculator".to_string(),
@@ -326,6 +327,43 @@ fn a_request_line_decodes_typed_with_each_member_once() {
     ] {
         assert!(parse(line).is_err(), "{why} refuses: {line}");
     }
+}
+
+/// **A refusal reason quotes at most `ECHO_BOUND` octets of client
+/// content**, per `weaver-types-Spec` section 4 (#504): content within the
+/// bound is quoted whole, longer content is cut on a character boundary
+/// with a marker naming the full length, and the parse's own refusal of an
+/// unknown member stays within the bound however long the member's name.
+/// Perturbation: return the content whole from `echoed` and the long cases
+/// fail.
+#[test]
+fn a_refusal_reason_quotes_client_content_within_the_echo_bound() {
+    use weaver_types::{ECHO_BOUND, echoed};
+    assert_eq!(ECHO_BOUND, 256);
+    let short = "x".repeat(ECHO_BOUND);
+    assert_eq!(echoed(&short), short.as_str(), "within the bound, whole");
+    let long = "x".repeat(ECHO_BOUND + 44);
+    assert_eq!(
+        echoed(&long),
+        format!("{}... [cut at 256 of 300 octets]", "x".repeat(ECHO_BOUND))
+    );
+    // A four-octet character straddling the bound is left out whole.
+    let straddle = format!("{}\u{1f600}tail", "x".repeat(ECHO_BOUND - 1));
+    assert_eq!(
+        echoed(&straddle),
+        format!(
+            "{}... [cut at 255 of 263 octets]",
+            "x".repeat(ECHO_BOUND - 1)
+        )
+    );
+    let line = format!(r#"{{"text":"","{}":0}}"#, "k".repeat(40_000));
+    let reason = weaver_types::TurnRequest::parse(line.as_bytes()).expect_err("unknown member");
+    let (_, quote) = reason
+        .split_once("each once: ")
+        .expect("the parse's refusal text leads the quote");
+    let (quoted, marker) = quote.split_once("... [cut at ").expect("the cut is marked");
+    assert!(quoted.len() <= ECHO_BOUND, "{} octets quoted", quoted.len());
+    assert!(marker.starts_with("256 of "), "{marker}");
 }
 
 /// **The dialer rides an inbound frame and is absent from a response**, per
@@ -871,11 +909,51 @@ fn in_transition_carries_its_constituents_only_where_filled() {
     );
 }
 
+/// **The emission's mark crosses the seam**, per `weaver-types-Spec` section
+/// 4.4 and `weaver-spu-Spec` section 6 (#493): present when the emission was
+/// not UTF-8, absent when it was, and an answer written before the member
+/// reads with it empty.
+///
+/// Perturbation: drop the member's `skip_serializing_if` or its `default`,
+/// and this fails.
+#[test]
+fn a_generation_carries_its_emission_mark_and_omits_an_empty_one() {
+    use weaver_types::{InvalidUtf8, TokenAnswer};
+    let mut generation = generation_with(vec![]);
+    let plain = serde_json::to_value(TokenAnswer::Generated(generation.clone())).unwrap();
+    assert!(
+        !plain.to_string().contains("invalid_utf8"),
+        "a UTF-8 emission carries no mark: {plain}"
+    );
+    generation.emission = "hi\u{fffd}".into();
+    generation.invalid_utf8 = vec![InvalidUtf8 {
+        at: 2,
+        bytes: "ff".into(),
+    }];
+    let wire = serde_json::to_string(&TokenAnswer::Generated(generation)).unwrap();
+    assert!(
+        wire.contains(r#""invalid_utf8":[{"at":2,"bytes":"ff"}]"#),
+        "the mark crosses: {wire}"
+    );
+    let TokenAnswer::Generated(read) = serde_json::from_str(&wire).unwrap() else {
+        panic!("a generation reads back as one");
+    };
+    assert_eq!(read.invalid_utf8[0].at, 2);
+    let TokenAnswer::Generated(old) = serde_json::from_value(plain).unwrap() else {
+        panic!("a generation reads back as one");
+    };
+    assert!(
+        old.invalid_utf8.is_empty(),
+        "an earlier answer reads with none"
+    );
+}
+
 /// A generation with the given unrecovered report and nothing else of note,
 /// for the report's own tests.
 fn generation_with(unrecovered: Vec<weaver_types::UnrecoveredCall>) -> weaver_types::Generation {
     let raw = |s: &str| serde_json::value::RawValue::from_string(s.to_string()).expect("JSON");
     weaver_types::Generation {
+        invalid_utf8: Vec::new(),
         content: vec![],
         unrecovered,
         emission: "hi".to_string(),

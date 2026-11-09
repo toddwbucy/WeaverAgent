@@ -133,6 +133,7 @@ pub(super) fn spu(mode: &str, fd: i32) {
         packet!(
             fd,
             &TokenAnswer::Generated(Generation {
+                invalid_utf8: Vec::new(),
                 emission: output.into(),
                 finish: Finish::Completed,
                 content: vec![ContentBlock::Text {

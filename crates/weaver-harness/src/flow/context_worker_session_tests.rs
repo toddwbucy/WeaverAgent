@@ -303,6 +303,7 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                 }
                 resident += 5;
                 let generation = Generation {
+                    invalid_utf8: Vec::new(),
                     emission: "Read file.".into(),
                     finish: if index == 0 && mode.ends_with("model-stop") {
                         Finish::Stopped
