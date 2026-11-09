@@ -215,6 +215,34 @@ if not found:
     print("   open measurement: none in the new events (the live record does not carry it), so the adapter above is the declared one")
 ' || { admin unload "$AGENT" >/dev/null; die "$AGENT: the new events carry no load event, so the run is unloaded"; }
 fi
+# **The agent's deployment tuple**, the rows of the tuple survey of
+# 2026-11-08 (1, 2, 3, 6, 7, 8 and 9) with the state engine and the restore
+# save point, printed by `agent_tuple.py` beside this script. Each line ends
+# in recorded, derivable, absent or FAULT, and a FAULT unloads the run as any
+# failed check here does. Read-only. **The artifact's header is parsed as
+# the agent's own account**, the one admission reads it as, never as root;
+# the helper's source goes in on standard input because that account cannot
+# reach the checkout. The sink is read as root only where it is a regular
+# file, as the count above reads it.
+TUPLE_HELPER="$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")/agent_tuple.py"
+[ -f "$TUPLE_HELPER" ] || { admin unload "$AGENT" >/dev/null; die "$AGENT: no tuple helper at $TUPLE_HELPER, so the run is unloaded"; }
+TUPLE_HEADER=$(sudo -n -u "weaver-$AGENT" python3 -I - header "$(sed -n 1p <<<"$BINDING")" <"$TUPLE_HELPER" 2>/dev/null || true)
+[ -n "$TUPLE_HEADER" ] || TUPLE_HEADER='{"refused": "the agent account ran no header read"}'
+TUPLE_ARGS=(--declaration "$DECL" --header-json "$TUPLE_HEADER"
+  --live-gpus-csv "$(nvidia-smi --query-gpu=pci.bus_id,name,memory.total --format=csv,noheader 2>/dev/null || true)")
+if [ "$SINK_KIND" = file ] && [ -f "$SINK" ] && [ ! -L "$SINK" ]; then
+  TUPLE_ARGS+=(--sink "$SINK" --from-line "$((BEFORE + 1))")
+fi
+say "$AGENT deployment tuple"
+TUPLE_RC=0
+python3 -I "$TUPLE_HELPER" rows "${TUPLE_ARGS[@]}" || TUPLE_RC=$?
+if [ "$TUPLE_RC" -ne 0 ]; then
+  admin unload "$AGENT" >/dev/null
+  if [ "$TUPLE_RC" -eq 3 ]; then
+    die "$AGENT: the deployment tuple carries a FAULT line, so the run is unloaded"
+  fi
+  die "$AGENT: the tuple helper failed (status $TUPLE_RC), so the run is unloaded"
+fi
 # **The constituents, from `show`, judged where they run.** Each is recorded
 # by pid and start time, so a pid the kernel reuses after the unload is never
 # taken for a constituent that survived it.
