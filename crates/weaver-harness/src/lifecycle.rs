@@ -2483,6 +2483,9 @@ impl Harness {
                 &self.organs.spu,
                 &[lifecycle_child.as_fd(), decode_child.as_fd()],
                 &self.parameters.spu_arguments(),
+                &crate::spawn::device_environment(
+                    &payload.spu_instruction.decoder.model_binding.devices,
+                ),
                 Some(std::os::fd::AsRawFd::as_raw_fd(&spu_stderr)),
             )
         } {
@@ -2631,6 +2634,7 @@ impl Harness {
                     binary,
                     &[child.as_fd()],
                     &arguments,
+                    &crate::spawn::device_environment(std::slice::from_ref(device)),
                     Some(std::os::fd::AsRawFd::as_raw_fd(&classify_stderr)),
                 )
             } {
@@ -3803,7 +3807,7 @@ unsafe fn fork_gate(
     stderr: Option<std::os::fd::RawFd>,
 ) -> Result<nix::unistd::Pid, nix::Error> {
     // SAFETY: the caller's.
-    unsafe { crate::spawn::fork_organ(binary, &[end.as_fd(), tools], &[], stderr) }
+    unsafe { crate::spawn::fork_organ(binary, &[end.as_fd(), tools], &[], &[], stderr) }
 }
 
 /// The worker's kill of `tools/` and what it came to, in the context it ran.

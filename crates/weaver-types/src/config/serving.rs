@@ -144,6 +144,7 @@ pub fn parse_serving_draft(source: &str) -> Result<ServingDraft, ConfigError> {
             kind: ConfigErrorKind::BadValue,
         });
     }
+    super::check_adapters(&agent.spu_instruction)?;
     super::check_tunable_values(&agent.spu_instruction.decoder.tunable_values)?;
     super::check_trace_sink_surface(source, &agent.trace_sink)?;
     super::check_declared_paths(&agent)?;

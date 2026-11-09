@@ -500,6 +500,66 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                     self.assertIn("cannot hold as written", result.stderr)
                     self.assertEqual(self.calls(), [])
 
+    ADAPTER_FLAGS = ("--adapter", "--adapter-sha256", "--adapter-scale", "--base-blake3")
+
+    def adapter_values(self):
+        return {"--adapter": str(self.root / "adapter.gguf"), "--adapter-sha256": "a" * 64,
+                "--adapter-scale": "0.7", "--base-blake3": "b" * 64}
+
+    def test_the_script_declares_the_adapter_table_whole(self):
+        # ADP-5 and its ADP-6 row: the four flags write the binding's closed
+        # `adapter` table, as declared and computed from nothing, and the
+        # rendered declaration parses. Perturbations: drop a member from the
+        # table, or quote the scale, and the read below fails.
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        values = self.adapter_values()
+        result = self.create(*[a for flag in self.ADAPTER_FLAGS for a in (flag, values[flag])], "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("adapter         " + values["--adapter"] + " at scale 0.7", result.stdout)
+        import tomllib
+        binding = tomllib.loads((self.decl / "agent.toml").read_text())["spu-instruction"]["decoder"]["model-binding"]
+        self.assertEqual(binding["adapter"], {"artifact": values["--adapter"], "sha256": "a" * 64,
+                                              "base-blake3": "b" * 64, "scale": 0.7})
+        self.assertEqual(binding["artifact"], str(self.artifact))
+
+    def test_a_partial_or_malformed_adapter_refuses_before_anything(self):
+        # ADP-5's guards, in both modes, before any command: three of the
+        # four flags refuse naming the fourth, a digest that is not 64
+        # lowercase hexadecimal characters refuses, a scale that is not a
+        # finite decimal within f32's range refuses (TOML would write `nan` or
+        # `inf` bare), and the adapter path meets the TOML-string guard.
+        # Perturbations: default a flag, or write a value unchecked, and the
+        # plan runs.
+        values = self.adapter_values()
+        cases = []
+        for absent in self.ADAPTER_FLAGS:
+            cases.append(({k: v for k, v in values.items() if k != absent},
+                          f"this run is missing: {absent}\n"))
+        for flag, bad, said in (("--adapter-sha256", "a" * 63, "--adapter-sha256 is 64"),
+                                ("--adapter-sha256", "A" * 64, "--adapter-sha256 is 64"),
+                                ("--base-blake3", "g" * 64, "--base-blake3 is 64"),
+                                ("--adapter-scale", "nan", "--adapter-scale is a finite"),
+                                ("--adapter-scale", "inf", "--adapter-scale is a finite"),
+                                ("--adapter-scale", "1e3", "--adapter-scale is a finite"),
+                                ("--adapter-scale", "0x1", "--adapter-scale is a finite"),
+                                ("--adapter-scale", "1" * 40 + ".0", "--adapter-scale is a finite"),
+                                ("--adapter-scale", "00.7", "--adapter-scale is a finite"),
+                                ("--adapter-scale", "007", "--adapter-scale is a finite"),
+                                ("--adapter-scale", "1" + "0" * 19, "--adapter-scale is a finite"),
+                                ("--adapter", '/m/x"y.gguf', "cannot hold as written"),
+                                ("--adapter", "/m/x\ty.gguf", "cannot hold as written")):
+            cases.append(({**values, flag: bad}, said))
+        for given, said in cases:
+            for mode in ((), ("--apply",)):
+                with self.subTest(given=given, mode=mode):
+                    self.log.unlink(missing_ok=True)
+                    args = [a for flag, value in given.items() for a in (flag, value)]
+                    result = self.run_script("create-agent.sh", "m1", "--artifact", str(self.artifact),
+                                             *args, *mode)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn(said, result.stderr)
+                    self.assertEqual(self.calls(), [])
+
     def test_the_rendered_declaration_is_toml_before_anything_is_made(self):
         # The plan renders and parse-checks the declaration it would write.
         # Perturbation: break the heredoc's quoting and the plan refuses here.
@@ -635,6 +695,9 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         decoder = declaration["spu-instruction"]["decoder"]
         self.assertNotIn("identity", decoder)
         self.assertNotIn("identity-file", decoder)
+        # A base-only agent omits the adapter table (ADP-1): absence is an
+        # omitted key, never an empty table.
+        self.assertNotIn("adapter", decoder["model-binding"])
         prompt = self.decl / "system-prompt.md"
         self.assertTrue(prompt.read_text().startswith("You are a careful assistant."))
         self.assertTrue(prompt.read_text().endswith("question allows.\n"))
@@ -1106,6 +1169,55 @@ esac
                     os.kill(int(path.read_text()), 9)
                 except (ProcessLookupError, ValueError):
                     pass
+
+    def test_verify_load_prints_the_adapter_beside_the_base(self):
+        # ADP-5: the declared adapter beside the declared base, `none` where
+        # the table is omitted, and the adapter member of an Open measurement
+        # an event carries beside the base identity it measured. The live
+        # record carries no Open measurement today, and the absence is said.
+        # Perturbations: drop the adapter line, or the measurement scan, and
+        # the reads below fail.
+        a = "a" * 64
+        for adapter, evidence in ((False, False), (True, False), (True, True)):
+            with self.subTest(adapter=adapter, evidence=evidence):
+                shutil.rmtree(self.config / "m1", ignore_errors=True)
+                shutil.rmtree(self.decl, ignore_errors=True)
+                shutil.rmtree(self.root / "installed", ignore_errors=True)
+                shutil.rmtree(self.root / "stub-state", ignore_errors=True)
+                state = self.verify_fixture()
+                declaration = self.decl / "agent.toml"
+                text = declaration.read_text() + (
+                    '\n[spu-instruction.decoder.model-binding]\nartifact = "/m/base.gguf"\ndevices = [0]\n')
+                if adapter:
+                    text += (f'\n[spu-instruction.decoder.model-binding.adapter]\nartifact = "/m/a.gguf"\n'
+                             f'sha256 = "{a}"\nbase-blake3 = "{"b" * 64}"\nscale = 0.7\n')
+                declaration.write_text(text)
+                if evidence:
+                    stub = self.root / "installed" / "bin" / "weaver-admin"
+                    sink = self.root / "agents" / "trace.ndjson"
+                    placement = json.dumps({"kind": "state.placement", "payload": {"open_evidence": {
+                        "request": {}, "measurement": {"model": "/m/base.gguf", "weights_hash": "h",
+                                                       "adapter": {"artifact": "/m/a.gguf", "sha256": a,
+                                                                   "scale": 0.7}}}}})
+                    stub.write_text(stub.read_text().replace(
+                        "echo '{\"kind\":\"load\"}' >>",
+                        f"echo '{placement}' >> {sink}; echo '{{\"kind\":\"load\"}}' >>"))
+                try:
+                    result = self.run_script("verify-load.sh", "m1")
+                finally:
+                    self.end_stand_in(state)
+                self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                self.assertIn("base        /m/base.gguf (declared)", result.stdout)
+                if adapter:
+                    self.assertIn(f"adapter     /m/a.gguf sha256 {a} scale 0.7 over base blake3 {'b' * 64} (declared)",
+                                  result.stdout)
+                else:
+                    self.assertIn("adapter     none (declared)", result.stdout)
+                if evidence:
+                    self.assertIn('open measurement: model /m/base.gguf weights_hash h adapter '
+                                  f'{{"artifact": "/m/a.gguf", "sha256": "{a}", "scale": 0.7}}', result.stdout)
+                else:
+                    self.assertIn("open measurement: none in the new events", result.stdout)
 
     def test_verify_load_checks_each_constituent_and_that_none_is_left(self):
         # The operator contract section 2: every constituent `show` names runs

@@ -195,7 +195,7 @@ impl OpenFixture {
         Opened { session: SessionId("session".into()), prefix_tokens: 3, capacity: 16384,
             generation_limit: 16, terminal_tokens: 1,
             request: serde_json::value::to_raw_value(&serde_json::json!({"rendered":rendered,"template":"fixture"})).unwrap(),
-            measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture",
+            measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","adapter":null,
                 "prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap() }
     }
     fn answer(&self, opened: Opened) -> Vec<u8> {
@@ -1148,7 +1148,7 @@ fn boot_open_partial_answer_after_cancellation_drains_same_exchange() {
         &serde_json::json!({"rendered":rendered,"template":"fixture"}),
     )
     .unwrap();
-    opened.measurement = serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture",
+    opened.measurement = serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","adapter":null,
         "prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":100_000}]})).unwrap();
     let raw = serde_json::to_vec(&TokenAnswer::Opened(opened)).unwrap();
     let chunks: Vec<_> = raw.chunks(weaver_types::MAX_ENVELOPE_BYTES).collect();
@@ -1588,7 +1588,7 @@ fn boot_open_escaped_render_line_breaks_preserve_evidence_and_allow_recording() 
         &serde_json::json!({"rendered":rendered,"template":"fixture"}),
     )
     .unwrap();
-    opened.measurement = serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture",
+    opened.measurement = serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","adapter":null,
         "prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap();
     let original = fx.answer(opened);
     let _checked = fx.finish();

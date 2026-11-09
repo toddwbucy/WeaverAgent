@@ -606,7 +606,15 @@ built in the parent before the fork, as the vector below is.
 composition root is owed.** A parameter this crate hands an organ is named on the
 vector at the call site, where the act that added it is the act that can be read.
 A variable reaches an organ because the start step composed it for the agent, so
-what the environment carries is the agent's and not a value this crate chose to pass.
+what the environment carries is the agent's and not a value this crate chose to pass,
+with the one exception below.
+
+**A device organ's launch sets its device visibility**, per the device pair amendment
+PAIR-1 (`weaver-spu-device-pair-Spec-amendment`). The SPU's fork and the classify
+organ's fork set `CUDA_DEVICE_ORDER` to `PCI_BUS_ID` and `CUDA_VISIBLE_DEVICES` to their
+binding's ordinals in binding order, comma-separated, replacing any inherited value. The
+worker reads only the ordinals, which it already holds in the load payload's SPU
+instruction, and interprets nothing else in the binding. The gate's fork sets nothing.
 
 **What travels here is a host's fact and not an agent's.** A number two agents
 sharing this host cannot sensibly disagree about belongs on this vector, the

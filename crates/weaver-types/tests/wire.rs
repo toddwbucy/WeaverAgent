@@ -678,6 +678,7 @@ fn sample_enter_payload() -> weaver_types::EnterPayload {
                 model_binding: weaver_types::ModelBinding {
                     artifact: weaver_types::ArtifactRef("/models/a.gguf".into()),
                     devices: vec![weaver_types::DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: false,
                 field_election: None,
@@ -1028,4 +1029,51 @@ fn typed_tool_interrupt_pins_both_causes_and_refuses_missing_cause() {
     ] {
         assert!(serde_json::from_str::<Payload>(json).is_err(), "{json}");
     }
+}
+
+/// **Absence is omission, not `null`** (ADP-1, ADP-6): a base-only binding
+/// serializes with no `adapter` key, an adapted one carries the table whole
+/// and reads back equal, and a reader meeting `"adapter": null` refuses.
+///
+/// Perturbation: drop `skip_serializing_if` and the base-only binding writes
+/// `"adapter":null`; drop `deserialize_with` and the `null` reads as `None`.
+/// Watched to fail under each.
+#[test]
+fn an_absent_adapter_is_an_omitted_key_and_null_refuses() {
+    let base = weaver_types::ModelBinding {
+        artifact: weaver_types::ArtifactRef("/models/a.gguf".into()),
+        devices: vec![weaver_types::DeviceOrdinal(0)],
+        adapter: None,
+    };
+    let text = serde_json::to_string(&base).unwrap();
+    assert_eq!(text, r#"{"artifact":"/models/a.gguf","devices":[0]}"#);
+    assert_eq!(
+        serde_json::from_str::<weaver_types::ModelBinding>(&text).unwrap(),
+        base
+    );
+
+    let adapted = weaver_types::ModelBinding {
+        adapter: Some(Box::new(weaver_types::AdapterBinding {
+            artifact: weaver_types::ArtifactRef("/models/adapter.gguf".into()),
+            sha256: "a".repeat(64),
+            base_blake3: "b".repeat(64),
+            scale: 0.7,
+        })),
+        ..base.clone()
+    };
+    let text = serde_json::to_string(&adapted).unwrap();
+    assert!(
+        text.contains(r#""scale":0.7}"#),
+        "the scale renders as the f32: {text}"
+    );
+    assert_eq!(
+        serde_json::from_str::<weaver_types::ModelBinding>(&text).unwrap(),
+        adapted
+    );
+
+    let null = r#"{"artifact":"/models/a.gguf","devices":[0],"adapter":null}"#;
+    assert!(
+        serde_json::from_str::<weaver_types::ModelBinding>(null).is_err(),
+        "a binding's adapter is omitted when absent, never null"
+    );
 }

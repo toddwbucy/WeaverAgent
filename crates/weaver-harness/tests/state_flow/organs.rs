@@ -219,7 +219,7 @@ fn spu(lifecycle: i32, decode: i32) {
     packet!(decode, &weaver_types::TokenAnswer::Opened(weaver_types::Opened {
         session, prefix_tokens: 3, capacity: 16384, generation_limit: 16, terminal_tokens: 1,
         request: serde_json::value::to_raw_value(&serde_json::json!({"rendered":rendered,"template":"synthetic"})).unwrap(),
-        measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"synthetic","weights_hash":"synthetic","prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap(),
+        measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"synthetic","weights_hash":"synthetic","adapter":null,"prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap(),
     }));
     let release: OrganEnvelope = serde_json::from_slice(&receive(lifecycle, end).unwrap()).unwrap();
     assert!(matches!(

@@ -113,6 +113,7 @@ fn the_last_word_survives_a_real_death() {
                 "-c".to_string(),
                 r#"echo not json >&2; echo '{"died":"typed reason"}' >&2; exit 3"#.to_string(),
             ],
+            &[],
             Some(std::os::fd::AsRawFd::as_raw_fd(&write_end)),
         )
     }
@@ -142,6 +143,7 @@ fn the_last_word_survives_a_real_death() {
             std::path::Path::new("/bin/sh"),
             &[],
             &["-c".to_string(), "echo '{\"x\":1}' >&2".to_string()],
+            &[],
             None,
         )
     }
@@ -157,7 +159,8 @@ fn the_last_word_survives_a_real_death() {
 
 /// **The organ starts with the worker's environment**, per
 /// `weaver-harness-Spec` section 2.2 and the operator's ruling of
-/// 2026-10-01, so a variable the agent's unit sets reaches every organ.
+/// 2026-10-01, so a variable admin's start step composes for the worker
+/// reaches every organ.
 /// The probe is a variable cargo sets on the test process and no shell
 /// sets for itself, read back as the organ's last typed line.
 ///
@@ -175,6 +178,7 @@ fn an_organ_inherits_the_workers_environment() {
                 "-c".to_string(),
                 r#"printf '{"probe":"%s"}\n' "$CARGO_PKG_NAME" >&2"#.to_string(),
             ],
+            &[],
             Some(std::os::fd::AsRawFd::as_raw_fd(&write_end)),
         )
     }

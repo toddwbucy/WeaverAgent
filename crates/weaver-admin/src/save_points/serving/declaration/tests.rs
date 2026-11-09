@@ -340,3 +340,59 @@ fn impossible_native_values_refuse_without_reinterpreting_their_type() {
         .is_err()
     );
 }
+
+/// **A published save point keeps the declared adapter** (adapter binding
+/// amendment ADP-1): an adapted declaration renders the table member for
+/// member and parses back equal, the scale as the same f32 (0.7 written
+/// `0.7`, never its f64 widening, and an integral scale with its decimal
+/// point so TOML reads it as a float), and a base-only declaration writes no
+/// `adapter` key. A non-finite scale, which the parse never admits, refuses
+/// rather than rendering.
+///
+/// Perturbation: skip the adapter arm in `Writer::model` and the round trip
+/// loses the table; render the scale through `finite_float(f64::from(scale))`
+/// and `0.699999988079071` is written. Watched to fail under each.
+#[test]
+fn a_declared_adapter_survives_the_published_declaration() {
+    let adapted = |scale: &str| {
+        GOLDEN.replace(
+            "spu-instruction.decoder.model-binding.devices = [0]\n",
+            &format!(
+                "spu-instruction.decoder.model-binding.devices = [0]\n\
+                 spu-instruction.decoder.model-binding.adapter.artifact = \"/models/adapter.gguf\"\n\
+                 spu-instruction.decoder.model-binding.adapter.sha256 = \"{}\"\n\
+                 spu-instruction.decoder.model-binding.adapter.base-blake3 = \"{}\"\n\
+                 spu-instruction.decoder.model-binding.adapter.scale = {scale}\n",
+                "d".repeat(64),
+                "e".repeat(64)
+            ),
+        )
+    };
+    for (declared, written, value) in [("0.7", "0.7", 0.7_f32), ("1", "1.0", 1.0_f32)] {
+        let (parsed, rendered) = round_trip(&adapted(declared));
+        let adapter = parsed
+            .agent()
+            .spu_instruction
+            .decoder
+            .model_binding
+            .adapter
+            .clone()
+            .expect("the adapter is carried");
+        assert_eq!(adapter.artifact.0, "/models/adapter.gguf");
+        assert_eq!(adapter.sha256, "d".repeat(64));
+        assert_eq!(adapter.base_blake3, "e".repeat(64));
+        assert_eq!(adapter.scale.to_bits(), value.to_bits(), "{declared}");
+        let line = format!("spu-instruction.decoder.model-binding.adapter.scale = {written}\n");
+        assert!(rendered.contains(&line), "{rendered}");
+    }
+
+    let (_, base_only) = round_trip(GOLDEN);
+    assert!(!base_only.contains("adapter"), "{base_only}");
+
+    for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert!(matches!(
+            finite_scale(value),
+            Err(RenderError::Unsupported("model-binding.adapter.scale"))
+        ));
+    }
+}

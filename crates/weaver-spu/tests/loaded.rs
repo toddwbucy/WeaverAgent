@@ -11,6 +11,15 @@
 //! safetensors. Each absent implicit fixture skips loudly: a suite that reports
 //! success for tests it did not run is the failure mode this corpus treats as
 //! worse than a red result.
+//!
+//! **Every SPU here holds the device pair amendment PAIR-1 mask for its
+//! binding**, ordinal 0: a spawned binary is given
+//! `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0` on its command
+//! ([`spu_command`]), as the harness's fork gives it, and the one in-process
+//! admission runs in a masked child of this binary (`common::run_masked`). So
+//! the binary runs under any lease that holds ordinal 0,
+//! `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0` or `=0,1` or no mask
+//! at all. With the cards hidden every device test skips.
 
 #![cfg(all(feature = "cuda", feature = "gguf"))]
 
@@ -31,6 +40,16 @@ use weaver_types::{ArtifactRef, DecoderInstruction, DeviceOrdinal, ModelBinding,
 /// on size alone. `WEAVER_TEST_GGUF` overrides the location for a machine laid
 /// out differently.
 const MODEL: &str = "/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf";
+
+/// The SPU binary under the PAIR-1 mask for ordinal 0, the binding every
+/// test here names, as the harness's fork composes it.
+fn spu_command() -> std::process::Command {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+    command
+        .env("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+        .env("CUDA_VISIBLE_DEVICES", "0");
+    command
+}
 
 fn assert_opened(answer: weaver_types::TokenAnswer) {
     let weaver_types::TokenAnswer::Opened(weaver_types::Opened {
@@ -127,6 +146,29 @@ fn free_bytes(context: &cudarc::driver::CudaContext) -> u64 {
     free as u64
 }
 
+/// **A masked child's report is read where the harness puts it**: under
+/// `--nocapture` the child's first stdout line shares the harness's
+/// `test <name> ... ` line. The shape here is the one the first live run
+/// printed. No device is touched.
+///
+/// Perturbation: read reports only at the start of a line and this test
+/// fails.
+#[test]
+fn a_masked_report_is_read_after_the_harness_prefix() {
+    let stdout = "\nrunning 1 test\n\
+        test a_real_admit_holds_the_device_and_release_frees_it_child ... MASKED-RESULT \"done\"\n\
+        MASKED-RESULT {\"tokens\":[1,2]}\n\
+        ok\n\n\
+        test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out\n";
+    assert_eq!(
+        common::reported(stdout),
+        vec![
+            serde_json::json!("done"),
+            serde_json::json!({"tokens": [1, 2]})
+        ]
+    );
+}
+
 /// **Admit holds the weights on the device, and release frees them before it
 /// answers.** The Spec carries the release ordering as review's, the instrument
 /// being priced against a driver seam the Spec does not introduce. This build
@@ -148,26 +190,46 @@ fn free_bytes(context: &cudarc::driver::CudaContext) -> u64 {
 /// stay on the device. Watched under exactly that change.
 #[test]
 fn a_real_admit_holds_the_device_and_release_frees_it() {
-    let Some(model) = model_present() else {
+    if model_present().is_none() {
         eprintln!("SKIP a_real_admit_holds_the_device: no model at {MODEL}");
         return;
-    };
-    let Some(context) = device_context() else {
-        eprintln!("SKIP a_real_admit_holds_the_device: no CUDA device");
+    }
+    if let Err(why) = common::lease(&[0]) {
+        eprintln!("SKIP a_real_admit_holds_the_device: {why}");
+        return;
+    }
+    let _device = device_lock();
+    common::run_masked(
+        "a_real_admit_holds_the_device_and_release_frees_it_child",
+        &[0],
+    );
+}
+
+/// The masked child of [`a_real_admit_holds_the_device_and_release_frees_it`]:
+/// its body, under the binding's mask.
+#[test]
+#[ignore = "a masked child, run by its parent"]
+fn a_real_admit_holds_the_device_and_release_frees_it_child() {
+    let Some(devices) =
+        common::masked_child("a_real_admit_holds_the_device_and_release_frees_it_child")
+    else {
         return;
     };
-    let _device = device_lock();
+    let model = model_present().expect("the parent found the model");
+    let context = device_context().expect("the device under the mask");
     let before = free_bytes(&context);
 
     let mut residency = Residency::new();
     let binding = ModelBinding {
         artifact: ArtifactRef(model.to_string_lossy().into_owned()),
-        devices: vec![DeviceOrdinal(0)],
+        devices,
+        adapter: None,
     };
 
     let admitted = residency.admit(
         &binding,
         Headroom(64 * 1024 * 1024),
+        4096,
         ReadoutElection(false),
         false,
     );
@@ -196,6 +258,7 @@ fn a_real_admit_holds_the_device_and_release_frees_it() {
     let second = residency.admit(
         &binding,
         Headroom(64 * 1024 * 1024),
+        4096,
         ReadoutElection(false),
         false,
     );
@@ -213,6 +276,7 @@ fn a_real_admit_holds_the_device_and_release_frees_it() {
         after.saturating_sub(held) > 100 * 1024 * 1024,
         "the release returns the memory before answering: held {held}, after {after}"
     );
+    common::report(&serde_json::json!("done"));
 }
 
 mod seam_success {
@@ -223,7 +287,7 @@ mod seam_success {
 
     use super::*;
     use std::os::fd::AsRawFd;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
     use crate::common::{ask, bound_receives, place_inherited, seqpacket_pair, wait_bounded};
     use weaver_types::{LifecycleAnswer, LifecycleDirective, LifecycleRefusal, Payload};
@@ -257,15 +321,15 @@ mod seam_success {
             eprintln!("SKIP an_admit_electing_readout_refuses: no model at {UNTAPPED_MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP an_admit_electing_readout_refuses: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP an_admit_electing_readout_refuses: {why}");
             return;
         }
         let _device = device_lock();
 
         let (lifecycle, child_lifecycle) = seqpacket_pair();
         let (_decode, child_decode) = seqpacket_pair();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -287,6 +351,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: true,
                         field_election: None,
@@ -334,8 +399,8 @@ mod seam_success {
             eprintln!("SKIP admit_then_release_round_trips: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP admit_then_release_round_trips: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP admit_then_release_round_trips: {why}");
             return;
         }
         // Held across the whole spawn-and-wait, because the child process is
@@ -344,7 +409,7 @@ mod seam_success {
 
         let (lifecycle, child_lifecycle) = seqpacket_pair();
         let (decode_parent, child_decode) = seqpacket_pair();
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         // The streams go to a file rather than pipes: llama.cpp writes model
         // metadata to stderr during the load, nothing here drains a pipe until
         // after the exchanges, and a load chatty enough to fill the buffer
@@ -376,6 +441,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: false,
                         field_election: None,
@@ -443,8 +509,8 @@ mod seam_success {
             eprintln!("SKIP the_declared_ceiling: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP the_declared_ceiling: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP the_declared_ceiling: {why}");
             return;
         }
         let _device = device_lock();
@@ -456,7 +522,7 @@ mod seam_success {
             std::process::id()
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -485,6 +551,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: false,
                         field_election: None,
@@ -579,8 +646,8 @@ mod seam_success {
             eprintln!("SKIP an_elected_surprisal: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP an_elected_surprisal: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP an_elected_surprisal: {why}");
             return;
         }
         let _device = device_lock();
@@ -592,7 +659,7 @@ mod seam_success {
             std::process::id()
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -620,6 +687,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: false,
                         field_election: None,
@@ -720,8 +788,8 @@ mod seam_success {
             eprintln!("SKIP an_opened_session_generates: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP an_opened_session_generates: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP an_opened_session_generates: {why}");
             return;
         }
         let _device = device_lock();
@@ -733,7 +801,7 @@ mod seam_success {
             std::process::id()
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -757,6 +825,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: false,
                         field_election: None,
@@ -958,8 +1027,8 @@ mod seam_success {
             eprintln!("SKIP a_serving_load_never_opens: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP a_serving_load_never_opens: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP a_serving_load_never_opens: {why}");
             return;
         }
         let _device = device_lock();
@@ -971,7 +1040,7 @@ mod seam_success {
             std::process::id()
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -995,6 +1064,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: false,
                         field_election: None,
@@ -1102,8 +1172,8 @@ mod seam_success {
     fn check_cancelled_refeed(model: PathBuf) {
         use weaver_traits::{ContentBlock, Message, Role};
         use weaver_types::{SessionId, TokenAnswer, TokenDirective, TurnKey};
-        if device_context().is_none() {
-            eprintln!("SKIP a_cancelled_refeed_retains_zero_prefix: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP a_cancelled_refeed_retains_zero_prefix: {why}");
             return;
         }
         let _device = device_lock();
@@ -1116,7 +1186,7 @@ mod seam_success {
             if model.is_dir() { "native" } else { "gguf" }
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1150,6 +1220,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: false,
                         field_election: Some(weaver_types::FieldElection { depth: 40 }),
@@ -1354,8 +1425,8 @@ mod seam_success {
             eprintln!("SKIP the_null_refeed_recomputes: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP the_null_refeed_recomputes: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP the_null_refeed_recomputes: {why}");
             return;
         }
         let _device = device_lock();
@@ -1374,6 +1445,7 @@ mod seam_success {
                 model_binding: ModelBinding {
                     artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                     devices: vec![DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: false,
                 field_election: None,
@@ -1397,7 +1469,7 @@ mod seam_success {
                 std::process::id()
             ));
             let log = std::fs::File::create(&log_path).expect("a child log file");
-            let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+            let mut command = spu_command();
             command
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
@@ -1634,8 +1706,8 @@ mod seam_success {
             eprintln!("SKIP the_column_crosses: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP the_column_crosses: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP the_column_crosses: {why}");
             return;
         }
         let _device = device_lock();
@@ -1647,7 +1719,7 @@ mod seam_success {
             std::process::id()
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1671,6 +1743,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: true,
                         field_election: None,
@@ -1800,8 +1873,8 @@ mod seam_success {
             eprintln!("SKIP no_vector_crosses_unasked: no model at {MODEL}");
             return;
         };
-        if device_context().is_none() {
-            eprintln!("SKIP no_vector_crosses_unasked: no CUDA device");
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP no_vector_crosses_unasked: {why}");
             return;
         }
         let _device = device_lock();
@@ -1812,6 +1885,7 @@ mod seam_success {
                 model_binding: ModelBinding {
                     artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                     devices: vec![DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: readout,
                 field_election: None,
@@ -1836,7 +1910,7 @@ mod seam_success {
             std::process::id()
         ));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1933,7 +2007,7 @@ mod seam_success {
         let log_path =
             std::env::temp_dir().join(format!("weaver-spu-arm2-child-{}.log", std::process::id()));
         let log = std::fs::File::create(&log_path).expect("a child log file");
-        let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
+        let mut command = spu_command();
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())

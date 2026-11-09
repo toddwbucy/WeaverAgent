@@ -309,7 +309,13 @@ fn parse_ste100(root: &Object<'_>) -> Result<Ste100Instruction, ConfigError> {
     if devices.is_empty() || devices.iter().any(|device| !seen.insert(device.0)) {
         return Err(bad(&binding.path("devices")));
     }
-    let model_binding = ModelBinding { artifact, devices };
+    // The checker's binding takes no adapter: its key list above is closed,
+    // and the adapter binding amendment serves decode alone (ADP-0).
+    let model_binding = ModelBinding {
+        artifact,
+        devices,
+        adapter: None,
+    };
     let instances: u32 = ste100.get("instances")?;
     if instances == 0 {
         return Err(bad(&ste100.path("instances")));

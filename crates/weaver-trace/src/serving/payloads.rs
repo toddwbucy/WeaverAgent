@@ -65,10 +65,24 @@ pub struct MeasuredInterval {
     pub elapsed_ns: DecimalU64,
     pub measurement_ref: String,
 }
+/// The binding carried whole, per the adapter binding amendment ADP-1, so the
+/// load facts say what was declared. An absent adapter is an omitted key, the
+/// binding's convention, and never `null`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ModelBinding {
     pub artifact: String,
     pub devices: Vec<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<AdapterBinding>,
+}
+/// The declared adapter table, member for member. The scale is the f32 itself,
+/// so it renders as declared rather than as its f64 widening.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct AdapterBinding {
+    pub artifact: String,
+    pub sha256: String,
+    pub base_blake3: String,
+    pub scale: f32,
 }
 
 #[cfg(test)]

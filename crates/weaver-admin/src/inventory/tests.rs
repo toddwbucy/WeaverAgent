@@ -1169,6 +1169,60 @@ fn the_artifact_is_named_here_and_resolved_at_admission() {
     }
 }
 
+/// **The adapter's artifact is named here and resolved at admission**, per
+/// the adapter binding amendment ADP-1 (ADP-6 "Admin checks presence only"):
+/// an empty adapter `artifact` refuses `ConfigInvalid` naming its path, and a
+/// nonexistent one passes, its resolution being the SPU's under the agent's
+/// identity.
+///
+/// Perturbation: resolve the adapter path in admin and the first assertion
+/// refuses on the absent file; drop the presence check and the second admits
+/// an unnamed adapter. Watched under both.
+#[test]
+fn the_adapter_artifact_is_named_here_and_resolved_at_admission() {
+    let root = scratch("adapter-artifact");
+    let sink_dir = root.join("sink");
+    std::fs::create_dir_all(&sink_dir).expect("sink dir");
+    std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o750)).expect("mode");
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).expect("home");
+    let name = AgentName("alpha".into());
+    let bound = boundary(&home, 65533);
+    let adapted = |artifact: &str| {
+        format!(
+            "{}\n[spu-instruction.decoder.model-binding.adapter]\n\
+             artifact = \"{artifact}\"\n\
+             sha256 = \"{}\"\n\
+             base-blake3 = \"{}\"\n\
+             scale = 1.0\n",
+            config_source(&sink_dir),
+            "a".repeat(64),
+            "b".repeat(64)
+        )
+    };
+
+    let absent = take_inventory(&name, &adapted("/no/such/directory/adapter.gguf"), &bound);
+    let inventory = absent.unwrap_or_else(|refusal| {
+        panic!("an absent adapter path is the SPU's to refuse, got {refusal:?}")
+    });
+    assert!(
+        inventory
+            .config
+            .spu_instruction
+            .decoder
+            .model_binding
+            .adapter
+            .is_some(),
+        "the declared adapter is carried"
+    );
+
+    match take_inventory(&name, &adapted(""), &bound) {
+        Err(LifecycleRefusal::ConfigInvalid { field: Some(ref f) })
+            if f.0 == "spu-instruction.decoder.model-binding.adapter.artifact" => {}
+        other => panic!("an unnamed adapter refuses naming the field, got {other:?}"),
+    }
+}
+
 /// **The inventory admits a declaration electing the shell** (#29): its
 /// judgment of the busybox and the grant are the caller's, which reads the
 /// root's `shell-binary` (`shell_grant` in `main.rs`). This inverts the first

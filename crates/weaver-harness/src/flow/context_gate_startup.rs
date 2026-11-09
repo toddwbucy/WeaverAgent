@@ -337,6 +337,8 @@ impl<'a> GateStartup<'a> {
                                 self.tools.as_ref().expect("judged tools").as_fd(),
                             ],
                             &[],
+                            // The gate is no device organ: no mask (PAIR-1).
+                            &[],
                         )
                     }?;
                     Ok::<_, String>((port, child))

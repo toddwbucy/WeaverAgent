@@ -446,7 +446,40 @@ fn render_measurement(
         measurement["residual_layers"] = serde_json::json!(reduction.layers());
         measurement["residual_forwards"] = serde_json::json!(reduction.forwards());
     }
-    measurement.to_string()
+    let members = measurement
+        .as_object()
+        .expect("the measurement is built as an object literal");
+    lead_with_adapter(resident.adapter(), members)
+}
+
+/// **The adapter identity leads every generation's measurement, written
+/// typed**, per the adapter binding amendment ADP-3: the actual loaded
+/// identity, `null` for base-only. It is written ahead of the generic
+/// members rather than set among them, because a generic value would widen
+/// the f32 scale to f64. The members follow in the map's order, each written
+/// by serde_json into the one buffer, so an empty map still closes a valid
+/// object. The generic members never carry `adapter`.
+fn lead_with_adapter(
+    adapter: Option<&weaver_spu::lora::RecordedAdapter>,
+    members: &serde_json::Map<String, serde_json::Value>,
+) -> String {
+    debug_assert!(
+        !members.contains_key("adapter"),
+        "the typed adapter is the measurement's only adapter member"
+    );
+    let mut rendered = b"{\"adapter\":".to_vec();
+    let written =
+        weaver_spu::lora::RecordedAdapter::write_member(adapter, &mut rendered).and_then(|()| {
+            members.iter().try_for_each(|(key, value)| {
+                rendered.push(b',');
+                serde_json::to_writer(&mut rendered, key)?;
+                rendered.push(b':');
+                serde_json::to_writer(&mut rendered, value)
+            })
+        });
+    written.expect("writing to a vector cannot fail");
+    rendered.push(b'}');
+    String::from_utf8(rendered).expect("serde_json writes UTF-8")
 }
 
 /// The decode phase, entered once residency confirms and served until the
@@ -1312,6 +1345,20 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // **The placement observer is a serving fact**, per the adapter binding
+    // amendment ADP-2: installed before any backend call, whether or not the
+    // binding carries an adapter, keeping lines only inside the placement
+    // window and forwarding every line to standard error.
+    #[cfg(feature = "gguf")]
+    if let Err(detail) =
+        weaver_spu::lora::observation::install(weaver_spu::lora::observation::Retention::Window)
+    {
+        eprintln!(
+            "{}",
+            serde_json::json!({"refusal": "placement_observer", "detail": detail})
+        );
+        return ExitCode::FAILURE;
+    }
     serve(inherited, headroom)
 }
 
@@ -1362,8 +1409,80 @@ fn admit_refusal_line(refusal: &weaver_spu::residency::AdmitRefusal) -> Option<S
                 .to_string(),
             )
         }
+        // **The placement refusals name the binding's ordinals and every
+        // figure the judgment read**, per the device pair amendment: the
+        // operator meets DeviceCannotAdmit for each, and this line says
+        // which device and which condition.
+        AdmitRefusal::Mask(refusal) => Some(
+            serde_json::json!({
+                "refusal": "device_mask",
+                "order": refusal.found.order,
+                "visible": refusal.found.visible,
+                "expected_order": weaver_spu::devices::ORDER_VALUE,
+                "expected_visible": refusal.expected,
+            })
+            .to_string(),
+        ),
+        AdmitRefusal::DeviceRefused(refusal) => Some(device_refusal_line(refusal)),
+        // **The adapter's artifact and the check that refused it**, per the
+        // adapter binding amendment ADP-2: the floor answers one of three
+        // refusals the base also meets, and this line says it was the
+        // adapter, at which stage, and as which identity.
+        AdmitRefusal::Adapter(failure) => Some(adapter_refusal_line(failure)),
         _ => None,
     }
+}
+
+/// The account of an adapter refusal: its artifact as declared, its LORA-2
+/// stage and detail, and the effective pair the checks ran as.
+fn adapter_refusal_line(failure: &weaver_spu::lora::Failure) -> String {
+    serde_json::json!({
+        "refusal": "adapter",
+        "path": failure.path.to_string_lossy(),
+        "stage": failure.stage,
+        "detail": failure.detail,
+        "uid": failure.uid,
+        "gid": failure.gid,
+    })
+    .to_string()
+}
+
+/// The account of a refusal the driver answered, by binding ordinal.
+fn device_refusal_line(refusal: &weaver_spu::devices::DeviceRefusal) -> String {
+    use weaver_spu::devices::DeviceRefusal;
+    match refusal {
+        DeviceRefusal::Unreachable { ordinal } => {
+            serde_json::json!({"refusal": "device_unreachable", "ordinal": ordinal})
+        }
+        DeviceRefusal::NoRoom {
+            ordinal,
+            free,
+            needed,
+            total,
+        } => serde_json::json!({
+            "refusal": "device_no_room",
+            "ordinal": ordinal,
+            "free": free,
+            "needed": needed,
+            "total": total,
+        }),
+        DeviceRefusal::NoPeerAccess { from, to } => {
+            serde_json::json!({"refusal": "device_no_peer_access", "from": from, "to": to})
+        }
+        DeviceRefusal::Mismatched { members } => serde_json::json!({
+            "refusal": "device_members_differ",
+            "members": members
+                .iter()
+                .map(|(ordinal, identity)| serde_json::json!({
+                    "ordinal": ordinal,
+                    "name": identity.name,
+                    "compute_capability": [identity.capability.0, identity.capability.1],
+                    "total": identity.total,
+                }))
+                .collect::<Vec<_>>(),
+        }),
+    }
+    .to_string()
 }
 
 /// A refusal before any channel is trusted goes to standard error, because the
@@ -1600,6 +1719,7 @@ fn dispatch(
             match residency.admit(
                 &decoder.model_binding,
                 Headroom(headroom),
+                resolved.session.context_capacity,
                 ReadoutElection(decoder.residual_readout_election),
                 decoder.surprisal_election,
             ) {

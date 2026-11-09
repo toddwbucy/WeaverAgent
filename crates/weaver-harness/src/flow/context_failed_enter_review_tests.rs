@@ -38,6 +38,7 @@ fn spawn_peer(fx: &mut Fixture, name: &str) -> FailedEnterResources {
         resources.spawn_spu(
             &mut fx.context,
             &std::env::current_exe().unwrap(),
+            &[],
             &child_arguments_review(name),
             &mut fx.clock,
         )
@@ -143,6 +144,7 @@ pub(super) fn prior_admission() -> LifecycleDirective {
                 model_binding: weaver_types::ModelBinding {
                     artifact: weaver_types::ArtifactRef("fixture-model".into()),
                     devices: vec![weaver_types::DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: false,
                 field_election: None,

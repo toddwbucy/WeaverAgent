@@ -258,7 +258,13 @@ whose build script accepts the CUDA 13.4 toolkit.
 **The pins, recorded here because no document of this corpus carried them
 until 2026-08-06.** `llama-cpp-2` and `llama-cpp-sys-2` both resolve to
 `https://github.com/toddwbucy/llama-cpp-rs` at revision
-`ecce255bcb14dd6d88f184cc8776c23a85afafeb`, moved 2026-08-17 from `277e4100`
+`bebe55d6a90069e13bc6c38eefc707a700014550`, the fork's branch
+`weaver/tensor-split-on-ecce255`, moved 2026-11-08 from `ecce255b` by the
+device pair amendment (PAIR-3). It adds two upstream cherry-picks on
+`params.rs` alone: `with_tensor_split` (`e7af607`) and override appends that
+no longer overwrite slot 0 (`ef551b0`). The vendored llama.cpp stays at
+`e21cdc11`, so an engine citation at `ecce255` still names this engine.
+`ecce255bcb14dd6d88f184cc8776c23a85afafeb` had moved 2026-08-17 from `277e4100`
 by the split-artifact ruling: the fork gains `load_from_splits`, the
 explicit-set door llama.cpp holds for callers whose paths carry no sibling
 pattern, which is what a descriptor path is, and the build script's DLL
@@ -457,6 +463,21 @@ Process section 6 names the two invocations that reach them.
 | `loaded.rs` | `cuda` and `gguf` | `WEAVER_TEST_GGUF`, `WEAVER_ARTIFACT_QWEN25_SAFETENSORS`, `WEAVER_ARTIFACT_COLUMN_LAYERS`, `WEAVER_ARTIFACT_COLUMN_WIDTH` |
 | `two_card.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_TWO_CARD`, `WEAVER_ARTIFACT_SPLIT` |
 | `readout_neutral.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_READOUT`, `WEAVER_ARTIFACT_READOUT_LAYERS` |
+| `observed_division.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_DIVISION` |
+| `lora_proof.rs` | `cuda` and `gguf` | `WEAVER_LORA_BASE`, `WEAVER_LORA_BASE_BLAKE3`, `WEAVER_LORA_ADAPTER`, `WEAVER_LORA_ADAPTER_SHA256`, `WEAVER_LORA_SCALE`, `WEAVER_LORA_DEVICES`, `WEAVER_LORA_ENTRIES`, `WEAVER_LORA_REPORT`, `WEAVER_LORA_PINNED_ID` |
+| `lora_heldout.rs` | `cuda` and `gguf` | `WEAVER_LORA_BASE`, `WEAVER_LORA_BASE_BLAKE3`, `WEAVER_LORA_ADAPTER`, `WEAVER_LORA_ADAPTER_SHA256`, `WEAVER_LORA_SCALE`, `WEAVER_LORA_DEVICES`, `WEAVER_LORA_ENTRIES`, `WEAVER_LORA_REPORT` |
+
+**A device target holds the device mask of each binding it admits.** The SPU refuses
+a binding whose ordinals its process mask does not name in binding order (device pair
+amendment PAIR-1), and one process holds one mask. So each device target admits in a
+process of its own binary under that binding's
+`CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<ordinals>`, or sets the mask on the
+SPU binary it spawns, as the harness's fork does. The targets run under the lease line
+`CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1`, or with no mask. A run with the
+cards hidden (`CUDA_VISIBLE_DEVICES=`) skips every device test, except
+`observed_division.rs`, `lora_proof.rs` and `lora_heldout.rs`: each is an explicit
+accelerator instrument run with `--ignored`, and each fails by name without its
+artifacts or the device pair.
 
 **Two targets name a fixture they do not read, and the first form of this
 table recorded the mention as a read.** `seam.rs` cites `WEAVER_TEST_GGUF` in a
@@ -488,6 +509,23 @@ manifest test therefore checks the shape rather than the roster.
 re-renders the R1 held-out prompts through the granite renderer and compares their
 token ids with the deposit's, so it needs the same artifact `markers.rs` probes, and one
 name for one artifact keeps the two from pointing at different files.
+
+**The two LORA-7 targets share one arm runner**, `tests/lora/fixture.rs`, per
+`weaver-spu-lora-loading-Spec-amendment` section 7. A residency admits once per process
+and the LORA-3 observer installs once per process, so each arm (a base-only control or
+an adapted run) is a child process of its target's own binary, marked by
+`LORA_PROOF_ARM`, which carries no `WEAVER_` prefix because it is not a fixture.
+Each arm's command carries its binding's PAIR-1 mask. The arms keep their own spawner
+rather than `common::run_masked`, so a held-out arm's progress lines stream as it
+decodes. `lora_proof.rs` is the gate: one pinned entry, the base-only control twice and
+the adapted run twice, each pair replaying bitwise: identical token ids, bit-identical
+entropy and surprisal at every position (LORA-6's numerical trace), and the same
+termination. `lora_heldout.rs` is the long run: every entry, base-only and adapted.
+Both write their report outside the repository (LORA-6), with the numerical trace
+of every entry, so a later run of the held-out set can be compared bitwise. Each arm judges the observed
+division of every session as it closes, the load's records with the session's own, with
+`lora::observation::judge_division` (PAIR-5), and the parent asserts the same computed
+and observed division across arms.
 
 **`WEAVER_DECODE_GGUF` is the decode module's own and is not a test target's.** It
 points the engine's unit suite at an artifact whose vocabulary those tests read, which
@@ -746,6 +784,24 @@ edge: asserts
 from: weaver-spu
 to: spu-artifact-refusal-names-path-and-identity
 ```
+
+**A declared adapter is admitted on the fixture's path**, per the adapter binding
+amendment ADP-2. Admit builds the LoRA amendment's adapter request from the binding's
+`adapter` table, member for member, and admits it on the one path LORA-1 has the
+fixture share, so LORA-2 to LORA-5 hold unchanged: custody and ownership, the pre-load
+judgment, the declared `sha256` against the pinned file (`ArtifactUnreadable` at
+`adapter-hash`) and the declared `base-blake3` against the base's BLAKE3
+(`DeviceCannotAdmit` at `adapter-base-identity`) before any load, the load order, the
+scale attachment and the refusal mapping. A base-only binding admits with no request.
+An adapter refusal's account is one typed line beside the artifact's: `adapter`, the
+adapter's path as declared, the LORA-2 stage and its detail, and the uid and gid.
+**The placement observer is installed at process start**, before any backend call,
+whether or not the binding carries an adapter, so an adapted load does not refuse at
+`adapter-observer`. It keeps records only inside a window that opens at the load and
+closes once the first session's context is made, a failed load closing it too, and
+forwards every engine line, kept or not, to standard error, as the engine's default
+logger writes it. A read borrows the kept records. The fixture's install is the same
+function, keeping every record for its isolated process.
 
 **The devices are the binding's and this crate selects none.** The assignment
 arrives inside the model binding, per `weaver-types-Spec` section 2, ordered,
@@ -2067,7 +2123,10 @@ resident length, per issue #461.
 
 **What travels with a generation.** The token identifiers in and out, the two signal
 vectors, the timings the charter's row names, the model identity and its weights hash
-from section 3, the prompt-block partition, the residual reductions when elected, the
+from section 3, the adapter identity beside them (`adapter`: `null` for a base-only load,
+or `artifact`, `sha256` and `scale` of the resident adapter, the scale written as the f32
+itself and never through a generic JSON value, per the adapter binding amendment ADP-3,
+which puts the same member in the Open measurement), the prompt-block partition, the residual reductions when elected, the
 session's resident token count and its capacity as the generation closed - the
 generation's own typed members beside the two spliced boxes, never measurement members,
 per issue #221's arc and `weaver-types-Spec` section 4.4 - and beside the measurement
@@ -3170,6 +3229,25 @@ than a code fact.
   to tunable without changing the binary's declaration.
 - Readout elected but untappable refuses at admit, confirmed by watching the
   load succeed and the first turn fail when the check moves off the admit path.
+- The adapter binding amendment's rows (ADP-6) that this crate holds, each watched
+  under the perturbation its row names. One path:
+  `the_declared_request_is_the_fixtures_request` (`lora_proof.rs`, no device) and
+  `the_declared_table_becomes_the_request_member_for_member`. The declaration is the
+  caller: `production_admission_carries_the_declared_adapter_into_lora_two`. The
+  declaration's claims are checked: `the_declared_claims_are_checked_against_the_pinned_file`
+  and `the_adapter_refusal_line_names_the_artifact_and_the_stage`. The capture is
+  bounded: `the_serving_capture_keeps_lines_only_inside_the_window` for the window's
+  state machine, and on a device
+  `the_serving_window_opens_at_the_load_and_closes_at_the_first_session_and_the_release`
+  for its three call sites (the load, the first session's context, the release). The
+  engine log
+  keeps flowing: `the_serving_capture_forwards_every_line_to_stderr`. The identity is
+  recorded: `the_open_measurement_carries_the_adapter_identity_beside_the_base` and
+  `every_generation_measurement_leads_with_the_typed_adapter`. The serving binary
+  observes, end to end on a device: `the_serving_binary_admits_a_declared_adapter_and_records_it`,
+  an explicit accelerator instrument in `lora_proof.rs` that also reads the adapter
+  in the Open and generation measurements and the engine's lines on the binary's
+  standard error.
 
 **The kernels cross verbatim and their tests cross with them.** The CUDA
 kernel set and its build script are carried unchanged, per the operator's

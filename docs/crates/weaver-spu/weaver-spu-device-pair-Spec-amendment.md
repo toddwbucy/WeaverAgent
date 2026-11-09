@@ -35,6 +35,10 @@ The baseline is main at `9d76e1765af25084cb77e3b4bb38bc20c9211d46`.
 The dependency pin is `toddwbucy/llama-cpp-rs` at
 `ecce255bcb14dd6d88f184cc8776c23a85afafeb`, as recorded by Cargo.lock.
 The vendored llama.cpp in that pin is the engine every engine citation names.
+The PAIR-3 code act moves the pin to `bebe55d6a90069e13bc6c38eefc707a700014550`
+(the fork's branch `weaver/tensor-split-on-ecce255`), whose two cherry-picks
+touch only `params.rs`. The vendored llama.cpp stays at `e21cdc11`, so every
+engine citation here still holds.
 
 **What this amendment does not do.** It adds no declaration key and does not
 change the binding grammar. `ModelBinding` stays `{artifact, devices}`
@@ -269,7 +273,8 @@ refusal still carries the device's capacity.
 
 The observed-division instrument is an explicit accelerator test, like the
 LORA-7 fixture. It runs only in an isolated process with the LORA-3 observer.
-The production path does not install a log callback. A missing device or
+The serving SPU installs the capture at process start and keeps records only
+inside the placement window (adapter binding amendment ADP-2). A missing device or
 artifact fails the test by name and is not a pass.
 
 The existing two-device tests (`tests/two_card.rs`) rest on the free-memory

@@ -333,6 +333,7 @@ fn failed_enter_cleanup_real_fork_release_requires_exact_reply_and_reaps_origina
             resources.spawn_spu(
                 &mut fx.context,
                 &std::env::current_exe().unwrap(),
+                &[],
                 &child_arguments(name),
                 &mut fx.clock,
             )
@@ -379,6 +380,7 @@ fn failed_enter_cleanup_real_child_at_cap_never_claims_kill_is_reap() {
         resources.spawn_spu(
             &mut fx.context,
             Path::new("/bin/sleep"),
+            &[],
             &["60".into()],
             &mut fx.clock,
         )
@@ -432,7 +434,7 @@ fn failed_enter_process_open_then_release_peer() {
     let opened = weaver_types::Opened { session, prefix_tokens: 3, capacity: 16384,
         generation_limit: 16, terminal_tokens: 1,
         request: serde_json::value::to_raw_value(&serde_json::json!({"rendered":rendered,"template":"fixture"})).unwrap(),
-        measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture",
+        measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","adapter":null,
             "prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap(),
     };
     let response = serde_json::to_vec(&weaver_types::TokenAnswer::Opened(opened)).unwrap();
@@ -851,6 +853,7 @@ fn failed_enter_cleanup_actual_premature_release_reply_cannot_confirm_an_unsent_
         resources.spawn_spu(
             &mut fx.context,
             &std::env::current_exe().unwrap(),
+            &[],
             &child_arguments("failed_enter_process_premature_release_peer"),
             &mut fx.clock,
         )
@@ -913,8 +916,16 @@ fn failed_enter_cleanup_same_context_cannot_issue_a_second_bag_omitting_an_actua
     fx.activate();
     let mut resources = fx.context.failed_enter_resources().unwrap();
     // SAFETY: this test retains/reaps the actual child before returning.
-    unsafe { resources.spawn_spu(&mut fx.context, Path::new("/bin/true"), &[], &mut fx.clock) }
-        .unwrap();
+    unsafe {
+        resources.spawn_spu(
+            &mut fx.context,
+            Path::new("/bin/true"),
+            &[],
+            &[],
+            &mut fx.clock,
+        )
+    }
+    .unwrap();
     assert!(fx.context.failed_enter_resources().is_none());
     state_eof(&mut fx);
     assert!(fx.context.failed_enter_resources().is_none());
@@ -926,6 +937,56 @@ fn failed_enter_cleanup_same_context_cannot_issue_a_second_bag_omitting_an_actua
     ));
 }
 
+/// **The flow's SPU fork carries the binding's mask** (device pair amendment
+/// PAIR-1): a shell launched as the SPU reports both variables as its last
+/// stderr word, set from the devices handed to `spawn_spu` in their order.
+///
+/// Perturbation: hand `OwnedChild::spawn` no overrides and this test fails.
+#[test]
+fn failed_enter_spu_fork_carries_the_binding_mask() {
+    let mut fx = Fixture::new(config());
+    fx.activate();
+    let mut resources = fx.context.failed_enter_resources().unwrap();
+    let script = r#"printf '{"order":"%s","visible":"%s"}\n' "$CUDA_DEVICE_ORDER" "$CUDA_VISIBLE_DEVICES" >&2"#;
+    // SAFETY: this test retains/reaps the actual child before returning.
+    unsafe {
+        resources.spawn_spu(
+            &mut fx.context,
+            Path::new("/bin/sh"),
+            &[
+                weaver_types::DeviceOrdinal(3),
+                weaver_types::DeviceOrdinal(1),
+            ],
+            &["-c".into(), script.into()],
+            &mut fx.clock,
+        )
+    }
+    .unwrap();
+    state_eof(&mut fx);
+    let mut owner = start(&mut fx, resources);
+    drive(&mut owner, &mut fx.clock);
+    assert!(matches!(
+        owner.resources.spu_child(),
+        Some(ChildState::Reaped(_))
+    ));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let word = loop {
+        let snapshot = owner.resources.spu_last_word_for_test().unwrap();
+        if snapshot.eof {
+            break snapshot.word;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the SPU's stderr did not finish"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert_eq!(
+        word,
+        Some(serde_json::json!({"order": "PCI_BUS_ID", "visible": "3,1"}))
+    );
+}
+
 #[test]
 fn failed_enter_cleanup_foreign_replaced_producer_ports_return_exact_resources_before_cleanup() {
     for decoder in [true, false] {
@@ -933,8 +994,16 @@ fn failed_enter_cleanup_foreign_replaced_producer_ports_return_exact_resources_b
         fx.activate();
         let mut resources = fx.context.failed_enter_resources().unwrap();
         // SAFETY: original actual child is retained/reaped through the retry.
-        unsafe { resources.spawn_spu(&mut fx.context, Path::new("/bin/true"), &[], &mut fx.clock) }
-            .unwrap();
+        unsafe {
+            resources.spawn_spu(
+                &mut fx.context,
+                Path::new("/bin/true"),
+                &[],
+                &[],
+                &mut fx.clock,
+            )
+        }
+        .unwrap();
         let (foreign, _peer) = crate::channel::OrganChannel::pair().unwrap();
         let mut old_decode = None;
         let mut old_residency = None;
@@ -1016,6 +1085,7 @@ fn failed_enter_cleanup_account_step_cap_observation_cannot_be_erased_before_rel
                 resources.spawn_spu(
                     &mut fx.context,
                     Path::new("/bin/sleep"),
+                    &[],
                     &["60".into()],
                     &mut fx.clock,
                 )
@@ -1107,6 +1177,7 @@ fn failed_enter_cleanup_wait_uses_original_cap_with_actual_silent_child_and_trac
         resources.spawn_spu(
             &mut fx.context,
             Path::new("/bin/sleep"),
+            &[],
             &["60".into()],
             &mut fx.clock,
         )

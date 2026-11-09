@@ -29,6 +29,7 @@ fn fixture() -> (Ste100Bootstrap, SchemeDeclaration, Ste100Ready) {
         model_binding: ModelBinding {
             artifact: ArtifactRef("/synthetic/checker-manifest.json".into()),
             devices: vec![DeviceOrdinal(0)],
+            adapter: None,
         },
         model_artifact_sha256: Digest::new("1".repeat(64)).unwrap(),
         instances: 1,

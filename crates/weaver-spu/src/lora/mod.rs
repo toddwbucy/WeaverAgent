@@ -1,9 +1,10 @@
-//! SPU-owned fixture input and preflight, per LORA-1 and LORA-2.
-//! No production declaration or wire member selects this mechanic.
-//! The fixture accepts ordinary F32, F16 and BF16 matrix pairs. Other adapter
-//! features refuse. Artifact selection and real application proof remain LORA-8 cells.
+//! The adapter request and its preflight, per LORA-1 and LORA-2. The serving
+//! SPU builds the request from the declared `adapter` table (the adapter
+//! binding amendment ADP-2) and the LORA-7 fixture builds it from its own
+//! inputs, and both admit it on one path. Ordinary F32, F16 and BF16 matrix
+//! pairs are accepted. Other adapter features refuse.
 
-mod gguf;
+use crate::artifact::directory as gguf;
 #[cfg(feature = "gguf")]
 pub mod observation;
 
@@ -17,13 +18,33 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use weaver_types::LifecycleRefusal;
 
-/// The four fixture members of LORA-1, beside the unchanged base instruction.
-#[derive(Debug, Clone)]
+/// The four members of LORA-1, beside the unchanged base instruction.
+#[derive(Debug, Clone, PartialEq)]
 pub struct Request {
     pub artifact: PathBuf,
     pub sha256: String,
     pub expected_base_weights_hash: String,
     pub scale: f32,
+}
+
+/// **The declared table, member for member**, per ADP-2: the path as
+/// written, the two digests as the operator's claims, and the scale as the
+/// declared f32. Nothing is computed here. Admission checks the claims.
+impl From<&weaver_types::AdapterBinding> for Request {
+    fn from(declared: &weaver_types::AdapterBinding) -> Self {
+        let weaver_types::AdapterBinding {
+            artifact,
+            sha256,
+            base_blake3,
+            scale,
+        } = declared;
+        Request {
+            artifact: PathBuf::from(&artifact.0),
+            sha256: sha256.clone(),
+            expected_base_weights_hash: base_blake3.clone(),
+            scale: *scale,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -116,11 +137,52 @@ pub struct Identity {
     /// Stored alpha, absent when the artifact leaves the backend default in use.
     pub alpha: Option<f32>,
     pub targets: BTreeMap<String, u64>,
+    /// Each target's adapter bytes (its `lora_a` and `lora_b` together), which
+    /// the room judgment charges to the device holding the target's base
+    /// (device pair amendment PAIR-4).
+    pub target_bytes: BTreeMap<String, u64>,
     pub tensor_bytes: u64,
 }
 
-/// Isolated fixture driver for LORA-1, LORA-3 and LORA-6.
-/// Normal serving calls Residency::admit and cannot supply an adapter.
+/// **The adapter identity the record carries**, per the adapter binding
+/// amendment ADP-3: the path for the reader, never compared, and the digest
+/// and scale an identity comparison reads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordedAdapter {
+    pub artifact: String,
+    pub sha256: String,
+    pub scale: f32,
+}
+
+impl RecordedAdapter {
+    /// Write the record's `adapter` member: `null` for a base-only load, the
+    /// closed object for an adapted one. **The scale is written as the f32
+    /// itself**, never through a generic JSON value, which would widen it to
+    /// f64 and write 0.7 as `0.699999988079071`. A resident adapter's scale
+    /// is finite (LORA-1's input check), so it never writes as `null`.
+    pub fn write_member(
+        adapter: Option<&RecordedAdapter>,
+        out: &mut Vec<u8>,
+    ) -> serde_json::Result<()> {
+        let Some(adapter) = adapter else {
+            out.extend_from_slice(b"null");
+            return Ok(());
+        };
+        out.extend_from_slice(b"{\"artifact\":");
+        serde_json::to_writer(&mut *out, &adapter.artifact)?;
+        out.extend_from_slice(b",\"sha256\":");
+        serde_json::to_writer(&mut *out, &adapter.sha256)?;
+        out.extend_from_slice(b",\"scale\":");
+        serde_json::to_writer(&mut *out, &adapter.scale)?;
+        out.push(b'}');
+        Ok(())
+    }
+}
+
+/// Isolated fixture driver for LORA-1, LORA-3 and LORA-6. **The fixture
+/// admits through the production entry**: its binding declares the adapter
+/// table, and `Residency::admit` builds the request from it (ADP-2), so no
+/// caller can hand a request beside a binding.
 #[cfg(feature = "gguf")]
 pub struct Fixture {
     residency: crate::residency::Residency,
@@ -130,7 +192,7 @@ pub struct Fixture {
 impl Fixture {
     /// Call once in the fixture process, before any backend admission.
     pub fn new() -> Result<Self, String> {
-        observation::install()?;
+        observation::install(observation::Retention::Whole)?;
         Ok(Self {
             residency: crate::residency::Residency::new(),
         })
@@ -140,12 +202,18 @@ impl Fixture {
         &mut self,
         binding: &weaver_types::ModelBinding,
         headroom: crate::residency::Headroom,
+        positions: u32,
         readout: crate::readout::ReadoutElection,
         surprisal: bool,
-        request: Option<&Request>,
     ) -> Result<&crate::residency::Resident, crate::residency::AdmitRefusal> {
         self.residency
-            .admit_with_adapter(binding, headroom, readout, surprisal, request)
+            .admit(binding, headroom, positions, readout, surprisal)
+    }
+
+    /// The residency this fixture admitted, `None` before an admission. A
+    /// shared borrow, so a driver can read the capture between its sessions.
+    pub fn resident(&self) -> Option<&crate::residency::Resident> {
+        self.residency.resident()
     }
 
     pub fn records(&self) -> Result<Vec<observation::Record>, String> {
@@ -167,6 +235,12 @@ impl Prepared {
     #[cfg(any(feature = "gguf", test))]
     pub fn path(&self) -> PathBuf {
         PathBuf::from(format!("/proc/self/fd/{}", self.file.as_raw_fd()))
+    }
+
+    /// The adapter's path as the request named it, for the record (ADP-3).
+    #[cfg(feature = "gguf")]
+    pub fn artifact(&self) -> &Path {
+        &self.request.artifact
     }
 
     pub fn failure(
@@ -351,6 +425,7 @@ fn inspect(
     let mut pairs: BTreeMap<String, [Option<&gguf::Tensor>; 2]> = BTreeMap::new();
     let mut ranges = Vec::new();
     let mut tensor_bytes = 0u64;
+    let mut target_bytes: BTreeMap<String, u64> = BTreeMap::new();
     for (name, tensor) in &adapter.tensors {
         let (target, side) = if let Some(target) = name.strip_suffix(".lora_a") {
             (target, 0)
@@ -389,6 +464,10 @@ fn inspect(
         }
         ranges.push((tensor.offset, end));
         tensor_bytes = tensor_bytes
+            .checked_add(size)
+            .ok_or("adapter storage overflow")?;
+        let per_target = target_bytes.entry(target.into()).or_default();
+        *per_target = per_target
             .checked_add(size)
             .ok_or("adapter storage overflow")?;
         pairs.entry(target.into()).or_default()[side] = Some(tensor);
@@ -435,6 +514,7 @@ fn inspect(
         scale: request.scale,
         alpha,
         targets,
+        target_bytes,
         tensor_bytes,
     })
 }

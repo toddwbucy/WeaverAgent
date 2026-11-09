@@ -722,6 +722,14 @@ the devices are a set.**
 pub struct ModelBinding {
     pub artifact: ArtifactRef,
     pub devices: Vec<DeviceOrdinal>,
+    pub adapter: Option<Box<AdapterBinding>>,
+}
+
+pub struct AdapterBinding {
+    pub artifact: ArtifactRef,
+    pub sha256: String,
+    pub base_blake3: String,
+    pub scale: f32,
 }
 ```
 
@@ -735,6 +743,24 @@ the placement decision this crate exists not to make. Whether the devices
 exist, whether they can reach each other, and whether the backend can shard
 across that many are all admission's, per `weaver-spu-Spec` section 3, and
 this crate answers well-formed and nothing more.
+
+**The binding may carry one LoRA adapter**, per the weaver-spu adapter binding
+amendment ADP-1: the optional table `[spu-instruction.decoder.model-binding.adapter]`
+with exactly four members. `artifact` names one GGUF LoRA file in the base's
+`ArtifactRef` grammar. `sha256` is the adapter file's SHA-256 and `base-blake3` the
+base's weaver-spu Spec section 3 BLAKE3 identity, each 64 lowercase hexadecimal
+characters. `scale` is a finite number, a TOML float or integer (`1` reads as 1.0),
+stored as f32, with no default. The table is closed: an unknown key, a missing member,
+a digest of another shape or a non-finite scale is a parse error, `BadValue` naming
+`model-binding.adapter.<member>` for a value and the usual refusal for a key, and a
+present table never falls back to a base-only binding. **Absence is omission**: an
+absent adapter serializes as no `adapter` key, and a reader refuses `"adapter": null`
+in a binding, the record's convention (ADP-3) being the other one. The adapter serves
+decode only, so an adapter on the classify binding refuses `BadValue` naming
+`classify.model-binding.adapter`. The digests are the operator's claims, judged here
+for shape alone. The SPU checks them at admission (ADP-2). The table is boxed so a
+binding keeps its size inside the organ channel's payload enums, and the box is not
+visible on the wire.
 
 **`GateInstruction` carries the access rule and not the socket, ruled
 2026-08-15.** Where a socket sits is the program's and only who may pass it is

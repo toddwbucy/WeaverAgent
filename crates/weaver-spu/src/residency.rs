@@ -62,8 +62,11 @@ use weaver_types::{DeviceOrdinal, LifecycleRefusal, ModelBinding};
 use crate::artifact::{self, ArtifactHeader};
 use crate::decoder::backend::{self, DecodeFault, FlushMechanism, TokenId};
 use crate::decoder::session::Session;
+use crate::devices::{self, DeviceQuery, DeviceRefusal, MaskRefusal, Visibility};
+use crate::division::Division;
 use crate::family::{self, FamilyRefusal};
 use crate::readout::{self, ReadoutElection, ReadoutRefusal};
+use crate::room::{Layout, Share};
 
 /// The headroom term, in bytes, held beside the shard on each assigned device.
 ///
@@ -90,7 +93,8 @@ pub struct WeightsHash(pub String);
 /// with the whole ordering inverted.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AdmitRefusal {
-    /// LORA-2: fixture-only detail, mapped onto the existing lifecycle cases.
+    /// LORA-2's adapter refusal, reached from the declared table (ADP-2) and
+    /// from the fixture's supplied request, with its own account line.
     Adapter(crate::lora::Failure),
     /// The load elected residual readout and this family's engine cannot tap.
     /// Judged on the admit path, so the refusal costs the operator nothing
@@ -118,11 +122,14 @@ pub enum AdmitRefusal {
     /// judging the pair as distinct would pass room on half the real demand and
     /// skip the peer check the pair would need. Free, so judged with the width.
     DuplicateDevice { ordinal: u32 },
+    /// Step three, on the PAIR-1 mask: the process was launched with a device
+    /// numbering the binding does not mean. Judged before any device query,
+    /// and carries what the process held beside what the binding expects.
+    Mask(MaskRefusal),
     /// Step three, on a condition the driver answered. Carries which device and
     /// which condition, because an operator meeting this needs to know whether
     /// to free a card or to reassign the binding.
-    #[cfg(feature = "cuda")]
-    DeviceRefused(crate::gpu::DeviceRefusal),
+    DeviceRefused(DeviceRefusal),
     /// Step four, on a container whose backend this build does not carry.
     /// Named distinctly so that a build with a device attached is not told it
     /// has a device problem.
@@ -167,7 +174,7 @@ impl From<AdmitRefusal> for LifecycleRefusal {
             AdmitRefusal::Readout(_) => LifecycleRefusal::DeviceCannotAdmit,
             AdmitRefusal::Device => LifecycleRefusal::DeviceCannotAdmit,
             AdmitRefusal::DuplicateDevice { .. } => LifecycleRefusal::DeviceCannotAdmit,
-            #[cfg(feature = "cuda")]
+            AdmitRefusal::Mask(_) => LifecycleRefusal::DeviceCannotAdmit,
             AdmitRefusal::DeviceRefused(_) => LifecycleRefusal::DeviceCannotAdmit,
             // The floor's closed set carries no case for a step this binary did
             // not build, and inventing one would be a floor edit this act has no
@@ -197,6 +204,9 @@ pub struct Admission<'a> {
     paths: &'a [PathBuf],
     header: &'a ArtifactHeader,
     devices: &'a [DeviceOrdinal],
+    /// The PAIR-3 division a multi-device GGUF load splits by, `None` for
+    /// the native backend, whose pair keeps its own tensor-parallel design.
+    division: Option<&'a Division>,
     /// What makes the door a door: nothing outside this module constructs one.
     _admitted: (),
 }
@@ -217,6 +227,9 @@ impl Admission<'_> {
     }
     pub fn devices(&self) -> &[DeviceOrdinal] {
         self.devices
+    }
+    pub fn division(&self) -> Option<&Division> {
+        self.division
     }
 }
 
@@ -352,10 +365,36 @@ pub struct Resident {
     /// is carried and obeyed rather than tested, and a bare boolean is the
     /// whole of what there is to hold.
     pub surprisal_elected: bool,
+    /// What the admission judged about placement, kept for the fixture
+    /// report (LORA-6): the visible device set, the computed division and
+    /// each device's share.
+    pub placement: Placement,
     /// The model itself. Private: what the rest of the crate may do with a
     /// residency is a question for the decode acts, and nothing reaches the
     /// engine around the seam.
     model: LoadedModel,
+}
+
+/// What admission judged about where the model goes, per the device pair
+/// amendment. Every device is named by its binding ordinal, in binding
+/// order.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Placement {
+    /// The `CUDA_VISIBLE_DEVICES` value the mask judgment passed, which is
+    /// the binding's ordinals in order.
+    pub visible: String,
+    /// The PAIR-3 division, `None` for the native backend.
+    pub division: Option<Division>,
+    /// Each device's PAIR-4 share, `None` where the even fraction stands
+    /// (the native backend, and the recurrent and hybrid architectures
+    /// deferred to the second child act).
+    pub shares: Option<Vec<Share>>,
+    /// The bytes the room judgment asked of each device, without the
+    /// headroom.
+    pub needs: Vec<u64>,
+    /// The input layer's host bytes for a GGUF artifact, charged to no
+    /// device.
+    pub input_bytes: Option<u64>,
 }
 
 impl Resident {
@@ -458,8 +497,21 @@ impl Resident {
     }
 
     /// The emission verbatim: the sampled tokens back as text, before any
-    /// parse, which is what the record's `model.output` carries.
+    /// parse, which is what the record's `model.output` carries. The text
+    /// conversion is strict, so bytes that are not UTF-8 fault here.
     pub fn detokenize(&self, tokens: &[TokenId]) -> Result<String, DecodeFault> {
+        String::from_utf8(self.emission_bytes(tokens)?).map_err(|error| DecodeFault::Engine {
+            detail: error.to_string(),
+        })
+    }
+
+    /// The emission's bytes: each sampled token's piece, concatenated, before
+    /// any text conversion on the GGUF container. [`Self::detokenize`] is
+    /// these bytes converted strictly. **On the Native container the
+    /// tokenizer decodes to text itself and replaces what is not UTF-8 as it
+    /// does**, so there the bytes are that text's, always UTF-8, and the
+    /// model's raw bytes are not recoverable.
+    pub fn emission_bytes(&self, tokens: &[TokenId]) -> Result<Vec<u8>, DecodeFault> {
         #[cfg(not(feature = "gguf"))]
         let _ = tokens;
         match &self.model {
@@ -468,9 +520,9 @@ impl Resident {
                 // The whole sequence decodes together: a multi-byte character
                 // split across two tokens is ordinary under a byte-pair
                 // vocabulary, and per-token conversion would break it where
-                // the split fell. The bytes are gathered per token and the
-                // text conversion is one pass over the concatenation, so a
-                // split character still fails as incomplete rather than
+                // the split fell. The bytes are gathered per token here and
+                // `detokenize` converts the concatenation in one pass, so a
+                // split character fails there as incomplete rather than
                 // rendering wrong, which is the failure the stream's pending
                 // buffer waits on. The engine reports a too-small buffer as
                 // the negative of the size it needed, so one retry at that
@@ -496,12 +548,11 @@ impl Resident {
                     })?;
                     bytes.extend_from_slice(&piece);
                 }
-                String::from_utf8(bytes).map_err(|error| DecodeFault::Engine {
-                    detail: error.to_string(),
-                })
+                Ok(bytes)
             }
+            // The tokenizer's text, already replaced (see the doc above).
             #[cfg(feature = "cuda")]
-            LoadedModel::Native(model) => model.detokenize(tokens),
+            LoadedModel::Native(model) => model.detokenize(tokens).map(String::into_bytes),
             #[allow(unreachable_patterns)]
             _ => Err(DecodeFault::ContainerNotBuilt {
                 container: self.header.container,
@@ -577,6 +628,19 @@ impl Resident {
     fn flush_mechanism(&self) -> Result<FlushMechanism, DecodeFault> {
         Ok(self.declaration.flush)
     }
+
+    /// **The adapter this residency holds, as the record states it**, per
+    /// the adapter binding amendment ADP-3: `None` for a base-only load. The
+    /// identity is the resident's own (LORA-5), so the record names what was
+    /// loaded rather than what was declared.
+    pub fn adapter(&self) -> Option<&crate::lora::RecordedAdapter> {
+        match &self.model {
+            #[cfg(feature = "gguf")]
+            LoadedModel::Gguf(model) => model.adapter_record(),
+            #[allow(unreachable_patterns)]
+            _ => None,
+        }
+    }
 }
 
 /// The residency, which begins empty and admits once.
@@ -599,24 +663,65 @@ impl Residency {
     }
 
     /// Run the charter's five steps in order.
+    ///
+    /// `positions` is the context capacity the session will open with, which
+    /// sizes the KV term of each device's share (PAIR-4).
     pub fn admit(
         &mut self,
         binding: &ModelBinding,
         headroom: Headroom,
+        positions: u32,
         readout: ReadoutElection,
         surprisal_elected: bool,
     ) -> Result<&Resident, AdmitRefusal> {
-        // LORA-1: production callers share admission with absent adapter input.
-        self.admit_with_adapter(binding, headroom, readout, surprisal_elected, None)
+        self.admit_declared_on(
+            binding,
+            headroom,
+            positions,
+            readout,
+            surprisal_elected,
+            &DeviceSide::of_process(),
+        )
     }
 
-    pub(crate) fn admit_with_adapter(
+    /// **The declaration is the caller**, per the adapter binding amendment
+    /// ADP-2: the adapter request is the binding's declared table, member
+    /// for member, admitted on the one path LORA-1 has the fixture share. A
+    /// base-only binding admits with no request.
+    pub(crate) fn admit_declared_on(
         &mut self,
         binding: &ModelBinding,
         headroom: Headroom,
+        positions: u32,
+        readout: ReadoutElection,
+        surprisal_elected: bool,
+        side: &DeviceSide<'_>,
+    ) -> Result<&Resident, AdmitRefusal> {
+        let request = binding.adapter.as_deref().map(crate::lora::Request::from);
+        self.admit_on(
+            binding,
+            headroom,
+            positions,
+            readout,
+            surprisal_elected,
+            request.as_ref(),
+            side,
+        )
+    }
+
+    /// The admission against a stated environment and driver. Production
+    /// reaches it through [`DeviceSide::of_process`]; a test states both, so
+    /// the order of the device judgments is watched with no device.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn admit_on(
+        &mut self,
+        binding: &ModelBinding,
+        headroom: Headroom,
+        positions: u32,
         readout: ReadoutElection,
         surprisal_elected: bool,
         adapter: Option<&crate::lora::Request>,
+        side: &DeviceSide<'_>,
     ) -> Result<&Resident, AdmitRefusal> {
         if self.admit_attempted {
             return Err(AdmitRefusal::AlreadyAttempted);
@@ -648,6 +753,20 @@ impl Residency {
         // loading it and without touching a device. Free.
         let header = artifact::read_header(&mut pinned)
             .map_err(|refusal| AdmitRefusal::on_artifact(refusal, &path, "header"))?;
+        // **PAIR-4: the header read reaches every shard's tensor directory**,
+        // still reading no tensor data and touching no device. A directory
+        // that does not parse refuses as the header read refuses, naming the
+        // shard. The floor's refusal carries no detail, so the fault's own
+        // account goes to standard error as one typed line, the operator's
+        // record of why.
+        let layout = match header.container {
+            artifact::Container::Gguf => Some(Layout::read(&pinned.paths()).map_err(|fault| {
+                let shard = pinned.names().get(fault.shard).unwrap_or(&path);
+                eprintln!("{}", layout_fault_line(shard, &fault.detail));
+                AdmitRefusal::on_artifact(LifecycleRefusal::ArtifactUnreadable, shard, "header")
+            })?),
+            artifact::Container::Safetensors => None,
+        };
 
         if let Some(request) = adapter
             && header.container != artifact::Container::Gguf
@@ -656,7 +775,7 @@ impl Residency {
                 request,
                 crate::lora::FailureKind::Incompatible,
                 "adapter-backend",
-                "the fixture requires the GGUF backend",
+                "an adapter requires the GGUF backend",
             )));
         }
 
@@ -694,23 +813,30 @@ impl Residency {
         // perturbs.
         readout::judge(readout, declaration).map_err(AdmitRefusal::Readout)?;
         judge_distinct(&binding.devices)?;
-        // The shard each device must hold, read from the held descriptor
-        // rather than from the name. The width was judged above, so the
-        // divisor is known non-zero.
-        let shard_bytes = pinned
-            .len()
-            .map_err(|refusal| AdmitRefusal::on_artifact(refusal, &path, "size"))?
-            / binding.devices.len() as u64;
-        // LORA-2: each assigned device must fit the entire adapter as a safe
-        // preflight bound until measured target placement apportions its cost.
-        let adapter_bytes = adapter.as_ref().map_or(0, |a| a.identity.tensor_bytes);
-        let shard_bytes =
-            shard_bytes
-                .checked_add(adapter_bytes)
-                .ok_or_else(|| AdmitRefusal::LoadFailed {
-                    detail: "base plus adapter storage overflow".into(),
-                })?;
-        judge_room_and_reach(&binding.devices, shard_bytes, headroom)?;
+        // **PAIR-1: the mask, before any device query.** Free: it reads two
+        // variables of this process.
+        devices::judge_mask(&binding.devices, &side.visibility).map_err(AdmitRefusal::Mask)?;
+        // **The division and each device's share**, both free: arithmetic
+        // over the header and the directories read above.
+        let plan = plan(
+            layout.as_ref(),
+            &binding.devices,
+            positions,
+            adapter.as_ref(),
+            || {
+                pinned
+                    .len()
+                    .map_err(|refusal| AdmitRefusal::on_artifact(refusal, &path, "size"))
+            },
+        )?;
+        // **PAIR-2, then room and reach**, the conditions that cost a driver
+        // query. A build with no driver refuses at the first of them.
+        let Some(query) = side.query else {
+            return Err(AdmitRefusal::Device);
+        };
+        devices::judge_identical(&binding.devices, query).map_err(AdmitRefusal::DeviceRefused)?;
+        devices::judge_room_and_reach(&binding.devices, &plan.needs, headroom.0, query)
+            .map_err(AdmitRefusal::DeviceRefused)?;
 
         // **The weights hash is judged here, the last free step**, per Spec
         // section 3: computed by reading the artifact, never taken from a
@@ -753,6 +879,7 @@ impl Residency {
             paths: &pinned_paths,
             header: &header,
             devices: &binding.devices,
+            division: plan.division.as_ref(),
             _admitted: (),
         };
         let model = load(&admission)?;
@@ -766,6 +893,13 @@ impl Residency {
             weights_hash,
             readout,
             surprisal_elected,
+            placement: Placement {
+                visible: Visibility::mask(&binding.devices),
+                division: plan.division,
+                shares: plan.shares,
+                needs: plan.needs,
+                input_bytes: layout.as_ref().map(Layout::input_bytes),
+            },
             model,
         });
         Ok(self.resident.as_ref().expect("set immediately above"))
@@ -784,6 +918,10 @@ impl Residency {
         let Some(resident) = self.resident.take() else {
             return Err(LifecycleRefusal::NoResidency);
         };
+        // ADP-2: a load released before any session opened leaves the
+        // placement window open, and the release is its last chance to close.
+        #[cfg(feature = "gguf")]
+        crate::lora::observation::close_window();
         // The drop is the free: the weights, the working allocations, and the
         // cache go together because they are one residency, and they go here,
         // inside this function, so the caller cannot answer before the device
@@ -803,43 +941,93 @@ fn judge_distinct(devices: &[DeviceOrdinal]) -> Result<(), AdmitRefusal> {
     Ok(())
 }
 
-/// The room and reach conditions, each of which costs a driver query.
-///
-/// **The device judgment reads the driver rather than this crate's own
-/// accounting.** This crate holds no fleet ledger to prefer, and the case the
-/// check exists to catch is a device occupied by something this program did not
-/// put there, so the authority is what the device reports free at the moment of
-/// admission. Each assigned device must have room for its shard plus the
-/// residency's headroom, the one inequality read per device, and the devices
-/// must be able to reach each other, because a sharded forward exchanges
-/// activations across them and a set without peer access cannot serve.
-#[cfg(not(feature = "cuda"))]
-fn judge_room_and_reach(
-    _devices: &[DeviceOrdinal],
-    _shard_bytes: u64,
-    _headroom: Headroom,
-) -> Result<(), AdmitRefusal> {
-    // No driver is compiled in, so there is no device this build can admit to.
-    // Refusing here rather than pretending the conditions passed is what keeps
-    // the no-feature build from claiming a residency it cannot hold.
-    Err(AdmitRefusal::Device)
+/// The typed standard-error line for a tensor directory that does not parse:
+/// the shard and the reader's own account, which the refusal cannot carry.
+fn layout_fault_line(shard: &Path, detail: &str) -> String {
+    serde_json::json!({
+        "layout_fault": {"shard": shard.display().to_string(), "detail": detail}
+    })
+    .to_string()
 }
 
-/// The room and reach conditions, asked of the driver.
+/// The environment and driver an admission judges against.
+pub(crate) struct DeviceSide<'a> {
+    pub visibility: Visibility,
+    /// `None` where no driver is compiled in: the first condition that needs
+    /// one refuses, rather than pretending it passed.
+    pub query: Option<&'a dyn DeviceQuery>,
+}
+
+impl DeviceSide<'static> {
+    /// This process's environment and the driver this build carries.
+    pub(crate) fn of_process() -> DeviceSide<'static> {
+        DeviceSide {
+            visibility: Visibility::of_process(),
+            #[cfg(feature = "cuda")]
+            query: Some(&crate::gpu::Driver),
+            #[cfg(not(feature = "cuda"))]
+            query: None,
+        }
+    }
+}
+
+/// The division and the per-device needs the room judgment reads.
+struct Plan {
+    division: Option<Division>,
+    shares: Option<Vec<Share>>,
+    needs: Vec<u64>,
+}
+
+/// **The free half of the device judgment**: the PAIR-3 division and each
+/// device's PAIR-4 share, from the header and the directories, reading no
+/// device.
 ///
-/// The shard size is the artifact's bytes divided across the assigned set, read
-/// from the filesystem at admit. It is an over-estimate of what a shard costs
-/// in device memory for a quantized artifact and an under-estimate of the
-/// working allocations beside it, which is why the headroom term sits in the
-/// inequality and why charter section 9 stages a measurement to replace both.
-#[cfg(feature = "cuda")]
-fn judge_room_and_reach(
+/// A GGUF artifact divides by its layer count, and the load places every
+/// architecture by that division. Its devices are charged their own shares,
+/// unless its architecture is recurrent or hybrid ([`Layout::deferred`]):
+/// then the room judgment keeps the even fraction of the file until the
+/// second child act, while the load already places the layers by the
+/// division, so the last device, which takes the output layer, can be asked
+/// for less than it holds. A native artifact keeps the even fraction: its
+/// tensor-parallel pair shards every layer across both devices, so no device
+/// holds whole layers. The even fraction charges each device the whole
+/// adapter, the preflight bound LORA-2 set before placement was declared.
+fn plan(
+    layout: Option<&Layout>,
     devices: &[DeviceOrdinal],
-    shard_bytes: u64,
-    headroom: Headroom,
-) -> Result<(), AdmitRefusal> {
-    crate::gpu::room_and_reach(devices, shard_bytes, headroom.0)
-        .map_err(AdmitRefusal::DeviceRefused)
+    positions: u32,
+    adapter: Option<&crate::lora::Prepared>,
+    file_bytes: impl FnOnce() -> Result<u64, AdmitRefusal>,
+) -> Result<Plan, AdmitRefusal> {
+    let overflow = || AdmitRefusal::LoadFailed {
+        detail: "the room judgment's byte count overflowed".into(),
+    };
+    let division = layout.and_then(|layout| Division::even(layout.layers(), devices.len()));
+    if let (Some(layout), Some(even)) = (layout, division.as_ref())
+        && !layout.deferred()
+    {
+        let shares = layout
+            .shares(even, positions, adapter.map(|a| &a.identity.target_bytes))
+            .ok_or_else(overflow)?;
+        let needs = shares
+            .iter()
+            .map(|share| share.total().ok_or_else(overflow))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(Plan {
+            division,
+            shares: Some(shares),
+            needs,
+        });
+    }
+    // The width was judged before this, so the divisor is known non-zero.
+    let shard = file_bytes()? / devices.len() as u64;
+    let adapter_bytes = adapter.map_or(0, |a| a.identity.tensor_bytes);
+    let shard = shard.checked_add(adapter_bytes).ok_or_else(overflow)?;
+    Ok(Plan {
+        division,
+        shares: None,
+        needs: vec![shard; devices.len()],
+    })
 }
 
 /// Step four: load by the container the header declared.

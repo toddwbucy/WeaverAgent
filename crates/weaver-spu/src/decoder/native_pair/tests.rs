@@ -106,7 +106,12 @@ fn the_halves_recompose_the_whole() {
     {
         use weaver_types::DeviceOrdinal;
         let devices = [DeviceOrdinal(0), DeviceOrdinal(1)];
-        let _ = crate::gpu::room_and_reach(&devices, 1024, 2 * 1024 * 1024 * 1024);
+        let _ = crate::devices::judge_room_and_reach(
+            &devices,
+            &[1024, 1024],
+            2 * 1024 * 1024 * 1024,
+            &crate::gpu::Driver,
+        );
     }
     let mut paired = ShardedModel::load(
         std::slice::from_ref(&container),
