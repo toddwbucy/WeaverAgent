@@ -143,6 +143,7 @@ fn the_measurement_splices_and_never_quotes() {
     )
     .expect("valid JSON splices");
     let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+        invalid_utf8: Vec::new(),
         content: vec![weaver_traits::ContentBlock::ToolCall(
             weaver_traits::ToolCall {
                 name: "calculator".to_string(),
@@ -871,11 +872,51 @@ fn in_transition_carries_its_constituents_only_where_filled() {
     );
 }
 
+/// **The emission's mark crosses the seam**, per `weaver-types-Spec` section
+/// 4.4 and `weaver-spu-Spec` section 6 (#493): present when the emission was
+/// not UTF-8, absent when it was, and an answer written before the member
+/// reads with it empty.
+///
+/// Perturbation: drop the member's `skip_serializing_if` or its `default`,
+/// and this fails.
+#[test]
+fn a_generation_carries_its_emission_mark_and_omits_an_empty_one() {
+    use weaver_types::{InvalidUtf8, TokenAnswer};
+    let mut generation = generation_with(vec![]);
+    let plain = serde_json::to_value(TokenAnswer::Generated(generation.clone())).unwrap();
+    assert!(
+        !plain.to_string().contains("invalid_utf8"),
+        "a UTF-8 emission carries no mark: {plain}"
+    );
+    generation.emission = "hi\u{fffd}".into();
+    generation.invalid_utf8 = vec![InvalidUtf8 {
+        at: 2,
+        bytes: "ff".into(),
+    }];
+    let wire = serde_json::to_string(&TokenAnswer::Generated(generation)).unwrap();
+    assert!(
+        wire.contains(r#""invalid_utf8":[{"at":2,"bytes":"ff"}]"#),
+        "the mark crosses: {wire}"
+    );
+    let TokenAnswer::Generated(read) = serde_json::from_str(&wire).unwrap() else {
+        panic!("a generation reads back as one");
+    };
+    assert_eq!(read.invalid_utf8[0].at, 2);
+    let TokenAnswer::Generated(old) = serde_json::from_value(plain).unwrap() else {
+        panic!("a generation reads back as one");
+    };
+    assert!(
+        old.invalid_utf8.is_empty(),
+        "an earlier answer reads with none"
+    );
+}
+
 /// A generation with the given unrecovered report and nothing else of note,
 /// for the report's own tests.
 fn generation_with(unrecovered: Vec<weaver_types::UnrecoveredCall>) -> weaver_types::Generation {
     let raw = |s: &str| serde_json::value::RawValue::from_string(s.to_string()).expect("JSON");
     weaver_types::Generation {
+        invalid_utf8: Vec::new(),
         content: vec![],
         unrecovered,
         emission: "hi".to_string(),

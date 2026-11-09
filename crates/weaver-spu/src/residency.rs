@@ -496,9 +496,23 @@ impl Resident {
         }
     }
 
-    /// The emission verbatim: the sampled tokens back as text, before any
-    /// parse, which is what the record's `model.output` carries. The text
-    /// conversion is strict, so bytes that are not UTF-8 fault here.
+    /// The emission verbatim, as the record's `model.output` carries it: the
+    /// sampled tokens' bytes as the replaced decode, with a mark for each
+    /// sequence that was not UTF-8, per `weaver-spu-Spec` section 6 (#493).
+    /// Only the engine's failure to render a piece faults. On the Native
+    /// container the bytes are the tokenizer's already-replaced text, so the
+    /// marks are empty there: the model's bytes were never seen.
+    pub fn emission(
+        &self,
+        tokens: &[TokenId],
+    ) -> Result<(String, Vec<weaver_types::InvalidUtf8>), DecodeFault> {
+        self.emission_bytes(tokens)
+            .map(|bytes| crate::emission::replaced(&bytes))
+    }
+
+    /// The sampled tokens back as text under the strict conversion, so bytes
+    /// that are not UTF-8 fault here. The serve path takes [`Self::emission`];
+    /// this stays for the device tests that assert a text is UTF-8 whole.
     pub fn detokenize(&self, tokens: &[TokenId]) -> Result<String, DecodeFault> {
         String::from_utf8(self.emission_bytes(tokens)?).map_err(|error| DecodeFault::Engine {
             detail: error.to_string(),
@@ -506,8 +520,9 @@ impl Resident {
     }
 
     /// The emission's bytes: each sampled token's piece, concatenated, before
-    /// any text conversion on the GGUF container. [`Self::detokenize`] is
-    /// these bytes converted strictly. **On the Native container the
+    /// any text conversion on the GGUF container. [`Self::emission`] is these
+    /// bytes as the replaced decode, and [`Self::detokenize`] the same bytes
+    /// converted strictly. **On the Native container the
     /// tokenizer decodes to text itself and replaces what is not UTF-8 as it
     /// does**, so there the bytes are that text's, always UTF-8, and the
     /// model's raw bytes are not recoverable.
@@ -521,10 +536,10 @@ impl Resident {
                 // split across two tokens is ordinary under a byte-pair
                 // vocabulary, and per-token conversion would break it where
                 // the split fell. The bytes are gathered per token here and
-                // `detokenize` converts the concatenation in one pass, so a
-                // split character fails there as incomplete rather than
-                // rendering wrong, which is the failure the stream's pending
-                // buffer waits on. The engine reports a too-small buffer as
+                // the conversion takes the concatenation in one pass, so a
+                // split character is joined there rather than rendering
+                // wrong, and the stream's pending buffer holds the bytes of
+                // one until the token that completes it. The engine reports a too-small buffer as
                 // the negative of the size it needed, so one retry at that
                 // size is exact - the wrapper's whole-sequence call caps the
                 // buffer at eight bytes and never retries, which faults any

@@ -30,6 +30,7 @@ use weaver_spu::decoder::backend::{DecodeFault, TokenId};
 use weaver_spu::decoder::session::{
     CancelPoll, FieldSink, PositionedSinks, SamplerBuild, StopCondition, Stopped,
 };
+use weaver_spu::emission::{PieceBuffer, Step};
 use weaver_spu::family;
 use weaver_spu::readout::ReadoutElection;
 use weaver_spu::residency::{Headroom, Residency, Resident, StopSet};
@@ -317,10 +318,19 @@ struct SeamCancel<'a> {
     refeed_turn: Option<&'a weaver_types::TurnKey>,
     cancelled: bool,
     fatal: bool,
+    /// Set by the stream when the engine could not render a drawn token's
+    /// piece (#493): the generation stops at the next poll rather than
+    /// decoding to its bound with nothing streamed, and the phase then ends
+    /// as that decode fault. Neither a cancel nor a channel fault, so it
+    /// sets neither flag.
+    halt: Option<&'a std::cell::Cell<bool>>,
 }
 
 impl CancelPoll for SeamCancel<'_> {
     fn cancelled(&mut self) -> bool {
+        if self.halt.is_some_and(std::cell::Cell::get) {
+            return true;
+        }
         loop {
             match self.socket.try_recv_octets() {
                 Ok(None) => return false,
@@ -673,36 +683,51 @@ fn serve_decode(
                     terminator: standing.stop.terminator,
                     max_tokens: effective.session.max_tokens_per_turn,
                 };
+                let piece_halt = std::cell::Cell::new(false);
                 let mut cancel = SeamCancel {
                     socket: decode,
                     refeed_turn: None,
                     cancelled: false,
                     fatal: false,
+                    halt: Some(&piece_halt),
                 };
                 // **The stream, per the contract's section 2**: each retained
                 // token crosses as it is drawn. The pieces ride a pending
-                // buffer because a byte-pair vocabulary splits characters
-                // across tokens: a batch that does not yet decode to text
-                // waits for the token that completes it, and the piece that
-                // then crosses is the rendering that became emittable at this
-                // token, per `weaver-types-Spec` section 4.4. A send the
-                // socket refuses marks the stream fatal and the phase dies
-                // after the exchange, closure being the contract's signal.
+                // buffer of bytes because a byte-pair vocabulary splits
+                // characters across tokens: a tail a later token may still
+                // complete waits for it, a sequence no later byte completes
+                // crosses as U+FFFD, and the piece that crosses is the
+                // rendering that became emittable at this token, per
+                // `weaver-types-Spec` section 4.4 and `weaver-spu-Spec`
+                // section 6 (#493). A send the socket refuses marks the
+                // stream fatal and the phase dies after the exchange, closure
+                // being the contract's signal. **A piece the engine cannot
+                // render is a decode fault and ends the phase as one**, kept
+                // apart from a tail that waits: the halt stops the generation
+                // at the next poll. Before #493 both failed one strict
+                // conversion and both waited, silently, to the end.
                 let stream_fatal = std::cell::Cell::new(false);
-                let mut pending: Vec<TokenId> = Vec::new();
+                let mut piece_fault: Option<DecodeFault> = None;
+                let mut pieces = PieceBuffer::default();
                 let mut on_token = |token: TokenId| {
                     if stream_fatal.get() {
                         return;
                     }
-                    pending.push(token);
-                    if let Ok(piece) = resident.detokenize(&pending) {
-                        pending.clear();
-                        let frame = TokenAnswer::Token {
-                            token: token.0,
-                            piece,
-                        };
-                        if send_answer(decode, &frame).is_err() {
+                    match pieces.step(resident.emission_bytes(&[token])) {
+                        Step::Cross(piece) => {
+                            let frame = TokenAnswer::Token {
+                                token: token.0,
+                                piece,
+                            };
+                            if send_answer(decode, &frame).is_err() {
+                                stream_fatal.set(true);
+                            }
+                        }
+                        Step::Wait => {}
+                        Step::Fault(fault) => {
+                            piece_fault = Some(fault);
                             stream_fatal.set(true);
+                            piece_halt.set(true);
                         }
                     }
                 };
@@ -804,12 +829,26 @@ fn serve_decode(
                         return Err(());
                     }
                 };
-                if cancel.fatal || stream_fatal.get() {
+                // The channel's own failure first: a piece fault met after the
+                // channel failed is not the cause (#493).
+                if cancel.fatal {
                     eprintln!("{}", fault_line(&ChannelFault::Undecodable));
                     return Err(());
                 }
-                let emission = match resident.detokenize(&generated.tokens) {
-                    Ok(text) => text,
+                if let Some(fault) = piece_fault {
+                    eprintln!("{}", decode_fault_line(&fault));
+                    return Err(());
+                }
+                if stream_fatal.get() {
+                    eprintln!("{}", fault_line(&ChannelFault::Undecodable));
+                    return Err(());
+                }
+                // **The replaced decode, marked**, per `weaver-spu-Spec`
+                // sections 6 and 9 (#493): bytes that are not UTF-8 are the
+                // model's and are kept, and only the engine's failure to
+                // render a piece faults.
+                let (emission, invalid_utf8) = match resident.emission(&generated.tokens) {
+                    Ok(converted) => converted,
                     Err(fault) => {
                         eprintln!("{}", decode_fault_line(&fault));
                         return Err(());
@@ -916,6 +955,7 @@ fn serve_decode(
                     measurement,
                     resident: standing.session.resident_len() as u64,
                     capacity: standing.session.capacity() as u64,
+                    invalid_utf8,
                 });
                 if send_answer(decode, &answer).is_err() {
                     return Err(());
@@ -977,6 +1017,7 @@ fn serve_decode(
                     refeed_turn: Some(&turn),
                     cancelled: false,
                     fatal: false,
+                    halt: None,
                 };
                 // The field's intermediate crosses exactly as a generation's
                 // does where the election stands, the realized rank being
@@ -1086,8 +1127,9 @@ fn serve_decode(
                 }
                 // Only a complete path reaches emission parsing and measured
                 // generation construction. A later Cancel answers at rest.
-                let emission = match resident.detokenize(&path_tokens) {
-                    Ok(text) => text,
+                // The same conversion and mark as a generation's (#493).
+                let (emission, invalid_utf8) = match resident.emission(&path_tokens) {
+                    Ok(converted) => converted,
                     Err(fault) => {
                         eprintln!("{}", decode_fault_line(&fault));
                         return Err(());
@@ -1168,6 +1210,7 @@ fn serve_decode(
                     measurement,
                     resident: standing.session.resident_len() as u64,
                     capacity: standing.session.capacity() as u64,
+                    invalid_utf8,
                 });
                 if send_answer(decode, &answer).is_err() {
                     return Err(());

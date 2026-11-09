@@ -561,6 +561,7 @@ impl RecordingContext {
                             },
                             resident: g.resident,
                             capacity: g.capacity,
+                            invalid_utf8: crate::record::invalid_utf8(&g.invalid_utf8),
                         }),
                         turn.clone(),
                         AuthoredSource::Model,

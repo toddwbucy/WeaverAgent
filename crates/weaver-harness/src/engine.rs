@@ -2022,6 +2022,7 @@ impl<'a> Ports<'a> {
                     // context has no other source once the run is over.
                     resident: generation.resident,
                     capacity: generation.capacity,
+                    invalid_utf8: crate::record::invalid_utf8(&generation.invalid_utf8),
                 })),
             )
             .map_err(|_| TurnError::ChannelLost)?;
@@ -2315,6 +2316,7 @@ impl<'a> Ports<'a> {
                     },
                     resident: generation.resident,
                     capacity: generation.capacity,
+                    invalid_utf8: crate::record::invalid_utf8(&generation.invalid_utf8),
                 })),
             )
             .map_err(|_| TurnError::ChannelLost)?;

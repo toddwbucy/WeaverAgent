@@ -42,6 +42,7 @@ fn generated(mode: &str, attempt: usize, stopped: bool) -> TokenAnswer {
         }]
     };
     TokenAnswer::Generated(Generation {
+        invalid_utf8: Vec::new(),
         emission: "fixture correction".into(),
         finish: if stopped {
             Finish::Stopped

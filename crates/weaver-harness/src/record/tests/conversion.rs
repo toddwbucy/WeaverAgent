@@ -136,6 +136,7 @@ fn compatible() -> Vec<(Event, s::Event)> {
         ModelOutput,
         ModelOutput,
         t::ModelOutput {
+            invalid_utf8: Vec::new(),
             emission: "original output\n\u{e9}".into(),
             finish: t::Finish::Length,
             resident: 33,

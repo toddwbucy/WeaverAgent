@@ -1774,6 +1774,26 @@ pub struct Generation {
     /// section 4.4. Plain counts with no judgment.
     pub resident: u64,
     pub capacity: u64,
+    /// Each sequence of the emission's bytes that was not UTF-8, in emission
+    /// order, per `weaver-spu-Spec` section 6 on the operator's ruling of
+    /// 2026-11-08 (#493): the emission is the replaced decode and this says
+    /// where. Absent where the bytes were UTF-8 as the SPU saw them (on the
+    /// Native container the tokenizer replaces first and no mark is made),
+    /// and defaulted at the read so an answer written before the member
+    /// parses with it empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invalid_utf8: Vec<InvalidUtf8>,
+}
+
+/// One replaced sequence of an emission, per `weaver-spu-Spec` section 6:
+/// `at` is the byte offset of its U+FFFD in the emission text, and `bytes`
+/// the sequence it replaced, in lowercase hexadecimal. Putting each entry's
+/// bytes back at its offset restores the model's bytes exactly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvalidUtf8 {
+    pub at: u64,
+    pub bytes: String,
 }
 
 /// A call the emission attempted and the family parse could not recover,

@@ -85,6 +85,7 @@ fn refeed_cancel_matches_the_original_turn_and_refuses_foreign_work() {
         refeed_turn: Some(&turn),
         cancelled: false,
         fatal: false,
+        halt: None,
     };
     send(
         &client,
@@ -165,6 +166,7 @@ fn interrupted_prefix(
         refeed_turn: Some(&turn),
         cancelled: false,
         fatal: false,
+        halt: None,
     };
     let fields = Cell::new(0);
     let stream_failed = Cell::new(false);
@@ -332,6 +334,7 @@ fn refeed_malformed_cancel_poll_remains_a_fault_without_terminal_answers() {
         refeed_turn: Some(&turn),
         cancelled: false,
         fatal: false,
+        halt: None,
     };
     let mut session = Session::new(
         Box::new(RecordingBackend(Rc::new(RefCell::new(Observed::default())))),
@@ -359,4 +362,68 @@ fn refeed_malformed_cancel_poll_remains_a_fault_without_terminal_answers() {
     assert!(cancel.fatal && !cancel.cancelled);
     assert!(finish_refeed(&server, &turn, &session, &generated, &cancel, false).is_err());
     assert!(client.try_recv_octets().unwrap().is_none());
+}
+
+/// **A piece fault halts the generation at the next poll** (#493): the
+/// stream sets the poll's halt when the engine could not render a drawn
+/// token's piece, and the generation stops there instead of decoding on to
+/// its bound with nothing streamed. The halt is neither a cancel nor a
+/// channel fault, so it sets neither flag and the phase reports the decode
+/// fault itself.
+///
+/// Perturbation: drop the halt check from `SeamCancel::cancelled`, and the
+/// generation runs to `max_tokens`, failing this.
+#[test]
+fn a_piece_fault_halts_the_generation_at_the_next_poll() {
+    let log = Rc::new(RefCell::new(Observed::default()));
+    let mut session = Session::new(
+        Box::new(RecordingBackend(log)),
+        256,
+        FlushMechanism::TruncateToPosition,
+        false,
+    );
+    session.open(&[TokenId(4)]).unwrap();
+    let (_client, server) = pair();
+    let halt = Cell::new(false);
+    let mut cancel = SeamCancel {
+        socket: &server,
+        refeed_turn: None,
+        cancelled: false,
+        fatal: false,
+        halt: Some(&halt),
+    };
+    let drawn = Cell::new(0);
+    let mut on_token = |_: TokenId| {
+        drawn.set(drawn.get() + 1);
+        if drawn.get() == 2 {
+            halt.set(true);
+        }
+    };
+    let generated = session
+        .append_and_generate(
+            &[TokenId(5)],
+            &weaver_spu::decoder::session::StopCondition {
+                stop_tokens: vec![],
+                terminator: TokenId(0),
+                max_tokens: 64,
+            },
+            &mut cancel,
+            &mut on_token,
+            PositionedSinks {
+                field: None,
+                on_column: &mut |_, _| {},
+            },
+            SamplerBuild {
+                seed: 11,
+                penalty_window: 64,
+            },
+        )
+        .unwrap();
+    assert_eq!(generated.stopped, Stopped::Cancelled);
+    assert!(
+        generated.tokens.len() <= 3,
+        "stopped at the poll after the fault, not at the bound: {} tokens",
+        generated.tokens.len()
+    );
+    assert!(!cancel.cancelled && !cancel.fatal);
 }

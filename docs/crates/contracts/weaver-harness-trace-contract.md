@@ -230,7 +230,11 @@ canonical parse of it as the message kinds, and it submits both. A harness
 that submitted only the parse would leave the record unable to answer what
 the model said, and one that submitted only the verbatim would make every
 consumer a parser of every family. The recorder judges neither, per section
-6, so this is an obligation on the party that can meet it.
+6, so this is an obligation on the party that can meet it. **The verbatim is
+the replaced decode where the model's bytes were not UTF-8**, per
+`weaver-spu-Spec` section 6 on the ruling of 2026-11-08 (#493), and the
+harness submits the SPU's `invalid_utf8` mark beside it unread, so the record
+holds the model's bytes exactly.
 
 **An unrecovered call, as its own kind.** On the operator's ruling of 2026-10-13 on
 #31: where the family parse could not recover a call the emission attempted, the

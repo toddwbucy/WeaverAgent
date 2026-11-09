@@ -34,6 +34,7 @@ fn packet(fd: i32, value: &TokenAnswer) {
 }
 fn generated(mode: &str, finish: Finish) -> TokenAnswer {
     TokenAnswer::Generated(Generation {
+        invalid_utf8: Vec::new(),
         emission: "Read result.".into(), finish,
         content: if mode.contains("emission") { super::emission::tests::content(mode) } else { vec![weaver_traits::ContentBlock::Text { text: "Read result.".into() }] },
         unrecovered: vec![],

@@ -166,7 +166,13 @@ resident end and generates, **and the exchange streams as it does**, per
 the operator's ruling of 2026-08-11: each token crosses as it is drawn,
 an intermediate message carrying the token's identifier and its rendered
 piece, any number of them and possibly none, ordered, and none closing
-the exchange. The answer closes the exchange as it always did, carrying
+the exchange. **A piece is the rendering that became decided at its
+token**, per `weaver-spu-Spec` section 6 on the ruling of 2026-11-08
+(#493): a character split across tokens crosses whole with the token
+that completes it (on the Native container, where the tokenizer renders
+each token's piece itself, it crosses as replaced halves), a sequence
+that is not UTF-8 crosses as U+FFFD, and a piece the engine cannot render
+ends the phase as a decode fault rather than holding the stream. The answer closes the exchange as it always did, carrying
 the generation whole, the model.request content beside the measurement
 because each splices into its own box of the record, the request being the
 turn's delta as rendered with its template and effective sampling per the
@@ -179,7 +185,11 @@ members and never inside the measurement, the session's fullness as the
 generation closed: the resident token count and the capacity, added
 2026-08-19 so the loop that elects a flush sees the pressure before the
 wall rather than in the wall's refusal, shaped at `weaver-types-Spec`
-section 4.4 because the harness consumes them. **The template identity
+section 4.4 because the harness consumes them. **The emission is the
+replaced decode**, per `weaver-spu-Spec` sections 6 and 9 (#493): bytes
+that are not UTF-8 are kept as U+FFFD, and a third typed member,
+`invalid_utf8`, names each replacement's offset and bytes, absent where
+the emission was UTF-8, so a turn never faults on what the model drew. **The template identity
 travels in the request and only
 there**, per the ruling of 2026-08-17 on #129: it is an input-side fact of
 the same kind as the sampling values, which moved to the request for the

@@ -2292,6 +2292,13 @@ pub struct Generation {
     pub measurement: Box<serde_json::value::RawValue>,
     pub resident: u64,
     pub capacity: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invalid_utf8: Vec<InvalidUtf8>,
+}
+
+pub struct InvalidUtf8 {
+    pub at: u64,
+    pub bytes: String,
 }
 
 pub struct UnrecoveredCall {
@@ -2332,7 +2339,10 @@ finish are consumed here: the emission is the verbatim the record holds, the
 content is the canonical parse the working structure takes as the assistant's
 message and the harness dispatches from, the unrecovered calls are what the
 harness's turn call authors the record's event from and hands its loop, and the
-finish closes the turn, so all four are shaped. The measurement and the rendered prompt
+finish closes the turn, so all four are shaped. `invalid_utf8`, the emission's
+mark per `weaver-spu-Spec` section 6 (#493), is shaped beside the counts on their
+ground: a plain list the harness holds typed and carries into the output event
+unread, so shaping it forces no transform. The measurement and the rendered prompt
 are consumed by nothing on the way past and are two members rather than one: each
 is forwarded whole into its own box, the measurement into the measurement
 event and the rendered prompt into the request event's `rendered`, because one

@@ -251,6 +251,13 @@ pub struct ModelOutput {
     pub finish: Finish,
     pub resident: u64,
     pub capacity: u64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub invalid_utf8: Vec<InvalidUtf8>,
+}
+
+pub struct InvalidUtf8 {
+    pub at: u64,
+    pub bytes: String,
 }
 
 pub struct ModelField {
@@ -823,6 +830,18 @@ carried opaque and a harness that opened it to insert two members would be
 editing an organ's content, retiring the splice rule in the same breath
 that invoked it. The output is where the harness's own reading of the
 generation belongs, beside the finish it converts at its one site.
+
+**The emission's mark joins it 2026-11-08 and meets the same test**, per
+`weaver-spu-Spec` sections 6 and 9 on the operator's ruling of that date
+(#493). An emission whose bytes are not UTF-8 is kept as the replaced decode
+rather than faulted, and `invalid_utf8` names each replacement: the byte
+offset of its U+FFFD in the emission and the bytes it replaced, in lowercase
+hexadecimal, so the record holds the model's bytes exactly. It is a plain list
+the harness holds typed, shaped like the counts and for their reason, and it
+is absent where the emission was UTF-8 as the SPU saw it, so every line written
+before it reads unchanged. On the Native container the tokenizer replaces
+before the SPU sees bytes and no mark is made, per that section, so there an
+unmarked U+FFFD may be the tokenizer's.
 
 ```graph
 node: trace-splice-or-shape

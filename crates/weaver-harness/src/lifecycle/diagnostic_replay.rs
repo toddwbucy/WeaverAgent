@@ -630,6 +630,7 @@ impl ReplayPorts<'_, '_> {
                 },
                 resident: generation.resident,
                 capacity: generation.capacity,
+                invalid_utf8: crate::record::invalid_utf8(&generation.invalid_utf8),
             })),
         )?;
         self.event(

@@ -3639,6 +3639,7 @@ fn a_leave_against_late_stand_ins(
                 )
             });
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "the summary".into(),
@@ -5042,6 +5043,7 @@ fn a_leave_whose_gate_dies(
                 )
             });
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "the summary".into(),
@@ -5229,6 +5231,7 @@ fn a_turn_whose_gate_dies(
                 )
             });
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "late".into(),
@@ -5489,6 +5492,7 @@ fn a_turn_refused_with_the_spu_alive_and_a_leave_held_stays_graceful() {
             .expect("the wind-down's append");
         assert!(n > 0, "the wind-down ran");
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "the summary".into(),
@@ -5739,6 +5743,7 @@ fn answer_appends(far: crate::channel::ChildEnd, mark: impl Fn() + Send + 'stati
             };
             mark();
             let summary = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+                invalid_utf8: Vec::new(),
                 unrecovered: vec![],
                 content: vec![],
                 emission: "the summary".into(),
@@ -6517,6 +6522,7 @@ fn a_graceful_leave_heard_mid_turn_is_carried_out_after_the_turn() {
         )
         .unwrap();
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "one word".into(),
@@ -6808,6 +6814,7 @@ fn a_gate_dying_during_a_call_with_a_leave_held_forces_the_leave() {
         let mut buf = vec![0u8; 65536];
         let _ = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("the append");
         let call = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
@@ -7287,6 +7294,7 @@ fn a_frame_grants_the_seat_and_is_answered() {
         )
         .unwrap();
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "one word".into(),
@@ -7688,6 +7696,7 @@ fn a_seeding_past_the_answer_bound_refuses_and_one_that_fits_seats() {
         )
         .unwrap();
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "I am Karl.".into(),
@@ -7849,6 +7858,7 @@ fn the_operators_system_line_seats_the_prompt_and_turns() {
         )
         .unwrap();
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "I am Karl.".into(),
@@ -8014,6 +8024,7 @@ fn the_turn_key_stands_while_a_turn_runs() {
         )
         .unwrap();
         let answer = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![],
             emission: "one word".into(),
@@ -8695,6 +8706,7 @@ fn containment_a_gate_dying_with_a_call_open_leaves_tools_empty() {
         let mut buf = vec![0u8; 65536];
         let _ = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("the append");
         let call = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
@@ -8996,6 +9008,7 @@ fn a_forced_leave_closes_a_call_its_gate_never_answers_within_the_lower_bound() 
         let mut buf = vec![0u8; 65536];
         let _ = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("the append");
         let call = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {
@@ -9152,6 +9165,7 @@ fn containment_a_live_gates_bad_frame_kills_nothing() {
         let mut buf = vec![0u8; 65536];
         let _ = sock_recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("the append");
         let call = weaver_types::TokenAnswer::Generated(weaver_types::Generation {
+            invalid_utf8: Vec::new(),
             unrecovered: vec![],
             content: vec![weaver_traits::ContentBlock::ToolCall(
                 weaver_traits::ToolCall {

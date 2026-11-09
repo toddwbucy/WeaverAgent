@@ -694,6 +694,7 @@ fn active_decode_refuses_measurement_without_cancelling_or_queuing_it() {
         refeed_turn: None,
         cancelled: false,
         fatal: false,
+        halt: None,
     };
     assert!(!poll.cancelled());
     assert!(!poll.cancelled && !poll.fatal);

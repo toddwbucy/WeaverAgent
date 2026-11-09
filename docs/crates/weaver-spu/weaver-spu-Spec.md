@@ -2158,6 +2158,42 @@ generation**, because unlike an unproduced reading there is no state in
 which a generation ran under no bound, so a missing `stop` is a defect
 rather than an absence with a meaning.
 
+**The emission is the replaced decode of the drawn tokens, and an invalid span
+is marked rather than faulted**, per the operator's ruling of 2026-11-08 on #493.
+The emission's text is the pieces of the output identifiers, concatenated as
+bytes and converted once. Each maximal sequence that is not UTF-8 is replaced by
+U+FFFD, the conversion `String::from_utf8_lossy` makes, which is also the text
+the training side's reference decode (the transformers tokenizer) produces, so a
+held-out comparison reads the same text on both sides. Where any replacement was made, the
+generation carries `invalid_utf8`: one entry per replaced sequence, in emission
+order, each naming `at`, the byte offset of its U+FFFD in the emission text, and
+`bytes`, the replaced bytes in lowercase hexadecimal. The member is absent where
+the bytes were UTF-8. Putting each entry's bytes back at its offset restores the
+model's bytes exactly, so the text loses nothing the record does not hold. The
+output identifiers stay the record of what was drawn. The member is the
+generation's own typed member, beside resident and capacity, and the harness
+carries it into `model.output` unread. **On the Native container the tokenizer
+replaces before this crate sees bytes**, so there the emission is the
+tokenizer's text and carries no mark: the model's bytes are not recoverable on
+that container, and the mark would claim what was not measured. An unmarked
+U+FFFD in a Native emission may therefore be the tokenizer's rather than the
+model's, and the measurement's `model` names the artifact the container is read from. The re-feed's
+completed path takes the same conversion and the same member.
+
+**The stream's pending buffer holds bytes, and it is told apart from an engine
+fault.** Each drawn token's piece is appended and the longest decided prefix
+crosses, per the decode contract's section 2: a complete character as itself, a
+sequence no later byte can complete as U+FFFD, and a tail a later token may
+still complete waits. A piece the engine cannot render is a decode fault and
+ends the phase as one, the generation stopping at its next cancel poll rather
+than decoding on to its bound. A tail still undecided when the generation closes
+is in the emission, replaced and marked, and never crosses as a piece: the
+emission is the authority and the stream is its rhythm. On the Native container
+each piece is the tokenizer's rendering of one token, already replaced, so a
+character split across tokens streams there as replaced halves while the
+emission, decoded whole, holds it. Both conversions are assertions by
+host test, a model reaching the serve path on no host.
+
 The partition comes from the tokenizer's offsets, which is the salvaged
 `tokenize_with_offsets` mechanic with its invariant intact: the last offset
 equals the rendered text's length, so a partition covers the prompt exactly
@@ -2898,6 +2934,13 @@ edge: grounds
 from: spu-fault-below-the-exchange-layer
 to: axiom-contract-is-a-complete-interface
 ```
+
+**An emission that is not UTF-8 is not a decode fault**, per the operator's
+ruling of 2026-11-08 on #493. The model drew those tokens, the signals were
+computed and the identifiers are the record, so a turn that faulted on them
+would lose a generation that happened, which is the trace's own loss. The bytes
+are kept as section 6 rules, and the turn answers as any other. Only the
+engine's failure to render a token's piece faults at the text step.
 
 **A directive out of order for its seam's state answers `OutOfOrder` and is not
 queued, on both seams.** `weaver-types-Spec` section 5 owes the refusal to each
