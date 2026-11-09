@@ -25,7 +25,9 @@ pub mod foundation;
 /// agent declaration, injected as the first contribution, and thereby
 /// recorded, distilled, and held like everything else the model ever
 /// received. In the field vocabulary it is the first narrowing, applied
-/// once per decode session.
+/// once per decode session. **It is the fallback for an agent not yet
+/// seeded**: where the open seated the agent's prompt from state, the loop
+/// pushes none of this (ADP-4, see [`drive`]).
 ///
 /// **Edit this constant to shape your agent.** It rides as a system-role
 /// message. It rode as `User` until 2026-08-28 because the floor carried no
@@ -41,12 +43,12 @@ pub mod foundation;
 /// a baseline. It moves here rather than later because the operator's
 /// ruling of 2026-08-28 re-baselines both boxes on one frozen build, which
 /// is the moment such a change costs nothing.
-const SYSTEM_PROMPT: &str = "\
+pub(crate) const SYSTEM_PROMPT: &str = "\
 You are a careful assistant. Answer from what you know, say plainly when \
 you do not know, and keep answers as short as the question allows.";
 
 /// The first control loop, loop 1: the system prompt once per session's
-/// standing, then one turn per request.
+/// standing where nothing is seated, then one turn per request.
 ///
 /// The first-turn test reads the seat's assembly: an empty message history
 /// means no turn has run against this decode session, so the prompt leads
@@ -56,10 +58,19 @@ you do not know, and keep answers as short as the question allows.";
 /// the base, which is what a fresh decode session needs: the resident
 /// prefix died with the last process, and the record shows each run's
 /// narrowing from its own first event.
+///
+/// **The compiled prompt yields to a seated one**, per ADP-4
+/// (`weaver-spu-adapter-binding-Spec-amendment` section 4): the system
+/// prompt is state, and where the open seated it as the identity prefix the
+/// seat reads seated and this loop pushes neither its compiled prompt nor
+/// the continuity line, on the first turn or at re-entry, either being a
+/// second system turn beneath the seated one. Where nothing is seated, an
+/// agent before its seeding turn, it pushes both as before.
 pub fn drive(seat: &mut Ports<'_>, text: &str) -> Result<TurnOutcome, TurnError> {
     let first_turn = seat
         .assembled()
         .is_none_or(|prompt| prompt.messages.is_empty());
+    let seated = seat.seated();
     // The context management, per the loop's charter: the decode context
     // is a working set this loop keeps under its ceiling. At pressure the
     // loop elects a flush - the decode context returns to its prefix, the
@@ -78,11 +89,14 @@ pub fn drive(seat: &mut Ports<'_>, text: &str) -> Result<TurnOutcome, TurnError>
         // Where the flush landed the model needs the restoration, and
         // where it did not the recap costs a few duplicated tokens on a
         // seam already failing.
-        // The cut is the loop's: zero keeps the identity prefix alone,
-        // which is this loop's whole standing context, its system prompt
-        // riding as message content rather than as the open's prefix.
+        // The cut is the loop's: zero keeps the identity prefix alone.
+        // Where the open seated the agent's prompt, that prefix is the
+        // prompt and the cut keeps it, so the re-entry is the recall
+        // alone; where nothing is seated the prefix holds at most the
+        // family's start marker, and the compiled prompt rides the
+        // re-entry as message content.
         let _ = seat.flush(0);
-        Some(reentry_text(seat.recall(Some(RECALL_TURNS))))
+        Some(reentry_text(seated, seat.recall(Some(RECALL_TURNS))))
     } else {
         None
     };
@@ -90,8 +104,9 @@ pub fn drive(seat: &mut Ports<'_>, text: &str) -> Result<TurnOutcome, TurnError>
     // first asker: on a run's first turn the loop consults the session's
     // shape and narrows the field with what the session already holds. The
     // ask costs one bounded exchange and a missing answer costs nothing
-    // but the line, the leg being optional by presence.
-    let continuity = if first_turn {
+    // but the line, the leg being optional by presence. A seated prefix
+    // leaves the line no carrier, so the ask is not made.
+    let continuity = if first_turn && !seated {
         seat.session_shape()
             .and_then(|shape| continuity_line(&shape))
     } else {
@@ -99,6 +114,7 @@ pub fn drive(seat: &mut Ports<'_>, text: &str) -> Result<TurnOutcome, TurnError>
     };
     seat.turn(contribution(
         first_turn,
+        seated,
         continuity.as_deref(),
         reentry.as_deref(),
         text,
@@ -117,17 +133,22 @@ fn pressured(resident: u64, capacity: u64) -> bool {
     capacity > 0 && resident.saturating_mul(5) >= capacity.saturating_mul(4)
 }
 
-/// The re-entry the loop composes from custody's recall: the system prompt
-/// again, because the flush retired the resident copy, then the recent
-/// conversation quoted so the model re-enters mid-dialogue rather than
-/// cold. The quotes share one budget across the whole recall, so the
+/// The re-entry the loop composes from custody's recall: where nothing is
+/// seated, the compiled prompt again, because the flush retired the
+/// resident copy (a seated prompt is the prefix and survives the flush, so
+/// it is not repeated), then the recent conversation quoted so the model
+/// re-enters mid-dialogue rather than cold. The quotes share one budget across the whole recall, so the
 /// re-entry cannot rebuild the pressure the flush just relieved. A missing
 /// recall composes the honest fallback: the model is told the context was
 /// reset and nothing more.
-fn reentry_text(recalled: Option<Vec<Recalled>>) -> String {
-    let mut text = String::from(SYSTEM_PROMPT);
+fn reentry_text(seated: bool, recalled: Option<Vec<Recalled>>) -> String {
+    let mut text = if seated {
+        String::new()
+    } else {
+        format!("{SYSTEM_PROMPT}\n\n")
+    };
     text.push_str(
-        "\n\nThe working context was reset to stay within its limit. \
+        "The working context was reset to stay within its limit. \
          Recent conversation, restored from the session's record:",
     );
     let Some(events) = recalled else {
@@ -227,20 +248,22 @@ fn continuity_line(shape: &SessionShape) -> Option<String> {
     ))
 }
 
-/// The turn's delta from the loop's one judgment: the prompt leads a first
-/// turn and no other, the continuity line riding beneath it where the
-/// session holds a past. Pure, because the seat cannot be minted outside
+/// The turn's delta from the loop's one judgment: where nothing is seated
+/// the prompt leads a first turn and no other, the continuity line riding
+/// beneath it where the session holds a past; where a prefix is seated no
+/// opening is pushed at all (ADP-4). Pure, because the seat cannot be minted outside
 /// loop zero - the E0624 blade of `weaver-harness-Spec` section 8 - so
 /// what this loop can pin is its own contribution, and the seat's half is
 /// loop zero's suite's to hold.
 fn contribution(
     first_turn: bool,
+    seated: bool,
     continuity: Option<&str>,
     reentry: Option<&str>,
     text: &str,
 ) -> Vec<Message> {
     let mut delta = Vec::new();
-    if first_turn {
+    if first_turn && !seated {
         let opening = match continuity {
             Some(line) => format!("{SYSTEM_PROMPT}\n\n{line}"),
             None => SYSTEM_PROMPT.to_string(),
@@ -252,8 +275,8 @@ fn contribution(
     }
     if let Some(reentry) = reentry {
         // **The re-entry is the loop's voice and carries the loop's role.**
-        // It opens with `SYSTEM_PROMPT`, the flush having retired the
-        // resident copy, so under `Role::User` the whole prompt plus the
+        // Unseated, it opens with `SYSTEM_PROMPT`, the flush having retired
+        // the resident copy, so under `Role::User` the whole prompt plus the
         // restored transcript came back quoted as the operator's words - and
         // a later recall would return it from the record as `message.user`,
         // compounding it. The opening and the re-entry are one voice framing

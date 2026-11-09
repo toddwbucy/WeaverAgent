@@ -1696,7 +1696,11 @@ determinism. The two stay two records because the byte-for-byte comparison
 holds whatever order landed and cannot see the order move, which is the reason
 the order was given a claim of its own. **Assembly reads the identity prefix and
 never its source**: where the prefix comes from is decided at one site, section
-6.1's open, and named there.
+6.1's open, and named there. **The serving path assembles with an empty identity**
+since the worker's positional identity argument retired (ADP-4 of
+`weaver-spu-adapter-binding-Spec-amendment` section 4): the prefix is the open's, seated
+at the SPU from the state member's answer, and is not assembled again, and a loop that
+needs to know whether one stands reads the seat's seated read of section 6.
 
 ```graph
 node: harness-prompt-part-order
@@ -2045,7 +2049,8 @@ again at the leave, and the `unload` event carries the comparison, per
 boundary its state sits behind. The fifth, `identity` of the same date, is the seat's
 own for the opposite reason: it is asked once at the enter, before the decode open, and
 its answer is the open's material rather than a loop's, so no loop composes a prefix and
-no `Ports` call exists to hand one out. The seam's ask end lives in `src/state.rs`, a
+no `Ports` call exists to hand one out; the seated read below answers only whether the
+answer carried any identity message. The seam's ask end lives in `src/state.rs`, a
 clone of the standing state channel held on the run beside the tee the enter attaches,
 that channel arriving in the enter directive as the harness half of the pair admin
 created, per the operator's ruling of 2026-08-26, dialed nowhere and derived from
@@ -2133,6 +2138,25 @@ frame is skipped against it rather than taken for the exchange's answer, so a sk
 frame does not renew the bound and a stream of them cannot postpone the retirement. A
 loop asking about many positions in a turn waits up to the bound on each, since the asks
 are serial and each one blocks.
+
+**The seat carries the seated read, 2026-11-08, with ADP-4 of
+`weaver-spu-adapter-binding-Spec-amendment` section 4.** `Ports` grows one call,
+`seated`, answering whether the open seated a prefix: true where the state member's
+`identity` answer at the enter carried any identity message, false where the answer was
+empty (an agent before its seeding turn), and false where no member is elected. The run
+holds the fact from the moment the answer is read, before the open, and every seat
+granted over the run lends it, the frame path's and `grant_seat`'s alike. The read is a
+boolean and never the prefix: the identity's source stays the open's alone (section
+6.1), and no loop composes or reads a prefix. **The predicate is the answer's and nothing
+else's.** It is not the assembled prompt's identity part, which the serving path leaves
+empty (section 5), and not the Open's `prefix_tokens`, which a family whose renderer
+prepends a start marker to an empty identity (llama, gemma4, mistral3) makes non-zero
+with nothing seated. A loop reads it to yield a prompt of its own to the seated one,
+and the deployed loop's use of it is its workflow document's
+(`Loops/basic-inference-loop.md` section 6). `src/lifecycle/seated_tests.rs` drives the
+read through a real enter against a stand-in SPU process and then the deployed loop
+through the frame path, and each of the three perturbations fails it: push the
+compiled prompt unconditionally, read the assembled identity, or read `prefix_tokens`.
 
 **The loop these ports serve is state management**, per the operator's rulings of
 2026-10-02 on issue #1 and `weaver-agent-PRD` section 5.5. **One loop is deployed, the

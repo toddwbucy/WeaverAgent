@@ -279,6 +279,9 @@ pub struct Ports<'a> {
     /// leave does not wait it out), and past it the call is closed
     /// `Killed { by: fault }` without the gate's answer.
     interrupted_at: std::cell::Cell<Option<std::time::Instant>>,
+    /// Whether the open seated a prefix, the run's admission fact lent at
+    /// the grant ([`Ports::seated`]).
+    seated: bool,
 }
 
 /// Why a turn did not complete. A refusal the seam typed is the session
@@ -396,7 +399,15 @@ impl<'a> Ports<'a> {
             cut_by_leave: false,
             gate_lost: false,
             interrupted_at: std::cell::Cell::new(None),
+            seated: false,
         }
+    }
+
+    /// Lends the run's admission fact, whether the open seated a prefix,
+    /// for [`Ports::seated`]. A seat granted without it reads unseated.
+    pub(crate) fn with_seated(mut self, seated: bool) -> Self {
+        self.seated = seated;
+        self
     }
 
     /// Lends the run's leave slot, so a leave heard mid-turn is held there
@@ -987,6 +998,17 @@ impl<'a> Ports<'a> {
     /// has over the granted surface.
     pub fn assembled(&self) -> Option<&Prompt> {
         self.assembled.as_ref()
+    }
+
+    /// **Whether the open seated a prefix**, per `weaver-harness-Spec`
+    /// section 6's seated read (ADP-4): true where the state member's
+    /// `identity` answer at admission carried any identity message, the
+    /// agent's prompt seated as the open's prefix. The prefix itself is not
+    /// handed out, its source being the open's alone (section 6.1). A loop
+    /// reads this, and not [`Prompt::identity`] or the open's token count, to
+    /// decide whether a prompt of its own would be a second system turn.
+    pub fn seated(&self) -> bool {
+        self.seated
     }
 
     /// **Run one turn**, per `weaver-harness-Spec` section 6.1. Loop 1 supplies
