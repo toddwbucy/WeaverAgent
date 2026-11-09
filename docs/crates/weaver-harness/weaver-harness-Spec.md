@@ -2569,10 +2569,12 @@ generates, the record holds the model's first answer beside the prompt**: the an
 on the record whole, as every `message.assistant` is. The agent's starting state holds
 the prompt whole, since a turnless `message.system` crosses the tee under every
 election, per `weaver-trace-Spec` section 11. It holds the first answer as the
-declaration's election lands it, per the same section and `weaver-types-Spec` section 2:
+declaration's election admits it, per the same section and `weaver-types-Spec` section 2:
 the answer's text where the election names `message.assistant`'s `content`, as the
-declaration `create-agent.sh` writes does, and its envelope alone under the default
-election. A save point taken after the seeding carries what the tee landed, by design
+declaration `create-agent.sh` writes does, its envelope without the text where the
+election admits the kind and names no `content` path for it, as the default election
+does, and nothing where `all-kinds` is false and the election does not name the kind.
+A save point taken after the seeding carries what the tee landed, by design
 and not by leak.
 The line's bound is the gate's, 49,041 octets before the delimiter per
 `weaver-gate-Spec` section 4, the organ envelope's exact capacity, which the R1 system

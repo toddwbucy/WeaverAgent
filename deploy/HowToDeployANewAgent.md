@@ -363,13 +363,13 @@ directory, the state group passing you through the territory and the access grou
 letting you read the file, and sends it through the gate
 as the one line `{"role": "system", "text": ...}`. The harness takes a system line from
 the operator's uid alone, the one `allowed-uids` names and admin's `operator` key
-records: it writes the prompt into the record as the session's prefix, the tee carries
-it to the state member, and the model answers it as a turn, so what prints is the
-model's first answer under its prompt and the seeding has exercised the whole loop
-(gate, harness, model, trace, tee, state). The prompt is state from here: every later
+records: it writes the prompt into the record as the prefix the next load seats, the
+tee carries it to the state member, and the model answers it as a turn, so what prints
+is the model's first answer under its prompt and the seeding has exercised the whole
+loop (gate, harness, model, trace, tee, state). The prompt is state from here: every later
 load asks the member for it and seats what the member holds, and the draft on disk is
 only what the next seeding would send. Seeding again in a later residency replaces the
-prompt; seeding twice in one residency seats both, in order.
+prompt, and seeding twice in one residency seats both, in order.
 
 **The seeding line has a bound: 49,041 octets before the delimiter**, the gate's line
 bound (`weaver-gate-Spec` section 4), measured on the JSON line `turn.py` writes. The
@@ -399,10 +399,12 @@ sudo /opt/weaver/bin/weaver-admin unload <name>
 ```
 
 The first save point taken after the seeding is the agent's starting state. It holds the
-prompt whole, and the model's first answer as the declaration's election lands it: its
-text under the `[state-election]` this script writes, which names `message.assistant`'s
-`content`, and its envelope alone under the default election (`weaver-trace-Spec`
-section 11). `save-point` publishes it at once into
+prompt whole under every election, and the model's first answer as the declaration's
+election admits it (`weaver-trace-Spec` section 11): its text under the
+`[state-election]` `create-agent.sh` writes, which names `message.assistant`'s
+`content`, its envelope without the text under an election that admits the kind and
+names no `content` path for it, the default election among them, and nothing under one
+with `all-kinds = false` that does not name the kind. `save-point` publishes it at once into
 `<territory>/save-points/` as `<YYYYMMDDTHHMMSSZ>-<digest>.save-point`, named on one
 line of `save-points.manifest` there, which is root's and which you do not edit
 (section 5). The unload takes one more at the leave, and every
@@ -411,11 +413,21 @@ later load restores the latest the manifest names. A healthy seeding leaves a tu
 it. A seeding line from any other uid, or a frame the gate carried without its
 dialer, answers `{"kind":"refused", ...}` naming the role, and the agent stands.
 
-The compiled worker loop still carries its own `SYSTEM_PROMPT` constant
-(`crates/weaver-harness/src/bin/worker/dev_loop/mod.rs`) and prepends it on a
-residency's first turn and after a flush, so a seeded agent's first user turn in each
-residency reads both, the seeded prefix and the loop's constant. Retiring the constant
-is the loop act's, not this runbook's.
+**A seeded agent's production turns carry no loop prompt.** The compiled worker loop's
+`SYSTEM_PROMPT` (`crates/weaver-harness/src/bin/worker/dev_loop/mod.rs`) yields to a
+seated one, per ADP-4 and section 6 of
+`docs/crates/weaver-harness/Loops/basic-inference-loop.md`: where the member's identity
+answer seats a prefix at the load, the loop pushes no compiled prompt and no continuity
+line, on the run's first turn or at the re-entry after a flush, and the re-entry stays a
+system message, the recall text alone. The compiled prompt rides only where nothing is
+seated: it leads a run's first turn where the loop drives that turn, with the continuity
+line beneath it, and opens each re-entry. In a seeded agent's trace the prompt appears
+only as the turnless `message.system` at the seeding, and no production turn carries the
+loop's prompt. A seeding is appended context in its own residency, so a flush there
+drops it (#502): the re-entry opens with the compiled prompt after a first seeding, and
+keeps the prefix the load seated after a later one. The sequence above (load, seed, save
+point, unload) avoids that, and an agent without a store, seeded in every residency,
+cannot.
 
 ## 5. Serving, stopping, unloading, and the connector's rule
 
