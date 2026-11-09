@@ -1105,8 +1105,8 @@ impl Harness {
                     run.classify.as_ref().map(|arm| &arm.channel),
                     &mut run.fullness,
                     &mut run.pressure_reported,
-                )
-                .with_seated(run.seated);
+                    run.seated,
+                );
                 ports.hold_leave(&mut run.leave, run.drain_bound);
                 // The seeding turn is loop 0's own and crosses the dev
                 // boundary nowhere: the prompt is appended and the model
@@ -1472,6 +1472,7 @@ impl Harness {
             run.classify.as_ref().map(|arm| &arm.channel),
             &mut run.fullness,
             &mut run.pressure_reported,
+            run.seated,
         );
         ports.hold_leave(held, None);
         let (ran, _) = ports.wind_down(deadline_after(wind_down_bound), cause);
@@ -2827,29 +2828,27 @@ impl Harness {
                     return None;
                 }
                 let spu = run.spu.as_ref()?;
-                Some(
-                    crate::engine::Ports::grant(
-                        &spu.decode,
-                        &run.author,
-                        &mut run.recorder,
-                        &mut run.turn_ordinal,
-                        &mut run.turn_in_flight,
-                        &run.load,
-                        Some(prompt),
-                        &self.coordination,
-                        // A seat granted outside the serve loop streams without
-                        // the ear, the verb slot being the loop's own, and
-                        // executes no tools: the dev boundary's seat reasons and
-                        // the serve loop's seat reaches the world.
-                        None,
-                        None,
-                        run.state.as_mut(),
-                        run.classify.as_ref().map(|arm| &arm.channel),
-                        &mut run.fullness,
-                        &mut run.pressure_reported,
-                    )
-                    .with_seated(run.seated),
-                )
+                Some(crate::engine::Ports::grant(
+                    &spu.decode,
+                    &run.author,
+                    &mut run.recorder,
+                    &mut run.turn_ordinal,
+                    &mut run.turn_in_flight,
+                    &run.load,
+                    Some(prompt),
+                    &self.coordination,
+                    // A seat granted outside the serve loop streams without
+                    // the ear, the verb slot being the loop's own, and
+                    // executes no tools: the dev boundary's seat reasons and
+                    // the serve loop's seat reaches the world.
+                    None,
+                    None,
+                    run.state.as_mut(),
+                    run.classify.as_ref().map(|arm| &arm.channel),
+                    &mut run.fullness,
+                    &mut run.pressure_reported,
+                    run.seated,
+                ))
             }
             // Before enter and after leave there is no standing interior to
             // hand across, which is the bracket discipline being loop 0's.

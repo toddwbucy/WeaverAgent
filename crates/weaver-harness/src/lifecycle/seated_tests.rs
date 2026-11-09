@@ -4,7 +4,11 @@
 //! stand-in SPU process (this binary run again) against a scripted state
 //! member, then the deployed loop, `dev_loop::drive` compiled in from the
 //! worker's own source, serves frames through the serve loop's frame path,
-//! and the stand-in records every delta the SPU was handed.
+//! and the stand-in records every delta the SPU was handed. The enter is
+//! real through the identity ask and the open and stops at the gate's fork,
+//! the gate binary being absent: what follows the fork is the gate's step
+//! alone (the tools directory, the pair, the raise), which sets nothing the
+//! seated read holds, and the test stands a gate peer in its place.
 
 use super::*;
 use std::io::{BufRead, BufReader, Write};
@@ -343,8 +347,9 @@ fn enter_seated(identity: Option<&'static str>) -> Entered {
             Some(OwnedFd::from(near))
         }
     };
-    // The gate binary does not exist, so the fan-out stops past the open
-    // with the SPU standing: everything the seat reads is in place.
+    // The gate binary does not exist, so the fan-out stops at the gate's
+    // fork with the SPU standing: everything the seat reads is in place,
+    // the gate's step being all that the enter leaves unrun.
     let mut run = match harness.enter(payload, Some(sink), state_end) {
         Ok(run) => run,
         Err(EnterFailure::AfterLoad(run, _)) => *run,

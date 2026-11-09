@@ -2145,7 +2145,8 @@ are serial and each one blocks.
 `identity` answer at the enter carried any identity message, false where the answer was
 empty (an agent before its seeding turn), and false where no member is elected. The run
 holds the fact from the moment the answer is read, before the open, and every seat
-granted over the run lends it, the frame path's and `grant_seat`'s alike. The read is a
+granted over the run lends it, the frame path's, `grant_seat`'s and the wind-down's
+alike, as an argument of the grant that no grant can leave out. The read is a
 boolean and never the prefix: the identity's source stays the open's alone (section
 6.1), and no loop composes or reads a prefix. **The predicate is the answer's and nothing
 else's.** It is not the assembled prompt's identity part, which the serving path leaves
@@ -2154,9 +2155,10 @@ prepends a start marker to an empty identity (llama, gemma4, mistral3) makes non
 with nothing seated. A loop reads it to yield a prompt of its own to the seated one,
 and the deployed loop's use of it is its workflow document's
 (`Loops/basic-inference-loop.md` section 6). `src/lifecycle/seated_tests.rs` drives the
-read through a real enter against a stand-in SPU process and then the deployed loop
-through the frame path, and each of the three perturbations fails it: push the
-compiled prompt unconditionally, read the assembled identity, or read `prefix_tokens`.
+read through a real enter against a stand-in SPU process, up to the gate's fork, and
+then the deployed loop through the frame path, and each of the three perturbations
+fails it: push the compiled prompt unconditionally, read the assembled identity, or read
+`prefix_tokens`.
 
 **The loop these ports serve is state management**, per the operator's rulings of
 2026-10-02 on issue #1 and `weaver-agent-PRD` section 5.5. **One loop is deployed, the

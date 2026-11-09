@@ -137,10 +137,10 @@ fn pressured(resident: u64, capacity: u64) -> bool {
 /// seated, the compiled prompt again, because the flush retired the
 /// resident copy (a seated prompt is the prefix and survives the flush, so
 /// it is not repeated), then the recent conversation quoted so the model
-/// re-enters mid-dialogue rather than cold. The quotes share one budget across the whole recall, so the
-/// re-entry cannot rebuild the pressure the flush just relieved. A missing
-/// recall composes the honest fallback: the model is told the context was
-/// reset and nothing more.
+/// re-enters mid-dialogue rather than cold. The quotes share one budget
+/// across the whole recall, so the re-entry cannot rebuild the pressure the
+/// flush just relieved. A missing recall composes the honest fallback: the
+/// model is told the context was reset and nothing more.
 fn reentry_text(seated: bool, recalled: Option<Vec<Recalled>>) -> String {
     let mut text = if seated {
         String::new()
@@ -251,10 +251,10 @@ fn continuity_line(shape: &SessionShape) -> Option<String> {
 /// The turn's delta from the loop's one judgment: where nothing is seated
 /// the prompt leads a first turn and no other, the continuity line riding
 /// beneath it where the session holds a past; where a prefix is seated no
-/// opening is pushed at all (ADP-4). Pure, because the seat cannot be minted outside
-/// loop zero - the E0624 blade of `weaver-harness-Spec` section 8 - so
-/// what this loop can pin is its own contribution, and the seat's half is
-/// loop zero's suite's to hold.
+/// opening is pushed at all (ADP-4). Pure, because the seat cannot be
+/// minted outside loop zero - the E0624 blade of `weaver-harness-Spec`
+/// section 8 - so what this loop can pin is its own contribution, and the
+/// seat's half is loop zero's suite's to hold.
 fn contribution(
     first_turn: bool,
     seated: bool,

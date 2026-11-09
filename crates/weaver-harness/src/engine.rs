@@ -356,7 +356,9 @@ impl<'a> Ports<'a> {
     ///
     /// The arguments are the granted surface itself, one per port, and a
     /// bundling struct would be a second `Ports` wrapping this one, so the
-    /// lint is answered rather than obeyed.
+    /// lint is answered rather than obeyed. `seated` is the run's admission
+    /// fact for [`Ports::seated`] (ADP-4), an argument rather than a default
+    /// so that no grant can leave it out.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn grant(
         decode: &'a DecodeChannel,
@@ -373,6 +375,7 @@ impl<'a> Ports<'a> {
         classify: Option<&'a crate::channel::ClassifyChannel>,
         fullness: &'a mut Option<(u64, u64)>,
         pressure_reported: &'a mut bool,
+        seated: bool,
     ) -> Self {
         Ports {
             decode,
@@ -399,15 +402,8 @@ impl<'a> Ports<'a> {
             cut_by_leave: false,
             gate_lost: false,
             interrupted_at: std::cell::Cell::new(None),
-            seated: false,
+            seated,
         }
-    }
-
-    /// Lends the run's admission fact, whether the open seated a prefix,
-    /// for [`Ports::seated`]. A seat granted without it reads unseated.
-    pub(crate) fn with_seated(mut self, seated: bool) -> Self {
-        self.seated = seated;
-        self
     }
 
     /// Lends the run's leave slot, so a leave heard mid-turn is held there
