@@ -1505,6 +1505,32 @@ esac
         self.assertIn("the deployment tuple carries a FAULT line, so the run is unloaded", result.stderr)
         self.assertFalse((state / "pid").exists(), "no run is left")
 
+    def test_verify_load_binds_the_record_to_the_install_tuple(self):
+        """**The box side and the record binding print from the stack record's
+        install tuple**: its digest as the box's identity, the declaration's
+        sha256 against the load event's, the stack against its members.
+        Perturbation: drop the install tuple's argument in verify-load and
+        the box line reads absent."""
+        state = self.verify_fixture()
+        decl = (self.decl / "agent.toml").read_bytes()
+        lines = [line.format(llama="1" * 64, ggml="2" * 64) for line in INSTALL_TUPLE_LINES]
+        (self.stack / "install-tuple").write_text("".join(l + "\n" for l in lines))
+        tuple_sha = hashlib.sha256((self.stack / "install-tuple").read_bytes()).hexdigest()
+        payload = json.dumps({"declaration": hashlib.sha256(decl).hexdigest(),
+                              "stack": {"worker": "1" * 64}})
+        stub = self.root / "installed" / "bin" / "weaver-admin"
+        stub.write_text(stub.read_text().replace(
+            "echo '{\"kind\":\"load\"}'", "echo '{\"kind\":\"load\",\"payload\":" + payload + "}'"))
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertRegex(result.stdout, r"box +install tuple +sha256 " + tuple_sha + r" +\[recorded:")
+        self.assertRegex(result.stdout, r"bind +declaration +sha256 [0-9a-f]{64} +\[recorded: equal")
+        self.assertRegex(result.stdout, r"bind +member worker +1{64} +\[recorded:")
+        self.assertIn("m1 verified", result.stdout)
+
     def test_verify_load_refuses_a_constituent_of_another_account(self):
         # Perturbation: drop the account check, and a stranger's process passes.
         state = self.verify_fixture()
@@ -6686,7 +6712,7 @@ class AgentTupleRowTests(unittest.TestCase):
         decl = self.declaration()
         lines = (self.tuple.artifact_rows(decl, self.header, None, None)
                  + self.tuple.adapter_rows(decl)
-                 + self.tuple.device_rows(decl, self.header, ["A6000 49140 MiB"] * 2, ["A6000 49140 MiB"] * 2)
+                 + self.tuple.device_rows(decl, self.header, ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"], ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"])
                  + self.tuple.state_rows(decl, {"state_store": {"engine": "sqlite"}}))
         for status in self.statuses(lines):
             self.assertIn(status, ("recorded", "derivable", "absent", "FAULT"))
@@ -6725,7 +6751,7 @@ class AgentTupleRowTests(unittest.TestCase):
         self.assertIn("all 64 layers and the output on device 1", one)
 
     def test_row_seven_maps_ordinals_into_the_pci_order_list_and_states_its_premise(self):
-        gpus = ["RTX A6000 49140 MiB", "RTX A6000 49140 MiB", "RTX 2000 Ada 16380 MiB"]
+        gpus = ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:C1:00.0, NVIDIA RTX 2000 Ada Generation, 16380 MiB"]
         lines = self.tuple.device_rows(self.declaration(devices=(2,)), self.header, gpus, gpus)
         device = next(line for line in lines if "device 2 " in line)
         self.assertIn("RTX 2000 Ada", device)
@@ -6733,8 +6759,8 @@ class AgentTupleRowTests(unittest.TestCase):
 
     def test_a_live_list_that_differs_from_the_install_tuple_is_a_fault(self):
         """Perturbation: compare counts only and a swapped card passes."""
-        box = ["RTX A6000 49140 MiB", "RTX 2000 Ada 16380 MiB"]
-        live = ["RTX 2000 Ada 16380 MiB", "RTX A6000 49140 MiB"]
+        box = ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:C1:00.0, NVIDIA RTX 2000 Ada Generation, 16380 MiB"]
+        live = ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:C1:00.0, NVIDIA RTX A4000, 16376 MiB"]
         lines = self.tuple.device_rows(self.declaration(), self.header, box, live)
         self.assertIn("FAULT", self.statuses(lines))
         lines = self.tuple.device_rows(self.declaration(devices=(5,)), self.header, box, box)
@@ -6825,11 +6851,13 @@ class AgentTupleRecordReadTests(unittest.TestCase):
         # load is never taken for this one.
         self.assertEqual(self.tuple.load_payload(events, 2), {"declaration": "d" * 64})
         self.assertIsNone(self.tuple.load_payload(events, 4))
-        smi = ("00000000:81:00.0, NVIDIA RTX A6000, 49140 MiB\n"
-               "00000000:01:00.0, NVIDIA RTX 2000 Ada Generation, 16380 MiB\n")
+        smi = ("00000000:C1:00.0,  NVIDIA RTX 2000 Ada Generation, 16380 MiB\n"
+               "00000000:01:00.0, NVIDIA RTX A6000 ,49140 MiB\n")
         self.assertIsNone(self.tuple.live_gpus("fixture-driver\n"))
+        # The install tuple's `gpu.<n>` shape, sorted in the C locale.
         self.assertEqual(self.tuple.live_gpus(smi),
-                         ["NVIDIA RTX 2000 Ada Generation 16380 MiB", "NVIDIA RTX A6000 49140 MiB"])
+                         ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB",
+                          "00000000:C1:00.0, NVIDIA RTX 2000 Ada Generation, 16380 MiB"])
 
 
 class TupleQueryMirrorTests(unittest.TestCase):
@@ -6842,6 +6870,139 @@ class TupleQueryMirrorTests(unittest.TestCase):
         runbook = " ".join((DEPLOY / "HowToDeployANewAgent.md").read_text().split())
         query = re.search(r"nvidia-smi (--query-gpu=\S+ --format=\S+)", script).group(1)
         self.assertIn(f"`nvidia-smi {query}`", runbook)
+
+
+INSTALL_TUPLE_LINES = [
+    "commit = " + "0" * 40,
+    "toolchain = nightly-2026-02-13",
+    "features = weaver-spu/cuda,weaver-state/sqlite",
+    "engine = llama-cpp-sys-2 0.1.146",
+    "engine-source = git+https://example.invalid/llama-cpp-rs?rev=" + "a" * 40 + "#" + "b" * 40,
+    "engine-vendored = " + "c" * 40,
+    "nvcc = 13.4, V13.4.92",
+    "member.worker = " + "1" * 64,
+    "member.weaver-admin = " + "2" * 64,
+    "member.weaver-trace-relay = " + "3" * 64,
+    "member.weaver-gate = " + "4" * 64,
+    "member.weaver-spu = " + "5" * 64,
+    "member.weaver-state = " + "6" * 64,
+    "member.busybox = " + "7" * 64,
+    "member.busybox.applets = " + "8" * 64,
+    "library.libllama.so.0.0.8783 = {llama}",
+    "library.libggml-base.so.0.9.11 = {ggml}",
+    "driver = 580.1",
+    "cudart = /opt/cuda/lib/libcudart.so.13.0.1",
+    "cublas = /opt/cuda/lib/libcublas.so.13.0.1",
+    "cublaslt = /opt/cuda/lib/libcublasLt.so.13.0.1",
+    "cccl = 3.0",
+    "gpus = 2",
+    "gpu.0 = 00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB",
+    "gpu.1 = 00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB",
+]
+
+
+class AgentTupleInstallTests(unittest.TestCase):
+    """**The install tuple is read as install-tuple.sh writes it** and bound
+    to the load's record. Perturbations named per test."""
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.lib = self.dir / "lib"
+        self.lib.mkdir()
+        (self.lib / "libllama.so.0.0.8783").write_bytes(b"llama")
+        (self.lib / "libggml-base.so.0.9.11").write_bytes(b"ggml")
+        (self.lib / "libllama.so.0").symlink_to("libllama.so.0.0.8783")
+        self.digests = {"llama": hashlib.sha256(b"llama").hexdigest(),
+                        "ggml": hashlib.sha256(b"ggml").hexdigest()}
+        self.path = self.write(INSTALL_TUPLE_LINES)
+
+    def write(self, lines):
+        path = self.dir / "install-tuple"
+        path.write_text("".join(line.format(**self.digests) + "\n" for line in lines))
+        return path
+
+    def test_the_tuple_is_read(self):
+        install = self.tuple.read_install_tuple(self.path)
+        self.assertEqual(install["sha256"], hashlib.sha256(self.path.read_bytes()).hexdigest())
+        self.assertEqual(install["facts"]["engine-vendored"], "c" * 40)
+        self.assertEqual(install["members"]["busybox.applets"], "8" * 64)
+        self.assertEqual(install["gpus"], ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB",
+                                           "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"])
+
+    def test_a_malformed_tuple_is_refused(self):
+        """Perturbation: drop any one check in `read_install_tuple` and its
+        case reads on."""
+        cases = {
+            "not `key = value`": INSTALL_TUPLE_LINES + ["driver=1"],
+            "empty or repeated": INSTALL_TUPLE_LINES + ["driver = 2"],
+            "no cccl": [l for l in INSTALL_TUPLE_LINES if not l.startswith("cccl")],
+            "not 64 hex digits": INSTALL_TUPLE_LINES[:7] + ["member.worker = zz"] + INSTALL_TUPLE_LINES[8:],
+            "numbered 0 to n-1": [l for l in INSTALL_TUPLE_LINES if not l.startswith("gpu.0")] + ["gpu.2 = x, y, z"],
+            "gpus says 2": INSTALL_TUPLE_LINES + ["gpu.2 = 00000000:81:00.0, X, 1 MiB"],
+        }
+        for said, lines in cases.items():
+            with self.subTest(said):
+                with self.assertRaisesRegex(self.tuple.InstallTupleRefused, said):
+                    self.tuple.read_install_tuple(self.write(lines))
+        link = self.dir / "linked"
+        link.symlink_to(self.write(INSTALL_TUPLE_LINES))
+        with self.assertRaises(OSError):
+            self.tuple.read_install_tuple(link)
+
+    def load(self, **override):
+        event = {"declaration": "d" * 64, "library_path": str(self.lib),
+                 "stack": {"worker": "1" * 64, "weaver-spu": "5" * 64, "weaver-state": "6" * 64,
+                           "weaver-gate": "4" * 64, "weaver-spu-classify": "9" * 64}}
+        event.update(override)
+        return event
+
+    def statuses(self, lines, field):
+        return {re.search(r"\[(\w+):", l).group(1) for l in lines if field in l}
+
+    def test_the_record_binds_to_the_box(self):
+        install = self.tuple.read_install_tuple(self.path)
+        lines = self.tuple.binding_rows("d" * 64, self.load(), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "declaration"), {"recorded"})
+        self.assertEqual(self.statuses(lines, "member worker"), {"recorded"})
+        # Names one side holds are printed as not bound, never compared.
+        self.assertEqual(self.statuses(lines, "member busybox "), {"absent"})
+        self.assertEqual(self.statuses(lines, "member weaver-spu-classify"), {"absent"})
+        self.assertEqual(self.statuses(lines, "library libllama.so.0.0.8783"), {"recorded"})
+        self.assertFalse([l for l in lines if "libllama.so.0 " in l], "a link is never listed")
+        self.assertNotIn("FAULT", " ".join(lines))
+
+    def test_each_disagreement_is_a_fault_naming_which(self):
+        """Perturbations: compare the declaration loosely, skip a stack name,
+        or skip hashing the library files, and a case passes."""
+        install = self.tuple.read_install_tuple(self.path)
+        lines = self.tuple.binding_rows("e" * 64, self.load(), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "declaration"), {"FAULT"})
+        stack = dict(self.load()["stack"], worker="0" * 64)
+        lines = self.tuple.binding_rows("d" * 64, self.load(stack=stack), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "member worker"), {"FAULT"})
+        (self.lib / "libggml-base.so.0.9.11").write_bytes(b"changed")
+        lines = self.tuple.binding_rows("d" * 64, self.load(), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "library libggml-base.so.0.9.11"), {"FAULT"})
+        (self.lib / "libggml-cuda.so.0.9.11").write_bytes(b"extra")
+        lines = self.tuple.binding_rows("d" * 64, self.load(), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "library libggml-cuda.so.0.9.11"), {"FAULT"})
+
+    def test_a_library_path_the_tuple_does_not_digest_is_not_bound(self):
+        install = self.tuple.read_install_tuple(self.path)
+        lines = self.tuple.binding_rows("d" * 64, self.load(library_path="/elsewhere"), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "library path"), {"absent"})
+
+    def test_the_box_rows_cite_the_tuples_digest(self):
+        install = self.tuple.read_install_tuple(self.path)
+        lines = self.tuple.box_rows(str(self.path), install, None)
+        self.assertIn(install["sha256"], lines[0])
+        self.assertIn("fork " + "b" * 40, lines[1])
+        lines = self.tuple.box_rows(str(self.path), None, "the install tuple is refused: x")
+        self.assertIn("[FAULT:", lines[0])
+        lines = self.tuple.box_rows(str(self.path), None, None)
+        self.assertIn("[absent:", lines[0])
 
 
 if __name__ == "__main__":

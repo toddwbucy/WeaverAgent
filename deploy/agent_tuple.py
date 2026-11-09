@@ -343,14 +343,92 @@ def load_payload(path, from_line=1):
 
 
 def live_gpus(text):
-    """nvidia-smi's `pci.bus_id, name, memory.total` CSV lines, put in PCI bus
-    order, each rendered as `<name> <memory>`. None for no such line."""
+    """nvidia-smi's `pci.bus_id, name, memory.total` CSV lines, each rendered
+    `<bus id>, <name>, <memory>` as the install tuple's `gpu.<n>` values are,
+    and sorted in the C locale (code point order) as install-tuple.sh sorts
+    them, which is PCI bus order. None for no such line."""
     rows = []
     for line in text.splitlines():
         parts = [part.strip() for part in line.split(",")]
         if len(parts) == 3 and all(parts):
-            rows.append((parts[0].lower(), f"{parts[1]} {parts[2]}"))
-    return [label for _, label in sorted(rows)] or None
+            rows.append(", ".join(parts))
+    return sorted(rows) or None
+
+
+# --- The install tuple (deploy/install-tuple.sh) ---------------------------
+
+INSTALL_TUPLE_CAP = 64 * 1024
+INSTALL_SCALARS = ("commit", "toolchain", "features", "engine", "engine-source",
+                   "engine-vendored", "nvcc", "driver", "cudart", "cublas", "cublaslt",
+                   "cccl", "gpus")
+
+
+class InstallTupleRefused(Exception):
+    """An install tuple this reader cannot take as written."""
+
+
+def read_install_tuple(path):
+    """The box's install tuple: its own sha256 (the box side's identity), the
+    scalar facts, the member and library digests by name, and the devices in
+    `gpu.<n>` order.
+
+    One fact per line, `key = value`, split on the first " = ", no value
+    empty, every scalar key present, no key twice, `gpu.<n>` numbered from 0
+    without a gap and as many as `gpus` says. Anything else is refused.
+    """
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise InstallTupleRefused("not a regular file")
+        raw = handle.read(INSTALL_TUPLE_CAP + 1)
+    if len(raw) > INSTALL_TUPLE_CAP:
+        raise InstallTupleRefused(f"past {INSTALL_TUPLE_CAP} octets")
+    try:
+        text = raw.decode("ascii")
+    except UnicodeDecodeError:
+        raise InstallTupleRefused("not ASCII") from None
+    facts, members, libraries, gpus = {}, {}, {}, {}
+    for number, line in enumerate(text.splitlines(), start=1):
+        key, sep, value = line.partition(" = ")
+        if not sep or not key or not value or not line.isprintable():
+            raise InstallTupleRefused(f"line {number} is not `key = value`")
+        for prefix, into in (("member.", members), ("library.", libraries), ("gpu.", gpus)):
+            if key.startswith(prefix):
+                name = key[len(prefix):]
+                break
+        else:
+            into, name = facts, key
+        if not name or name in into:
+            raise InstallTupleRefused(f"line {number}: {key} is empty or repeated")
+        into[name] = value
+    missing = [key for key in INSTALL_SCALARS if key not in facts]
+    if missing:
+        raise InstallTupleRefused(f"no {', '.join(missing)}")
+    for name, digest in list(members.items()) + list(libraries.items()):
+        if not HEX64.fullmatch(digest):
+            raise InstallTupleRefused(f"{name}'s digest is not 64 hex digits")
+    order = sorted(gpus, key=lambda n: int(n) if n.isdigit() else -1)
+    if order != [str(n) for n in range(len(gpus))]:
+        raise InstallTupleRefused("gpu.<n> is not numbered 0 to n-1")
+    if facts["gpus"] != str(len(gpus)):
+        raise InstallTupleRefused(f"gpus says {facts['gpus']} and {len(gpus)} gpu lines stand")
+    return {"sha256": hashlib.sha256(raw).hexdigest(), "facts": facts, "members": members,
+            "libraries": libraries, "gpus": [gpus[n] for n in order]}
+
+
+def file_sha256(path):
+    """A file's sha256, opened without following a link and judged regular."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise OSError(f"{path} is not a regular file")
+        digest = hashlib.sha256()
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+VERSIONED_LIBRARY = re.compile(r"lib(ggml|llama)[A-Za-z0-9_-]*\.so\.[0-9]+\.[0-9]+\.[0-9]+")
 
 
 # --- The rows ---------------------------------------------------------------
@@ -445,7 +523,7 @@ def adapter_rows(declaration):
                 "the Open half is dropped on the live path")]
 
 
-def device_rows(declaration, header, box_gpus, live_gpus):
+def device_rows(declaration, header, box_gpus, live_gpus, engine=None):
     """Rows 7, 8 and 9: the devices, the placement and the offload."""
     devices = binding_of(declaration).get("devices", [])
     lines = [row(7, "devices", json.dumps(devices), "absent",
@@ -489,7 +567,91 @@ def device_rows(declaration, header, box_gpus, live_gpus):
     lines.append(row(9, "cpu offload", "every layer offloaded; input embedding and sampling on the host",
                      "derivable",
                      "n_gpu_layers u32::MAX (gguf.rs placement_params); the engine keeps "
-                     "token_embd in host memory by rule, at the install tuple's engine revision"))
+                     "token_embd in host memory by rule, at the engine revision "
+                     + (engine or "the install tuple would name")))
+    return lines
+
+
+def box_rows(install_path, install, refusal):
+    """The box side: the install tuple's own digest, the identity a report
+    cites for the box, and the engine it names."""
+    if install is None:
+        return [row("box", "install tuple", "-", "FAULT" if refusal else "absent",
+                    refusal or f"no install tuple at {install_path}; the box side is unstated")]
+    facts = install["facts"]
+    fork = facts["engine-source"].rpartition("#")[2]
+    return [
+        row("box", "install tuple", f"sha256 {install['sha256']}", "recorded",
+            f"{install_path}, the box tuple's identity; commit {facts['commit']}"),
+        row("box", "engine", f"fork {fork}, llama.cpp {facts['engine-vendored']}", "recorded",
+            "the install tuple's engine-source and engine-vendored"),
+    ]
+
+
+def binding_rows(declaration_sha256, load_event, install, stack_library_path):
+    """The record bound to the box: the declaration's sha256 against the load
+    event's, the load event's stack digests against the install tuple's
+    members by name, and its library path against the install tuple's
+    library set, each file hashed here."""
+    lines = []
+    if load_event is None:
+        return [row("bind", "declaration", f"sha256 {declaration_sha256}", "absent",
+                    "no load event was read, so no record is bound")]
+    recorded = load_event.get("declaration")
+    if recorded == declaration_sha256:
+        lines.append(row("bind", "declaration", f"sha256 {declaration_sha256}", "recorded",
+                         "equal to the load event's declaration"))
+    else:
+        lines.append(row("bind", "declaration", f"sha256 {declaration_sha256}", "FAULT",
+                         f"the load event's declaration is {recorded!r}"))
+    if install is None:
+        lines.append(row("bind", "stack", "-", "absent", "no install tuple to bind the stack to"))
+        return lines
+    stack = load_event.get("stack") if isinstance(load_event.get("stack"), dict) else {}
+    members = install["members"]
+    for name in sorted(set(stack) | set(members)):
+        if name in stack and name in members:
+            if stack[name] == members[name]:
+                lines.append(row("bind", f"member {name}", members[name], "recorded",
+                                 "the load event's stack equals the install tuple's member"))
+            else:
+                lines.append(row("bind", f"member {name}", stack[name], "FAULT",
+                                 f"the install tuple's member is {members[name]}"))
+        else:
+            side = "the load event's stack" if name in stack else "the install tuple"
+            lines.append(row("bind", f"member {name}", (stack.get(name) or members.get(name)), "absent",
+                             f"not bound: only {side} carries it"))
+    path = load_event.get("library_path")
+    if not path:
+        lines.append(row("bind", "library path", "-", "absent",
+                         "the load event names no library path"))
+        return lines
+    if os.path.normpath(path) != os.path.normpath(stack_library_path or ""):
+        lines.append(row("bind", "library path", path, "absent",
+                         f"not bound: the install tuple digests {stack_library_path or 'no directory'}"))
+        return lines
+    libraries = install["libraries"]
+    try:
+        present = sorted(n for n in os.listdir(path) if VERSIONED_LIBRARY.fullmatch(n))
+    except OSError as error:
+        return lines + [row("bind", "library path", path, "FAULT", f"unreadable: {error.strerror}")]
+    for name in sorted(set(present) | set(libraries)):
+        if name not in libraries:
+            lines.append(row("bind", f"library {name}", "-", "FAULT",
+                             "in the library path and not in the install tuple"))
+            continue
+        try:
+            digest = file_sha256(os.path.join(path, name))
+        except OSError as error:
+            lines.append(row("bind", f"library {name}", "-", "FAULT",
+                             f"the install tuple names it and it does not read: {error}"))
+            continue
+        if digest == libraries[name]:
+            lines.append(row("bind", f"library {name}", digest, "recorded",
+                             f"the file in {path} equals the install tuple's digest"))
+        else:
+            lines.append(row("bind", f"library {name}", digest, "FAULT",
+                             f"the install tuple's digest is {libraries[name]}"))
     return lines
 
 
@@ -527,6 +689,9 @@ def main(argv):
     rows.add_argument("--sink")
     rows.add_argument("--from-line", type=int, default=1)
     rows.add_argument("--live-gpus-csv")
+    rows.add_argument("--install-tuple")
+    rows.add_argument("--install-tuple-unheld")
+    rows.add_argument("--stack-library-path")
     args = parser.parse_args(argv)
     if args.door == "header":
         try:
@@ -539,8 +704,19 @@ def main(argv):
             return 1
         return 0
     import tomllib
+    # One read: the bytes parsed are the bytes hashed.
     with open(args.declaration, "rb") as handle:
-        declaration = tomllib.load(handle)
+        declaration_bytes = handle.read()
+    declaration = tomllib.loads(declaration_bytes.decode("utf-8"))
+    declaration_sha256 = hashlib.sha256(declaration_bytes).hexdigest()
+    install, install_refusal = None, None
+    if args.install_tuple_unheld:
+        install_refusal = f"the install tuple is not held closed by root at {args.install_tuple_unheld}"
+    elif args.install_tuple and os.path.lexists(args.install_tuple):
+        try:
+            install = read_install_tuple(args.install_tuple)
+        except (InstallTupleRefused, OSError) as error:
+            install_refusal = f"the install tuple is refused: {error}"
     facts, refusal = None, None
     if args.header_json is not None:
         try:
@@ -559,10 +735,16 @@ def main(argv):
             load_event, measurement = scan_sink(handle, args.from_line,
                                                 binding_of(declaration).get("artifact"))
     live = live_gpus(args.live_gpus_csv) if args.live_gpus_csv else None
-    lines = (artifact_rows(declaration, facts, refusal, measurement)
+    engine = None
+    if install is not None:
+        engine = (f"fork {install['facts']['engine-source'].rpartition('#')[2]}, "
+                  f"llama.cpp {install['facts']['engine-vendored']}")
+    lines = (box_rows(args.install_tuple or "-", install, install_refusal)
+             + artifact_rows(declaration, facts, refusal, measurement)
              + adapter_rows(declaration)
-             + device_rows(declaration, facts, None, live)
-             + state_rows(declaration, load_event))
+             + device_rows(declaration, facts, install["gpus"] if install else None, live, engine)
+             + state_rows(declaration, load_event)
+             + binding_rows(declaration_sha256, load_event, install, args.stack_library_path))
     print("\n".join(lines))
     return 3 if any("[FAULT:" in line for line in lines) else 0
 

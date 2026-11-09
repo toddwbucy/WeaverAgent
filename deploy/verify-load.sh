@@ -233,6 +233,23 @@ TUPLE_ARGS=(--declaration "$DECL" --header-json "$TUPLE_HEADER"
 if [ "$SINK_KIND" = file ] && [ -f "$SINK" ] && [ ! -L "$SINK" ]; then
   TUPLE_ARGS+=(--sink "$SINK" --from-line "$((BEFORE + 1))")
 fi
+# **The box side is the stack record's install tuple**, written by
+# install-tuple.sh at each install. It is trusted only where admin's rule
+# holds it closed, as the record's `prefix` is above; an entry another
+# principal could write is named as a FAULT rather than read. A record with no
+# install tuple prints the box side as absent.
+if [ -e "$STACK/install-tuple" ] || [ -L "$STACK/install-tuple" ]; then
+  if bad=$(held_closed "$STACK/install-tuple"); then
+    TUPLE_ARGS+=(--install-tuple "$STACK/install-tuple")
+  else
+    TUPLE_ARGS+=(--install-tuple-unheld "$bad")
+  fi
+fi
+if [ -f "$STACK/library-path" ] && held_closed "$STACK/library-path" >/dev/null; then
+  STACK_LIBRARY=$(< "$STACK/library-path")
+  STACK_LIBRARY=${STACK_LIBRARY#"${STACK_LIBRARY%%[![:space:]]*}"}; STACK_LIBRARY=${STACK_LIBRARY%"${STACK_LIBRARY##*[![:space:]]}"}
+  TUPLE_ARGS+=(--stack-library-path "$STACK_LIBRARY")
+fi
 say "$AGENT deployment tuple"
 TUPLE_RC=0
 python3 -I "$TUPLE_HELPER" rows "${TUPLE_ARGS[@]}" || TUPLE_RC=$?
