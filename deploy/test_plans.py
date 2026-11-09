@@ -129,7 +129,7 @@ elif name == 'pacman': print('cccl 3.3.4-1')
 elif name == 'cargo':
     target = pathlib.Path(os.environ['CARGO_TARGET_DIR'])
     if args[0] == 'metadata': print(json.dumps({'target_directory': str(target)}))
-    elif args[0] == 'test': print('test result: ok. 1 passed; 0 failed; 0 ignored')
+    elif args[0] == 'test': print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s')
     elif args[0] == 'build':
         if os.environ.get('BUILD_FAIL'):
             print('fixture build refusal', file=sys.stderr)
@@ -5584,10 +5584,14 @@ exit "${CARGO_EXIT:-0}"
         gave a failed count of 0.29, which `printf %d` refused under errexit,
         ending the script on a suite cargo passed. A garbled line counts for
         nothing, the verdict is cargo's status, and the same garble beside a
-        failed test still refuses.
+        failed test still refuses. A summary counts only with its five counts
+        present (through `filtered out`; libtest adds the duration only when
+        it measured one), so output holding nothing but a summary cut short
+        is a run of no tests, and refuses.
         Perturbation: restore the unanchored `awk '/^test result/ ...'` and
         the clean case exits 1 at the `%d` printf, or, with `%s`, prints a
-        failed count of 0.29."""
+        failed count of 0.29; anchor on the first two counts alone and the
+        cut-short summary passes."""
         garbled = ("test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s\n"
                    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out\n"
                    "test result: ; finished in 0.29sok\n"
@@ -5605,6 +5609,11 @@ exit "${CARGO_EXIT:-0}"
                 self.assertNotEqual(ran.returncode, 0)
                 self.assertIn("7 passed, 1 failed", ran.stdout)
                 self.assertIn("cargo exited 101", ran.stderr)
+                for log in self.kept_logs():
+                    log.unlink()
+                ran = self.step(script, "run_tests", stdout="test result: ok. 1 passed; 0 failed\n")
+                self.assertNotEqual(ran.returncode, 0, "a summary cut short is no count")
+                self.assertIn("0 passed", ran.stderr)
                 for log in self.kept_logs():
                     log.unlink()
 
