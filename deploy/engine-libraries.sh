@@ -88,19 +88,26 @@ spu_ldd() {
 # engine_resolved REPORT LIBDIR: answers 0 only where REPORT, spu_ldd's
 # output from a run that exited 0, names no library not found, names at
 # least one engine library, and resolves every engine library to a file in
-# LIBDIR. Prints each line that fails, so a refusal can show it.
+# LIBDIR. Prints each line that fails, so a refusal can show it. ldd prints
+# a resolved library as `<name> => <path> (<load address>)`, and the path
+# is read whole, from the arrow to the last load address, since a library
+# directory may hold a space; a line with no arrow (the vDSO, the loader)
+# names no engine library, and only `=> not found` at a line's end is a
+# library not found.
 engine_resolved() {
   python3 -c 'import os, re, sys
 lib = os.path.realpath(sys.argv[2])
+resolved = re.compile(r"\s*(\S+)\s+=>\s+(.+)\s+\(0x[0-9a-fA-F]+\)\s*")
 bad, engine = [], 0
 for line in sys.argv[1].splitlines():
-    fields = line.split()
-    if "not found" in line:
+    if re.search(r"=>\s*not found\s*$", line):
         bad.append(line.strip())
         continue
-    if fields and re.match(r"lib(ggml|llama)", fields[0]):
+    name = (line.split() or [""])[0]
+    if re.match(r"lib(ggml|llama)", name):
         engine += 1
-        if len(fields) < 3 or fields[1] != "=>" or os.path.dirname(os.path.realpath(fields[2])) != lib:
+        m = resolved.fullmatch(line)
+        if not m or os.path.dirname(os.path.realpath(m.group(2))) != lib:
             bad.append(line.strip())
 for line in bad:
     print(line)

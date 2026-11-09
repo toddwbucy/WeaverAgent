@@ -5996,7 +5996,9 @@ class EngineLibrariesTests(unittest.TestCase):
     unresolved and the link out of the build prints; let `engine_resolved`
     pass a report with no engine and the empty report passes; keep the
     operator's LD_PRELOAD and it reaches ldd; drop the newline test and the
-    two-line value passes."""
+    two-line value passes; take a resolved path as one whitespace field, in
+    `engine_resolved` or in the tuple, and a library directory holding a
+    space is judged unresolved or truncated."""
 
     ENGINE = "fixture-engine-source#llama-cpp-sys-2@0.1.0"
 
@@ -6074,6 +6076,54 @@ class EngineLibrariesTests(unittest.TestCase):
                 ran = self.run_bash(check, REPORT=report, LIB=str(lib))
                 self.assertEqual(ran.returncode, 1, ran.stdout)
                 self.assertIn(said, ran.stdout)
+
+    def test_a_resolved_path_holding_a_space_is_read_whole(self):
+        """**A path ldd resolves is read whole, spaces included**, by
+        `engine_resolved` and by the install tuple. A library directory may
+        hold a space (`loader_dir` and admin refuse only what is not one
+        absolute path), and ldd prints `<name> => <path> (<load address>)`.
+        The CUDA directory here also holds the words `not found`, which name
+        a library not found only after the arrow at a line's end; a library
+        not found reads `unknown` in the tuple, never a path. Perturbations:
+        take the path as one whitespace field in `engine_resolved` and the
+        correct install is judged unresolved; take it as `$3` in the tuple
+        and cudart reads a truncated path and cublas reads one."""
+        lib = self.dir / "weaver lib"
+        cuda = self.dir / "cuda not found here"
+        for d in (lib, cuda):
+            d.mkdir()
+        (lib / "libllama.so.0.0.1").write_text("x")
+        (lib / "libllama.so.0").symlink_to("libllama.so.0.0.1")
+        (cuda / "libcudart.so.13.0.48").write_text("x")
+        (cuda / "libcudart.so.13").symlink_to("libcudart.so.13.0.48")
+        report = (f"\tlinux-vdso.so.1 (0x00007ffd00000000)\n"
+                  f"\tlibllama.so.0 => {lib}/libllama.so.0 (0x00007f0000000000)\n"
+                  f"\tlibcudart.so.13 => {cuda}/libcudart.so.13 (0x00007f0100000000)\n"
+                  f"\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f0200000000)\n"
+                  f"\t/lib64/ld-linux-x86-64.so.2 (0x00007f0300000000)\n")
+        check = 'engine_resolved "$REPORT" "$LIB"'
+        ran = self.run_bash(check, REPORT=report, LIB=str(lib))
+        self.assertEqual((ran.returncode, ran.stdout), (0, ""), ran.stderr)
+        elsewhere = report.replace(f"{lib}/", f"{cuda}/")
+        ran = self.run_bash(check, REPORT=elsewhere, LIB=str(lib))
+        self.assertEqual(ran.returncode, 1, "the engine from another spaced directory is still refused")
+        self.assertIn(f"{cuda}/libllama.so.0", ran.stdout)
+        ldd = self.bin / "ldd"
+        ldd.write_text('#!/bin/sh\nprintf "%s" "$LDD_REPORT"\n')
+        ldd.chmod(0o755)
+        for tool in ("nvidia-smi", "pacman", "nvcc", "git"):
+            (self.bin / tool).write_text("#!/bin/sh\nexit 1\n")
+            (self.bin / tool).chmod(0o755)
+        tuple_report = report + "\tlibcublas.so.13 => not found\n"
+        ran = self.run_bash(f"source {shlex.quote(str(DEPLOY / 'install-tuple.sh'))}\n"
+                            f"install_tuple {shlex.quote(str(self.dir))} fixture-commit "
+                            f"{shlex.quote(str(self.dir / 'bin dir'))} {shlex.quote(str(lib))} fixture-features '' ''",
+                            LDD_REPORT=tuple_report)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
+        self.assertEqual(facts["cudart"], str((cuda / "libcudart.so.13.0.48").resolve()))
+        self.assertEqual(facts["cublas"], "unknown")
+        self.assertEqual(facts["cublaslt"], "unknown")
 
     def test_spu_ldd_runs_ldd_with_the_library_directory_and_no_operator_loader_variables(self):
         ldd = self.bin / "ldd"

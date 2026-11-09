@@ -85,10 +85,18 @@ if len(found) == 1:
   n=$(printf '%s\n' "$smi" | sed -n 1p)
   printf 'driver = %s\n' "${n:-unknown}"
   # What the installed SPU resolves, each name followed to the file it names,
-  # whose versioned name carries the runtime's version.
+  # whose versioned name carries the runtime's version. The path is read
+  # whole, from the arrow to the last load address, as engine_resolved reads
+  # it, since a directory may hold a space; a library not found has no load
+  # address and reads `unknown`.
   ldd_said=$(spu_ldd "$bin_dir/weaver-spu" "$lib_dir" || true)
   for name in cudart cublas cublasLt; do
-    path=$(printf '%s\n' "$ldd_said" | awk -v want="lib$name.so" 'index($1, want) == 1 && substr($1, length(want) + 1, 1) ~ /^(\.|)$/ && $2 == "=>" {print $3; exit}')
+    path=$(printf '%s\n' "$ldd_said" | awk -v want="lib$name.so" 'index($1, want) == 1 && substr($1, length(want) + 1, 1) ~ /^(\.|)$/ && $2 == "=>" {
+      line = $0
+      sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+=>[[:space:]]+/, "", line)
+      if (sub(/[[:space:]]+\(0x[0-9a-fA-F]+\)[[:space:]]*$/, "", line)) print line
+      exit
+    }')
     [ -z "$path" ] || path=$(readlink -f -- "$path" 2>/dev/null || printf '%s' "$path")
     printf '%s = %s\n' "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" "${path:-unknown}"
   done
