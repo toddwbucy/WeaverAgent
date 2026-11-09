@@ -331,6 +331,15 @@ struct Run {
     /// seeding whose addition would carry that answer past the bound
     /// refuses rather than seating a prefix the next load cannot read.
     seeded_bytes: usize,
+    /// **Whether the open seated a prefix**, per `weaver-harness-Spec`
+    /// section 6's seated read (ADP-4 of
+    /// `weaver-spu-adapter-binding-Spec-amendment` section 4): set once at
+    /// admission from whether the state member's `identity` answer carried
+    /// any identity message, and lent to every seat. Not the assembled
+    /// prompt's identity, which nothing fills, and not the open's token
+    /// count, which a BOS-prefixing family makes non-zero with nothing
+    /// seated.
+    seated: bool,
     /// The run's own reference, retained so a close can name the run a turn
     /// belongs to, per `weaver-gate-world-contract` section 3. The author
     /// holds its own converted copy for the record, and this is the floor's,
@@ -628,12 +637,13 @@ impl Harness {
     /// the one arrival owed an answer: `entry` is the loop the binary
     /// carries across the dev boundary, called with the granted surface and
     /// the parsed request, and its return is the response the frame's
-    /// exchange is answered with. `identity` is the composition root's, the
-    /// c-material of the assembled prompt. The tool schemas are not: they
-    /// are the ones the enter elects ([`offered_schemas`], #29).
+    /// exchange is answered with. The composition root supplies no identity:
+    /// the prefix is the state member's `identity` answer, seated at the
+    /// open per Spec section 6.1, and the loop reads only whether one was
+    /// seated ([`crate::Ports::seated`]). The tool schemas are the ones the
+    /// enter elects (`offered_schemas`, #29).
     pub fn serve<F>(
         mut self,
-        identity: &str,
         composer: weaver_trace::LoopIdentity,
         entry: F,
     ) -> Result<Outcome, ChannelFault>
@@ -650,12 +660,11 @@ impl Harness {
         // on: the listener leaves the read set while a verb's connection is
         // being served, which is what holds the contract's
         // one-exchange-in-flight rule now that no fleet map does.
-        self.serve_loop(identity, entry, None)
+        self.serve_loop(entry, None)
     }
 
     fn serve_loop<F>(
         mut self,
-        identity: &str,
         mut entry: F,
         mut pending: Option<OrganChannel>,
     ) -> Result<Outcome, ChannelFault>
@@ -744,7 +753,7 @@ impl Harness {
                     }
                 }
                 Ok(Wake::Gate) => {
-                    if let Err(fault) = self.serve_gate_wake(identity, &mut entry, &mut pending) {
+                    if let Err(fault) = self.serve_gate_wake(&mut entry, &mut pending) {
                         self.unwind_if_entered(weaver_types::FaultCase::OrganDeathObserved, &fault);
                         return Err(fault);
                     }
@@ -873,7 +882,6 @@ impl Harness {
     /// leave.
     fn serve_gate_wake<F>(
         &mut self,
-        identity: &str,
         entry: &mut F,
         pending: &mut Option<OrganChannel>,
     ) -> Result<(), ChannelFault>
@@ -905,7 +913,7 @@ impl Harness {
         };
         match envelope.payload {
             weaver_types::Payload::Frame(frame) => {
-                self.serve_frame(envelope.exchange, frame, identity, entry, pending)?;
+                self.serve_frame(envelope.exchange, frame, entry, pending)?;
                 // A leave the turn held is carried out now, the turn closed
                 // and its dialer answered.
                 self.carry_out_held_leave().map(|_| ())
@@ -940,7 +948,6 @@ impl Harness {
         &mut self,
         exchange: ExchangeId,
         frame: weaver_types::TurnFrame,
-        identity: &str,
         entry: &mut F,
         pending: &mut Option<OrganChannel>,
     ) -> Result<(), ChannelFault>
@@ -988,7 +995,10 @@ impl Harness {
                     .recorder
                     .structure()
                     .expect("the frame path runs under the serving record");
-                let prompt = crate::assembly::assemble(structure, identity, &offered_schemas(run));
+                // **The assembled identity is empty**: the prefix is seated
+                // at the open from the member's answer (Spec section 6.1)
+                // and is not re-assembled here (ADP-4).
+                let prompt = crate::assembly::assemble(structure, "", &offered_schemas(run));
                 if prompt.undecodable > 0 {
                     // An incomplete prompt does not cross the seam: the hole
                     // becomes the fault event and the turn does not run.
@@ -1095,6 +1105,7 @@ impl Harness {
                     run.classify.as_ref().map(|arm| &arm.channel),
                     &mut run.fullness,
                     &mut run.pressure_reported,
+                    run.seated,
                 );
                 ports.hold_leave(&mut run.leave, run.drain_bound);
                 // The seeding turn is loop 0's own and crosses the dev
@@ -1240,7 +1251,6 @@ impl Harness {
         &mut self,
         exchange: ExchangeId,
         frame: weaver_types::TurnFrame,
-        identity: &str,
         entry: &mut F,
         pending: &mut Option<OrganChannel>,
     ) -> Result<(), ChannelFault>
@@ -1250,8 +1260,8 @@ impl Harness {
             &str,
         ) -> Result<crate::engine::TurnOutcome, crate::engine::TurnError>,
     {
-        self.serve_one_frame(exchange, frame, identity, entry, pending)?;
-        self.serve_shelf(identity, entry, pending)
+        self.serve_one_frame(exchange, frame, entry, pending)?;
+        self.serve_shelf(entry, pending)
     }
 
     /// The shelf's flat loop, after a frame's turn ([`Self::serve_frame`]).
@@ -1260,7 +1270,6 @@ impl Harness {
     /// `Unloading` there, never served as a turn under the leave.
     fn serve_shelf<F>(
         &mut self,
-        identity: &str,
         entry: &mut F,
         pending: &mut Option<OrganChannel>,
     ) -> Result<(), ChannelFault>
@@ -1289,7 +1298,7 @@ impl Harness {
             };
             match held.payload {
                 weaver_types::Payload::Frame(frame) => {
-                    self.serve_one_frame(held.exchange, frame, identity, entry, pending)?;
+                    self.serve_one_frame(held.exchange, frame, entry, pending)?;
                 }
                 weaver_types::Payload::Fault(report) => {
                     let ChannelState::Entered(run) = &mut self.state else {
@@ -1463,6 +1472,7 @@ impl Harness {
             run.classify.as_ref().map(|arm| &arm.channel),
             &mut run.fullness,
             &mut run.pressure_reported,
+            run.seated,
         );
         ports.hold_leave(held, None);
         let (ran, _) = ports.wind_down(deadline_after(wind_down_bound), cause);
@@ -2288,6 +2298,7 @@ impl Harness {
             session,
             operator: payload.operator,
             seeded_bytes: 0,
+            seated: false,
             run: payload.run.clone(),
             spu: None,
             gate: None,
@@ -2453,6 +2464,12 @@ impl Harness {
         // on the trace at its seeding turn. The open's messages are the
         // identity, prefix material permanent for the residency, per Spec
         // section 6.1.
+        // **The seated fact is the answer's, held here at admission**
+        // (ADP-4): an identity message seated is the agent's prompt as the
+        // open's prefix, and a loop reads it to yield its own. An empty
+        // answer, an agent before its seeding turn, seats nothing, whatever
+        // start marker the family's renderer puts in the prefix.
+        run.seated = !identity.is_empty();
         let opening = identity.clone();
         if let Some(setup) = setup.as_deref_mut()
             && setup.checkpoint().is_err()
@@ -2768,7 +2785,7 @@ impl Harness {
     /// interior to whatever loop 1 the binary carries, and takes it back at
     /// the stop and at the leave. A loop composes what this grants or does not
     /// compile - there is no call by which it mints a port.
-    pub fn grant_seat(&mut self, identity: &str) -> Option<crate::Ports<'_>> {
+    pub fn grant_seat(&mut self) -> Option<crate::Ports<'_>> {
         match &mut self.state {
             // **The extension seam is crossed at loaded-and-idle itself.** A
             // turn in flight is the active state, not the idle one, and loop 0
@@ -2785,7 +2802,7 @@ impl Harness {
                 // nothing-to-hand-across the other arms give rather than
                 // panicking on a record shape the guard above never read.
                 let structure = run.recorder.structure()?;
-                let prompt = crate::assembly::assemble(structure, identity, &offered_schemas(run));
+                let prompt = crate::assembly::assemble(structure, "", &offered_schemas(run));
                 // **An incomplete prompt does not cross the seam.** A
                 // message-kind record that did not decode is a hole where a
                 // turn's content was, so the count becomes the `fault` event
@@ -2830,6 +2847,7 @@ impl Harness {
                     run.classify.as_ref().map(|arm| &arm.channel),
                     &mut run.fullness,
                     &mut run.pressure_reported,
+                    run.seated,
                 ))
             }
             // Before enter and after leave there is no standing interior to

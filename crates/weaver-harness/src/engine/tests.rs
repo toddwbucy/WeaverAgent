@@ -315,6 +315,7 @@ fn a_refused_turn_closes_once_and_names_the_refusal() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.turn(vec![Message {
             role: Role::User,
@@ -449,6 +450,7 @@ fn a_refused_ask_reaches_the_record() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.elide(41, 57)
     };
@@ -578,6 +580,7 @@ fn the_elision_event_carries_the_span_the_loop_named() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let counts = ports.elide(41, 57).expect("the elision holds");
         assert_eq!(
@@ -742,6 +745,7 @@ fn a_turn_authors_the_whole_bracket() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -957,6 +961,7 @@ fn a_fault_emission_lands_inside_the_bracket_before_the_close() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1183,6 +1188,7 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1424,6 +1430,7 @@ fn an_ungranted_call(name: &str, shell_granted: bool) {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1615,6 +1622,7 @@ fn each_field_intermediate_authors_its_event() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1705,6 +1713,7 @@ fn a_supplied_tool_result_refuses_at_the_door() {
         None,
         &mut fullness,
         &mut pressure_reported,
+        false,
     );
     let delta = vec![Message {
         role: Role::ToolResult,
@@ -1925,6 +1934,7 @@ fn dial_mid_stream(
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -2278,6 +2288,7 @@ fn leave_during_turn(
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.hold_leave(&mut held, None);
         ports.turn(vec![Message {
@@ -2407,6 +2418,7 @@ fn a_directive_mid_turn_with_a_leave_held(
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.hold_leave(&mut held, None);
         ports.turn(vec![Message {
@@ -2575,6 +2587,7 @@ fn a_join_during_the_wind_down_cancels_it_and_turns_the_leave_forced() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.hold_leave(&mut held, None);
         ports.wind_down(None, weaver_types::Cause { uid: 7 })
@@ -2714,6 +2727,7 @@ fn a_leave_dialed_while_the_spu_streams_is_heard() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.hold_leave(&mut held, None);
         ports.turn(vec![Message {
@@ -2843,6 +2857,7 @@ fn a_bound_passing_while_the_spu_streams_cancels_the_turn() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.hold_leave(&mut held, Some(1));
         ports.turn(vec![Message {
@@ -2960,6 +2975,7 @@ fn a_drain_bound_passing_mid_turn_cancels_the_turn_and_turns_the_leave_forced() 
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.hold_leave(&mut held, Some(1));
         ports.turn(vec![Message {
@@ -3133,6 +3149,7 @@ fn a_call_asked_in_the_wind_down_is_never_sent() {
         None,
         &mut fullness,
         &mut pressure_reported,
+        false,
     )
     .wind_down(None, weaver_types::Cause { uid: 7 })
     .0;
@@ -3455,6 +3472,7 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.turn(vec![Message {
             role: Role::User,
@@ -3706,6 +3724,7 @@ fn stop_dialed_mid_stream(latched: bool) {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -3839,6 +3858,7 @@ fn a_stop_is_not_answered_after_a_close_over_a_latched_record() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let generation = Generation {
             invalid_utf8: Vec::new(),
@@ -3958,6 +3978,7 @@ fn a_column_on_the_generate_stream_authors_rather_than_kills() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.turn(vec![Message {
             role: Role::User,
@@ -4023,6 +4044,7 @@ fn with_seat<R>(
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ask(&mut ports)
     };
@@ -4237,6 +4259,7 @@ fn the_recall_after_a_flush_is_recorded_before_the_loop_holds_it() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         assert_eq!(ports.flush(0), Some((27196, 712)), "the flush holds");
         let answered = ports.recall(Some(4)).expect("custody answered");
@@ -4366,6 +4389,7 @@ fn a_replay_answer_is_recorded_by_its_bounds_and_count() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         ports.replay(2_000).expect("custody answered")
     };
@@ -4435,6 +4459,7 @@ fn a_recall_the_member_did_not_answer_records_no_recall() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         assert!(
             ports.recall(Some(4)).is_none(),
@@ -4618,6 +4643,7 @@ fn an_unrecovered_call_is_authored_at_the_answer_and_handed_to_the_loop() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -4885,6 +4911,7 @@ fn an_unrecovered_call_opens_no_execution_exchange() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -5102,6 +5129,7 @@ fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
             None,
             &mut fullness,
             &mut pressure_reported,
+            false,
         );
         let turn = weaver_types::TurnKey("t-1".into());
         ports

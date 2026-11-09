@@ -10,8 +10,10 @@
 //! surface or does not compile.
 //!
 //! Arguments are a provisioning fact, per the charter: the coordination
-//! socket path to bind, the SPU binary, the gate binary, and optionally the
-//! identity prefix the assembled prompt carries.
+//! socket path to bind, the SPU binary, the gate binary, then the
+//! deployment's construction parameters as named flags. No argument carries
+//! an identity: the system prompt is state, seated at the open from the state
+//! member's answer, per `weaver-harness-Spec` section 6.1.
 
 mod dev_loop;
 
@@ -30,16 +32,15 @@ fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let (Some(socket), Some(spu), Some(gate)) = (args.next(), args.next(), args.next()) else {
         eprintln!(
-            "worker <coordination-socket> <spu-binary> <gate-binary> [identity] \
+            "worker <coordination-socket> <spu-binary> <gate-binary> \
              [--headroom-bytes N] [--classify-binary PATH]"
         );
         return ExitCode::FAILURE;
     };
-    // **The positional identity, then the deployment's construction
-    // parameters as named flags.** A parameter is optional and an organ given
-    // none keeps its compiled default, so a deployment that supplies nothing
-    // behaves as every deployment did before this vector existed.
-    let mut identity = String::new();
+    // **The deployment's construction parameters, as named flags.** A
+    // parameter is optional and an organ given none keeps its compiled
+    // default, so a deployment that supplies nothing behaves as every
+    // deployment did before this vector existed.
     let mut parameters = OrganParameters::default();
     let mut classify: Option<std::path::PathBuf> = None;
     while let Some(argument) = args.next() {
@@ -67,7 +68,15 @@ fn main() -> ExitCode {
                 eprintln!("worker: unknown parameter {other}");
                 return ExitCode::FAILURE;
             }
-            positional => identity = positional.to_string(),
+            // **A fourth positional is refused, not taken.** It once carried
+            // an identity prefix, which the system prompt's ruling of
+            // 2026-10-06 made state and ADP-4 retired; admin's start step
+            // never passed one, and one passed by hand would now be ignored
+            // without a signal.
+            other => {
+                eprintln!("worker: unexpected argument {other}");
+                return ExitCode::FAILURE;
+            }
         }
     }
 
@@ -100,7 +109,6 @@ fn main() -> ExitCode {
     // The loop is compiled into this binary, so the record names the binary
     // and no file, per `weaver-trace-Spec` section 3.
     match harness.serve(
-        &identity,
         weaver_harness::LoopIdentity::compiled("worker"),
         dev_loop::drive,
     ) {

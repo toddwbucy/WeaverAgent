@@ -279,6 +279,9 @@ pub struct Ports<'a> {
     /// leave does not wait it out), and past it the call is closed
     /// `Killed { by: fault }` without the gate's answer.
     interrupted_at: std::cell::Cell<Option<std::time::Instant>>,
+    /// Whether the open seated a prefix, the run's admission fact lent at
+    /// the grant ([`Ports::seated`]).
+    seated: bool,
 }
 
 /// Why a turn did not complete. A refusal the seam typed is the session
@@ -353,7 +356,9 @@ impl<'a> Ports<'a> {
     ///
     /// The arguments are the granted surface itself, one per port, and a
     /// bundling struct would be a second `Ports` wrapping this one, so the
-    /// lint is answered rather than obeyed.
+    /// lint is answered rather than obeyed. `seated` is the run's admission
+    /// fact for [`Ports::seated`] (ADP-4), an argument rather than a default
+    /// so that no grant can leave it out.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn grant(
         decode: &'a DecodeChannel,
@@ -370,6 +375,7 @@ impl<'a> Ports<'a> {
         classify: Option<&'a crate::channel::ClassifyChannel>,
         fullness: &'a mut Option<(u64, u64)>,
         pressure_reported: &'a mut bool,
+        seated: bool,
     ) -> Self {
         Ports {
             decode,
@@ -396,6 +402,7 @@ impl<'a> Ports<'a> {
             cut_by_leave: false,
             gate_lost: false,
             interrupted_at: std::cell::Cell::new(None),
+            seated,
         }
     }
 
@@ -987,6 +994,17 @@ impl<'a> Ports<'a> {
     /// has over the granted surface.
     pub fn assembled(&self) -> Option<&Prompt> {
         self.assembled.as_ref()
+    }
+
+    /// **Whether the open seated a prefix**, per `weaver-harness-Spec`
+    /// section 6's seated read (ADP-4): true where the state member's
+    /// `identity` answer at admission carried any identity message, the
+    /// agent's prompt seated as the open's prefix. The prefix itself is not
+    /// handed out, its source being the open's alone (section 6.1). A loop
+    /// reads this, and not [`Prompt::identity`] or the open's token count, to
+    /// decide whether a prompt of its own would be a second system turn.
+    pub fn seated(&self) -> bool {
+        self.seated
     }
 
     /// **Run one turn**, per `weaver-harness-Spec` section 6.1. Loop 1 supplies
