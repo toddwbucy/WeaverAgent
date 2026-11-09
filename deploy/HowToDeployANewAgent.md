@@ -421,13 +421,14 @@ answer seats a prefix at the load, the loop pushes no compiled prompt and no con
 line, on the run's first turn or at the re-entry after a flush, and the re-entry stays a
 system message, the recall text alone. The compiled prompt rides only where nothing is
 seated: it leads a run's first turn where the loop drives that turn, with the continuity
-line beneath it, and opens each re-entry. In a seeded agent's trace the prompt appears
-only as the turnless `message.system` at the seeding, and no production turn carries the
-loop's prompt. A seeding is appended context in its own residency, so a flush there
-drops it (#502): the re-entry opens with the compiled prompt after a first seeding, and
-keeps the prefix the load seated after a later one. The sequence above (load, seed, save
-point, unload) avoids that, and an agent without a store, seeded in every residency,
-cannot.
+line beneath it only where the member's session shape reports an earlier run (none on a
+session's first run, none where the shape is unavailable), and opens each re-entry
+without the line. In a seeded agent's trace the prompt appears only as the turnless
+`message.system` at the seeding, and no production turn carries the loop's prompt. A
+seeding is appended context in its own residency, so a flush there drops it (#502): the
+re-entry opens with the compiled prompt after a first seeding, and keeps the prefix the
+load seated after a later one. The sequence above (load, seed, save point, unload)
+avoids that, and an agent without a store, seeded in every residency, cannot.
 
 ## 5. Serving, stopping, unloading, and the connector's rule
 

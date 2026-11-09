@@ -281,17 +281,18 @@ the flush. Where nothing is seated (an agent before its seeding turn), the
 loop pushes its compiled prompt as today.
 
 **The continuity line goes with it in the seated case.** The line that counts
-prior runs (`continuity_line`, line 207) rides the compiled opening today. In
-the seated case it has no carrier: pushed alone it is still a second system
-turn, so it is not pushed, and the fact it carried is already in the record's
-lifecycle events. In the unseated case it rides the compiled opening as
-today. This is the operator's to confirm with the rule.
+prior runs (the function `continuity_line` in `dev_loop/mod.rs`) rides the
+compiled opening today. In the seated case it has no carrier: pushed alone it
+is still a second system turn, so it is not pushed, and the fact it carried is
+already in the record's lifecycle events. In the unseated case it rides the
+compiled opening as today, where the session shape reports an earlier run.
+This is the operator's to confirm with the rule.
 
-The comment at `dev_loop/mod.rs:81-83`, which still describes the system
-prompt as message content rather than the open's prefix, predates the ruling
-and goes with this act. The test
-`the_prompt_leads_the_first_turn_and_no_other` (`dev_loop/tests.rs:25`) moves
-to the unseated case, and a seated case joins it.
+The flush comment in `drive` (`dev_loop/mod.rs`), which still describes the
+system prompt as message content rather than the open's prefix, predates the
+ruling and goes with this act. The test
+`the_prompt_leads_the_first_turn_and_no_other` (`dev_loop/tests.rs`) moves to
+the unseated case, and a seated case joins it.
 
 This clause lands as its own pull request, since it is a loop change in the
 harness and not an SPU change, and it is the operator's to confirm: the loop
@@ -341,7 +342,7 @@ The request type derives `PartialEq` so the one-path row can compare.
 | Replay judges the adapter before the walk | A record whose adapter differs from the loaded binding's refuses at `refuse_identity` | Compare the model alone |
 | Replay judges the adapter per generation | A re-fed measurement whose adapter differs from the source's returns `IdentityBroken` | Compare the weights hash alone |
 | The projection follows | Once the contract and WeaverAnalysis carry it, the state member's projection includes `adapter`, and the `SELECTION` oracle pins it | Leave the path list unchanged |
-| The loop yields (ADP-4) | With a seated prefix, the first turn's delta carries no compiled prompt and no continuity line, and neither does a re-entry. Without one, it carries both. The seated case is driven with an empty positional identity and a non-empty identity answer, as admin loads it. The unseeded case includes a BOS-prefixing family (llama), whose Open prefix is non-zero with nothing seated, and it still carries the compiled prompt | Push the compiled prompt unconditionally, read `Prompt.identity` as the predicate, or read `prefix_tokens` as the predicate |
+| The loop yields (ADP-4) | With a seated prefix, the first turn's delta carries no compiled prompt and no continuity line, and neither does a re-entry. Without one, the first turn carries both where the session shape reports an earlier run, as the test's shape does, and a re-entry carries the compiled prompt alone. The seated case is driven with an empty positional identity and a non-empty identity answer, as admin loads it. The unseeded case includes a BOS-prefixing family (llama), whose Open prefix is non-zero with nothing seated, and it still carries the compiled prompt | Push the compiled prompt unconditionally, read `Prompt.identity` as the predicate, or read `prefix_tokens` as the predicate |
 | The script declares it | `create-agent.sh --adapter ...` renders the table and parses, three of the four flags refuse, a 63-character digest refuses, and `--adapter-scale nan` refuses | Default a flag, or write the value unchecked |
 
 The projection row and the two replay rows that read a recall wait on the
