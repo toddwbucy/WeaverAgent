@@ -126,15 +126,26 @@ elif name == 'systemctl':
 elif name == 'git':
     if args[0] == 'rev-parse': print('abcdef0')
     elif args[0] == 'branch': print('fixture-branch')
+    elif args[0] == 'ls-tree': print('160000 commit e21cdc11fixturevendoredcommit\tllama.cpp')
 elif name == 'hostname': print('fixture-box')
-elif name == 'nvidia-smi': print('fixture-driver')
+elif name == 'nvidia-smi':
+    if os.environ.get('NO_NVIDIA'): sys.exit(9)
+    # Listed out of PCI bus order, so a reader that trusts the query's order
+    # is caught.
+    if '--query-gpu=pci.bus_id,name,memory.total' in args:
+        print('00000000:41:00.0, Fixture GPU B, 2048 MiB')
+        print('00000000:01:00.0, Fixture GPU A, 1024 MiB')
+    else: print('fixture-driver')
+elif name == 'nvcc': print('nvcc: fixture\nCuda compilation tools, release 99.9, V99.9.1\nBuild fixture')
 elif name == 'pacman': print('cccl 3.3.4-1')
 elif name == 'cargo':
     target = pathlib.Path(os.environ['CARGO_TARGET_DIR'])
     # The engine's package as the lock names it, beside another crate with a
     # build script, so a reader that does not match the id exactly is caught.
     if args[0] == 'metadata': print(json.dumps({'target_directory': str(target), 'packages': [
-        {'name': 'llama-cpp-sys-2', 'id': 'fixture-engine-source#llama-cpp-sys-2@0.1.0'},
+        {'name': 'llama-cpp-sys-2', 'id': 'fixture-engine-source#llama-cpp-sys-2@0.1.0', 'version': '0.1.0',
+         'source': 'git+https://fixture.invalid/llama-cpp-rs?rev=f00d#f00dfixtureforkcommit',
+         'manifest_path': str(root / 'checkout' / 'llama-cpp-sys-2' / 'Cargo.toml')},
         {'name': 'fixture-other-sys', 'id': 'fixture-other-source#fixture-other-sys@0.1.0'}]}))
     elif args[0] == 'pkgid':
         # The lock's one package of the name, as `cargo pkgid` names it.
@@ -295,15 +306,19 @@ elif name == 'setfacl': sys.exit(1 if os.environ.get('ACL_FAIL') else 0)
 elif name == 'ldd':
     # What the loader resolves for the installed SPU: the engine's SONAMEs
     # from LD_LIBRARY_PATH, as the loader takes them, or from LDD_ELSEWHERE;
-    # LDD_MISSING names a library it cannot find, and LDD_STATIC answers as
-    # ldd does for a file that is not a dynamic executable.
+    # LDD_MISSING names a library it cannot find, LDD_STATIC answers as ldd
+    # does for a file that is not a dynamic executable, and a file that is
+    # not there fails as ldd does.
+    if not os.path.exists(args[-1]):
+        print(f'ldd: {args[-1]}: No such file or directory', file=sys.stderr)
+        sys.exit(1)
     if os.environ.get('LDD_STATIC'):
         print('\tnot a dynamic executable')
         sys.exit(1)
     with open(os.environ['CALLS'], 'a') as seen:
         seen.write(json.dumps(['ldd-env', os.environ.get('LD_LIBRARY_PATH', ''), os.environ.get('LD_PRELOAD', '')]) + '\n')
     engine_dir = os.environ.get('LDD_ELSEWHERE') or os.environ.get('LD_LIBRARY_PATH', '/fixture/lib').split(':')[0]
-    for soname in ('libllama.so.0', 'libggml.so.0', 'libc.so.6'):
+    for soname in ('libllama.so.0', 'libggml.so.0', 'libcudart.so.99', 'libcublas.so.99', 'libcublasLt.so.99', 'libc.so.6'):
         at = engine_dir if soname.startswith(('libllama', 'libggml')) else '/fixture/lib'
         if soname == os.environ.get('LDD_MISSING'): print(f'\t{soname} => not found')
         else: print(f'\t{soname} => {at}/{soname} (0x0000)')
@@ -389,6 +404,9 @@ class PlanTests(unittest.TestCase):
         self.cuda_lib = self.root / "cuda" / "lib64"
         self.cuda_lib.mkdir(parents=True)
         self.ldso_conf.write_text(f"{self.lib_dir}\n{self.cuda_lib}\n")
+        # The engine's checkout, where the install tuple reads the vendored
+        # engine's commit from the fork's tree.
+        (self.root / "checkout" / "llama-cpp-sys-2").mkdir(parents=True)
         self.hba = self.root / "pg_hba.conf"
         self.hba.write_text("local all all peer\n")
         self.ident = self.root / "pg_ident.conf"
@@ -397,7 +415,7 @@ class PlanTests(unittest.TestCase):
         self.artifact.touch()
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for name in ("sudo", "systemctl", "psql", "mktemp", "setfacl", "getent", "git", "cargo", "hostname", "nvidia-smi", "pacman", "sh", "id", "stat", "ldd"):
+        for name in ("sudo", "systemctl", "psql", "mktemp", "setfacl", "getent", "git", "cargo", "hostname", "nvidia-smi", "pacman", "sh", "id", "stat", "ldd", "nvcc"):
             command = self.bin / name
             command.write_text(DOUBLE)
             command.chmod(0o755)
@@ -414,7 +432,7 @@ class PlanTests(unittest.TestCase):
                      "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
                      "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF", "ENGINE_BUILD", "NO_ENGINE_MESSAGE",
                      "LDD_MISSING", "CUDA_LIB_DIR", "DECOY_ENGINE", "LDD_ELSEWHERE", "LDD_STATIC",
-                     "LD_LIBRARY_PATH", "LD_PRELOAD"):
+                     "LD_LIBRARY_PATH", "LD_PRELOAD", "NO_NVIDIA"):
             self.env.pop(name, None)
         self.env["CUDA_LIB_DIR"] = str(self.cuda_lib)
         # Redirect even shell builtin /home probes, and the cgroup mount's
@@ -3063,6 +3081,122 @@ esac
         self.assertFalse(self.ldso_conf.exists())
         self.assertEqual(self.calls().count(["sudo", "ldconfig"]), 2, self.calls())
         self.assertNotIn("RESTORE INCOMPLETE", result.stderr)
+
+    TUPLE_KEYS = ["commit", "toolchain", "features", "engine", "engine-source", "engine-vendored", "nvcc",
+                  "member.worker", "member.weaver-admin", "member.weaver-trace-relay", "member.weaver-gate",
+                  "member.weaver-spu", "member.weaver-state", "member.busybox", "member.busybox.applets",
+                  "library.libggml.so.0.9.1", "library.libllama.so.0.0.1",
+                  "driver", "cudart", "cublas", "cublaslt", "cccl", "gpus", "gpu.0", "gpu.1"]
+
+    def test_a_verified_install_prints_and_records_the_install_tuple(self):
+        """**A verified install ends with the install tuple** (the Planner's
+        brief of 2026-11-09): printed under `== tuple` before the closing
+        line and written whole to the stack record's install-tuple, one
+        `key = value` line per fact in a fixed order: the members and the
+        libraries by their installed sha256 in full, the engine as the lock
+        pins it, the runtime files the installed SPU resolves, and the GPUs
+        in PCI bus order. A plan writes none. Perturbations: drop the sort
+        and gpu.0 is the bus-41 card; drop the write and the record holds
+        nothing; collect no library names and the keys differ; print the
+        tuple after the closing line and the order fails; read the runtime
+        in the operator's environment and its library path reaches ldd;
+        read the lock unfiltered and the metadata call carries no
+        platform."""
+        # The operator's shell carries its own library path, which neither
+        # the install's check nor the tuple's runtime read may take.
+        result = self.library_install(LD_LIBRARY_PATH="/operator/out/lib")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        seen = [c[1] for c in self.calls() if c[0] == "ldd-env"]
+        self.assertEqual(seen, [str(self.lib_dir)] * 2, "the check and the tuple each read as admin runs the SPU")
+        self.assertLess(result.stdout.index("== tuple"), result.stdout.index("== the box is at"))
+        block = result.stdout.split("== tuple\n", 1)[1].split("\n\n", 1)[0].splitlines()
+        self.assertEqual(block[-1], f"  written to {self.stack / 'install-tuple'}")
+        printed = [line[2:] for line in block[:-1]]
+        record = (self.stack / "install-tuple").read_text().splitlines()
+        self.assertEqual(record, printed)
+        facts = dict(line.split(" = ", 1) for line in record)
+        self.assertEqual([line.split(" = ", 1)[0] for line in record], self.TUPLE_KEYS)
+        installed = self.root / "installed"
+        for member in ("worker", "weaver-spu", "busybox.applets"):
+            self.assertEqual(facts[f"member.{member}"], hashlib.sha256((installed / member).read_bytes()).hexdigest())
+        self.assertEqual(facts["library.libllama.so.0.0.1"],
+                         hashlib.sha256(b"fixture libllama b").hexdigest())
+        self.assertEqual(facts["commit"], "abcdef0")
+        self.assertEqual(facts["features"], "weaver-spu/cuda,weaver-state/sqlite")
+        self.assertEqual(facts["engine"], "llama-cpp-sys-2 0.1.0")
+        self.assertEqual(facts["engine-source"], "git+https://fixture.invalid/llama-cpp-rs?rev=f00d#f00dfixtureforkcommit")
+        self.assertEqual(facts["engine-vendored"], "e21cdc11fixturevendoredcommit")
+        self.assertEqual(facts["nvcc"], "99.9, V99.9.1")
+        self.assertEqual(facts["driver"], "fixture-driver")
+        self.assertEqual(facts["cudart"], "/fixture/lib/libcudart.so.99")
+        self.assertEqual(facts["cublaslt"], "/fixture/lib/libcublasLt.so.99")
+        self.assertEqual(facts["cccl"], "3.3.4-1")
+        self.assertEqual(facts["gpus"], "2")
+        self.assertEqual(facts["gpu.0"], "00000000:01:00.0, Fixture GPU A, 1024 MiB")
+        self.assertEqual(facts["gpu.1"], "00000000:41:00.0, Fixture GPU B, 2048 MiB")
+        # The lock read filtered to the host, so an offline cache a build
+        # filled answers it.
+        metadata = [c for c in self.calls() if c[:2] == ["cargo", "metadata"] and "--no-deps" not in c]
+        self.assertTrue(metadata and all("--filter-platform" in c for c in metadata), metadata)
+        tee = [c for c in self.calls() if c[:2] == ["sudo", "tee"] and c[-1].endswith("/install-tuple")]
+        self.assertEqual(len(tee), 1, self.calls())
+        self.assertIn(["sudo", "chmod", "0644", str(self.stack / "install-tuple")], self.calls())
+
+    def test_a_plan_writes_no_install_tuple_and_says_the_install_will(self):
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"--install ends, once verified, by writing the install tuple to {self.stack / 'install-tuple'}",
+                      result.stdout)
+        self.assertNotIn("== tuple", result.stdout)
+        self.assertFalse((self.stack / "install-tuple").exists())
+        self.assert_unprivileged()
+
+    def test_the_install_tuple_reads_unknown_where_the_box_cannot_answer(self):
+        """**A fact the box cannot answer reads `unknown`, and no key is left
+        out**: no driver to ask, no SPU to resolve, no lock to read and no
+        toolchain file. Perturbation: print nothing for an unanswered fact
+        and the keys differ."""
+        self.env["NO_NVIDIA"] = "1"
+        empty = self.root / "empty-repo"
+        empty.mkdir()
+        script = (f"source {shlex.quote(str(self.repo / 'deploy' / 'engine-libraries.sh'))}; "
+                  f"source {shlex.quote(str(self.repo / 'deploy' / 'install-tuple.sh'))}; "
+                  f"install_tuple {shlex.quote(str(empty))} fixture-commit {shlex.quote(str(self.root / 'no-bin'))} "
+                  f"{shlex.quote(str(self.root / 'no-lib'))} fixture-features 'worker' 'libllama.so.0.0.1'")
+        env = {**self.env, "PATH": str(self.bin) + os.pathsep + "/usr/bin:/bin"}
+        (self.bin / "cargo").write_text("#!/bin/sh\nexit 101\n")
+        (self.bin / "git").write_text("#!/bin/sh\nexit 128\n")
+        ran = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
+        self.assertEqual(list(facts), ["commit", "toolchain", "features", "engine", "engine-source", "engine-vendored",
+                                       "nvcc", "member.worker", "library.libllama.so.0.0.1", "driver", "cudart",
+                                       "cublas", "cublaslt", "cccl", "gpus"])
+        for key in ("toolchain", "engine-source", "engine-vendored", "member.worker", "library.libllama.so.0.0.1",
+                    "driver", "cudart", "cublas", "cublaslt"):
+            self.assertEqual(facts[key], "unknown", key)
+        self.assertEqual(facts["engine"], "llama-cpp-sys-2 unknown")
+        self.assertEqual(facts["commit"], "fixture-commit", "the commit is the caller's, never read again")
+        self.assertEqual(facts["gpus"], "0")
+
+    def test_bootstrap_records_the_same_install_tuple_after_its_install(self):
+        """**The two scripts write one record from one function**: bootstrap
+        sources deploy/install-tuple.sh, as update-stack does, calls it after
+        its install and stack record, before its closing line, and writes it
+        to the record's install-tuple, 0644; neither script defines the
+        function itself. Perturbation: inline a second copy in either script
+        and this fails."""
+        for name in ("bootstrap-stack.sh", "update-stack.sh"):
+            text = (self.repo / "deploy" / name).read_text()
+            with self.subTest(script=name):
+                self.assertIn('source "$REPO/deploy/install-tuple.sh"', text)
+                self.assertNotIn("install_tuple() {", text)
+                self.assertEqual(text.count("TUPLE=$(install_tuple "), 1)
+                self.assertIn('sudo tee "$STACK/install-tuple"', text)
+                self.assertIn('sudo chmod 0644 "$STACK/install-tuple"', text)
+        text = (self.repo / "deploy" / "bootstrap-stack.sh").read_text()
+        self.assertLess(text.index("w agent-directory"), text.index("TUPLE=$(install_tuple "))
+        self.assertLess(text.index("TUPLE=$(install_tuple "), text.index('say "installed at $REV"'))
 
     def window_admin(self, extra=""):
         """A stand-in admin for the install window: each verb logged with

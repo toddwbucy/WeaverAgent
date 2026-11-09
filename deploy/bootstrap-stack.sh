@@ -18,7 +18,9 @@
 # `/etc/weaver/stack/` holds the box-wide defaults, one file per key, which
 # `create-agent.sh` copies into each new agent's root: `worker-binary`,
 # `spu-binary`, `gate-binary`, `shell-binary`, `coordination-root` and `library-path`, and for
-# the scripts alone `prefix` and `agent-directory`. `headroom-bytes` and
+# the scripts alone `prefix`, `agent-directory` and `install-tuple`, the
+# box-side half of the deployment tuple (deploy/install-tuple.sh), which
+# update-stack.sh rewrites after each verified install. `headroom-bytes` and
 # `load-bound-seconds` are optional, and this script writes neither. An
 # operator who writes one into the record has it copied into every agent made
 # after. The admin base is created empty here, root-owned 0755, and gains one
@@ -52,6 +54,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 source "$REPO/deploy/retired-python.sh"
 source "$REPO/deploy/engine-libraries.sh"
+source "$REPO/deploy/install-tuple.sh"
 
 # The operator's cargo, rustup and PATH do the building; root has none of
 # them. Measured 2026-09-30: under sudo the toolchain read empty and nvcc
@@ -189,11 +192,18 @@ done
 loader_dir CUDA_LIB_DIR "$CUDA_LIB_DIR"
 
 say "tree"
+# The install tuple names the commit in full, read here and not after the
+# build, since the checkout may move during it. A status that cannot be read
+# refuses rather than reading as a clean tree.
 if git -C "$REPO" rev-parse --short HEAD >/dev/null 2>&1; then
   REV=$(git -C "$REPO" rev-parse --short HEAD)
-  [ -z "$(git -C "$REPO" status --porcelain=v1 --untracked-files=all)" ] || REV="$REV-dirty"
+  COMMIT=$(git -C "$REPO" rev-parse HEAD)
+  TREE_STATUS=$(git -C "$REPO" status --porcelain=v1 --untracked-files=all) \
+    || die "cannot read the tree's status, so whether $REV is the tree built is unknown"
+  [ -z "$TREE_STATUS" ] || { REV="$REV-dirty"; COMMIT="$COMMIT-dirty"; }
 else
   REV="nogit-$(sha256sum Cargo.lock | cut -c1-12)"
+  COMMIT=$REV
 fi
 plan "revision      $REV"
 BUILT=$(cargo metadata --format-version 1 --no-deps --offline --locked 2>/dev/null \
@@ -316,7 +326,11 @@ build_busybox() {
 }
 build_busybox || die "the shell's busybox did not build"
 LIBS=()
+LIB_NAMES=()
 for g in $LIB_GLOBS; do for f in "$SYS_OUT"/$g; do [ -e "$f" ] && LIBS+=("$f"); done; done
+# The versioned files, which the install tuple names by digest; the links
+# carry no content of their own.
+for f in "${LIBS[@]}"; do [ -L "$f" ] || LIB_NAMES+=("${f##*/}"); done
 [ ${#LIBS[@]} -gt 0 ] || die "no engine libraries matched $LIB_GLOBS under $SYS_OUT"
 plan "engine out    $SYS_OUT"
 plan "members       $MEMBERS"
@@ -329,7 +343,7 @@ for b in $MEMBERS; do plan "install $b -> $PREFIX/bin/$b  $(sha256sum "$BUILT/$b
 plan "cp -a ${#LIBS[@]} library files and links -> $PREFIX/lib"
 plan "write $LDSO_CONF = $PREFIX/lib and $CUDA_LIB_DIR, then ldconfig"
 plan "install busybox -> $PREFIX/bin/busybox (root, 0755) and busybox.applets beside it (root, 0644)"
-plan "write $STACK/{worker-binary,spu-binary,gate-binary,shell-binary,coordination-root,library-path,prefix,agent-directory}  (root, 0755 / 0644)"
+plan "write $STACK/{worker-binary,spu-binary,gate-binary,shell-binary,coordination-root,library-path,prefix,agent-directory,install-tuple}  (root, 0755 / 0644)"
 plan "install -d $ADMIN_BASE (root:root 0755): empty; create-agent.sh adds one root per agent"
 plan "install -d $AGENT_DIR (root:root 0755): territories, each root:weaver-<name>-state 0710, not setgid, its trace root:weaver-<name>-trace 0640"
 [ -d "$PREFIX/models" ] && plan "$PREFIX/models stands: $(ls "$PREFIX/models" | wc -l) entries" || plan "$PREFIX/models is absent: copy the artifacts before declaring an agent"
@@ -386,6 +400,15 @@ plan "admin base $ADMIN_BASE (empty)"
 # The territories' base is root's, so no other principal can make a name in it
 # and each territory is reached by group, never by an access entry (#28).
 sudo install -d -o root -g root -m 0755 "$AGENT_DIR"
+
+# **The install tuple** (deploy/install-tuple.sh), read from what this run
+# installed, the same record update-stack.sh writes after each install.
+say "tuple"
+TUPLE=$(install_tuple "$REPO" "$COMMIT" "$PREFIX/bin" "$PREFIX/lib" "$FEATURES" "$MEMBERS busybox busybox.applets" "${LIB_NAMES[*]}")
+printf '%s\n' "$TUPLE" | sed 's/^/   /'
+printf '%s\n' "$TUPLE" | sudo tee "$STACK/install-tuple" >/dev/null
+sudo chmod 0644 "$STACK/install-tuple"
+plan "written to $STACK/install-tuple"
 
 say "installed at $REV"
 plan "next: deploy/create-agent.sh <name> --artifact <path> [--apply], one agent at a time"

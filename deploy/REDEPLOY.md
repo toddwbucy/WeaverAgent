@@ -14,7 +14,8 @@ already stood up: it needs the stack record to read and a git tree to name the b
 and it refuses without them; a box with no agent root is updated all the same (#39).
 It plans and installs the members, the shell and the engine libraries alike, so the
 commit its closing line names is true of everything that commit builds (the
-operator's ruling of 2026-11-09). Its `--install` unloads every
+operator's ruling of 2026-11-09), and a verified install ends by printing and
+recording the install tuple (section 3, step 6). Its `--install` unloads every
 agent before it replaces a binary, waiting on each graceful unload up to 300 seconds
 (`--unload-timeout <s>`) and then joining it with `force-unload`, which still takes the
 leave's save point, and prints which ended the run. A box on the box-wide layout
@@ -49,7 +50,7 @@ something this runbook does not mention, the runbook is what gets amended.
 
 | Piece | Where | Made by |
 |---|---|---|
-| Stack record: the box-wide defaults, one file per key, read by the scripts and never by admin | `/etc/weaver/stack/` | bootstrap |
+| Stack record: the box-wide defaults, one file per key, read by the scripts and never by admin, and the install tuple | `/etc/weaver/stack/` | bootstrap; update-stack rewrites `install-tuple` |
 | Admin base, empty until an agent is made | `/etc/weaver/admin/` (root 0755, and a delegated invocation under sudo reads only this one) | bootstrap |
 | Agent root: the agent's admin configuration, one file per key, copied from the stack record, plus `territory`, `operator` and `roles.toml` | `/etc/weaver/admin/<name>/` (root 0755, files 0644) | create-agent |
 | Sudo rule: the connector's fixed command lines | `/etc/sudoers.d/weaver-<name>` (root 0440) | create-agent |
@@ -323,7 +324,28 @@ What it does, so the log can say which step a failure was at:
    `headroom-bytes` or `load-bound-seconds` on every agent writes
    it into the record before making agents. Creates the admin base `/etc/weaver/admin`
    empty (root 0755) and the agent directory `/var/lib/weaver-agent` (root 0755), under
-   which each territory is root:weaver-<name>-state 0710, not setgid.
+   which each territory is root:weaver-<name>-state 0710, not setgid. Then prints
+   and writes `install-tuple`, the box-side half of the deployment tuple, which
+   `update-stack.sh` rewrites after each verified install. One `key = value` line
+   per fact, in this order, with `unknown` where the box cannot answer
+   (`deploy/install-tuple.sh` states each key); the values below are shapes:
+
+   ```text
+   commit = <40 hex>[-dirty]
+   toolchain = nightly-<date>
+   features = weaver-spu/cuda,weaver-state/sqlite
+   engine = llama-cpp-sys-2 <version>
+   engine-source = git+<fork url>?rev=<40 hex>#<40 hex>
+   engine-vendored = <40 hex>
+   nvcc = <release>, V<version>
+   member.<name> = <64 hex>              (one per installed member, the shell's two files among them)
+   library.<versioned file> = <64 hex>   (one per engine library)
+   driver = <driver version>
+   cudart = <resolved file>              (and cublas, cublaslt)
+   cccl = <package version>
+   gpus = <count>
+   gpu.<n> = <pci bus id>, <name>, <memory>   (in PCI bus order)
+   ```
 
 The SPU is the Rust implementation. `create-agent.sh --spu /absolute/path/to/custom-spu`
 can still select a separately installed Rust binary for one agent. The Python zipapp
@@ -394,8 +416,8 @@ after the seeding turn (`HowToDeployANewAgent.md` section 4).
 ## 5. What to record in the run log
 
 The box facts of step 0. The archive path and its `SHA256SUMS` line count. What
-`--purge` printed under "what remains". The revision `bootstrap-stack.sh` named and its
-test count. Per agent: the declaration's sha256, the artifact's sha256, the load
+`--purge` printed under "what remains". The revision `bootstrap-stack.sh` named, its
+test count and the install tuple it printed. Per agent: the declaration's sha256, the artifact's sha256, the load
 event's `composer` and device, the constituents and their cgroup, and how long the load
 took. Anything the scripts refused and what was done about it, since a refusal is the
 thing the next box will hit first.

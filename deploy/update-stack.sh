@@ -39,7 +39,11 @@
 # libraries included, and a partial install is a confound in every
 # measurement taken on the box afterwards. The libraries are planned and
 # installed beside the members, from the output directory cargo names for
-# the engine the build just compiled.
+# the engine the build just compiled. **A verified install ends with the
+# install tuple** (deploy/install-tuple.sh): the box-side half of the
+# deployment tuple, printed under `== tuple` and written to the stack record
+# as `install-tuple`, so a run's report cites one record of what the box was
+# built from and runs on.
 set -euo pipefail
 
 ORIGINAL_ARGS=("$@")
@@ -67,6 +71,7 @@ die() { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 
 source "$REPO/deploy/retired-python.sh"
 source "$REPO/deploy/engine-libraries.sh"
+source "$REPO/deploy/install-tuple.sh"
 
 read_key() { cat "$STACK/$1" 2>/dev/null || true; }
 
@@ -833,6 +838,9 @@ else
   printf '  on branch %s, not fast-forwarding\n' "$BRANCH"
 fi
 AFTER=$(git rev-parse --short HEAD)
+# The install tuple names this commit in full, read here and not after the
+# build, since the checkout may move during it.
+COMMIT=$(git rev-parse HEAD)
 printf '  %s -> %s\n' "$BEFORE" "$AFTER"
 # **The run checks with the code it installs** (Codex on #82): a fast-forward
 # that moved HEAD has changed this very script, and the checks above ran from
@@ -1010,6 +1018,7 @@ done
 # counted here and not listed.
 LIB_CHANGED=()
 LIB_LINKS=()
+LIB_NAMES=()
 lib_files=0
 for g in $LIB_GLOBS; do
   for f in "$SYS_OUT"/$g; do
@@ -1023,6 +1032,7 @@ for g in $LIB_GLOBS; do
     # A pattern that matched nothing stands as itself and names no file.
     [ -f "$f" ] || continue
     lib_files=$((lib_files + 1))
+    LIB_NAMES+=("$name")
     n=$(sha256sum -- "$f" | cut -d' ' -f1)
     if [ -f "$LIB_DIR/$name" ] && [ ! -L "$LIB_DIR/$name" ]; then
       d=$(sha256sum -- "$LIB_DIR/$name" | cut -d' ' -f1)
@@ -1089,6 +1099,7 @@ else
       "$agent" "$agent" "$agent" "$agent" "$agent"
   done
 fi
+printf '  --install ends, once verified, by writing the install tuple to %s\n' "$STACK/install-tuple"
 [ "$INSTALL" -eq 1 ] || printf '  plan only: no rule is moved and no agent unloaded\n'
 
 # **Binaries current is not the same as the box being finished.** A run that
@@ -1614,4 +1625,14 @@ say "the connector rules, put back"
 [ ${#HELD_RULES[@]} -gt 0 ] || printf '  none was held\n'
 COMPLETED=1
 restore_rules || die "the install stands verified, but a connector rule named above did not come back: put it back by hand"
+# **The install tuple, read from what is installed** (deploy/install-tuple.sh):
+# the members and libraries by their installed digests, the engine as the
+# lock pins it, the runtime the installed SPU resolves and the GPUs in PCI
+# bus order. It replaces the previous run's record whole.
+say "tuple"
+TUPLE=$(install_tuple "$REPO" "$COMMIT" "$BIN_DIR" "$LIB_DIR" "$FEATURES" "$MEMBERS $SHELL_FILES" "${LIB_NAMES[*]}")
+printf '%s\n' "$TUPLE" | sed 's/^/  /'
+printf '%s\n' "$TUPLE" | sudo tee "$STACK/install-tuple" >/dev/null
+sudo chmod 0644 "$STACK/install-tuple"
+printf '  written to %s\n' "$STACK/install-tuple"
 say "the box is at $AFTER"
