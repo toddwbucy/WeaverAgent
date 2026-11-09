@@ -6737,6 +6737,34 @@ class AgentTupleResolveTests(unittest.TestCase):
         with self.assertRaisesRegex(self.tuple.HeaderRefused, "unreadable"):
             self.resolve(closed / "m.gguf")
 
+    def test_a_safetensors_directory_names_its_container_and_kind(self):
+        """The door's refusal for a container without the GGUF magic still
+        names the container and the kind admission chose by the magic, so
+        the rows door can match the measurement and withhold rows 8 and 9.
+        Perturbation: drop either member from the refusal and its
+        assertion fails."""
+        model = self.dir / "native"
+        model.mkdir()
+        (model / "model.safetensors").write_bytes(b"\x08\0\0\0\0\0\0\0{}      ")
+        source = (DEPLOY / "agent_tuple.py").read_bytes()
+        ran = subprocess.run([sys.executable, "-I", "-", "header", str(model)], input=source,
+                             capture_output=True, cwd=self.dir)
+        self.assertEqual(ran.returncode, 1, ran.stderr)
+        answer = json.loads(ran.stdout)
+        self.assertEqual(answer["container"], "safetensors")
+        self.assertEqual(answer["resolved"], str(model / "model.safetensors"))
+        self.assertIn("no GGUF magic", answer["refused"])
+
+    def test_a_later_shard_declared_reads_the_first_shards_header(self):
+        """**The header is the first shard's whatever shard is declared**, as
+        artifact.rs `pin` opens it. Perturbation: read the declared shard and
+        its missing magic refuses the header."""
+        _gguf(self.dir / "m-00001-of-00002.gguf", GRANITE_KEYS, GRANITE_TENSORS)
+        (self.dir / "m-00002-of-00002.gguf").write_bytes(b"tensor data only")
+        facts = self.tuple.read_header(str(self.dir / "m-00002-of-00002.gguf"))
+        self.assertEqual(facts["architecture"], "granite")
+        self.assertIsNone(facts["resolved"], "a declared file is its own measurement path")
+
     def test_the_header_door_reads_a_directory_artifact(self):
         """The door end to end: a directory holding one GGUF answers its
         header facts and names the container, and row 1 prints it.
@@ -6862,7 +6890,8 @@ class AgentTupleRowTests(unittest.TestCase):
         seen = self.tuple.artifact_rows(self.declaration(), self.header, None,
                                         {"weights_hash": "c" * 64, "line": 7})
         self.assertIn("c" * 64, seen[1])
-        self.assertIn("[recorded: the latest model.measurement in the sink, line 7", seen[1])
+        self.assertIn("[recorded: the latest model.measurement in the sink naming "
+                      "/models/granite.gguf, line 7]", seen[1])
 
     def test_a_contested_architecture_is_not_printed_as_derivable(self):
         """Perturbation: treat any registry hit as derivable and llama's
@@ -6923,6 +6952,59 @@ class AgentTupleRowTests(unittest.TestCase):
         self.assertIn("[FAULT:", lines[0])
         self.assertIn("none declared", lines[1])
 
+
+    def test_rows_eight_and_nine_are_the_gguf_paths_alone(self):
+        """**Rows 8 and 9 state the GGUF path's rule** (Codex on #514): a
+        safetensors container is served by the native path, and a header
+        refused before its magic names no kind, so both rows read absent.
+        Perturbation: print row 9 unconditionally and the safetensors and
+        unknown cases read derivable."""
+        decl = self.declaration()
+        gguf = self.tuple.device_rows(decl, self.header, None, None)
+        self.assertTrue([l for l in gguf if "row 8" in l and "[derivable:" in l], gguf)
+        self.assertTrue([l for l in gguf if "row 9" in l and "[derivable:" in l], gguf)
+        native = self.tuple.device_rows(decl, None, None, None, container="safetensors")
+        unknown = self.tuple.device_rows(decl, None, None, None)
+        for case, lines in (("safetensors", native), ("unknown", unknown)):
+            with self.subTest(case):
+                for number in ("row 8", "row 9"):
+                    found = [l for l in lines if number in l]
+                    self.assertEqual(len(found), 1, lines)
+                    self.assertIn("[absent:", found[0])
+        self.assertIn("the native path, decoder/native.rs and native_pair.rs", native[-1])
+        self.assertIn("no container kind is known", unknown[-1])
+
+    def test_a_directory_measurement_is_matched_by_its_container(self):
+        """**The measurement names the container a directory resolved to**
+        (Codex on #514; residency.rs Resident.artifact, main.rs
+        render_measurement), so the rows door matches the header door's
+        `resolved`, and the declared directory stays row 1's artifact.
+        Perturbation: match the declared path and the hash reads absent."""
+        import contextlib
+        import io
+        model = self.dir / "granite"
+        container = model / "granite.safetensors"
+        declaration = self.dir / "agent.toml"
+        declaration.write_text('[spu-instruction.decoder.model-binding]\n'
+                               f'artifact = "{model}"\ndevices = [0]\n')
+        sink = self.dir / "trace.ndjson"
+        measurement = {"kind": "model.measurement", "run": "r-1", "sequence": 3,
+                       "payload": {"model": str(container), "weights_hash": "c" * 64,
+                                   "adapter": None}}
+        sink.write_text(json.dumps({"kind": "load", "run": "r-1", "sequence": 0, "payload": {}})
+                        + "\n" + json.dumps(measurement) + "\n")
+        header = json.dumps({"refused": "no GGUF magic", "container": "safetensors",
+                             "resolved": str(container)})
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            self.tuple.main(["rows", "--declaration", str(declaration), "--header-json", header,
+                             "--sink", str(sink)])
+        out = printed.getvalue()
+        self.assertRegex(out, r"row 1 +artifact +" + re.escape(str(model)) + r" +\[recorded:")
+        self.assertRegex(out, r"row 1 +container +" + re.escape(str(container)) + r" +\[derivable:")
+        self.assertIn("c" * 64 + "  [recorded: the latest model.measurement in the sink naming "
+                      + str(container) + ", line 2]", out)
+        self.assertRegex(out, r"row 9 +cpu offload +- +\[absent: the native path")
 
     LINEAGE = {"save_point": "e" * 64, "run": "r-0", "sequence": 5, "turn": 1,
                "named_at_restore": False}

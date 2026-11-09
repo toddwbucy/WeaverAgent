@@ -347,8 +347,9 @@ Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
 - **Row 1, the artifact and its weights hash.** The hash is admission's BLAKE3, which no
   tool on the box computes. For an adapted agent it is the declared `base-blake3`, since
   admission refuses a base that differs. For a base-only agent it is the sink's latest
-  `model.measurement` naming the declared artifact, and `absent` where the sink holds
-  none: the load itself records no hash.
+  `model.measurement` naming the path admission resolved (the declared file, or the
+  container a declared directory resolves to), and `absent` where the sink holds none:
+  the load itself records no hash.
 - **Rows 2 and 3, the family, the chat template and the formats**, from the artifact's
   GGUF header. The header is read as the agent's own account, the one admission reads it
   as, and never as root. A declared directory is first resolved to its one container by
@@ -360,8 +361,10 @@ Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
   `nvidia-smi --query-gpu=pci.bus_id,name,memory.total --format=csv,noheader`, put in
   bus order. A difference from the install tuple's list in name, memory, count or order
   is a `FAULT`: the install tuple is stale.
-- **Row 8, the placement**, by PAIR-3's even split of the header's layer count over the
-  declared devices.
+- **Rows 8 and 9, the placement and the offload**, for a GGUF container: PAIR-3's even
+  split of the header's layer count over the declared devices, and every layer
+  offloaded. A container without the GGUF magic is served by the native path, and both
+  rows read `absent`, as they do where no container kind is known.
 - **The restore rows.** The declaration's `[restore]`, or none declared, and what the
   load restored, from the load event's `lineage`. With no `[restore]` a reload restores
   the manifest's latest save point. A declared save point the lineage does not name, by

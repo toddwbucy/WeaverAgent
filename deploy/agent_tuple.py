@@ -93,7 +93,15 @@ ARCHITECTURE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 
 class HeaderRefused(Exception):
-    """A header this reader cannot bound or does not understand."""
+    """A header this reader cannot bound or does not understand. Where the
+    artifact resolved, `resolved` names the path admission's measurement
+    carries as `model`, and where its magic was read, `container` names the
+    backend admission chose by it."""
+
+    def __init__(self, message, container=None, resolved=None):
+        super().__init__(message)
+        self.container = container
+        self.resolved = resolved
 
 
 class _Reader:
@@ -244,23 +252,40 @@ def resolve_artifact(path):
     return path
 
 
+def header_file(resolved):
+    """The file whose header admission reads: the split's first shard where
+    the resolved path names any shard of one, as artifact.rs `pin` opens it,
+    and the resolved path itself otherwise."""
+    parts = split_pattern(os.path.basename(resolved))
+    if parts is None:
+        return resolved
+    stem, count, suffix = parts
+    return os.path.join(os.path.dirname(resolved), f"{stem}-{1:05}-of-{count:05}{suffix}")
+
+
 def read_header(path):
     """The header facts the tuple rows read, as a dict, the declared path
-    resolved first as admission resolves it, and `resolved` naming the
-    container where a directory resolved.
+    resolved first as admission resolves it. `container` is `gguf`, and
+    `resolved` names the container where a directory resolved, the path
+    admission's measurement carries as `model` (residency.rs Resident.artifact).
 
     Raises HeaderRefused for an artifact that does not resolve, or a file
-    that is not a GGUF this reader bounds.
+    that is not a GGUF this reader bounds. A file without the GGUF magic is
+    the one admission reads as safetensors (artifact.rs read_header), and
+    its refusal says so.
     """
     resolved = resolve_artifact(path)
-    fd = os.open(resolved, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    named = str(resolved) if str(resolved) != str(path) else None
+    fd = os.open(header_file(str(resolved)), os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
     with os.fdopen(fd, "rb") as handle:
         if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-            raise HeaderRefused("the resolved artifact is not a regular file")
+            raise HeaderRefused("the resolved artifact is not a regular file", resolved=named)
         size = os.fstat(handle.fileno()).st_size
         reader = _Reader(handle, size)
         if reader.take(4, "magic") != GGUF_MAGIC:
-            raise HeaderRefused("not a GGUF file (magic)")
+            raise HeaderRefused("no GGUF magic, so admission reads it as safetensors "
+                                "(artifact.rs read_header), and this reader reads GGUF "
+                                "headers only", container="safetensors", resolved=named)
         version = reader.u32("version")
         if version not in GGUF_VERSIONS:
             raise HeaderRefused(f"GGUF version {version}")
@@ -302,7 +327,8 @@ def read_header(path):
         "split_count": split if isinstance(split, int) else None,
         "tensor_count": tensors,
         "tensor_types": dict(sorted(types.items())),
-        "resolved": resolved if resolved != path else None,
+        "container": "gguf",
+        "resolved": named,
     }
 
 
@@ -552,28 +578,34 @@ def binding_of(declaration):
     return declaration.get("spu-instruction", {}).get("decoder", {}).get("model-binding", {})
 
 
-def artifact_rows(declaration, header, header_refusal, measurement):
+def artifact_rows(declaration, header, header_refusal, measurement, resolved=None, matched=None):
     """Rows 1, 2 and 3: the artifact, its hash, its family and template, its
-    formats."""
+    formats. `resolved` is the container a directory resolved to, and
+    `matched` the path the sink's measurement was matched against."""
     binding = binding_of(declaration)
     adapter = binding.get("adapter")
+    resolved = resolved or (header or {}).get("resolved")
+    matched = matched or resolved or binding.get("artifact")
     lines = [row(1, "artifact", binding.get("artifact", "<none declared>"), "recorded",
-                 "model.measurement's model, on each generation")]
-    if header is not None and header.get("resolved"):
-        lines.append(row(1, "container", header["resolved"], "derivable",
-                         "the declared directory's one container, by admission's rule "
-                         "(artifact.rs container_within), whose header rows 2, 3 and 8 read"))
+                 "the declared reference; model.measurement's model names it, or the "
+                 "container a directory resolves to (residency.rs Resident.artifact)")]
+    if resolved:
+        lines.append(row(1, "container", resolved, "derivable",
+                         "what the declared directory resolves to (its one container, or a "
+                         "split's first shard), by admission's rule (artifact.rs "
+                         "container_within), the path model.measurement names"))
     if adapter is not None:
         lines.append(row(1, "weights_hash", adapter["base-blake3"], "derivable",
                          "BLAKE3 by SPU Spec 3's rule; equal to the declared base-blake3, "
                          "since admission refuses a load whose base differs (LORA-2)"))
     elif measurement is not None:
         lines.append(row(1, "weights_hash", measurement["weights_hash"], "recorded",
-                         f"the latest model.measurement in the sink, line {measurement['line']}"))
+                         f"the latest model.measurement in the sink naming {matched}, "
+                         f"line {measurement['line']}"))
     else:
         lines.append(row(1, "weights_hash", "-", "absent",
-                         "the load records no weights_hash and the sink holds no generation; "
-                         "each generation's model.measurement carries it"))
+                         f"the load records no weights_hash and the sink holds no "
+                         f"model.measurement naming {matched}, which each generation's carries"))
     if header is None:
         why = header_refusal or "no GGUF header was read"
         for number, field in ((2, "family"), (2, "chat template"), (3, "file type"),
@@ -628,8 +660,16 @@ def adapter_rows(declaration):
                 "the Open half is dropped on the live path")]
 
 
-def device_rows(declaration, header, box_gpus, live_gpus, engine=None):
-    """Rows 7, 8 and 9: the devices, the placement and the offload."""
+CONTAINERS = ("gguf", "safetensors")
+
+NATIVE_PATH = ("the native path, decoder/native.rs and native_pair.rs; PAIR-3's division "
+               "and placement_params are the GGUF path's")
+
+
+def device_rows(declaration, header, box_gpus, live_gpus, engine=None, container=None):
+    """Rows 7, 8 and 9: the devices, the placement and the offload. Row 7
+    holds for every backend (PAIR-1's mask is the harness's). Rows 8 and 9
+    state the GGUF path's rule and are stated for a GGUF container only."""
     devices = binding_of(declaration).get("devices", [])
     lines = [row(7, "devices", json.dumps(devices), "absent",
                  "in the record only inside the declaration's sha256")]
@@ -655,6 +695,12 @@ def device_rows(declaration, header, box_gpus, live_gpus, engine=None):
             if 0 <= ordinal < len(live_gpus):
                 lines.append(row(7, f"live {ordinal}", live_gpus[ordinal], "derivable",
                                  f"nvidia-smi now, {premise}"))
+    kind = (header or {}).get("container") or container
+    if kind != "gguf":
+        why = NATIVE_PATH if kind == "safetensors" else "no container kind is known: " + (
+            "the header read named none")
+        return lines + [row(8, "placement", "-", "absent", why),
+                        row(9, "cpu offload", "-", "absent", why)]
     layers = header.get("block_count") if header else None
     counts = even_division(layers, len(devices)) if layers else None
     if counts is None:
@@ -846,7 +892,11 @@ def main(argv):
         try:
             print(json.dumps(read_header(args.artifact), sort_keys=True))
         except HeaderRefused as refusal:
-            print(json.dumps({"refused": str(refusal)}))
+            answer = {"refused": str(refusal)}
+            answer.update({key: value for key, value in
+                           (("container", refusal.container), ("resolved", refusal.resolved))
+                           if value is not None})
+            print(json.dumps(answer, sort_keys=True))
             return 1
         except OSError as error:
             print(json.dumps({"refused": f"unreadable: {error.strerror}"}))
@@ -866,7 +916,7 @@ def main(argv):
             install = read_install_tuple(args.install_tuple)
         except (InstallTupleRefused, OSError) as error:
             install_refusal = f"the install tuple is refused: {error}"
-    facts, refusal = None, None
+    facts, refusal, resolved, container = None, None, None, None
     if args.header_json is not None:
         try:
             answer = json.loads(args.header_json)
@@ -878,20 +928,26 @@ def main(argv):
             refusal = f"the header reader refused: {answer['refused']}"
         else:
             facts = answer
+        resolved = answer.get("resolved") if isinstance(answer.get("resolved"), str) else None
+        container = answer.get("container") if answer.get("container") in CONTAINERS else None
+    # **The measurement names the path admission resolved**, the container
+    # for a directory (residency.rs Resident.artifact, main.rs
+    # render_measurement), so that is the path matched.
+    matched = resolved or binding_of(declaration).get("artifact")
     load_event, measurement = None, None
     if args.sink:
         with open_sink(args.sink) as handle:
-            load_event, measurement = scan_sink(handle, args.from_line,
-                                                binding_of(declaration).get("artifact"))
+            load_event, measurement = scan_sink(handle, args.from_line, matched)
     live = live_gpus(args.live_gpus_csv) if args.live_gpus_csv else None
     engine = None
     if install is not None:
         engine = (f"fork {install['facts']['engine-source'].rpartition('#')[2]}, "
                   f"llama.cpp {install['facts']['engine-vendored']}")
     lines = (box_rows(args.install_tuple or "-", install, install_refusal)
-             + artifact_rows(declaration, facts, refusal, measurement)
+             + artifact_rows(declaration, facts, refusal, measurement, resolved, matched)
              + adapter_rows(declaration)
-             + device_rows(declaration, facts, install["gpus"] if install else None, live, engine)
+             + device_rows(declaration, facts, install["gpus"] if install else None, live, engine,
+                           container)
              + state_rows(declaration, load_event)
              + binding_rows(declaration_sha256, load_event, install, args.stack_library_path))
     print("\n".join(lines))
