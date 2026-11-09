@@ -217,6 +217,13 @@ fn render(envelope: &OrganEnvelope) -> Result<Vec<u8>, ChannelFault> {
     Ok(body)
 }
 
+/// The send paths' own encode and judgment, for the relay's suite, which
+/// derives the line bound through it rather than through a copy.
+#[cfg(test)]
+pub(crate) fn render_for_test(envelope: &OrganEnvelope) -> Result<Vec<u8>, ChannelFault> {
+    render(envelope)
+}
+
 /// Construct a channel from an already-owned descriptor, for the unit suite,
 /// which needs one over a socketpair it made rather than over an inherited
 /// number.

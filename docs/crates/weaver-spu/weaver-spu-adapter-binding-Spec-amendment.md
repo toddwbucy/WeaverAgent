@@ -363,12 +363,13 @@ the declaration the only difference, read from the trace.
   and **the classifier as an SPU role** (item 4).
 - **The accepted Python/SPU drift**, the operator's ruling after the LORA-7
   fixture and the 100-source comparison.
-- **The gate's line bound.** The R1 system prompt is 47,214 bytes and the gate
-  refuses a line over 32 KiB (`weaver-gate-Spec` section 4, `relay.rs:42`),
-  so the adapter's own prompt cannot be seeded through the gate today. Seeding
-  it in two lines renders two system turns. Raising the bound is a gate Spec
-  act and a gate-world contract change, cross-repository, and the operator's
-  ruling.
+- **The gate's line bound**, ruled by the operator on 2026-11-08 and moved
+  outside this amendment. The R1 system prompt is 47,214 bytes, 48,454 octets
+  as its seeding line, and the gate refused a line over 32 KiB. The bound is
+  now the organ envelope's exact capacity, 49,041 octets (`weaver-gate-Spec`
+  section 4, with the gate-world contract), so the adapter's own prompt seeds
+  in one line. The bound is an interim; its destination is the seed verb,
+  ADMIN-SEED.
 - **The trace floor** (#473 item 1).
 - **A save point's record of the adapter.** The published bound declaration
   carries the adapter table (the save-point renderer writes it member for

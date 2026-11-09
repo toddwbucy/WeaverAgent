@@ -9440,5 +9440,68 @@ fn diagnostic_open_uses_the_same_evidence_corpus_and_rejects_wrong_echo() {
     }
 }
 
+/// **A parse refusal for any line the inbound envelope could carry fits the
+/// return leg** (#504). The parse's two refusals are the frame path's only
+/// reasons that quote client content: the others are fixed text, the
+/// seeding bound's numbers and the identity door's static names, swept in
+/// #504. The gate admits a line up to its bound, the organ
+/// envelope's exact capacity (`weaver-gate-Spec` section 4), and a refused
+/// line's close travels back through the same 64 KiB envelope
+/// base64-encoded. With the reason quoting client content within
+/// `ECHO_BOUND`, every refusal close renders inside `MAX_ENVELOPE_BYTES`,
+/// at the worst-case ordinal, for lines longer than any gate could admit:
+/// an unknown role plain and escaped (Display re-escapes it and the close
+/// escapes it again), and an unknown member's name plain and as control
+/// characters (serde quotes the name decoded, and the close escapes each to
+/// six octets).
+///
+/// Perturbation: return the content whole from `weaver_types::echoed` and
+/// every case renders past the envelope.
+#[test]
+fn a_parse_refusal_for_any_carried_line_fits_the_return_envelope() {
+    use weaver_types::{
+        ExchangeId, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload, Position, TurnFrame,
+    };
+    let size = MAX_ENVELOPE_BYTES;
+    let filled = |head: &str, unit: &str, tail: &str| {
+        let room = size - head.len() - tail.len();
+        format!("{head}{}{tail}", unit.repeat(room / unit.len())).into_bytes()
+    };
+    let lines = [
+        ("plain role", filled(r#"{"text":"","role":""#, "x", r#""}"#)),
+        (
+            "escaped role",
+            filled(r#"{"text":"","role":""#, r"\\", r#""}"#),
+        ),
+        (
+            "control-character role",
+            filled(r#"{"text":"","role":""#, r"\u0001", r#""}"#),
+        ),
+        ("plain member", filled(r#"{"text":"",""#, "k", r#"":0}"#)),
+        (
+            "control-character member",
+            filled(r#"{"text":"",""#, r"\u0001", r#"":0}"#),
+        ),
+    ];
+    for (name, line) in lines {
+        let reason = parse_request(&TurnFrame::carry(&line)).expect_err(name);
+        let close = render_close("refused", "reason", &reason, None);
+        let envelope = OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal: u64::MAX,
+            },
+            position: Position::Close,
+            payload: Payload::Frame(TurnFrame::carry(close.as_bytes())),
+        };
+        let rendered = serde_json::to_vec(&envelope).expect("renders").len();
+        assert!(
+            rendered <= MAX_ENVELOPE_BYTES,
+            "{name}: a {}-octet line's refusal renders to {rendered} octets",
+            line.len()
+        );
+    }
+}
+
 #[path = "seated_tests.rs"]
 mod seated;

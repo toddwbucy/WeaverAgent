@@ -1530,10 +1530,12 @@ esac
     def test_turn_system_reads_the_draft_and_measures_it_against_the_gates_bound(self):
         # --system reads the draft from the territory the root's `territory`
         # key names and sends it as the system role; a draft whose line would
-        # pass the gate's 32 KiB bound refuses before dialing, naming the size
-        # (Codex on #92, round 3), and an empty draft refuses too. A draft
-        # that fits reaches the dial, which finds no gate. Perturbation: drop
-        # the measure and the oversize draft reaches the dial.
+        # pass the gate's bound of 49,041 octets refuses before dialing, naming
+        # the size (Codex on #92, round 3), and an empty draft refuses too. A
+        # draft that fits reaches the dial, which finds no gate; a draft whose
+        # line is exactly the bound is the edge that fits. Perturbation: drop
+        # the measure and the oversize draft reaches the dial; read the bound
+        # exclusively and the bound-exact draft refuses.
         root = self.config / "m1"
         root.mkdir()
         (root / "territory").write_text(str(self.decl) + "\n")
@@ -1541,11 +1543,18 @@ esac
         self.decl.mkdir(parents=True)
         draft = self.decl / "system-prompt.md"
         turn = [sys.executable, str(self.repo / "deploy" / "turn.py"), "m1", "--system"]
-        draft.write_text("x" * (32 * 1024))
+        # {"role": "system", "text": "..."} takes 30 octets around the text.
+        draft.write_text("x" * (49_041 - 30 + 1))
         result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("past the gate's bound of 32768 octets", result.stderr)
+        self.assertIn("the seeding line is 49042 octets, past the gate's bound of 49041 octets",
+                      result.stderr)
         self.assertNotIn("no gate at", result.stderr)
+        draft.write_text("x" * (49_041 - 30))
+        result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("past the gate's bound", result.stderr)
+        self.assertIn("no gate at", result.stderr)
         # The empty draft refuses by the identity door's own rule, and a
         # draft of whitespace alone is a prompt the door admits, so it reaches
         # the dial (Codex on #92, round 7). Perturbation: strip before the
@@ -5426,6 +5435,23 @@ def docs_mirror_faults(root):
             faults.append(f"{document.relative_to(root).as_posix()} sits outside "
                           f"docs/crates/{owner.group(1)}/")
     return faults
+
+
+class LineBoundMirrorTests(unittest.TestCase):
+    """turn.py measures a line against the gate's bound before it dials, so
+    its copy of the bound is the gate's own `LINE_BOUND`: a copy that runs
+    high sends lines the gate closes unanswered, and one that runs low
+    refuses lines the gate carries. The gate's suite derives the number from
+    the envelope; this pins turn.py to the gate.
+    Perturbation: change either number alone and this fails."""
+
+    def test_turn_py_carries_the_gates_line_bound(self):
+        relay = (DEPLOY.parent / "crates" / "weaver-gate" / "src" / "relay.rs").read_text()
+        gate = re.findall(r"^pub const LINE_BOUND: usize = ([0-9_]+);$", relay, re.MULTILINE)
+        turn = re.findall(r"^LINE_BOUND = ([0-9_]+)$", (DEPLOY / "turn.py").read_text(), re.MULTILINE)
+        self.assertEqual(len(gate), 1, "relay.rs declares LINE_BOUND once, as a literal")
+        self.assertEqual(len(turn), 1, "turn.py declares LINE_BOUND once, as a literal")
+        self.assertEqual(int(turn[0].replace("_", "")), int(gate[0].replace("_", "")))
 
 
 class DocsMirrorTests(unittest.TestCase):

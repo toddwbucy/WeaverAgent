@@ -40,8 +40,11 @@ import time
 # The gate's line bound, per weaver-gate-Spec section 4: a line of more than
 # this many octets before the delimiter closes the connection unanswered, so a
 # request is measured here, as the bytes it will send, and refused with its
-# size rather than met as a closed socket.
-LINE_BOUND = 32 * 1024
+# size rather than met as a closed socket. The bound is the organ envelope's
+# exact capacity (the operator's ruling of 2026-11-08, an interim until the
+# seed verb takes seeding off the gate): the line rides the 64 KiB envelope
+# encoded, and 49,041 octets is the largest line whose envelope fits.
+LINE_BOUND = 49_041
 
 
 def read_key(base: str, agent: str, key: str) -> str | None:

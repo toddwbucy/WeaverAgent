@@ -392,6 +392,44 @@ fn a_half_closed_peer_still_receives_its_answer() {
     );
 }
 
+/// **The bound is the largest line the organ envelope carries**, per
+/// `weaver-gate-Spec` section 4 on the operator's ruling of 2026-11-08. A
+/// line of the bound, framed at the worst case (the ordinal at `u64::MAX`,
+/// the dialer at `u32::MAX`), renders inside `MAX_ENVELOPE_BYTES` through
+/// the channel's own `render`, and one octet more renders past it, so a
+/// line the gate admits always reaches the harness.
+///
+/// Perturbation: set `LINE_BOUND` to 49,040 and the second assertion
+/// fails (49,041 still renders); set it to 49,042 and the first fails.
+#[test]
+fn the_bound_is_the_largest_line_the_envelope_carries() {
+    let worst = |octets: usize| OrganEnvelope {
+        exchange: ExchangeId {
+            opener: Opener::Gate,
+            ordinal: u64::MAX,
+        },
+        position: Position::Open,
+        payload: Payload::Frame(TurnFrame::carry_from(&vec![b'x'; octets], u32::MAX)),
+    };
+    let rendered = crate::channel::render_for_test(&worst(LINE_BOUND));
+    assert!(
+        rendered.is_ok(),
+        "a line of the bound renders inside the envelope: {:?}",
+        rendered.map(|body| body.len())
+    );
+    assert_eq!(
+        crate::channel::render_for_test(&worst(LINE_BOUND + 1)).map(|body| body.len()),
+        Err(ChannelFault::Truncated {
+            bound: weaver_types::MAX_ENVELOPE_BYTES
+        }),
+        "one octet more renders past the envelope"
+    );
+    assert_eq!(
+        LINE_BOUND, 49_041,
+        "the number the Spec and the contract state"
+    );
+}
+
 /// **The bound is inclusive, and one octet more closes the
 /// connection.** A line of exactly the bound followed by its delimiter
 /// opens its exchange, and a connection fed one undelimited octet past
