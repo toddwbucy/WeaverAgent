@@ -53,7 +53,7 @@ use weaver_spu::readout::ReadoutElection;
 use weaver_spu::residency::{Headroom, LoadedModel};
 use weaver_spu::room::Layout;
 use weaver_spu::sampling::EffectiveKnobs;
-use weaver_types::{ArtifactRef, DeviceOrdinal, ModelBinding};
+use weaver_types::{AdapterBinding, ArtifactRef, DeviceOrdinal, ModelBinding};
 
 /// The child marker: the arm a child process runs. Not a fixture, so it
 /// carries no `WEAVER_` prefix and stays out of Spec section 1.2's table.
@@ -161,14 +161,29 @@ impl Inputs {
             .join(",")
     }
 
-    fn binding(&self) -> ModelBinding {
+    /// The arm's binding. An adapted arm declares the adapter table in it, as
+    /// a production declaration does (ADP-1), and admits through the
+    /// production entry (ADP-2).
+    fn binding(&self, adapted: bool) -> ModelBinding {
         ModelBinding {
             artifact: ArtifactRef(self.base.to_string_lossy().into_owned()),
             devices: self.devices.clone(),
-            adapter: None,
+            adapter: adapted.then(|| Box::new(self.declared())),
         }
     }
 
+    /// The adapter table these inputs declare.
+    pub fn declared(&self) -> AdapterBinding {
+        AdapterBinding {
+            artifact: ArtifactRef(self.adapter.to_string_lossy().into_owned()),
+            sha256: self.adapter_sha256.clone(),
+            base_blake3: self.base_blake3.clone(),
+            scale: self.scale,
+        }
+    }
+
+    /// LORA-1's request for these inputs, the reference the one-path row
+    /// compares the declared table's conversion against.
     pub fn request(&self) -> Request {
         Request {
             artifact: self.adapter.clone(),
@@ -582,18 +597,16 @@ pub fn child() -> bool {
     };
     stage("observer");
     let mut fixture = Fixture::new().expect("the LORA-3 observer installs first");
-    let request = inputs.request();
     stage("admit");
     let admit_started = Instant::now();
     match fixture.admit(
-        &inputs.binding(),
+        &inputs.binding(adapted),
         Headroom(HEADROOM_BYTES),
         CAPACITY,
         ReadoutElection(false),
         // The surprisal is elected so the numerical trace carries it. Every
         // arm elects it, so the election moves no comparison.
         true,
-        adapted.then_some(&request),
     ) {
         Ok(_) => {}
         Err(refusal) => {

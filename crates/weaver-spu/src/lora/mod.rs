@@ -179,9 +179,10 @@ impl RecordedAdapter {
     }
 }
 
-/// Isolated fixture driver for LORA-1, LORA-3 and LORA-6. Serving calls
-/// `Residency::admit`, which builds the request from the binding's declared
-/// table. The fixture supplies its request beside a base-only binding.
+/// Isolated fixture driver for LORA-1, LORA-3 and LORA-6. **The fixture
+/// admits through the production entry**: its binding declares the adapter
+/// table, and `Residency::admit` builds the request from it (ADP-2), so no
+/// caller can hand a request beside a binding.
 #[cfg(feature = "gguf")]
 pub struct Fixture {
     residency: crate::residency::Residency,
@@ -204,10 +205,9 @@ impl Fixture {
         positions: u32,
         readout: crate::readout::ReadoutElection,
         surprisal: bool,
-        request: Option<&Request>,
     ) -> Result<&crate::residency::Resident, crate::residency::AdmitRefusal> {
         self.residency
-            .admit_with_adapter(binding, headroom, positions, readout, surprisal, request)
+            .admit(binding, headroom, positions, readout, surprisal)
     }
 
     /// The residency this fixture admitted, `None` before an admission. A

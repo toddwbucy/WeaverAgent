@@ -171,7 +171,6 @@ fn the_observed_division_matches_the_computed_one_on_the_pair_child() {
                 POSITIONS,
                 ReadoutElection(false),
                 false,
-                None,
             )
             .unwrap_or_else(|refusal| panic!("the pair admits: {refusal:?}"));
         let knobs = EffectiveKnobs {

@@ -179,18 +179,19 @@ fn normal_admission_does_not_validate_or_acquire_an_adapter() {
             ..
         })
     ));
-    let mut supplied = Residency::new();
-    let mut r = request(&files.path("absent-adapter"));
-    r.scale = f32::NAN;
+    let mut adapted = Residency::new();
+    let mut table = declared(
+        &files.path("absent-adapter"),
+        "a".repeat(64),
+        "b".repeat(64),
+    );
+    table.scale = f32::NAN;
+    let declaring = ModelBinding {
+        adapter: Some(Box::new(table)),
+        ..binding.clone()
+    };
     assert!(matches!(
-        supplied.admit_with_adapter(
-            &binding,
-            Headroom(0),
-            4096,
-            ReadoutElection(false),
-            false,
-            Some(&r)
-        ),
+        adapted.admit(&declaring, Headroom(0), 4096, ReadoutElection(false), false),
         Err(AdmitRefusal::Adapter(Failure {
             stage: "adapter-input",
             ..
@@ -1050,4 +1051,116 @@ fn the_serving_capture_forwards_every_line_to_stderr() {
     };
     assert!(at("forward-before-window\n") < at("forward-inside-window\n"));
     assert!(at("forward-inside-window\n") < at("forward-after-window\n"));
+}
+
+/// One window phase in this process: the serving install, an adapted
+/// admission from the inputs the LORA-7 fixture reads, then the steps the
+/// phase names, each followed by the count the window should keep.
+#[cfg(feature = "gguf")]
+fn window_phase(phase: &str) {
+    use crate::readout::ReadoutElection;
+    use crate::residency::{Headroom, Residency};
+    use weaver_types::{AdapterBinding, ArtifactRef, DeviceOrdinal, ModelBinding};
+    let var = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} is set"));
+    let binding = ModelBinding {
+        artifact: ArtifactRef(var("WEAVER_LORA_BASE")),
+        devices: var("WEAVER_LORA_DEVICES")
+            .split(',')
+            .map(|d| DeviceOrdinal(d.trim().parse().expect("an ordinal")))
+            .collect(),
+        adapter: Some(Box::new(AdapterBinding {
+            artifact: ArtifactRef(var("WEAVER_LORA_ADAPTER")),
+            sha256: var("WEAVER_LORA_ADAPTER_SHA256"),
+            base_blake3: var("WEAVER_LORA_BASE_BLAKE3"),
+            scale: var("WEAVER_LORA_SCALE").parse().expect("a scale"),
+        })),
+    };
+    let kept = || observation::with_records(<[_]>::len).expect("the capture reads");
+    observation::install(observation::Retention::Window).expect("the serving install");
+    let mut residency = Residency::new();
+    let resident = residency
+        .admit(&binding, Headroom(0), 4096, ReadoutElection(false), false)
+        .unwrap_or_else(|refusal| panic!("the declared adapter admits: {refusal:?}"));
+    let after_load = kept();
+    eprintln!("window: {phase}: {after_load} records kept after the load");
+    assert!(after_load > 0, "the window holds the load's records");
+    if phase == "sessions" {
+        let knobs = crate::sampling::EffectiveKnobs {
+            temperature: 0.0,
+            top_k: 1,
+            top_p: 1.0,
+            repetition_penalty: 1.0,
+            repetition_window: 0,
+            seed: 0,
+        };
+        for open in ["first", "second"] {
+            let session = resident
+                .open_session(&knobs, 4096)
+                .expect("a session opens");
+            assert_eq!(kept(), 0, "the window is closed after the {open} open");
+            drop(session);
+        }
+    }
+    residency.release().expect("the residency releases");
+    assert_eq!(kept(), 0, "the window is closed after the release");
+    eprintln!("window: {phase}: closed");
+}
+
+/// **The window opens and closes where ADP-2 says**, on the device: the
+/// serving install keeps the load's records (it opens at `ResidentModel::load`),
+/// drops them at the first session's context and keeps nothing at a second
+/// open (it closes in `GgufEngine::open`), and a load released before any
+/// session keeps nothing after the release (it closes in
+/// `Residency::release`). The `Capture` unit test pins the state machine;
+/// this pins the calls. Each phase runs in its own process, because the
+/// install and the admission are once per process.
+///
+/// Perturbation: drop `open_window()` from `ResidentModel::load`, drop
+/// `close_window()` from `GgufEngine::open`, or drop it from
+/// `Residency::release`, and a phase fails. Watched to fail under each, on
+/// the device.
+#[cfg(feature = "gguf")]
+#[test]
+#[ignore = "needs the base, the adapter and the binding's devices"]
+fn the_serving_window_opens_at_the_load_and_closes_at_the_first_session_and_the_release() {
+    if let Ok(phase) = std::env::var("WEAVER_LORA_WINDOW_PHASE") {
+        window_phase(&phase);
+        return;
+    }
+    let devices = std::env::var("WEAVER_LORA_DEVICES").expect("WEAVER_LORA_DEVICES is set");
+    let mask: Vec<&str> = devices.split(',').map(str::trim).collect();
+    let leased = std::env::var("CUDA_VISIBLE_DEVICES").unwrap_or_default();
+    assert!(
+        std::env::var("CUDA_DEVICE_ORDER").as_deref() == Ok("PCI_BUS_ID")
+            && mask
+                .iter()
+                .all(|d| leased.split(',').any(|l| l.trim() == *d)),
+        "the binding's devices are not leased ({leased}), so the instrument did not run"
+    );
+    for phase in ["sessions", "release"] {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "lora::tests::the_serving_window_opens_at_the_load_and_closes_at_the_first_session_and_the_release",
+                "--include-ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env("WEAVER_LORA_WINDOW_PHASE", phase)
+            .env("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+            .env("CUDA_VISIBLE_DEVICES", mask.join(","))
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let summary: Vec<&str> = stderr
+            .lines()
+            .filter(|line| line.contains("window: ") || line.contains("panicked"))
+            .collect();
+        eprintln!("{}", summary.join("\n"));
+        assert!(
+            output.status.success(),
+            "the {phase} phase: {}",
+            summary.join("\n")
+        );
+    }
 }

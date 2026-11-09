@@ -3,7 +3,7 @@
 //! producer used these bytes, confer boot provenance, or license placement.
 
 use serde_json::{Map, Value};
-use weaver_types::state_flow::decode_strict;
+use weaver_types::state_flow::{Digest, decode_strict};
 use weaver_types::{Opened, SessionId};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -26,15 +26,18 @@ fn object<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Map<String, Value>>
 
 /// **The adapter member is stated either way**, per the adapter binding
 /// amendment ADP-3: `null` for a base-only load, or the closed object
-/// `artifact`, `sha256`, `scale` for an adapted one, the scale a number that
-/// narrows to a finite f32. An absent member fails the five-member shape.
+/// `artifact`, `sha256`, `scale` for an adapted one, the digest in the state
+/// flow's own spelling and the scale a number that narrows to a finite f32.
+/// An absent member fails the five-member shape.
 fn adapter_shape(adapter: &Value) -> bool {
     if adapter.is_null() {
         return true;
     }
     object(adapter, &["artifact", "sha256", "scale"]).is_some_and(|adapter| {
         adapter["artifact"].is_string()
-            && adapter["sha256"].is_string()
+            && adapter["sha256"]
+                .as_str()
+                .is_some_and(|sha256| Digest::new(sha256).is_ok())
             && adapter["scale"]
                 .as_f64()
                 .is_some_and(|scale| (scale as f32).is_finite())

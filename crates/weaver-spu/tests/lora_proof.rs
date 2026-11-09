@@ -42,9 +42,10 @@ use weaver_types::DeviceOrdinal;
 const TEST: &str = "the_adapter_changes_the_pinned_greedy_output_on_the_binding";
 
 /// **One path**, per the adapter binding amendment ADP-2 and ADP-6: the
-/// request serving builds from the declared table is the request this
-/// fixture builds from its own inputs for the same artifacts, so the LORA-7
-/// proof exercises what a declared adapter admits. Needs no device.
+/// request serving builds from the declared table is LORA-1's request for
+/// the same inputs. The fixture declares that table in its binding and
+/// admits through `Residency::admit`, so the LORA-7 proof runs the
+/// production entry itself. Needs no device.
 ///
 /// Perturbation: build the serving request as a second type, or drop or
 /// recompute a member in `Request::from`, and this fails.
@@ -60,13 +61,10 @@ fn the_declared_request_is_the_fixtures_request() {
         report: "/reports/arm".into(),
         devices: vec![DeviceOrdinal(0), DeviceOrdinal(1)],
     };
-    let declared = weaver_types::AdapterBinding {
-        artifact: weaver_types::ArtifactRef(inputs.adapter.to_string_lossy().into_owned()),
-        sha256: inputs.adapter_sha256.clone(),
-        base_blake3: inputs.base_blake3.clone(),
-        scale: inputs.scale,
-    };
-    assert_eq!(weaver_spu::lora::Request::from(&declared), inputs.request());
+    assert_eq!(
+        weaver_spu::lora::Request::from(&inputs.declared()),
+        inputs.request()
+    );
 }
 
 #[test]
@@ -362,8 +360,8 @@ fn the_serving_binary_admits_a_declared_adapter_and_records_it() {
     use std::process::Stdio;
     use weaver_traits::{ContentBlock, Message, Role};
     use weaver_types::{
-        AdapterBinding, ArtifactRef, DecoderInstruction, LifecycleAnswer, LifecycleDirective,
-        ModelBinding, Payload, SessionId, SpuInstruction, TokenAnswer, TokenDirective, TurnKey,
+        ArtifactRef, DecoderInstruction, LifecycleAnswer, LifecycleDirective, ModelBinding,
+        Payload, SessionId, SpuInstruction, TokenAnswer, TokenDirective, TurnKey,
     };
 
     let inputs = Inputs::from_env();
@@ -400,12 +398,7 @@ fn the_serving_binary_admits_a_declared_adapter_and_records_it() {
     let decode = weaver_spu::channel::decode_from_owned(decode_parent);
     let log_text = || std::fs::read_to_string(&log_path).unwrap_or_default();
 
-    let declared = AdapterBinding {
-        artifact: ArtifactRef(inputs.adapter.to_string_lossy().into_owned()),
-        sha256: inputs.adapter_sha256.clone(),
-        base_blake3: inputs.base_blake3.clone(),
-        scale: inputs.scale,
-    };
+    let declared = inputs.declared();
     let admitted = common::ask(
         &lifecycle,
         1,
@@ -455,6 +448,9 @@ fn the_serving_binary_admits_a_declared_adapter_and_records_it() {
     };
     let scale_text = serde_json::to_string(&inputs.scale).expect("an f32 renders");
     let judge_adapter = |measurement: &str, what: &str| {
+        // The instrument's evidence, teed: the measurement's leading members.
+        let lead: String = measurement.chars().take(480).collect();
+        eprintln!("instrument: {what}: {lead}");
         let parsed: serde_json::Value = serde_json::from_str(measurement).expect("JSON");
         let adapter = &parsed["adapter"];
         assert_eq!(
@@ -502,10 +498,12 @@ fn the_serving_binary_admits_a_declared_adapter_and_records_it() {
     };
     judge_adapter(generation.measurement.get(), "the generation's measurement");
 
+    // The decode phase ends when its channel closes, and only then does the
+    // binary read the lifecycle seam again, so the release follows the close.
+    drop(decode);
     let released = common::ask(&lifecycle, 2, LifecycleDirective::Release);
     assert_eq!(released.payload, Payload::Answer(LifecycleAnswer::Released));
     drop(lifecycle);
-    drop(decode);
     let status = common::wait_bounded(&mut child, 120, "the released worker exits");
     assert!(status.success());
 
@@ -514,5 +512,15 @@ fn the_serving_binary_admits_a_declared_adapter_and_records_it() {
         log.contains("load_tensors:") && log.contains("llama_adapter_lora_init_impl: lora for '"),
         "the engine's lines, kept and not, reach the binary's stderr: {log}"
     );
+    eprintln!(
+        "instrument: the binary's stderr holds {} lines, the adapter's among them:",
+        log.lines().count()
+    );
+    for line in log
+        .lines()
+        .filter(|line| line.contains("llama_adapter_lora"))
+    {
+        eprintln!("instrument:   {line}");
+    }
     let _ = std::fs::remove_file(&log_path);
 }

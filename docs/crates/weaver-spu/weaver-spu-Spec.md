@@ -3236,7 +3236,11 @@ than a code fact.
   caller: `production_admission_carries_the_declared_adapter_into_lora_two`. The
   declaration's claims are checked: `the_declared_claims_are_checked_against_the_pinned_file`
   and `the_adapter_refusal_line_names_the_artifact_and_the_stage`. The capture is
-  bounded: `the_serving_capture_keeps_lines_only_inside_the_window`. The engine log
+  bounded: `the_serving_capture_keeps_lines_only_inside_the_window` for the window's
+  state machine, and on a device
+  `the_serving_window_opens_at_the_load_and_closes_at_the_first_session_and_the_release`
+  for its three call sites (the load, the first session's context, the release). The
+  engine log
   keeps flowing: `the_serving_capture_forwards_every_line_to_stderr`. The identity is
   recorded: `the_open_measurement_carries_the_adapter_identity_beside_the_base` and
   `every_generation_measurement_leads_with_the_typed_adapter`. The serving binary

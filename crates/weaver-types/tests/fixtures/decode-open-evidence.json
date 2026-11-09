@@ -294,6 +294,12 @@
     "evidence_valid": false
   },
   {
+    "name": "adapter_short_sha256",
+    "wire": "{\"kind\":\"opened\",\"body\":{\"session\":\"s\",\"prefix_tokens\":2,\"capacity\":4096,\"generation_limit\":42,\"terminal_tokens\":1,\"request\":{ \"rendered\" : \"\\u00e9\\n\", \"template\" : \"q\\u0077en\" },\"measurement\":{ \"model\":\"m\", \"weights_hash\":\"h\", \"adapter\":{\"artifact\":\"/a.gguf\",\"sha256\":\"abc\",\"scale\":1.0}, \"prefix_token_ids\":[0,4294967295], \"blocks\":[{\"label\":\"identity-prefix\",\"start\":0,\"end\":3}] }}}",
+    "outer_valid": true,
+    "evidence_valid": false
+  },
+  {
     "name": "missing_tokens",
     "wire": "{\"kind\":\"opened\",\"body\":{\"session\":\"s\",\"prefix_tokens\":2,\"capacity\":4096,\"generation_limit\":42,\"terminal_tokens\":1,\"request\":{ \"rendered\" : \"\\u00e9\\n\", \"template\" : \"q\\u0077en\" },\"measurement\":{ \"model\":\"m\", \"weights_hash\":\"h\", \"adapter\":null,  \"blocks\":[{\"label\":\"identity-prefix\",\"start\":0,\"end\":3}] }}}",
     "outer_valid": true,

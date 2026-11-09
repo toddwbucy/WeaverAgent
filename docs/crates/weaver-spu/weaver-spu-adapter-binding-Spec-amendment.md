@@ -98,9 +98,12 @@ A reader that meets `"adapter": null` refuses, since the record (ADP-3) uses
 `null` for a stated absence and the binding does not.
 
 **The binding is carried whole.** `weaver-trace`'s serving copy of the binding
-(`serving/payloads.rs::ModelBinding`, filled at `flow/mirror.rs`) today holds
-`artifact` and `devices` and would drop an adapter silently. It carries the
-adapter table, so the load facts in the record say what was declared.
+(`serving/payloads.rs::ModelBinding`, filled at `flow/mirror.rs`) held only
+`artifact` and `devices` and would drop an adapter silently, so it carries the
+adapter table. Its one user is the STE100 instruction's binding, which refuses
+an adapter (ADP-0 serves decode alone), so no load fact carries the declared
+decoder adapter. The record states the loaded adapter in the measurements
+(ADP-3).
 
 Admin checks the adapter's `artifact` for presence the way it checks the
 base's (`weaver-admin-Spec` section 4): an empty member refuses
@@ -153,8 +156,8 @@ stated rather than left to be found:
   level, so `worker.log` loses nothing to the capture.
 - **The fixture keeps its own install** for the isolated test process, as
   LORA-7 says. The two installs are one function, and its accounts name the
-  observer, not the fixture, since they now reach `admin.log` from a serving
-  SPU.
+  observer, not the fixture, since they now reach `worker.log` from a
+  serving SPU.
 
 If the placement child lands the serving install first, this paragraph
 becomes a citation of it. The device-pair amendment's PAIR-5 sentence that
@@ -165,8 +168,11 @@ goes with whichever act lands second.
 
 The LORA-2 sentence "the ordinary production caller cannot exercise an adapter
 request under this amendment" is retired. The caller is the declaration. The
-admit account line names the adapter stage where an adapter fails, so an
-operator reading `admin.log` sees which artifact and which check refused.
+admit account line names the adapter stage where an adapter fails. It is
+written on the SPU's stderr, which the worker tees into `worker.log`, so an
+operator reading `worker.log` sees which artifact and which check refused, and
+where the SPU then dies the death's account carries the line as `last_word`.
+`admin.log` is admin's supervision log and never reads the SPU's stderr.
 
 Room is judged with the adapter's tensors in the need, per LORA-2 and, on a
 device pair, per the device-pair amendment PAIR-4, which already charges the
@@ -304,9 +310,12 @@ characters, and it refuses a scale that is not a finite decimal, because TOML
 would otherwise write `nan` or `inf` and the parse would refuse later with a
 worse account. The adapter file takes the same custody as the base (owned
 outside the agent uid, readable by it, not writable by it), and the runbook
-says so. `verify-load.sh` reads the adapter member of the Open measurement and
-prints it beside the base identity. `HowToDeployANewAgent.md` gains the
-adapted agent's steps.
+says so. `verify-load.sh` prints the declared base and adapter, labelled
+declared, and prints the adapter member of the Open measurement wherever the
+record carries one, saying when none does. The live record does not carry the
+Open measurement today: whether that evidence reaches the record is the
+operator's ruling (the tuple survey's Flag C), so the script drives no turn to
+find it. `HowToDeployANewAgent.md` gains the adapted agent's steps.
 
 ## 6. Instruments
 
@@ -361,6 +370,9 @@ the declaration the only difference, read from the trace.
   act and a gate-world contract change, cross-repository, and the operator's
   ruling.
 - **The trace floor** (#473 item 1).
-- **A save point's record of the adapter.** Whether a save point names the
-  adapter it was taken under, so a restore under a different declaration can
-  refuse, is a state-management question.
+- **A save point's record of the adapter.** The published bound declaration
+  carries the adapter table (the save-point renderer writes it member for
+  member), so a restore re-admits the adapter declared at publication. What
+  stays open is a restore under a current declaration whose adapter differs
+  from the published one: whether it refuses is a state-management
+  question.

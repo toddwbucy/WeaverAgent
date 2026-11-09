@@ -697,30 +697,6 @@ impl Residency {
         )
     }
 
-    /// The fixture's admission with a supplied request (LORA-1), and the
-    /// lora tests'. No production caller reaches it.
-    #[cfg(any(feature = "gguf", test))]
-    pub(crate) fn admit_with_adapter(
-        &mut self,
-        binding: &ModelBinding,
-        headroom: Headroom,
-        positions: u32,
-        readout: ReadoutElection,
-        surprisal_elected: bool,
-        adapter: Option<&crate::lora::Request>,
-    ) -> Result<&Resident, AdmitRefusal> {
-        let side = DeviceSide::of_process();
-        self.admit_on(
-            binding,
-            headroom,
-            positions,
-            readout,
-            surprisal_elected,
-            adapter,
-            &side,
-        )
-    }
-
     /// The admission against a stated environment and driver. Production
     /// reaches it through [`DeviceSide::of_process`]; a test states both, so
     /// the order of the device judgments is watched with no device.

@@ -698,30 +698,6 @@ fn check_declared_paths(config: &AgentConfig) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// **The identity prefix is `system` and the parse is where that binds**, per
-/// `weaver-types-Spec` section 2 and the door of `weaver-harness-Spec`
-/// section 6.
-///
-/// The door writes `message.system` and refuses every other role, per
-/// `harness-identity-door-writes-system-only`, so a declaration carrying one
-/// seats a prefix into the decode context that the record cannot show - the
-/// condition `weaver-harness-PRD` section 5's fifth case reports and issue
-/// #369 found in the field. **The door is the last place that can be caught
-/// rather than the first**: a rule enforced only there is one the operator
-/// meets as a fault in a running agent instead of as a refusal to load, so
-/// the judgment belongs where declarations are judged.
-///
-/// **The role and the block are both judged**, the identity door refusing
-/// both: `weaver-traits-Spec` section 3 licenses a `System` message to carry
-/// `Text` blocks only. Judging the role alone left half the door's refusal at
-/// runtime, which is the condition this check exists to prevent rather than
-/// to halve.
-///
-/// The index rides the field name, an operator with several messages needing
-/// to know which one, the way `tunable-values.<name>` already names its own.
-///
-/// conforms: types-identity-role-is-system
-#[cfg(feature = "config")]
 /// **A restore names a save point by a bare name**, per `weaver-types-Spec`
 /// section 2 as of A3.2: the published name in the declaration's own
 /// directory or the digest, carrying no `/`, not `.` or `..`, not empty and
