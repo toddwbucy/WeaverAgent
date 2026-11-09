@@ -342,7 +342,7 @@ are in `<territory>/worker.log`, the state member's in `<territory>/state/state.
 
 **Then it prints the agent's deployment tuple**, through `deploy/agent_tuple.py` beside
 it, before the constituents are read. The rows are those of the tuple survey of
-2026-11-08 (1, 2, 3, 6, 7, 8 and 9), with the state engine and the restore save point.
+2026-11-08 (1, 2, 3, 6, 7, 8 and 9), with the state engine and the restore rows.
 Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
 - **Row 1, the artifact and its weights hash.** The hash is admission's BLAKE3, which no
   tool on the box computes. For an adapted agent it is the declared `base-blake3`, since
@@ -351,7 +351,9 @@ Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
   none: the load itself records no hash.
 - **Rows 2 and 3, the family, the chat template and the formats**, from the artifact's
   GGUF header. The header is read as the agent's own account, the one admission reads it
-  as, and never as root.
+  as, and never as root. A declared directory is first resolved to its one container by
+  admission's rule (a single `.gguf` or `.safetensors` file, or one split's first
+  shard), and row 1 names that container.
 - **Row 7, the devices.** Each declared ordinal names its card in the install tuple's
   PCI-order list. That order is the one the SPU sees, under PAIR-1's
   `CUDA_DEVICE_ORDER=PCI_BUS_ID` mask. The live cards are read with
@@ -360,6 +362,10 @@ Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
   is a `FAULT`: the install tuple is stale.
 - **Row 8, the placement**, by PAIR-3's even split of the header's layer count over the
   declared devices.
+- **The restore rows.** The declaration's `[restore]`, or none declared, and what the
+  load restored, from the load event's `lineage`. With no `[restore]` a reload restores
+  the manifest's latest save point. A declared save point the lineage does not name, by
+  digest or by published name, or a declared one with no lineage, is a `FAULT`.
 
 - **The box side and the binding.** The box side is the stack record's `install-tuple`,
   written by each install. Its own sha256 is printed as the box's identity, the one value

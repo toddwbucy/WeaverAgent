@@ -6627,6 +6627,133 @@ class AgentTupleHeaderTests(unittest.TestCase):
         self.assertIn("refused", json.loads(ran.stdout))
 
 
+class AgentTupleResolveTests(unittest.TestCase):
+    """**The header door resolves a declared artifact as admission does**
+    (Codex on #514), mirroring crates/weaver-spu/src/artifact.rs
+    `resolve_with_kind`, `container_within` and `split_pattern` case for case
+    against that file's own tests. Perturbations named per test."""
+
+    RUST_TESTS = DEPLOY.parent / "crates" / "weaver-spu" / "src" / "artifact" / "tests.rs"
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+
+    def resolve(self, path):
+        return Path(self.tuple.resolve_artifact(str(path)))
+
+    def test_the_split_pattern_mirrors_the_rust_cases(self):
+        """The hits and misses of `the_split_pattern_is_exact`, read from
+        the Rust test itself, so a case added there is a case here.
+        Perturbation: accept a signed count, or an index outside its set,
+        and a miss parses."""
+        text = self.RUST_TESTS.read_text()
+        body = text[text.index("fn the_split_pattern_is_exact"):]
+        body = body[:body.index("\n}\n")]
+        block = body[body.index("for miss in ["):]
+        misses = re.findall(r'"([^"]+)"', block[:block.index("]")])
+        called = re.findall(r'split_pattern\(Path::new\("([^"]+)"\)\)', body)
+        hits = [path for path in called if path not in misses]
+        self.assertGreaterEqual(len(misses), 8, misses)
+        self.assertGreaterEqual(len(hits), 3, hits)
+        for path in hits:
+            with self.subTest(hit=path):
+                self.assertIsNotNone(self.tuple.split_pattern(os.path.basename(path)))
+        for path in misses:
+            with self.subTest(miss=path):
+                self.assertIsNone(self.tuple.split_pattern(os.path.basename(path)))
+        self.assertEqual(self.tuple.split_pattern("model-00001-of-00002.gguf"), ("model", 2, ".gguf"))
+        self.assertEqual(self.tuple.split_pattern("model-00001-of-00017.safetensors"),
+                         ("model", 17, ".safetensors"))
+
+    def test_a_directory_artifact_resolves_to_its_container_file(self):
+        """Mirrors `a_directory_artifact_resolves_to_its_container_file`.
+        Perturbation: return the directory itself and the extension check
+        fails."""
+        _gguf(self.dir / "only.gguf", GRANITE_KEYS, GRANITE_TENSORS)
+        resolved = self.resolve(self.dir)
+        self.assertTrue(resolved.is_file())
+        self.assertEqual(resolved.suffix, ".gguf")
+
+    def test_a_sharded_directory_resolves_to_its_first_shard(self):
+        """Mirrors `a_sharded_directory_resolves_to_its_first_shard`, the
+        stranger included. Perturbation: take the first name sorted, or
+        drop the one-stem check, and a case resolves wrongly."""
+        for index in (1, 2, 3):
+            (self.dir / f"model-{index:05}-of-00003.safetensors").write_bytes(b"x")
+        self.assertEqual(self.resolve(self.dir), self.dir / "model-00001-of-00003.safetensors")
+        (self.dir / "other.safetensors").write_bytes(b"x")
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "not one split's shards"):
+            self.resolve(self.dir)
+
+    def test_an_ambiguous_directory_refuses(self):
+        """Mirrors `an_ambiguous_directory_refuses`, and a split short of
+        its count refuses as `container_within` does. Perturbation: take
+        the first name sorted and both resolve."""
+        for name in ("a.gguf", "b.gguf"):
+            (self.dir / name).write_bytes(b"GGUF")
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "2 containers"):
+            self.resolve(self.dir)
+        short = self.dir / "short"
+        short.mkdir()
+        for index in (1, 2):
+            (short / f"m-{index:05}-of-00003.gguf").write_bytes(b"GGUF")
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "not one split's shards"):
+            self.resolve(short)
+
+    def test_a_dot_entry_is_never_the_container(self):
+        """Mirrors the resolution half of `a_dot_entry_is_outside_the_identity`.
+        Perturbation: keep dot-entries and the directory is ambiguous."""
+        (self.dir / "model.safetensors").write_bytes(b"the weights")
+        (self.dir / "config.json").write_bytes(b"{}")
+        (self.dir / ".stray.safetensors").write_bytes(b"not the model")
+        self.assertEqual(self.resolve(self.dir), self.dir / "model.safetensors")
+
+    def test_a_named_pipe_does_not_resolve(self):
+        """Mirrors `a_named_pipe_does_not_resolve`, at the path and inside a
+        directory. Perturbation: admit any non-directory and the open
+        blocks on the pipe."""
+        pipe = self.dir / "pipe.gguf"
+        os.mkfifo(pipe)
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "not a regular file"):
+            self.resolve(pipe)
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "holds no container"):
+            self.resolve(self.dir)
+
+    def test_absent_and_denied_are_told_apart(self):
+        """Mirrors `a_denied_directory_is_unreadable_rather_than_unresolvable`.
+        Skips as root, whom no directory denies. Perturbation: answer every
+        stat error as not resolving and the denied case says absent."""
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "does not resolve"):
+            self.resolve(self.dir / "absent.gguf")
+        if os.getuid() == 0:
+            self.skipTest("root traverses every directory")
+        closed = self.dir / "closed"
+        closed.mkdir()
+        _gguf(closed / "m.gguf", GRANITE_KEYS, GRANITE_TENSORS)
+        closed.chmod(0)
+        self.addCleanup(closed.chmod, 0o700)
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "unreadable"):
+            self.resolve(closed / "m.gguf")
+
+    def test_the_header_door_reads_a_directory_artifact(self):
+        """The door end to end: a directory holding one GGUF answers its
+        header facts and names the container, and row 1 prints it.
+        Perturbation: open the declared path unresolved and the door
+        refuses the directory."""
+        model = self.dir / "granite"
+        model.mkdir()
+        _gguf(model / "granite.gguf", GRANITE_KEYS, GRANITE_TENSORS)
+        facts = self.tuple.read_header(str(model))
+        self.assertEqual(facts["architecture"], "granite")
+        self.assertEqual(facts["resolved"], str(model / "granite.gguf"))
+        declaration = {"spu-instruction": {"decoder": {"model-binding": {"artifact": str(model)}}}}
+        lines = self.tuple.artifact_rows(declaration, facts, None, None)
+        self.assertTrue([l for l in lines if "container" in l and "[derivable:" in l], lines)
+        self.assertIsNone(self.tuple.read_header(str(model / "granite.gguf"))["resolved"])
+
+
 class AgentTupleDivisionTests(unittest.TestCase):
     """**Row 8 mirrors `Division::even` and `index_of` case for case**, the
     fixtures taken from weaver-spu/src/division/tests.rs:
@@ -6795,6 +6922,74 @@ class AgentTupleRowTests(unittest.TestCase):
         lines = self.tuple.state_rows(self.declaration(), {"state_store": {"engine": "none"}})
         self.assertIn("[FAULT:", lines[0])
         self.assertIn("none declared", lines[1])
+
+
+    LINEAGE = {"save_point": "e" * 64, "run": "r-0", "sequence": 5, "turn": 1,
+               "named_at_restore": False}
+
+    def restored(self, lines):
+        return [line for line in lines if " restored from " in line]
+
+    def test_the_restored_save_point_is_read_from_the_lineage(self):
+        """**What the load restored is the load event's lineage** (Codex on
+        #514): with no [restore], admin restores the manifest's latest and
+        the harness names it in `lineage` (the shape the harness's lifecycle
+        tests assert). Perturbation: read the declaration alone and the
+        reload's digest is not printed."""
+        lines = self.tuple.restore_rows(self.declaration(), {"lineage": self.LINEAGE})
+        self.assertIn("[recorded: the declaration has no [restore]", lines[0])
+        restored = self.restored(lines)
+        self.assertEqual(len(restored), 1, lines)
+        self.assertIn("e" * 64 + " (run r-0, sequence 5, turn 1)", restored[0])
+        self.assertIn("[recorded: the load event's lineage, named_at_restore False]", restored[0])
+        lines = self.tuple.restore_rows(self.declaration(), {"state_store": {}})
+        self.assertIn("none  [recorded: the load event carries no lineage", self.restored(lines)[0])
+        lines = self.tuple.restore_rows(self.declaration(), None)
+        self.assertIn("[absent: no load event was read]", self.restored(lines)[0])
+
+    def test_a_declared_save_point_the_load_did_not_restore_is_a_fault(self):
+        """**The declaration's [restore] and the lineage must name one save
+        point**, by digest or by published name, as admin's selection
+        matches them (save_points.rs). Perturbation: drop the comparison,
+        or the FAULT for a declared point with no lineage, and a case reads
+        recorded."""
+        digest = "e" * 64
+        for declared in (digest, f"20261109T120000Z-{digest}.save-point"):
+            with self.subTest(declared):
+                lines = self.tuple.restore_rows(self.declaration(restore=declared),
+                                                {"lineage": self.LINEAGE})
+                self.assertIn("[recorded:", self.restored(lines)[0])
+        cases = {
+            "another digest": ("f" * 64, {"lineage": self.LINEAGE}),
+            "another name": (f"20261109T120000Z-{'f' * 64}.save-point", {"lineage": self.LINEAGE}),
+            "a name around the digest": (f"x{digest}.save-point", {"lineage": self.LINEAGE}),
+            "no lineage": (digest, {"state_store": {}}),
+            "a lineage with no digest": (digest, {"lineage": {"run": "r-0"}}),
+        }
+        for said, (declared, event) in cases.items():
+            with self.subTest(said):
+                lines = self.tuple.restore_rows(self.declaration(restore=declared), event)
+                self.assertIn("[FAULT:", self.restored(lines)[0])
+
+    def test_the_exit_reads_the_rows_flag_and_never_their_text(self):
+        """**A FAULT is the flag `row` sets**, so a declared value that
+        prints "[FAULT:" fails nothing. Perturbation: judge the exit by the
+        substring "[FAULT:" over the printed lines and the clean run exits
+        3."""
+        import contextlib
+        import io
+        declaration = self.dir / "agent.toml"
+        declaration.write_text('[spu-instruction.decoder.model-binding]\n'
+                               'artifact = "/models/[FAULT: not a fault]"\ndevices = []\n')
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            clean = self.tuple.main(["rows", "--declaration", str(declaration)])
+        self.assertIn("[FAULT: not a fault]", printed.getvalue())
+        self.assertEqual(clean, 0, printed.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()):
+            faulted = self.tuple.main(["rows", "--declaration", str(declaration),
+                                       "--install-tuple-unheld", "an open entry"])
+        self.assertEqual(faulted, 3)
 
 
 class AgentTupleRecordReadTests(unittest.TestCase):

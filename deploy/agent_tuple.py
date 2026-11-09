@@ -167,12 +167,96 @@ def _value(reader, kind, key, depth=0):
     raise HeaderRefused(f"{key}: value type {kind}")
 
 
-def read_header(path):
-    """The header facts the tuple rows read, as a dict.
+CONTAINER_SUFFIXES = (".gguf", ".safetensors")
 
-    Raises HeaderRefused for a file that is not a GGUF this reader bounds.
+
+def split_pattern(name):
+    """`<stem>-NNNNN-of-NNNNN.<gguf|safetensors>` as (stem, count, suffix), or
+    None: artifact.rs `split_pattern`, case for case."""
+    for suffix in CONTAINER_SUFFIXES:
+        if name.endswith(suffix):
+            rest = name[:-len(suffix)]
+            break
+    else:
+        return None
+    digits = set("0123456789")
+    if len(rest) < 15:
+        return None
+    head, of_part = rest[:-9], rest[-9:]
+    if not of_part.startswith("-of-"):
+        return None
+    count_digits = of_part[4:]
+    if not set(count_digits) <= digits:
+        return None
+    count = int(count_digits)
+    if len(head) < 6:
+        return None
+    stem_dash, index_digits = head[:-5], head[-5:]
+    if not set(index_digits) <= digits or not stem_dash.endswith("-"):
+        return None
+    stem = stem_dash[:-1]
+    index = int(index_digits)
+    if not stem or count == 0 or index == 0 or index > count:
+        return None
+    return stem, count, suffix
+
+
+def container_within(directory):
+    """The one container a directory artifact resolves to, as admission's
+    `container_within` (artifact.rs) chooses it: dot-entries skipped, regular
+    files with a `.gguf` or `.safetensors` extension only, one such file, or
+    several that are exactly one split's shards (one stem, suffix and count,
+    as many as the count), which resolve to the first shard."""
+    try:
+        names = os.listdir(directory)
+    except OSError as error:
+        raise HeaderRefused(f"the artifact directory is unreadable: {error.strerror}") from None
+    found = sorted(n for n in names
+                   if not n.startswith(".")
+                   and os.path.splitext(n)[1] in CONTAINER_SUFFIXES
+                   and os.path.isfile(os.path.join(directory, n)))
+    if not found:
+        raise HeaderRefused("the artifact directory holds no container")
+    if len(found) == 1:
+        return os.path.join(directory, found[0])
+    parsed = [split_pattern(n) for n in found]
+    if None in parsed or len(set(parsed)) != 1 or len(found) != parsed[0][1]:
+        raise HeaderRefused(f"the artifact directory holds {len(found)} containers "
+                            "that are not one split's shards")
+    stem, count, suffix = parsed[0]
+    return os.path.join(directory, f"{stem}-{1:05}-of-{count:05}{suffix}")
+
+
+def resolve_artifact(path):
+    """The file a declared artifact resolves to, by admission's rule
+    (artifact.rs `resolve_with_kind`): a directory to its one container, a
+    regular file to itself, anything else refused."""
+    try:
+        mode = os.stat(path).st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        raise HeaderRefused("the artifact does not resolve") from None
+    except OSError as error:
+        raise HeaderRefused(f"the artifact is unreadable: {error.strerror}") from None
+    if stat.S_ISDIR(mode):
+        return container_within(path)
+    if not stat.S_ISREG(mode):
+        raise HeaderRefused("the artifact is not a regular file or a directory")
+    return path
+
+
+def read_header(path):
+    """The header facts the tuple rows read, as a dict, the declared path
+    resolved first as admission resolves it, and `resolved` naming the
+    container where a directory resolved.
+
+    Raises HeaderRefused for an artifact that does not resolve, or a file
+    that is not a GGUF this reader bounds.
     """
-    with open(path, "rb") as handle:
+    resolved = resolve_artifact(path)
+    fd = os.open(resolved, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise HeaderRefused("the resolved artifact is not a regular file")
         size = os.fstat(handle.fileno()).st_size
         reader = _Reader(handle, size)
         if reader.take(4, "magic") != GGUF_MAGIC:
@@ -218,6 +302,7 @@ def read_header(path):
         "split_count": split if isinstance(split, int) else None,
         "tensor_count": tensors,
         "tensor_types": dict(sorted(types.items())),
+        "resolved": resolved if resolved != path else None,
     }
 
 
@@ -448,10 +533,19 @@ def printable(text):
                    for c in str(text))
 
 
+class Line(str):
+    """A printed row that carries its status, so the exit reads the flag set
+    where the row is made and never the printed text, which holds values
+    from the header, the declaration and the sink."""
+    fault = False
+
+
 def row(number, field, value, status, note):
     assert status in STATUSES, status
     label = f"row {number}" if isinstance(number, int) else number
-    return f"   {label:<7} {field:<22} {printable(value)}  [{status}: {printable(note)}]"
+    line = Line(f"   {label:<7} {field:<22} {printable(value)}  [{status}: {printable(note)}]")
+    line.fault = status == "FAULT"
+    return line
 
 
 def binding_of(declaration):
@@ -465,6 +559,10 @@ def artifact_rows(declaration, header, header_refusal, measurement):
     adapter = binding.get("adapter")
     lines = [row(1, "artifact", binding.get("artifact", "<none declared>"), "recorded",
                  "model.measurement's model, on each generation")]
+    if header is not None and header.get("resolved"):
+        lines.append(row(1, "container", header["resolved"], "derivable",
+                         "the declared directory's one container, by admission's rule "
+                         "(artifact.rs container_within), whose header rows 2, 3 and 8 read"))
     if adapter is not None:
         lines.append(row(1, "weights_hash", adapter["base-blake3"], "derivable",
                          "BLAKE3 by SPU Spec 3's rule; equal to the declared base-blake3, "
@@ -681,14 +779,52 @@ def state_rows(declaration, load_event):
     else:
         lines.append(row("state", "engine", engine, "FAULT",
                          f"the load event's state_store names {recorded!r}"))
-    point = declaration.get("restore", {}).get("save-point")
-    if point is None:
-        lines.append(row("restore", "save point", "none declared", "recorded",
-                         "the declaration has no [restore]; the load event carries no lineage"))
-    else:
-        lines.append(row("restore", "save point", point, "recorded",
-                         "the declaration's [restore]; the load event's lineage on a restoring load"))
-    return lines
+    return lines + restore_rows(declaration, load_event)
+
+
+def names_the_save_point(declared, digest):
+    """Whether `[restore] save-point` names the save point of `digest`, as
+    admin's selection matches it (save_points.rs select_with): the digest
+    itself, or the published name `<YYYYMMDDTHHMMSSZ>-<digest>.save-point`
+    (published_name)."""
+    return declared == digest or re.fullmatch(
+        r"[0-9]{8}T[0-9]{6}Z-" + re.escape(digest) + r"\.save-point", declared) is not None
+
+
+def restore_rows(declaration, load_event):
+    """What the declaration asks to restore and what the load restored, two
+    rows. Admin restores the manifest's latest save point where `[restore]`
+    is absent, and the harness names what it restored in the load event's
+    `lineage` (lifecycle.rs, weaver-trace event.rs `Lineage`). Where the
+    declaration names a save point and the load restored another, or none,
+    that is a FAULT."""
+    declared = declaration.get("restore", {}).get("save-point")
+    lines = [row("restore", "declared", declared or "none declared", "recorded",
+                 "the declaration's [restore]" if declared else
+                 "the declaration has no [restore], so admin restores the manifest's latest")]
+    if load_event is None:
+        return lines + [row("restore", "restored from", "-", "absent", "no load event was read")]
+    lineage = load_event.get("lineage")
+    if lineage is None:
+        if declared:
+            return lines + [row("restore", "restored from", "none", "FAULT",
+                                "the declaration names a save point and the load event "
+                                "carries no lineage")]
+        return lines + [row("restore", "restored from", "none", "recorded",
+                            "the load event carries no lineage, so this load restored no save point")]
+    digest = lineage.get("save_point") if isinstance(lineage, dict) else None
+    if not isinstance(digest, str) or not HEX64.fullmatch(digest):
+        return lines + [row("restore", "restored from", "-", "FAULT",
+                            "the load event's lineage names no save point digest")]
+    value = (f"{digest} (run {lineage.get('run')}, sequence {lineage.get('sequence')}, "
+             f"turn {lineage.get('turn')})")
+    note = f"the load event's lineage, named_at_restore {lineage.get('named_at_restore')}"
+    if lineage.get("built_from") is not None:
+        note += f", built_from {json.dumps(lineage['built_from'], sort_keys=True)}"
+    if declared and not names_the_save_point(declared, digest):
+        return lines + [row("restore", "restored from", value, "FAULT",
+                            f"the declaration's [restore] names {declared}")]
+    return lines + [row("restore", "restored from", value, "recorded", note)]
 
 
 def main(argv):
@@ -759,7 +895,7 @@ def main(argv):
              + state_rows(declaration, load_event)
              + binding_rows(declaration_sha256, load_event, install, args.stack_library_path))
     print("\n".join(lines))
-    return 3 if any("[FAULT:" in line for line in lines) else 0
+    return 3 if any(line.fault for line in lines) else 0
 
 
 if __name__ == "__main__":
