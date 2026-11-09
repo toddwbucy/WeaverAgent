@@ -49,7 +49,20 @@ fn binding(connection: &Connection, block: i64, ordinal: u64) -> i64 {
 fn literal_ddl_is_the_complete_merged_catalog() {
     let specification =
         include_str!("../../../../../docs/crates/state-management/weaver-state-Spec-amendment.md");
-    let expected: Vec<_> = specification
+    // **state-content/1 only, harvested up to STATE-GOVERNING** (#498). The
+    // amendment carries two catalogs: state-content/1, and under
+    // STATE-GOVERNING the two governing tables that make state-content/2 at
+    // its cutover. STATE-GOVERNING says "Until then, state-content/1 stands
+    // as written above", and `schema::DDL` is state-content/1, so the harvest
+    // stops where STATE-GOVERNING begins. The marker stands exactly once, so
+    // a moved or doubled marker fails here rather than silently changing
+    // what is harvested. At the cutover this pin moves to state-content/2.
+    let marker = "**STATE-GOVERNING.**";
+    assert_eq!(specification.matches(marker).count(), 1);
+    let (state_content_1, _) = specification
+        .split_once(marker)
+        .expect("the amendment carries STATE-GOVERNING");
+    let expected: Vec<_> = state_content_1
         .split("```sql\n")
         .skip(1)
         .filter_map(|block| block.split_once("\n```"))
