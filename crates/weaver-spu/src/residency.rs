@@ -93,7 +93,8 @@ pub struct WeightsHash(pub String);
 /// with the whole ordering inverted.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AdmitRefusal {
-    /// LORA-2: fixture-only detail, mapped onto the existing lifecycle cases.
+    /// LORA-2's adapter refusal, reached from the declared table (ADP-2) and
+    /// from the fixture's supplied request, with its own account line.
     Adapter(crate::lora::Failure),
     /// The load elected residual readout and this family's engine cannot tap.
     /// Judged on the admit path, so the refusal costs the operator nothing
@@ -620,7 +621,7 @@ impl Resident {
     /// the adapter binding amendment ADP-3: `None` for a base-only load. The
     /// identity is the resident's own (LORA-5), so the record names what was
     /// loaded rather than what was declared.
-    pub fn adapter(&self) -> Option<crate::lora::RecordedAdapter> {
+    pub fn adapter(&self) -> Option<&crate::lora::RecordedAdapter> {
         match &self.model {
             #[cfg(feature = "gguf")]
             LoadedModel::Gguf(model) => model.adapter_record(),
@@ -929,6 +930,10 @@ impl Residency {
         let Some(resident) = self.resident.take() else {
             return Err(LifecycleRefusal::NoResidency);
         };
+        // ADP-2: a load released before any session opened leaves the
+        // placement window open, and the release is its last chance to close.
+        #[cfg(feature = "gguf")]
+        crate::lora::observation::close_window();
         // The drop is the free: the weights, the working allocations, and the
         // cache go together because they are one residency, and they go here,
         // inside this function, so the caller cannot answer before the device

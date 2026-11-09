@@ -88,23 +88,29 @@ fn the_adapter_refusal_line_names_the_artifact_and_the_stage() {
 /// per the adapter binding amendment ADP-3: `null` for base-only, the closed
 /// object for an adapted load, and the scale as the f32 itself, which a
 /// generic value renders `0.699999988079071`. The rest of the measurement
-/// follows as it rendered before.
+/// follows as it rendered before, and an empty member list still closes a
+/// valid object.
 ///
 /// Perturbation: set the member through `serde_json::json!`, or omit it for
 /// a base-only load, and this fails.
 #[test]
 fn every_generation_measurement_leads_with_the_typed_adapter() {
     let rest = serde_json::json!({"model": "m", "blocks": []});
+    let rest = rest.as_object().expect("an object");
     assert_eq!(
-        super::lead_with_adapter(None, &rest),
+        super::lead_with_adapter(None, rest),
         r#"{"adapter":null,"blocks":[],"model":"m"}"#
+    );
+    assert_eq!(
+        super::lead_with_adapter(None, &serde_json::Map::new()),
+        r#"{"adapter":null}"#
     );
     let adapter = weaver_spu::lora::RecordedAdapter {
         artifact: "/models/adapter.gguf".into(),
         sha256: "a".repeat(64),
         scale: 0.7,
     };
-    let rendered = super::lead_with_adapter(Some(&adapter), &rest);
+    let rendered = super::lead_with_adapter(Some(&adapter), rest);
     assert_eq!(
         rendered,
         format!(

@@ -497,3 +497,28 @@ fn closed_object_container_rename_is_shared_by_writer_and_named_map_reader() {
     );
     assert_valid::<RenamedCarrier>(&json!({"exact-value":"retained", "prior-value":"previous"}));
 }
+
+/// **The checker's binding takes no adapter on the wire**, as the serving
+/// grammar writes it: the adapter binding amendment serves decode alone
+/// (ADP-0). A bootstrap whose instruction binding carries an adapter table
+/// decodes, since the binding is one type, and refuses validation, so the
+/// classifier's record never states an adapter the checker did not load.
+///
+/// Perturbation: drop the adapter arm of `Ste100Instruction::validate` and
+/// this validates. Watched to fail under it.
+#[test]
+fn ste100_instruction_refuses_an_adapter_on_its_binding() {
+    let mut value = bootstrap();
+    value["instruction"]["model_binding"]["adapter"] = json!({
+        "artifact": "/synthetic/adapter.gguf",
+        "sha256": "a".repeat(64),
+        "base-blake3": "b".repeat(64),
+        "scale": 1.0
+    });
+    let decoded: Ste100Bootstrap = serde_json::from_value(value).unwrap();
+    assert!(decoded.instruction.model_binding.adapter.is_some());
+    assert_eq!(
+        decoded.validate(DecimalU64(65536)),
+        Err(ValidationError("invalid STE100 model binding"))
+    );
+}

@@ -39,7 +39,10 @@ impl Ste100Instruction {
         }
         Self::validate_artifact_locator(&self.model_binding.artifact.0)?;
         let mut devices = BTreeSet::new();
-        if self.model_binding.devices.is_empty()
+        // The checker's binding takes no adapter, as the serving grammar
+        // writes it: the adapter binding amendment serves decode alone (ADP-0).
+        if self.model_binding.adapter.is_some()
+            || self.model_binding.devices.is_empty()
             || self
                 .model_binding
                 .devices

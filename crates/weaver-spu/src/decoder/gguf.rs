@@ -94,15 +94,17 @@ fn backend() -> Result<&'static LlamaBackend, AdmitRefusal> {
 /// release's ordering hold by construction.
 pub struct ResidentModel {
     // LORA-5: this inert handle drops before the model that owns its allocation.
-    adapter: Option<ResidentAdapter>,
+    // Boxed, so an adapted residency does not widen `LoadedModel`'s variant.
+    adapter: Option<Box<ResidentAdapter>>,
     model: LlamaModel,
 }
 
 struct ResidentAdapter {
     handle: std::cell::RefCell<LlamaLoraAdapter>,
-    /// The path the request named, which the record carries for the reader
-    /// (ADP-3) and never compares.
-    artifact: std::path::PathBuf,
+    /// The record's statement of this adapter (ADP-3), built once at load:
+    /// the path the request named, never compared, and the identity's digest
+    /// and scale.
+    record: crate::lora::RecordedAdapter,
     identity: crate::lora::Identity,
     placement: std::collections::BTreeMap<String, weaver_types::DeviceOrdinal>,
 }
@@ -211,12 +213,16 @@ impl ResidentModel {
             })
             .and_then(|judged| judged)
             .map_err(&failure)?;
-            Some(ResidentAdapter {
+            Some(Box::new(ResidentAdapter {
                 handle: std::cell::RefCell::new(handle),
-                artifact: prepared.artifact().to_path_buf(),
+                record: crate::lora::RecordedAdapter {
+                    artifact: prepared.artifact().display().to_string(),
+                    sha256: prepared.identity.sha256.clone(),
+                    scale: prepared.identity.scale,
+                },
                 identity: prepared.identity.clone(),
                 placement,
-            })
+            }))
         } else {
             None
         };
@@ -225,14 +231,8 @@ impl ResidentModel {
 
     /// The adapter as the record states it (ADP-3), `None` for a base-only
     /// load.
-    pub fn adapter_record(&self) -> Option<crate::lora::RecordedAdapter> {
-        self.adapter
-            .as_ref()
-            .map(|adapter| crate::lora::RecordedAdapter {
-                artifact: adapter.artifact.display().to_string(),
-                sha256: adapter.identity.sha256.clone(),
-                scale: adapter.identity.scale,
-            })
+    pub fn adapter_record(&self) -> Option<&crate::lora::RecordedAdapter> {
+        self.adapter.as_ref().map(|adapter| &adapter.record)
     }
 
     pub fn adapter_identity(&self) -> Option<&crate::lora::Identity> {

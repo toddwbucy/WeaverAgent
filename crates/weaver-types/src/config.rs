@@ -626,13 +626,6 @@ fn check_lifecycle_bounds(source: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// **A path in a declaration carries no control character**, per
-/// `weaver-types-Spec` section 2 and the operator's ruling of 2026-09-28:
-/// every reader in the suite, this parser, the deploy script's shell and the
-/// experiment harness, must agree on what a path is, and a control character
-/// is where they part, a shell's command substitution dropping a trailing
-/// newline this parser keeps. The trace sink's path is refused by its own
-/// name. The restore's save point is a bare name with its own check below.
 /// **An adapter is the decoder's alone**, per the adapter binding amendment
 /// ADP-0, which serves decode and leaves the classifier as an adapter role
 /// open (ADP-7): the classify binding is the same type, so a table declared
@@ -668,12 +661,8 @@ fn check_adapter(adapter: &AdapterBinding) -> Result<(), ConfigError> {
         field: Some(FieldName(format!("model-binding.adapter.{member}"))),
         kind: ConfigErrorKind::BadValue,
     };
-    let digest = |value: &str| {
-        value.len() == 64
-            && value
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    };
+    // The state flow's own digest rule, so the two cannot drift.
+    let digest = |value: &str| crate::state_flow::Digest::new(value).is_ok();
     if !digest(&adapter.sha256) {
         return Err(refused("sha256"));
     }
@@ -686,6 +675,13 @@ fn check_adapter(adapter: &AdapterBinding) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// **A path in a declaration carries no control character**, per
+/// `weaver-types-Spec` section 2 and the operator's ruling of 2026-09-28:
+/// every reader in the suite, this parser, the deploy script's shell and the
+/// experiment harness, must agree on what a path is, and a control character
+/// is where they part, a shell's command substitution dropping a trailing
+/// newline this parser keeps. The trace sink's path is refused by its own
+/// name. The restore's save point is a bare name with its own check below.
 #[cfg(feature = "config")]
 fn check_declared_paths(config: &AgentConfig) -> Result<(), ConfigError> {
     let sink = match &config.trace_sink {

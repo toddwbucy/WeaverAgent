@@ -197,12 +197,13 @@ if [ "$ADAPTER_GIVEN" -eq 4 ]; then
   # The digests are written as the parse requires them, 64 lowercase
   # hexadecimal characters. The scale is written bare into TOML, which would
   # take `nan` or `inf` as floats the parse then refuses with a worse account,
-  # so it is a finite decimal that narrows to a finite f32.
+  # so it is a finite decimal in TOML's own number grammar (no leading zero,
+  # an integer within i64) that narrows to a finite f32.
   command -v python3 >/dev/null || die "python3 is not on PATH, and the adapter's scale is checked with it"
   [[ "$ADAPTER_SHA256" =~ ^[0-9a-f]{64}$ ]] || die "--adapter-sha256 is 64 lowercase hexadecimal characters: '$ADAPTER_SHA256'"
   [[ "$BASE_BLAKE3" =~ ^[0-9a-f]{64}$ ]] || die "--base-blake3 is 64 lowercase hexadecimal characters: '$BASE_BLAKE3'"
-  [[ "$ADAPTER_SCALE" =~ ^[+-]?[0-9]+(\.[0-9]+)?$ ]] \
-    && python3 -c 'import sys; sys.exit(0 if abs(float(sys.argv[1])) <= 3.4028234663852886e38 else 1)' "$ADAPTER_SCALE" 2>/dev/null \
+  [[ "$ADAPTER_SCALE" =~ ^[+-]?(0|[1-9][0-9]*)(\.[0-9]+)?$ ]] \
+    && python3 -c 'import sys; v = sys.argv[1]; n = float(v) if "." in v else int(v); sys.exit(0 if (isinstance(n, float) or -2**63 <= n < 2**63) and abs(float(n)) <= 3.4028234663852886e38 else 1)' "$ADAPTER_SCALE" 2>/dev/null \
     || die "--adapter-scale is a finite decimal number within f32's range, such as 1.0 or 0.7: '$ADAPTER_SCALE'"
 fi
 # The SPU path is one line of a key file admin reads, so it is absolute and

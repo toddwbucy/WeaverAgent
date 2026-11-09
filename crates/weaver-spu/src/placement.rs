@@ -97,7 +97,7 @@ impl<'r> OpenedSession<'r> {
             resident.declaration.template,
             &resident.artifact.display().to_string(),
             &resident.weights_hash.0,
-            resident.adapter().as_ref(),
+            resident.adapter(),
             &prepared,
         )
         .map_err(PlacementFailure::Decode)?;

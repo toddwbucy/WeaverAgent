@@ -543,6 +543,9 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                                 ("--adapter-scale", "1e3", "--adapter-scale is a finite"),
                                 ("--adapter-scale", "0x1", "--adapter-scale is a finite"),
                                 ("--adapter-scale", "1" * 40 + ".0", "--adapter-scale is a finite"),
+                                ("--adapter-scale", "00.7", "--adapter-scale is a finite"),
+                                ("--adapter-scale", "007", "--adapter-scale is a finite"),
+                                ("--adapter-scale", "1" + "0" * 19, "--adapter-scale is a finite"),
                                 ("--adapter", '/m/x"y.gguf', "cannot hold as written"),
                                 ("--adapter", "/m/x\ty.gguf", "cannot hold as written")):
             cases.append(({**values, flag: bad}, said))

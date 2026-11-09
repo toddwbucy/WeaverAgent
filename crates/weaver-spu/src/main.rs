@@ -446,26 +446,40 @@ fn render_measurement(
         measurement["residual_layers"] = serde_json::json!(reduction.layers());
         measurement["residual_forwards"] = serde_json::json!(reduction.forwards());
     }
-    lead_with_adapter(resident.adapter().as_ref(), &measurement)
+    let members = measurement
+        .as_object()
+        .expect("the measurement is built as an object literal");
+    lead_with_adapter(resident.adapter(), members)
 }
 
 /// **The adapter identity leads every generation's measurement, written
 /// typed**, per the adapter binding amendment ADP-3: the actual loaded
-/// identity, `null` for base-only. It is spliced ahead of the generic object
-/// rather than set in it, because a generic value would widen the f32 scale
-/// to f64. The object always holds `model`, so the splice joins two
-/// non-empty member lists.
+/// identity, `null` for base-only. It is written ahead of the generic
+/// members rather than set among them, because a generic value would widen
+/// the f32 scale to f64. The members follow in the map's order, each written
+/// by serde_json into the one buffer, so an empty map still closes a valid
+/// object. The generic members never carry `adapter`.
 fn lead_with_adapter(
     adapter: Option<&weaver_spu::lora::RecordedAdapter>,
-    measurement: &serde_json::Value,
+    members: &serde_json::Map<String, serde_json::Value>,
 ) -> String {
-    let rest = measurement.to_string();
+    debug_assert!(
+        !members.contains_key("adapter"),
+        "the typed adapter is the measurement's only adapter member"
+    );
     let mut rendered = b"{\"adapter\":".to_vec();
-    weaver_spu::lora::RecordedAdapter::write_member(adapter, &mut rendered)
-        .expect("writing to a vector cannot fail");
-    rendered.push(b',');
-    rendered.extend_from_slice(&rest.as_bytes()[1..]);
-    String::from_utf8(rendered).expect("both halves are serde_json's own UTF-8")
+    let written =
+        weaver_spu::lora::RecordedAdapter::write_member(adapter, &mut rendered).and_then(|()| {
+            members.iter().try_for_each(|(key, value)| {
+                rendered.push(b',');
+                serde_json::to_writer(&mut rendered, key)?;
+                rendered.push(b':');
+                serde_json::to_writer(&mut rendered, value)
+            })
+        });
+    written.expect("writing to a vector cannot fail");
+    rendered.push(b'}');
+    String::from_utf8(rendered).expect("serde_json writes UTF-8")
 }
 
 /// The decode phase, entered once residency confirms and served until the
