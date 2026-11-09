@@ -2565,9 +2565,15 @@ that residency at the save point: load, seed, save point, unload, and the produc
 session is the next load. The first save point taken after the seeding is the agent's
 starting state, per `weaver-state-PRD` section 4, taken on the operator's demand with
 admin's `save-point` verb, or by the first leave's snapshot. **Because the seeding turn
-generates, the agent's starting state holds the model's first answer beside the
-prompt**: that answer is on the record as every `message.assistant` is, the tee lands
-it, and a save point taken after the seeding carries both, by design and not by leak.
+generates, the record holds the model's first answer beside the prompt**: the answer is
+on the record whole, as every `message.assistant` is. The agent's starting state holds
+the prompt whole, since a turnless `message.system` crosses the tee under every
+election, per `weaver-trace-Spec` section 11. It holds the first answer as the
+declaration's election lands it, per the same section and `weaver-types-Spec` section 2:
+the answer's text where the election names `message.assistant`'s `content`, as the
+declaration `create-agent.sh` writes does, and its envelope alone under the default
+election. A save point taken after the seeding carries what the tee landed, by design
+and not by leak.
 The line's bound is the gate's, 49,041 octets before the delimiter per
 `weaver-gate-Spec` section 4, the organ envelope's exact capacity, which the R1 system
 prompt's seeding line, 48,454 octets as `deploy/turn.py` encodes it, sits inside. A

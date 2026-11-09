@@ -398,8 +398,11 @@ sudo /opt/weaver/bin/weaver-admin save-point <name>   # answers {"kind":"save_po
 sudo /opt/weaver/bin/weaver-admin unload <name>
 ```
 
-The first save point taken after the seeding is the agent's starting state, holding the
-prompt and the model's first answer beside it; `save-point` publishes it at once into
+The first save point taken after the seeding is the agent's starting state. It holds the
+prompt whole, and the model's first answer as the declaration's election lands it: its
+text under the `[state-election]` this script writes, which names `message.assistant`'s
+`content`, and its envelope alone under the default election (`weaver-trace-Spec`
+section 11). `save-point` publishes it at once into
 `<territory>/save-points/` as `<YYYYMMDDTHHMMSSZ>-<digest>.save-point`, named on one
 line of `save-points.manifest` there, which is root's and which you do not edit
 (section 5). The unload takes one more at the leave, and every
