@@ -49,16 +49,59 @@ fn binding(connection: &Connection, block: i64, ordinal: u64) -> i64 {
 fn literal_ddl_is_the_complete_merged_catalog() {
     let specification =
         include_str!("../../../../../docs/crates/state-management/weaver-state-Spec-amendment.md");
-    let expected: Vec<_> = specification
-        .split("```sql\n")
-        .skip(1)
-        .filter_map(|block| block.split_once("\n```"))
-        .map(|(sql, _)| sql.trim())
-        .filter(|sql| sql.starts_with("CREATE "))
-        .collect();
+    // **state-content/1 only, harvested up to STATE-GOVERNING** (#498). The
+    // amendment carries two catalogs: state-content/1, and under
+    // STATE-GOVERNING the two governing tables that make state-content/2 at
+    // its cutover. STATE-GOVERNING says "Until then, state-content/1 stands
+    // as written above", and `schema::DDL` is state-content/1, so the harvest
+    // stops where STATE-GOVERNING begins. The marker stands exactly once, so
+    // a moved or doubled marker fails here rather than silently changing
+    // what is harvested, and what follows it is exactly the two governing
+    // tables, so a statement added to either catalog fails here too. At the
+    // cutover this pin moves to state-content/2, deliberately.
+    let marker = "**STATE-GOVERNING.**";
+    assert_eq!(specification.matches(marker).count(), 1);
+    let (state_content_1, governing) = specification
+        .split_once(marker)
+        .expect("the amendment carries STATE-GOVERNING");
+    let creates = |text: &'static str| -> Vec<&'static str> {
+        text.split("```sql\n")
+            .skip(1)
+            .filter_map(|block| block.split_once("\n```"))
+            .map(|(sql, _)| sql.trim())
+            .filter(|sql| sql.starts_with("CREATE "))
+            .collect()
+    };
+    let expected = creates(state_content_1);
     assert_eq!(expected.len(), 27);
     assert_eq!(schema::DDL.as_slice(), expected);
     assert!(schema::DDL.iter().all(|sql| !sql.contains(';')));
+    // Each governing fence holds one statement, so the names compared below
+    // are the whole of what it carries: a second statement appended inside a
+    // fence fails here rather than hiding past the first parenthesis.
+    let governing = creates(governing);
+    for sql in &governing {
+        assert_eq!(
+            sql.to_ascii_uppercase().matches("CREATE ").count(),
+            1,
+            "one statement per governing fence: {sql}"
+        );
+        assert!(
+            !sql.contains(';'),
+            "one statement per governing fence: {sql}"
+        );
+    }
+    let second: Vec<_> = governing
+        .into_iter()
+        .map(|sql| sql.split_once(" (").map_or(sql, |(head, _)| head))
+        .collect();
+    assert_eq!(
+        second,
+        [
+            "CREATE TABLE governing_version",
+            "CREATE TABLE governing_current"
+        ]
+    );
 }
 
 #[test]
