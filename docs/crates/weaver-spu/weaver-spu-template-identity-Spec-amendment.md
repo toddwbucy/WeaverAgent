@@ -102,11 +102,13 @@ Each digest is pinned by a code act that records, beside the digest:
 
 A golden render matches on the served path: the conversations that carry a
 system message (a system and user turn, and a history), rendered in the mode
-the entry's ruling or opener implies. A case off that path (a lone user turn,
-a final assistant turn, a tool result) is not evidence and not a failure: it
-is recorded beside the pin as the entry's named limit, with the reference's
-rendering and the renderer's, so the census can read what the family does not
-reproduce. The `granite` goldens are the model here too: their served-path
+the entry's ruling or opener implies, and, for an entry whose renderer serves
+tool calls and tool results, a history carrying a call and its result, the
+result rendered as the appended turn the family makes of it. A case off that
+path (a lone user turn, a final assistant turn, and a tool result for an entry
+whose renderer refuses them) is not evidence and not a failure: it is recorded
+beside the pin as the entry's named limit, with the reference's rendering and
+the renderer's, so the census can read what the family does not reproduce. The `granite` goldens are the model here too: their served-path
 rows pin the digest, and their `user_only` and `tool_result` rows are named
 limits.
 
@@ -155,10 +157,13 @@ hold.
 bytes the header read. The artifact hash (`weights_hash`, SPU Spec 3) is taken
 later in admission and reads the same files again, so a sidecar that changed
 between the two reads would select one template and record another. The hash
-walk therefore compares its bytes for the template file against the header's
-and refuses `ArtifactUnreadable`, naming the file, where they differ. The
-pinned-file rule of LORA-2 (hash and load through one pinned file) is the
-model.
+walk therefore checks both template sources against the header's reading:
+each source the header read must be present with the same bytes, and each
+source the header found absent must still be absent, or the walk refuses
+`ArtifactUnreadable`, naming the file. So a sidecar that appeared or vanished
+between the two reads refuses, and the recorded directory never holds a
+template the selection did not see. The pinned-file rule of LORA-2 (hash and
+load through one pinned file) is the model.
 
 **The account line.** Every family refusal crosses the seam as
 `ArtifactUnreadable`, and today the admit account line (Spec 3) names only
@@ -214,7 +219,7 @@ carries it, with no normalization of whitespace, line endings or encoding:
 | A list or other non-string key beside a sidecar | `TemplateConflict` |
 | A sidecar that is not UTF-8 | `ArtifactUnreadable`, as for any unreadable sidecar |
 | `chat_template.json` | Not read |
-| A safetensors binding that names a file, not its directory | No sidecar is read. The binding refuses `TemplateAbsent`, with an account naming the directory binding, because `weights_hash` covers only the named file and a template read from a sibling would not be identified by the record |
+| A safetensors binding that names a file, not its directory | The architecture sidecar (`config.json`) may be read for the key, as today, since the key is judged first (TID-3 step 1) and an unknown one refuses `UnknownFamily`. No template sidecar is read. The binding then refuses `TemplateAbsent`, with an account naming the directory binding, because `weights_hash` covers only the named file and a template read from a sibling would not be identified by the record |
 
 The refusal of two different texts is the only answer that agrees with both
 upstream readers. Transformers takes the sidecar over the config (and on save
