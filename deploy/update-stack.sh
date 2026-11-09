@@ -33,6 +33,17 @@
 # The plan is the point. An install that swaps every binary hides which act
 # actually moved, and the campaign's comparability rests on knowing that, so
 # this diffs deployed against built and installs only what differs.
+# **The closing line is a deployment-tuple fact** (the operator's ruling of
+# 2026-11-09): every live run's report cites "the box is at <commit>", so it
+# has to be true of everything the commit builds, the engine's shared
+# libraries included, and a partial install is a confound in every
+# measurement taken on the box afterwards. The libraries are planned and
+# installed beside the members, from the output directory cargo names for
+# the engine the build just compiled. **A verified install ends with the
+# install tuple** (deploy/install-tuple.sh): the box-side half of the
+# deployment tuple, printed under `== tuple` and written to the stack record
+# as `install-tuple`, so a run's report cites one record of what the box was
+# built from and runs on.
 set -euo pipefail
 
 ORIGINAL_ARGS=("$@")
@@ -59,6 +70,8 @@ say() { printf '\n== %s\n' "$*"; }
 die() { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 
 source "$REPO/deploy/retired-python.sh"
+source "$REPO/deploy/engine-libraries.sh"
+source "$REPO/deploy/install-tuple.sh"
 
 read_key() { cat "$STACK/$1" 2>/dev/null || true; }
 
@@ -328,6 +341,16 @@ refuse_python_binary "$(read_key spu-binary)" "the stack's spu-binary"
 PREFIX=$(read_key prefix)
 [[ "$PREFIX" == /* ]] || die "no absolute prefix in the stack record $STACK"
 refuse_python_install "$PREFIX" "$BIN_DIR"
+# **The engine's libraries go where the record's `library-path` names**, the
+# directory bootstrap-stack.sh made and copied into each agent's root, which
+# admin judges and sets as the worker's LD_LIBRARY_PATH (weaver-admin-Spec
+# section 6). This run installs into it and never rewrites the key: the
+# directory stays where it was, and only its files move. It is held closed by
+# admin's rule before any root step acts in it.
+LIB_DIR=$(read_key library-path)
+[[ "$LIB_DIR" == /* ]] || die "no absolute library-path in the stack record $STACK"
+[ -d "$LIB_DIR" ] || die "the stack record's library-path $LIB_DIR does not stand as a directory: bootstrap-stack.sh makes it"
+bad=$(held_closed "$LIB_DIR") || die "the stack record's library-path $LIB_DIR is not held closed by root at $bad, which admin refuses at every load"
 
 # **A box still on the box-wide layout refuses before anything is built.**
 # Before 2026-10-01 admin read one configuration for every agent, its
@@ -654,6 +677,10 @@ SHELL_FILES="busybox busybox.applets"
 MEMBER_FEATURES=weaver-state/sqlite
 SPU_FEATURES=weaver-spu/cuda
 FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
+# The engine's shared objects, the crate that builds them, the loader's
+# entry and the CUDA directory it names are deploy/engine-libraries.sh's,
+# which bootstrap-stack.sh sources as well. The entry is written here only
+# where bootstrap's is missing.
 
 # ---------------------------------------------------------------- 1. box facts
 say "box"
@@ -664,15 +691,17 @@ printf '  stack record  %s\n' "$STACK"
 printf '  admin base    %s\n' "$ADMIN_BASE"
 printf '  agents        %s\n' "${AGENTS:-(none: nothing to unload, reconcile or verify)}"
 printf '  bin dir       %s\n' "$BIN_DIR"
+printf '  library dir   %s\n' "$LIB_DIR"
 printf '  worker-binary %s\n' "$WORKER_BINARY"
 # **Each agent's binary paths are its own and this run does not move them.**
 # It installs over the files at the stack record's paths, so an agent whose
 # root names those paths is updated in place and nothing in its root changes;
 # one whose root names another file (an SPU chosen with `create-agent.sh
 # --spu`, or a path written by hand) keeps serving that file, and is printed
-# here so the reader knows this run does not reach it.
+# here so the reader knows this run does not reach it. Its `library-path` is
+# read the same way: the libraries go into the record's directory alone.
 for agent in $AGENTS; do
-  for key in worker-binary gate-binary spu-binary; do
+  for key in worker-binary gate-binary spu-binary library-path; do
     # A key that stands and does not read is not an absent one (Codex on #45).
     if [ -e "$ADMIN_BASE/$agent/$key" ] && [ ! -r "$ADMIN_BASE/$agent/$key" ]; then
       die "$ADMIN_BASE/$agent/$key stands and cannot be read by $(id -un), so whether this run updates $agent is unknown"
@@ -695,7 +724,7 @@ printf '  built from    %s\n' "$BUILT"
 # read: step 9 prints the `state_store` the load event names, out of the sink,
 # after the member has served it.
 printf '  will build    %s\n' "$FEATURES"
-printf '  will install  %s\n' "$MEMBERS"
+printf '  will install  %s, and the engine libraries (%s) built by %s\n' "$MEMBERS" "$LIB_GLOBS" "$ENGINE_CRATE"
 # **One line, because the query answers once per device.** Three cards gave
 # three lines into one `%s`, so two of them printed with no label and no
 # indent. The driver is the box's, not the card's, so the first answer is the
@@ -809,6 +838,9 @@ else
   printf '  on branch %s, not fast-forwarding\n' "$BRANCH"
 fi
 AFTER=$(git rev-parse --short HEAD)
+# The install tuple names this commit in full, read here and not after the
+# build, since the checkout may move during it.
+COMMIT=$(git rev-parse HEAD)
 printf '  %s -> %s\n' "$BEFORE" "$AFTER"
 # **The run checks with the code it installs** (Codex on #82): a fast-forward
 # that moved HEAD has changed this very script, and the checks above ran from
@@ -908,8 +940,32 @@ run_tests
 # the build is the whole workspace: the six installed members and the tools
 # beside them.
 say "build"
+# **The engine's output directory is the one cargo names for this build**,
+# never the newest by time (deploy/engine-libraries.sh): the build's machine
+# messages go to a file mktemp makes, `engine_out` reads the engine package's
+# out_dir from them, and the file is removed. Progress and rendered
+# diagnostics stay on stderr as before. A failed build exits with cargo's
+# status, its diagnostics above.
+BUILD_MESSAGES=$(mktemp "${BUILT%/release}/weaver-deploy-messages-XXXXXX") \
+  || die "no file for the build's messages could be made beside $BUILT"
+# No exit trap stands yet (the install arms one), so a signal during the
+# long build still removes the file.
+trap 'rm -f -- "$BUILD_MESSAGES"' EXIT
+rc=0
 NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
-  cargo build --release --locked --workspace --features "$FEATURES"
+  cargo build --release --locked --workspace --message-format=json-render-diagnostics \
+    --features "$FEATURES" >"$BUILD_MESSAGES" || rc=$?
+if [ "$rc" -ne 0 ]; then
+  rm -f -- "$BUILD_MESSAGES"
+  printf '\nREFUSED: the build failed (cargo exited %s); its diagnostics are above\n' "$rc" >&2
+  exit "$rc"
+fi
+SYS_OUT=$(engine_out "$ENGINE_CRATE" "$BUILD_MESSAGES" "$BUILT/build" || true)
+rm -f -- "$BUILD_MESSAGES"
+trap - EXIT
+[ -n "$SYS_OUT" ] || die "the build reported no single output directory under $BUILT/build for $ENGINE_CRATE, the lock's one package of that name, so which engine libraries it built is unknown"
+SYS_OUT="$SYS_OUT/lib"
+[ -d "$SYS_OUT" ] || die "the engine's output directory names no lib/ at $SYS_OUT, so the build installed no engine libraries"
 # **The agent's shell, built from its pinned source and configuration** (#29,
 # weaver-gate-Spec 8.1): a static busybox and its applet list, written beside
 # the members, planned and installed with them, and rolled back with them.
@@ -923,6 +979,7 @@ build_busybox() {
   fi
 }
 build_busybox || die "the shell's busybox did not build"
+printf '  engine out    %s\n' "$SYS_OUT"
 printf '  ok\n'
 
 # --------------------------------------------------------------------- 5. plan
@@ -951,6 +1008,84 @@ for b in $MEMBERS $SHELL_FILES; do
     CHANGED+=("$b")
   fi
 done
+# **The engine's libraries are planned as the members are**, each versioned
+# file by its digest against the file of its name in the library directory.
+# Before this, an update installed none of them, and a build whose engine
+# pin moved ran over the previous bootstrap's libraries while the closing
+# line named the new commit (measured on 2026-11-09). The links, the SONAME
+# and the bare name, carry no content of their own: each is carried with
+# `cp -a` where the box holds no link at its name or one to another target,
+# counted here and not listed.
+LIB_CHANGED=()
+LIB_LINKS=()
+LIB_NAMES=()
+lib_files=0
+for g in $LIB_GLOBS; do
+  for f in "$SYS_OUT"/$g; do
+    name=${f##*/}
+    if [ -L "$f" ]; then
+      if [ ! -L "$LIB_DIR/$name" ] || [ "$(readlink -- "$LIB_DIR/$name")" != "$(readlink -- "$f")" ]; then
+        LIB_LINKS+=("$name")
+      fi
+      continue
+    fi
+    # A pattern that matched nothing stands as itself and names no file.
+    [ -f "$f" ] || continue
+    lib_files=$((lib_files + 1))
+    LIB_NAMES+=("$name")
+    n=$(sha256sum -- "$f" | cut -d' ' -f1)
+    if [ -f "$LIB_DIR/$name" ] && [ ! -L "$LIB_DIR/$name" ]; then
+      d=$(sha256sum -- "$LIB_DIR/$name" | cut -d' ' -f1)
+      if [ "$d" = "$n" ]; then
+        printf '  %-22s unchanged\n' "$name"
+        continue
+      fi
+      printf '  %-22s CHANGED  %s -> %s\n' "$name" "${d:0:12}" "${n:0:12}"
+    elif [ -e "$LIB_DIR/$name" ] || [ -L "$LIB_DIR/$name" ]; then
+      printf '  %-22s CHANGED  (not a regular file) -> %s\n' "$name" "${n:0:12}"
+    else
+      printf '  %-22s NEW      %s\n' "$name" "${n:0:12}"
+    fi
+    LIB_CHANGED+=("$name")
+  done
+done
+[ "$lib_files" -gt 0 ] || die "no engine library matched $LIB_GLOBS under $SYS_OUT, so the build's engine cannot be installed"
+[ ${#LIB_LINKS[@]} -eq 0 ] || printf '  %-22s %s to carry with cp -a\n' "(library links)" "${#LIB_LINKS[@]}"
+# **A name the build no longer makes goes.** The versioned names carry the
+# engine's build number, so a moved pin leaves the old file beside the new
+# one, and `ldconfig` points each SONAME link at the highest version it finds
+# in the directory, the old one where the pin moved back. Each name the globs
+# match in the library directory that the build's out/lib does not hold is
+# removed under the same window, kept in the backup's lib/ and put back by a
+# rollback.
+LIB_STALE=()
+stale_links=0
+for g in $LIB_GLOBS; do
+  for f in "$LIB_DIR"/$g; do
+    [ -e "$f" ] || [ -L "$f" ] || continue
+    name=${f##*/}
+    if [ -e "$SYS_OUT/$name" ] || [ -L "$SYS_OUT/$name" ]; then continue; fi
+    LIB_STALE+=("$name")
+    if [ -L "$f" ]; then
+      stale_links=$((stale_links + 1))
+    else
+      printf '  %-22s REMOVED  %s\n' "$name" "$(sha256sum -- "$f" | cut -c1-12)"
+    fi
+  done
+done
+[ "$stale_links" -eq 0 ] || printf '  %-22s %s to remove\n' "(stale links)" "$stale_links"
+# **The loader's entry is bootstrap's and is left as it stands**; a box
+# missing it gains the entry bootstrap writes, and a rollback removes it.
+LDSO_WRITE=0
+if [ -e "$LDSO_CONF" ] || [ -L "$LDSO_CONF" ]; then
+  printf '  %-22s stands; left as it is\n' "$LDSO_CONF"
+else
+  # LIB_DIR was judged held closed where it was read; the CUDA directory is
+  # judged here, where it would join the entry (deploy/engine-libraries.sh).
+  loader_dir CUDA_LIB_DIR "$CUDA_LIB_DIR"
+  printf '  %-22s NEW      %s and %s, then ldconfig\n' "$LDSO_CONF" "$LIB_DIR" "$CUDA_LIB_DIR"
+  LDSO_WRITE=1
+fi
 # **What --install does to the agents, said before it does it** (#99 area 2
 # review, R2): every agent's connector rule is held out of sudo's reading and
 # every agent unloaded before any binary is replaced, and the rules come back
@@ -964,6 +1099,7 @@ else
       "$agent" "$agent" "$agent" "$agent" "$agent"
   done
 fi
+printf '  --install ends, once verified, by writing the install tuple to %s\n' "$STACK/install-tuple"
 [ "$INSTALL" -eq 1 ] || printf '  plan only: no rule is moved and no agent unloaded\n'
 
 # **Binaries current is not the same as the box being finished.** A run that
@@ -971,8 +1107,9 @@ fi
 # and an agent that will not load, so an early exit here would refuse to
 # repair exactly the state a failed run leaves behind. Only a plan run stops
 # on this.
-if [ ${#CHANGED[@]} -eq 0 ]; then
-  printf '  every deployed binary already matches the build\n'
+if [ ${#CHANGED[@]} -eq 0 ] && [ ${#LIB_CHANGED[@]} -eq 0 ] && [ ${#LIB_LINKS[@]} -eq 0 ] && [ ${#LIB_STALE[@]} -eq 0 ] \
+  && [ "$LDSO_WRITE" -eq 0 ]; then
+  printf '  every deployed binary and engine library already matches the build\n'
   if [ "$INSTALL" -eq 0 ]; then
     say "the box is current at $AFTER"
     exit 0
@@ -999,6 +1136,8 @@ refuse_legacy_units
 
 # ------------------------------------------------------------------ 7. install
 ADDED=()
+LIB_ADDED=()
+LDSO_WRITTEN=0
 # The agent the verify step has loaded right now, empty whenever none is. Every
 # rollback from inside that step happens with a worker running, and a restore
 # that leaves it running puts the old binaries under a live agent that came up
@@ -1056,6 +1195,30 @@ restore() {
       sudo install -o root -g root -m "$mode" "$BACKUP/$b" "$BIN_DIR/$b" \
         || { printf '  FAILED to restore %s\n' "$b" >&2; failed=1; }
     done
+    # **The engine's libraries go back as the binaries do**: a name the box
+    # never held is removed, and every name this run replaced is put back
+    # from the backup's lib/, links as links. A name never reached was never
+    # backed up, so there is nothing to put back.
+    for f in "${LIB_ADDED[@]}"; do
+      printf '  removing %s, which the library directory did not hold before this run\n' "$f" >&2
+      sudo rm -f -- "$LIB_DIR/$f" \
+        || { printf '  FAILED to remove %s\n' "$LIB_DIR/$f" >&2; failed=1; }
+    done
+    for f in "${LIB_CHANGED[@]}" "${LIB_LINKS[@]}" "${LIB_STALE[@]}"; do
+      sudo test -e "$BACKUP/lib/$f" || sudo test -L "$BACKUP/lib/$f" || continue
+      sudo cp -a --remove-destination -- "$BACKUP/lib/$f" "$LIB_DIR/$f" \
+        || { printf '  FAILED to restore %s\n' "$LIB_DIR/$f" >&2; failed=1; }
+    done
+  fi
+  # The loader's entry this run wrote goes, and the cache is rebuilt over
+  # what now stands, whenever this run touched either.
+  if [ "$LDSO_WRITTEN" -eq 1 ]; then
+    printf '  removing %s, which this run wrote\n' "$LDSO_CONF" >&2
+    sudo rm -f -- "$LDSO_CONF" \
+      || { printf '  FAILED to remove %s\n' "$LDSO_CONF" >&2; failed=1; }
+  fi
+  if [ "$LDSO_WRITTEN" -eq 1 ] || { [ "$INSTALL_DONE" -eq 1 ] && [ $(( ${#LIB_CHANGED[@]} + ${#LIB_LINKS[@]} + ${#LIB_STALE[@]} )) -gt 0 ]; }; then
+    sudo ldconfig || { printf '  FAILED to rebuild the loader cache with ldconfig\n' >&2; failed=1; }
   fi
   # **The key this run wrote goes whether or not binaries were installed**
   # (Codex on #177): the repair path writes it with nothing installed, so its
@@ -1066,7 +1229,7 @@ restore() {
       || { printf '  FAILED to remove %s\n' "$STACK/shell-binary" >&2; failed=1; }
   fi
   if [ "$failed" -ne 0 ]; then
-    printf '  RESTORE INCOMPLETE - inspect %s and %s by hand\n' "$BIN_DIR" "$BACKUP" >&2
+    printf '  RESTORE INCOMPLETE - inspect %s, %s and %s by hand\n' "$BIN_DIR" "$LIB_DIR" "$BACKUP" >&2
     printf '  and check with weaver-admin that no agent is still loaded\n' >&2
   fi
   return 0
@@ -1189,7 +1352,8 @@ for agent in $AGENTS; do
   printf '  %-12s unloaded\n' "$agent"
 done
 
-if [ ${#CHANGED[@]} -gt 0 ]; then
+if [ ${#CHANGED[@]} -gt 0 ] || [ ${#LIB_CHANGED[@]} -gt 0 ] || [ ${#LIB_LINKS[@]} -gt 0 ] || [ ${#LIB_STALE[@]} -gt 0 ] \
+  || [ "$LDSO_WRITE" -eq 1 ]; then
   say "install"
   # **Exclusive, not merely named.** A seconds-resolution name with
   # `mkdir -p` lets two runs in one second share a directory, and the
@@ -1215,7 +1379,61 @@ if [ ${#CHANGED[@]} -gt 0 ]; then
     sudo install -o root -g root -m "$mode" "$BUILT/$b" "$BIN_DIR/$b"
     printf '  installed %s\n' "$b"
   done
-  printf '  previous binaries kept at %s\n' "$BACKUP"
+  # **The engine's libraries, under the same window and the same backup**:
+  # each name this run replaces is kept in the backup's lib/ first, a name
+  # the box never held is recorded for removal, and each is placed by
+  # `install_library` (deploy/engine-libraries.sh), a new file in place of
+  # the old rather than the old one rewritten under a mapping, root's from
+  # the moment it has a name. The versioned files go before the links, so no
+  # link names a file not yet carried, and the names the build no longer
+  # makes go last.
+  if [ $(( ${#LIB_CHANGED[@]} + ${#LIB_LINKS[@]} + ${#LIB_STALE[@]} )) -gt 0 ]; then
+    sudo install -d -o root -g root -m 0700 "$BACKUP/lib"
+    for f in "${LIB_CHANGED[@]}" "${LIB_LINKS[@]}"; do
+      if [ -e "$LIB_DIR/$f" ] || [ -L "$LIB_DIR/$f" ]; then
+        sudo cp -a -- "$LIB_DIR/$f" "$BACKUP/lib/$f"
+      else
+        LIB_ADDED+=("$f")
+      fi
+      install_library "$SYS_OUT/$f" "$LIB_DIR/$f"
+      printf '  installed %s\n' "$f"
+    done
+    for f in "${LIB_STALE[@]}"; do
+      sudo cp -a -- "$LIB_DIR/$f" "$BACKUP/lib/$f"
+      sudo rm -f -- "$LIB_DIR/$f"
+      printf '  removed %s, which the build no longer makes\n' "$f"
+    done
+  fi
+  if [ "$LDSO_WRITE" -eq 1 ]; then
+    # Set before the write, so a write that ends the run part way leaves
+    # restore() removing an entry this run may have written.
+    LDSO_WRITTEN=1
+    printf '%s\n%s\n' "$LIB_DIR" "$CUDA_LIB_DIR" | sudo tee "$LDSO_CONF" >/dev/null
+    sudo chmod 0644 "$LDSO_CONF"
+    printf '  wrote %s (%s, %s)\n' "$LDSO_CONF" "$LIB_DIR" "$CUDA_LIB_DIR"
+  fi
+  if [ "$LDSO_WRITE" -eq 1 ] || [ $(( ${#LIB_CHANGED[@]} + ${#LIB_LINKS[@]} + ${#LIB_STALE[@]} )) -gt 0 ]; then
+    sudo ldconfig
+    printf '  ran ldconfig\n'
+  fi
+  # **The SPU resolves its engine from the library directory**, as admin's
+  # start step will run it (deploy/engine-libraries.sh): ldd's status, no
+  # library not found, and every engine library a file in $LIB_DIR, whatever
+  # loader variables the operator's shell carries. Read whole, then
+  # searched, never through a consumer that stops early under `pipefail`.
+  rc=0
+  LDD_SAID=$(spu_ldd "$BIN_DIR/weaver-spu" "$LIB_DIR") || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s\n' "$LDD_SAID" >&2
+    rollback "ldd could not read the installed weaver-spu (it exited $rc)"
+  fi
+  if ! UNRESOLVED=$(engine_resolved "$LDD_SAID" "$LIB_DIR"); then
+    printf '%s\n' "$UNRESOLVED" >&2
+    rollback "weaver-spu has unresolved libraries after the install, or resolves its engine outside $LIB_DIR"
+  fi
+  printf '  weaver-spu resolves every library it names, %s of them the engine'"'"'s from %s\n' \
+    "$(grep -cE '^[[:space:]]*lib(ggml|llama)' <<<"$LDD_SAID" || true)" "$LIB_DIR"
+  printf '  previous binaries and libraries kept at %s\n' "$BACKUP"
 else
   say "install"
   printf '  nothing to install; continuing to reconcile and verify\n'
@@ -1407,4 +1625,14 @@ say "the connector rules, put back"
 [ ${#HELD_RULES[@]} -gt 0 ] || printf '  none was held\n'
 COMPLETED=1
 restore_rules || die "the install stands verified, but a connector rule named above did not come back: put it back by hand"
+# **The install tuple, read from what is installed** (deploy/install-tuple.sh):
+# the members and libraries by their installed digests, the engine as the
+# lock pins it, the runtime the installed SPU resolves and the GPUs in PCI
+# bus order. It replaces the previous run's record whole.
+say "tuple"
+TUPLE=$(install_tuple "$REPO" "$COMMIT" "$BIN_DIR" "$LIB_DIR" "$FEATURES" "$MEMBERS $SHELL_FILES" "${LIB_NAMES[*]}")
+printf '%s\n' "$TUPLE" | sed 's/^/  /'
+printf '%s\n' "$TUPLE" | sudo tee "$STACK/install-tuple" >/dev/null
+sudo chmod 0644 "$STACK/install-tuple"
+printf '  written to %s\n' "$STACK/install-tuple"
 say "the box is at $AFTER"

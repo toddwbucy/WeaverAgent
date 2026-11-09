@@ -22,7 +22,7 @@ import unittest
 
 DEPLOY = Path(__file__).resolve().parent
 DOUBLE = r'''#!/usr/bin/env python3
-import json, os, pathlib, shutil, subprocess, sys
+import json, os, pathlib, shutil, subprocess, sys, time
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 root = pathlib.Path(os.environ['FIXTURE_ROOT'])
@@ -58,10 +58,13 @@ if name == 'stat':
         print(0 if path.is_relative_to(root) else st.st_uid, format(st.st_mode & 0o7777, 'o'))
         sys.exit(0)
     os.execv('/usr/bin/stat', ['stat', *args])
+if name == 'mktemp' and args and '/weaver-deploy-messages-' in args[-1]:
+    # The build's messages file, made as the scripts make it; not logged.
+    os.execv('/usr/bin/mktemp', ['mktemp', *args])
 with open(os.environ['CALLS'], 'a') as log:
     log.write(json.dumps([name, *args]) + '\n')
 def mapped(value):
-    if value.startswith('/home/') or value.startswith('/etc/sudoers'):
+    if value.startswith('/home/') or value.startswith('/etc/sudoers') or value.startswith('/etc/ld.so.conf.d/'):
         return str(root / value.lstrip('/'))
     return value
 
@@ -123,12 +126,31 @@ elif name == 'systemctl':
 elif name == 'git':
     if args[0] == 'rev-parse': print('abcdef0')
     elif args[0] == 'branch': print('fixture-branch')
+    elif args[0] == 'ls-tree': print('160000 commit e21cdc11fixturevendoredcommit\tllama.cpp')
 elif name == 'hostname': print('fixture-box')
-elif name == 'nvidia-smi': print('fixture-driver')
+elif name == 'nvidia-smi':
+    if os.environ.get('NO_NVIDIA'): sys.exit(9)
+    # Listed out of PCI bus order, so a reader that trusts the query's order
+    # is caught.
+    if '--query-gpu=pci.bus_id,name,memory.total' in args:
+        print('00000000:41:00.0, Fixture GPU B, 2048 MiB')
+        print('00000000:01:00.0, Fixture GPU A, 1024 MiB')
+    else: print('fixture-driver')
+elif name == 'nvcc': print('nvcc: fixture\nCuda compilation tools, release 99.9, V99.9.1\nBuild fixture')
 elif name == 'pacman': print('cccl 3.3.4-1')
 elif name == 'cargo':
     target = pathlib.Path(os.environ['CARGO_TARGET_DIR'])
-    if args[0] == 'metadata': print(json.dumps({'target_directory': str(target)}))
+    # The engine's package as the lock names it, beside another crate with a
+    # build script, so a reader that does not match the id exactly is caught.
+    if args[0] == 'metadata': print(json.dumps({'target_directory': str(target), 'packages': [
+        {'name': 'llama-cpp-sys-2', 'id': 'fixture-engine-source#llama-cpp-sys-2@0.1.0', 'version': '0.1.0',
+         'source': 'git+https://fixture.invalid/llama-cpp-rs?rev=f00d#f00dfixtureforkcommit',
+         'manifest_path': str(root / 'checkout' / 'llama-cpp-sys-2' / 'Cargo.toml')},
+        {'name': 'fixture-other-sys', 'id': 'fixture-other-source#fixture-other-sys@0.1.0'}]}))
+    elif args[0] == 'pkgid':
+        # The lock's one package of the name, as `cargo pkgid` names it.
+        if 'llama-cpp-sys-2' not in args: sys.exit(101)
+        print('fixture-engine-source#llama-cpp-sys-2@0.1.0')
     elif args[0] == 'test': print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s')
     elif args[0] == 'build':
         if os.environ.get('BUILD_FAIL'):
@@ -137,6 +159,31 @@ elif name == 'cargo':
         target.joinpath('release').mkdir(parents=True)
         for member in ('worker', 'weaver-admin', 'weaver-trace-relay', 'weaver-gate', 'weaver-spu', 'weaver-state'):
             target.joinpath('release', member).write_text('fixture artifact ' + member)
+        # The engine's out/lib as llama-cpp-sys-2 lays it out: each versioned
+        # file beside its SONAME link and its bare link, and what the globs
+        # leave behind. ENGINE_BUILD names the build, so a test can move it.
+        out = target / 'release' / 'build' / 'llama-cpp-sys-2-fixture' / 'out'
+        lib = out / 'lib'
+        (lib / 'cmake').mkdir(parents=True)
+        (lib / 'pkgconfig').mkdir()
+        for stem, version in (('libllama', '0.0.1'), ('libggml', '0.9.1')):
+            (lib / f'{stem}.so.{version}').write_text(f"fixture {stem} {os.environ.get('ENGINE_BUILD', 'a')}")
+            (lib / f'{stem}.so.0').symlink_to(f'{stem}.so.{version}')
+            (lib / f'{stem}.so').symlink_to(f'{stem}.so.0')
+        # A second engine directory, newer by mtime, as a shared target holds
+        # one per engine pin it has built: the build did not use it.
+        if os.environ.get('DECOY_ENGINE'):
+            decoy = target / 'release' / 'build' / 'llama-cpp-sys-2-decoy' / 'out' / 'lib'
+            decoy.mkdir(parents=True)
+            for stem, version in (('libllama', '0.0.1'), ('libggml', '0.9.1')):
+                (decoy / f'{stem}.so.{version}').write_text(f'decoy {stem}')
+            later = time.time() + 3600
+            os.utime(decoy, (later, later))
+        if '--message-format=json-render-diagnostics' in args and not os.environ.get('NO_ENGINE_MESSAGE'):
+            for package, at in (('fixture-other-source#fixture-other-sys@0.1.0', target / 'release' / 'build' / 'other' / 'out'),
+                                ('fixture-engine-source#llama-cpp-sys-2@0.1.0', out)):
+                print(json.dumps({'reason': 'build-script-executed', 'package_id': package, 'out_dir': str(at)}))
+            print(json.dumps({'reason': 'build-finished', 'success': True}))
     else: sys.exit(99)
 elif name == 'sudo':
     if not os.environ.get('ALLOW_APPLY_CHECKS'): sys.exit(99)
@@ -172,12 +219,30 @@ elif name == 'sudo':
     elif op == 'cp':
         source, destination = (pathlib.Path(mapped(a)) for a in rest[-2:])
         assert source.is_relative_to(root) and destination.is_relative_to(root)
-        privileged([source, destination], lambda: shutil.copyfile(source, destination))
+        def copy():
+            # `-a` copies a link as a link; `--remove-destination` unlinks the
+            # name first, so the copy is a new file and never follows a link.
+            if '--remove-destination' in rest and (destination.exists() or destination.is_symlink()):
+                destination.unlink()
+            if '-a' in rest and source.is_symlink():
+                destination.symlink_to(os.readlink(source))
+            else:
+                shutil.copyfile(source, destination)
+        privileged([source, destination], copy)
     elif op == 'install':
         target = pathlib.Path(mapped(rest[-1]))
         assert target.is_relative_to(root), target
         if '-d' in rest: privileged([target], lambda: target.mkdir(parents=True, exist_ok=True))
-        else: privileged([target], target.touch)
+        else:
+            # A file installed from a source is a new file holding its bytes,
+            # as `install` unlinks the name first.
+            source = pathlib.Path(mapped(rest[-2]))
+            def place():
+                if source.is_relative_to(root) and source.is_file():
+                    if target.exists() or target.is_symlink(): target.unlink()
+                    shutil.copyfile(source, target)
+                else: target.touch()
+            privileged([target], place)
     elif op == 'mv':
         source, destination = (pathlib.Path(mapped(a)) for a in rest[-2:])
         assert source.is_relative_to(root) and destination.is_relative_to(root)
@@ -230,7 +295,7 @@ elif name == 'sudo':
             p = pathlib.Path(mapped(a))
             if a.startswith('/') and p.is_relative_to(root) and not privileged([p], lambda: os.path.lexists(p)):
                 sys.exit(1)
-    elif op in ('useradd', 'usermod', 'groupadd', 'chmod', 'setfacl'): pass
+    elif op in ('useradd', 'usermod', 'groupadd', 'chmod', 'setfacl', 'ldconfig'): pass
     else: sys.exit(99)
 elif name == 'mktemp':
     if not os.environ.get('ALLOW_APPLY_CHECKS'): sys.exit(99)
@@ -238,6 +303,25 @@ elif name == 'mktemp':
     probe.mkdir()
     print(probe)
 elif name == 'setfacl': sys.exit(1 if os.environ.get('ACL_FAIL') else 0)
+elif name == 'ldd':
+    # What the loader resolves for the installed SPU: the engine's SONAMEs
+    # from LD_LIBRARY_PATH, as the loader takes them, or from LDD_ELSEWHERE;
+    # LDD_MISSING names a library it cannot find, LDD_STATIC answers as ldd
+    # does for a file that is not a dynamic executable, and a file that is
+    # not there fails as ldd does.
+    if not os.path.exists(args[-1]):
+        print(f'ldd: {args[-1]}: No such file or directory', file=sys.stderr)
+        sys.exit(1)
+    if os.environ.get('LDD_STATIC'):
+        print('\tnot a dynamic executable')
+        sys.exit(1)
+    with open(os.environ['CALLS'], 'a') as seen:
+        seen.write(json.dumps(['ldd-env', os.environ.get('LD_LIBRARY_PATH', ''), os.environ.get('LD_PRELOAD', '')]) + '\n')
+    engine_dir = os.environ.get('LDD_ELSEWHERE') or os.environ.get('LD_LIBRARY_PATH', '/fixture/lib').split(':')[0]
+    for soname in ('libllama.so.0', 'libggml.so.0', 'libcudart.so.99', 'libcublas.so.99', 'libcublasLt.so.99', 'libc.so.6'):
+        at = engine_dir if soname.startswith(('libllama', 'libggml')) else '/fixture/lib'
+        if soname == os.environ.get('LDD_MISSING'): print(f'\t{soname} => not found')
+        else: print(f'\t{soname} => {at}/{soname} (0x0000)')
 else: sys.exit(99)
 '''
 
@@ -308,6 +392,21 @@ class PlanTests(unittest.TestCase):
         }
         for key, value in self.stack_keys.items():
             (self.stack / key).write_text(value + ("" if value.endswith("\n") else "\n"))
+        # The engine's libraries as bootstrap-stack.sh leaves them, equal to
+        # what the cargo double builds by default, and the loader's entry it
+        # writes, which the double and the preamble map into the fixture.
+        self.lib_dir = self.root / "installed" / "lib"
+        self.install_libraries("a")
+        (self.root / "etc" / "ld.so.conf.d").mkdir(parents=True)
+        self.ldso_conf = self.root / "etc" / "ld.so.conf.d" / "weaver.conf"
+        # The CUDA directory the entry names, root's and closed as the stat
+        # double answers for the fixture.
+        self.cuda_lib = self.root / "cuda" / "lib64"
+        self.cuda_lib.mkdir(parents=True)
+        self.ldso_conf.write_text(f"{self.lib_dir}\n{self.cuda_lib}\n")
+        # The engine's checkout, where the install tuple reads the vendored
+        # engine's commit from the fork's tree.
+        (self.root / "checkout" / "llama-cpp-sys-2").mkdir(parents=True)
         self.hba = self.root / "pg_hba.conf"
         self.hba.write_text("local all all peer\n")
         self.ident = self.root / "pg_ident.conf"
@@ -316,7 +415,7 @@ class PlanTests(unittest.TestCase):
         self.artifact.touch()
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for name in ("sudo", "systemctl", "psql", "mktemp", "setfacl", "getent", "git", "cargo", "hostname", "nvidia-smi", "pacman", "sh", "id", "stat"):
+        for name in ("sudo", "systemctl", "psql", "mktemp", "setfacl", "getent", "git", "cargo", "hostname", "nvidia-smi", "pacman", "sh", "id", "stat", "ldd", "nvcc"):
             command = self.bin / name
             command.write_text(DOUBLE)
             command.chmod(0o755)
@@ -331,8 +430,11 @@ class PlanTests(unittest.TestCase):
                      "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES",
                      "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
-                     "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF"):
+                     "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF", "ENGINE_BUILD", "NO_ENGINE_MESSAGE",
+                     "LDD_MISSING", "CUDA_LIB_DIR", "DECOY_ENGINE", "LDD_ELSEWHERE", "LDD_STATIC",
+                     "LD_LIBRARY_PATH", "LD_PRELOAD", "NO_NVIDIA"):
             self.env.pop(name, None)
+        self.env["CUDA_LIB_DIR"] = str(self.cuda_lib)
         # Redirect even shell builtin /home probes, and the cgroup mount's
         # reads, into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -343,7 +445,7 @@ class PlanTests(unittest.TestCase):
   fixture_mapped=()
   for arg in "$@"; do
     case "$arg" in
-      /home/*|/run/systemd/system) arg="$FIXTURE_ROOT$arg";;
+      /home/*|/run/systemd/system|/etc/ld.so.conf.d/*) arg="$FIXTURE_ROOT$arg";;
       /sys/fs/cgroup/*) arg="$FIXTURE_ROOT/cgroup-fs${arg#/sys/fs/cgroup}";;
     esac
     fixture_mapped+=("$arg")
@@ -354,6 +456,17 @@ test() { fixture_args "$@"; builtin test "${fixture_mapped[@]}"; }
 grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
 """)
         self.env["BASH_ENV"] = str(preamble)
+
+    def install_libraries(self, build):
+        """Lay the library directory out as an install of the cargo double's
+        engine build BUILD leaves it: the versioned files and their links."""
+        self.lib_dir.mkdir(parents=True, exist_ok=True)
+        for stem, version in (("libllama", "0.0.1"), ("libggml", "0.9.1")):
+            for name in (f"{stem}.so", f"{stem}.so.0", f"{stem}.so.{version}"):
+                (self.lib_dir / name).unlink(missing_ok=True)
+            (self.lib_dir / f"{stem}.so.{version}").write_text(f"fixture {stem} {build}")
+            (self.lib_dir / f"{stem}.so.0").symlink_to(f"{stem}.so.{version}")
+            (self.lib_dir / f"{stem}.so").symlink_to(f"{stem}.so.0")
 
     def run_script(self, name, *args):
         return subprocess.run(["bash", str(self.repo / "deploy" / name), *args],
@@ -1352,6 +1465,79 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIn("not counted: a pipe is not a file a line count reads", result.stdout)
 
+    def test_verify_load_prints_the_deployment_tuple(self):
+        """**verify-load prints the tuple after the load event**, every row
+        ending in one of the four status words, and the run verifies.
+        Perturbation: drop the tuple block and the heading is missing."""
+        state = self.verify_fixture()
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("== m1 deployment tuple", result.stdout)
+        rows = [line for line in result.stdout.splitlines()
+                if re.match(r"^   (row [0-9]|state|restore) ", line)]
+        self.assertGreaterEqual(len(rows), 12, result.stdout)
+        for line in rows:
+            self.assertRegex(line, r"\[(recorded|derivable|absent|FAULT): ")
+        self.assertIn("m1 verified", result.stdout)
+
+    def test_a_tuple_fault_unloads_the_run(self):
+        """**A FAULT line fails the verification and unloads**, `--keep`
+        included: here the load event's state_store names another engine than
+        the declaration. Perturbation: ignore the helper's status and the run
+        verifies (and under --keep stays serving)."""
+        state = self.verify_fixture()
+        sink = self.root / "agents" / "trace.ndjson"
+        (self.decl / "agent.toml").write_text(
+            f'[trace-sink]\nkind = "file"\npath = "{sink}"\n\n[state-store]\nengine = "sqlite"\n')
+        stub = self.root / "installed" / "bin" / "weaver-admin"
+        stub.write_text(stub.read_text().replace(
+            "echo '{\"kind\":\"load\"}'",
+            "echo '{\"kind\":\"load\",\"payload\":{\"state_store\":{\"engine\":\"none\"}}}'"))
+        try:
+            result = self.run_script("verify-load.sh", "m1", "--keep")
+        finally:
+            self.end_stand_in(state)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("[FAULT: the load event's state_store names 'none'", result.stdout)
+        self.assertIn("the deployment tuple carries a FAULT line, so the run is unloaded", result.stderr)
+        self.assertFalse((state / "pid").exists(), "no run is left")
+
+    def test_verify_load_binds_the_record_to_the_install_tuple(self):
+        """**The box side and the record binding print from the stack record's
+        install tuple**: its digest as the box's identity, the declaration's
+        sha256 against the load event's, the stack against its members.
+        Perturbation: drop the install tuple's argument in verify-load and
+        the box line reads absent."""
+        state = self.verify_fixture()
+        decl = (self.decl / "agent.toml").read_bytes()
+        # The devices as the harness's nvidia-smi lists them, sorted into PCI
+        # order as install-tuple.sh writes them, so row 7 reads the same box.
+        stub_gpus = {"gpu.0": "00000000:01:00.0, Fixture GPU A, 1024 MiB",
+                     "gpu.1": "00000000:41:00.0, Fixture GPU B, 2048 MiB"}
+        lines = [line.format(llama="1" * 64, ggml="2" * 64) for line in INSTALL_TUPLE_LINES]
+        lines = [f"{l.split(' = ')[0]} = {stub_gpus[l.split(' = ')[0]]}"
+                 if l.split(" = ")[0] in stub_gpus else l for l in lines]
+        (self.stack / "install-tuple").write_text("".join(l + "\n" for l in lines))
+        tuple_sha = hashlib.sha256((self.stack / "install-tuple").read_bytes()).hexdigest()
+        payload = json.dumps({"declaration": hashlib.sha256(decl).hexdigest(),
+                              "stack": {"worker": "1" * 64}})
+        stub = self.root / "installed" / "bin" / "weaver-admin"
+        stub.write_text(stub.read_text().replace(
+            "echo '{\"kind\":\"load\"}'", "echo '{\"kind\":\"load\",\"payload\":" + payload + "}'"))
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertRegex(result.stdout, r"box +install tuple +sha256 " + tuple_sha + r" +\[recorded:")
+        self.assertRegex(result.stdout, r"bind +declaration +sha256 [0-9a-f]{64} +\[recorded: equal")
+        self.assertRegex(result.stdout, r"bind +member worker +1{64} +\[recorded:")
+        self.assertNotIn("FAULT", result.stdout, "the live devices equal the install tuple's")
+        self.assertIn("m1 verified", result.stdout)
+
     def test_verify_load_refuses_a_constituent_of_another_account(self):
         # Perturbation: drop the account check, and a stranger's process passes.
         state = self.verify_fixture()
@@ -1777,8 +1963,10 @@ esac
             self.assertIn("  " + shell_file, result.stdout)
         self.assertIn("plan only. rerun with --install", result.stdout)
         self.assert_unprivileged()
+        # The lock's id of the engine's package, for the build's messages
+        # (the library step).
         cargo_actions = [c[1] for c in self.calls() if c[0] == "cargo"]
-        self.assertEqual(cargo_actions, ["metadata", "test", "build"])
+        self.assertEqual(cargo_actions, ["metadata", "test", "build", "pkgid"])
 
     def test_stack_test_step_selects_no_package_that_left(self):
         # #33: weaver-analysis left the workspace and cargo refuses a package
@@ -1886,7 +2074,7 @@ esac
         self.assertEqual(len(calls), 2)
         self.assertLess(calls[0], text.index('cargo test --release --locked'))
         self.assertLess(text.index('sudo -v || die "--install needs sudo'), calls[1])
-        self.assertLess(calls[1], text.index('if [ ${#CHANGED[@]} -gt 0 ]; then\n  say "install"'))
+        self.assertLess(calls[1], text.index('if [ ${#CHANGED[@]} -gt 0 ] || [ ${#LIB_CHANGED[@]} -gt 0 ]'))
 
     def test_stack_plans_on_a_box_whose_systemd_is_not_running(self):
         # A systemctl client beside another init reaches no manager, so the box
@@ -2734,6 +2922,354 @@ esac
         self.assertIn("the stack record gains shell-binary", result.stdout)
         self.assertTrue([c for c in calls if c[:2] == ["sudo", "tee"] and c[-1].endswith("/shell-binary")],
                         calls)
+
+    def engine_digest(self, stem, build):
+        return hashlib.sha256(f"fixture {stem} {build}".encode()).hexdigest()[:12]
+
+    def test_the_plan_lists_each_engine_library_from_the_build_cargo_names(self):
+        """**The engine's libraries are planned as the members are** (the
+        operator's ruling of 2026-11-09): each versioned file of the out/lib
+        cargo reports for the engine's package is CHANGED, unchanged or NEW
+        by its digest against the library directory, with the 12-character
+        prefixes; the links are counted and not listed; the loader's entry
+        that stands is left. A newer engine directory beside it, as a shared
+        target holds one per pin, is not read. Perturbations: select the
+        out/lib by `ls -td` and the decoy's digest is planned; drop the link
+        comparison and no link is counted."""
+        self.env.update(ENGINE_BUILD="b", DECOY_ENGINE="1")
+        (self.lib_dir / "libggml.so.0").unlink()
+        (self.lib_dir / "libggml.so.0").symlink_to("libggml.so.0.9.0")
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        out = self.root / 'target with "quotes"' / "release" / "build" / "llama-cpp-sys-2-fixture" / "out" / "lib"
+        self.assertIn(f"  engine out    {out}\n", result.stdout)
+        self.assertNotIn("decoy", result.stdout)
+        self.assertIn(f"  {'libllama.so.0.0.1':<22} CHANGED  {self.engine_digest('libllama', 'a')} -> "
+                      f"{self.engine_digest('libllama', 'b')}\n", result.stdout)
+        self.assertIn(f"  {'libggml.so.0.9.1':<22} CHANGED  {self.engine_digest('libggml', 'a')} -> "
+                      f"{self.engine_digest('libggml', 'b')}\n", result.stdout)
+        for link in ("libllama.so ", "libllama.so.0 ", "libggml.so ", "libggml.so.0 "):
+            self.assertNotIn("  " + link, result.stdout)
+        self.assertIn(f"  {'(library links)':<22} 1 to carry with cp -a\n", result.stdout)
+        self.assertIn("/etc/ld.so.conf.d/weaver.conf stands; left as it is", result.stdout)
+        self.assertIn(f"  library dir   {self.lib_dir}\n", result.stdout)
+        self.assert_unprivileged()
+        # An unchanged engine plans unchanged and the box is current.
+        self.install_libraries("a")
+        installed = self.root / "installed"
+        for member in ("worker", "weaver-admin", "weaver-trace-relay", "weaver-gate", "weaver-spu", "weaver-state"):
+            installed.joinpath(member).write_text("fixture artifact " + member)
+        installed.joinpath("busybox").write_text("fixture busybox")
+        installed.joinpath("busybox.applets").write_text("ls\ncat\n")
+        shutil.rmtree(self.root / 'target with "quotes"')
+        self.env["ENGINE_BUILD"] = "a"
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"  {'libllama.so.0.0.1':<22} unchanged\n", result.stdout)
+        self.assertNotIn("(library links)", result.stdout)
+        self.assertIn("every deployed binary and engine library already matches the build", result.stdout)
+        self.assertIn("the box is current at", result.stdout)
+
+    def test_the_plan_refuses_where_the_library_step_cannot_be_named(self):
+        """**What cannot be named refuses before anything is planned**: a
+        build whose messages report no output directory for the engine's
+        package, and a stack record whose library-path is missing, relative,
+        or not a directory. Perturbation: fall back to the newest out/lib
+        when no message names one and the first case plans."""
+        self.env["NO_ENGINE_MESSAGE"] = "1"
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        target = self.root / 'target with "quotes"'
+        self.assertIn(f"the build reported no single output directory under {target}/release/build for llama-cpp-sys-2",
+                      result.stderr)
+        self.assertNotIn("== plan", result.stdout)
+        self.assertEqual(list(target.glob("weaver-deploy-messages-*")), [], "the messages file is removed")
+        self.env.pop("NO_ENGINE_MESSAGE")
+        for value, said in (("", "no absolute library-path"), ("relative/lib", "no absolute library-path"),
+                            (str(self.root / "no-such-lib"), "does not stand as a directory")):
+            with self.subTest(value=value):
+                self.log.unlink(missing_ok=True)
+                (self.stack / "library-path").write_text(value + "\n")
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertFalse(any(c[0] == "cargo" for c in self.calls()), self.calls())
+
+    def test_a_loader_entry_refuses_a_cuda_directory_root_does_not_hold_closed(self):
+        """**Where the plan would write the loader's entry, the CUDA directory
+        it names is judged first** (deploy/engine-libraries.sh): one absolute
+        path, held closed by root, or the plan refuses before any sudo. Where
+        the entry stands, the variable is not read. Perturbation: drop the
+        `loader_dir` call and each refused case plans the entry."""
+        open_dir = self.root / "open-cuda"
+        open_dir.mkdir()
+        open_dir.chmod(0o777)
+        self.ldso_conf.unlink()
+        for value, said in (("relative/lib64", "is not one absolute path"),
+                            (str(self.root / "no-such-cuda"), "is not held closed by root"),
+                            (str(open_dir), f"is not held closed by root at {open_dir}")):
+            with self.subTest(value=value):
+                self.log.unlink(missing_ok=True)
+                shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+                self.env["CUDA_LIB_DIR"] = value
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(f"CUDA_LIB_DIR {value} {said}", result.stderr)
+                self.assertNotIn("NEW      " + str(self.lib_dir), result.stdout)
+                self.assertFalse(any(c[0] == "sudo" for c in self.calls()), self.calls())
+        self.ldso_conf.write_text(f"{self.lib_dir}\n{self.cuda_lib}\n")
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        self.env["CUDA_LIB_DIR"] = str(open_dir)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("stands; left as it is", result.stdout)
+
+    def library_install(self, **env):
+        """An --install on a box with no agent, the engine moved to build b,
+        libggml's SONAME link at another target and libllama's bare link
+        absent, so one file is replaced, one link replaced and one added."""
+        shutil.rmtree(self.config / "existing")
+        (self.lib_dir / "libggml.so.0").unlink()
+        (self.lib_dir / "libggml.so.0").symlink_to("libggml.so.0.9.0")
+        (self.lib_dir / "libllama.so").unlink()
+        admin = self.root / "fixture-admin"
+        admin.write_text("#!/bin/sh\nexit 2\n")
+        admin.chmod(0o755)
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_ADMIN=str(admin), ENGINE_BUILD="b", **env)
+        return self.run_script("update-stack.sh", "--install")
+
+    def test_a_name_the_build_no_longer_makes_is_removed_and_put_back_by_a_rollback(self):
+        """**The library directory ends holding the build's engine and no
+        other**: a versioned file of a higher build number, which `ldconfig`
+        would point the SONAME link at, and a link the build does not make
+        are planned REMOVED, removed under the window into the backup's lib/,
+        and put back where the install rolls back. Perturbations: drop the
+        removal and the stale file stays; drop it from the restore and the
+        rollback leaves it gone."""
+        (self.lib_dir / "libllama.so.0.0.9").write_text("fixture libllama stale")
+        (self.lib_dir / "libllama.so.1").symlink_to("libllama.so.0.0.9")
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        digest = hashlib.sha256(b"fixture libllama stale").hexdigest()[:12]
+        self.assertIn(f"  {'libllama.so.0.0.9':<22} REMOVED  {digest}\n", result.stdout)
+        self.assertIn(f"  {'(stale links)':<22} 1 to remove\n", result.stdout)
+        self.assertFalse((self.lib_dir / "libllama.so.0.0.9").exists())
+        self.assertFalse((self.lib_dir / "libllama.so.1").is_symlink())
+        backup, = self.root.glob("backup-*")
+        self.assertEqual((backup / "lib" / "libllama.so.0.0.9").read_text(), "fixture libllama stale")
+        self.assertEqual(os.readlink(backup / "lib" / "libllama.so.1"), "libllama.so.0.0.9")
+        # The same box, rolled back by an unresolved library: a fresh fixture.
+        self.setUp()
+        (self.lib_dir / "libllama.so.0.0.9").write_text("fixture libllama stale")
+        (self.lib_dir / "libllama.so.1").symlink_to("libllama.so.0.0.9")
+        result = self.library_install(LDD_MISSING="libggml.so.0")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual((self.lib_dir / "libllama.so.0.0.9").read_text(), "fixture libllama stale")
+        self.assertEqual(os.readlink(self.lib_dir / "libllama.so.1"), "libllama.so.0.0.9")
+
+    def test_the_install_takes_the_engine_only_from_the_library_directory(self):
+        """**The resolution check is the agent's, not the operator's shell's**
+        (deploy/engine-libraries.sh): ldd runs with LD_LIBRARY_PATH the
+        library directory and no LD_PRELOAD, whatever the operator carries;
+        an engine resolved outside the directory, and an SPU ldd cannot read,
+        each roll the install back. Perturbations: run ldd in the operator's
+        environment and the outside directory passes; drop ldd's status and
+        the unreadable SPU passes."""
+        # A preload every process can load, so only its absence at ldd counts.
+        preload = "/usr/lib/libm.so.6" if os.path.exists("/usr/lib/libm.so.6") else ""
+        self.env.update(LD_LIBRARY_PATH="/operator/out/lib", LD_PRELOAD=preload)
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(["ldd-env", str(self.lib_dir), ""], self.calls())
+        self.assertIn(f"of them the engine's from {self.lib_dir}", result.stdout)
+        for env, said in (({"LDD_ELSEWHERE": "/operator/out/lib"}, "resolves its engine outside"),
+                          ({"LDD_STATIC": "1"}, "ldd could not read the installed weaver-spu (it exited 1)")):
+            with self.subTest(env=env):
+                self.setUp()
+                result = self.library_install(**env)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertEqual((self.lib_dir / "libllama.so.0.0.1").read_text(), "fixture libllama a")
+
+    def test_the_install_carries_the_engine_libraries_under_the_window(self):
+        """**The install carries each changed library and link, keeping the
+        old ones in the backup's lib/** and the loader's entry where it is
+        missing: a new file, root's without following a link, ldconfig, then
+        the SPU's every library resolved. Perturbations: drop the library
+        loop and libllama stays build a; copy without `-a` and the link
+        becomes a file; drop the backup and lib/ holds nothing."""
+        self.ldso_conf.unlink()
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"  {'/etc/ld.so.conf.d/weaver.conf':<22} NEW      {self.lib_dir} and {self.cuda_lib}, then ldconfig",
+                      result.stdout)
+        self.assertEqual((self.lib_dir / "libllama.so.0.0.1").read_text(), "fixture libllama b")
+        self.assertEqual((self.lib_dir / "libggml.so.0.9.1").read_text(), "fixture libggml b")
+        self.assertEqual(os.readlink(self.lib_dir / "libggml.so.0"), "libggml.so.0.9.1")
+        self.assertEqual(os.readlink(self.lib_dir / "libllama.so"), "libllama.so.0")
+        backup, = self.root.glob("backup-*")
+        self.assertEqual((backup / "lib" / "libllama.so.0.0.1").read_text(), "fixture libllama a")
+        self.assertEqual(os.readlink(backup / "lib" / "libggml.so.0"), "libggml.so.0.9.0")
+        self.assertFalse((backup / "lib" / "libllama.so").exists() or (backup / "lib" / "libllama.so").is_symlink())
+        self.assertEqual(self.ldso_conf.read_text(), f"{self.lib_dir}\n{self.cuda_lib}\n")
+        calls = self.calls()
+        # A file is installed root's from the moment it has a name; a link is
+        # carried as a link and made root's without following it.
+        out = self.root / 'target with "quotes"' / "release" / "build" / "llama-cpp-sys-2-fixture" / "out" / "lib"
+        for name in ("libllama.so.0.0.1", "libggml.so.0.9.1"):
+            self.assertIn(["sudo", "install", "-o", "root", "-g", "root", "-m", "0755", "--",
+                           str(out / name), str(self.lib_dir / name)], calls)
+        for name in ("libggml.so.0", "libllama.so"):
+            self.assertIn(["sudo", "chown", "-h", "root:root", "--", str(self.lib_dir / name)], calls)
+        placed = [c for c in calls if c[:2] in (["sudo", "cp"], ["sudo", "install"])
+                  and c[-1].startswith(str(self.lib_dir)) and "-d" not in c]
+        copies = [c for c in placed if c[1] == "cp"]
+        self.assertTrue(copies and all(c[2:4] == ["-a", "--remove-destination"] for c in copies), copies)
+        # The versioned files are carried before any link.
+        order = [Path(c[-1]).name for c in placed]
+        self.assertLess(max(order.index(n) for n in ("libllama.so.0.0.1", "libggml.so.0.9.1")),
+                        min(order.index(n) for n in ("libggml.so.0", "libllama.so")), order)
+        self.assertIn(["sudo", "ldconfig"], calls)
+        self.assertLess(calls.index(["sudo", "ldconfig"]), next(i for i, c in enumerate(calls) if c[0] == "ldd"))
+        self.assertIn(f"weaver-spu resolves every library it names, 2 of them the engine's from {self.lib_dir}",
+                      result.stdout)
+        self.assertIn("the box is at", result.stdout)
+
+    def test_an_unresolved_library_rolls_the_libraries_back(self):
+        """**A library the SPU cannot resolve after the install rolls back**,
+        the libraries with the binaries: the replaced file and link come back
+        from the backup, the added link goes, the loader's entry this run
+        wrote goes, and ldconfig runs over what stands. Perturbations: drop
+        the library restore and libllama stays build b; drop the removal and
+        the added link stays; drop the entry's removal and it stays."""
+        self.ldso_conf.unlink()
+        result = self.library_install(LDD_MISSING="libllama.so.0")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("libllama.so.0 => not found", result.stderr)
+        self.assertIn("weaver-spu has unresolved libraries after the install", result.stderr)
+        self.assertEqual((self.lib_dir / "libllama.so.0.0.1").read_text(), "fixture libllama a")
+        self.assertEqual((self.lib_dir / "libggml.so.0.9.1").read_text(), "fixture libggml a")
+        self.assertEqual(os.readlink(self.lib_dir / "libggml.so.0"), "libggml.so.0.9.0")
+        self.assertFalse((self.lib_dir / "libllama.so").is_symlink() or (self.lib_dir / "libllama.so").exists())
+        self.assertFalse(self.ldso_conf.exists())
+        self.assertEqual(self.calls().count(["sudo", "ldconfig"]), 2, self.calls())
+        self.assertNotIn("RESTORE INCOMPLETE", result.stderr)
+
+    TUPLE_KEYS = ["commit", "toolchain", "features", "engine", "engine-source", "engine-vendored", "nvcc",
+                  "member.worker", "member.weaver-admin", "member.weaver-trace-relay", "member.weaver-gate",
+                  "member.weaver-spu", "member.weaver-state", "member.busybox", "member.busybox.applets",
+                  "library.libggml.so.0.9.1", "library.libllama.so.0.0.1",
+                  "driver", "cudart", "cublas", "cublaslt", "cccl", "gpus", "gpu.0", "gpu.1"]
+
+    def test_a_verified_install_prints_and_records_the_install_tuple(self):
+        """**A verified install ends with the install tuple** (the Planner's
+        brief of 2026-11-09): printed under `== tuple` before the closing
+        line and written whole to the stack record's install-tuple, one
+        `key = value` line per fact in a fixed order: the members and the
+        libraries by their installed sha256 in full, the engine as the lock
+        pins it, the runtime files the installed SPU resolves, and the GPUs
+        in PCI bus order. A plan writes none. Perturbations: drop the sort
+        and gpu.0 is the bus-41 card; drop the write and the record holds
+        nothing; collect no library names and the keys differ; print the
+        tuple after the closing line and the order fails; read the runtime
+        in the operator's environment and its library path reaches ldd;
+        read the lock unfiltered and the metadata call carries no
+        platform."""
+        # The operator's shell carries its own library path, which neither
+        # the install's check nor the tuple's runtime read may take.
+        result = self.library_install(LD_LIBRARY_PATH="/operator/out/lib")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        seen = [c[1] for c in self.calls() if c[0] == "ldd-env"]
+        self.assertEqual(seen, [str(self.lib_dir)] * 2, "the check and the tuple each read as admin runs the SPU")
+        self.assertLess(result.stdout.index("== tuple"), result.stdout.index("== the box is at"))
+        block = result.stdout.split("== tuple\n", 1)[1].split("\n\n", 1)[0].splitlines()
+        self.assertEqual(block[-1], f"  written to {self.stack / 'install-tuple'}")
+        printed = [line[2:] for line in block[:-1]]
+        record = (self.stack / "install-tuple").read_text().splitlines()
+        self.assertEqual(record, printed)
+        facts = dict(line.split(" = ", 1) for line in record)
+        self.assertEqual([line.split(" = ", 1)[0] for line in record], self.TUPLE_KEYS)
+        installed = self.root / "installed"
+        for member in ("worker", "weaver-spu", "busybox.applets"):
+            self.assertEqual(facts[f"member.{member}"], hashlib.sha256((installed / member).read_bytes()).hexdigest())
+        self.assertEqual(facts["library.libllama.so.0.0.1"],
+                         hashlib.sha256(b"fixture libllama b").hexdigest())
+        self.assertEqual(facts["commit"], "abcdef0")
+        self.assertEqual(facts["features"], "weaver-spu/cuda,weaver-state/sqlite")
+        self.assertEqual(facts["engine"], "llama-cpp-sys-2 0.1.0")
+        self.assertEqual(facts["engine-source"], "git+https://fixture.invalid/llama-cpp-rs?rev=f00d#f00dfixtureforkcommit")
+        self.assertEqual(facts["engine-vendored"], "e21cdc11fixturevendoredcommit")
+        self.assertEqual(facts["nvcc"], "99.9, V99.9.1")
+        self.assertEqual(facts["driver"], "fixture-driver")
+        self.assertEqual(facts["cudart"], "/fixture/lib/libcudart.so.99")
+        self.assertEqual(facts["cublaslt"], "/fixture/lib/libcublasLt.so.99")
+        self.assertEqual(facts["cccl"], "3.3.4-1")
+        self.assertEqual(facts["gpus"], "2")
+        self.assertEqual(facts["gpu.0"], "00000000:01:00.0, Fixture GPU A, 1024 MiB")
+        self.assertEqual(facts["gpu.1"], "00000000:41:00.0, Fixture GPU B, 2048 MiB")
+        # The lock read filtered to the host, so an offline cache a build
+        # filled answers it.
+        metadata = [c for c in self.calls() if c[:2] == ["cargo", "metadata"] and "--no-deps" not in c]
+        self.assertTrue(metadata and all("--filter-platform" in c for c in metadata), metadata)
+        tee = [c for c in self.calls() if c[:2] == ["sudo", "tee"] and c[-1].endswith("/install-tuple")]
+        self.assertEqual(len(tee), 1, self.calls())
+        self.assertIn(["sudo", "chmod", "0644", str(self.stack / "install-tuple")], self.calls())
+
+    def test_a_plan_writes_no_install_tuple_and_says_the_install_will(self):
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"--install ends, once verified, by writing the install tuple to {self.stack / 'install-tuple'}",
+                      result.stdout)
+        self.assertNotIn("== tuple", result.stdout)
+        self.assertFalse((self.stack / "install-tuple").exists())
+        self.assert_unprivileged()
+
+    def test_the_install_tuple_reads_unknown_where_the_box_cannot_answer(self):
+        """**A fact the box cannot answer reads `unknown`, and no key is left
+        out**: no driver to ask, no SPU to resolve, no lock to read and no
+        toolchain file. Perturbation: print nothing for an unanswered fact
+        and the keys differ."""
+        self.env["NO_NVIDIA"] = "1"
+        empty = self.root / "empty-repo"
+        empty.mkdir()
+        script = (f"source {shlex.quote(str(self.repo / 'deploy' / 'engine-libraries.sh'))}; "
+                  f"source {shlex.quote(str(self.repo / 'deploy' / 'install-tuple.sh'))}; "
+                  f"install_tuple {shlex.quote(str(empty))} fixture-commit {shlex.quote(str(self.root / 'no-bin'))} "
+                  f"{shlex.quote(str(self.root / 'no-lib'))} fixture-features 'worker' 'libllama.so.0.0.1'")
+        env = {**self.env, "PATH": str(self.bin) + os.pathsep + "/usr/bin:/bin"}
+        (self.bin / "cargo").write_text("#!/bin/sh\nexit 101\n")
+        (self.bin / "git").write_text("#!/bin/sh\nexit 128\n")
+        ran = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
+        self.assertEqual(list(facts), ["commit", "toolchain", "features", "engine", "engine-source", "engine-vendored",
+                                       "nvcc", "member.worker", "library.libllama.so.0.0.1", "driver", "cudart",
+                                       "cublas", "cublaslt", "cccl", "gpus"])
+        for key in ("toolchain", "engine-source", "engine-vendored", "member.worker", "library.libllama.so.0.0.1",
+                    "driver", "cudart", "cublas", "cublaslt"):
+            self.assertEqual(facts[key], "unknown", key)
+        self.assertEqual(facts["engine"], "llama-cpp-sys-2 unknown")
+        self.assertEqual(facts["commit"], "fixture-commit", "the commit is the caller's, never read again")
+        self.assertEqual(facts["gpus"], "0")
+
+    def test_bootstrap_records_the_same_install_tuple_after_its_install(self):
+        """**The two scripts write one record from one function**: bootstrap
+        sources deploy/install-tuple.sh, as update-stack does, calls it after
+        its install and stack record, before its closing line, and writes it
+        to the record's install-tuple, 0644; neither script defines the
+        function itself. Perturbation: inline a second copy in either script
+        and this fails."""
+        for name in ("bootstrap-stack.sh", "update-stack.sh"):
+            text = (self.repo / "deploy" / name).read_text()
+            with self.subTest(script=name):
+                self.assertIn('source "$REPO/deploy/install-tuple.sh"', text)
+                self.assertNotIn("install_tuple() {", text)
+                self.assertEqual(text.count("TUPLE=$(install_tuple "), 1)
+                self.assertIn('sudo tee "$STACK/install-tuple"', text)
+                self.assertIn('sudo chmod 0644 "$STACK/install-tuple"', text)
+        text = (self.repo / "deploy" / "bootstrap-stack.sh").read_text()
+        self.assertLess(text.index("w agent-directory"), text.index("TUPLE=$(install_tuple "))
+        self.assertLess(text.index("TUPLE=$(install_tuple "), text.index('say "installed at $REV"'))
 
     def window_admin(self, extra=""):
         """A stand-in admin for the install window: each verb logged with
@@ -5157,7 +5693,7 @@ class RoundOneOf79Tests(unittest.TestCase):
         script = (DEPLOY / "update-stack.sh").read_text()
         take = script.index('sudo -v || die "--install needs sudo')
         self.assertLess(script.index('say "plan only. rerun with --install"; exit 0; }'), take)
-        self.assertLess(take, script.index('if [ ${#CHANGED[@]} -gt 0 ]; then\n  say "install"'))
+        self.assertLess(take, script.index('if [ ${#CHANGED[@]} -gt 0 ] || [ ${#LIB_CHANGED[@]} -gt 0 ]'))
         self.assertEqual(script.count("sudo -v"), 1)
 
 
@@ -5516,6 +6052,224 @@ CARGO_COMPILE_FAILURE = (
 )
 
 
+class EngineLibrariesTests(unittest.TestCase):
+    """**Both stack scripts select, place and check the engine's libraries,
+    and judge the loader entry's directories, through
+    deploy/engine-libraries.sh**, run here as the scripts source it.
+    `engine_out` prints the out_dir of the one build-script-executed message
+    for the package `cargo pkgid` names, inside the build, and nothing
+    otherwise; `engine_resolved` passes only a report naming the engine and
+    resolving it inside the library directory with nothing missing; `spu_ldd`
+    runs ldd with the library directory as LD_LIBRARY_PATH and none of the
+    operator's loader variables; `loader_dir` refuses a directory that is not
+    one absolute path held closed by root. Perturbations: take the first
+    message rather than the single one and the two-directory case prints;
+    match any package's message and the decoy's directory counts; drop the
+    containment and the directory outside the build prints; compare
+    unresolved and the link out of the build prints; let `engine_resolved`
+    pass a report with no engine and the empty report passes; keep the
+    operator's LD_PRELOAD and it reaches ldd; drop the newline test and the
+    two-line value passes; take a resolved path as one whitespace field, in
+    `engine_resolved` or in the tuple, and a library directory holding a
+    space is judged unresolved or truncated."""
+
+    ENGINE = "fixture-engine-source#llama-cpp-sys-2@0.1.0"
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-engine-libraries-")
+        self.addCleanup(self.scratch.cleanup)
+        self.dir = Path(self.scratch.name)
+        self.bin = self.dir / "bin"
+        self.bin.mkdir()
+        cargo = self.bin / "cargo"
+        cargo.write_text('#!/bin/sh\n[ "$1" = pkgid ] || exit 99\nprintf \'%s\' "$PKGID"\nexit "${PKGID_EXIT:-0}"\n')
+        cargo.chmod(0o755)
+        self.messages = self.dir / "messages.json"
+        self.build = self.dir / "target" / "release" / "build"
+
+    def run_bash(self, program, **env):
+        env = {**os.environ, "PATH": f"{self.bin}:{os.environ['PATH']}", **env}
+        env.pop("BASH_ENV", None)
+        source = f"source {shlex.quote(str(DEPLOY / 'engine-libraries.sh'))}\n"
+        return subprocess.run(["bash", "-c", "set -euo pipefail\n" + source + program],
+                              env=env, text=True, capture_output=True, timeout=20)
+
+    def engine_out(self, pkgid, *messages, status=0):
+        self.messages.write_text("".join(m if isinstance(m, str) else json.dumps(m) + "\n" for m in messages))
+        return self.run_bash(f"engine_out llama-cpp-sys-2 {shlex.quote(str(self.messages))} "
+                             f"{shlex.quote(str(self.build))}", PKGID=pkgid, PKGID_EXIT=str(status))
+
+    def test_engine_out_prints_the_one_directory_cargo_reported_for_the_engine(self):
+        a = self.build / "llama-cpp-sys-2-a" / "out"
+        b = self.build / "llama-cpp-sys-2-b" / "out"
+        elsewhere = self.dir / "elsewhere" / "out"
+        for d in (a, b, self.build / "decoy" / "out", elsewhere):
+            d.mkdir(parents=True)
+        (self.build / "leads-out").symlink_to(elsewhere)
+        mine = {"reason": "build-script-executed", "package_id": self.ENGINE, "out_dir": str(a)}
+        decoy = {"reason": "build-script-executed", "package_id": "1-source#decoy@0.1.0",
+                 "out_dir": str(self.build / "decoy" / "out")}
+        artifact = {"reason": "compiler-artifact", "package_id": self.ENGINE, "out_dir": str(elsewhere)}
+        ran = self.engine_out(self.ENGINE, decoy, "not json\n", artifact, mine, mine)
+        self.assertEqual((ran.returncode, ran.stdout), (0, f"{a}\n"), ran.stderr)
+        for label, pkgid, status, messages in (
+                ("two directories for the engine", self.ENGINE, 0, (mine, dict(mine, out_dir=str(b)))),
+                ("no message for the engine", self.ENGINE, 0, (decoy, artifact)),
+                ("an empty directory", self.ENGINE, 0, (dict(mine, out_dir=""),)),
+                ("a directory outside the build", self.ENGINE, 0, (dict(mine, out_dir=str(elsewhere)),)),
+                ("a link out of the build", self.ENGINE, 0, (dict(mine, out_dir=str(self.build / "leads-out")),)),
+                ("the build directory itself", self.ENGINE, 0, (dict(mine, out_dir=str(self.build)),)),
+                ("a directory that is not there", self.ENGINE, 0, (dict(mine, out_dir=str(self.build / "gone" / "out")),)),
+                ("a name beside the build", self.ENGINE, 0, (dict(mine, out_dir=str(self.build) + "-x/out"),)),
+                ("cargo refuses an ambiguous or absent name", "", 101, (mine,)),
+                ("cargo names nothing", "", 0, (mine,))):
+            with self.subTest(label):
+                ran = self.engine_out(pkgid, *messages, status=status)
+                self.assertEqual((ran.returncode, ran.stdout), (1, ""), ran.stderr)
+
+    def test_engine_resolved_passes_only_the_engine_from_the_library_directory(self):
+        lib = self.dir / "lib"
+        lib.mkdir()
+        (lib / "libllama.so.0.0.1").write_text("x")
+        (lib / "libllama.so.0").symlink_to("libllama.so.0.0.1")
+        other = self.dir / "other"
+        other.mkdir()
+        (other / "libllama.so.0").write_text("x")
+        good = (f"\tlinux-vdso.so.1 (0x0000)\n\tlibllama.so.0 => {lib}/libllama.so.0 (0x0000)\n"
+                f"\tlibc.so.6 => /usr/lib/libc.so.6 (0x0000)\n")
+        check = 'engine_resolved "$REPORT" "$LIB"'
+        ran = self.run_bash(check, REPORT=good, LIB=str(lib))
+        self.assertEqual((ran.returncode, ran.stdout), (0, ""), ran.stderr)
+        for label, report, said in (
+                ("a library not found", good + "\tlibcudart.so.13 => not found\n", "libcudart.so.13 => not found"),
+                ("the engine from elsewhere", good.replace(str(lib), str(other)), f"{other}/libllama.so.0"),
+                ("no engine named", "\tlibc.so.6 => /usr/lib/libc.so.6 (0x0000)\n", "no engine library is named"),
+                ("an empty report", "", "no engine library is named")):
+            with self.subTest(label):
+                ran = self.run_bash(check, REPORT=report, LIB=str(lib))
+                self.assertEqual(ran.returncode, 1, ran.stdout)
+                self.assertIn(said, ran.stdout)
+
+    def test_a_resolved_path_holding_a_space_is_read_whole(self):
+        """**A path ldd resolves is read whole, spaces included**, by
+        `engine_resolved` and by the install tuple. A library directory may
+        hold a space (`loader_dir` and admin refuse only what is not one
+        absolute path), and ldd prints `<name> => <path> (<load address>)`.
+        The CUDA directory here also holds the words `not found`, which name
+        a library not found only after the arrow at a line's end; a library
+        not found reads `unknown` in the tuple, never a path. Perturbations:
+        take the path as one whitespace field in `engine_resolved` and the
+        correct install is judged unresolved; take it as `$3` in the tuple
+        and cudart reads a truncated path and cublas reads one."""
+        lib = self.dir / "weaver lib"
+        cuda = self.dir / "cuda not found here"
+        for d in (lib, cuda):
+            d.mkdir()
+        (lib / "libllama.so.0.0.1").write_text("x")
+        (lib / "libllama.so.0").symlink_to("libllama.so.0.0.1")
+        (cuda / "libcudart.so.13.0.48").write_text("x")
+        (cuda / "libcudart.so.13").symlink_to("libcudart.so.13.0.48")
+        report = (f"\tlinux-vdso.so.1 (0x00007ffd00000000)\n"
+                  f"\tlibllama.so.0 => {lib}/libllama.so.0 (0x00007f0000000000)\n"
+                  f"\tlibcudart.so.13 => {cuda}/libcudart.so.13 (0x00007f0100000000)\n"
+                  f"\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f0200000000)\n"
+                  f"\t/lib64/ld-linux-x86-64.so.2 (0x00007f0300000000)\n")
+        check = 'engine_resolved "$REPORT" "$LIB"'
+        ran = self.run_bash(check, REPORT=report, LIB=str(lib))
+        self.assertEqual((ran.returncode, ran.stdout), (0, ""), ran.stderr)
+        elsewhere = report.replace(f"{lib}/", f"{cuda}/")
+        ran = self.run_bash(check, REPORT=elsewhere, LIB=str(lib))
+        self.assertEqual(ran.returncode, 1, "the engine from another spaced directory is still refused")
+        self.assertIn(f"{cuda}/libllama.so.0", ran.stdout)
+        ldd = self.bin / "ldd"
+        ldd.write_text('#!/bin/sh\nprintf "%s" "$LDD_REPORT"\n')
+        ldd.chmod(0o755)
+        for tool in ("nvidia-smi", "pacman", "nvcc", "git"):
+            (self.bin / tool).write_text("#!/bin/sh\nexit 1\n")
+            (self.bin / tool).chmod(0o755)
+        tuple_report = report + "\tlibcublas.so.13 => not found\n"
+        ran = self.run_bash(f"source {shlex.quote(str(DEPLOY / 'install-tuple.sh'))}\n"
+                            f"install_tuple {shlex.quote(str(self.dir))} fixture-commit "
+                            f"{shlex.quote(str(self.dir / 'bin dir'))} {shlex.quote(str(lib))} fixture-features '' ''",
+                            LDD_REPORT=tuple_report)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
+        self.assertEqual(facts["cudart"], str((cuda / "libcudart.so.13.0.48").resolve()))
+        self.assertEqual(facts["cublas"], "unknown")
+        self.assertEqual(facts["cublaslt"], "unknown")
+
+    def test_spu_ldd_runs_ldd_with_the_library_directory_and_no_operator_loader_variables(self):
+        ldd = self.bin / "ldd"
+        ldd.write_text('#!/bin/sh\nprintf "%s|%s|%s|%s\\n" "$LD_LIBRARY_PATH" "${LD_PRELOAD-unset}" '
+                       '"${LD_AUDIT-unset}" "$1"\n')
+        ldd.chmod(0o755)
+        ran = self.run_bash('spu_ldd /x/weaver-spu /opt/fixture/lib', LD_LIBRARY_PATH="/operator/out/lib",
+                            LD_PRELOAD="/operator/p.so", LD_AUDIT="/operator/a.so")
+        # The loader warns from `env` itself, which starts under the
+        # operator's variables before it clears them; ldd's own line is last.
+        self.assertEqual(ran.stdout.splitlines()[-1], "/opt/fixture/lib|unset|unset|/x/weaver-spu", ran.stderr)
+
+    def test_loader_dir_refuses_what_root_does_not_hold_closed(self):
+        update = (DEPLOY / "update-stack.sh").read_text()
+        helpers = ("die() { printf 'REFUSED: %s\\n' \"$*\" >&2; exit 1; }\n"
+                   + shell_function(update, "held_closed"))
+        mine = self.dir / "mine"
+        mine.mkdir()
+        for value, said in (("relative", "is not one absolute path"),
+                            ("/usr\n" + str(mine), "is not one absolute path"),
+                            (str(self.dir / "absent"), "is not held closed by root"),
+                            (str(mine), "is not held closed by root")):
+            with self.subTest(value=value):
+                ran = self.run_bash(helpers + f"loader_dir CUDA_LIB_DIR {shlex.quote(value)}; echo passed")
+                self.assertEqual(ran.returncode, 1, ran.stdout)
+                self.assertIn(f"REFUSED: CUDA_LIB_DIR {value} {said}", ran.stderr)
+                self.assertNotIn("passed", ran.stdout)
+        if os.stat("/usr").st_uid == 0 and not os.stat("/usr").st_mode & 0o022:
+            ran = self.run_bash(helpers + "loader_dir CUDA_LIB_DIR /usr; echo passed")
+            self.assertEqual(ran.stdout, "passed\n", ran.stderr)
+
+    def test_both_scripts_select_place_check_and_judge_through_the_one_file(self):
+        """Neither script keeps a copy of its own: each sources the file and
+        assigns none of its constants, makes its build's messages file with
+        mktemp under an exit trap, calls `engine_out` once and removes the
+        file, places every library through `install_library`, checks the SPU
+        through `spu_ldd` and `engine_resolved` and runs no bare ldd, judges
+        the CUDA directory before it writes the entry, and lists no `build/`
+        directory. Bootstrap's build sends its messages to the file and its
+        diagnostics to the kept log, and judges the CUDA directory before it
+        builds."""
+        call = 'SYS_OUT=$(engine_out "$ENGINE_CRATE" "$BUILD_MESSAGES" "$BUILT/build" || true)\n'
+        for name in ("bootstrap-stack.sh", "update-stack.sh"):
+            text = (DEPLOY / name).read_text()
+            with self.subTest(script=name):
+                self.assertIn('source "$REPO/deploy/engine-libraries.sh"', text)
+                for defined in ("engine_out() {", "loader_dir() {", "install_library() {", "spu_ldd() {",
+                                "engine_resolved() {"):
+                    self.assertNotIn(defined, text)
+                for constant in ("ENGINE_CRATE=", "LIB_GLOBS=", "LDSO_CONF=", "CUDA_LIB_DIR="):
+                    self.assertNotRegex(text, rf"(?m)^\s*{constant}")
+                self.assertEqual(text.count(call), 1)
+                take = text.index(call)
+                self.assertEqual(text.index('rm -f -- "$BUILD_MESSAGES"\ntrap - EXIT\n', take) - take, len(call))
+                self.assertEqual(text.count('BUILD_MESSAGES=$(mktemp "${BUILT%/release}/weaver-deploy-messages-XXXXXX")'), 1)
+                self.assertEqual(text.count("""trap 'rm -f -- "$BUILD_MESSAGES"' EXIT"""), 1)
+                self.assertNotRegex(text, r"ls [^\n]*build/")
+                self.assertNotRegex(text, r"(?m)^[^#\n]*\bldd \"")
+                self.assertIn("install_library ", text)
+                self.assertNotRegex(text, r'sudo cp -a[^\n]*\$SYS_OUT|sudo cp -a "\$\{LIBS')
+                self.assertIn("spu_ldd ", text)
+                self.assertIn("engine_resolved ", text)
+                self.assertIn("--message-format=json-render-diagnostics", text)
+                self.assertEqual(text.count('loader_dir CUDA_LIB_DIR "$CUDA_LIB_DIR"'), 1)
+                self.assertLess(text.index('loader_dir CUDA_LIB_DIR "$CUDA_LIB_DIR"'),
+                                text.index('| sudo tee "$LDSO_CONF"'))
+        bootstrap = (DEPLOY / "bootstrap-stack.sh").read_text()
+        build = shell_function(bootstrap, "run_build")
+        self.assertIn('>"$BUILD_MESSAGES" 2>"$log"', build)
+        self.assertIn('rm -f -- "$BUILD_MESSAGES"', build.split('if [ "$rc" -ne 0 ]; then', 1)[1])
+        self.assertLess(bootstrap.index('loader_dir CUDA_LIB_DIR "$CUDA_LIB_DIR"'), bootstrap.index("\nrun_build\n"))
+
+
 class CargoStepTests(unittest.TestCase):
     """The deploy scripts' cargo steps keep cargo's output and status (#128).
     Each step is lifted from the script as it ships and run against a
@@ -5784,6 +6538,852 @@ class BusyboxBuildTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertIn("not the pinned b8cc24c9", result.stderr)
             self.assertFalse((Path(out) / "busybox").exists())
+
+
+def _agent_tuple():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("agent_tuple_under_test", DEPLOY / "agent_tuple.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _gguf(path, keys, tensors=(), version=3):
+    """A GGUF header with `keys` ((name, type, value) triples; arrays as
+    (name, 9, (element, [values]))) and `tensors` ((name, dims, type))."""
+    import struct
+
+    def text(value):
+        raw = value if isinstance(value, bytes) else value.encode()
+        return struct.pack("<Q", len(raw)) + raw
+
+    def scalar(kind, value):
+        return {4: struct.pack("<I", value), 10: struct.pack("<Q", value),
+                5: struct.pack("<i", value)}[kind]
+
+    body = b"GGUF" + struct.pack("<IQQ", version, len(tensors), len(keys))
+    for name, kind, value in keys:
+        body += text(name) + struct.pack("<I", kind)
+        if kind == 8:
+            body += text(value)
+        elif kind == 9:
+            element, items = value
+            body += struct.pack("<IQ", element, len(items))
+            body += b"".join(text(i) if element == 8 else scalar(element, i) for i in items)
+        else:
+            body += scalar(kind, value)
+    for name, dims, kind in tensors:
+        body += text(name) + struct.pack("<I", len(dims)) + b"".join(struct.pack("<Q", d) for d in dims)
+        body += struct.pack("<IQ", kind, 0)
+    Path(path).write_bytes(body + b"\0" * 64)
+    return body
+
+
+GRANITE_KEYS = [
+    ("general.architecture", 8, "granite"),
+    ("general.file_type", 4, 32),
+    ("granite.block_count", 4, 64),
+    ("tokenizer.ggml.tokens", 9, (8, ["<a>", "<b>", "c"])),
+    ("tokenizer.ggml.token_type", 9, (5, [1, 1, 1])),
+    ("tokenizer.chat_template", 8, "{{ messages }}"),
+]
+GRANITE_TENSORS = [("token_embd.weight", (4096, 100352), 30), ("blk.0.attn_norm.weight", (4096,), 0),
+                   ("output.weight", (4096, 100352), 30)]
+
+
+class AgentTupleHeaderTests(unittest.TestCase):
+    """**The GGUF header reader bounds every length it reads** against the
+    file's size and a cap, and refuses a header it cannot bound rather than
+    reading on. Perturbation: drop the bound in `_Reader.take` (or in
+    `count`'s file check) and the length-past-the-file cases read on or
+    fail with a struct error instead of a refusal."""
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+
+    def test_the_header_facts_are_read(self):
+        path = self.dir / "m.gguf"
+        _gguf(path, GRANITE_KEYS, GRANITE_TENSORS)
+        facts = self.tuple.read_header(path)
+        self.assertEqual(facts["architecture"], "granite")
+        self.assertEqual(facts["block_count"], 64)
+        self.assertEqual(facts["file_type"], 32)
+        self.assertEqual(facts["chat_template_sha256"], hashlib.sha256(b"{{ messages }}").hexdigest())
+        self.assertEqual(facts["tensor_types"], {"BF16": 2, "F32": 1})
+        self.assertEqual(facts["tensor_count"], 3)
+
+    def test_a_length_past_the_file_is_refused(self):
+        import struct
+        path = self.dir / "m.gguf"
+        body = _gguf(path, GRANITE_KEYS, GRANITE_TENSORS)
+        # The chat template's length field, set past the file's end.
+        at = body.index(b"tokenizer.chat_template") + len(b"tokenizer.chat_template") + 4
+        raw = bytearray(path.read_bytes())
+        raw[at:at + 8] = struct.pack("<Q", len(raw) + 1)
+        path.write_bytes(bytes(raw))
+        with self.assertRaises(self.tuple.HeaderRefused) as refused:
+            self.tuple.read_header(path)
+        self.assertIn("past the file's end", str(refused.exception))
+
+    def test_a_count_past_the_file_or_the_cap_is_refused(self):
+        import struct
+        path = self.dir / "m.gguf"
+        _gguf(path, GRANITE_KEYS, GRANITE_TENSORS)
+        raw = bytearray(path.read_bytes())
+        raw[8:16] = struct.pack("<Q", 1 << 40)          # tensor_count past the cap
+        path.write_bytes(bytes(raw))
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "past the cap"):
+            self.tuple.read_header(path)
+        raw[8:16] = struct.pack("<Q", 1000)             # under the cap, past the file
+        path.write_bytes(bytes(raw))
+        # Refused at the count, before any tensor info is read.
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "tensor_count: 1000 items of 28 octets run past"):
+            self.tuple.read_header(path)
+
+    def test_a_string_array_element_past_the_file_is_refused(self):
+        import struct
+        path = self.dir / "m.gguf"
+        body = _gguf(path, GRANITE_KEYS, GRANITE_TENSORS)
+        at = body.index(b"<a>") - 8
+        raw = bytearray(path.read_bytes())
+        raw[at:at + 8] = struct.pack("<Q", len(raw))
+        path.write_bytes(bytes(raw))
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "past the file's end"):
+            self.tuple.read_header(path)
+
+    def test_not_a_gguf_and_an_unknown_version_are_refused(self):
+        path = self.dir / "m.gguf"
+        path.write_bytes(b"PK\x03\x04" + b"\0" * 60)
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "magic"):
+            self.tuple.read_header(path)
+        _gguf(path, GRANITE_KEYS, version=1)
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "version 1"):
+            self.tuple.read_header(path)
+
+    def test_the_header_door_answers_one_json_line_and_refuses_with_status_one(self):
+        path = self.dir / "m.gguf"
+        _gguf(path, GRANITE_KEYS, GRANITE_TENSORS)
+        source = (DEPLOY / "agent_tuple.py").read_bytes()
+        ran = subprocess.run([sys.executable, "-I", "-", "header", str(path)], input=source,
+                             capture_output=True, cwd=self.dir)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual(json.loads(ran.stdout)["architecture"], "granite")
+        path.write_bytes(b"nope")
+        ran = subprocess.run([sys.executable, "-I", "-", "header", str(path)], input=source,
+                             capture_output=True, cwd=self.dir)
+        self.assertEqual(ran.returncode, 1)
+        self.assertIn("refused", json.loads(ran.stdout))
+
+
+class AgentTupleResolveTests(unittest.TestCase):
+    """**The header door resolves a declared artifact as admission does**
+    (Codex on #514), mirroring crates/weaver-spu/src/artifact.rs
+    `resolve_with_kind`, `container_within` and `split_pattern` case for case
+    against that file's own tests. Perturbations named per test."""
+
+    RUST_TESTS = DEPLOY.parent / "crates" / "weaver-spu" / "src" / "artifact" / "tests.rs"
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+
+    def resolve(self, path):
+        return Path(self.tuple.resolve_artifact(str(path)))
+
+    def test_the_split_pattern_mirrors_the_rust_cases(self):
+        """The hits and misses of `the_split_pattern_is_exact`, read from
+        the Rust test itself, so a case added there is a case here.
+        Perturbation: accept a signed count, or an index outside its set,
+        and a miss parses."""
+        text = self.RUST_TESTS.read_text()
+        body = text[text.index("fn the_split_pattern_is_exact"):]
+        body = body[:body.index("\n}\n")]
+        block = body[body.index("for miss in ["):]
+        misses = re.findall(r'"([^"]+)"', block[:block.index("]")])
+        called = re.findall(r'split_pattern\(Path::new\("([^"]+)"\)\)', body)
+        hits = [path for path in called if path not in misses]
+        self.assertGreaterEqual(len(misses), 8, misses)
+        self.assertGreaterEqual(len(hits), 3, hits)
+        for path in hits:
+            with self.subTest(hit=path):
+                self.assertIsNotNone(self.tuple.split_pattern(os.path.basename(path)))
+        for path in misses:
+            with self.subTest(miss=path):
+                self.assertIsNone(self.tuple.split_pattern(os.path.basename(path)))
+        self.assertEqual(self.tuple.split_pattern("model-00001-of-00002.gguf"), ("model", 2, ".gguf"))
+        self.assertEqual(self.tuple.split_pattern("model-00001-of-00017.safetensors"),
+                         ("model", 17, ".safetensors"))
+
+    def test_a_directory_artifact_resolves_to_its_container_file(self):
+        """Mirrors `a_directory_artifact_resolves_to_its_container_file`.
+        Perturbation: return the directory itself and the extension check
+        fails."""
+        _gguf(self.dir / "only.gguf", GRANITE_KEYS, GRANITE_TENSORS)
+        resolved = self.resolve(self.dir)
+        self.assertTrue(resolved.is_file())
+        self.assertEqual(resolved.suffix, ".gguf")
+
+    def test_a_sharded_directory_resolves_to_its_first_shard(self):
+        """Mirrors `a_sharded_directory_resolves_to_its_first_shard`, the
+        stranger included. Perturbation: take the first name sorted, or
+        drop the one-stem check, and a case resolves wrongly."""
+        for index in (1, 2, 3):
+            (self.dir / f"model-{index:05}-of-00003.safetensors").write_bytes(b"x")
+        self.assertEqual(self.resolve(self.dir), self.dir / "model-00001-of-00003.safetensors")
+        (self.dir / "other.safetensors").write_bytes(b"x")
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "not one split's shards"):
+            self.resolve(self.dir)
+
+    def test_an_ambiguous_directory_refuses(self):
+        """Mirrors `an_ambiguous_directory_refuses`, and a split short of
+        its count refuses as `container_within` does. Perturbation: take
+        the first name sorted and both resolve."""
+        for name in ("a.gguf", "b.gguf"):
+            (self.dir / name).write_bytes(b"GGUF")
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "2 containers"):
+            self.resolve(self.dir)
+        short = self.dir / "short"
+        short.mkdir()
+        for index in (1, 2):
+            (short / f"m-{index:05}-of-00003.gguf").write_bytes(b"GGUF")
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "not one split's shards"):
+            self.resolve(short)
+
+    def test_a_dot_entry_is_never_the_container(self):
+        """Mirrors the resolution half of `a_dot_entry_is_outside_the_identity`.
+        Perturbation: keep dot-entries and the directory is ambiguous."""
+        (self.dir / "model.safetensors").write_bytes(b"the weights")
+        (self.dir / "config.json").write_bytes(b"{}")
+        (self.dir / ".stray.safetensors").write_bytes(b"not the model")
+        self.assertEqual(self.resolve(self.dir), self.dir / "model.safetensors")
+
+    def test_a_named_pipe_does_not_resolve(self):
+        """Mirrors `a_named_pipe_does_not_resolve`, at the path and inside a
+        directory. Perturbation: admit any non-directory and the open
+        blocks on the pipe."""
+        pipe = self.dir / "pipe.gguf"
+        os.mkfifo(pipe)
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "not a regular file"):
+            self.resolve(pipe)
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "holds no container"):
+            self.resolve(self.dir)
+
+    def test_absent_and_denied_are_told_apart(self):
+        """Mirrors `a_denied_directory_is_unreadable_rather_than_unresolvable`.
+        Skips as root, whom no directory denies. Perturbation: answer every
+        stat error as not resolving and the denied case says absent."""
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "does not resolve"):
+            self.resolve(self.dir / "absent.gguf")
+        if os.getuid() == 0:
+            self.skipTest("root traverses every directory")
+        closed = self.dir / "closed"
+        closed.mkdir()
+        _gguf(closed / "m.gguf", GRANITE_KEYS, GRANITE_TENSORS)
+        closed.chmod(0)
+        self.addCleanup(closed.chmod, 0o700)
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "unreadable"):
+            self.resolve(closed / "m.gguf")
+
+    def test_a_safetensors_directory_names_its_container_and_kind(self):
+        """The door's refusal for a container without the GGUF magic still
+        names the container and the kind admission chose by the magic, so
+        the rows door can match the measurement and withhold rows 8 and 9.
+        Perturbation: drop either member from the refusal and its
+        assertion fails."""
+        model = self.dir / "native"
+        model.mkdir()
+        (model / "model.safetensors").write_bytes(b"\x08\0\0\0\0\0\0\0{}      ")
+        source = (DEPLOY / "agent_tuple.py").read_bytes()
+        ran = subprocess.run([sys.executable, "-I", "-", "header", str(model)], input=source,
+                             capture_output=True, cwd=self.dir)
+        self.assertEqual(ran.returncode, 1, ran.stderr)
+        answer = json.loads(ran.stdout)
+        self.assertEqual(answer["container"], "safetensors")
+        self.assertEqual(answer["resolved"], str(model / "model.safetensors"))
+        self.assertIn("no GGUF magic", answer["refused"])
+
+    def test_a_later_shard_declared_reads_the_first_shards_header(self):
+        """**The header is the first shard's whatever shard is declared**, as
+        artifact.rs `pin` opens it. Perturbation: read the declared shard and
+        its missing magic refuses the header."""
+        _gguf(self.dir / "m-00001-of-00002.gguf", GRANITE_KEYS, GRANITE_TENSORS)
+        (self.dir / "m-00002-of-00002.gguf").write_bytes(b"tensor data only")
+        facts = self.tuple.read_header(str(self.dir / "m-00002-of-00002.gguf"))
+        self.assertEqual(facts["architecture"], "granite")
+        self.assertIsNone(facts["resolved"], "a declared file is its own measurement path")
+
+    def test_the_header_door_reads_a_directory_artifact(self):
+        """The door end to end: a directory holding one GGUF answers its
+        header facts and names the container, and row 1 prints it.
+        Perturbation: open the declared path unresolved and the door
+        refuses the directory."""
+        model = self.dir / "granite"
+        model.mkdir()
+        _gguf(model / "granite.gguf", GRANITE_KEYS, GRANITE_TENSORS)
+        facts = self.tuple.read_header(str(model))
+        self.assertEqual(facts["architecture"], "granite")
+        self.assertEqual(facts["resolved"], str(model / "granite.gguf"))
+        declaration = {"spu-instruction": {"decoder": {"model-binding": {"artifact": str(model)}}}}
+        lines = self.tuple.artifact_rows(declaration, facts, None, None)
+        self.assertTrue([l for l in lines if "container" in l and "[derivable:" in l], lines)
+        self.assertIsNone(self.tuple.read_header(str(model / "granite.gguf"))["resolved"])
+
+
+class AgentTupleDivisionTests(unittest.TestCase):
+    """**Row 8 mirrors `Division::even` and `index_of` case for case**, the
+    fixtures taken from weaver-spu/src/division/tests.rs:
+    granite_divides_thirty_two_and_thirty_two, odd_layers_over_three_devices,
+    every_shape_reproduces_its_counts_under_the_engine_mapping,
+    no_device_or_no_layer_has_no_division and
+    index_of_names_every_slot_and_nothing_past_the_output. Perturbation: give
+    the larger count to the last L mod N devices, or put the output on the
+    first device, and these fail."""
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+
+    def test_granite_divides_thirty_two_and_thirty_two(self):
+        self.assertEqual(self.tuple.even_division(64, 2), [32, 32])
+
+    def test_odd_layers_over_three_devices(self):
+        self.assertEqual(self.tuple.even_division(13, 3), [5, 4, 4])
+
+    def test_every_shape(self):
+        for layers in range(1, 131):
+            for devices in range(1, 17):
+                counts = self.tuple.even_division(layers, devices)
+                self.assertEqual(sum(counts), layers)
+                larger = layers % devices
+                for index, count in enumerate(counts):
+                    want = -(-layers // devices) if index < larger else layers // devices
+                    self.assertEqual(count, want, (layers, devices, index))
+                self.assertEqual(self.tuple.index_of(counts, layers), devices - 1)
+
+    def test_no_device_or_no_layer_has_no_division(self):
+        self.assertIsNone(self.tuple.even_division(64, 0))
+        self.assertIsNone(self.tuple.even_division(0, 2))
+
+    def test_index_of_names_every_slot_and_nothing_past_the_output(self):
+        counts = self.tuple.even_division(5, 2)
+        self.assertEqual([self.tuple.index_of(counts, s) for s in range(7)],
+                         [0, 0, 0, 1, 1, 1, None])
+
+
+class FamilyRegistryMirrorTests(unittest.TestCase):
+    """**agent_tuple.py's family keys are the SPU registry's**, entry for
+    entry and in order, read from weaver-spu/src/family/mod.rs's `REGISTRY`,
+    and its fold is `same_key`'s. Perturbation: drop one `llama` entry from
+    the mirror and this fails, and a contested key would print as derivable."""
+
+    def test_the_mirror_is_the_registry(self):
+        source = (DEPLOY.parent / "crates/weaver-spu/src/family/mod.rs").read_text()
+        start = source.index("pub const REGISTRY: &[Declaration] = &[")
+        end = source.index("\n];", start)
+        block = source[start:end]
+        # Only the top-level entries' family members: eight spaces in.
+        families = tuple(re.findall(r'^        family: "([^"]+)",$', block, re.M))
+        self.assertEqual(_agent_tuple().REGISTRY_FAMILIES, families)
+
+    def test_the_fold_is_same_keys(self):
+        fold = _agent_tuple().family_key
+        self.assertEqual(fold("qwen3_5_moe"), fold("qwen35moe"))
+        self.assertEqual(fold("Nemotron-H.MoE"), "nemotronhmoe")
+        self.assertNotEqual(fold("qwen3"), fold("qwen35"))
+
+
+class AgentTupleRowTests(unittest.TestCase):
+    """**Every row ends in one of the four status words**, and each row says
+    what the survey says it can. Perturbations named per test."""
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+        path = self.dir / "m.gguf"
+        _gguf(path, GRANITE_KEYS, GRANITE_TENSORS)
+        self.header = self.tuple.read_header(path)
+
+    def declaration(self, devices=(0, 1), adapter=False, restore=None):
+        binding = {"artifact": "/models/granite.gguf", "devices": list(devices)}
+        if adapter:
+            binding["adapter"] = {"artifact": "/models/r1.gguf", "sha256": "a" * 64,
+                                  "base-blake3": "b" * 64, "scale": 1.0}
+        declaration = {"spu-instruction": {"decoder": {"model-binding": binding}},
+                       "state-store": {"engine": "sqlite"}}
+        if restore:
+            declaration["restore"] = {"save-point": restore}
+        return declaration
+
+    def statuses(self, lines):
+        return [re.search(r"\[(\w+):", line).group(1) for line in lines]
+
+    def test_every_line_carries_one_of_the_four_words(self):
+        decl = self.declaration()
+        lines = (self.tuple.artifact_rows(decl, self.header, None, None)
+                 + self.tuple.adapter_rows(decl)
+                 + self.tuple.device_rows(decl, self.header, ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"], ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"])
+                 + self.tuple.state_rows(decl, {"state_store": {"engine": "sqlite"}}))
+        for status in self.statuses(lines):
+            self.assertIn(status, ("recorded", "derivable", "absent", "FAULT"))
+
+    def test_row_one_takes_the_base_blake3_only_for_an_adapted_load(self):
+        """Perturbation: print base-blake3 for a base-only declaration and the
+        absent line is lost."""
+        adapted = self.tuple.artifact_rows(self.declaration(adapter=True), self.header, None, None)
+        self.assertIn("b" * 64, adapted[1])
+        self.assertIn("[derivable:", adapted[1])
+        base = self.tuple.artifact_rows(self.declaration(), self.header, None, None)
+        self.assertIn("[absent:", base[1])
+        seen = self.tuple.artifact_rows(self.declaration(), self.header, None,
+                                        {"weights_hash": "c" * 64, "line": 7})
+        self.assertIn("c" * 64, seen[1])
+        self.assertIn("[recorded: the latest model.measurement in the sink naming "
+                      "/models/granite.gguf, line 7]", seen[1])
+
+    def test_a_contested_architecture_is_not_printed_as_derivable(self):
+        """Perturbation: treat any registry hit as derivable and llama's
+        line reads derivable."""
+        path = self.dir / "l.gguf"
+        _gguf(path, [("general.architecture", 8, "llama"), ("llama.block_count", 4, 16)])
+        lines = self.tuple.artifact_rows(self.declaration(), self.tuple.read_header(path), None, None)
+        family = next(line for line in lines if " family " in line)
+        self.assertIn("[absent: the key is contested by 3 registry entries", family)
+        granite = next(line for line in self.tuple.artifact_rows(self.declaration(), self.header, None, None)
+                       if " family " in line)
+        self.assertIn("[derivable:", granite)
+
+    def test_the_placement_is_pair_three_with_the_output_on_the_last_device(self):
+        lines = self.tuple.device_rows(self.declaration(devices=(1, 0)), self.header, None, None)
+        placement = next(line for line in lines if "placement" in line)
+        self.assertIn("device 1: 32, device 0: 32; output on device 0", placement)
+        one = next(line for line in self.tuple.device_rows(self.declaration(devices=(1,)), self.header, None, None)
+                   if "placement" in line)
+        self.assertIn("all 64 layers and the output on device 1", one)
+
+    def test_row_seven_maps_ordinals_into_the_pci_order_list_and_states_its_premise(self):
+        gpus = ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:C1:00.0, NVIDIA RTX 2000 Ada Generation, 16380 MiB"]
+        lines = self.tuple.device_rows(self.declaration(devices=(2,)), self.header, gpus, gpus)
+        device = next(line for line in lines if "device 2 " in line)
+        self.assertIn("RTX 2000 Ada", device)
+        self.assertIn("CUDA_DEVICE_ORDER=PCI_BUS_ID", device)
+
+    def test_a_live_list_that_differs_from_the_install_tuple_is_a_fault(self):
+        """Perturbation: compare counts only and a swapped card passes."""
+        box = ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:C1:00.0, NVIDIA RTX 2000 Ada Generation, 16380 MiB"]
+        live = ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:C1:00.0, NVIDIA RTX A4000, 16376 MiB"]
+        lines = self.tuple.device_rows(self.declaration(), self.header, box, live)
+        self.assertIn("FAULT", self.statuses(lines))
+        lines = self.tuple.device_rows(self.declaration(devices=(5,)), self.header, box, box)
+        self.assertIn("FAULT", self.statuses(lines))
+
+    def test_header_and_declared_text_cannot_reach_the_terminal_raw(self):
+        """**No value is printed with a character a terminal acts on**, and an
+        architecture that is not a short name is absent, not echoed.
+        Perturbation: drop `printable` from `row` and the escape reaches the
+        line."""
+        path = self.dir / "e.gguf"
+        _gguf(path, [("general.architecture", 8, "granite\x1b]0;owned\x07")])
+        lines = self.tuple.artifact_rows(self.declaration(), self.tuple.read_header(path), None, None)
+        family = next(line for line in lines if " family " in line)
+        self.assertIn("[absent: the header carries no general.architecture", family)
+        decl = self.declaration(restore="sp\x1b[2J")
+        line = self.tuple.state_rows(decl, None)[1]
+        self.assertNotIn("\x1b", line)
+        self.assertIn("sp\\x1b[2J", line)
+
+    def test_restore_and_engine(self):
+        """Perturbation: print a declared save point as `none declared`."""
+        lines = self.tuple.state_rows(self.declaration(restore="sp-1"), {"state_store": {"engine": "sqlite"}})
+        self.assertIn("sp-1", lines[1])
+        lines = self.tuple.state_rows(self.declaration(), {"state_store": {"engine": "none"}})
+        self.assertIn("[FAULT:", lines[0])
+        self.assertIn("none declared", lines[1])
+
+
+    def test_rows_eight_and_nine_are_the_gguf_paths_alone(self):
+        """**Rows 8 and 9 state the GGUF path's rule** (Codex on #514): a
+        safetensors container is served by the native path, and a header
+        refused before its magic names no kind, so both rows read absent.
+        Perturbation: print row 9 unconditionally and the safetensors and
+        unknown cases read derivable."""
+        decl = self.declaration()
+        gguf = self.tuple.device_rows(decl, self.header, None, None)
+        self.assertTrue([l for l in gguf if "row 8" in l and "[derivable:" in l], gguf)
+        self.assertTrue([l for l in gguf if "row 9" in l and "[derivable:" in l], gguf)
+        native = self.tuple.device_rows(decl, None, None, None, container="safetensors")
+        unknown = self.tuple.device_rows(decl, None, None, None)
+        for case, lines in (("safetensors", native), ("unknown", unknown)):
+            with self.subTest(case):
+                for number in ("row 8", "row 9"):
+                    found = [l for l in lines if number in l]
+                    self.assertEqual(len(found), 1, lines)
+                    self.assertIn("[absent:", found[0])
+        self.assertIn("the native path, decoder/native.rs and native_pair.rs", native[-1])
+        self.assertIn("no container kind is known", unknown[-1])
+
+    def test_a_directory_measurement_is_matched_by_its_container(self):
+        """**The measurement names the container a directory resolved to**
+        (Codex on #514; residency.rs Resident.artifact, main.rs
+        render_measurement), so the rows door matches the header door's
+        `resolved`, and the declared directory stays row 1's artifact.
+        Perturbation: match the declared path and the hash reads absent."""
+        import contextlib
+        import io
+        model = self.dir / "granite"
+        container = model / "granite.safetensors"
+        declaration = self.dir / "agent.toml"
+        declaration.write_text('[spu-instruction.decoder.model-binding]\n'
+                               f'artifact = "{model}"\ndevices = [0]\n')
+        sink = self.dir / "trace.ndjson"
+        measurement = {"kind": "model.measurement", "run": "r-1", "sequence": 3,
+                       "payload": {"model": str(container), "weights_hash": "c" * 64,
+                                   "adapter": None}}
+        sink.write_text(json.dumps({"kind": "load", "run": "r-1", "sequence": 0, "payload": {}})
+                        + "\n" + json.dumps(measurement) + "\n")
+        header = json.dumps({"refused": "no GGUF magic", "container": "safetensors",
+                             "resolved": str(container)})
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            self.tuple.main(["rows", "--declaration", str(declaration), "--header-json", header,
+                             "--sink", str(sink)])
+        out = printed.getvalue()
+        self.assertRegex(out, r"row 1 +artifact +" + re.escape(str(model)) + r" +\[recorded:")
+        self.assertRegex(out, r"row 1 +container +" + re.escape(str(container)) + r" +\[derivable:")
+        self.assertIn("c" * 64 + "  [recorded: the latest model.measurement in the sink naming "
+                      + str(container) + ", line 2]", out)
+        self.assertRegex(out, r"row 9 +cpu offload +- +\[absent: the native path")
+
+    LINEAGE = {"save_point": "e" * 64, "run": "r-0", "sequence": 5, "turn": 1,
+               "named_at_restore": False}
+
+    def restored(self, lines):
+        return [line for line in lines if " restored from " in line]
+
+    def test_the_restored_save_point_is_read_from_the_lineage(self):
+        """**What the load restored is the load event's lineage** (Codex on
+        #514): with no [restore], admin restores the manifest's latest and
+        the harness names it in `lineage` (the shape the harness's lifecycle
+        tests assert). Perturbation: read the declaration alone and the
+        reload's digest is not printed."""
+        lines = self.tuple.restore_rows(self.declaration(), {"lineage": self.LINEAGE})
+        self.assertIn("[recorded: the declaration has no [restore]", lines[0])
+        restored = self.restored(lines)
+        self.assertEqual(len(restored), 1, lines)
+        self.assertIn("e" * 64 + " (run r-0, sequence 5, turn 1)", restored[0])
+        self.assertIn("[recorded: the load event's lineage, named_at_restore False]", restored[0])
+        lines = self.tuple.restore_rows(self.declaration(), {"state_store": {}})
+        self.assertIn("none  [recorded: the load event carries no lineage", self.restored(lines)[0])
+        lines = self.tuple.restore_rows(self.declaration(), None)
+        self.assertIn("[absent: no load event was read]", self.restored(lines)[0])
+
+    def test_a_declared_save_point_the_load_did_not_restore_is_a_fault(self):
+        """**The declaration's [restore] and the lineage must name one save
+        point**, by digest or by published name, as admin's selection
+        matches them (save_points.rs). Perturbation: drop the comparison,
+        or the FAULT for a declared point with no lineage, and a case reads
+        recorded."""
+        digest = "e" * 64
+        for declared in (digest, f"20261109T120000Z-{digest}.save-point"):
+            with self.subTest(declared):
+                lines = self.tuple.restore_rows(self.declaration(restore=declared),
+                                                {"lineage": self.LINEAGE})
+                self.assertIn("[recorded:", self.restored(lines)[0])
+        cases = {
+            "another digest": ("f" * 64, {"lineage": self.LINEAGE}),
+            "another name": (f"20261109T120000Z-{'f' * 64}.save-point", {"lineage": self.LINEAGE}),
+            "a name around the digest": (f"x{digest}.save-point", {"lineage": self.LINEAGE}),
+            "no lineage": (digest, {"state_store": {}}),
+            "a lineage with no digest": (digest, {"lineage": {"run": "r-0"}}),
+        }
+        for said, (declared, event) in cases.items():
+            with self.subTest(said):
+                lines = self.tuple.restore_rows(self.declaration(restore=declared), event)
+                self.assertIn("[FAULT:", self.restored(lines)[0])
+
+    def test_the_exit_reads_the_rows_flag_and_never_their_text(self):
+        """**A FAULT is the flag `row` sets**, so a declared value that
+        prints "[FAULT:" fails nothing. Perturbation: judge the exit by the
+        substring "[FAULT:" over the printed lines and the clean run exits
+        3."""
+        import contextlib
+        import io
+        declaration = self.dir / "agent.toml"
+        declaration.write_text('[spu-instruction.decoder.model-binding]\n'
+                               'artifact = "/models/[FAULT: not a fault]"\ndevices = []\n')
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            clean = self.tuple.main(["rows", "--declaration", str(declaration)])
+        self.assertIn("[FAULT: not a fault]", printed.getvalue())
+        self.assertEqual(clean, 0, printed.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()):
+            faulted = self.tuple.main(["rows", "--declaration", str(declaration),
+                                       "--install-tuple-unheld", "an open entry"])
+        self.assertEqual(faulted, 3)
+
+
+class AgentTupleRecordReadTests(unittest.TestCase):
+    """**The record reads take the trace's line shape**: the envelope
+    flattened, the payload under `payload` (weaver-trace event.rs), the
+    measurement spliced there whole. Perturbations: read the first
+    measurement rather than the last, or keep one naming another artifact,
+    and the hash printed is not this binding's."""
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+
+    def test_the_latest_measurement_of_the_declared_artifact(self):
+        sink = self.dir / "trace.ndjson"
+        lines = [
+            {"kind": "load", "payload": {"state_store": {"engine": "sqlite"}}},
+            {"kind": "model.measurement", "payload": {"model": "/m.gguf", "weights_hash": "1" * 64}},
+            {"kind": "model.output", "payload": {"finish": "stop"}},
+            {"kind": "model.measurement", "payload": {"model": "/m.gguf", "weights_hash": "2" * 64}},
+        ]
+        sink.write_text("".join(json.dumps(line) + "\n" for line in lines) + "not json\n")
+        self.assertEqual(self.tuple.latest_measurement(sink, "/m.gguf"),
+                         {"weights_hash": "2" * 64, "line": 4})
+        self.assertIsNone(self.tuple.latest_measurement(sink, "/other.gguf"))
+        empty = self.dir / "empty.ndjson"
+        empty.write_text("")
+        self.assertIsNone(self.tuple.latest_measurement(empty, "/m.gguf"))
+
+    def test_the_sink_is_read_only_as_a_regular_file_never_through_a_link(self):
+        """**A link or a FIFO at the sink's name is refused at the open**, not
+        followed or blocked on: the shell's look and the helper's open are two
+        moments. Perturbation: open with plain `open()` and the link is
+        followed (and the FIFO blocks past the timeout)."""
+        real = self.dir / "real.ndjson"
+        real.write_text(json.dumps({"kind": "model.measurement",
+                                    "payload": {"model": "/m.gguf", "weights_hash": "3" * 64}}) + "\n")
+        link = self.dir / "link.ndjson"
+        link.symlink_to(real)
+        with self.assertRaises(OSError):
+            self.tuple.latest_measurement(link, "/m.gguf")
+        fifo = self.dir / "fifo.ndjson"
+        os.mkfifo(fifo)
+        with self.assertRaises(OSError):
+            self.tuple.latest_measurement(fifo, "/m.gguf")
+        self.assertEqual(self.tuple.latest_measurement(real, "/m.gguf")["weights_hash"], "3" * 64)
+
+    def test_a_measurement_hash_of_another_shape_is_not_taken(self):
+        sink = self.dir / "trace.ndjson"
+        sink.write_text(json.dumps({"kind": "model.measurement",
+                                    "payload": {"model": "/m.gguf", "weights_hash": "\x1b[2Jzz"}}) + "\n")
+        self.assertIsNone(self.tuple.latest_measurement(sink, "/m.gguf"))
+
+    def test_the_load_payload_and_the_live_list(self):
+        events = self.dir / "trace.ndjson"
+        events.write_text(json.dumps({"kind": "load", "payload": {"declaration": "0" * 64}}) + "\n"
+                          + json.dumps({"kind": "unload"}) + "\n"
+                          + json.dumps({"kind": "load", "payload": {"declaration": "d" * 64}}) + "\n")
+        # The load's own events start after the earlier run's: an earlier
+        # load is never taken for this one.
+        self.assertEqual(self.tuple.load_payload(events, 2), {"declaration": "d" * 64})
+        self.assertIsNone(self.tuple.load_payload(events, 4))
+        smi = ("00000000:C1:00.0,  NVIDIA RTX 2000 Ada Generation, 16380 MiB\n"
+               "00000000:01:00.0, NVIDIA RTX A6000 ,49140 MiB\n")
+        self.assertIsNone(self.tuple.live_gpus("fixture-driver\n"))
+        # The install tuple's `gpu.<n>` shape, sorted in the C locale.
+        self.assertEqual(self.tuple.live_gpus(smi),
+                         ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB",
+                          "00000000:C1:00.0, NVIDIA RTX 2000 Ada Generation, 16380 MiB"])
+
+
+class TupleQueryMirrorTests(unittest.TestCase):
+    """**The runbook names the nvidia-smi query verify-load runs**, so the
+    box's operator reads the exact line from section 4. Perturbation: change
+    either side's query fields and this fails."""
+
+    def test_the_runbook_names_the_scripts_query(self):
+        script = (DEPLOY / "verify-load.sh").read_text()
+        runbook = " ".join((DEPLOY / "HowToDeployANewAgent.md").read_text().split())
+        query = re.search(r"nvidia-smi (--query-gpu=\S+ --format=\S+)", script).group(1)
+        self.assertIn(f"`nvidia-smi {query}`", runbook)
+
+
+INSTALL_TUPLE_LINES = [
+    "commit = " + "0" * 40,
+    "toolchain = nightly-2026-02-13",
+    "features = weaver-spu/cuda,weaver-state/sqlite",
+    "engine = llama-cpp-sys-2 0.1.146",
+    "engine-source = git+https://example.invalid/llama-cpp-rs?rev=" + "a" * 40 + "#" + "b" * 40,
+    "engine-vendored = " + "c" * 40,
+    "nvcc = 13.4, V13.4.92",
+    "member.worker = " + "1" * 64,
+    "member.weaver-admin = " + "2" * 64,
+    "member.weaver-trace-relay = " + "3" * 64,
+    "member.weaver-gate = " + "4" * 64,
+    "member.weaver-spu = " + "5" * 64,
+    "member.weaver-state = " + "6" * 64,
+    "member.busybox = " + "7" * 64,
+    "member.busybox.applets = " + "8" * 64,
+    "library.libllama.so.0.0.8783 = {llama}",
+    "library.libggml-base.so.0.9.11 = {ggml}",
+    "driver = 580.1",
+    "cudart = /opt/cuda/lib/libcudart.so.13.0.1",
+    "cublas = /opt/cuda/lib/libcublas.so.13.0.1",
+    "cublaslt = /opt/cuda/lib/libcublasLt.so.13.0.1",
+    "cccl = 3.0",
+    "gpus = 2",
+    "gpu.0 = 00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB",
+    "gpu.1 = 00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB",
+]
+
+
+class AgentTupleInstallTests(unittest.TestCase):
+    """**The install tuple is read as install-tuple.sh writes it** and bound
+    to the load's record. Perturbations named per test."""
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.lib = self.dir / "lib"
+        self.lib.mkdir()
+        (self.lib / "libllama.so.0.0.8783").write_bytes(b"llama")
+        (self.lib / "libggml-base.so.0.9.11").write_bytes(b"ggml")
+        (self.lib / "libllama.so.0").symlink_to("libllama.so.0.0.8783")
+        self.digests = {"llama": hashlib.sha256(b"llama").hexdigest(),
+                        "ggml": hashlib.sha256(b"ggml").hexdigest()}
+        self.path = self.write(INSTALL_TUPLE_LINES)
+
+    def write(self, lines):
+        path = self.dir / "install-tuple"
+        path.write_text("".join(line.format(**self.digests) + "\n" for line in lines))
+        return path
+
+    def test_the_tuple_is_read(self):
+        install = self.tuple.read_install_tuple(self.path)
+        self.assertEqual(install["sha256"], hashlib.sha256(self.path.read_bytes()).hexdigest())
+        self.assertEqual(install["facts"]["engine-vendored"], "c" * 40)
+        self.assertEqual(install["members"]["busybox.applets"], "8" * 64)
+        self.assertEqual(install["gpus"], ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB",
+                                           "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"])
+
+    def test_a_malformed_tuple_is_refused(self):
+        """Perturbation: drop any one check in `read_install_tuple` and its
+        case reads on."""
+        cases = {
+            "not `key = value`": INSTALL_TUPLE_LINES + ["driver=1"],
+            "empty or repeated": INSTALL_TUPLE_LINES + ["driver = 2"],
+            "no cccl": [l for l in INSTALL_TUPLE_LINES if not l.startswith("cccl")],
+            "not 64 hex digits": INSTALL_TUPLE_LINES[:7] + ["member.worker = zz"] + INSTALL_TUPLE_LINES[8:],
+            "numbered 0 to n-1": [l for l in INSTALL_TUPLE_LINES if not l.startswith("gpu.0")] + ["gpu.2 = x, y, z"],
+            "gpus says 2": INSTALL_TUPLE_LINES + ["gpu.2 = 00000000:81:00.0, X, 1 MiB"],
+        }
+        for said, lines in cases.items():
+            with self.subTest(said):
+                with self.assertRaisesRegex(self.tuple.InstallTupleRefused, said):
+                    self.tuple.read_install_tuple(self.write(lines))
+        link = self.dir / "linked"
+        link.symlink_to(self.write(INSTALL_TUPLE_LINES))
+        with self.assertRaises(OSError):
+            self.tuple.read_install_tuple(link)
+
+    def test_the_tuple_install_tuple_sh_writes_is_read(self):
+        """**The reader takes what the writer writes**: the tuple comes from
+        install-tuple.sh's own `install_tuple` on a box that answers nothing,
+        so every member and library digest reads `unknown`, and the reader
+        takes it whole. Perturbation: refuse an `unknown` digest and the
+        writer's tuple is refused."""
+        repo = Path(__file__).resolve().parent.parent
+        stubs = self.dir / "stubs"
+        stubs.mkdir()
+        for name in ("cargo", "git", "nvidia-smi", "nvcc", "pacman", "rustc"):
+            (stubs / name).write_text("#!/bin/sh\nexit 1\n")
+            (stubs / name).chmod(0o755)
+        empty = self.dir / "empty-repo"
+        empty.mkdir()
+        script = (f"source {shlex.quote(str(repo / 'deploy' / 'engine-libraries.sh'))}; "
+                  f"source {shlex.quote(str(repo / 'deploy' / 'install-tuple.sh'))}; "
+                  f"install_tuple {shlex.quote(str(empty))} {'0' * 40} "
+                  f"{shlex.quote(str(self.dir / 'no-bin'))} {shlex.quote(str(self.dir / 'no-lib'))} "
+                  f"fixture 'worker weaver-spu busybox.applets' 'libllama.so.0.0.8783'")
+        env = {"PATH": str(stubs) + os.pathsep + "/usr/bin:/bin", "LC_ALL": "C"}
+        ran = subprocess.run(["bash", "-c", script], env=env, text=True,
+                             capture_output=True, timeout=20)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        install = self.tuple.read_install_tuple(self.write([ran.stdout.rstrip("\n")]))
+        self.assertEqual(set(install["facts"]), set(self.tuple.INSTALL_SCALARS))
+        self.assertEqual(install["members"], {"worker": "unknown", "weaver-spu": "unknown",
+                                              "busybox.applets": "unknown"})
+        self.assertEqual(install["libraries"], {"libllama.so.0.0.8783": "unknown"})
+        self.assertEqual(install["gpus"], [])
+
+    def test_an_unknown_digest_binds_nothing_and_faults_nothing(self):
+        """**An `unknown` digest is the box side unstated**, so the row is
+        absent, never a fault. Perturbation: drop either `unknown` branch in
+        `binding_rows` and its row reads FAULT."""
+        lines = [l.replace("1" * 64, "unknown") if l.startswith("member.worker") else
+                 l.replace("{llama}", "unknown") for l in INSTALL_TUPLE_LINES]
+        install = self.tuple.read_install_tuple(self.write(lines))
+        rows = self.tuple.binding_rows("d" * 64, self.load(), install, str(self.lib))
+        worker = [r for r in rows if "member worker" in r]
+        llama = [r for r in rows if "library libllama.so.0.0.8783" in r]
+        self.assertEqual(len(worker), 1, rows)
+        self.assertEqual(len(llama), 1, rows)
+        self.assertIn("[absent: not bound: the install tuple could not hash it]", worker[0])
+        self.assertIn("[absent: not bound: the install tuple could not hash it]", llama[0])
+        self.assertFalse([r for r in rows if "FAULT" in r], rows)
+
+    def load(self, **override):
+        event = {"declaration": "d" * 64, "library_path": str(self.lib),
+                 "stack": {"worker": "1" * 64, "weaver-spu": "5" * 64, "weaver-state": "6" * 64,
+                           "weaver-gate": "4" * 64, "weaver-spu-classify": "9" * 64}}
+        event.update(override)
+        return event
+
+    def statuses(self, lines, field):
+        return {re.search(r"\[(\w+):", l).group(1) for l in lines if field in l}
+
+    def test_the_record_binds_to_the_box(self):
+        install = self.tuple.read_install_tuple(self.path)
+        lines = self.tuple.binding_rows("d" * 64, self.load(), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "declaration"), {"recorded"})
+        self.assertEqual(self.statuses(lines, "member worker"), {"recorded"})
+        # Names one side holds are printed as not bound, never compared.
+        self.assertEqual(self.statuses(lines, "member busybox "), {"absent"})
+        self.assertEqual(self.statuses(lines, "member weaver-spu-classify"), {"absent"})
+        self.assertEqual(self.statuses(lines, "library libllama.so.0.0.8783"), {"recorded"})
+        self.assertFalse([l for l in lines if "libllama.so.0 " in l], "a link is never listed")
+        self.assertNotIn("FAULT", " ".join(lines))
+
+    def test_each_disagreement_is_a_fault_naming_which(self):
+        """Perturbations: compare the declaration loosely, skip a stack name,
+        or skip hashing the library files, and a case passes."""
+        install = self.tuple.read_install_tuple(self.path)
+        lines = self.tuple.binding_rows("e" * 64, self.load(), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "declaration"), {"FAULT"})
+        stack = dict(self.load()["stack"], worker="0" * 64)
+        lines = self.tuple.binding_rows("d" * 64, self.load(stack=stack), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "member worker"), {"FAULT"})
+        (self.lib / "libggml-base.so.0.9.11").write_bytes(b"changed")
+        lines = self.tuple.binding_rows("d" * 64, self.load(), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "library libggml-base.so.0.9.11"), {"FAULT"})
+        (self.lib / "libggml-cuda.so.0.9.11").write_bytes(b"extra")
+        lines = self.tuple.binding_rows("d" * 64, self.load(), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "library libggml-cuda.so.0.9.11"), {"FAULT"})
+
+    def test_a_library_path_the_tuple_does_not_digest_is_not_bound(self):
+        install = self.tuple.read_install_tuple(self.path)
+        lines = self.tuple.binding_rows("d" * 64, self.load(library_path="/elsewhere"), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "library path"), {"absent"})
+
+    def test_the_box_rows_cite_the_tuples_digest(self):
+        install = self.tuple.read_install_tuple(self.path)
+        lines = self.tuple.box_rows(str(self.path), install, None)
+        self.assertIn(install["sha256"], lines[0])
+        self.assertIn("fork " + "b" * 40, lines[1])
+        lines = self.tuple.box_rows(str(self.path), None, "the install tuple is refused: x")
+        self.assertIn("[FAULT:", lines[0])
+        lines = self.tuple.box_rows(str(self.path), None, None)
+        self.assertIn("[absent:", lines[0])
+
 
 if __name__ == "__main__":
     unittest.main()
