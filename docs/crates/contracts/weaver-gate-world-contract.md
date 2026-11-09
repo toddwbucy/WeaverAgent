@@ -125,9 +125,9 @@ at most 256 octets and marked where cut. The seeding is the last step of
 creating an agent, run by the operator after the load with the draft
 `system-prompt.md` beside the declaration, and the first save point after it is the
 agent's starting state. A seeding line is bounded as every line is, 49,041 octets
-before the delimiter per `weaver-gate-Spec` section 4: the organ envelope's exact
-capacity, an interim on the operator's ruling of 2026-11-08 until the seed verb takes
-seeding off the gate at the foundation cutover.
+before the delimiter per `weaver-gate-Spec` section 4. The bound is an interim, on the
+operator's ruling of 2026-11-08, until the seed verb takes seeding off the gate at the
+foundation cutover.
 
 ## 3. What crosses out, and its format
 

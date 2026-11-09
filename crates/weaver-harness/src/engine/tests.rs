@@ -5049,7 +5049,7 @@ fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
             }],
             content: vec![
                 weaver_traits::ContentBlock::Text {
-                    text: "one word".into(),
+                    text: "one word\u{fffd}".into(),
                 },
                 weaver_traits::ContentBlock::UnrecoveredCall {
                     fragment: "<tool_call>x</tool_call>".into(),
@@ -5062,7 +5062,7 @@ fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
                 unrecovered_entry("<tool_call>x</tool_call>", false),
                 unrecovered_entry("<tool_call>y", true),
             ],
-            emission: "one word".into(),
+            emission: "one word\u{fffd}".into(),
             finish: Finish::Completed,
             // Deliberately unroundable: a site forwarding a zero, a
             // default, or the other member would fail the assertion
@@ -5186,5 +5186,14 @@ fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
         output["payload"]["invalid_utf8"],
         serde_json::json!([{"at": 8, "bytes": "ff"}]),
         "the re-feed's mark reaches the record: {output_line}"
+    );
+    // The mark's contract: its offset names a U+FFFD in the recorded text.
+    let emission = output["payload"]["emission"]
+        .as_str()
+        .expect("the output carries its emission");
+    assert_eq!(emission, "one word\u{fffd}", "{output_line}");
+    assert!(
+        emission[8..].starts_with('\u{fffd}'),
+        "the mark at 8 names the replacement character: {output_line}"
     );
 }

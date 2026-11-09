@@ -368,7 +368,7 @@ the declaration the only difference, read from the trace.
   as its seeding line, and the gate refused a line over 32 KiB. The bound is
   now the organ envelope's exact capacity, 49,041 octets (`weaver-gate-Spec`
   section 4, with the gate-world contract), so the adapter's own prompt seeds
-  in one line. The bound is an interim; its destination is the seed verb,
+  in one line. The bound is an interim. Its destination is the seed verb,
   ADMIN-SEED.
 - **The trace floor** (#473 item 1).
 - **A save point's record of the adapter.** The published bound declaration

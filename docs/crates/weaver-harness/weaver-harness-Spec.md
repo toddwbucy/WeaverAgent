@@ -2049,7 +2049,7 @@ again at the leave, and the `unload` event carries the comparison, per
 boundary its state sits behind. The fifth, `identity` of the same date, is the seat's
 own for the opposite reason: it is asked once at the enter, before the decode open, and
 its answer is the open's material rather than a loop's, so no loop composes a prefix and
-no `Ports` call exists to hand one out; the seated read below answers only whether the
+no `Ports` call exists to hand one out. The seated read below answers only whether the
 answer carried any identity message. The seam's ask end lives in `src/state.rs`, a
 clone of the standing state channel held on the run beside the tee the enter attaches,
 that channel arriving in the enter directive as the harness half of the pair admin
@@ -2564,14 +2564,15 @@ prefix, so a flush there would drop it from the context, which is why the runboo
 that residency at the save point: load, seed, save point, unload, and the production
 session is the next load. The first save point taken after the seeding is the agent's
 starting state, per `weaver-state-PRD` section 4, taken on the operator's demand with
-admin's `save-point` verb, or by the first leave's snapshot. **Because the seeding turn generates, the agent's starting state
-holds the model's first answer beside the prompt**: that answer is on the record as
-every `message.assistant` is, the tee lands it, and a save point taken after the
-seeding carries both, by design and not by leak. The line's bound is the gate's, 49,041 octets before the
-delimiter per `weaver-gate-Spec` section 4, the organ envelope's exact capacity, which
-the R1 system prompt's seeding line, 48,454 octets as `deploy/turn.py` encodes it,
-sits inside. A refused open is a refused enter, returned through the
-fan-out's after-load failure so the authored bracket stands for the forced leave of admin's rollback to unwind, the
+admin's `save-point` verb, or by the first leave's snapshot. **Because the seeding turn
+generates, the agent's starting state holds the model's first answer beside the
+prompt**: that answer is on the record as every `message.assistant` is, the tee lands
+it, and a save point taken after the seeding carries both, by design and not by leak.
+The line's bound is the gate's, 49,041 octets before the delimiter per
+`weaver-gate-Spec` section 4, the organ envelope's exact capacity, which the R1 system
+prompt's seeding line, 48,454 octets as `deploy/turn.py` encodes it, sits inside. A
+refused open is a refused enter, returned through the fan-out's after-load failure so
+the authored bracket stands for the forced leave of admin's rollback to unwind, the
 aggregate naming the decode seam as where the fan-out stopped. **Under a restoring load
 the store answers from the save point**, per the operator's rulings of 2026-10-02 on
 #58: admin hands the member the save point at spawn, per `weaver-admin-Spec`, the member
@@ -2596,9 +2597,10 @@ on for 120 seconds** (`RESTORED_ANSWER_BOUND_MS`, the operator's ruling of 2026-
 #99): the member judges and seats the save point only after the opener reaches it, up to
 the save point's 1 GiB bound, and answers after that, so the two seconds of the small
 asks would refuse every load of a large save point. Admin's load bound
-(`load-bound-seconds`, 900 by default) spends this wait with the rest of the enter. **The reset rides the `load`
-event**: where the enter carries `reset`, beside its lineage and whether or not a save
-point stands, resolved by admin from its clean-unload marker per `weaver-admin-Spec`
+(`load-bound-seconds`, 900 by default) spends this wait with the rest of the enter.
+**The reset rides the `load` event**: where the enter carries `reset`, beside its
+lineage and whether or not a save point stands, resolved by admin from its clean-unload
+marker per `weaver-admin-Spec`
 section 4, this crate copies it onto the `load` event beside the lineage, per
 `weaver-trace-Spec` section 3, the prior run and the reason, the save point reset to
 being the lineage's or none where the store stands empty, so a rebuild from the record

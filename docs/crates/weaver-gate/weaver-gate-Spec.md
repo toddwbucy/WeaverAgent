@@ -882,7 +882,7 @@ rides the envelope encoded, 4 * ceil(N / 3) octets for N octets, and the
 envelope's other members (the exchange, the position, the frame's dialer and
 the JSON around them) take at most 147 octets, at an ordinal of `u64::MAX` and
 a dialer of `u32::MAX`. A line of 49,041 octets encodes to 65,388 and renders
-to 65,535, inside the bound of 65,536; a line of 49,042 encodes to 65,392 and
+to 65,535, inside the bound of 65,536. A line of 49,042 encodes to 65,392 and
 renders to 65,539, past it. So every line the gate admits reaches the harness,
 and no larger bound can. The ruling gives up the margin the earlier election
 of 32 kibibytes kept, knowingly, so that a seeding line of 48,454 octets (the
