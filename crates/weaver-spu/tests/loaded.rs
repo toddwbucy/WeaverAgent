@@ -223,6 +223,7 @@ fn a_real_admit_holds_the_device_and_release_frees_it_child() {
     let binding = ModelBinding {
         artifact: ArtifactRef(model.to_string_lossy().into_owned()),
         devices,
+        adapter: None,
     };
 
     let admitted = residency.admit(
@@ -350,6 +351,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: true,
                         field_election: None,
@@ -439,6 +441,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: false,
                         field_election: None,
@@ -548,6 +551,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: false,
                         field_election: None,
@@ -683,6 +687,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: false,
                         field_election: None,
@@ -820,6 +825,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: false,
                         field_election: None,
@@ -1058,6 +1064,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: false,
                         field_election: None,
@@ -1213,6 +1220,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: false,
                         field_election: Some(weaver_types::FieldElection { depth: 40 }),
@@ -1437,6 +1445,7 @@ mod seam_success {
                 model_binding: ModelBinding {
                     artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                     devices: vec![DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: false,
                 field_election: None,
@@ -1734,6 +1743,7 @@ mod seam_success {
                         model_binding: ModelBinding {
                             artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                             devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
                         },
                         residual_readout_election: true,
                         field_election: None,
@@ -1875,6 +1885,7 @@ mod seam_success {
                 model_binding: ModelBinding {
                     artifact: ArtifactRef(model.to_string_lossy().into_owned()),
                     devices: vec![DeviceOrdinal(0)],
+                    adapter: None,
                 },
                 residual_readout_election: readout,
                 field_election: None,

@@ -144,6 +144,34 @@ until it is recreated. The model learns the tool from the system prompt, so desc
 in `system-prompt.md` before the seeding turn: its name `sh`, that it is POSIX `sh` and
 not bash, the listed commands, and that it has no network.
 
+**An adapted agent** (the weaver-spu adapter binding amendment, ADP-1, ADP-2 and
+ADP-5). A LoRA adapter rides the base binding as its `adapter` table, declared with
+four flags, all four or none:
+
+```sh
+deploy/create-agent.sh <name> --artifact /opt/weaver/models/<base> \
+  --adapter /opt/weaver/models/<adapter>.gguf --adapter-sha256 <hex> \
+  --adapter-scale 1.0 --base-blake3 <hex> --apply
+```
+
+The script computes nothing. `--adapter-sha256` is the adapter file's SHA-256, from
+the conversion record, and `--base-blake3` is the BLAKE3 the base was trained against,
+from the fixture report; both are 64 lowercase hexadecimal characters. `--adapter-scale`
+is a finite decimal (`1.0`, `0.7`). The script refuses a partial set, a digest of
+another shape and a scale that is not a finite decimal, before it makes anything. The
+SPU checks both digests at admission, on the path the LoRA fixture proves: a file that
+does not hash to the declared digest refuses `ArtifactUnreadable` at `adapter-hash`, and
+a base that is not the declared one refuses `DeviceCannotAdmit` at
+`adapter-base-identity`. The SPU's line in `worker.log` names the adapter's path, the
+stage and the identity the check ran as.
+
+**The adapter file takes the base's custody**: a regular file owned outside the agent's
+uid, readable by it, and not writable by it (LoRA amendment LORA-2). A file the agent's
+uid owns, or one it can write, refuses at `adapter-custody`. Admin checks only that the
+path is named; the SPU resolves and judges it at admission. The adapter is part of the
+binding, so adding, changing or removing it is a declaration edit followed by a reload,
+like a change of base.
+
 ## 3. An agent without a store
 
 `create-agent.sh` refuses `--engine none`, since a storeless agent has no member, no
@@ -296,7 +324,10 @@ until #166 (the placement and the lifetime binding to the invoker) is ruled.
 `validate` answers `{"kind":"validated"}` or a refusal naming the field or the boundary
 piece. `verify-load.sh` validates, first unloads the agent (taking its leave save
 point where a run stands), then loads, counts the events that arrive in the sink,
-prints their kinds and the load event, then reads `show`'s constituents and checks each:
+prints their kinds and the load event, and prints the binding's base and adapter as
+declared (`none` for a base-only agent) beside the adapter member of any Open
+measurement the new events carry. The live record does not carry the Open measurement
+yet, and the script says so. It then reads `show`'s constituents and checks each:
 it runs as the agent's, the member's or the relay's account, it sits in the agent's
 cgroup beneath the invoker's (the member and the relay in `constituents/`, the worker in
 `worker/run/`), and a relay stands among them for a file sink. It then unloads, and

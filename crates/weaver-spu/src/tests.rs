@@ -30,6 +30,101 @@ fn the_artifact_refusal_line_names_the_path_and_the_identity() {
     );
 }
 
+/// **An adapter refusal's account names the artifact and the check**, per
+/// the adapter binding amendment ADP-2: the floor answers
+/// `ArtifactUnreadable` for a digest the pinned file does not hash to and
+/// `DeviceCannotAdmit` for a base it was not trained on, and the base meets
+/// both of those refusals too, so the line says it was the adapter, at which
+/// stage, and as which identity.
+///
+/// Perturbation: drop the `Adapter` arm, or the `stage` member, and this
+/// fails.
+#[test]
+fn the_adapter_refusal_line_names_the_artifact_and_the_stage() {
+    use weaver_spu::lora::{Failure, FailureKind};
+    use weaver_spu::residency::AdmitRefusal;
+    use weaver_types::LifecycleRefusal;
+    for (kind, stage, detail, floor) in [
+        (
+            FailureKind::Unreadable,
+            "adapter-hash",
+            "adapter SHA-256 mismatch",
+            LifecycleRefusal::ArtifactUnreadable,
+        ),
+        (
+            FailureKind::Incompatible,
+            "adapter-base-identity",
+            "runtime base BLAKE3 mismatch",
+            LifecycleRefusal::DeviceCannotAdmit,
+        ),
+    ] {
+        let failure = Failure {
+            kind,
+            path: "/models/adapter.gguf".into(),
+            stage,
+            detail: detail.into(),
+            uid: 7,
+            gid: 8,
+        };
+        assert_eq!(failure.lifecycle(), floor, "{stage}");
+        let refusal = AdmitRefusal::Adapter(failure);
+        let line = super::admit_refusal_line(&refusal).expect("an adapter case has an account");
+        let parsed: serde_json::Value = serde_json::from_str(&line).expect("one typed line");
+        assert_eq!(
+            parsed,
+            serde_json::json!({
+                "refusal": "adapter",
+                "path": "/models/adapter.gguf",
+                "stage": stage,
+                "detail": detail,
+                "uid": 7,
+                "gid": 8,
+            })
+        );
+    }
+}
+
+/// **Every generation's measurement leads with the adapter, written typed**,
+/// per the adapter binding amendment ADP-3: `null` for base-only, the closed
+/// object for an adapted load, and the scale as the f32 itself, which a
+/// generic value renders `0.699999988079071`. The rest of the measurement
+/// follows as it rendered before, and an empty member list still closes a
+/// valid object.
+///
+/// Perturbation: set the member through `serde_json::json!`, or omit it for
+/// a base-only load, and this fails.
+#[test]
+fn every_generation_measurement_leads_with_the_typed_adapter() {
+    let rest = serde_json::json!({"model": "m", "blocks": []});
+    let rest = rest.as_object().expect("an object");
+    assert_eq!(
+        super::lead_with_adapter(None, rest),
+        r#"{"adapter":null,"blocks":[],"model":"m"}"#
+    );
+    assert_eq!(
+        super::lead_with_adapter(None, &serde_json::Map::new()),
+        r#"{"adapter":null}"#
+    );
+    let adapter = weaver_spu::lora::RecordedAdapter {
+        artifact: "/models/adapter.gguf".into(),
+        sha256: "a".repeat(64),
+        scale: 0.7,
+    };
+    let rendered = super::lead_with_adapter(Some(&adapter), rest);
+    assert_eq!(
+        rendered,
+        format!(
+            r#"{{"adapter":{{"artifact":"/models/adapter.gguf","sha256":"{}","scale":0.7}},"blocks":[],"model":"m"}}"#,
+            "a".repeat(64)
+        )
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&rendered).expect("one object");
+    assert_eq!(
+        parsed["adapter"]["scale"].as_f64().map(|s| s as f32),
+        Some(0.7)
+    );
+}
+
 use super::*;
 use weaver_traits::{ContentBlock, Role};
 use weaver_types::{
@@ -83,6 +178,7 @@ fn binding() -> ModelBinding {
     ModelBinding {
         artifact: ArtifactRef("/nonexistent/artifact".into()),
         devices: vec![DeviceOrdinal(0)],
+        adapter: None,
     }
 }
 

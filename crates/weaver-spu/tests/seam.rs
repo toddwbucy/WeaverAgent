@@ -74,6 +74,7 @@ fn binding() -> ModelBinding {
     ModelBinding {
         artifact: ArtifactRef("/nonexistent/artifact".into()),
         devices: vec![DeviceOrdinal(0)],
+        adapter: None,
     }
 }
 

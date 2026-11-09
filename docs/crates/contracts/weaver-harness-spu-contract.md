@@ -408,7 +408,11 @@ live in `weaver-organ-channel`, per `weaver-types-PRD` section 2.3.
 `model-binding` is a field of the agent's configuration file, defined at
 `weaver-types-PRD` section 2.1, drawn here because it is what crosses this seam and not
 interpreted here beyond being carried. Neither party redefines it. The operator writes
-it, admin validates it, the harness carries it, and the SPU resolves it.
+it, admin validates it, the harness carries it, and the SPU resolves it. **It may carry
+one `adapter` table** (weaver-spu adapter binding amendment ADP-1, `weaver-types-Spec`
+section 2): the harness carries it opaque, an absent adapter crosses as no `adapter`
+key, and the SPU builds its adapter request from the table and checks it at admission.
+Nothing else in this contract changes with it.
 
 `residual-readout-election` is drawn as of the route act of 2026-08-10, defined
 beside the binding at the same section. The SPU judges at admit what the

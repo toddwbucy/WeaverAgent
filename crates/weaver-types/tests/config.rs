@@ -784,3 +784,125 @@ fn an_unknown_lifecycle_key_refuses() {
     let err = parse(&source).expect_err("refuses");
     assert_eq!(err.kind, ConfigErrorKind::UnknownField);
 }
+
+/// The ADP-1 table, appended after the base binding's table.
+fn adapter_table(scale: &str) -> String {
+    format!(
+        "\n[spu-instruction.decoder.model-binding.adapter]\n\
+         artifact = \"/models/adapter.gguf\"\n\
+         sha256 = \"{}\"\n\
+         base-blake3 = \"{}\"\n\
+         scale = {scale}\n",
+        "a".repeat(64),
+        "b".repeat(64),
+    )
+}
+
+fn adapted(table: &str) -> String {
+    format!("{}{table}", full_config())
+}
+
+/// **The adapter table parses** (ADP-1, ADP-6 "The table parses"): the four
+/// members give `Some`, no table gives `None`, and an integer scale reads as
+/// 1.0, stored as f32.
+///
+/// Perturbation: make the field required (drop its `default`) and the
+/// base-only declaration refuses as a missing field. Watched to fail under it.
+#[test]
+fn the_adapter_table_parses_and_its_absence_is_none() {
+    let base = parse(&full_config()).expect("base-only parses");
+    assert_eq!(base.spu_instruction.decoder.model_binding.adapter, None);
+
+    let config = parse(&adapted(&adapter_table("0.7"))).expect("adapted parses");
+    let adapter = config
+        .spu_instruction
+        .decoder
+        .model_binding
+        .adapter
+        .expect("the table is present");
+    assert_eq!(adapter.artifact.0, "/models/adapter.gguf");
+    assert_eq!(adapter.sha256, "a".repeat(64));
+    assert_eq!(adapter.base_blake3, "b".repeat(64));
+    assert_eq!(adapter.scale, 0.7_f32);
+
+    let integer = parse(&adapted(&adapter_table("1"))).expect("an integer scale parses");
+    let scale = integer
+        .spu_instruction
+        .decoder
+        .model_binding
+        .adapter
+        .unwrap()
+        .scale;
+    assert_eq!(scale, 1.0_f32);
+}
+
+/// **Presence is all or nothing** (ADP-1, ADP-6): a table missing any one
+/// member refuses naming it, a digest of the wrong shape or a non-finite
+/// scale refuses `BadValue` naming the member, and an unknown key refuses.
+///
+/// Perturbation: default any member (`#[serde(default)]` on it) and its
+/// missing case parses; drop `check_adapters` from `parse` and the shape
+/// cases parse. Watched to fail under each.
+#[test]
+fn a_partial_or_malformed_adapter_table_refuses() {
+    for member in ["artifact", "sha256", "base-blake3", "scale"] {
+        let table: String = adapter_table("1.0")
+            .lines()
+            .filter(|line| !line.starts_with(&format!("{member} = ")))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        let err = parse(&adapted(&table)).expect_err(member);
+        assert_eq!(err.kind, ConfigErrorKind::MissingField, "{member}");
+        assert_eq!(err.field, Some(FieldName(member.into())), "{member}");
+    }
+    let bad = |from: &str, to: &str, member: &str| {
+        let table = adapter_table("1.0").replace(from, to);
+        let err = parse(&adapted(&table)).expect_err(member);
+        assert_eq!(err.kind, ConfigErrorKind::BadValue, "{member}: {to}");
+        assert_eq!(
+            err.field,
+            Some(FieldName(format!("model-binding.adapter.{member}"))),
+            "{to}"
+        );
+    };
+    let a64 = "a".repeat(64);
+    let b64 = "b".repeat(64);
+    bad(&a64, &"a".repeat(63), "sha256");
+    bad(&a64, &"A".repeat(64), "sha256");
+    bad(&b64, &"b".repeat(65), "base-blake3");
+    bad(&b64, &"g".repeat(64), "base-blake3");
+    bad("scale = 1.0", "scale = nan", "scale");
+    bad("scale = 1.0", "scale = inf", "scale");
+    bad("scale = 1.0", "scale = 1e39", "scale");
+
+    let unknown = adapter_table("1.0") + "alpha = 16.0\n";
+    let err = parse(&adapted(&unknown)).expect_err("unknown key");
+    assert_eq!(err.kind, ConfigErrorKind::UnknownField);
+    assert_eq!(err.field, Some(FieldName("alpha".into())));
+}
+
+/// **An adapter is the decoder's alone** (ADP-0): a table on the classify
+/// binding refuses naming it rather than parsing into a load that ignores it.
+///
+/// Perturbation: drop the classify arm of `check_adapters` and this parses.
+/// Watched to fail under exactly that removal.
+#[test]
+fn an_adapter_on_the_classify_binding_refuses() {
+    let source = format!(
+        "{}\n[spu-instruction.classify.model-binding]\nartifact = \"/models/scorer\"\ndevices = [0]\n{}",
+        full_config(),
+        adapter_table("1.0").replace("decoder.model-binding", "classify.model-binding")
+    );
+    let err = parse(&source).expect_err("refuses");
+    assert_eq!(err.kind, ConfigErrorKind::BadValue);
+    assert_eq!(
+        err.field,
+        Some(FieldName("classify.model-binding.adapter".into()))
+    );
+    // The control: the same classify binding without the table parses.
+    let control = format!(
+        "{}\n[spu-instruction.classify.model-binding]\nartifact = \"/models/scorer\"\ndevices = [0]\n",
+        full_config()
+    );
+    parse(&control).expect("a classify binding without an adapter parses");
+}

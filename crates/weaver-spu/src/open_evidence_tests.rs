@@ -36,6 +36,7 @@ fn every_registered_family_reports_one_whole_identity_render_and_its_actual_toke
             declaration.template,
             "model",
             "hash",
+            None,
             &prepared,
         )
         .unwrap();
@@ -55,16 +56,16 @@ fn every_registered_family_reports_one_whole_identity_render_and_its_actual_toke
         assert_eq!(
             measurement,
             serde_json::json!({
-                "model":"model","weights_hash":"hash","prefix_token_ids":[7,u32::MAX,3],
+                "model":"model","weights_hash":"hash","adapter":null,
+                "prefix_token_ids":[7,u32::MAX,3],
                 "blocks":[{"label":"identity-prefix","start":0,"end":expected.len()}]
             })
         );
         assert!(opened.request.get().starts_with("{\"rendered\":"));
-        assert!(
-            opened.measurement.get().starts_with(
-                "{\"model\":\"model\",\"weights_hash\":\"hash\",\"prefix_token_ids\":"
-            )
-        );
+        assert!(opened.measurement.get().starts_with(
+            "{\"model\":\"model\",\"weights_hash\":\"hash\",\"adapter\":null,\
+                 \"prefix_token_ids\":"
+        ));
         assert!(expected.len() > expected.chars().count());
     }
 }
@@ -108,6 +109,7 @@ fn evidence_rejects_a_count_that_does_not_describe_the_prefill_vector() {
         "t",
         "m",
         "h",
+        None,
         &prepared,
     );
     assert!(matches!(result, Err(DecodeFault::Engine { .. })));
@@ -130,6 +132,7 @@ fn open_evidence_escapes_all_identities_and_keeps_an_empty_numeric_token_array()
         "template\"\\\n",
         "model\"\\\n",
         "hash\"\\\n",
+        None,
         &prepared,
     )
     .unwrap();
@@ -139,7 +142,67 @@ fn open_evidence_escapes_all_identities_and_keeps_an_empty_numeric_token_array()
     );
     assert_eq!(
         opened.measurement.get(),
-        r#"{"model":"model\"\\\n","weights_hash":"hash\"\\\n","prefix_token_ids":[],"blocks":[{"label":"identity-prefix","start":0,"end":0}]}"#
+        r#"{"model":"model\"\\\n","weights_hash":"hash\"\\\n","adapter":null,"prefix_token_ids":[],"blocks":[{"label":"identity-prefix","start":0,"end":0}]}"#
+    );
+}
+
+/// **The Open measurement states the adapter either way**, per the adapter
+/// binding amendment ADP-3: `null` for a base-only load (the tests above),
+/// and for an adapted one the closed object in the closed shape's place,
+/// between the base identity and the prefix, with the scale written as the
+/// f32 itself. Through a generic JSON value 0.7 would read
+/// `0.699999988079071`.
+///
+/// Perturbation: write the member through `serde_json::json!`, omit it for
+/// a base-only load, or move it after the prefix, and this fails.
+#[test]
+fn the_open_measurement_carries_the_adapter_identity_beside_the_base() {
+    let prepared = super::placement::PreparedIdentity {
+        rendered: String::new(),
+        tokens: vec![],
+    };
+    let facts = || OpenFacts {
+        prefix_tokens: 0,
+        capacity: 0,
+        generation_limit: 0,
+        terminal_tokens: 1,
+    };
+    let adapter = weaver_spu::lora::RecordedAdapter {
+        artifact: "/models/adapter.gguf".into(),
+        sha256: "a".repeat(64),
+        scale: 0.7,
+    };
+    let adapted = open_evidence(
+        SessionId("s".into()),
+        facts(),
+        "t",
+        "m",
+        "h",
+        Some(&adapter),
+        &prepared,
+    )
+    .unwrap();
+    assert_eq!(
+        adapted.measurement.get(),
+        format!(
+            r#"{{"model":"m","weights_hash":"h","adapter":{{"artifact":"/models/adapter.gguf","sha256":"{}","scale":0.7}},"prefix_token_ids":[],"blocks":[{{"label":"identity-prefix","start":0,"end":0}}]}}"#,
+            "a".repeat(64)
+        )
+    );
+    let base = open_evidence(
+        SessionId("s".into()),
+        facts(),
+        "t",
+        "m",
+        "h",
+        None,
+        &prepared,
+    )
+    .unwrap();
+    assert!(
+        base.measurement
+            .get()
+            .starts_with(r#"{"model":"m","weights_hash":"h","adapter":null,"prefix_token_ids":"#)
     );
 }
 
@@ -206,6 +269,7 @@ fn opened_with_encoded_size(wanted: usize) -> weaver_types::TokenAnswer {
                 "family",
                 "model",
                 "hash",
+                None,
                 &prepared,
             )
             .unwrap(),

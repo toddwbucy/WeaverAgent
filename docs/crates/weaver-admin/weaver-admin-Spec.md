@@ -1179,7 +1179,11 @@ declaration's, and whether the named artifact resolves is the SPU's at
 admission under the agent's identity, per `weaver-spu-Spec` section 3: a look
 from here runs as root and cannot see a directory the agent uid is denied, so
 `ArtifactUnresolvable` is never this crate's refusal and the walk raises it at
-no site. The checks are a list a reviewer reads against the charter's boundary,
+no site. **A declared adapter's artifact is checked the same way** (weaver-spu
+adapter binding amendment ADP-1): an empty member refuses `ConfigInvalid` naming
+`spu-instruction.decoder.model-binding.adapter.artifact`, and this crate neither
+resolves, opens nor hashes the adapter, whose digests are the declaration's claims
+and the SPU's to check at admission. The checks are a list a reviewer reads against the charter's boundary,
 and review is the instrument that holds the set, stated rather than left to look
 like an omission. **One member of the set has a test and has had one since the
 crate landed**, as of 2026-09-07 per issue #481: a home that does not exist refuses

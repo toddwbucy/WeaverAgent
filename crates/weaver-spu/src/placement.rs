@@ -97,6 +97,7 @@ impl<'r> OpenedSession<'r> {
             resident.declaration.template,
             &resident.artifact.display().to_string(),
             &resident.weights_hash.0,
+            resident.adapter(),
             &prepared,
         )
         .map_err(PlacementFailure::Decode)?;
@@ -187,6 +188,7 @@ pub(super) fn open_evidence(
     template: &str,
     model: &str,
     weights_hash: &str,
+    adapter: Option<&weaver_spu::lora::RecordedAdapter>,
     prepared: &PreparedIdentity,
 ) -> Result<Opened, DecodeFault> {
     if facts.prefix_tokens != count(prepared.tokens.len())? {
@@ -210,6 +212,9 @@ pub(super) fn open_evidence(
     serde_json::to_writer(&mut measurement, model).map_err(encoding)?;
     measurement.extend_from_slice(b",\"weights_hash\":");
     serde_json::to_writer(&mut measurement, weights_hash).map_err(encoding)?;
+    // ADP-3: the adapter identity beside the base's, always present.
+    measurement.extend_from_slice(b",\"adapter\":");
+    weaver_spu::lora::RecordedAdapter::write_member(adapter, &mut measurement).map_err(encoding)?;
     measurement.extend_from_slice(b",\"prefix_token_ids\":[");
     for (index, token) in prepared.tokens.iter().enumerate() {
         if index != 0 {

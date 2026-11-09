@@ -333,6 +333,7 @@ pub(super) fn classifier_fixture() -> (s::Ste100Bootstrap, s::SchemeDeclaration,
         model_binding: ModelBinding {
             artifact: ArtifactRef("/synthetic/context-manifest.json".into()),
             devices: vec![DeviceOrdinal(0)],
+            adapter: None,
         },
         model_artifact_sha256: seed.checker_artifact_sha256,
         instances: 1,

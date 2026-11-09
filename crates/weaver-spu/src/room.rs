@@ -215,7 +215,9 @@ fn place(name: &str, layers: u32) -> Place {
     }
 }
 
-/// Where the engine places a named tensor under a division.
+/// Where the engine places a named tensor under a division. Read only by
+/// the placement observer, which a build without `gguf` does not carry.
+#[cfg(feature = "gguf")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Placed {
     /// In host memory: an input-class tensor.
@@ -229,6 +231,7 @@ pub(crate) enum Placed {
 /// The binding index the engine places tensor `name` on under `division`:
 /// a layer's tensor on its layer's device, an output-class tensor on the
 /// last device.
+#[cfg(feature = "gguf")]
 pub(crate) fn placed(name: &str, division: &Division) -> Placed {
     match place(name, division.layers()) {
         Place::Host => Placed::Host,

@@ -105,6 +105,23 @@ pub(super) fn member(
     }
 }
 
+/// **The binding is carried whole**, per the adapter binding amendment ADP-1:
+/// a copy holding the artifact and the devices alone would drop a declared
+/// adapter without a word, and the load facts would say less than was
+/// declared.
+pub(super) fn model_binding(value: &weaver_types::ModelBinding) -> trace::ModelBinding {
+    trace::ModelBinding {
+        artifact: value.artifact.0.clone(),
+        devices: value.devices.iter().map(|device| device.0).collect(),
+        adapter: value.adapter.as_ref().map(|adapter| trace::AdapterBinding {
+            artifact: adapter.artifact.0.clone(),
+            sha256: adapter.sha256.clone(),
+            base_blake3: adapter.base_blake3.clone(),
+            scale: adapter.scale,
+        }),
+    }
+}
+
 pub(super) fn instruction(value: &shared::Ste100Instruction) -> trace::Ste100Instruction {
     let shared::Ste100Instruction {
         model_binding,
@@ -116,14 +133,7 @@ pub(super) fn instruction(value: &shared::Ste100Instruction) -> trace::Ste100Ins
         decision_wait,
     } = value;
     trace::Ste100Instruction {
-        model_binding: trace::ModelBinding {
-            artifact: model_binding.artifact.0.clone(),
-            devices: model_binding
-                .devices
-                .iter()
-                .map(|device| device.0)
-                .collect(),
-        },
+        model_binding: self::model_binding(model_binding),
         model_artifact_sha256: model_artifact_sha256.as_str().into(),
         instances: *instances,
         max_wire_bytes: number(*max_wire_bytes),

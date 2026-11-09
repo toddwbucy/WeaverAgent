@@ -785,6 +785,24 @@ from: weaver-spu
 to: spu-artifact-refusal-names-path-and-identity
 ```
 
+**A declared adapter is admitted on the fixture's path**, per the adapter binding
+amendment ADP-2. Admit builds the LoRA amendment's adapter request from the binding's
+`adapter` table, member for member, and admits it on the one path LORA-1 has the
+fixture share, so LORA-2 to LORA-5 hold unchanged: custody and ownership, the pre-load
+judgment, the declared `sha256` against the pinned file (`ArtifactUnreadable` at
+`adapter-hash`) and the declared `base-blake3` against the base's BLAKE3
+(`DeviceCannotAdmit` at `adapter-base-identity`) before any load, the load order, the
+scale attachment and the refusal mapping. A base-only binding admits with no request.
+An adapter refusal's account is one typed line beside the artifact's: `adapter`, the
+adapter's path as declared, the LORA-2 stage and its detail, and the uid and gid.
+**The placement observer is installed at process start**, before any backend call,
+whether or not the binding carries an adapter, so an adapted load does not refuse at
+`adapter-observer`. It keeps records only inside a window that opens at the load and
+closes once the first session's context is made, a failed load closing it too, and
+forwards every engine line, kept or not, to standard error, as the engine's default
+logger writes it. A read borrows the kept records. The fixture's install is the same
+function, keeping every record for its isolated process.
+
 **The devices are the binding's and this crate selects none.** The assignment
 arrives inside the model binding, per `weaver-types-Spec` section 2, ordered,
 with the order the shard order. There is no device survey, no ranking, and no
@@ -2105,7 +2123,10 @@ resident length, per issue #461.
 
 **What travels with a generation.** The token identifiers in and out, the two signal
 vectors, the timings the charter's row names, the model identity and its weights hash
-from section 3, the prompt-block partition, the residual reductions when elected, the
+from section 3, the adapter identity beside them (`adapter`: `null` for a base-only load,
+or `artifact`, `sha256` and `scale` of the resident adapter, the scale written as the f32
+itself and never through a generic JSON value, per the adapter binding amendment ADP-3,
+which puts the same member in the Open measurement), the prompt-block partition, the residual reductions when elected, the
 session's resident token count and its capacity as the generation closed - the
 generation's own typed members beside the two spliced boxes, never measurement members,
 per issue #221's arc and `weaver-types-Spec` section 4.4 - and beside the measurement
@@ -3208,6 +3229,25 @@ than a code fact.
   to tunable without changing the binary's declaration.
 - Readout elected but untappable refuses at admit, confirmed by watching the
   load succeed and the first turn fail when the check moves off the admit path.
+- The adapter binding amendment's rows (ADP-6) that this crate holds, each watched
+  under the perturbation its row names. One path:
+  `the_declared_request_is_the_fixtures_request` (`lora_proof.rs`, no device) and
+  `the_declared_table_becomes_the_request_member_for_member`. The declaration is the
+  caller: `production_admission_carries_the_declared_adapter_into_lora_two`. The
+  declaration's claims are checked: `the_declared_claims_are_checked_against_the_pinned_file`
+  and `the_adapter_refusal_line_names_the_artifact_and_the_stage`. The capture is
+  bounded: `the_serving_capture_keeps_lines_only_inside_the_window` for the window's
+  state machine, and on a device
+  `the_serving_window_opens_at_the_load_and_closes_at_the_first_session_and_the_release`
+  for its three call sites (the load, the first session's context, the release). The
+  engine log
+  keeps flowing: `the_serving_capture_forwards_every_line_to_stderr`. The identity is
+  recorded: `the_open_measurement_carries_the_adapter_identity_beside_the_base` and
+  `every_generation_measurement_leads_with_the_typed_adapter`. The serving binary
+  observes, end to end on a device: `the_serving_binary_admits_a_declared_adapter_and_records_it`,
+  an explicit accelerator instrument in `lora_proof.rs` that also reads the adapter
+  in the Open and generation measurements and the engine's lines on the binary's
+  standard error.
 
 **The kernels cross verbatim and their tests cross with them.** The CUDA
 kernel set and its build script are carried unchanged, per the operator's

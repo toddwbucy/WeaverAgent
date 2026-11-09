@@ -2414,6 +2414,7 @@ fn held_classifier_admission(
             model_binding: weaver_types::ModelBinding {
                 artifact: weaver_types::ArtifactRef("/synthetic/admission-manifest.json".into()),
                 devices: vec![weaver_types::DeviceOrdinal(0)],
+                adapter: None,
             },
             model_artifact_sha256: seed.checker_artifact_sha256,
             instances: 1,

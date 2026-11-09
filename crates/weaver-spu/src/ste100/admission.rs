@@ -853,6 +853,7 @@ mod tests {
                     model_binding: ModelBinding {
                         artifact: ArtifactRef("/synthetic/supplied-bytes-only.json".into()),
                         devices: vec![DeviceOrdinal(0)],
+                        adapter: None,
                     },
                     model_artifact_sha256: sha256(&manifest),
                     instances: 2,

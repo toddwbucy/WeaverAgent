@@ -1,7 +1,10 @@
-//! Process-lifetime fixture capture and placement qualification, per LORA-3.
+//! The placement observer, per LORA-3 as the adapter binding amendment
+//! ADP-2 completes it: one capture of the engine's log, installed by the
+//! serving SPU at process start and by the fixture in its isolated process.
 
 use std::collections::BTreeMap;
 use std::ffi::{CStr, c_char, c_void};
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -13,40 +16,130 @@ pub struct Record {
     pub bytes: Vec<u8>,
 }
 
-static RECORDS: OnceLock<Mutex<Vec<Record>>> = OnceLock::new();
+/// Which lines the capture keeps. It forwards every line either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retention {
+    /// Every line for the life of the process: the fixture's, whose driver
+    /// judges each session's cache records against the load's.
+    Whole,
+    /// Only the lines inside the placement window, per ADP-2: the serving
+    /// SPU's, whose one residency lives as long as the process.
+    Window,
+}
+
+/// What the capture holds. The window opens at load and closes once the
+/// placement judgment ends, after the first session's context is made, and
+/// a closed window keeps nothing.
+#[derive(Debug)]
+pub(crate) struct Capture {
+    retention: Retention,
+    open: bool,
+    records: Vec<Record>,
+}
+
+impl Capture {
+    pub(crate) fn new(retention: Retention) -> Self {
+        Capture {
+            retention,
+            open: false,
+            records: Vec::new(),
+        }
+    }
+
+    /// Keep a line if the retention keeps it.
+    pub(crate) fn offer(&mut self, record: Record) {
+        if self.retention == Retention::Whole || self.open {
+            self.records.push(record);
+        }
+    }
+
+    /// The load begins. A windowed capture keeps from here.
+    pub(crate) fn open_window(&mut self) {
+        if self.retention == Retention::Window {
+            self.records.clear();
+            self.open = true;
+        }
+    }
+
+    /// The placement judgment has ended. A windowed capture drops what it
+    /// kept and keeps nothing more.
+    pub(crate) fn close_window(&mut self) {
+        if self.retention == Retention::Window {
+            self.open = false;
+            self.records = Vec::new();
+        }
+    }
+
+    /// The kept lines, borrowed: a read makes no copy.
+    pub(crate) fn records(&self) -> &[Record] {
+        &self.records
+    }
+}
+
+static CAPTURE: OnceLock<Mutex<Capture>> = OnceLock::new();
 static CAPTURE_FAILED: AtomicBool = AtomicBool::new(false);
 
-/// Install once, before any admission, in an isolated fixture process.
+/// Install the capture once, before any backend call. The serving SPU calls
+/// this at process start with [`Retention::Window`], whether or not its
+/// binding carries an adapter, and the fixture with [`Retention::Whole`].
 /// The static allocation survives contexts, models and in-flight callbacks.
-pub(super) fn install() -> Result<(), String> {
+pub fn install(retention: Retention) -> Result<(), String> {
     if crate::decoder::gguf::backend_started() {
-        return Err("fixture observation must precede backend admission".into());
+        return Err("the placement observer must precede backend admission".into());
     }
-    RECORDS
-        .set(Mutex::new(Vec::new()))
-        .map_err(|_| "fixture capture already installed")?;
+    CAPTURE
+        .set(Mutex::new(Capture::new(retention)))
+        .map_err(|_| "the placement observer is already installed")?;
     // LORA-3: no callback replacement or teardown is permitted in this process.
     unsafe { llama_cpp_sys_2::llama_log_set(Some(capture), std::ptr::null_mut()) };
     Ok(())
 }
 
+/// Open the placement window, if a capture is installed.
+pub(crate) fn open_window() {
+    if let Some(capture) = CAPTURE.get() {
+        capture
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .open_window();
+    }
+}
+
+/// Close the placement window, if a capture is installed.
+pub(crate) fn close_window() {
+    if let Some(capture) = CAPTURE.get() {
+        capture
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .close_window();
+    }
+}
+
+/// **Every line reaches the SPU's standard error**, kept or not, verbatim
+/// and unfiltered, as the engine's default logger writes it
+/// (`llama_log_callback_default` puts every level to stderr), so the
+/// worker's log loses nothing to the capture.
 unsafe extern "C" fn capture(level: u32, text: *const c_char, _data: *mut c_void) {
     // No backend calls or unwinding across the C boundary, per LORA-3.
     let result = std::panic::catch_unwind(|| {
         if text.is_null() {
             return;
         }
-        let Some(records) = RECORDS.get() else {
+        // The backend owns a NUL-terminated string for this callback's duration.
+        let bytes = unsafe { CStr::from_ptr(text) }.to_bytes();
+        let mut stderr = std::io::stderr().lock();
+        let _ = stderr.write_all(bytes);
+        let _ = stderr.flush();
+        drop(stderr);
+        let Some(capture) = CAPTURE.get() else {
             return;
         };
-        // The backend owns a NUL-terminated string for this callback's duration.
-        let bytes = unsafe { CStr::from_ptr(text) }.to_bytes().to_vec();
-        records
+        capture
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(Record {
+            .offer(Record {
                 level: level as i32,
-                bytes,
+                bytes: bytes.to_vec(),
             });
     });
     if result.is_err() {
@@ -54,17 +147,23 @@ unsafe extern "C" fn capture(level: u32, text: *const c_char, _data: *mut c_void
     }
 }
 
-pub(crate) fn records() -> Result<Vec<Record>, String> {
+/// Read the kept lines in place. The lock is held for `read`, so `read`
+/// makes no backend call.
+pub(crate) fn with_records<T>(read: impl FnOnce(&[Record]) -> T) -> Result<T, String> {
     if CAPTURE_FAILED.load(Ordering::SeqCst) {
-        return Err("fixture callback lost a record".into());
+        return Err("the placement observer lost a record".into());
     }
-    let records = RECORDS
-        .get()
-        .ok_or("fixture placement observer is absent")?;
-    Ok(records
+    let capture = CAPTURE.get().ok_or("the placement observer is absent")?;
+    let capture = capture
         .lock()
-        .map_err(|_| "fixture capture failed")?
-        .clone())
+        .map_err(|_| "the placement observer's capture failed")?;
+    Ok(read(capture.records()))
+}
+
+/// A copy of the kept lines, for the fixture's driver, which reads them
+/// between its sessions.
+pub(crate) fn records() -> Result<Vec<Record>, String> {
+    with_records(<[Record]>::to_vec)
 }
 
 /// **Each target's buffer is matched to the device the division gives its

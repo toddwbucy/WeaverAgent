@@ -67,6 +67,7 @@ fn enter() -> LifecycleDirective {
                     model_binding: weaver_types::ModelBinding {
                         artifact: weaver_types::ArtifactRef("must-not-open".into()),
                         devices: vec![],
+                        adapter: None,
                     },
                     residual_readout_election: false,
                     field_election: None,

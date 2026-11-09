@@ -89,6 +89,7 @@ pub(super) fn source(
                 .into(),
         ),
         devices: vec![weaver_types::DeviceOrdinal(0)],
+        adapter: None,
     };
     instruction.decoder.tunable_values = [
         ("max-tokens-per-turn".into(), 16.0),

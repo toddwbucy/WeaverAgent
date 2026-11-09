@@ -17,7 +17,7 @@ half. The operator ruled on 2026-11-08 that the adapter is the point: a model
 served without its adapter is only the first step to one served with it.
 
 Amend SPU Spec sections 3 and 6, `weaver-types-Spec` section 2,
-`weaver-admin-Spec` section 7, the `weaver-harness-spu` contract (the
+`weaver-admin-Spec` section 4, the `weaver-harness-spu` contract (the
 `model-binding` draw), `weaver-trace`'s serving payloads, the harness replay
 and Open evidence, the diagnostic identity carrier, the
 `weaver-analysis-state` contract (this repository's copy, the authoritative
@@ -28,7 +28,7 @@ declaration carries no adapter and every production load is base-only.
 
 | Clause | Destination | Addition |
 | --- | --- | --- |
-| ADP-1 | `weaver-types-Spec` 2, `weaver-admin-Spec` 7, the harness-spu contract, `weaver-trace` serving payloads | The optional `adapter` table in the model binding, carried wherever the binding is |
+| ADP-1 | `weaver-types-Spec` 2, `weaver-admin-Spec` 4, the harness-spu contract, `weaver-trace` serving payloads | The optional `adapter` table in the model binding, carried wherever the binding is |
 | ADP-2 | SPU Spec 3 | Admission builds the adapter request from the declaration, on the fixture's path, with the observer installed for serving |
 | ADP-3 | SPU Spec 6, the harness replay and Open evidence, diagnostic, the analysis-state contract | The adapter identity in every record that carries the base identity |
 | ADP-4 | `weaver-harness` dev_loop (`Loops/`) | The loop's compiled prompt yields to a seated one |
@@ -88,7 +88,8 @@ The table is closed: an unknown key is a parse error, as everywhere in the
 declaration. A present table with any member missing is a parse error, never a
 base-only fallback (LORA-1: do not replace presence with absence after an
 error). The `ModelBinding` type stays one type, with `adapter:
-Option<AdapterBinding>`. The floor parse in `weaver-types` is the one
+Option<Box<AdapterBinding>>`, boxed so the binding keeps its size inside the
+organ channel's payloads. The floor parse in `weaver-types` is the one
 authority on the table's shape, and every other party reads the parsed type.
 
 **Absence is omission, not `null`.** Wherever the binding is serialized (the
@@ -97,12 +98,15 @@ A reader that meets `"adapter": null` refuses, since the record (ADP-3) uses
 `null` for a stated absence and the binding does not.
 
 **The binding is carried whole.** `weaver-trace`'s serving copy of the binding
-(`serving/payloads.rs::ModelBinding`, filled at `flow/mirror.rs`) today holds
-`artifact` and `devices` and would drop an adapter silently. It carries the
-adapter table, so the load facts in the record say what was declared.
+(`serving/payloads.rs::ModelBinding`, filled at `flow/mirror.rs`) held only
+`artifact` and `devices` and would drop an adapter silently, so it carries the
+adapter table. Its one user is the STE100 instruction's binding, which refuses
+an adapter (ADP-0 serves decode alone), so no load fact carries the declared
+decoder adapter. The record states the loaded adapter in the measurements
+(ADP-3).
 
 Admin checks the adapter's `artifact` for presence the way it checks the
-base's (`weaver-admin-Spec` section 7): an empty member refuses
+base's (`weaver-admin-Spec` section 4): an empty member refuses
 `ConfigInvalid` naming
 `spu-instruction.decoder.model-binding.adapter.artifact`, and admin resolves
 neither path, because resolution runs under the agent's identity at admission.
@@ -152,8 +156,8 @@ stated rather than left to be found:
   level, so `worker.log` loses nothing to the capture.
 - **The fixture keeps its own install** for the isolated test process, as
   LORA-7 says. The two installs are one function, and its accounts name the
-  observer, not the fixture, since they now reach `admin.log` from a serving
-  SPU.
+  observer, not the fixture, since they now reach `worker.log` from a
+  serving SPU.
 
 If the placement child lands the serving install first, this paragraph
 becomes a citation of it. The device-pair amendment's PAIR-5 sentence that
@@ -164,8 +168,11 @@ goes with whichever act lands second.
 
 The LORA-2 sentence "the ordinary production caller cannot exercise an adapter
 request under this amendment" is retired. The caller is the declaration. The
-admit account line names the adapter stage where an adapter fails, so an
-operator reading `admin.log` sees which artifact and which check refused.
+admit account line names the adapter stage where an adapter fails. It is
+written on the SPU's stderr, which the worker tees into `worker.log`, so an
+operator reading `worker.log` sees which artifact and which check refused, and
+where the SPU then dies the death's account carries the line as `last_word`.
+`admin.log` is admin's supervision log and never reads the SPU's stderr.
 
 Room is judged with the adapter's tensors in the need, per LORA-2 and, on a
 device pair, per the device-pair amendment PAIR-4, which already charges the
@@ -303,9 +310,12 @@ characters, and it refuses a scale that is not a finite decimal, because TOML
 would otherwise write `nan` or `inf` and the parse would refuse later with a
 worse account. The adapter file takes the same custody as the base (owned
 outside the agent uid, readable by it, not writable by it), and the runbook
-says so. `verify-load.sh` reads the adapter member of the Open measurement and
-prints it beside the base identity. `HowToDeployANewAgent.md` gains the
-adapted agent's steps.
+says so. `verify-load.sh` prints the declared base and adapter, labelled
+declared, and prints the adapter member of the Open measurement wherever the
+record carries one, saying when none does. The live record does not carry the
+Open measurement today: whether that evidence reaches the record is the
+operator's ruling (the tuple survey's Flag C), so the script drives no turn to
+find it. `HowToDeployANewAgent.md` gains the adapted agent's steps.
 
 ## 6. Instruments
 
@@ -360,6 +370,9 @@ the declaration the only difference, read from the trace.
   act and a gate-world contract change, cross-repository, and the operator's
   ruling.
 - **The trace floor** (#473 item 1).
-- **A save point's record of the adapter.** Whether a save point names the
-  adapter it was taken under, so a restore under a different declaration can
-  refuse, is a state-management question.
+- **A save point's record of the adapter.** The published bound declaration
+  carries the adapter table (the save-point renderer writes it member for
+  member), so a restore re-admits the adapter declared at publication. What
+  stays open is a restore under a current declaration whose adapter differs
+  from the published one: whether it refuses is a state-management
+  question.

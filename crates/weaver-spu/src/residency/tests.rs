@@ -116,6 +116,7 @@ fn a_second_admit_refuses_on_the_ordering() {
     let binding = ModelBinding {
         artifact: ArtifactRef("/nonexistent/artifact".into()),
         devices: vec![DeviceOrdinal(0)],
+        adapter: None,
     };
     let first = residency
         .admit(&binding, Headroom(0), 4096, ReadoutElection(false), false)
@@ -225,6 +226,7 @@ fn a_duplicate_ordinal_refuses_on_the_admit_path() {
     let binding = ModelBinding {
         artifact: ArtifactRef(fixture.path.to_string_lossy().into_owned()),
         devices: vec![DeviceOrdinal(0), DeviceOrdinal(0)],
+        adapter: None,
     };
     assert_eq!(
         residency
@@ -305,6 +307,7 @@ fn bound(fixture: &Fixture, devices: &[u32]) -> ModelBinding {
     ModelBinding {
         artifact: ArtifactRef(fixture.path.to_string_lossy().into_owned()),
         devices: devices.iter().copied().map(DeviceOrdinal).collect(),
+        adapter: None,
     }
 }
 
@@ -479,4 +482,59 @@ fn a_layout_fault_line_names_the_shard_and_the_detail() {
         }})
     );
     assert!(!line.contains('\n'));
+}
+
+/// **The declaration is the caller**, per the adapter binding amendment
+/// ADP-2: production `admit` builds the adapter request from the binding's
+/// declared table and admits it on LORA-1's one path, so a declared adapter
+/// meets LORA-2's checks before any device question. An absent adapter file
+/// refuses `ArtifactUnresolvable` at `adapter-open` naming the declared
+/// path, and a file the agent's own uid owns refuses at `adapter-custody`.
+/// Neither reaches the mask, which the hidden-card environment would refuse.
+///
+/// Perturbation: have `admit` pass no request (the binding's table ignored),
+/// and the admission runs on to the mask and refuses there, so this fails.
+#[test]
+fn production_admission_carries_the_declared_adapter_into_lora_two() {
+    use crate::lora::{Failure, FailureKind};
+    let fixture = dense_pair_artifact("declared-adapter");
+    let adapted = |artifact: &std::path::Path| {
+        let mut binding = bound(&fixture, &[0]);
+        binding.adapter = Some(Box::new(weaver_types::AdapterBinding {
+            artifact: ArtifactRef(artifact.to_string_lossy().into_owned()),
+            sha256: "a".repeat(64),
+            base_blake3: "b".repeat(64),
+            scale: 1.0,
+        }));
+        binding
+    };
+    let admit = |binding: &ModelBinding| {
+        Residency::new()
+            .admit(binding, Headroom(0), 4096, ReadoutElection(false), false)
+            .err()
+    };
+
+    let absent = fixture.dir.join("absent-adapter.gguf");
+    match admit(&adapted(&absent)) {
+        Some(AdmitRefusal::Adapter(Failure {
+            kind: FailureKind::Missing,
+            stage: "adapter-open",
+            path,
+            ..
+        })) => assert_eq!(path, absent),
+        other => panic!("an absent declared adapter refuses at adapter-open, got {other:?}"),
+    }
+
+    let owned = fixture.dir.join("agent-owned-adapter.gguf");
+    std::fs::write(&owned, b"not an adapter").expect("a fixture file");
+    match admit(&adapted(&owned)) {
+        Some(AdmitRefusal::Adapter(failure)) => {
+            assert_eq!(failure.stage, "adapter-custody");
+            assert_eq!(
+                LifecycleRefusal::from(AdmitRefusal::Adapter(failure)),
+                LifecycleRefusal::ArtifactUnreadable
+            );
+        }
+        other => panic!("an agent-owned declared adapter refuses at custody, got {other:?}"),
+    }
 }
