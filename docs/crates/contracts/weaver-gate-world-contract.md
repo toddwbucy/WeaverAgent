@@ -120,8 +120,8 @@ admitted from the operator's uid alone**, the uid the box's root names as the op
 and the enter carries, judged by the harness on the dialer's peer identity, which the
 gate relays as it relays every line, parsing nothing; from any other dialer, the
 connector's service user among them, or with any other `role` value, it is a refused
-turn by section 3's path, the refusal naming the role, quoted to at most 256 octets
-and marked where cut. The seeding is the last step of
+turn by section 3's path, the refusal naming the role in its JSON rendering, quoted to
+at most 256 octets and marked where cut. The seeding is the last step of
 creating an agent, run by the operator after the load with the draft
 `system-prompt.md` beside the declaration, and the first save point after it is the
 agent's starting state. A seeding line is bounded as every line is, 49,041 octets

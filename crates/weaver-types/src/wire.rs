@@ -925,8 +925,10 @@ pub const ECHO_BOUND: usize = 256;
 
 /// Client content as a refusal reason quotes it: whole when it is at most
 /// [`ECHO_BOUND`] octets, and otherwise its longest prefix within the bound
-/// that ends on a character boundary, followed by a marker naming the full
-/// length, so a reader knows the quote was cut and by how much.
+/// that ends on a character boundary, followed by a marker naming the
+/// quoted text's full length, so a reader knows the quote was cut and by how
+/// much. The cut knows characters and not JSON, so a quote of a rendering
+/// may end inside an escape; the marker says it was cut.
 pub fn echoed(content: &str) -> std::borrow::Cow<'_, str> {
     if content.len() <= ECHO_BOUND {
         return std::borrow::Cow::Borrowed(content);

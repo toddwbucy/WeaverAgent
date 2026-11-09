@@ -2536,8 +2536,9 @@ peer uid the gate read at accept and carries inward per
 other uid, the connector's service user among them, or whose `role` is any other
 value, is a refused turn, the response frame's `refused` kind naming the role, and the
 channel stands. **A refusal reason quotes at most 256 octets of client content**
-(`ECHO_BOUND`, `weaver-types-Spec` section 4, #504): the role as written, cut on a
-character boundary and marked with its full length where it runs longer. The close
+(`ECHO_BOUND`, `weaver-types-Spec` section 4, #504): the role's JSON rendering as the
+harness decoded it, cut on a character boundary where it runs longer and marked with the
+rendering's full length. The close
 returns through the same 64 KiB organ envelope the line arrived in, base64-encoded, and
 a reason that quoted a line of the gate's bound whole would render past it, failing the
 send and the run with it rather than answering. An admitted seeding line is one turn in the residency that seeds: this

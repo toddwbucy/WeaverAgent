@@ -1249,10 +1249,11 @@ the line wrote, `null` included, for the harness to refuse every value but the s
 `system`, naming it. The parse is `TurnRequest::parse`, which refuses a line that does
 not open an object before the typed decode, since serde reads a struct from an array
 by position and `["x","system"]` would otherwise read as the seeding line. Its refusal
-quotes serde's error text, which names an unknown member whole, through `echoed`: client
-content in a refusal reason is quoted whole up to `ECHO_BOUND`, 256 octets, and past it
-cut on a character boundary with a marker naming the full length, so a refusal's close
-always fits the envelope it returns in (#504). The encoding is RFC 4648 section 4's standard
+quotes serde's error text, which names an unknown member whole, through `echoed`: text
+carrying client content is quoted whole up to `ECHO_BOUND`, 256 octets, and past it cut
+on a character boundary with a marker naming the quoted text's full length (serde's whole
+message here, whose tail of column and expected members a long name pushes past the cut),
+so a refusal's close always fits the envelope it returns in (#504). The encoding is RFC 4648 section 4's standard
 alphabet, padded, with no line breaks and no interior whitespace, and the
 decode refuses input the encode would not produce, so one octet sequence has
 exactly one carried form. The encoding's implementation rides with the type,

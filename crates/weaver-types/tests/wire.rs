@@ -358,15 +358,12 @@ fn a_refusal_reason_quotes_client_content_within_the_echo_bound() {
     );
     let line = format!(r#"{{"text":"","{}":0}}"#, "k".repeat(40_000));
     let reason = weaver_types::TurnRequest::parse(line.as_bytes()).expect_err("unknown member");
-    assert!(
-        reason.len() < 2 * ECHO_BOUND,
-        "the reason stays near the bound: {} octets",
-        reason.len()
-    );
-    assert!(
-        reason.contains("... [cut at 256 of "),
-        "the cut is marked: {reason}"
-    );
+    let (_, quote) = reason
+        .split_once("each once: ")
+        .expect("the parse's refusal text leads the quote");
+    let (quoted, marker) = quote.split_once("... [cut at ").expect("the cut is marked");
+    assert!(quoted.len() <= ECHO_BOUND, "{} octets quoted", quoted.len());
+    assert!(marker.starts_with("256 of "), "{marker}");
 }
 
 /// **The dialer rides an inbound frame and is absent from a response**, per

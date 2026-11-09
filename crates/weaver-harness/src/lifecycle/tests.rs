@@ -9440,8 +9440,11 @@ fn diagnostic_open_uses_the_same_evidence_corpus_and_rejects_wrong_echo() {
     }
 }
 
-/// **A refusal for any line the inbound envelope could carry fits the
-/// return leg** (#504). The gate admits a line up to its bound, the organ
+/// **A parse refusal for any line the inbound envelope could carry fits the
+/// return leg** (#504). The parse's two refusals are the frame path's only
+/// reasons that quote client content: the others are fixed text, the
+/// seeding bound's numbers and the identity door's static names, swept in
+/// #504. The gate admits a line up to its bound, the organ
 /// envelope's exact capacity (`weaver-gate-Spec` section 4), and a refused
 /// line's close travels back through the same 64 KiB envelope
 /// base64-encoded. With the reason quoting client content within
@@ -9455,7 +9458,7 @@ fn diagnostic_open_uses_the_same_evidence_corpus_and_rejects_wrong_echo() {
 /// Perturbation: return the content whole from `weaver_types::echoed` and
 /// every case renders past the envelope.
 #[test]
-fn a_refusal_for_any_carried_line_fits_the_return_envelope() {
+fn a_parse_refusal_for_any_carried_line_fits_the_return_envelope() {
     use weaver_types::{
         ExchangeId, MAX_ENVELOPE_BYTES, Opener, OrganEnvelope, Payload, Position, TurnFrame,
     };
