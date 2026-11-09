@@ -758,7 +758,7 @@ absent adapter serializes as no `adapter` key, and a reader refuses `"adapter": 
 in a binding, the record's convention (ADP-3) being the other one. The adapter serves
 decode only, so an adapter on the classify binding refuses `BadValue` naming
 `classify.model-binding.adapter`. The digests are the operator's claims, judged here
-for shape alone; the SPU checks them at admission (ADP-2). The table is boxed so a
+for shape alone. The SPU checks them at admission (ADP-2). The table is boxed so a
 binding keeps its size inside the organ channel's payload enums, and the box is not
 visible on the wire.
 
