@@ -363,6 +363,10 @@ INSTALL_SCALARS = ("commit", "toolchain", "features", "engine", "engine-source",
                    "cccl", "gpus")
 
 
+# What install-tuple.sh writes for a fact the box cannot answer.
+UNKNOWN = "unknown"
+
+
 class InstallTupleRefused(Exception):
     """An install tuple this reader cannot take as written."""
 
@@ -373,8 +377,11 @@ def read_install_tuple(path):
     `gpu.<n>` order.
 
     One fact per line, `key = value`, split on the first " = ", no value
-    empty, every scalar key present, no key twice, `gpu.<n>` numbered from 0
-    without a gap and as many as `gpus` says. Anything else is refused.
+    empty, every scalar key present, no key twice, each member and library
+    digest 64 hex digits or `unknown` (install-tuple.sh writes `unknown` for
+    any fact the box cannot answer, a file it could not hash among them),
+    `gpu.<n>` numbered from 0 without a gap and as many as `gpus` says.
+    Anything else is refused.
     """
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     with os.fdopen(fd, "rb") as handle:
@@ -405,8 +412,8 @@ def read_install_tuple(path):
     if missing:
         raise InstallTupleRefused(f"no {', '.join(missing)}")
     for name, digest in list(members.items()) + list(libraries.items()):
-        if not HEX64.fullmatch(digest):
-            raise InstallTupleRefused(f"{name}'s digest is not 64 hex digits")
+        if digest != UNKNOWN and not HEX64.fullmatch(digest):
+            raise InstallTupleRefused(f"{name}'s digest is not 64 hex digits or unknown")
     order = sorted(gpus, key=lambda n: int(n) if n.isdigit() else -1)
     if order != [str(n) for n in range(len(gpus))]:
         raise InstallTupleRefused("gpu.<n> is not numbered 0 to n-1")
@@ -610,7 +617,10 @@ def binding_rows(declaration_sha256, load_event, install, stack_library_path):
     stack = load_event.get("stack") if isinstance(load_event.get("stack"), dict) else {}
     members = install["members"]
     for name in sorted(set(stack) | set(members)):
-        if name in stack and name in members:
+        if name in stack and members.get(name) == UNKNOWN:
+            lines.append(row("bind", f"member {name}", stack[name], "absent",
+                             "not bound: the install tuple could not hash it"))
+        elif name in stack and name in members:
             if stack[name] == members[name]:
                 lines.append(row("bind", f"member {name}", members[name], "recorded",
                                  "the load event's stack equals the install tuple's member"))
@@ -646,7 +656,10 @@ def binding_rows(declaration_sha256, load_event, install, stack_library_path):
             lines.append(row("bind", f"library {name}", "-", "FAULT",
                              f"the install tuple names it and it does not read: {error}"))
             continue
-        if digest == libraries[name]:
+        if libraries[name] == UNKNOWN:
+            lines.append(row("bind", f"library {name}", digest, "absent",
+                             "not bound: the install tuple could not hash it"))
+        elif digest == libraries[name]:
             lines.append(row("bind", f"library {name}", digest, "recorded",
                              f"the file in {path} equals the install tuple's digest"))
         else:

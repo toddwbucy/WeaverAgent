@@ -364,11 +364,14 @@ Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
 - **The box side and the binding.** The box side is the stack record's `install-tuple`,
   written by each install. Its own sha256 is printed as the box's identity, the one value
   a report cites for it. The record is then bound to the box:
-  - the declaration's sha256 against the load event's;
-  - the load event's `stack` digests against the install tuple's members, by name, with
-    a name only one side carries printed as not bound;
-  - each engine library in the load event's library path against the install tuple's
+  - The declaration's sha256 against the load event's.
+  - The load event's `stack` digests against the install tuple's members, by name, with
+    a name only one side carries printed as not bound.
+  - Each engine library in the load event's library path against the install tuple's
     digest, hashed on the spot.
+
+  A digest the install tuple reads `unknown` (the install could not hash that file) is
+  printed as not bound, never as a `FAULT`.
 
 A `FAULT` line unloads the run and fails the script, `--keep` included, like every other
 failed check.

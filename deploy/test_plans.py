@@ -1513,7 +1513,13 @@ esac
         the box line reads absent."""
         state = self.verify_fixture()
         decl = (self.decl / "agent.toml").read_bytes()
+        # The devices as the harness's nvidia-smi lists them, sorted into PCI
+        # order as install-tuple.sh writes them, so row 7 reads the same box.
+        stub_gpus = {"gpu.0": "00000000:01:00.0, Fixture GPU A, 1024 MiB",
+                     "gpu.1": "00000000:41:00.0, Fixture GPU B, 2048 MiB"}
         lines = [line.format(llama="1" * 64, ggml="2" * 64) for line in INSTALL_TUPLE_LINES]
+        lines = [f"{l.split(' = ')[0]} = {stub_gpus[l.split(' = ')[0]]}"
+                 if l.split(" = ")[0] in stub_gpus else l for l in lines]
         (self.stack / "install-tuple").write_text("".join(l + "\n" for l in lines))
         tuple_sha = hashlib.sha256((self.stack / "install-tuple").read_bytes()).hexdigest()
         payload = json.dumps({"declaration": hashlib.sha256(decl).hexdigest(),
@@ -1529,6 +1535,7 @@ esac
         self.assertRegex(result.stdout, r"box +install tuple +sha256 " + tuple_sha + r" +\[recorded:")
         self.assertRegex(result.stdout, r"bind +declaration +sha256 [0-9a-f]{64} +\[recorded: equal")
         self.assertRegex(result.stdout, r"bind +member worker +1{64} +\[recorded:")
+        self.assertNotIn("FAULT", result.stdout, "the live devices equal the install tuple's")
         self.assertIn("m1 verified", result.stdout)
 
     def test_verify_load_refuses_a_constituent_of_another_account(self):
@@ -6950,6 +6957,52 @@ class AgentTupleInstallTests(unittest.TestCase):
         link.symlink_to(self.write(INSTALL_TUPLE_LINES))
         with self.assertRaises(OSError):
             self.tuple.read_install_tuple(link)
+
+    def test_the_tuple_install_tuple_sh_writes_is_read(self):
+        """**The reader takes what the writer writes**: the tuple comes from
+        install-tuple.sh's own `install_tuple` on a box that answers nothing,
+        so every member and library digest reads `unknown`, and the reader
+        takes it whole. Perturbation: refuse an `unknown` digest and the
+        writer's tuple is refused."""
+        repo = Path(__file__).resolve().parent.parent
+        stubs = self.dir / "stubs"
+        stubs.mkdir()
+        for name in ("cargo", "git", "nvidia-smi", "nvcc", "pacman", "rustc"):
+            (stubs / name).write_text("#!/bin/sh\nexit 1\n")
+            (stubs / name).chmod(0o755)
+        empty = self.dir / "empty-repo"
+        empty.mkdir()
+        script = (f"source {shlex.quote(str(repo / 'deploy' / 'engine-libraries.sh'))}; "
+                  f"source {shlex.quote(str(repo / 'deploy' / 'install-tuple.sh'))}; "
+                  f"install_tuple {shlex.quote(str(empty))} {'0' * 40} "
+                  f"{shlex.quote(str(self.dir / 'no-bin'))} {shlex.quote(str(self.dir / 'no-lib'))} "
+                  f"fixture 'worker weaver-spu busybox.applets' 'libllama.so.0.0.8783'")
+        env = {"PATH": str(stubs) + os.pathsep + "/usr/bin:/bin", "LC_ALL": "C"}
+        ran = subprocess.run(["bash", "-c", script], env=env, text=True,
+                             capture_output=True, timeout=20)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        install = self.tuple.read_install_tuple(self.write([ran.stdout.rstrip("\n")]))
+        self.assertEqual(set(install["facts"]), set(self.tuple.INSTALL_SCALARS))
+        self.assertEqual(install["members"], {"worker": "unknown", "weaver-spu": "unknown",
+                                              "busybox.applets": "unknown"})
+        self.assertEqual(install["libraries"], {"libllama.so.0.0.8783": "unknown"})
+        self.assertEqual(install["gpus"], [])
+
+    def test_an_unknown_digest_binds_nothing_and_faults_nothing(self):
+        """**An `unknown` digest is the box side unstated**, so the row is
+        absent, never a fault. Perturbation: drop either `unknown` branch in
+        `binding_rows` and its row reads FAULT."""
+        lines = [l.replace("1" * 64, "unknown") if l.startswith("member.worker") else
+                 l.replace("{llama}", "unknown") for l in INSTALL_TUPLE_LINES]
+        install = self.tuple.read_install_tuple(self.write(lines))
+        rows = self.tuple.binding_rows("d" * 64, self.load(), install, str(self.lib))
+        worker = [r for r in rows if "member worker" in r]
+        llama = [r for r in rows if "library libllama.so.0.0.8783" in r]
+        self.assertEqual(len(worker), 1, rows)
+        self.assertEqual(len(llama), 1, rows)
+        self.assertIn("[absent: not bound: the install tuple could not hash it]", worker[0])
+        self.assertIn("[absent: not bound: the install tuple could not hash it]", llama[0])
+        self.assertFalse([r for r in rows if "FAULT" in r], rows)
 
     def load(self, **override):
         event = {"declaration": "d" * 64, "library_path": str(self.lib),
