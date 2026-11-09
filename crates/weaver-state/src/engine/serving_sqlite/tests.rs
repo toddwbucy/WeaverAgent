@@ -56,22 +56,37 @@ fn literal_ddl_is_the_complete_merged_catalog() {
     // as written above", and `schema::DDL` is state-content/1, so the harvest
     // stops where STATE-GOVERNING begins. The marker stands exactly once, so
     // a moved or doubled marker fails here rather than silently changing
-    // what is harvested. At the cutover this pin moves to state-content/2.
+    // what is harvested, and what follows it is exactly the two governing
+    // tables, so a statement added to either catalog fails here too. At the
+    // cutover this pin moves to state-content/2, deliberately.
     let marker = "**STATE-GOVERNING.**";
     assert_eq!(specification.matches(marker).count(), 1);
-    let (state_content_1, _) = specification
+    let (state_content_1, governing) = specification
         .split_once(marker)
         .expect("the amendment carries STATE-GOVERNING");
-    let expected: Vec<_> = state_content_1
-        .split("```sql\n")
-        .skip(1)
-        .filter_map(|block| block.split_once("\n```"))
-        .map(|(sql, _)| sql.trim())
-        .filter(|sql| sql.starts_with("CREATE "))
-        .collect();
+    let creates = |text: &'static str| -> Vec<&'static str> {
+        text.split("```sql\n")
+            .skip(1)
+            .filter_map(|block| block.split_once("\n```"))
+            .map(|(sql, _)| sql.trim())
+            .filter(|sql| sql.starts_with("CREATE "))
+            .collect()
+    };
+    let expected = creates(state_content_1);
     assert_eq!(expected.len(), 27);
     assert_eq!(schema::DDL.as_slice(), expected);
     assert!(schema::DDL.iter().all(|sql| !sql.contains(';')));
+    let second: Vec<_> = creates(governing)
+        .into_iter()
+        .map(|sql| sql.split_once(" (").map_or(sql, |(head, _)| head))
+        .collect();
+    assert_eq!(
+        second,
+        [
+            "CREATE TABLE governing_version",
+            "CREATE TABLE governing_current"
+        ]
+    );
 }
 
 #[test]
