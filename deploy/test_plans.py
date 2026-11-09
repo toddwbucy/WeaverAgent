@@ -6793,5 +6793,17 @@ class AgentTupleRecordReadTests(unittest.TestCase):
                          ["NVIDIA RTX 2000 Ada Generation 16380 MiB", "NVIDIA RTX A6000 49140 MiB"])
 
 
+class TupleQueryMirrorTests(unittest.TestCase):
+    """**The runbook names the nvidia-smi query verify-load runs**, so the
+    box's operator reads the exact line from section 4. Perturbation: change
+    either side's query fields and this fails."""
+
+    def test_the_runbook_names_the_scripts_query(self):
+        script = (DEPLOY / "verify-load.sh").read_text()
+        runbook = " ".join((DEPLOY / "HowToDeployANewAgent.md").read_text().split())
+        query = re.search(r"nvidia-smi (--query-gpu=\S+ --format=\S+)", script).group(1)
+        self.assertIn(f"`nvidia-smi {query}`", runbook)
+
+
 if __name__ == "__main__":
     unittest.main()

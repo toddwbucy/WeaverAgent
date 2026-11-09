@@ -340,6 +340,30 @@ payload names the session, the run, the store, the declaration's hash, the compo
 and writes nothing is the failure this step exists to catch, and the worker's own words
 are in `<territory>/worker.log`, the state member's in `<territory>/state/state.log`.
 
+**Then it prints the agent's deployment tuple**, through `deploy/agent_tuple.py` beside
+it, before the constituents are read. The rows are those of the tuple survey of
+2026-11-08 (1, 2, 3, 6, 7, 8 and 9), with the state engine and the restore save point.
+Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
+- **Row 1, the artifact and its weights hash.** The hash is admission's BLAKE3, which no
+  tool on the box computes. For an adapted agent it is the declared `base-blake3`, since
+  admission refuses a base that differs. For a base-only agent it is the sink's latest
+  `model.measurement` naming the declared artifact, and `absent` where the sink holds
+  none: the load itself records no hash.
+- **Rows 2 and 3, the family, the chat template and the formats**, from the artifact's
+  GGUF header. The header is read as the agent's own account, the one admission reads it
+  as, and never as root.
+- **Row 7, the devices.** Each declared ordinal names its card in the install tuple's
+  PCI-order list. That order is the one the SPU sees, under PAIR-1's
+  `CUDA_DEVICE_ORDER=PCI_BUS_ID` mask. The live cards are read with
+  `nvidia-smi --query-gpu=pci.bus_id,name,memory.total --format=csv,noheader`, put in
+  bus order. A difference from the install tuple's list in name, memory, count or order
+  is a `FAULT`: the install tuple is stale.
+- **Row 8, the placement**, by PAIR-3's even split of the header's layer count over the
+  declared devices.
+
+A `FAULT` line unloads the run and fails the script, `--keep` included, like every other
+failed check.
+
 `deploy/verify-lifecycle.sh --agent <throwaway>`, run as the operator (it runs each load
 in a delegated scope itself), verifies a whole lifecycle end to end
 (create, load, seed, save points, restore, force-unload, crash recovery, the refusal by
