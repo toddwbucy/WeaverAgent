@@ -76,7 +76,22 @@ fn literal_ddl_is_the_complete_merged_catalog() {
     assert_eq!(expected.len(), 27);
     assert_eq!(schema::DDL.as_slice(), expected);
     assert!(schema::DDL.iter().all(|sql| !sql.contains(';')));
-    let second: Vec<_> = creates(governing)
+    // Each governing fence holds one statement, so the names compared below
+    // are the whole of what it carries: a second statement appended inside a
+    // fence fails here rather than hiding past the first parenthesis.
+    let governing = creates(governing);
+    for sql in &governing {
+        assert_eq!(
+            sql.to_ascii_uppercase().matches("CREATE ").count(),
+            1,
+            "one statement per governing fence: {sql}"
+        );
+        assert!(
+            !sql.contains(';'),
+            "one statement per governing fence: {sql}"
+        );
+    }
+    let second: Vec<_> = governing
         .into_iter()
         .map(|sql| sql.split_once(" (").map_or(sql, |(head, _)| head))
         .collect();
