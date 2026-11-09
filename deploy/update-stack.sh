@@ -724,7 +724,11 @@ printf '  built from    %s\n' "$BUILT"
 # read: step 9 prints the `state_store` the load event names, out of the sink,
 # after the member has served it.
 printf '  will build    %s\n' "$FEATURES"
-printf '  will install  %s, and the engine libraries (%s) built by %s\n' "$MEMBERS" "$LIB_GLOBS" "$ENGINE_CRATE"
+# **The line names all three things the plan lists and the install moves**:
+# the members, the shell's two files and the engine libraries, as
+# deploy/REDEPLOY.md says. It named the members and the libraries alone.
+printf '  will install  %s, the shell (%s), and the engine libraries (%s) built by %s\n' \
+  "$MEMBERS" "$SHELL_FILES" "$LIB_GLOBS" "$ENGINE_CRATE"
 # **One line, because the query answers once per device.** Three cards gave
 # three lines into one `%s`, so two of them printed with no label and no
 # indent. The driver is the box's, not the card's, so the first answer is the
@@ -832,8 +836,13 @@ say "tree"
 git remote update origin >/dev/null || die "cannot refresh origin; refusing to build against a stale origin/main"
 BEFORE=$(git rev-parse --short HEAD)
 BRANCH=$(git branch --show-current)
+# **A detached checkout is named by its commit**: `--show-current` answers
+# an empty line there, and a pinned install runs from a detached worktree,
+# so the line read "on branch , not fast-forwarding" on every pinned run.
 if [ "$BRANCH" = "main" ]; then
   git merge --ff-only origin/main >/dev/null 2>&1 || die "main will not fast-forward; resolve by hand"
+elif [ -z "$BRANCH" ]; then
+  printf '  detached at %s, not fast-forwarding\n' "$BEFORE"
 else
   printf '  on branch %s, not fast-forwarding\n' "$BRANCH"
 fi
@@ -894,9 +903,9 @@ say "test"
 # `cargo | grep | awk` answered "0 passed, 0 failed", took grep's status under
 # `pipefail` rather than cargo's, and discarded every diagnostic. Cargo's own
 # status is kept, the counts are read from the log whole, and a failure, a
-# failed test or no test at all prints the first lines cargo names as the
-# cause and the log's last 60 on stderr, and refuses naming the log, which is
-# kept; a clean run removes it. The log is the operator's, beside cargo's own
+# failed test or no test at all prints the failures and the lines cargo names
+# as the cause on stderr, and refuses naming the log, which is kept; a clean
+# run removes it. The log is the operator's, beside cargo's own
 # output in the target directory, named by this run's pid so runs sharing a
 # target directory never write each other's, and named as the step begins so
 # a long step can be followed.
@@ -924,11 +933,20 @@ run_tests() {
   failed=${totals#* }
   printf '  %s passed, %s failed\n' "$passed" "$failed"
   if [ "$rc" -ne 0 ] || [ "$passed" = 0 ]; then
-    # The cause first, where cargo names one, then the run's end: a long
-    # captured output can push the panic or the first error out of the tail.
-    grep -m 12 -E -A 6 '^(error(\[|:)|failures:|---- )|panicked at' -- "$log" >&2 || true
-    printf '   ...\n' >&2
-    tail -n 60 -- "$log" >&2
+    # **The failures and cargo's cause, never the run's end** (the live plan
+    # of 2026-11-09): the harness's suites write queue-pressure JSON lines and
+    # every passing test's line to cargo's stdout, and the log's last 60
+    # carried them, and the failures block a second time, before the
+    # refusal. Echoed, in the log's order: each libtest `failures:` block
+    # through its `test result:` line (a FAILED summary outside a block too),
+    # then, outside those blocks, the first 12 of cargo's `error` lines with
+    # the 6 after each, which name a crate that did not compile or a test
+    # binary that died. The whole output stays in the kept log.
+    awk '
+      /^failures:$/ {held = 1}
+      held || /^test result: FAILED\./ {print; if (/^test result: /) held = 0; next}
+      /^error(\[|:)/ && shown < 12 {after = 7; shown++}
+      after > 0 {print; after--}' "$log" >&2 || true
     die "the tests did not pass (cargo exited $rc, $passed passed, $failed failed); the whole output is kept in $log"
   fi
   rm -f -- "$log"
@@ -1089,18 +1107,23 @@ fi
 # **What --install does to the agents, said before it does it** (#99 area 2
 # review, R2): every agent's connector rule is held out of sudo's reading and
 # every agent unloaded before any binary is replaced, and the rules come back
-# after the verify. A plan moves no rule and unloads nothing.
-say "the install window"
-if [ -z "$AGENTS" ]; then
-  printf '  no agents: --install holds no connector rule and unloads none\n'
-else
-  for agent in $AGENTS; do
-    printf '  %-12s --install holds /etc/sudoers.d/weaver-%s as .weaver-%s.updating where it stands, then unloads %s; the rule comes back after the verify, and %s is left unloaded\n' \
-      "$agent" "$agent" "$agent" "$agent" "$agent"
-  done
+# after the verify. A plan moves no rule and unloads nothing. **The preview is
+# a plan's alone**: --install says the same as it acts, under step 7's
+# "the install window: connector rules held, agents unloaded", and printing
+# both put two install-window headers over one body on every install.
+if [ "$INSTALL" -eq 0 ]; then
+  say "the install window"
+  if [ -z "$AGENTS" ]; then
+    printf '  no agents: --install holds no connector rule and unloads none\n'
+  else
+    for agent in $AGENTS; do
+      printf '  %-12s --install holds /etc/sudoers.d/weaver-%s as .weaver-%s.updating where it stands, then unloads %s; the rule comes back after the verify, and %s is left unloaded\n' \
+        "$agent" "$agent" "$agent" "$agent" "$agent"
+    done
+  fi
+  printf '  --install ends, once verified, by writing the install tuple to %s\n' "$STACK/install-tuple"
+  printf '  plan only: no rule is moved and no agent unloaded\n'
 fi
-printf '  --install ends, once verified, by writing the install tuple to %s\n' "$STACK/install-tuple"
-[ "$INSTALL" -eq 1 ] || printf '  plan only: no rule is moved and no agent unloaded\n'
 
 # **Binaries current is not the same as the box being finished.** A run that
 # installed and then died before reconciling leaves every digest matching

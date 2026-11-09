@@ -725,10 +725,13 @@ def device_rows(declaration, header, box_gpus, live_gpus, engine=None, container
 
 def box_rows(install_path, install, refusal):
     """The box side: the install tuple's own digest, the identity a report
-    cites for the box, and the engine it names."""
+    cites for the box, and the engine it names. `install_path` is None where
+    no install tuple was named (verify-load names none where the stack record
+    holds none), and the row then says so rather than print a placeholder."""
     if install is None:
+        where = f"at {install_path}" if install_path else "was named"
         return [row("box", "install tuple", "-", "FAULT" if refusal else "absent",
-                    refusal or f"no install tuple at {install_path}; the box side is unstated")]
+                    refusal or f"no install tuple {where}; the box side is unstated")]
     facts = install["facts"]
     fork = facts["engine-source"].rpartition("#")[2]
     return [
@@ -943,7 +946,7 @@ def main(argv):
     if install is not None:
         engine = (f"fork {install['facts']['engine-source'].rpartition('#')[2]}, "
                   f"llama.cpp {install['facts']['engine-vendored']}")
-    lines = (box_rows(args.install_tuple or "-", install, install_refusal)
+    lines = (box_rows(args.install_tuple, install, install_refusal)
              + artifact_rows(declaration, facts, refusal, measurement, resolved, matched)
              + adapter_rows(declaration)
              + device_rows(declaration, facts, install["gpus"] if install else None, live, engine,
