@@ -875,12 +875,20 @@ run_tests() {
   cargo test --release --locked \
     -p weaver-trace -p weaver-harness -p weaver-state \
     --features "$MEMBER_FEATURES" >"$log" 2>&1 || rc=$?
-  totals=$(awk '/^test result/ {p+=$4; f+=$6} END {print p+0, f+0}' "$log") \
+  # **Only a well-formed summary line counts** (#507). Child test processes
+  # share cargo's stdout, so two summary lines can interleave, and a garbled
+  # one read field by field once gave a failed count of 0.29, which `%d`
+  # refused under errexit, ending the script on a suite cargo passed. The
+  # verdict is cargo's status, which a failed test sets, and a run that
+  # counted no test at all; the counts are read from whole summary lines
+  # only and printed as text, so no total a garble could make can end the
+  # step or decide it.
+  totals=$(awk '/^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed/ {p+=$4; f+=$6} END {print p+0, f+0}' "$log") \
     || die "cannot read the test step's log $log"
   passed=${totals% *}
   failed=${totals#* }
-  printf '  %d passed, %d failed\n' "$passed" "$failed"
-  if [ "$rc" -ne 0 ] || [ "$failed" -gt 0 ] || [ "$passed" -eq 0 ]; then
+  printf '  %s passed, %s failed\n' "$passed" "$failed"
+  if [ "$rc" -ne 0 ] || [ "$passed" = 0 ]; then
     # The cause first, where cargo names one, then the run's end: a long
     # captured output can push the panic or the first error out of the tail.
     grep -m 12 -E -A 6 '^(error(\[|:)|failures:|---- )|panicked at' -- "$log" >&2 || true

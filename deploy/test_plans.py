@@ -5577,6 +5577,37 @@ exit "${CARGO_EXIT:-0}"
                 self.assertIn("7 passed, 0 failed", ran.stdout)
                 self.assertEqual(self.kept_logs(), [], "a clean run keeps no log")
 
+    def test_a_garbled_result_line_neither_fails_the_step_nor_passes_it(self):
+        """Child test processes share one stdout, so two of their summary
+        lines can interleave (#507). The garble below is the one a real run
+        of the step's command printed: read field by field, its second line
+        gave a failed count of 0.29, which `printf %d` refused under errexit,
+        ending the script on a suite cargo passed. A garbled line counts for
+        nothing, the verdict is cargo's status, and the same garble beside a
+        failed test still refuses.
+        Perturbation: restore the unanchored `awk '/^test result/ ...'` and
+        the clean case exits 1 at the `%d` printf, or, with `%s`, prints a
+        failed count of 0.29."""
+        garbled = ("test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s\n"
+                   "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out\n"
+                   "test result: ; finished in 0.29sok\n"
+                   "\n"
+                   ". 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.29s\n")
+        failed = garbled + ("test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; "
+                            "0 filtered out; finished in 0.20s\n")
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script):
+                ran = self.step(script, "run_tests", stdout=garbled)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertIn("5 passed, 0 failed", ran.stdout)
+                self.assertEqual(self.kept_logs(), [], "a clean run keeps no log")
+                ran = self.step(script, "run_tests", stdout=failed, status=101)
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertIn("7 passed, 1 failed", ran.stdout)
+                self.assertIn("cargo exited 101", ran.stderr)
+                for log in self.kept_logs():
+                    log.unlink()
+
     def test_the_cause_is_printed_where_the_tail_would_lose_it(self):
         captured = "".join(f"captured line {n}\n" for n in range(100))
         stdout = ("running 1 test\ntest lifecycle::tests::x ... FAILED\n\nfailures:\n\n"
