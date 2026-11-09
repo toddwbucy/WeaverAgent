@@ -295,10 +295,10 @@ the agent's starting state. It holds the prompt whole, and the model's first ans
 the declaration's election lands it, because the seeding turn generates and every event
 of it lands here like any other: the answer's text where the election names
 `message.assistant`'s `content`, and its envelope alone under the default election, per
-`weaver-trace-Spec` section 11. What this crate holds under that kind is the history of
-the identities entered and seated, and the newest run's is the one in force. It decides
-none of them. **The identity's kind cannot be elected out**: the seated prefix crosses
-the tee whole under every election, per
+`weaver-trace-Spec` section 11. What this crate holds under `message.system` is the
+history of the identities entered and seated, and the newest run's is the one in force.
+It decides none of them. **The identity's kind cannot be elected out**: the seated
+prefix crosses the tee whole under every election, per
 `weaver-trace-PRD` section 11, the one exception to the key-based rule, so no election
 produces a load whose identity this crate never held. Within a residency the prefix is
 permanent, the decode seam holding it from open to release, so a revised prompt takes
