@@ -32,6 +32,8 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import stat
 import struct
 import sys
 
@@ -85,6 +87,9 @@ LLAMA_FTYPES = {
     38: "MOSTLY_MXFP4_MOE", 39: "MOSTLY_NVFP4", 40: "MOSTLY_Q1_0",
     1024: "GUESSED",
 }
+
+
+ARCHITECTURE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 
 class HeaderRefused(Exception):
@@ -196,6 +201,10 @@ def read_header(path):
             types[name] = types.get(name, 0) + 1
     architecture = keys.get("general.architecture")
     architecture = architecture.decode("utf-8", "replace") if isinstance(architecture, bytes) else None
+    # A family key is a short name; anything else is not one this reader
+    # reports, and is printed as absent rather than echoed.
+    if architecture is not None and not ARCHITECTURE.fullmatch(architecture):
+        architecture = None
     block_count = keys.get(f"{architecture}.block_count") if architecture else None
     template = keys.get("tokenizer.chat_template")
     file_type = keys.get("general.file_type")
@@ -262,59 +271,75 @@ def registry_entries(architecture):
 
 # --- The sink's latest measurement -----------------------------------------
 
-def latest_measurement(sink, artifact):
-    """The weights_hash of the sink's last `model.measurement` line, with its
-    line number, where that measurement names the declared artifact.
+def open_sink(path):
+    """The sink opened once, as a regular file, never through a link and never
+    blocking on a FIFO: O_NOFOLLOW refuses a link at the name, O_NONBLOCK
+    keeps a FIFO swapped in after the shell's look from holding root for
+    ever, and fstat on the descriptor refuses anything not regular. Every
+    read of the sink goes through the one descriptor this returns."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise OSError(f"{path} is not a regular file")
+    return os.fdopen(fd, "rb")
 
-    A load serves no generation, so its own events carry no measurement, and
-    the Open evidence that carries the hash at load is dropped on the live
-    path. An earlier generation's measurement is the only record of the hash a
-    base-only declaration has. One naming another artifact is not this
-    binding's, so it is not used. Returns None for no such line.
+
+HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+def scan_sink(handle, from_line, artifact):
+    """One pass over the sink: the payload of the first `load` event at or
+    after `from_line` (the load's own new events), and the sink's last
+    `model.measurement` when it names the declared artifact.
+
+    The trace's `Event` flattens its envelope and carries the payload under
+    `payload`; a measurement is spliced there whole. A load serves no
+    generation, so its own events carry no measurement, and the Open evidence
+    that carries the hash at load is dropped on the live path: an earlier
+    generation's measurement is the only record of the hash a base-only
+    declaration has. One naming another artifact is not this binding's, so it
+    is not used, and a hash that is not 64 lowercase hex digits is not taken.
     """
-    found = None
-    with open(sink, "rb") as handle:
-        for number, raw in enumerate(handle, start=1):
-            if b'"model.measurement"' not in raw:
-                continue
+    load, found = None, None
+    for number, raw in enumerate(handle, start=1):
+        is_load = load is None and number >= from_line and b'"load"' in raw
+        if not is_load and b'"model.measurement"' not in raw:
+            continue
+        try:
+            event = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        payload = event.get("payload")
+        if is_load and event.get("kind") == "load":
+            load = payload if isinstance(payload, dict) else {}
+            continue
+        if event.get("kind") != "model.measurement":
+            continue
+        if isinstance(payload, str):
             try:
-                event = json.loads(raw)
+                payload = json.loads(payload)
             except ValueError:
                 continue
-            if not isinstance(event, dict) or event.get("kind") != "model.measurement":
-                continue
-            payload = event.get("payload")
-            if isinstance(payload, str):
-                try:
-                    payload = json.loads(payload)
-                except ValueError:
-                    continue
-            if isinstance(payload, dict) and isinstance(payload.get("weights_hash"), str):
-                found = (number, payload)
-    if found is None:
-        return None
-    number, payload = found
-    if payload.get("model") != artifact:
-        return None
-    return {"weights_hash": payload["weights_hash"], "line": number}
+        if isinstance(payload, dict) and isinstance(payload.get("weights_hash"), str):
+            found = (number, payload)
+    measurement = None
+    if found is not None:
+        number, payload = found
+        if payload.get("model") == artifact and HEX64.fullmatch(payload["weights_hash"]):
+            measurement = {"weights_hash": payload["weights_hash"], "line": number}
+    return load or None, measurement
+
+
+def latest_measurement(sink, artifact):
+    with open_sink(sink) as handle:
+        return scan_sink(handle, 1, artifact)[1]
 
 
 def load_payload(path, from_line=1):
-    """The payload of the first `load` event at or after line `from_line` of
-    `path` (the load's own new events), or None. The trace's `Event` flattens
-    its envelope and carries the payload under `payload`."""
-    with open(path, "rb") as handle:
-        for number, raw in enumerate(handle, start=1):
-            if number < from_line:
-                continue
-            try:
-                event = json.loads(raw)
-            except ValueError:
-                continue
-            if isinstance(event, dict) and event.get("kind") == "load":
-                payload = event.get("payload")
-                return payload if isinstance(payload, dict) else None
-    return None
+    with open_sink(path) as handle:
+        return scan_sink(handle, from_line, None)[0]
 
 
 def live_gpus(text):
@@ -330,10 +355,18 @@ def live_gpus(text):
 
 # --- The rows ---------------------------------------------------------------
 
+def printable(text):
+    """Every character a terminal would act on, escaped: the values come from
+    the artifact's header, the sink and the declaration, and the line is
+    printed to root's terminal."""
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode("ascii")
+                   for c in str(text))
+
+
 def row(number, field, value, status, note):
     assert status in STATUSES, status
     label = f"row {number}" if isinstance(number, int) else number
-    return f"   {label:<7} {field:<22} {value}  [{status}: {note}]"
+    return f"   {label:<7} {field:<22} {printable(value)}  [{status}: {printable(note)}]"
 
 
 def binding_of(declaration):
@@ -522,8 +555,9 @@ def main(argv):
             facts = answer
     load_event, measurement = None, None
     if args.sink:
-        load_event = load_payload(args.sink, args.from_line)
-        measurement = latest_measurement(args.sink, binding_of(declaration).get("artifact"))
+        with open_sink(args.sink) as handle:
+            load_event, measurement = scan_sink(handle, args.from_line,
+                                                binding_of(declaration).get("artifact"))
     live = live_gpus(args.live_gpus_csv) if args.live_gpus_csv else None
     lines = (artifact_rows(declaration, facts, refusal, measurement)
              + adapter_rows(declaration)

@@ -6740,6 +6740,21 @@ class AgentTupleRowTests(unittest.TestCase):
         lines = self.tuple.device_rows(self.declaration(devices=(5,)), self.header, box, box)
         self.assertIn("FAULT", self.statuses(lines))
 
+    def test_header_and_declared_text_cannot_reach_the_terminal_raw(self):
+        """**No value is printed with a character a terminal acts on**, and an
+        architecture that is not a short name is absent, not echoed.
+        Perturbation: drop `printable` from `row` and the escape reaches the
+        line."""
+        path = self.dir / "e.gguf"
+        _gguf(path, [("general.architecture", 8, "granite\x1b]0;owned\x07")])
+        lines = self.tuple.artifact_rows(self.declaration(), self.tuple.read_header(path), None, None)
+        family = next(line for line in lines if " family " in line)
+        self.assertIn("[absent: the header carries no general.architecture", family)
+        decl = self.declaration(restore="sp\x1b[2J")
+        line = self.tuple.state_rows(decl, None)[1]
+        self.assertNotIn("\x1b", line)
+        self.assertIn("sp\\x1b[2J", line)
+
     def test_restore_and_engine(self):
         """Perturbation: print a declared save point as `none declared`."""
         lines = self.tuple.state_rows(self.declaration(restore="sp-1"), {"state_store": {"engine": "sqlite"}})
@@ -6776,6 +6791,30 @@ class AgentTupleRecordReadTests(unittest.TestCase):
         empty = self.dir / "empty.ndjson"
         empty.write_text("")
         self.assertIsNone(self.tuple.latest_measurement(empty, "/m.gguf"))
+
+    def test_the_sink_is_read_only_as_a_regular_file_never_through_a_link(self):
+        """**A link or a FIFO at the sink's name is refused at the open**, not
+        followed or blocked on: the shell's look and the helper's open are two
+        moments. Perturbation: open with plain `open()` and the link is
+        followed (and the FIFO blocks past the timeout)."""
+        real = self.dir / "real.ndjson"
+        real.write_text(json.dumps({"kind": "model.measurement",
+                                    "payload": {"model": "/m.gguf", "weights_hash": "3" * 64}}) + "\n")
+        link = self.dir / "link.ndjson"
+        link.symlink_to(real)
+        with self.assertRaises(OSError):
+            self.tuple.latest_measurement(link, "/m.gguf")
+        fifo = self.dir / "fifo.ndjson"
+        os.mkfifo(fifo)
+        with self.assertRaises(OSError):
+            self.tuple.latest_measurement(fifo, "/m.gguf")
+        self.assertEqual(self.tuple.latest_measurement(real, "/m.gguf")["weights_hash"], "3" * 64)
+
+    def test_a_measurement_hash_of_another_shape_is_not_taken(self):
+        sink = self.dir / "trace.ndjson"
+        sink.write_text(json.dumps({"kind": "model.measurement",
+                                    "payload": {"model": "/m.gguf", "weights_hash": "\x1b[2Jzz"}}) + "\n")
+        self.assertIsNone(self.tuple.latest_measurement(sink, "/m.gguf"))
 
     def test_the_load_payload_and_the_live_list(self):
         events = self.dir / "trace.ndjson"
