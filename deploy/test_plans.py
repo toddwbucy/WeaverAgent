@@ -1465,6 +1465,79 @@ esac
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertIn("not counted: a pipe is not a file a line count reads", result.stdout)
 
+    def test_verify_load_prints_the_deployment_tuple(self):
+        """**verify-load prints the tuple after the load event**, every row
+        ending in one of the four status words, and the run verifies.
+        Perturbation: drop the tuple block and the heading is missing."""
+        state = self.verify_fixture()
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIn("== m1 deployment tuple", result.stdout)
+        rows = [line for line in result.stdout.splitlines()
+                if re.match(r"^   (row [0-9]|state|restore) ", line)]
+        self.assertGreaterEqual(len(rows), 12, result.stdout)
+        for line in rows:
+            self.assertRegex(line, r"\[(recorded|derivable|absent|FAULT): ")
+        self.assertIn("m1 verified", result.stdout)
+
+    def test_a_tuple_fault_unloads_the_run(self):
+        """**A FAULT line fails the verification and unloads**, `--keep`
+        included: here the load event's state_store names another engine than
+        the declaration. Perturbation: ignore the helper's status and the run
+        verifies (and under --keep stays serving)."""
+        state = self.verify_fixture()
+        sink = self.root / "agents" / "trace.ndjson"
+        (self.decl / "agent.toml").write_text(
+            f'[trace-sink]\nkind = "file"\npath = "{sink}"\n\n[state-store]\nengine = "sqlite"\n')
+        stub = self.root / "installed" / "bin" / "weaver-admin"
+        stub.write_text(stub.read_text().replace(
+            "echo '{\"kind\":\"load\"}'",
+            "echo '{\"kind\":\"load\",\"payload\":{\"state_store\":{\"engine\":\"none\"}}}'"))
+        try:
+            result = self.run_script("verify-load.sh", "m1", "--keep")
+        finally:
+            self.end_stand_in(state)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("[FAULT: the load event's state_store names 'none'", result.stdout)
+        self.assertIn("the deployment tuple carries a FAULT line, so the run is unloaded", result.stderr)
+        self.assertFalse((state / "pid").exists(), "no run is left")
+
+    def test_verify_load_binds_the_record_to_the_install_tuple(self):
+        """**The box side and the record binding print from the stack record's
+        install tuple**: its digest as the box's identity, the declaration's
+        sha256 against the load event's, the stack against its members.
+        Perturbation: drop the install tuple's argument in verify-load and
+        the box line reads absent."""
+        state = self.verify_fixture()
+        decl = (self.decl / "agent.toml").read_bytes()
+        # The devices as the harness's nvidia-smi lists them, sorted into PCI
+        # order as install-tuple.sh writes them, so row 7 reads the same box.
+        stub_gpus = {"gpu.0": "00000000:01:00.0, Fixture GPU A, 1024 MiB",
+                     "gpu.1": "00000000:41:00.0, Fixture GPU B, 2048 MiB"}
+        lines = [line.format(llama="1" * 64, ggml="2" * 64) for line in INSTALL_TUPLE_LINES]
+        lines = [f"{l.split(' = ')[0]} = {stub_gpus[l.split(' = ')[0]]}"
+                 if l.split(" = ")[0] in stub_gpus else l for l in lines]
+        (self.stack / "install-tuple").write_text("".join(l + "\n" for l in lines))
+        tuple_sha = hashlib.sha256((self.stack / "install-tuple").read_bytes()).hexdigest()
+        payload = json.dumps({"declaration": hashlib.sha256(decl).hexdigest(),
+                              "stack": {"worker": "1" * 64}})
+        stub = self.root / "installed" / "bin" / "weaver-admin"
+        stub.write_text(stub.read_text().replace(
+            "echo '{\"kind\":\"load\"}'", "echo '{\"kind\":\"load\",\"payload\":" + payload + "}'"))
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertRegex(result.stdout, r"box +install tuple +sha256 " + tuple_sha + r" +\[recorded:")
+        self.assertRegex(result.stdout, r"bind +declaration +sha256 [0-9a-f]{64} +\[recorded: equal")
+        self.assertRegex(result.stdout, r"bind +member worker +1{64} +\[recorded:")
+        self.assertNotIn("FAULT", result.stdout, "the live devices equal the install tuple's")
+        self.assertIn("m1 verified", result.stdout)
+
     def test_verify_load_refuses_a_constituent_of_another_account(self):
         # Perturbation: drop the account check, and a stranger's process passes.
         state = self.verify_fixture()
@@ -6465,6 +6538,852 @@ class BusyboxBuildTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertIn("not the pinned b8cc24c9", result.stderr)
             self.assertFalse((Path(out) / "busybox").exists())
+
+
+def _agent_tuple():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("agent_tuple_under_test", DEPLOY / "agent_tuple.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _gguf(path, keys, tensors=(), version=3):
+    """A GGUF header with `keys` ((name, type, value) triples; arrays as
+    (name, 9, (element, [values]))) and `tensors` ((name, dims, type))."""
+    import struct
+
+    def text(value):
+        raw = value if isinstance(value, bytes) else value.encode()
+        return struct.pack("<Q", len(raw)) + raw
+
+    def scalar(kind, value):
+        return {4: struct.pack("<I", value), 10: struct.pack("<Q", value),
+                5: struct.pack("<i", value)}[kind]
+
+    body = b"GGUF" + struct.pack("<IQQ", version, len(tensors), len(keys))
+    for name, kind, value in keys:
+        body += text(name) + struct.pack("<I", kind)
+        if kind == 8:
+            body += text(value)
+        elif kind == 9:
+            element, items = value
+            body += struct.pack("<IQ", element, len(items))
+            body += b"".join(text(i) if element == 8 else scalar(element, i) for i in items)
+        else:
+            body += scalar(kind, value)
+    for name, dims, kind in tensors:
+        body += text(name) + struct.pack("<I", len(dims)) + b"".join(struct.pack("<Q", d) for d in dims)
+        body += struct.pack("<IQ", kind, 0)
+    Path(path).write_bytes(body + b"\0" * 64)
+    return body
+
+
+GRANITE_KEYS = [
+    ("general.architecture", 8, "granite"),
+    ("general.file_type", 4, 32),
+    ("granite.block_count", 4, 64),
+    ("tokenizer.ggml.tokens", 9, (8, ["<a>", "<b>", "c"])),
+    ("tokenizer.ggml.token_type", 9, (5, [1, 1, 1])),
+    ("tokenizer.chat_template", 8, "{{ messages }}"),
+]
+GRANITE_TENSORS = [("token_embd.weight", (4096, 100352), 30), ("blk.0.attn_norm.weight", (4096,), 0),
+                   ("output.weight", (4096, 100352), 30)]
+
+
+class AgentTupleHeaderTests(unittest.TestCase):
+    """**The GGUF header reader bounds every length it reads** against the
+    file's size and a cap, and refuses a header it cannot bound rather than
+    reading on. Perturbation: drop the bound in `_Reader.take` (or in
+    `count`'s file check) and the length-past-the-file cases read on or
+    fail with a struct error instead of a refusal."""
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+
+    def test_the_header_facts_are_read(self):
+        path = self.dir / "m.gguf"
+        _gguf(path, GRANITE_KEYS, GRANITE_TENSORS)
+        facts = self.tuple.read_header(path)
+        self.assertEqual(facts["architecture"], "granite")
+        self.assertEqual(facts["block_count"], 64)
+        self.assertEqual(facts["file_type"], 32)
+        self.assertEqual(facts["chat_template_sha256"], hashlib.sha256(b"{{ messages }}").hexdigest())
+        self.assertEqual(facts["tensor_types"], {"BF16": 2, "F32": 1})
+        self.assertEqual(facts["tensor_count"], 3)
+
+    def test_a_length_past_the_file_is_refused(self):
+        import struct
+        path = self.dir / "m.gguf"
+        body = _gguf(path, GRANITE_KEYS, GRANITE_TENSORS)
+        # The chat template's length field, set past the file's end.
+        at = body.index(b"tokenizer.chat_template") + len(b"tokenizer.chat_template") + 4
+        raw = bytearray(path.read_bytes())
+        raw[at:at + 8] = struct.pack("<Q", len(raw) + 1)
+        path.write_bytes(bytes(raw))
+        with self.assertRaises(self.tuple.HeaderRefused) as refused:
+            self.tuple.read_header(path)
+        self.assertIn("past the file's end", str(refused.exception))
+
+    def test_a_count_past_the_file_or_the_cap_is_refused(self):
+        import struct
+        path = self.dir / "m.gguf"
+        _gguf(path, GRANITE_KEYS, GRANITE_TENSORS)
+        raw = bytearray(path.read_bytes())
+        raw[8:16] = struct.pack("<Q", 1 << 40)          # tensor_count past the cap
+        path.write_bytes(bytes(raw))
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "past the cap"):
+            self.tuple.read_header(path)
+        raw[8:16] = struct.pack("<Q", 1000)             # under the cap, past the file
+        path.write_bytes(bytes(raw))
+        # Refused at the count, before any tensor info is read.
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "tensor_count: 1000 items of 28 octets run past"):
+            self.tuple.read_header(path)
+
+    def test_a_string_array_element_past_the_file_is_refused(self):
+        import struct
+        path = self.dir / "m.gguf"
+        body = _gguf(path, GRANITE_KEYS, GRANITE_TENSORS)
+        at = body.index(b"<a>") - 8
+        raw = bytearray(path.read_bytes())
+        raw[at:at + 8] = struct.pack("<Q", len(raw))
+        path.write_bytes(bytes(raw))
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "past the file's end"):
+            self.tuple.read_header(path)
+
+    def test_not_a_gguf_and_an_unknown_version_are_refused(self):
+        path = self.dir / "m.gguf"
+        path.write_bytes(b"PK\x03\x04" + b"\0" * 60)
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "magic"):
+            self.tuple.read_header(path)
+        _gguf(path, GRANITE_KEYS, version=1)
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "version 1"):
+            self.tuple.read_header(path)
+
+    def test_the_header_door_answers_one_json_line_and_refuses_with_status_one(self):
+        path = self.dir / "m.gguf"
+        _gguf(path, GRANITE_KEYS, GRANITE_TENSORS)
+        source = (DEPLOY / "agent_tuple.py").read_bytes()
+        ran = subprocess.run([sys.executable, "-I", "-", "header", str(path)], input=source,
+                             capture_output=True, cwd=self.dir)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual(json.loads(ran.stdout)["architecture"], "granite")
+        path.write_bytes(b"nope")
+        ran = subprocess.run([sys.executable, "-I", "-", "header", str(path)], input=source,
+                             capture_output=True, cwd=self.dir)
+        self.assertEqual(ran.returncode, 1)
+        self.assertIn("refused", json.loads(ran.stdout))
+
+
+class AgentTupleResolveTests(unittest.TestCase):
+    """**The header door resolves a declared artifact as admission does**
+    (Codex on #514), mirroring crates/weaver-spu/src/artifact.rs
+    `resolve_with_kind`, `container_within` and `split_pattern` case for case
+    against that file's own tests. Perturbations named per test."""
+
+    RUST_TESTS = DEPLOY.parent / "crates" / "weaver-spu" / "src" / "artifact" / "tests.rs"
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+
+    def resolve(self, path):
+        return Path(self.tuple.resolve_artifact(str(path)))
+
+    def test_the_split_pattern_mirrors_the_rust_cases(self):
+        """The hits and misses of `the_split_pattern_is_exact`, read from
+        the Rust test itself, so a case added there is a case here.
+        Perturbation: accept a signed count, or an index outside its set,
+        and a miss parses."""
+        text = self.RUST_TESTS.read_text()
+        body = text[text.index("fn the_split_pattern_is_exact"):]
+        body = body[:body.index("\n}\n")]
+        block = body[body.index("for miss in ["):]
+        misses = re.findall(r'"([^"]+)"', block[:block.index("]")])
+        called = re.findall(r'split_pattern\(Path::new\("([^"]+)"\)\)', body)
+        hits = [path for path in called if path not in misses]
+        self.assertGreaterEqual(len(misses), 8, misses)
+        self.assertGreaterEqual(len(hits), 3, hits)
+        for path in hits:
+            with self.subTest(hit=path):
+                self.assertIsNotNone(self.tuple.split_pattern(os.path.basename(path)))
+        for path in misses:
+            with self.subTest(miss=path):
+                self.assertIsNone(self.tuple.split_pattern(os.path.basename(path)))
+        self.assertEqual(self.tuple.split_pattern("model-00001-of-00002.gguf"), ("model", 2, ".gguf"))
+        self.assertEqual(self.tuple.split_pattern("model-00001-of-00017.safetensors"),
+                         ("model", 17, ".safetensors"))
+
+    def test_a_directory_artifact_resolves_to_its_container_file(self):
+        """Mirrors `a_directory_artifact_resolves_to_its_container_file`.
+        Perturbation: return the directory itself and the extension check
+        fails."""
+        _gguf(self.dir / "only.gguf", GRANITE_KEYS, GRANITE_TENSORS)
+        resolved = self.resolve(self.dir)
+        self.assertTrue(resolved.is_file())
+        self.assertEqual(resolved.suffix, ".gguf")
+
+    def test_a_sharded_directory_resolves_to_its_first_shard(self):
+        """Mirrors `a_sharded_directory_resolves_to_its_first_shard`, the
+        stranger included. Perturbation: take the first name sorted, or
+        drop the one-stem check, and a case resolves wrongly."""
+        for index in (1, 2, 3):
+            (self.dir / f"model-{index:05}-of-00003.safetensors").write_bytes(b"x")
+        self.assertEqual(self.resolve(self.dir), self.dir / "model-00001-of-00003.safetensors")
+        (self.dir / "other.safetensors").write_bytes(b"x")
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "not one split's shards"):
+            self.resolve(self.dir)
+
+    def test_an_ambiguous_directory_refuses(self):
+        """Mirrors `an_ambiguous_directory_refuses`, and a split short of
+        its count refuses as `container_within` does. Perturbation: take
+        the first name sorted and both resolve."""
+        for name in ("a.gguf", "b.gguf"):
+            (self.dir / name).write_bytes(b"GGUF")
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "2 containers"):
+            self.resolve(self.dir)
+        short = self.dir / "short"
+        short.mkdir()
+        for index in (1, 2):
+            (short / f"m-{index:05}-of-00003.gguf").write_bytes(b"GGUF")
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "not one split's shards"):
+            self.resolve(short)
+
+    def test_a_dot_entry_is_never_the_container(self):
+        """Mirrors the resolution half of `a_dot_entry_is_outside_the_identity`.
+        Perturbation: keep dot-entries and the directory is ambiguous."""
+        (self.dir / "model.safetensors").write_bytes(b"the weights")
+        (self.dir / "config.json").write_bytes(b"{}")
+        (self.dir / ".stray.safetensors").write_bytes(b"not the model")
+        self.assertEqual(self.resolve(self.dir), self.dir / "model.safetensors")
+
+    def test_a_named_pipe_does_not_resolve(self):
+        """Mirrors `a_named_pipe_does_not_resolve`, at the path and inside a
+        directory. Perturbation: admit any non-directory and the open
+        blocks on the pipe."""
+        pipe = self.dir / "pipe.gguf"
+        os.mkfifo(pipe)
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "not a regular file"):
+            self.resolve(pipe)
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "holds no container"):
+            self.resolve(self.dir)
+
+    def test_absent_and_denied_are_told_apart(self):
+        """Mirrors `a_denied_directory_is_unreadable_rather_than_unresolvable`.
+        Skips as root, whom no directory denies. Perturbation: answer every
+        stat error as not resolving and the denied case says absent."""
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "does not resolve"):
+            self.resolve(self.dir / "absent.gguf")
+        if os.getuid() == 0:
+            self.skipTest("root traverses every directory")
+        closed = self.dir / "closed"
+        closed.mkdir()
+        _gguf(closed / "m.gguf", GRANITE_KEYS, GRANITE_TENSORS)
+        closed.chmod(0)
+        self.addCleanup(closed.chmod, 0o700)
+        with self.assertRaisesRegex(self.tuple.HeaderRefused, "unreadable"):
+            self.resolve(closed / "m.gguf")
+
+    def test_a_safetensors_directory_names_its_container_and_kind(self):
+        """The door's refusal for a container without the GGUF magic still
+        names the container and the kind admission chose by the magic, so
+        the rows door can match the measurement and withhold rows 8 and 9.
+        Perturbation: drop either member from the refusal and its
+        assertion fails."""
+        model = self.dir / "native"
+        model.mkdir()
+        (model / "model.safetensors").write_bytes(b"\x08\0\0\0\0\0\0\0{}      ")
+        source = (DEPLOY / "agent_tuple.py").read_bytes()
+        ran = subprocess.run([sys.executable, "-I", "-", "header", str(model)], input=source,
+                             capture_output=True, cwd=self.dir)
+        self.assertEqual(ran.returncode, 1, ran.stderr)
+        answer = json.loads(ran.stdout)
+        self.assertEqual(answer["container"], "safetensors")
+        self.assertEqual(answer["resolved"], str(model / "model.safetensors"))
+        self.assertIn("no GGUF magic", answer["refused"])
+
+    def test_a_later_shard_declared_reads_the_first_shards_header(self):
+        """**The header is the first shard's whatever shard is declared**, as
+        artifact.rs `pin` opens it. Perturbation: read the declared shard and
+        its missing magic refuses the header."""
+        _gguf(self.dir / "m-00001-of-00002.gguf", GRANITE_KEYS, GRANITE_TENSORS)
+        (self.dir / "m-00002-of-00002.gguf").write_bytes(b"tensor data only")
+        facts = self.tuple.read_header(str(self.dir / "m-00002-of-00002.gguf"))
+        self.assertEqual(facts["architecture"], "granite")
+        self.assertIsNone(facts["resolved"], "a declared file is its own measurement path")
+
+    def test_the_header_door_reads_a_directory_artifact(self):
+        """The door end to end: a directory holding one GGUF answers its
+        header facts and names the container, and row 1 prints it.
+        Perturbation: open the declared path unresolved and the door
+        refuses the directory."""
+        model = self.dir / "granite"
+        model.mkdir()
+        _gguf(model / "granite.gguf", GRANITE_KEYS, GRANITE_TENSORS)
+        facts = self.tuple.read_header(str(model))
+        self.assertEqual(facts["architecture"], "granite")
+        self.assertEqual(facts["resolved"], str(model / "granite.gguf"))
+        declaration = {"spu-instruction": {"decoder": {"model-binding": {"artifact": str(model)}}}}
+        lines = self.tuple.artifact_rows(declaration, facts, None, None)
+        self.assertTrue([l for l in lines if "container" in l and "[derivable:" in l], lines)
+        self.assertIsNone(self.tuple.read_header(str(model / "granite.gguf"))["resolved"])
+
+
+class AgentTupleDivisionTests(unittest.TestCase):
+    """**Row 8 mirrors `Division::even` and `index_of` case for case**, the
+    fixtures taken from weaver-spu/src/division/tests.rs:
+    granite_divides_thirty_two_and_thirty_two, odd_layers_over_three_devices,
+    every_shape_reproduces_its_counts_under_the_engine_mapping,
+    no_device_or_no_layer_has_no_division and
+    index_of_names_every_slot_and_nothing_past_the_output. Perturbation: give
+    the larger count to the last L mod N devices, or put the output on the
+    first device, and these fail."""
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+
+    def test_granite_divides_thirty_two_and_thirty_two(self):
+        self.assertEqual(self.tuple.even_division(64, 2), [32, 32])
+
+    def test_odd_layers_over_three_devices(self):
+        self.assertEqual(self.tuple.even_division(13, 3), [5, 4, 4])
+
+    def test_every_shape(self):
+        for layers in range(1, 131):
+            for devices in range(1, 17):
+                counts = self.tuple.even_division(layers, devices)
+                self.assertEqual(sum(counts), layers)
+                larger = layers % devices
+                for index, count in enumerate(counts):
+                    want = -(-layers // devices) if index < larger else layers // devices
+                    self.assertEqual(count, want, (layers, devices, index))
+                self.assertEqual(self.tuple.index_of(counts, layers), devices - 1)
+
+    def test_no_device_or_no_layer_has_no_division(self):
+        self.assertIsNone(self.tuple.even_division(64, 0))
+        self.assertIsNone(self.tuple.even_division(0, 2))
+
+    def test_index_of_names_every_slot_and_nothing_past_the_output(self):
+        counts = self.tuple.even_division(5, 2)
+        self.assertEqual([self.tuple.index_of(counts, s) for s in range(7)],
+                         [0, 0, 0, 1, 1, 1, None])
+
+
+class FamilyRegistryMirrorTests(unittest.TestCase):
+    """**agent_tuple.py's family keys are the SPU registry's**, entry for
+    entry and in order, read from weaver-spu/src/family/mod.rs's `REGISTRY`,
+    and its fold is `same_key`'s. Perturbation: drop one `llama` entry from
+    the mirror and this fails, and a contested key would print as derivable."""
+
+    def test_the_mirror_is_the_registry(self):
+        source = (DEPLOY.parent / "crates/weaver-spu/src/family/mod.rs").read_text()
+        start = source.index("pub const REGISTRY: &[Declaration] = &[")
+        end = source.index("\n];", start)
+        block = source[start:end]
+        # Only the top-level entries' family members: eight spaces in.
+        families = tuple(re.findall(r'^        family: "([^"]+)",$', block, re.M))
+        self.assertEqual(_agent_tuple().REGISTRY_FAMILIES, families)
+
+    def test_the_fold_is_same_keys(self):
+        fold = _agent_tuple().family_key
+        self.assertEqual(fold("qwen3_5_moe"), fold("qwen35moe"))
+        self.assertEqual(fold("Nemotron-H.MoE"), "nemotronhmoe")
+        self.assertNotEqual(fold("qwen3"), fold("qwen35"))
+
+
+class AgentTupleRowTests(unittest.TestCase):
+    """**Every row ends in one of the four status words**, and each row says
+    what the survey says it can. Perturbations named per test."""
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+        path = self.dir / "m.gguf"
+        _gguf(path, GRANITE_KEYS, GRANITE_TENSORS)
+        self.header = self.tuple.read_header(path)
+
+    def declaration(self, devices=(0, 1), adapter=False, restore=None):
+        binding = {"artifact": "/models/granite.gguf", "devices": list(devices)}
+        if adapter:
+            binding["adapter"] = {"artifact": "/models/r1.gguf", "sha256": "a" * 64,
+                                  "base-blake3": "b" * 64, "scale": 1.0}
+        declaration = {"spu-instruction": {"decoder": {"model-binding": binding}},
+                       "state-store": {"engine": "sqlite"}}
+        if restore:
+            declaration["restore"] = {"save-point": restore}
+        return declaration
+
+    def statuses(self, lines):
+        return [re.search(r"\[(\w+):", line).group(1) for line in lines]
+
+    def test_every_line_carries_one_of_the_four_words(self):
+        decl = self.declaration()
+        lines = (self.tuple.artifact_rows(decl, self.header, None, None)
+                 + self.tuple.adapter_rows(decl)
+                 + self.tuple.device_rows(decl, self.header, ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"], ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"])
+                 + self.tuple.state_rows(decl, {"state_store": {"engine": "sqlite"}}))
+        for status in self.statuses(lines):
+            self.assertIn(status, ("recorded", "derivable", "absent", "FAULT"))
+
+    def test_row_one_takes_the_base_blake3_only_for_an_adapted_load(self):
+        """Perturbation: print base-blake3 for a base-only declaration and the
+        absent line is lost."""
+        adapted = self.tuple.artifact_rows(self.declaration(adapter=True), self.header, None, None)
+        self.assertIn("b" * 64, adapted[1])
+        self.assertIn("[derivable:", adapted[1])
+        base = self.tuple.artifact_rows(self.declaration(), self.header, None, None)
+        self.assertIn("[absent:", base[1])
+        seen = self.tuple.artifact_rows(self.declaration(), self.header, None,
+                                        {"weights_hash": "c" * 64, "line": 7})
+        self.assertIn("c" * 64, seen[1])
+        self.assertIn("[recorded: the latest model.measurement in the sink naming "
+                      "/models/granite.gguf, line 7]", seen[1])
+
+    def test_a_contested_architecture_is_not_printed_as_derivable(self):
+        """Perturbation: treat any registry hit as derivable and llama's
+        line reads derivable."""
+        path = self.dir / "l.gguf"
+        _gguf(path, [("general.architecture", 8, "llama"), ("llama.block_count", 4, 16)])
+        lines = self.tuple.artifact_rows(self.declaration(), self.tuple.read_header(path), None, None)
+        family = next(line for line in lines if " family " in line)
+        self.assertIn("[absent: the key is contested by 3 registry entries", family)
+        granite = next(line for line in self.tuple.artifact_rows(self.declaration(), self.header, None, None)
+                       if " family " in line)
+        self.assertIn("[derivable:", granite)
+
+    def test_the_placement_is_pair_three_with_the_output_on_the_last_device(self):
+        lines = self.tuple.device_rows(self.declaration(devices=(1, 0)), self.header, None, None)
+        placement = next(line for line in lines if "placement" in line)
+        self.assertIn("device 1: 32, device 0: 32; output on device 0", placement)
+        one = next(line for line in self.tuple.device_rows(self.declaration(devices=(1,)), self.header, None, None)
+                   if "placement" in line)
+        self.assertIn("all 64 layers and the output on device 1", one)
+
+    def test_row_seven_maps_ordinals_into_the_pci_order_list_and_states_its_premise(self):
+        gpus = ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:C1:00.0, NVIDIA RTX 2000 Ada Generation, 16380 MiB"]
+        lines = self.tuple.device_rows(self.declaration(devices=(2,)), self.header, gpus, gpus)
+        device = next(line for line in lines if "device 2 " in line)
+        self.assertIn("RTX 2000 Ada", device)
+        self.assertIn("CUDA_DEVICE_ORDER=PCI_BUS_ID", device)
+
+    def test_a_live_list_that_differs_from_the_install_tuple_is_a_fault(self):
+        """Perturbation: compare counts only and a swapped card passes."""
+        box = ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:C1:00.0, NVIDIA RTX 2000 Ada Generation, 16380 MiB"]
+        live = ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:C1:00.0, NVIDIA RTX A4000, 16376 MiB"]
+        lines = self.tuple.device_rows(self.declaration(), self.header, box, live)
+        self.assertIn("FAULT", self.statuses(lines))
+        lines = self.tuple.device_rows(self.declaration(devices=(5,)), self.header, box, box)
+        self.assertIn("FAULT", self.statuses(lines))
+
+    def test_header_and_declared_text_cannot_reach_the_terminal_raw(self):
+        """**No value is printed with a character a terminal acts on**, and an
+        architecture that is not a short name is absent, not echoed.
+        Perturbation: drop `printable` from `row` and the escape reaches the
+        line."""
+        path = self.dir / "e.gguf"
+        _gguf(path, [("general.architecture", 8, "granite\x1b]0;owned\x07")])
+        lines = self.tuple.artifact_rows(self.declaration(), self.tuple.read_header(path), None, None)
+        family = next(line for line in lines if " family " in line)
+        self.assertIn("[absent: the header carries no general.architecture", family)
+        decl = self.declaration(restore="sp\x1b[2J")
+        line = self.tuple.state_rows(decl, None)[1]
+        self.assertNotIn("\x1b", line)
+        self.assertIn("sp\\x1b[2J", line)
+
+    def test_restore_and_engine(self):
+        """Perturbation: print a declared save point as `none declared`."""
+        lines = self.tuple.state_rows(self.declaration(restore="sp-1"), {"state_store": {"engine": "sqlite"}})
+        self.assertIn("sp-1", lines[1])
+        lines = self.tuple.state_rows(self.declaration(), {"state_store": {"engine": "none"}})
+        self.assertIn("[FAULT:", lines[0])
+        self.assertIn("none declared", lines[1])
+
+
+    def test_rows_eight_and_nine_are_the_gguf_paths_alone(self):
+        """**Rows 8 and 9 state the GGUF path's rule** (Codex on #514): a
+        safetensors container is served by the native path, and a header
+        refused before its magic names no kind, so both rows read absent.
+        Perturbation: print row 9 unconditionally and the safetensors and
+        unknown cases read derivable."""
+        decl = self.declaration()
+        gguf = self.tuple.device_rows(decl, self.header, None, None)
+        self.assertTrue([l for l in gguf if "row 8" in l and "[derivable:" in l], gguf)
+        self.assertTrue([l for l in gguf if "row 9" in l and "[derivable:" in l], gguf)
+        native = self.tuple.device_rows(decl, None, None, None, container="safetensors")
+        unknown = self.tuple.device_rows(decl, None, None, None)
+        for case, lines in (("safetensors", native), ("unknown", unknown)):
+            with self.subTest(case):
+                for number in ("row 8", "row 9"):
+                    found = [l for l in lines if number in l]
+                    self.assertEqual(len(found), 1, lines)
+                    self.assertIn("[absent:", found[0])
+        self.assertIn("the native path, decoder/native.rs and native_pair.rs", native[-1])
+        self.assertIn("no container kind is known", unknown[-1])
+
+    def test_a_directory_measurement_is_matched_by_its_container(self):
+        """**The measurement names the container a directory resolved to**
+        (Codex on #514; residency.rs Resident.artifact, main.rs
+        render_measurement), so the rows door matches the header door's
+        `resolved`, and the declared directory stays row 1's artifact.
+        Perturbation: match the declared path and the hash reads absent."""
+        import contextlib
+        import io
+        model = self.dir / "granite"
+        container = model / "granite.safetensors"
+        declaration = self.dir / "agent.toml"
+        declaration.write_text('[spu-instruction.decoder.model-binding]\n'
+                               f'artifact = "{model}"\ndevices = [0]\n')
+        sink = self.dir / "trace.ndjson"
+        measurement = {"kind": "model.measurement", "run": "r-1", "sequence": 3,
+                       "payload": {"model": str(container), "weights_hash": "c" * 64,
+                                   "adapter": None}}
+        sink.write_text(json.dumps({"kind": "load", "run": "r-1", "sequence": 0, "payload": {}})
+                        + "\n" + json.dumps(measurement) + "\n")
+        header = json.dumps({"refused": "no GGUF magic", "container": "safetensors",
+                             "resolved": str(container)})
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            self.tuple.main(["rows", "--declaration", str(declaration), "--header-json", header,
+                             "--sink", str(sink)])
+        out = printed.getvalue()
+        self.assertRegex(out, r"row 1 +artifact +" + re.escape(str(model)) + r" +\[recorded:")
+        self.assertRegex(out, r"row 1 +container +" + re.escape(str(container)) + r" +\[derivable:")
+        self.assertIn("c" * 64 + "  [recorded: the latest model.measurement in the sink naming "
+                      + str(container) + ", line 2]", out)
+        self.assertRegex(out, r"row 9 +cpu offload +- +\[absent: the native path")
+
+    LINEAGE = {"save_point": "e" * 64, "run": "r-0", "sequence": 5, "turn": 1,
+               "named_at_restore": False}
+
+    def restored(self, lines):
+        return [line for line in lines if " restored from " in line]
+
+    def test_the_restored_save_point_is_read_from_the_lineage(self):
+        """**What the load restored is the load event's lineage** (Codex on
+        #514): with no [restore], admin restores the manifest's latest and
+        the harness names it in `lineage` (the shape the harness's lifecycle
+        tests assert). Perturbation: read the declaration alone and the
+        reload's digest is not printed."""
+        lines = self.tuple.restore_rows(self.declaration(), {"lineage": self.LINEAGE})
+        self.assertIn("[recorded: the declaration has no [restore]", lines[0])
+        restored = self.restored(lines)
+        self.assertEqual(len(restored), 1, lines)
+        self.assertIn("e" * 64 + " (run r-0, sequence 5, turn 1)", restored[0])
+        self.assertIn("[recorded: the load event's lineage, named_at_restore False]", restored[0])
+        lines = self.tuple.restore_rows(self.declaration(), {"state_store": {}})
+        self.assertIn("none  [recorded: the load event carries no lineage", self.restored(lines)[0])
+        lines = self.tuple.restore_rows(self.declaration(), None)
+        self.assertIn("[absent: no load event was read]", self.restored(lines)[0])
+
+    def test_a_declared_save_point_the_load_did_not_restore_is_a_fault(self):
+        """**The declaration's [restore] and the lineage must name one save
+        point**, by digest or by published name, as admin's selection
+        matches them (save_points.rs). Perturbation: drop the comparison,
+        or the FAULT for a declared point with no lineage, and a case reads
+        recorded."""
+        digest = "e" * 64
+        for declared in (digest, f"20261109T120000Z-{digest}.save-point"):
+            with self.subTest(declared):
+                lines = self.tuple.restore_rows(self.declaration(restore=declared),
+                                                {"lineage": self.LINEAGE})
+                self.assertIn("[recorded:", self.restored(lines)[0])
+        cases = {
+            "another digest": ("f" * 64, {"lineage": self.LINEAGE}),
+            "another name": (f"20261109T120000Z-{'f' * 64}.save-point", {"lineage": self.LINEAGE}),
+            "a name around the digest": (f"x{digest}.save-point", {"lineage": self.LINEAGE}),
+            "no lineage": (digest, {"state_store": {}}),
+            "a lineage with no digest": (digest, {"lineage": {"run": "r-0"}}),
+        }
+        for said, (declared, event) in cases.items():
+            with self.subTest(said):
+                lines = self.tuple.restore_rows(self.declaration(restore=declared), event)
+                self.assertIn("[FAULT:", self.restored(lines)[0])
+
+    def test_the_exit_reads_the_rows_flag_and_never_their_text(self):
+        """**A FAULT is the flag `row` sets**, so a declared value that
+        prints "[FAULT:" fails nothing. Perturbation: judge the exit by the
+        substring "[FAULT:" over the printed lines and the clean run exits
+        3."""
+        import contextlib
+        import io
+        declaration = self.dir / "agent.toml"
+        declaration.write_text('[spu-instruction.decoder.model-binding]\n'
+                               'artifact = "/models/[FAULT: not a fault]"\ndevices = []\n')
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            clean = self.tuple.main(["rows", "--declaration", str(declaration)])
+        self.assertIn("[FAULT: not a fault]", printed.getvalue())
+        self.assertEqual(clean, 0, printed.getvalue())
+        with contextlib.redirect_stdout(io.StringIO()):
+            faulted = self.tuple.main(["rows", "--declaration", str(declaration),
+                                       "--install-tuple-unheld", "an open entry"])
+        self.assertEqual(faulted, 3)
+
+
+class AgentTupleRecordReadTests(unittest.TestCase):
+    """**The record reads take the trace's line shape**: the envelope
+    flattened, the payload under `payload` (weaver-trace event.rs), the
+    measurement spliced there whole. Perturbations: read the first
+    measurement rather than the last, or keep one naming another artifact,
+    and the hash printed is not this binding's."""
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+
+    def test_the_latest_measurement_of_the_declared_artifact(self):
+        sink = self.dir / "trace.ndjson"
+        lines = [
+            {"kind": "load", "payload": {"state_store": {"engine": "sqlite"}}},
+            {"kind": "model.measurement", "payload": {"model": "/m.gguf", "weights_hash": "1" * 64}},
+            {"kind": "model.output", "payload": {"finish": "stop"}},
+            {"kind": "model.measurement", "payload": {"model": "/m.gguf", "weights_hash": "2" * 64}},
+        ]
+        sink.write_text("".join(json.dumps(line) + "\n" for line in lines) + "not json\n")
+        self.assertEqual(self.tuple.latest_measurement(sink, "/m.gguf"),
+                         {"weights_hash": "2" * 64, "line": 4})
+        self.assertIsNone(self.tuple.latest_measurement(sink, "/other.gguf"))
+        empty = self.dir / "empty.ndjson"
+        empty.write_text("")
+        self.assertIsNone(self.tuple.latest_measurement(empty, "/m.gguf"))
+
+    def test_the_sink_is_read_only_as_a_regular_file_never_through_a_link(self):
+        """**A link or a FIFO at the sink's name is refused at the open**, not
+        followed or blocked on: the shell's look and the helper's open are two
+        moments. Perturbation: open with plain `open()` and the link is
+        followed (and the FIFO blocks past the timeout)."""
+        real = self.dir / "real.ndjson"
+        real.write_text(json.dumps({"kind": "model.measurement",
+                                    "payload": {"model": "/m.gguf", "weights_hash": "3" * 64}}) + "\n")
+        link = self.dir / "link.ndjson"
+        link.symlink_to(real)
+        with self.assertRaises(OSError):
+            self.tuple.latest_measurement(link, "/m.gguf")
+        fifo = self.dir / "fifo.ndjson"
+        os.mkfifo(fifo)
+        with self.assertRaises(OSError):
+            self.tuple.latest_measurement(fifo, "/m.gguf")
+        self.assertEqual(self.tuple.latest_measurement(real, "/m.gguf")["weights_hash"], "3" * 64)
+
+    def test_a_measurement_hash_of_another_shape_is_not_taken(self):
+        sink = self.dir / "trace.ndjson"
+        sink.write_text(json.dumps({"kind": "model.measurement",
+                                    "payload": {"model": "/m.gguf", "weights_hash": "\x1b[2Jzz"}}) + "\n")
+        self.assertIsNone(self.tuple.latest_measurement(sink, "/m.gguf"))
+
+    def test_the_load_payload_and_the_live_list(self):
+        events = self.dir / "trace.ndjson"
+        events.write_text(json.dumps({"kind": "load", "payload": {"declaration": "0" * 64}}) + "\n"
+                          + json.dumps({"kind": "unload"}) + "\n"
+                          + json.dumps({"kind": "load", "payload": {"declaration": "d" * 64}}) + "\n")
+        # The load's own events start after the earlier run's: an earlier
+        # load is never taken for this one.
+        self.assertEqual(self.tuple.load_payload(events, 2), {"declaration": "d" * 64})
+        self.assertIsNone(self.tuple.load_payload(events, 4))
+        smi = ("00000000:C1:00.0,  NVIDIA RTX 2000 Ada Generation, 16380 MiB\n"
+               "00000000:01:00.0, NVIDIA RTX A6000 ,49140 MiB\n")
+        self.assertIsNone(self.tuple.live_gpus("fixture-driver\n"))
+        # The install tuple's `gpu.<n>` shape, sorted in the C locale.
+        self.assertEqual(self.tuple.live_gpus(smi),
+                         ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB",
+                          "00000000:C1:00.0, NVIDIA RTX 2000 Ada Generation, 16380 MiB"])
+
+
+class TupleQueryMirrorTests(unittest.TestCase):
+    """**The runbook names the nvidia-smi query verify-load runs**, so the
+    box's operator reads the exact line from section 4. Perturbation: change
+    either side's query fields and this fails."""
+
+    def test_the_runbook_names_the_scripts_query(self):
+        script = (DEPLOY / "verify-load.sh").read_text()
+        runbook = " ".join((DEPLOY / "HowToDeployANewAgent.md").read_text().split())
+        query = re.search(r"nvidia-smi (--query-gpu=\S+ --format=\S+)", script).group(1)
+        self.assertIn(f"`nvidia-smi {query}`", runbook)
+
+
+INSTALL_TUPLE_LINES = [
+    "commit = " + "0" * 40,
+    "toolchain = nightly-2026-02-13",
+    "features = weaver-spu/cuda,weaver-state/sqlite",
+    "engine = llama-cpp-sys-2 0.1.146",
+    "engine-source = git+https://example.invalid/llama-cpp-rs?rev=" + "a" * 40 + "#" + "b" * 40,
+    "engine-vendored = " + "c" * 40,
+    "nvcc = 13.4, V13.4.92",
+    "member.worker = " + "1" * 64,
+    "member.weaver-admin = " + "2" * 64,
+    "member.weaver-trace-relay = " + "3" * 64,
+    "member.weaver-gate = " + "4" * 64,
+    "member.weaver-spu = " + "5" * 64,
+    "member.weaver-state = " + "6" * 64,
+    "member.busybox = " + "7" * 64,
+    "member.busybox.applets = " + "8" * 64,
+    "library.libllama.so.0.0.8783 = {llama}",
+    "library.libggml-base.so.0.9.11 = {ggml}",
+    "driver = 580.1",
+    "cudart = /opt/cuda/lib/libcudart.so.13.0.1",
+    "cublas = /opt/cuda/lib/libcublas.so.13.0.1",
+    "cublaslt = /opt/cuda/lib/libcublasLt.so.13.0.1",
+    "cccl = 3.0",
+    "gpus = 2",
+    "gpu.0 = 00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB",
+    "gpu.1 = 00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB",
+]
+
+
+class AgentTupleInstallTests(unittest.TestCase):
+    """**The install tuple is read as install-tuple.sh writes it** and bound
+    to the load's record. Perturbations named per test."""
+
+    def setUp(self):
+        self.tuple = _agent_tuple()
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+        self.lib = self.dir / "lib"
+        self.lib.mkdir()
+        (self.lib / "libllama.so.0.0.8783").write_bytes(b"llama")
+        (self.lib / "libggml-base.so.0.9.11").write_bytes(b"ggml")
+        (self.lib / "libllama.so.0").symlink_to("libllama.so.0.0.8783")
+        self.digests = {"llama": hashlib.sha256(b"llama").hexdigest(),
+                        "ggml": hashlib.sha256(b"ggml").hexdigest()}
+        self.path = self.write(INSTALL_TUPLE_LINES)
+
+    def write(self, lines):
+        path = self.dir / "install-tuple"
+        path.write_text("".join(line.format(**self.digests) + "\n" for line in lines))
+        return path
+
+    def test_the_tuple_is_read(self):
+        install = self.tuple.read_install_tuple(self.path)
+        self.assertEqual(install["sha256"], hashlib.sha256(self.path.read_bytes()).hexdigest())
+        self.assertEqual(install["facts"]["engine-vendored"], "c" * 40)
+        self.assertEqual(install["members"]["busybox.applets"], "8" * 64)
+        self.assertEqual(install["gpus"], ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB",
+                                           "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"])
+
+    def test_a_malformed_tuple_is_refused(self):
+        """Perturbation: drop any one check in `read_install_tuple` and its
+        case reads on."""
+        cases = {
+            "not `key = value`": INSTALL_TUPLE_LINES + ["driver=1"],
+            "empty or repeated": INSTALL_TUPLE_LINES + ["driver = 2"],
+            "no cccl": [l for l in INSTALL_TUPLE_LINES if not l.startswith("cccl")],
+            "not 64 hex digits": INSTALL_TUPLE_LINES[:7] + ["member.worker = zz"] + INSTALL_TUPLE_LINES[8:],
+            "numbered 0 to n-1": [l for l in INSTALL_TUPLE_LINES if not l.startswith("gpu.0")] + ["gpu.2 = x, y, z"],
+            "gpus says 2": INSTALL_TUPLE_LINES + ["gpu.2 = 00000000:81:00.0, X, 1 MiB"],
+        }
+        for said, lines in cases.items():
+            with self.subTest(said):
+                with self.assertRaisesRegex(self.tuple.InstallTupleRefused, said):
+                    self.tuple.read_install_tuple(self.write(lines))
+        link = self.dir / "linked"
+        link.symlink_to(self.write(INSTALL_TUPLE_LINES))
+        with self.assertRaises(OSError):
+            self.tuple.read_install_tuple(link)
+
+    def test_the_tuple_install_tuple_sh_writes_is_read(self):
+        """**The reader takes what the writer writes**: the tuple comes from
+        install-tuple.sh's own `install_tuple` on a box that answers nothing,
+        so every member and library digest reads `unknown`, and the reader
+        takes it whole. Perturbation: refuse an `unknown` digest and the
+        writer's tuple is refused."""
+        repo = Path(__file__).resolve().parent.parent
+        stubs = self.dir / "stubs"
+        stubs.mkdir()
+        for name in ("cargo", "git", "nvidia-smi", "nvcc", "pacman", "rustc"):
+            (stubs / name).write_text("#!/bin/sh\nexit 1\n")
+            (stubs / name).chmod(0o755)
+        empty = self.dir / "empty-repo"
+        empty.mkdir()
+        script = (f"source {shlex.quote(str(repo / 'deploy' / 'engine-libraries.sh'))}; "
+                  f"source {shlex.quote(str(repo / 'deploy' / 'install-tuple.sh'))}; "
+                  f"install_tuple {shlex.quote(str(empty))} {'0' * 40} "
+                  f"{shlex.quote(str(self.dir / 'no-bin'))} {shlex.quote(str(self.dir / 'no-lib'))} "
+                  f"fixture 'worker weaver-spu busybox.applets' 'libllama.so.0.0.8783'")
+        env = {"PATH": str(stubs) + os.pathsep + "/usr/bin:/bin", "LC_ALL": "C"}
+        ran = subprocess.run(["bash", "-c", script], env=env, text=True,
+                             capture_output=True, timeout=20)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        install = self.tuple.read_install_tuple(self.write([ran.stdout.rstrip("\n")]))
+        self.assertEqual(set(install["facts"]), set(self.tuple.INSTALL_SCALARS))
+        self.assertEqual(install["members"], {"worker": "unknown", "weaver-spu": "unknown",
+                                              "busybox.applets": "unknown"})
+        self.assertEqual(install["libraries"], {"libllama.so.0.0.8783": "unknown"})
+        self.assertEqual(install["gpus"], [])
+
+    def test_an_unknown_digest_binds_nothing_and_faults_nothing(self):
+        """**An `unknown` digest is the box side unstated**, so the row is
+        absent, never a fault. Perturbation: drop either `unknown` branch in
+        `binding_rows` and its row reads FAULT."""
+        lines = [l.replace("1" * 64, "unknown") if l.startswith("member.worker") else
+                 l.replace("{llama}", "unknown") for l in INSTALL_TUPLE_LINES]
+        install = self.tuple.read_install_tuple(self.write(lines))
+        rows = self.tuple.binding_rows("d" * 64, self.load(), install, str(self.lib))
+        worker = [r for r in rows if "member worker" in r]
+        llama = [r for r in rows if "library libllama.so.0.0.8783" in r]
+        self.assertEqual(len(worker), 1, rows)
+        self.assertEqual(len(llama), 1, rows)
+        self.assertIn("[absent: not bound: the install tuple could not hash it]", worker[0])
+        self.assertIn("[absent: not bound: the install tuple could not hash it]", llama[0])
+        self.assertFalse([r for r in rows if "FAULT" in r], rows)
+
+    def load(self, **override):
+        event = {"declaration": "d" * 64, "library_path": str(self.lib),
+                 "stack": {"worker": "1" * 64, "weaver-spu": "5" * 64, "weaver-state": "6" * 64,
+                           "weaver-gate": "4" * 64, "weaver-spu-classify": "9" * 64}}
+        event.update(override)
+        return event
+
+    def statuses(self, lines, field):
+        return {re.search(r"\[(\w+):", l).group(1) for l in lines if field in l}
+
+    def test_the_record_binds_to_the_box(self):
+        install = self.tuple.read_install_tuple(self.path)
+        lines = self.tuple.binding_rows("d" * 64, self.load(), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "declaration"), {"recorded"})
+        self.assertEqual(self.statuses(lines, "member worker"), {"recorded"})
+        # Names one side holds are printed as not bound, never compared.
+        self.assertEqual(self.statuses(lines, "member busybox "), {"absent"})
+        self.assertEqual(self.statuses(lines, "member weaver-spu-classify"), {"absent"})
+        self.assertEqual(self.statuses(lines, "library libllama.so.0.0.8783"), {"recorded"})
+        self.assertFalse([l for l in lines if "libllama.so.0 " in l], "a link is never listed")
+        self.assertNotIn("FAULT", " ".join(lines))
+
+    def test_each_disagreement_is_a_fault_naming_which(self):
+        """Perturbations: compare the declaration loosely, skip a stack name,
+        or skip hashing the library files, and a case passes."""
+        install = self.tuple.read_install_tuple(self.path)
+        lines = self.tuple.binding_rows("e" * 64, self.load(), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "declaration"), {"FAULT"})
+        stack = dict(self.load()["stack"], worker="0" * 64)
+        lines = self.tuple.binding_rows("d" * 64, self.load(stack=stack), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "member worker"), {"FAULT"})
+        (self.lib / "libggml-base.so.0.9.11").write_bytes(b"changed")
+        lines = self.tuple.binding_rows("d" * 64, self.load(), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "library libggml-base.so.0.9.11"), {"FAULT"})
+        (self.lib / "libggml-cuda.so.0.9.11").write_bytes(b"extra")
+        lines = self.tuple.binding_rows("d" * 64, self.load(), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "library libggml-cuda.so.0.9.11"), {"FAULT"})
+
+    def test_a_library_path_the_tuple_does_not_digest_is_not_bound(self):
+        install = self.tuple.read_install_tuple(self.path)
+        lines = self.tuple.binding_rows("d" * 64, self.load(library_path="/elsewhere"), install, str(self.lib))
+        self.assertEqual(self.statuses(lines, "library path"), {"absent"})
+
+    def test_the_box_rows_cite_the_tuples_digest(self):
+        install = self.tuple.read_install_tuple(self.path)
+        lines = self.tuple.box_rows(str(self.path), install, None)
+        self.assertIn(install["sha256"], lines[0])
+        self.assertIn("fork " + "b" * 40, lines[1])
+        lines = self.tuple.box_rows(str(self.path), None, "the install tuple is refused: x")
+        self.assertIn("[FAULT:", lines[0])
+        lines = self.tuple.box_rows(str(self.path), None, None)
+        self.assertIn("[absent:", lines[0])
+
 
 if __name__ == "__main__":
     unittest.main()

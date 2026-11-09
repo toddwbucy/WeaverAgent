@@ -340,6 +340,51 @@ payload names the session, the run, the store, the declaration's hash, the compo
 and writes nothing is the failure this step exists to catch, and the worker's own words
 are in `<territory>/worker.log`, the state member's in `<territory>/state/state.log`.
 
+**Then it prints the agent's deployment tuple**, through `deploy/agent_tuple.py` beside
+it, before the constituents are read. The rows are those of the tuple survey of
+2026-11-08 (1, 2, 3, 6, 7, 8 and 9), with the state engine and the restore rows.
+Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
+- **Row 1, the artifact and its weights hash.** The hash is admission's BLAKE3, which no
+  tool on the box computes. For an adapted agent it is the declared `base-blake3`, since
+  admission refuses a base that differs. For a base-only agent it is the sink's latest
+  `model.measurement` naming the path admission resolved (the declared file, or the
+  container a declared directory resolves to), and `absent` where the sink holds none:
+  the load itself records no hash.
+- **Rows 2 and 3, the family, the chat template and the formats**, from the artifact's
+  GGUF header. The header is read as the agent's own account, the one admission reads it
+  as, and never as root. A declared directory is first resolved to its one container by
+  admission's rule (a single `.gguf` or `.safetensors` file, or one split's first
+  shard), and row 1 names that container.
+- **Row 7, the devices.** Each declared ordinal names its card in the install tuple's
+  PCI-order list. That order is the one the SPU sees, under PAIR-1's
+  `CUDA_DEVICE_ORDER=PCI_BUS_ID` mask. The live cards are read with
+  `nvidia-smi --query-gpu=pci.bus_id,name,memory.total --format=csv,noheader`, put in
+  bus order. A difference from the install tuple's list in name, memory, count or order
+  is a `FAULT`: the install tuple is stale.
+- **Rows 8 and 9, the placement and the offload**, for a GGUF container: PAIR-3's even
+  split of the header's layer count over the declared devices, and every layer
+  offloaded. A container without the GGUF magic is served by the native path, and both
+  rows read `absent`, as they do where no container kind is known.
+- **The restore rows.** The declaration's `[restore]`, or none declared, and what the
+  load restored, from the load event's `lineage`. With no `[restore]` a reload restores
+  the manifest's latest save point. A declared save point the lineage does not name, by
+  digest or by published name, or a declared one with no lineage, is a `FAULT`.
+
+- **The box side and the binding.** The box side is the stack record's `install-tuple`,
+  written by each install. Its own sha256 is printed as the box's identity, the one value
+  a report cites for it. The record is then bound to the box:
+  - The declaration's sha256 against the load event's.
+  - The load event's `stack` digests against the install tuple's members, by name, with
+    a name only one side carries printed as not bound.
+  - Each engine library in the load event's library path against the install tuple's
+    digest, hashed on the spot.
+
+  A digest the install tuple reads `unknown` (the install could not hash that file) is
+  printed as not bound, never as a `FAULT`.
+
+A `FAULT` line unloads the run and fails the script, `--keep` included, like every other
+failed check.
+
 `deploy/verify-lifecycle.sh --agent <throwaway>`, run as the operator (it runs each load
 in a delegated scope itself), verifies a whole lifecycle end to end
 (create, load, seed, save points, restore, force-unload, crash recovery, the refusal by
