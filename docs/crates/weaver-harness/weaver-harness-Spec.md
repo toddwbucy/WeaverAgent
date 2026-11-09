@@ -2561,9 +2561,9 @@ starting state, per `weaver-state-PRD` section 4, taken on the operator's demand
 admin's `save-point` verb, or by the first leave's snapshot. **Because the seeding turn generates, the agent's starting state
 holds the model's first answer beside the prompt**: that answer is on the record as
 every `message.assistant` is, the tee lands it, and a save point taken after the
-seeding carries both, by design and not by leak. The line's bound is the gate's, 32 kibibytes of octets before the
-delimiter per `weaver-gate-Spec` section 4, which a prompt written as prose sits well
-inside. A refused open is a refused enter, returned through the
+seeding carries both, by design and not by leak. The line's bound is the gate's, 49,041 octets before the
+delimiter per `weaver-gate-Spec` section 4, the organ envelope's exact capacity: the R1
+system prompt, 48,454 octets as its seeding line, sits inside it with 587 to spare. A refused open is a refused enter, returned through the
 fan-out's after-load failure so the authored bracket stands for the forced leave of admin's rollback to unwind, the
 aggregate naming the decode seam as where the fan-out stopped. **Under a restoring load
 the store answers from the save point**, per the operator's rulings of 2026-10-02 on

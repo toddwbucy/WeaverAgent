@@ -875,11 +875,24 @@ to: gate-one-exchange-per-line-by-identity
 **The line takes a bound, and the bound closes the connection.** The organ
 envelope is bounded at 64 kibibytes, per `weaver-types-Spec` section 4, and
 the frame's encoding inflates its octets by a third, so an unbounded line
-would overrun the envelope on this crate's own send. **The election, flagged
-for the operator: a client line is bounded at 32 kibibytes of octets before
-the delimiter,** which encodes to under 44 kibibytes and leaves the envelope
-its overhead with margin rather than arithmetic exactness. The bound is
-inclusive: a line of exactly the bound's octets followed by its delimiter is
+would overrun the envelope on this crate's own send. **A client line is
+bounded at 49,041 octets before the delimiter, the envelope's exact
+capacity**, on the operator's ruling of 2026-11-08. The derivation: the line
+rides the envelope encoded, 4 * ceil(N / 3) octets for N octets, and the
+envelope's other members (the exchange, the position, the frame's dialer and
+the JSON around them) take at most 147 octets, at an ordinal of `u64::MAX`
+and a dialer of `u32::MAX`. A line of 49,041 octets encodes to 65,388 and
+renders to 65,535, inside the bound of 65,536; a line of 49,042 encodes to
+65,392 and renders to 65,539, past it. So every line the gate admits reaches
+the harness, and no larger bound can. The ruling gives up the margin the
+earlier election of 32 kibibytes kept, knowingly, so that a seeding line of
+48,454 octets (the R1 system prompt of 47,214 bytes, encoded as the world
+contract's JSON line) seats through this door. **The bound is an interim.**
+Its destination is the seed verb, `ADMIN-SEED` in
+`docs/crates/state-management/weaver-admin-Spec-amendment.md`, which reads
+the prompt from the territory rather than off a line, while the gate
+amendment beside it retires the role-system seeding route at the gate
+(GATE-1), both at the foundation cutover. The bound is inclusive: a line of exactly the bound's octets followed by its delimiter is
 legal, and the connection closes when more than the bound stands undelimited,
 however many reads delivered it. A connection past the bound has left the
 protocol at the

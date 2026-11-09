@@ -207,7 +207,7 @@ impl Channel {
 
 /// One envelope rendered and judged against the bound, the shared half of
 /// the two send paths so the encode and the assertion cannot drift apart.
-fn render(envelope: &OrganEnvelope) -> Result<Vec<u8>, ChannelFault> {
+pub(crate) fn render(envelope: &OrganEnvelope) -> Result<Vec<u8>, ChannelFault> {
     let body = serde_json::to_vec(envelope).map_err(|_| ChannelFault::Undecodable)?;
     if body.len() > MAX_ENVELOPE_BYTES {
         return Err(ChannelFault::Truncated {

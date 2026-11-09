@@ -371,6 +371,15 @@ load asks the member for it and seats what the member holds, and the draft on di
 only what the next seeding would send. Seeding again in a later residency replaces the
 prompt; seeding twice in one residency seats both, in order.
 
+**The seeding line has a bound: 49,041 octets before the delimiter**, the gate's line
+bound (`weaver-gate-Spec` section 4), measured on the JSON line, so newlines and quotes
+in the draft count as two octets each and a non-ASCII character as a six-octet escape
+(twelve above U+FFFF). `turn.py` measures the
+line before it dials and refuses an oversize draft with its size; the gate itself would
+close the connection unanswered. The bound is an interim, on the operator's ruling of
+2026-11-08: seeding moves off the gate to admin's seed verb at the state-management
+foundation cutover.
+
 **An agent without a store (section 3) is seeded in every residency instead**, as its
 first turn: with no member, nothing holds the prompt across loads, the load seats
 nothing, and a save point and unload would carry nothing, so the seeding is the first
