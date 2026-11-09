@@ -162,8 +162,12 @@ each source the header read must be present with the same bytes, and each
 source the header found absent must still be absent, or the walk refuses
 `ArtifactUnreadable`, naming the file. So a sidecar that appeared or vanished
 between the two reads refuses, and the recorded directory never holds a
-template the selection did not see. The pinned-file rule of LORA-2 (hash and
-load through one pinned file) is the model.
+template the selection did not see. The same holds for a GGUF: the pinned
+descriptor keeps the file open but does not stop a write in place, so the hash
+walk reads `tokenizer.chat_template` again from the same descriptor and
+refuses `ArtifactUnreadable`, naming the file, where its bytes differ from the
+header's. The pinned-file rule of LORA-2 (hash and load through one pinned
+file) is the model.
 
 **The account line.** Every family refusal crosses the seam as
 `ArtifactUnreadable`, and today the admit account line (Spec 3) names only
