@@ -449,6 +449,32 @@ holds_group() {
   held=" $(id -Gn "$1" 2>/dev/null || true) "
   case "$held" in *" $2 "*) printf yes ;; *) printf no ;; esac
 }
+# box_groups_outside ACCOUNT: the groups the box's account ACCOUNT holds
+# outside what it may hold, space-separated, or `none`, by create-agent.sh's
+# allow-list (weaver-admin-Spec section 2): weaver-admincon its own group and
+# agents' -state and -admin groups, weaver-gatecon its own group and agents'
+# own groups, where an agent's name is one admin's name check admits.
+box_groups_outside() {
+  local g n outside=""
+  for g in $(id -Gn "$1" 2>/dev/null || echo "(unreadable)"); do
+    n=""
+    case "$1:$g" in
+      "$1:$1") continue ;;
+      "$ADMINCON:"weaver-*-state) n=${g#weaver-}; n=${n%-state} ;;
+      "$ADMINCON:"weaver-*-admin) n=${g#weaver-}; n=${n%-admin} ;;
+      "$GATECON:"weaver-*) n=${g#weaver-} ;;
+    esac
+    if [ -n "$n" ] && [[ "$n" =~ ^[A-Za-z0-9_-]+$ ]]; then
+      case "$n" in
+        *-state|*-trace|*-relay|*-admin|*-admincon|gatecon|admincon) ;;
+        *) continue ;;
+      esac
+    fi
+    outside="$outside $g"
+  done
+  printf '%s' "${outside# }"
+  [ -n "$outside" ] || printf none
+}
 TRACE_PY='import json, sys
 path, start, kinds = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
 with open(path) as f:
@@ -745,6 +771,7 @@ step_1() {
   for g in "$AU-state" "$AU-admin" "$AU-trace"; do expect_eq "$GATECON does not hold $g" no "$(holds_group "$GATECON" "$g")"; done
   for g in "$AU-state" "$AU-admin"; do expect_eq "$ADMINCON holds $g" yes "$(holds_group "$ADMINCON" "$g")"; done
   for g in "$AU" "$AU-trace"; do expect_eq "$ADMINCON does not hold $g" no "$(holds_group "$ADMINCON" "$g")"; done
+  for u in "$GATECON" "$ADMINCON"; do expect_eq "$u holds no group outside what the box's account may hold" none "$(box_groups_outside "$u")"; done
   expect_eq "no per-agent connector account $AU-admincon stands" no "$(lookup passwd "$AU-admincon" && echo yes || echo no)"
 
   expect_lay "$T" "root:$AU-state 710 directory"

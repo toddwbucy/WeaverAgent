@@ -576,29 +576,39 @@ refuse_existing() {
 # adopted only where it is the account this script would lay.
 UID_MIN=$(awk '$1 == "UID_MIN" { v = $2 } END { print v }' /etc/login.defs 2>/dev/null || true)
 [[ "$UID_MIN" =~ ^[0-9]+$ ]] || UID_MIN=1000
-# door_crossings NAME: each group NAME holds that reaches the other account's
-# door, space-separated, or nothing. The gate-con account's door is each
-# agent's own group, and the admin-con account's are each agent's state and
-# access groups. **The admin-con account is judged by what it may hold**: its
-# own group and weaver-<agent>-state and weaver-<agent>-admin groups, and no
-# other weaver- group, so an agent's own group is a crossing whatever
-# hyphens the agent's name carries, as are a trace group and the gate-con
-# account's. **The gate-con account holds no state, access or trace group**,
-# no per-agent connector's group `weaver-<agent>-admincon` of the earlier
-# layout and not the admin-con account's. Admin refuses every agent name
-# ending in a reserved suffix (weaver-admin-Spec section 4), so the suffixes
-# read here name no agent's own group.
+# agent_name_ok N: N is a name admin's name check admits (weaver-admin-Spec
+# section 4): ASCII letters, digits, `-` and `_`, no reserved suffix, and not
+# a box account's name.
+agent_name_ok() {
+  [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+  case "$1" in
+    *-state|*-trace|*-relay|*-admin|*-admincon|gatecon|admincon) return 1 ;;
+  esac
+  return 0
+}
+# door_crossings NAME: each group NAME holds outside what the box's account
+# NAME may hold, space-separated, or nothing. **Each account is judged by an
+# allow-list, inside the weaver- namespace and outside it alike**, so a group
+# such as wheel, sudo, disk or docker refuses as a weaver- group would:
+# - weaver-admincon may hold its own group and agents' state and access
+#   groups, weaver-<n>-state and weaver-<n>-admin, and nothing else;
+# - weaver-gatecon may hold its own group and agents' own groups, weaver-<n>,
+#   and nothing else.
+# <n> is a name agent_name_ok admits, so a trace, relay, state, access or
+# per-agent connector group is never read as an agent's own group.
 door_crossings() {
-  local held g crossed=""
+  local held g n crossed=""
   held=$(id -Gn "$1") || die "cannot read the groups of $1"
   for g in $held; do
+    n=""
     case "$1:$g" in
-      "$ADMINCON_USER:$ADMINCON_USER"|"$ADMINCON_USER:"weaver-*-state|"$ADMINCON_USER:"weaver-*-admin) ;;
-      "$ADMINCON_USER:"weaver-*) crossed="$crossed $g" ;;
-      "$GATECON_USER:$ADMINCON_USER") crossed="$crossed $g" ;;
-      "$GATECON_USER:"weaver-*-state|"$GATECON_USER:"weaver-*-admin|"$GATECON_USER:"weaver-*-trace) crossed="$crossed $g" ;;
-      "$GATECON_USER:"weaver-*-admincon) crossed="$crossed $g" ;;
+      "$1:$1") continue ;;
+      "$ADMINCON_USER:"weaver-*-state) n=${g#weaver-}; n=${n%-state} ;;
+      "$ADMINCON_USER:"weaver-*-admin) n=${g#weaver-}; n=${n%-admin} ;;
+      "$GATECON_USER:"weaver-*) n=${g#weaver-} ;;
     esac
+    [ -n "$n" ] && agent_name_ok "$n" && continue
+    crossed="$crossed $g"
   done
   printf '%s' "${crossed# }"
 }
@@ -630,7 +640,7 @@ judge_box_account() {
     || die "the account $name's primary group $gname is the primary group of ${sharers% } too, so it is not adopted as the box's account"
   crossed=$(door_crossings "$name") || exit 1
   [ -z "$crossed" ] \
-    || die "the account $name holds $crossed, which reaches the other connector account's door (weaver-admin-Spec section 2), so it is not adopted as the box's account"
+    || die "the account $name holds $crossed, outside what the box's account may hold (weaver-admin-Spec section 2), so it is not adopted as the box's account"
 }
 require_path -d "$ADMIN_BASE" "the admin base is missing or not a directory (bootstrap-stack.sh makes it)"
 require_path -x "$ADMIN_BASE" "the admin base cannot be traversed"
@@ -809,6 +819,19 @@ printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
 DECLARATION_TEXT=$(render_declaration)
 printf '%s\n' "$DECLARATION_TEXT" | python3 -c 'import sys, tomllib; tomllib.loads(sys.stdin.read())' 2>/dev/null \
   || die "the declaration rendered with $GATECON_USER's uid does not parse as TOML"
+# **The rule written names the gate-con account's uid and nothing else**: the
+# plan renders a placeholder, 65534, where the account is absent, so the
+# rendered rule is asserted to be exactly `allowed-uids = [<its uid>]` here and
+# again at the write, and refused otherwise.
+rule_names_gatecon() {
+  local rules
+  [[ "$GATECON_UID" =~ ^[0-9]+$ ]] && [ "$GATECON_UID" -gt 0 ] && [ "$GATECON_UID" -ne 65534 ] \
+    || die "$GATECON_USER's uid '$GATECON_UID' is not a uid an access rule may name"
+  rules=$(grep -E '^allowed-uids' <<<"$DECLARATION_TEXT" || true)
+  [ "$rules" = "allowed-uids = [$GATECON_UID]" ] \
+    || die "the declaration's access rule reads '$rules', not allowed-uids = [$GATECON_UID] ($GATECON_USER alone), so it is not written"
+}
+rule_names_gatecon
 
 say "territory"
 # **The whole agent lives here, and the group passes and never writes** (the
@@ -849,6 +872,7 @@ say "declaration"
 # or moded otherwise (weaver-admin-Spec section 9). Nothing lands in the operator's
 # home. The territory was refused above where it stood, so neither file is
 # written over.
+rule_names_gatecon
 printf '%s\n' "$DECLARATION_TEXT" | sudo tee "$DECLARATION" >/dev/null
 printf '%s' "$PROMPT_TEXT" | sudo tee "$PROMPT" >/dev/null
 sudo chown root:"$ACCESS_GROUP" "$DECLARATION" "$PROMPT"
@@ -933,8 +957,9 @@ printf '   %s reads the declaration and writes nothing of the territory\n' "$ADM
 # agent**: the relay the trace group alone; the admin-con account the state
 # group for passage and the access group for reading, never the agent's own
 # group or the trace group; the gate-con account the agent's own group, for
-# the gate's socket. **Neither box account holds a group reaching the other's
-# door**, of this agent or any other (weaver-admin-Spec section 2).
+# the gate's socket. **Neither box account holds a group outside what it may
+# hold**, of this agent, of any other or outside the weaver- namespace
+# (weaver-admin-Spec section 2), by the same allow-list as the judge above.
 relay_groups=$(id -Gn "$RELAY_USER")
 [ "$relay_groups" = "$TRACE_GROUP" ] || die "the relay account $RELAY_USER holds '$relay_groups', not the trace group alone"
 admincon_groups=" $(id -Gn "$ADMINCON_USER") "
@@ -944,7 +969,7 @@ gatecon_groups=" $(id -Gn "$GATECON_USER") "
 [[ "$gatecon_groups" == *" $AGENT_USER "* ]] || die "the gate-con account $GATECON_USER does not hold $AGENT_USER, so the gate's socket would turn it away"
 for box_account in "$GATECON_USER" "$ADMINCON_USER"; do
   crossed=$(door_crossings "$box_account") || exit 1
-  [ -z "$crossed" ] || die "the account $box_account holds $crossed, which reaches the other connector account's door (weaver-admin-Spec section 2)"
+  [ -z "$crossed" ] || die "the account $box_account holds $crossed, outside what the box's account may hold (weaver-admin-Spec section 2)"
 done
 printf '   %s holds %s alone, %s holds%s, %s holds%s\n' "$RELAY_USER" "$TRACE_GROUP" \
   "$ADMINCON_USER" "${admincon_groups% }" "$GATECON_USER" "${gatecon_groups% }"

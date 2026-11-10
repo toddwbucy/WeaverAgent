@@ -982,22 +982,28 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                           (dict(ADMINCON_GROUPS="weaver-admincon weaver-m1-state weaver-m1-admin weaver-m1-trace"),
                            "holds weaver-m1-trace"),
                           (dict(ADMINCON_GROUPS="weaver-admincon weaver-m1-state weaver-m1-admin weaver-m1"),
-                           "holds weaver-m1, which reaches"),
+                           "holds weaver-m1, outside what the box's account may hold"),
                           (dict(ADMINCON_GROUPS="weaver-admincon weaver-m1-state weaver-m1-admin weaver-gatecon"),
-                           "holds weaver-gatecon, which reaches"),
+                           "holds weaver-gatecon, outside what the box's account may hold"),
                           (dict(GATECON_GROUPS="weaver-gatecon"), "does not hold weaver-m1"),
                           (dict(GATECON_GROUPS="weaver-gatecon weaver-m1 weaver-other-admin"),
-                           "holds weaver-other-admin, which reaches"),
+                           "holds weaver-other-admin, outside what the box's account may hold"),
                           (dict(GATECON_GROUPS="weaver-gatecon weaver-m1 weaver-other-state"),
-                           "holds weaver-other-state, which reaches"),
+                           "holds weaver-other-state, outside what the box's account may hold"),
                           (dict(GATECON_GROUPS="weaver-gatecon weaver-m1 weaver-other-trace"),
-                           "holds weaver-other-trace, which reaches"),
+                           "holds weaver-other-trace, outside what the box's account may hold"),
                           # Clean when judged after laying, crossed once joined:
                           # the wall's own check after the join refuses.
                           (dict(ADMINCON_JOINED="weaver-admincon weaver-m1-state weaver-m1-admin weaver-m1-trace"),
-                           "holds weaver-m1-trace, which reaches"),
+                           "holds weaver-m1-trace, outside what the box's account may hold"),
                           (dict(GATECON_JOINED="weaver-gatecon weaver-m1 weaver-m1-state"),
-                           "holds weaver-m1-state, which reaches")):
+                           "holds weaver-m1-state, outside what the box's account may hold"),
+                          # The wall uses the same allow-list: a foreign group
+                          # joined after the judge refuses there too.
+                          (dict(GATECON_JOINED="weaver-gatecon weaver-m1 sudo"),
+                           "holds sudo, outside what the box's account may hold"),
+                          (dict(ADMINCON_JOINED="weaver-admincon weaver-m1-state weaver-m1-admin disk"),
+                           "holds disk, outside what the box's account may hold")):
             with self.subTest(env=env):
                 shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
                 shutil.rmtree(self.root / "agents" / "weaver-m1", ignore_errors=True)
@@ -1032,17 +1038,30 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
             (dict(BOX_PASSWD={"weaver-gatecon": well}, EXTRA_PASSWD="other:x:2000:990::/home/other:/bin/bash"),
              None, "is the primary group of other too"),
             (dict(BOX_PASSWD={"weaver-gatecon": well}, GATECON_GROUPS="weaver-gatecon weaver-existing-admin"),
-             None, "holds weaver-existing-admin, which reaches"),
+             None, "holds weaver-existing-admin, outside what the box's account may hold"),
             (dict(BOX_PASSWD={"weaver-admincon": "weaver-admincon:x:991:991::/home/weaver-admincon:/usr/sbin/nologin"},
                   ADMINCON_GROUPS="weaver-admincon weaver-existing-state weaver-existing"),
-             None, "holds weaver-existing, which reaches"),
+             None, "holds weaver-existing, outside what the box's account may hold"),
             # An agent's own group whatever hyphens its name carries.
             (dict(BOX_PASSWD={"weaver-admincon": "weaver-admincon:x:991:991::/home/weaver-admincon:/usr/sbin/nologin"},
                   ADMINCON_GROUPS="weaver-admincon weaver-my-bot-state weaver-my-bot"),
-             None, "holds weaver-my-bot, which reaches"),
+             None, "holds weaver-my-bot, outside what the box's account may hold"),
             # The earlier layout's per-agent connector group, on gate-con.
             (dict(BOX_PASSWD={"weaver-gatecon": well}, GATECON_GROUPS="weaver-gatecon weaver-old-admincon"),
-             None, "holds weaver-old-admincon, which reaches"),
+             None, "holds weaver-old-admincon, outside what the box's account may hold"),
+            # **Outside the weaver- namespace alike** (the Planner's grade of
+            # ac623d58): a foreign group refuses on either account, and a
+            # relay group on gate-con.
+            (dict(BOX_PASSWD={"weaver-admincon": "weaver-admincon:x:991:991::/home/weaver-admincon:/usr/sbin/nologin"},
+                  ADMINCON_GROUPS="weaver-admincon weaver-existing-state wheel"),
+             None, "holds wheel, outside what the box's account may hold"),
+            (dict(BOX_PASSWD={"weaver-gatecon": well}, GATECON_GROUPS="weaver-gatecon weaver-existing docker"),
+             None, "holds docker, outside what the box's account may hold"),
+            (dict(BOX_PASSWD={"weaver-gatecon": well}, GATECON_GROUPS="weaver-gatecon weaver-existing-relay"),
+             None, "holds weaver-existing-relay, outside what the box's account may hold"),
+            (dict(BOX_PASSWD={"weaver-admincon": "weaver-admincon:x:991:991::/home/weaver-admincon:/usr/sbin/nologin"},
+                  ADMINCON_GROUPS="weaver-admincon weaver-existing-relay"),
+             None, "holds weaver-existing-relay, outside what the box's account may hold"),
             (dict(BOX_PASSWD={"weaver-admincon": "weaver-admincon:x:0:991::/home/weaver-admincon:/usr/sbin/nologin"},
                   BOX_GROUP={"991": "weaver-admincon:x:991:"}), None, "stands with uid 0, root's"),
         )
@@ -1071,6 +1090,31 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertIn("weaver-admincon  the box's, absent: laid at --apply", result.stdout)
         self.assertIn("weaver-gatecon stands, and its shape is the box's gate-con account", result.stdout)
         self.assertIn("allowed-uids = [990] (weaver-gatecon alone)", result.stdout)
+
+    def test_the_rule_written_names_the_gatecon_uid_alone(self):
+        # **The rendered rule is asserted before it is written** (the
+        # Planner's guard on ac623d58): the plan's placeholder 65534, a uid
+        # that is not gate-con's, root's, or a rule with a second line each
+        # refuse; gate-con's uid alone passes. Perturbation: drop the
+        # assertion, or its placeholder test, and a case passes.
+        script = (DEPLOY / "create-agent.sh").read_text()
+        program = ('die() { printf "REFUSED: %s\\n" "$*" >&2; exit 1; }\n'
+                   + shell_function(script, "rule_names_gatecon")
+                   + 'GATECON_USER=weaver-gatecon; GATECON_UID=$1; DECLARATION_TEXT=$2; rule_names_gatecon; echo PASSED')
+        for uid, text, passes in (("990", "x = 1\nallowed-uids = [990]\nallowed-gids = []", True),
+                                  ("990", "allowed-uids = [65534]", False),
+                                  ("65534", "allowed-uids = [65534]", False),
+                                  ("0", "allowed-uids = [0]", False),
+                                  ("", "allowed-uids = []", False),
+                                  ("990", "allowed-uids = [990]\nallowed-uids = [1000]", False),
+                                  ("990", "allowed-uids = [990, 1000]", False)):
+            with self.subTest(uid=uid, text=text):
+                run = subprocess.run(["bash", "-c", program, "x", uid, text], text=True,
+                                     capture_output=True, timeout=20)
+                self.assertEqual("PASSED" in run.stdout, passes, run.stdout + run.stderr)
+                self.assertEqual(run.returncode == 0, passes, run.stderr)
+        self.assertEqual(script.count("\nrule_names_gatecon\n"), 2,
+                         "asserted after the re-render and again at the write")
 
     def test_a_box_group_without_its_account_refuses_in_the_plan(self):
         # **An absent box account with a group of its name standing refuses
@@ -4646,6 +4690,39 @@ class LifecycleNearMissTests(unittest.TestCase):
         self.assertEqual(result.returncode, 130, result.stdout + result.stderr)
         self.assertNotIn("FINISHED", result.stdout)
         self.assertEqual(self.mode(), 0o710)
+
+
+class LifecycleBoxGroupsTests(unittest.TestCase):
+    """**Step 1 judges the box accounts by create-agent.sh's allow-list**
+    (the Planner's grade of ac623d58, the sweep): a group outside it, in the
+    weaver- namespace or not, is named. Run alone with id as a stand-in.
+    Perturbation: let a non-weaver group through and the foreign cases pass."""
+
+    def test_groups_outside_the_allow_list_are_named(self):
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-box-groups-")
+        self.addCleanup(scratch.cleanup)
+        bin_dir = Path(scratch.name)
+        (bin_dir / "id").write_text('#!/bin/sh\nprintf "%s\\n" "$HELD"\n')
+        (bin_dir / "id").chmod(0o755)
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        program = ("GATECON=weaver-gatecon; ADMINCON=weaver-admincon\n"
+                   + lifecycle_functions(script, "box_groups_outside") + 'box_groups_outside "$1"')
+        env = {**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}
+        env.pop("BASH_ENV", None)
+        for account, held, said in (
+                ("weaver-gatecon", "weaver-gatecon weaver-m1 weaver-my-bot", "none"),
+                ("weaver-gatecon", "weaver-gatecon weaver-m1 wheel", "wheel"),
+                ("weaver-gatecon", "weaver-gatecon weaver-m1-relay weaver-m1-state", "weaver-m1-relay weaver-m1-state"),
+                ("weaver-gatecon", "weaver-gatecon weaver-admincon weaver-old-admincon", "weaver-admincon weaver-old-admincon"),
+                ("weaver-admincon", "weaver-admincon weaver-m1-state weaver-m1-admin", "none"),
+                ("weaver-admincon", "weaver-admincon weaver-m1-state docker", "docker"),
+                ("weaver-admincon", "weaver-admincon weaver-m1 weaver-m1-trace weaver-gatecon",
+                 "weaver-m1 weaver-m1-trace weaver-gatecon")):
+            with self.subTest(account=account, held=held):
+                run = subprocess.run(["bash", "-c", program, "x", account], env={**env, "HELD": held},
+                                     text=True, capture_output=True, timeout=20)
+                self.assertEqual(run.stdout, said, run.stderr)
+        self.assertIn('expect_eq "$u holds no group outside what the box\'s account may hold" none', script)
 
 
 class LifecycleStep5bRestoreTests(unittest.TestCase):

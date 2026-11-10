@@ -94,9 +94,12 @@ group in one shell.
   that looks whole is worse than an absent one.
 - `weaver-gatecon` and `weaver-admincon` either are absent, and apply lays them, or
   stand in the box's shape: `getent passwd weaver-gatecon weaver-admincon` shows a uid
-  below `UID_MIN` and a nologin shell, and each one's primary group has no members and
-  is no other account's. The plan says which it found, and refuses an account in any
-  other shape, or one holding a group across the other plane's door.
+  above 0 and below `UID_MIN` and a nologin shell, and each one's primary group has no
+  members and is no other account's. Each holds no group but what it may hold:
+  `weaver-gatecon` its own group and agents' own groups `weaver-<name>`,
+  `weaver-admincon` its own group and agents' `weaver-<name>-state` and
+  `weaver-<name>-admin`, and neither any other group, `wheel`, `sudo` or `docker`
+  among them. The plan says which it found, and refuses an account in any other shape.
 - `/etc/sudoers` includes `/etc/sudoers.d` (`@includedir /etc/sudoers.d`).
 
 ## 2. An agent with a store
