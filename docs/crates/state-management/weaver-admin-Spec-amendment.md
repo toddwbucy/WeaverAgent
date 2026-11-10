@@ -607,7 +607,7 @@ serving contract remains applicable.
 | Publication guard | Every post-Commit crash phase, guard update failure and explicit older restore | Load or recover a guarded image, publish after failure or silently choose an older image |
 | ADMIN-SELECTION | Root-key parser and latest/explicit restore index corpus | Put selector in bound copy, accept caller path, or silently reuse a stale selector |
 | ADMIN-LOAD | Different mutable draft and verified copy, fd probes, failed-enter fixtures | Run draft after checking copy or report loaded before boot |
-| ADMIN-SEED | Temporary-member process fixture, shared TYPES-SEED corpus, root verb parser and cgroup probes | Seed live state, require a prior artifact, omit checked scheme/checker inputs, skip invoker/ancestor checks, accept caller path or index before successful seed cleanup |
+| ADMIN-SEED | Temporary-member process fixture, shared TYPES-SEED corpus, root verb parser and cgroup probes | Seed live state, require a prior artifact, omit checked scheme/checker inputs, skip the scope and ancestor checks (the scope's delegation and ownership and every cgroup above it), accept caller path or index before successful seed cleanup |
 | ADMIN-REBIND | Same A/new B artifact and immutable prompt check | Mutate dump or use old B after editing config |
 | ADMIN-INSTALL | Install-mode member over a selected artifact, then load before and after rebind | Publish without the version files, change agent.toml, accept a path, or load a declaration that disagrees with the image |
 | ADMIN-SAVE | Three-party protocol, timeout cleanup then retry, cleanup failure, and fsync/rename failure hooks | Index before Commit, overwrite a good artifact, infer cleanup from silence or retry after FlowFailed |
