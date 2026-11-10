@@ -714,8 +714,35 @@ fn containment_an_unread_scope_refuses_unverified() {
     std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o444)).unwrap();
     end(start_step);
     assert!(
-        matches!(&refused, Err(StartRefused::Unverified(why)) if why.contains("cgroup.events does not read")),
+        matches!(&refused, Err(StartRefused::Unverified(why)) if why.contains("cgroup.events gives no populated reading")),
         "{refused:?}"
     );
     assert_eq!(asked.get(), 0, "no request");
+}
+
+/// **A scope PID1 collects between its open and its read is absent** (6.1,
+/// the scope already standing): the read before the request opens the scope,
+/// the scope is removed, and its standing reads absent, so the step goes on
+/// to the request. A load right after an unload meets that window while PID1
+/// collects the emptied scope. Perturbation: read no populated value as
+/// unread whatever stands, and the standing reads unread.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_scope_collected_after_its_open_reads_absent() {
+    let scratch = ScratchCgroup::new("collected-scope");
+    let slice = scratch.cgroup.make_child(scope::SLICE).unwrap();
+    slice.make_child("weaver-alpha.scope").unwrap();
+    let opened = Cgroup::open(&site(&scratch).path()).expect("the scope opens");
+    nix::unistd::unlinkat(
+        slice.fd(),
+        "weaver-alpha.scope",
+        nix::unistd::UnlinkatFlags::RemoveDir,
+    )
+    .expect("the stand-in collection");
+    let (standing, held) = scope::read_standing(opened);
+    assert_eq!(standing, scope::ScopeStanding::Absent);
+    assert!(
+        held.is_none(),
+        "nothing is held for a scope gone from its path"
+    );
 }

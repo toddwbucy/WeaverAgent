@@ -25,10 +25,11 @@ use crate::containment::{self, Cgroup};
 /// The slice every agent's scope stands in (6.1, one scope per agent).
 pub const SLICE: &str = "weaver.slice";
 
-/// **The scope bound**, 6.1's election, a ceiling: how long a stalled PID1
-/// holds a load, counted from the request (the call and the read for the
-/// move within it), and how long the start step waits for PID1 to collect a
-/// scope standing empty.
+/// **The scope bound**, 6.1's election, a ceiling on each wait: how long a
+/// stalled PID1 holds a load, counted from the request (the call and the read
+/// for the move within it), and how long the start step waits for PID1 to
+/// collect a scope standing empty. Each wait has its own, so a scope standing
+/// empty and then a stalled request hold a load up to twice the bound.
 pub const SCOPE_BOUND: Duration = Duration::from_secs(10);
 
 /// How often the start step reads for the move or the collection (6.1, the
@@ -144,8 +145,8 @@ pub enum ScopeStanding {
     Empty,
     /// Standing and populated: a run's leftovers (P3).
     Populated,
-    /// Standing and its `cgroup.events` not read: neither empty nor
-    /// populated is known.
+    /// Standing and its `cgroup.events` giving no populated reading: neither
+    /// empty nor populated is known.
     Unread,
 }
 
@@ -219,8 +220,7 @@ pub fn request_judgment(outcome: RequestOutcome) -> RequestAction {
 /// **The read before the request**: what stands at the scope's path, and
 /// the scope's cgroup where one stands, for naming its processes. A path
 /// that does not open other than as absent refuses rather than read as
-/// absent, and a `cgroup.events` that does not read is [`ScopeStanding::Unread`],
-/// never populated or empty.
+/// absent, and an opened scope is read by [`read_standing`].
 pub fn standing(site: &Site) -> Result<(ScopeStanding, Option<Cgroup>), ScopeRefused> {
     let path = site.path();
     match Cgroup::open_if_present(&path) {
@@ -228,14 +228,21 @@ pub fn standing(site: &Site) -> Result<(ScopeStanding, Option<Cgroup>), ScopeRef
         Err(error) => Err(ScopeRefused::Unverified(format!(
             "the scope {path} does not open: {error}"
         ))),
-        Ok(Some(scope)) => {
-            let standing = match scope.populated() {
-                Some(false) => ScopeStanding::Empty,
-                Some(true) => ScopeStanding::Populated,
-                None => ScopeStanding::Unread,
-            };
-            Ok((standing, Some(scope)))
-        }
+        Ok(Some(scope)) => Ok(read_standing(scope)),
+    }
+}
+
+/// **What an opened scope holds**, by `populated` in its `cgroup.events`.
+/// No populated reading on a scope [gone](Cgroup::gone) from its path since
+/// the open is absent, PID1 having collected it between the open and the
+/// read (a load right after an unload meets that window), and on a scope
+/// still standing it is [`ScopeStanding::Unread`], never populated or empty.
+pub fn read_standing(scope: Cgroup) -> (ScopeStanding, Option<Cgroup>) {
+    match scope.populated() {
+        Some(false) => (ScopeStanding::Empty, Some(scope)),
+        Some(true) => (ScopeStanding::Populated, Some(scope)),
+        None if scope.gone() => (ScopeStanding::Absent, None),
+        None => (ScopeStanding::Unread, Some(scope)),
     }
 }
 
@@ -353,14 +360,14 @@ where
         }
         StandingAction::RefuseUnread => {
             return Err(ScopeRefused::Unverified(format!(
-                "the scope {path} stands and its cgroup.events does not read"
+                "the scope {path} stands and its cgroup.events gives no populated reading"
             )));
         }
         StandingAction::AwaitCollection => {
             drop(scope);
             if !await_collection(&site, Instant::now() + bound) {
                 return Err(ScopeRefused::Unverified(format!(
-                    "the scope {path} still stands empty at the scope bound ({} ms)",
+                    "the scope {path} still stands empty at the scope bound ({} ms): PID1 is still collecting it, or left its directory for root to remove (#520)",
                     bound.as_millis()
                 )));
             }
