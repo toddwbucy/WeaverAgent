@@ -1995,12 +1995,14 @@ as before. Loop 0's wind-down and seeding turns each send the flush first and au
 event directly before `turn.started`, neither flushing under `continuous`. A flush that
 answers nothing refuses its turn: loop 1's second turn is never asked once its flush
 answers nothing, and loop 0's wind-down and seeding turns, the seam refusing the cut or
-ending before confirming it, open no bracket and send nothing after the flush. Watched
-to fail when the election is dropped, when the flush follows the turn, when the
-first-turn test is read under `independent`, when the `independent` path is taken under
-every election, when either of loop 0's flushes is dropped or taken under every
-election, and when a turn runs past a flush that answered nothing, in loop 1 and at each
-of loop 0's two turns.
+ending before confirming it, open no bracket and send nothing after the flush, and
+neither authors a `flush` event, the refused cut authoring its `refusal` naming the
+flush and its `keep`. Watched to fail when the election is dropped, when the flush
+follows the turn, when the first-turn test is read under `independent`, when the
+`independent` path is taken under every election, when either of loop 0's flushes is
+dropped or taken under every election, when a turn runs past a flush that answered
+nothing, in loop 1 and at each of loop 0's two turns, when the flush port's refusal goes
+unauthored, and when the `flush` event is authored before its confirmation is read.
 
 **A lifecycle refusal reaches the record where the run stands.** An enter
 refused after its bracket has been authored is clerked into that run, which

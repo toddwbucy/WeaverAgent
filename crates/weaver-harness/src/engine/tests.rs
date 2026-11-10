@@ -3349,13 +3349,19 @@ fn loop_zeros_own_turns_flush_first_under_independent() {
 /// `independent`** (`weaver-harness-Spec` section 6's turn-context read): the
 /// seeding turn and the wind-down turn each answer `ChannelLost` without
 /// opening their bracket where the seam refuses the cut or ends before
-/// confirming it, so neither runs on the context the election retires. The
+/// confirming it, so neither runs on a context no confirmation shows. The
 /// seam hears the flush and nothing after it, and no `turn.started` is
-/// authored.
+/// authored. **The record says which case it was**: a refused cut authors
+/// its `refusal`, naming the flush and its `keep`, and neither case authors
+/// a `flush` event, that event coming only from a confirmation's counts, so
+/// a reader takes the closed seam's cut as unknown and never as made.
 ///
-/// Perturbation: let the turn run past a failed flush and each case fails,
-/// the bracket opening and the append sent. Watched to fail under exactly
-/// that.
+/// Perturbations, each watched to fail: let the turn run past a failed
+/// flush, and each case fails, the bracket opening and the append sent.
+/// Drop `author_refusal` from the flush port's refusal arm, and a refused
+/// case fails on the missing `refusal`. Author the `flush` event before the
+/// confirmation is read, and the test fails on a `flush` event the seam
+/// never confirmed, the closed seam's case included.
 #[test]
 fn loop_zeros_own_turns_refuse_where_the_independent_flush_answers_nothing() {
     for winding in [true, false] {
@@ -3433,12 +3439,41 @@ fn loop_zeros_own_turns_refuse_where_the_independent_flush_answers_nothing() {
                 recv(far.as_raw_fd(), &mut buf, MsgFlags::MSG_DONTWAIT).is_err(),
                 "{case}: nothing follows the flush"
             );
-            let opened = recorder
-                .structure()
-                .expect("the serving record")
+            let records = recorder.structure().expect("the serving record");
+            assert!(
+                !records.iter().any(|r| r.kind == Kind::TurnStarted),
+                "{case}: no bracket opens"
+            );
+            assert!(
+                !records.iter().any(|r| r.kind == Kind::Flush),
+                "{case}: no flush event without a confirmation"
+            );
+            let refusals: Vec<serde_json::Value> = records
                 .iter()
-                .any(|r| r.kind == Kind::TurnStarted);
-            assert!(!opened, "{case}: no bracket opens");
+                .filter(|r| r.kind == Kind::Refusal)
+                .map(|r| serde_json::from_str(r.line.as_ref()).expect("the line parses"))
+                .collect();
+            if refused {
+                assert_eq!(
+                    refusals.len(),
+                    1,
+                    "{case}: the refused cut reaches the record"
+                );
+                let payload = &refusals[0]["payload"];
+                assert_eq!(payload["seam"], "decode", "{case}: {payload}");
+                assert_eq!(payload["asked"]["ask"], "flush", "{case}: {payload}");
+                assert_eq!(payload["asked"]["keep"], 0, "{case}: {payload}");
+                assert_eq!(
+                    payload["refusal"],
+                    serde_json::to_value(weaver_types::TokenRefusal::NotOpen).unwrap(),
+                    "{case}: {payload}"
+                );
+            } else {
+                assert!(
+                    refusals.is_empty(),
+                    "{case}: a seam that closed refused nothing: {refusals:?}"
+                );
+            }
         }
     }
 }
