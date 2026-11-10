@@ -4,19 +4,35 @@
     deploy/turn.py <agent> "<text>"            one turn, answer on stdout
     deploy/turn.py <agent> "<text>" --raw      the answer line as the gate sent it
     deploy/turn.py <agent> --system            the seeding turn: the prompt draft
-                                               as the system role, answer on stdout
+                                               as the system role, answer on stdout,
+                                               only for an agent whose rule names
+                                               the operator
 
 The gate's inbound shape, as the determinism matrix drives it: dial the agent's
 world socket under its coordination root, read from the agent's own admin root
 (`<WEAVER_ADMIN_CONFIG or /etc/weaver/admin>/<agent>/coordination-root`, required, as
 admin requires it), send one JSON line `{"text": ...}`, read one line back. The gate admits by the dialer's uid, so
-this runs as the operator the declaration's `allowed-uids` names, with no
-sudo. It is the smallest client the loop has; a refusal to connect means the
-agent is not loaded or the uid is not admitted, and the record of the turn is
-the agent's trace, not this script's output.
+this runs as the uid the declaration's `allowed-uids` names. For an agent
+`deploy/create-agent.sh` lays that is the box's gate-con account,
+`weaver-gatecon`, alone (weaver-gate-world-contract section 1), which reaches
+the socket through the agent's own group and reads the agent's root, root's
+and readable by every uid. That account cannot traverse a checkout in the
+operator's home, so the source goes on standard input:
+
+    sudo -n -u weaver-gatecon python3 -I - <agent> "<text>" < deploy/turn.py
+
+An agent whose rule names the operator, as an earlier create-agent.sh laid it,
+is driven as the operator with no sudo. It is the smallest client
+the loop has; a refusal to connect means the agent is not loaded or the uid is
+not admitted, and the record of the turn is the agent's trace, not this
+script's output.
 
 **`--system` is the seeding turn**, per weaver-gate-world-contract section 2 on the
-operator's ruling of 2026-10-06 that the system prompt is state: it reads the
+operator's ruling of 2026-10-06 that the system prompt is state. **It works only
+where the agent's rule names the operator**, since the harness admits a seeding
+line from the operator's uid alone and the gate admits only the uids the rule
+names: an agent whose rule names the box's gate-con account alone has no
+seeding sender, and how its prompt enters is deferred to its own act. It reads the
 operator's draft, `<territory>/system-prompt.md` (the root's `territory` key, as
 admin reads it; the file is root:weaver-<agent>-admin, 0640, and the operator reads it through the
 access group `weaver-<agent>-admin`, on the ruling of 2026-10-07 that the whole
@@ -169,8 +185,10 @@ def main() -> int:
             print(f"no gate at {path}: is {agent} loaded?", file=sys.stderr)
             return 1
         except PermissionError:
-            print(f"refused at {path}: uid {os.getuid()} is not in the declaration's allowed-uids, "
-                  f"or this shell is not yet in group weaver-{agent} (newgrp, or sg weaver-{agent} -c ...)",
+            print(f"refused at {path}: uid {os.getuid()} is not in the declaration's allowed-uids, which "
+                  f"names the box's gate-con account weaver-gatecon for an agent create-agent.sh lays, or "
+                  f"this process does not hold group weaver-{agent}; run it as weaver-gatecon "
+                  f"(sudo -n -u weaver-gatecon python3 -I - {agent} ... < deploy/turn.py)",
                   file=sys.stderr)
             return 1
         s.sendall(line + b"\n")

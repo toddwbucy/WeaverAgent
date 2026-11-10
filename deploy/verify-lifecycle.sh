@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Verify one agent's whole lifecycle on a live box, end to end: create it,
-# judge its layout, load it, seed it, take save points, reload, restore,
-# force it down, crash it, stage a root of an older form, and take it down
-# again.
+# judge its layout, load it, send it a turn, take save points, reload,
+# restore, measure a moved access rule, force it down, crash it, stage a root
+# of an older form, and take it down again. The agent is not seeded: its gate
+# admits the box's gate-con account alone, so it has no seeding sender
+# (weaver-gate-world-contract section 2), and its turns run unseeded.
 #
 #   ./deploy/verify-lifecycle.sh --agent vtest1                          plan only
 #   ./deploy/verify-lifecycle.sh --agent vtest1 --artifact <gguf> \
@@ -34,10 +36,12 @@
 # **sudo runs only where admin and the deploy scripts run it**: admin's verbs,
 # the root reads of the territory, the trace, the manifest and the marker, the
 # near misses' changes and their restores, the worker's kill in step 7, and
-# HowToDeployANewAgent.md section 7's take-down in step 9. One more: the turns
-# of steps 2 and 4 run turn.py as the operator's own uid through
-# `sudo -u <operator>`, which takes the groups create-agent.sh just joined
-# without a new login.
+# HowToDeployANewAgent.md section 7's take-down in step 9. One more: every
+# turn runs turn.py as the box's gate-con account, `weaver-gatecon`, the one
+# uid the agent's access rule names, through `sudo -u weaver-gatecon` with the
+# source on standard input, since that account cannot traverse the checkout.
+# `sudo -u` takes the groups create-agent.sh just joined without a new login.
+# Step 5b alone also runs a turn as the operator, against a rule it moved.
 #
 # **Step 9 never runs decommission.sh**, which takes every agent off the box:
 # it removes this one agent by HowToDeployANewAgent.md section 7's steps,
@@ -79,8 +83,9 @@ creates (step 1, create-agent.sh) and takes down (step 9). Plan only unless
   --apply                 act; without it, print the plan and act on nothing
   -h, --help              this text
 
-Steps: 0 the box; 1 create; 1b near misses; 2 load, seed, one turn;
-3 save point; 4 unload and reload; 5 restore; 6 force-unload; 6b force-unload
+Steps: 0 the box; 1 create; 1b near misses; 2 load, one unseeded turn;
+3 save point; 4 unload and reload; 5 restore; 5b a measurement: the access
+rule moved to the operator and back; 6 force-unload; 6b force-unload
 on a drifted territory; 7 crash recovery; 8 a root naming a
 declaration-directory, refused by admin and by update-stack.sh's plan;
 8b an access entry on the trace; 9 take the agent down.
@@ -127,8 +132,8 @@ done
 # Every refusal below is made before anything acts and before sudo is asked
 # for, except those that need root to look, which follow the credential.
 
-# **Run as the operator**: the gate admits the operator's uid, the root's
-# `operator` key names it, and create-agent.sh refuses root.
+# **Run as the operator**: the root's `operator` key names it, and
+# create-agent.sh refuses root.
 [ "$(id -u)" -ne 0 ] || die "run as the operator, not as root: create-agent.sh names this uid as the agent's operator, and --apply asks for sudo itself"
 [ -z "${SUDO_USER:-}" ] || die "run as the operator, not under sudo: --apply asks for sudo itself where a step needs it"
 
@@ -229,8 +234,12 @@ RUNTIME_DIR="$COORD/$AU"
 MARKER="$STACK/verify-lifecycle-$A"
 OPERATOR=$(id -un)
 OPERATOR_UID=$(id -u)
-ACCOUNTS="$AU $AU-state $AU-relay $AU-admincon"
-GROUPS_MADE="$AU $AU-state $AU-trace $AU-admin $AU-admincon"
+# The box's two connector accounts (weaver-admin-Spec section 2): step 1's
+# create-agent.sh lays each where absent, and step 9 leaves both standing.
+GATECON=weaver-gatecon
+ADMINCON=weaver-admincon
+ACCOUNTS="$AU $AU-state $AU-relay"
+GROUPS_MADE="$AU $AU-state $AU-trace $AU-admin"
 
 marker_names_agent() { [ -f "$MARKER" ] && grep -qxF "agent = \"$A\"" "$MARKER"; }
 
@@ -433,6 +442,13 @@ expect_no_acl() {
 as_can() { # as_can ACCOUNT TEST...: yes where the account passes the test
   if sudo -n -u "$1" "${@:2}" >/dev/null 2>&1; then printf yes; else printf no; fi
 }
+# holds_group ACCOUNT GROUP: yes where the group database gives ACCOUNT the
+# group GROUP, read without matching a pipeline that stops early.
+holds_group() {
+  local held
+  held=" $(id -Gn "$1" 2>/dev/null || true) "
+  case "$held" in *" $2 "*) printf yes ;; *) printf no ;; esac
+}
 TRACE_PY='import json, sys
 path, start, kinds = sys.argv[1], int(sys.argv[2]), sys.argv[3:]
 with open(path) as f:
@@ -561,15 +577,26 @@ for n in sys.argv[2:]:
 print("in order")' "$file" "$@")
   expect_eq "$check" "in order" "$found"
 }
-# turn TEXT...: one turn through turn.py as the operator's uid with the
-# groups create-agent.sh joined, its answer kept in TURN_SAID.
-TURN_SAID=""
-turn() {
-  local rc=0 out="$LOGDIR/turn.$RANDOM"
-  sudo -n -u "$OPERATOR" WEAVER_ADMIN_CONFIG="$ADMIN_BASE" python3 "$CHECKOUT/deploy/turn.py" "$A" "$@" >"$out" 2>"$out.err" || rc=$?
+# turn_as ACCOUNT TEXT...: one turn through turn.py as ACCOUNT, its source on
+# standard input, since the gate-con account cannot traverse a checkout in the
+# operator's home; its exit status in TURN_RC, its answer in TURN_SAID and its
+# stderr in TURN_ERR.
+TURN_SAID=""; TURN_ERR=""; TURN_RC=0
+turn_as() {
+  local who=$1 out="$LOGDIR/turn.$RANDOM"
+  shift
+  TURN_RC=0
+  sudo -n -u "$who" WEAVER_ADMIN_CONFIG="$ADMIN_BASE" python3 -I - "$A" "$@" \
+    <"$CHECKOUT/deploy/turn.py" >"$out" 2>"$out.err" || TURN_RC=$?
   TURN_SAID=$(cat "$out")
-  [ "$rc" -eq 0 ] || cat "$out.err" >&2
-  expect_eq "turn.py $* exits 0" 0 "$rc"
+  TURN_ERR=$(cat "$out.err")
+}
+# turn TEXT...: one turn as the box's gate-con account, the one uid the
+# agent's rule names, which must answer.
+turn() {
+  turn_as "$GATECON" "$@"
+  [ "$TURN_RC" -eq 0 ] || printf '%s\n' "$TURN_ERR" >&2
+  expect_eq "turn.py $* as $GATECON exits 0" 0 "$TURN_RC"
   [ -n "$TURN_SAID" ] || fail "turn.py $* answers" "an answer on stdout" "nothing"
   pass "turn.py $* answers"
   printf '%s\n' "$TURN_SAID" | sed 's/^/     answer: /'
@@ -583,6 +610,17 @@ restore_group() { sudo -n chgrp -- "$2" "$1"; }
 restore_acl()   { sudo -n setfacl -b -- "$1"; }
 restore_key()   { printf '%s' "$1" | base64 -d | sudo -n tee -- "$R/territory" >/dev/null && sudo -n rm -f -- "$2"; }
 restore_absent() { sudo -n rm -f -- "$1"; }
+# restore_rule B64: step 5b's measurement put back, the declaration byte for
+# byte and the operator out of the agent's own group, each attempted whatever
+# the other answers.
+restore_rule() {
+  local rc=0
+  printf '%s' "$1" | base64 -d | sudo -n tee -- "$DECL" >/dev/null || rc=1
+  if [ "$(holds_group "$OPERATOR" "$AU")" = yes ]; then
+    sudo -n gpasswd -d "$OPERATOR" "$AU" >/dev/null || rc=1
+  fi
+  return "$rc"
+}
 restore_now() {
   [ ${#RESTORE[@]} -gt 0 ] || return 0
   local -a pending=("${RESTORE[@]}")
@@ -666,11 +704,13 @@ step_1() {
   run_line "deploy/create-agent.sh $A --artifact ${ARTIFACT:-<--artifact>} --apply"
   want "the plan ends PENDING --apply and == plan only"
   want "the apply prints == accounts, == territory, == declaration, the wall lines, == sudo rule, == admission, == made, in order"
-  want "$OPERATOR holds $AU, $AU-trace, $AU-state and $AU-admin; $AU-relay holds $AU-trace alone; $AU-admincon holds $AU-admincon, $AU-state and $AU-admin; $AU-state holds itself alone"
+  want "$OPERATOR holds $AU-trace, $AU-state and $AU-admin and not $AU; $AU-relay holds $AU-trace alone; $AU-state holds itself alone"
+  want "$GATECON and $ADMINCON stand, the box's; $GATECON holds $AU and none of $AU-state, $AU-admin or $AU-trace; $ADMINCON holds $AU-state and $AU-admin and neither $AU nor $AU-trace"
   want "$T root:$AU-state 710 directory; state/ $AU-state:$AU-state 700; save-points/ root:$AU-admin 750; trace.ndjson root:$AU-trace 640 empty; agent.toml and system-prompt.md root:$AU-admin 640"
   want "/home/$AU $AU:$AU 2750; $R root:root 755 with every key root:root 644; $RULE root:root 440"
   want "no access entry on the territory, save-points/, the trace or the declaration"
-  want "territory names $T, operator is $OPERATOR_UID, roles.toml is trace-reader = \"$AU-admincon\"; the rule lists the eight verbs"
+  want "territory names $T, operator is $OPERATOR_UID, roles.toml is trace-reader = \"$ADMINCON\"; the rule grants $ADMINCON the eight verbs"
+  want "the declaration's allowed-uids names $GATECON's uid alone"
   want "$AU cannot pass the territory; $AU-state reads neither the trace nor the declaration"
   [ "$APPLY" -eq 1 ] || return 0
   local rc=0 out="$LOGDIR/step1-create"
@@ -691,18 +731,21 @@ step_1() {
     "the member cannot read the trace" "the agent's own uid cannot pass the territory"
     "reads the declaration and writes nothing of the territory"
     "== sudo rule" "== admission" "== made")
-  [ "$ADMIN_BASE" != /etc/weaver/admin ] || needles+=("$AU-admincon ran validate through its rule: {\"kind\":\"validated\"}")
+  [ "$ADMIN_BASE" != /etc/weaver/admin ] || needles+=("$ADMINCON ran validate through its rule: {\"kind\":\"validated\"}")
   expect_in_order "create-agent.sh's apply prints its sections in order" "$out.apply" "${needles[@]}"
 
-  expect_eq "$OPERATOR holds the four groups" 4 \
-    "$(id -Gn "$OPERATOR" | tr ' ' '\n' | grep -cE "^$AU(-trace|-state|-admin)?$" || true)"
+  expect_eq "$OPERATOR holds the trace, state and access groups" 3 \
+    "$(id -Gn "$OPERATOR" | tr ' ' '\n' | grep -cE "^$AU-(trace|state|admin)$" || true)"
+  expect_eq "$OPERATOR does not hold $AU" no "$(holds_group "$OPERATOR" "$AU")"
   local u
-  for u in $ACCOUNTS; do expect_eq "the account $u stands" yes "$(id "$u" >/dev/null 2>&1 && echo yes || echo no)"; done
+  for u in $ACCOUNTS "$GATECON" "$ADMINCON"; do expect_eq "the account $u stands" yes "$(id "$u" >/dev/null 2>&1 && echo yes || echo no)"; done
   expect_eq "$AU-relay holds its trace group alone" "$AU-trace" "$(id -Gn "$AU-relay")"
-  expect_eq "$AU-admincon holds its own, the state and the access groups" \
-    "$(printf '%s\n' "$AU-admin" "$AU-admincon" "$AU-state" | sort | tr '\n' ' ')" \
-    "$(id -Gn "$AU-admincon" | tr ' ' '\n' | sort | tr '\n' ' ')"
   expect_eq "$AU-state holds its own group alone" "$AU-state" "$(id -Gn "$AU-state")"
+  expect_eq "$GATECON holds $AU" yes "$(holds_group "$GATECON" "$AU")"
+  for g in "$AU-state" "$AU-admin" "$AU-trace"; do expect_eq "$GATECON does not hold $g" no "$(holds_group "$GATECON" "$g")"; done
+  for g in "$AU-state" "$AU-admin"; do expect_eq "$ADMINCON holds $g" yes "$(holds_group "$ADMINCON" "$g")"; done
+  for g in "$AU" "$AU-trace"; do expect_eq "$ADMINCON does not hold $g" no "$(holds_group "$ADMINCON" "$g")"; done
+  expect_eq "no per-agent connector account $AU-admincon stands" no "$(lookup passwd "$AU-admincon" && echo yes || echo no)"
 
   expect_lay "$T" "root:$AU-state 710 directory"
   expect_lay "$T/state" "$AU-state:$AU-state 700 directory"
@@ -718,11 +761,13 @@ step_1() {
   expect_lay "$RULE" "root:root 440 regular file"
   expect_eq "the territory key names the canonical territory" "$T" "$(trim "$(cat -- "$R/territory")")"
   expect_eq "the operator key names $OPERATOR's uid" "$OPERATOR_UID" "$(trim "$(cat -- "$R/operator")")"
-  expect_eq "roles.toml names the connector the trace reader" "trace-reader = \"$AU-admincon\"" "$(trim "$(cat -- "$R/roles.toml")")"
+  expect_eq "roles.toml names $ADMINCON the trace reader" "trace-reader = \"$ADMINCON\"" "$(trim "$(cat -- "$R/roles.toml")")"
+  expect_eq "the declaration's allowed-uids names $GATECON's uid alone" "allowed-uids = [$(id -u "$GATECON")]" \
+    "$(sudo -n grep -E '^allowed-uids = ' -- "$DECL" || true)"
   local listing verb
-  listing=$(sudo -n -l -U "$AU-admincon" 2>&1 || true)
+  listing=$(sudo -n -l -U "$ADMINCON" 2>&1 || true)
   for verb in show validate load unload stop save-point restore force-unload; do
-    expect_eq "the rule grants $AU-admincon $verb $A" yes \
+    expect_eq "the rule grants $ADMINCON $verb $A" yes \
       "$(grep -qF "$ADMIN $verb $A" <<<"$listing" && echo yes || echo no)"
   done
   expect_eq "$AU cannot pass the territory" no "$(as_can "$AU" test -x "$T")"
@@ -771,14 +816,13 @@ step_1b() {
 
 RUN=""
 step_2() {
-  begin_step 2 "weaver-admin-Spec section 6, 3.0 S0 x load; #99 K12" "validate, load, seed, one turn"
+  begin_step 2 "weaver-admin-Spec section 6, 3.0 S0 x load; #99 K12; weaver-gate-world-contract section 2" "validate, load, one unseeded turn"
   run_line "weaver-admin validate $A"
   run_line "deploy/verify-load.sh $A --keep   (as root)"
-  run_line "deploy/turn.py $A --system"
-  run_line "deploy/turn.py $A \"Name three primary colours.\""
+  run_line "deploy/turn.py $A \"Name three primary colours.\"   (as $GATECON, the source on stdin)"
   want "validated; verify-load prints validate validated, load idle, N > 0 new lines, a load event naming composer, state_member and stack, a $AU-relay constituent, left serving, == $A verified"
   want "the load event carries no lineage and no reset, and names declaration, boundary and cause"
-  want "a turnless message.system, a bracket with no message.user, then a bracket with message.user and message.assistant"
+  want "no message.system: the agent has no seeding sender; one bracket with message.user and message.assistant"
   want "the run marker names the load's run, open"
   want "admin.log and worker.log root:$AU-admin 640; $COORD/weaver.run and $RUN_DIR root:root 755; run.lock and admin.lock root:root 600; trace.sock root:$AU-admin 660 socket"
   want "$RUNTIME_DIR $AU:$AU 750; gate.sock $AU:$AU 770 socket; coordination.sock $AU:$AU 700 socket"
@@ -811,7 +855,6 @@ step_2() {
   # (weaver-trace-Spec section 3, the event: `Envelope` is flattened into the
   # event's top level and `payload` holds only the kind's own fields).
   json_req RUN "$load" run "the load event names its run"
-  turn --system
   turn "Name three primary colours."
   local seq
   seq=$(events_since "$start" message.system turn.started message.user message.assistant turn.closed | python3 -c 'import json, sys
@@ -823,11 +866,10 @@ for k in ks:
         if cur is not None: brackets.append(cur)
         cur = None
     elif cur is not None: cur.append(k)
-ok = (bool(ks) and ks[0] == "message.system" and len(brackets) >= 2
-      and "message.user" not in brackets[0]
-      and "message.user" in brackets[1] and "message.assistant" in brackets[1])
-print("seeded, then one turn" if ok else " ".join(ks))')
-  expect_eq "the seeding and the turn are on the record" "seeded, then one turn" "$seq"
+ok = ("message.system" not in ks and len(brackets) == 1
+      and "message.user" in brackets[0] and "message.assistant" in brackets[0])
+print("one unseeded turn" if ok else " ".join(ks))')
+  expect_eq "one unseeded turn is on the record" "one unseeded turn" "$seq"
   expect_marker "$RUN" open
   expect_lay "$T/admin.log" "root:$AU-admin 640 regular file"
   expect_lay "$T/worker.log" "root:$AU-admin 640 regular file"
@@ -872,7 +914,7 @@ step_3() {
 step_4() {
   begin_step 4 "weaver-admin-Spec section 6, 3.0 S2 x unload and outcome row 6; restore is a reload" "unload, then reload with state carried"
   run_line "weaver-admin unload $A; weaver-admin show $A; weaver-admin load $A"
-  run_line "deploy/turn.py $A \"In one sentence, what were you asked to be?\""
+  run_line "deploy/turn.py $A \"In one sentence, what did I ask you to name before?\"   (as $GATECON)"
   want "unloaded; the marker closed; a second manifest line arrived leave (SP_B); the unload event not forced; a save_point event for SP_B"
   want "show unloaded with no constituent; load idle; its lineage names SP_B and the previous run, named_at_restore false, no reset; a recall event after it"
   want "reported, not checked: the trace queue's peak depth at the unload, from worker.log (#120)"
@@ -897,7 +939,7 @@ step_4() {
   expect_eq "the member answered the restore (a recall event)" yes \
     "$( [ -n "$(events_since "$start" recall)" ] && echo yes || echo no)"
   json_req RUN "$load" run "the load event names its run"
-  turn "In one sentence, what were you asked to be?"
+  turn "In one sentence, what did I ask you to name before?"
   end_step
 }
 
@@ -946,6 +988,109 @@ step_5() {
   expect_at "the lineage names the newest line" "$(manifest_field last 4)" "$load" payload.lineage.save_point
   expect_eq "the newest was not named at restore" false "$(json_at "$load" payload.lineage.named_at_restore)"
   json_req RUN "$load" run "the load event names its run"
+  end_step
+}
+
+step_5b() {
+  begin_step 5b "weaver-admin-Spec section 9; weaver-gate-world-contract sections 1 and 2" "a measurement on this throwaway agent: its access rule moved to a second uid and back"
+  run_line "A MEASUREMENT ON THE THROWAWAY AGENT $A, NOT THE LAYOUT create-agent.sh LAYS: the rule names $GATECON again before the step passes"
+  run_line "weaver-admin unload $A"
+  run_line "gpasswd -a $OPERATOR $AU; allowed-uids = [$OPERATOR_UID] in $DECL (owner and mode kept)"
+  run_line "   both put back by the step and by the exit trap: the declaration byte for byte, $OPERATOR out of $AU"
+  run_line "weaver-admin validate $A; weaver-admin load $A"
+  run_line "agent_tuple.py rows --declaration $DECL --sink $TRACE --from-line <the load's first line>   (as root)"
+  run_line "deploy/turn.py as $GATECON, then as $OPERATOR"
+  run_line "weaver-admin unload $A; [restore] save-point = \"<SP_A name>\" appended; weaver-admin restore $A; weaver-admin load $A; weaver-admin unload $A"
+  run_line "$OPERATOR out of $AU with allowed-uids = [$OPERATOR_UID] (the perturbation); weaver-admin validate $A"
+  run_line "the measurement put back; weaver-admin validate $A; weaver-admin load $A"
+  want "validated; load idle; its declaration digest differs from the load before and its boundary digest is equal"
+  want "its lineage names the newest manifest line, named_at_restore false, no reset, and a recall event follows"
+  want "the tuple's bind declaration row reads recorded"
+  want "a turn as $GATECON is refused (no answer); a turn as $OPERATOR is answered: a rule naming the operator is still admitted"
+  want "SP_A, an older save point, restores and loads under the moved rule (N6 does not read the declaration)"
+  want "the perturbation, a uid outside $AU, refuses boundary_unverified, admin's cause (gate-instruction.access-rule.allowed-uids.$OPERATOR_UID) recorded as measured"
+  want "put back: $OPERATOR out of $AU, the declaration byte for byte with allowed-uids naming $GATECON alone; validated; load idle"
+  [ "$APPLY" -eq 1 ] || return 0
+  printf '   THIS IS A MEASUREMENT ON THE THROWAWAY AGENT %s, NOT THE LAYOUT create-agent.sh LAYS\n' "$A"
+  local gatecon_uid orig moved before load start rows bind
+  gatecon_uid=$(id -u "$GATECON") || fail "$GATECON's uid is read" "a uid" "id -u failed"
+  before=$(last_event load)
+  ask unload; expect_state unload unloaded
+  orig=$(sudo -n base64 -w0 -- "$DECL")
+  expect_eq "the declaration names $GATECON's uid alone before the step" "allowed-uids = [$gatecon_uid]" \
+    "$(printf '%s' "$orig" | base64 -d | grep -E '^allowed-uids = ' || true)"
+  moved=$(printf '%s' "$orig" | base64 -d | sed "s/^allowed-uids = \[$gatecon_uid\]\$/allowed-uids = [$OPERATOR_UID]/" | base64 -w0)
+  RESTORE=(restore_rule "$orig")
+  sudo -n gpasswd -a "$OPERATOR" "$AU" >/dev/null \
+    || { restore_now || true; fail "$OPERATOR joins $AU for the measurement" "gpasswd -a succeeds" "it failed"; }
+  printf '%s' "$moved" | base64 -d | sudo -n tee -- "$DECL" >/dev/null \
+    || { restore_now || true; fail "the rule moves to $OPERATOR_UID" "the declaration is written" "it failed"; }
+  expect_eq "the rule names $OPERATOR_UID alone" "allowed-uids = [$OPERATOR_UID]" \
+    "$(sudo -n grep -E '^allowed-uids = ' -- "$DECL" || true)"
+  expect_lay "$DECL" "root:$AU-admin 640 regular file"
+  ask validate; expect_kind validate validated
+  start=$(trace_lines)
+  ask load; expect_state load idle
+  load=$(last_event load)
+  local d0 d1 b0 b1
+  json_req d0 "$before" payload.declaration "the load before names its declaration"
+  json_req d1 "$load" payload.declaration "the load names its declaration"
+  json_req b0 "$before" payload.boundary "the load before names its boundary"
+  json_req b1 "$load" payload.boundary "the load names its boundary"
+  expect_eq "the declaration digest moved with the rule" moved "$( [ "$d0" != "$d1" ] && echo moved || echo equal)"
+  expect_eq "the boundary digest did not move" "$b0" "$b1"
+  expect_at "the lineage names the newest manifest line" "$(manifest_field last 4)" "$load" payload.lineage.save_point
+  expect_eq "the newest was not named at restore" false "$(json_at "$load" payload.lineage.named_at_restore)"
+  expect_eq "the load carries no reset" absent "$(json_at "$load" payload.reset)"
+  expect_eq "the member answered the restore (a recall event)" yes \
+    "$( [ -n "$(events_since "$start" recall)" ] && echo yes || echo no)"
+  rows=$(sudo -n python3 -I "$CHECKOUT/deploy/agent_tuple.py" rows --declaration "$DECL" --sink "$TRACE" \
+    --from-line "$((start + 1))" 2>&1 || true)
+  bind=$(grep -F 'bind    declaration' <<<"$rows" || true)
+  printf '%s\n' "${bind:-no bind declaration row}" | sed 's/^/     /'
+  expect_eq "the tuple's bind declaration row reads recorded" yes "$( [[ "$bind" == *"[recorded:"* ]] && echo yes || echo no)"
+  turn_as "$GATECON" "Name three primary colours."
+  expect_eq "a turn as $GATECON is refused, the rule no longer naming it" refused \
+    "$( [ "$TURN_RC" -ne 0 ] && [ -z "$TURN_SAID" ] && echo refused || echo "exit $TURN_RC, answer '$TURN_SAID'")"
+  measured "turn.py as $GATECON said: ${TURN_ERR:-nothing}"
+  turn_as "$OPERATOR" "Name three primary colours."
+  [ "$TURN_RC" -eq 0 ] || printf '%s\n' "$TURN_ERR" >&2
+  expect_eq "a turn as $OPERATOR is answered: a rule naming the operator is admitted" answered \
+    "$( [ "$TURN_RC" -eq 0 ] && [ -n "$TURN_SAID" ] && echo answered || echo "exit $TURN_RC")"
+  ask unload; expect_state unload unloaded
+  { printf '%s' "$moved" | base64 -d; printf '\n[restore]\nsave-point = "%s"\n' "$SP_A_NAME"; } | sudo -n tee -- "$DECL" >/dev/null \
+    || fail "[restore] is appended under the moved rule" "the declaration is written" "it failed"
+  ask restore; expect_kind restore restore_named
+  expect_at "restore names SP_A's digest" "$SP_A_DIG" "$ANSWER" save_point
+  ask load; expect_state load idle
+  load=$(last_event load)
+  expect_at "the lineage names SP_A, an older save point, under the moved rule" "$SP_A_DIG" "$load" payload.lineage.save_point
+  expect_eq "SP_A was named at restore" true "$(json_at "$load" payload.lineage.named_at_restore)"
+  ask unload; expect_state unload unloaded
+  # The perturbation: the same moved rule with the operator out of the
+  # agent's group, which the socket's mode would turn away before the
+  # credential check (inventory's UidOutsideGroup).
+  sudo -n gpasswd -d "$OPERATOR" "$AU" >/dev/null || fail "$OPERATOR leaves $AU for the perturbation" "gpasswd -d succeeds" "it failed"
+  printf '%s' "$moved" | base64 -d | sudo -n tee -- "$DECL" >/dev/null \
+    || fail "the moved rule is written without [restore]" "the declaration is written" "it failed"
+  ask validate
+  expect_kind "validate with the rule's uid outside $AU" boundary_unverified
+  # **Admin's cause is evidence, not a check** (as step 8b's): it names the
+  # field on stderr, outside admin's interface, and the put-back validate
+  # below is the control that pins the refusal to the moved uid.
+  measured "admin's cause: ${ASKED_CAUSE:-nothing}"
+  restore_now || fail "the measurement is put back" "restore_rule succeeds" "it failed"
+  expect_eq "the declaration is back byte for byte" "$orig" "$(sudo -n base64 -w0 -- "$DECL")"
+  expect_eq "the rule names $GATECON's uid alone again" "allowed-uids = [$gatecon_uid]" \
+    "$(sudo -n grep -E '^allowed-uids = ' -- "$DECL" || true)"
+  expect_eq "$OPERATOR is out of $AU" no "$(holds_group "$OPERATOR" "$AU")"
+  expect_lay "$DECL" "root:$AU-admin 640 regular file"
+  ask validate; expect_kind validate validated
+  ask load; expect_state load idle
+  load=$(last_event load)
+  expect_at "the lineage names the newest line" "$(manifest_field last 4)" "$load" payload.lineage.save_point
+  json_req RUN "$load" run "the load event names its run"
+  turn "Name three primary colours."
   end_step
 }
 
@@ -1202,13 +1347,14 @@ step_9() {
   run_line "tar --acls --xattrs -C $AGENT_DIR -cpf ${ARCHIVE:-<--archive>}/$AU-territory-<stamp>.tar $AU"
   run_line "tar -C $ADMIN_BASE -cpf ${ARCHIVE:-<--archive>}/$AU-root-<stamp>.tar $A"
   run_line "rm -rf $R $STAGE $RUN_DIR $RUNTIME_DIR"
-  run_line "userdel -r $AU; userdel $AU-state; userdel $AU-relay; userdel $AU-admincon"
+  run_line "userdel -r $AU; userdel $AU-state; userdel $AU-relay   ($GATECON and $ADMINCON are the box's and stay)"
   run_line "groupdel $GROUPS_MADE (each that stands)"
   run_line "rm -rf $T"
   run_line "rm -f $MARKER"
   run_line "weaver-admin show $A, as the operator and under sudo"
   want "show unloaded with no constituent before; afterwards show answers unauthorized as the operator and no_such_agent under sudo"
   want "the accounts, the groups, $R, $RULE and $T are absent; each archive reads back"
+  want "$GATECON and $ADMINCON still stand, holding no group of $A, the groups having gone with it"
   want "never decommission.sh, which takes every agent off the box; no other agent is touched"
   [ "$APPLY" -eq 1 ] || return 0
   if [ "$STAGED_KEY" -eq 1 ]; then
@@ -1239,7 +1385,7 @@ step_9() {
   sudo -n rm -rf -- "$R" "$STAGE" "$RUN_DIR" "$RUNTIME_DIR"
   local u g
   if lookup passwd "$AU"; then sudo -n userdel -r "$AU"; fi
-  for u in "$AU-state" "$AU-relay" "$AU-admincon"; do
+  for u in "$AU-state" "$AU-relay"; do
     if lookup passwd "$u"; then sudo -n userdel "$u"; fi
   done
   for g in $GROUPS_MADE; do
@@ -1257,6 +1403,17 @@ step_9() {
   ask show; expect_kind "show under sudo" no_such_agent
   for u in $ACCOUNTS; do expect_eq "the account $u is gone" no "$(lookup passwd "$u" && echo yes || echo no)"; done
   for g in $GROUPS_MADE; do expect_eq "the group $g is gone" no "$(lookup group "$g" && echo yes || echo no)"; done
+  # **The box's connector accounts are not this agent's** (weaver-admin-Spec
+  # section 2): a single agent's take-down leaves both, its memberships going
+  # with its groups.
+  for u in "$GATECON" "$ADMINCON"; do
+    if lookup passwd "$u"; then
+      pass "the box's account $u still stands"
+      for g in $GROUPS_MADE; do expect_eq "$u holds no group of $A" no "$(holds_group "$u" "$g")"; done
+    else
+      measured "the box's account $u does not stand, so there was nothing of it to leave"
+    fi
+  done
   local p
   for p in "$T" "$R" "$STAGE" "$RULE" "/home/$AU" "$RUN_DIR" "$RUNTIME_DIR"; do
     expect_eq "$p is gone" absent "$(lay "$p")"
@@ -1317,6 +1474,7 @@ step_2
 step_3
 step_4
 step_5
+step_5b
 step_6
 step_6b
 step_7

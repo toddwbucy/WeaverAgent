@@ -4358,6 +4358,27 @@ fn a_reserved_suffix_refuses() {
     assert!(well_formed("x-relays"), "a suffix is matched whole");
 }
 
+/// **The names `gatecon` and `admincon` refuse as a reserved suffix does**,
+/// per Spec section 4 on the operator's ruling of 2026-11-10: the box's two
+/// connector accounts are `weaver-gatecon` and `weaver-admincon`, so an agent
+/// of either name would own one of them as its own identity. The name is
+/// matched whole, so a name that only contains one stays admissible.
+/// Perturbation: drop the whole-name check and both names pass.
+#[test]
+fn a_box_account_name_refuses() {
+    for reserved in ["gatecon", "admincon"] {
+        assert!(!well_formed(reserved), "{reserved}");
+        assert_eq!(
+            load_service_config(&AgentName(reserved.into()), false).err(),
+            Some(LifecycleRefusal::NoSuchAgent),
+            "{reserved}"
+        );
+    }
+    for admissible in ["gatecons", "xgatecon", "admincon1", "gate", "con"] {
+        assert!(well_formed(admissible), "{admissible} is matched whole");
+    }
+}
+
 /// **A load never ends an existing run**, per Spec section 3: a held run
 /// lock with no worker listening refuses `AgentRunning`, and the holder
 /// still runs. Perturbation: let the load end what holds the lock and the
