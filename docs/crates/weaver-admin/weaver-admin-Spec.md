@@ -3020,6 +3020,15 @@ The instruments:
   removed from its path, or with another directory there, end at once, and over a
   cgroup at its path whose `cgroup.events` does not read run to the bound. Watched to
   fail when the path's reading is dropped, and when every failed read reads as empty.
+- **The root instruments' making:** an instrument that runs as root, in a root-owned
+  delegated scope the operator stands it in, makes the agent's cgroup beneath the cgroup
+  it runs in and never asks the system's PID1 for a scope. The serving-leave instruments
+  call that making directly. The serving-load composition instruments drive the load and
+  set the seam beside `make_agent_cgroup` in admin's `main.rs`, which routes the start
+  step's making there. In the suite, production's request refuses, so a test that
+  reaches the scope step without the seam is refused and never answered by PID1. Watched
+  to refuse at production's request when the seam is dropped, and to fail when the
+  suite's request answers.
 
 ## 7. The coordination channel
 

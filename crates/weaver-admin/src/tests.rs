@@ -5600,3 +5600,69 @@ fn the_shells_grant_names_the_judged_binary_and_commands() {
     assert_eq!(judged.applets.len(), 14);
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A run directory of the test's own for the start step's making. The
+/// floor's refusals the seam's tests read come before it writes anything.
+fn seam_run_directory(name: &str) -> (crate::scratch::Scratch, std::os::fd::OwnedFd) {
+    let path =
+        std::env::temp_dir().join(format!("weaver-admin-seam-{name}-{}", std::process::id()));
+    std::fs::create_dir(&path).unwrap();
+    let directory = agent_cgroup::open_run_directory(&path).unwrap();
+    (crate::scratch::Scratch(path), directory)
+}
+
+/// **The root instruments' seam** (Spec 6.1, the root instruments' making):
+/// set, the start step's making stands the agent's cgroup beneath the cgroup
+/// the test runs in and never reaches the scope step's request. The suite's
+/// own cgroup is not root's, so here the floor refuses it, naming that
+/// cgroup. As root the seam stands the cgroup, which the root lane's
+/// composition instruments read. Perturbation: drop the seam, and the making
+/// reaches production's request, which the suite refuses.
+#[test]
+fn the_instruments_seam_makes_beneath_the_tests_own_cgroup() {
+    use std::os::fd::AsFd;
+    if nix::unistd::geteuid().is_root() {
+        eprintln!(
+            "SKIP the instruments' seam: as root it stands the cgroup, read by the root lane"
+        );
+        return;
+    }
+    let (_scratch, directory) = seam_run_directory("set");
+    let own = containment::own_cgroup().unwrap();
+    TEST_BENEATH_OWN_CGROUP.with(|seam| seam.set(true));
+    let made = start_agent_cgroup(directory.as_fd(), "seam-fixture", "seam-run", (0, 0));
+    TEST_BENEATH_OWN_CGROUP.with(|seam| seam.set(false));
+    match made {
+        Err(agent_cgroup::StartRefused::Unverified(why)) => {
+            assert!(
+                why.contains(&format!("cgroup {own}")),
+                "the floor names the test's own cgroup {own}: {why}"
+            );
+            assert!(!why.contains("never asks the system's PID1"), "{why}");
+        }
+        Err(other) => panic!("the floor refuses BoundaryUnverified, not {other:?}"),
+        Ok(_) => panic!("a cgroup the suite's account owns is never the agent's scope"),
+    }
+}
+
+/// **The suite never asks the system's PID1 for a scope** (Spec 6.1, the
+/// root instruments' making): without the seam the start step's making
+/// reaches production's request, and the suite's refuses, so a test that
+/// forgets the seam is refused, never answered by PID1. The scope's path is
+/// this test's own agent's and absent, so the step goes on to the request.
+/// Perturbation: make the suite's request answer as PID1 does, and the step
+/// waits out the bound for a move that never comes.
+#[test]
+fn without_the_seam_productions_request_is_refused_in_the_suite() {
+    use std::os::fd::AsFd;
+    let (_scratch, directory) = seam_run_directory("unset");
+    let agent = format!("seam-fixture-{}", std::process::id());
+    match start_agent_cgroup(directory.as_fd(), &agent, "seam-run", (0, 0)) {
+        Err(agent_cgroup::StartRefused::Unverified(why)) => assert!(
+            why.contains("never asks the system's PID1"),
+            "production's request is refused in the suite: {why}"
+        ),
+        Err(other) => panic!("the request's refusal is BoundaryUnverified, not {other:?}"),
+        Ok(_) => panic!("the suite never stands the agent's scope"),
+    }
+}

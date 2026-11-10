@@ -117,10 +117,29 @@ impl Step<Busctl> {
         Step {
             site: Site::of(agent),
             pid: std::process::id(),
-            request: busctl,
+            request: PRODUCTION_REQUEST,
             bound: SCOPE_BOUND,
         }
     }
+}
+
+/// Production's request, [`busctl`].
+#[cfg(not(test))]
+const PRODUCTION_REQUEST: Busctl = busctl;
+
+/// **In the suite, production's request refuses** (6.1, the instruments): no
+/// test asks the system's PID1 for a scope, so a test that reaches the scope
+/// step without the root instruments' seam is refused, never answered by
+/// PID1.
+#[cfg(test)]
+const PRODUCTION_REQUEST: Busctl = refused_in_the_suite;
+
+#[cfg(test)]
+fn refused_in_the_suite(call: &Call) -> Result<String, String> {
+    Err(format!(
+        "the suite never asks the system's PID1 for {}: a root instrument sets the seam beside make_agent_cgroup",
+        call.unit
+    ))
 }
 
 /// Why the scope step stood nothing.
@@ -279,6 +298,10 @@ pub fn confirm(pid: u32, path: &str, deadline: Instant) -> bool {
 /// `output` waits for it, so the helper, admin's own and root's, is forked
 /// before the move and reaped before the confirm reads (D2). Answers the
 /// reply where it succeeds, and what it said where it fails.
+#[cfg_attr(
+    test,
+    expect(dead_code, reason = "in the suite, production's request refuses")
+)]
 pub fn busctl(call: &Call) -> Result<String, String> {
     let output = Command::new(BUSCTL)
         .args(busctl_arguments(call))
