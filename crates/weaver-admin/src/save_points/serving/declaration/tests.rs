@@ -214,6 +214,7 @@ fn optional_absences_stay_absent_and_every_sink_variant_round_trips() {
         "field-election",
         "state-election",
         "restore",
+        "turn-context",
     ] {
         assert!(!rendered.contains(absent), "{absent}");
     }
@@ -394,5 +395,26 @@ fn a_declared_adapter_survives_the_published_declaration() {
             finite_scale(value),
             Err(RenderError::Unsupported("model-binding.adapter.scale"))
         ));
+    }
+}
+
+/// **A declared turn-context survives the published declaration** (#423):
+/// each value renders by its declaration spelling and the round trip reads it
+/// back, while a silent declaration stays silent (the absence test above).
+/// The foundation's path checks the value and honors nothing until its
+/// cutover, and the published copy still carries what the operator declared.
+///
+/// Perturbation: drop the `turn_context` arm from `Writer::agent` and the
+/// round trip loses the key. Watched to fail under exactly that removal.
+#[test]
+fn a_declared_turn_context_survives_the_published_declaration() {
+    for (value, elected) in [
+        ("continuous", weaver_types::TurnContext::Continuous),
+        ("independent", weaver_types::TurnContext::Independent),
+    ] {
+        let line = format!("turn-context = \"{value}\"\n");
+        let (parsed, rendered) = round_trip(&format!("{GOLDEN}{line}"));
+        assert_eq!(parsed.agent().turn_context, Some(elected), "{value}");
+        assert!(rendered.contains(&line), "{rendered}");
     }
 }

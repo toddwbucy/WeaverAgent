@@ -286,6 +286,7 @@ fn entered_run(turn: Option<&str>) -> (Run, OrganChannel, crate::scratch::Scratc
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -363,6 +364,7 @@ fn entered_run(turn: Option<&str>) -> (Run, OrganChannel, crate::scratch::Scratc
             drain_bound: None,
             wind_down_bound: None,
             leave: None,
+            turn_context: weaver_types::TurnContext::Continuous,
         },
         near,
         path,
@@ -559,6 +561,7 @@ fn the_declared_election_reaches_the_tee() {
                 paths: vec!["origin".into()],
             }],
         },
+        turn_context: weaver_types::TurnContext::Continuous,
     };
 
     // The fan-out fails after-load at the SPU exec, which is the point:
@@ -681,6 +684,7 @@ fn a_refused_enter_leaves_its_reason_in_the_record() {
             all_kinds: false,
             keys: Vec::new(),
         },
+        turn_context: weaver_types::TurnContext::Continuous,
     };
     // The fan-out fails after-load at the SPU exec, which is the arm
     // this test exists for: the bracket stands and the refusal is the
@@ -772,6 +776,11 @@ fn a_refused_enter_leaves_its_reason_in_the_record() {
 /// Perturbation: author `state_member: false` regardless of the end, or
 /// author a compiled composer regardless of what serve set, and this
 /// fails on the standing case.
+///
+/// **The load names the turn context the enter carried** (#423,
+/// `weaver-trace-Spec` section 3): each case enters with a different
+/// election and reads it back off the authored load. Perturbation: author
+/// `continuous` regardless of the enter and the standing case fails.
 #[test]
 fn the_load_names_the_member_it_was_handed_and_the_composer_serve_set() {
     for standing in [false, true] {
@@ -843,6 +852,11 @@ fn the_load_names_the_member_it_was_handed_and_the_composer_serve_set() {
                 all_kinds: false,
                 keys: Vec::new(),
             },
+            turn_context: if standing {
+                weaver_types::TurnContext::Independent
+            } else {
+                weaver_types::TurnContext::Continuous
+            },
         };
         // The member's end, where it stands: one half of a pair the test
         // holds, the way admin's spawn hands the harness its half, its
@@ -877,6 +891,15 @@ fn the_load_names_the_member_it_was_handed_and_the_composer_serve_set() {
         assert_eq!(load["payload"]["composer"]["binary"], "pyworker");
         assert_eq!(load["payload"]["composer"]["file"], "/deployed/loop.py");
         assert_eq!(load["payload"]["composer"]["sha256"], "cd".repeat(32));
+        assert_eq!(
+            load["payload"]["turn_context"],
+            if standing {
+                "independent"
+            } else {
+                "continuous"
+            },
+            "the load names the enter's election"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
@@ -959,6 +982,7 @@ fn an_enter_naming_a_lineage_with_no_member_refuses_before_the_load() {
             all_kinds: false,
             keys: Vec::new(),
         },
+        turn_context: weaver_types::TurnContext::Continuous,
     };
     let refusal = match harness.enter(payload, Some(sink), None) {
         Err(EnterFailure::BeforeLoad(refusal)) => refusal,
@@ -1166,6 +1190,7 @@ fn enter_against_a_member_leaving(
             all_kinds: true,
             keys: Vec::new(),
         },
+        turn_context: weaver_types::TurnContext::Continuous,
     };
     let (near, far) = std::os::unix::net::UnixStream::pair().expect("pair");
     // Every line the member reads and every directive the gate stand-in
@@ -2355,6 +2380,7 @@ fn an_enter_with_no_member_seats_no_prefix() {
             all_kinds: false,
             keys: Vec::new(),
         },
+        turn_context: weaver_types::TurnContext::Continuous,
     };
     let mut run = match harness.enter(payload, Some(sink), None) {
         Err(EnterFailure::AfterLoad(run, _)) => run,
@@ -2462,6 +2488,7 @@ fn the_declared_elections_reach_the_load_record() {
                     paths: vec!["close".to_string()],
                 }],
             },
+            turn_context: weaver_types::TurnContext::Continuous,
         };
         let mut run = match harness.enter(payload, Some(sink), None) {
             Err(EnterFailure::AfterLoad(run, _)) => run,
@@ -2615,6 +2642,7 @@ fn the_diagnostic_enter_forks_no_gate() {
         drain_bound: None,
         wind_down_bound: None,
         state_election: weaver_types::StateElection::default(),
+        turn_context: weaver_types::TurnContext::Continuous,
     };
 
     let mut run = match harness.enter(payload, Some(sink), None) {
@@ -2745,6 +2773,7 @@ fn the_turn_rehearses_on_the_device() {
         drain_bound: None,
         wind_down_bound: None,
         state_election: weaver_types::StateElection::default(),
+        turn_context: weaver_types::TurnContext::Continuous,
     };
 
     // The real fan-out: real forks, real admit against real weights,

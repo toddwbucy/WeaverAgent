@@ -282,6 +282,9 @@ pub struct Ports<'a> {
     /// Whether the open seated a prefix, the run's admission fact lent at
     /// the grant ([`Ports::seated`]).
     seated: bool,
+    /// The run's turn-context election, from the enter, lent at the grant
+    /// ([`Ports::turn_context`]).
+    turn_context: weaver_types::TurnContext,
 }
 
 /// Why a turn did not complete. A refusal the seam typed is the session
@@ -358,7 +361,9 @@ impl<'a> Ports<'a> {
     /// bundling struct would be a second `Ports` wrapping this one, so the
     /// lint is answered rather than obeyed. `seated` is the run's admission
     /// fact for [`Ports::seated`] (ADP-4), an argument rather than a default
-    /// so that no grant can leave it out.
+    /// so that no grant can leave it out, and `turn_context` the run's
+    /// election for [`Ports::turn_context`] (#423), an argument for the same
+    /// reason.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn grant(
         decode: &'a DecodeChannel,
@@ -376,6 +381,7 @@ impl<'a> Ports<'a> {
         fullness: &'a mut Option<(u64, u64)>,
         pressure_reported: &'a mut bool,
         seated: bool,
+        turn_context: weaver_types::TurnContext,
     ) -> Self {
         Ports {
             decode,
@@ -403,6 +409,7 @@ impl<'a> Ports<'a> {
             gate_lost: false,
             interrupted_at: std::cell::Cell::new(None),
             seated,
+            turn_context,
         }
     }
 
@@ -504,17 +511,18 @@ impl<'a> Ports<'a> {
         *self.fullness
     }
 
-    /// The flush, per `weaver-harness-Spec` section 6's context ports:
-    /// drives the decode seam's standing flush exchange, valid between
-    /// turns, and on confirmation authors the record's `flush` event from
-    /// the counts the confirmation carried, the SPU being the one
-    /// authority on either number. Since the cut ruling of 2026-08-19 the
-    /// call takes `keep`, the resident length the session returns to,
-    /// forwarded to the directive unjudged: the seam bounds it below by
-    /// the identity prefix and above by the resident count, and the
-    /// answered pair says what held. Answers the pair, or `None` where the
-    /// seam refused or broke - the next turn will meet the dead seam
-    /// properly, so nothing here converts it.
+    /// The flush, per `weaver-harness-Spec` section 6's context ports: drives
+    /// the decode seam's standing flush exchange, valid between turns, and on
+    /// confirmation authors the record's `flush` event from the counts the
+    /// confirmation carried, the SPU being the one authority on either number.
+    /// Since the cut ruling of 2026-08-19 the call takes `keep`, the resident
+    /// length the session returns to, forwarded to the directive unjudged: the
+    /// seam bounds it below by the identity prefix and above by the resident
+    /// count, and the answered pair says what held. Answers the pair, or `None`
+    /// where the seam refused or broke, nothing here converting it: under
+    /// `continuous` the next turn meets the dead seam properly, and under
+    /// `independent` the caller refuses the turn (#423), a refused cut having
+    /// left the context as it was and a broken seam the cut's outcome unknown.
     pub fn flush(&mut self, keep: u64) -> Option<(u64, u64)> {
         self.decode
             .send_directive(&TokenDirective::Flush { keep })
@@ -1007,6 +1015,18 @@ impl<'a> Ports<'a> {
         self.seated
     }
 
+    /// **The run's turn-context election**, per `weaver-harness-Spec`
+    /// section 6's turn-context read (#423): the declaration's election as
+    /// the enter carried it resolved, a read the loop answers. Under
+    /// `independent` the shipped loop returns the decode context to the
+    /// identity prefix before every turn through [`Ports::flush`], so each
+    /// turn is answered from the prefix the open seated and its own request
+    /// alone, and loop 0 makes the same cut before its own two turns, the
+    /// seeding turn and the wind-down.
+    pub fn turn_context(&self) -> weaver_types::TurnContext {
+        self.turn_context
+    }
+
     /// **Run one turn**, per `weaver-harness-Spec` section 6.1. Loop 1 supplies
     /// the delta as canonical messages, and loop 0 drives the exchange and
     /// authors the record: the turn bracket, the delta as message events, the
@@ -1031,7 +1051,27 @@ impl<'a> Ports<'a> {
     /// turn; the delta does not, the record holding the prompt once, as the
     /// prefix the next load seats.
     pub fn seed(&mut self, prompt: Message) -> Result<TurnOutcome, TurnError> {
+        self.flush_if_independent()?;
         self.bracketed(vec![prompt], false)
+    }
+
+    /// **Loop 0's own turns answer the turn-context election** (#423,
+    /// `weaver-harness-Spec` section 6's turn-context read): the seeding turn
+    /// and the wind-down turn cross the dev boundary nowhere, so where the run
+    /// elects `independent` loop 0 makes the cut loop 1 makes before every turn
+    /// it drives, zero, which the seam bounds at the identity prefix, directly
+    /// before the bracket opens. **Its confirmation gates the turn**, as loop
+    /// 1's does: a cut refused, the context standing as it was, or a seam that
+    /// closes before confirming it, the cut's outcome unknown and no `flush`
+    /// event authored, answers `ChannelLost` and the turn does not run, the
+    /// refusal itself authored by the flush port. A seam that stays open and
+    /// silent holds the turn unbounded, the flush port's wait having no
+    /// deadline (#527).
+    fn flush_if_independent(&mut self) -> Result<(), TurnError> {
+        if self.turn_context == weaver_types::TurnContext::Independent && self.flush(0).is_none() {
+            return Err(TurnError::ChannelLost);
+        }
+        Ok(())
     }
 
     /// **The leave's wind-down turn** (`weaver-admin-Spec` 3.0, graceful
@@ -1056,6 +1096,11 @@ impl<'a> Ports<'a> {
                 text: WIND_DOWN_REQUEST.into(),
             }],
         };
+        // Under `independent` the wind-down sees the prefix alone, not the
+        // last turn's context (#423), or does not run.
+        if let Err(refused) = self.flush_if_independent() {
+            return (Err(refused), self.cut_by_leave);
+        }
         let ran = self.bracketed(vec![request], true);
         (ran, self.cut_by_leave)
     }

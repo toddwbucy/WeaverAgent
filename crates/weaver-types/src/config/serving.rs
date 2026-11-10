@@ -116,6 +116,10 @@ pub fn parse_serving_draft(source: &str) -> Result<ServingDraft, ConfigError> {
     // different TOML document or admitting aliases on the wire types.
     super::check_provided_engine(source)?;
     super::check_lifecycle_bounds(source)?;
+    // **Value checked, election not honored until the cutover** (#423): the
+    // foundation's serving path judges the key as the declaration parse does,
+    // and nothing on that path reads it yet.
+    super::check_turn_context(source)?;
     let agent: AgentConfig = document
         .try_into()
         .map_err(|error: toml::de::Error| super::classify_toml_error(error.message()))?;

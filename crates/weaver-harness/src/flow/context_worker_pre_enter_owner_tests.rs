@@ -1149,6 +1149,7 @@ fn legacy_enter_cannot_fall_back_to_an_ordinary_before_enter_directive() {
                 library_path: source.library_path.clone(),
                 drain_bound: source.drain_bound,
                 wind_down_bound: source.wind_down_bound,
+                turn_context: weaver_types::TurnContext::Continuous,
             }),
         },
     );

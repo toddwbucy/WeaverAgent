@@ -373,7 +373,11 @@ fn group(events: &[Recalled]) -> Result<Grouped, String> {
     // Whether it refuses waits on `carries_recall`, read over the whole
     // holdings, since the record carries no format marker and the kind's
     // presence is what says its recorder and seat record recalls.
+    // **A run whose `load` names `turn_context` independent owes none** (#423):
+    // its loop composes no re-entry, so no recalled provenance stands to be
+    // accounted for, and the rule stands where the load or its member is absent.
     let mut carries_recall = false;
+    let mut independent = false;
     let mut flushed: Option<&str> = None;
     let mut unaccounted: Option<(String, String)> = None;
     let mut run: Option<&str> = None;
@@ -460,6 +464,12 @@ fn group(events: &[Recalled]) -> Result<Grouped, String> {
                 }
                 edits.push((order.len(), edit));
             }
+            // The record's own statement of its turn-context election, read
+            // from the `load` the holdings carry and never inferred from the
+            // events that followed it.
+            "load" => {
+                independent = pair(event, "turn_context") == Some("\"independent\"");
+            }
             // Only the seat's own recall accounts for a re-entry: the
             // enter's identity ask and the replay port's answer are recalls
             // of other asks, and an ask this walk cannot read accounts for
@@ -485,8 +495,8 @@ fn group(events: &[Recalled]) -> Result<Grouped, String> {
                     event.sequence
                 ));
             }
-            // Turnless events - the run brackets, the seated prefix, the
-            // load - inform identity and feed nothing
+            // Turnless events - the run brackets, the seated prefix - inform
+            // identity and feed nothing
             // positionally, and kinds this walk does not read pass by, per
             // the versionless-schema rule.
             _ => {}
@@ -495,7 +505,10 @@ fn group(events: &[Recalled]) -> Result<Grouped, String> {
     if let Some((turn, _)) = pending.iter().next() {
         return Err(format!("a model.request in turn {turn} pairs with nothing"));
     }
-    if carries_recall && let Some((flush, turn)) = unaccounted {
+    if carries_recall
+        && !independent
+        && let Some((flush, turn)) = unaccounted
+    {
         return Err(format!(
             "the flush at sequence {flush} is followed by turn {turn}'s request with no recall between them, on a record that carries the recall kind, so the post-flush input's provenance is not in the record"
         ));

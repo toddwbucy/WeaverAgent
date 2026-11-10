@@ -170,6 +170,7 @@ fn replacement_enter_adoption_refusals_retain_original_bytes_and_unconsumed_hand
         send(&peer, &bytes, &handles);
         owner.advance(&mut FakePumpIo::new(1)).unwrap();
         if case == "dead-peer" {
+            crate::flow::fixture_eof::hang_up(&peer);
             drop(peer);
         }
         let refusal = received(owner)

@@ -796,6 +796,13 @@ pub struct EnterPayload {
     /// The wind-down's bound, in seconds, the same way, for S5.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wind_down_bound: Option<u64>,
+    /// **The turn-context election, resolved** (#423, `weaver-types-Spec`
+    /// section 2): admin fills `continuous` where the declaration is silent,
+    /// so what crosses is always the election and the harness, which holds no
+    /// declaration, never re-derives an absence. Required on the wire for the
+    /// same reason. The harness lends it to loop 1's seat and names it on the
+    /// load event.
+    pub turn_context: crate::config::TurnContext,
 }
 
 /// A save point's lineage as admin resolved it from the stamp, per

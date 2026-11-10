@@ -14,7 +14,7 @@ use weaver_types::state_flow::{
 use weaver_types::{
     AccessRule, AdapterBinding, AgentConfig, BindingKind, ClassifyInstruction, DecoderInstruction,
     FieldElection, GateInstruction, Lifecycle, ModelBinding, ServingDeclaration, SpuInstruction,
-    StateStore, StoreEngine, TraceSink,
+    StateStore, StoreEngine, TraceSink, TurnContext,
 };
 
 #[derive(Debug)]
@@ -109,6 +109,7 @@ impl Writer {
             state_store,
             restore,
             lifecycle,
+            turn_context,
         } = value;
         if state_election.is_some() || restore.is_some() {
             return Err(RenderError::Unsupported("retired serving declaration"));
@@ -194,6 +195,18 @@ impl Writer {
             if let Some(value) = wind_down_bound {
                 self.integer("lifecycle.wind-down-bound", *value)?;
             }
+        }
+        // **Value checked, election not honored until the cutover** (#423):
+        // the published copy carries what the operator declared, a silent
+        // declaration staying silent.
+        if let Some(elected) = turn_context {
+            self.string(
+                "turn-context",
+                match elected {
+                    TurnContext::Continuous => "continuous",
+                    TurnContext::Independent => "independent",
+                },
+            )?;
         }
         Ok(())
     }

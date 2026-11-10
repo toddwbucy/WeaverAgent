@@ -1943,6 +1943,67 @@ structure still holds the whole conversation and the decode context does
 not, which is exactly the divergence the loop then closes with the recall
 ask and its own composed re-entry.
 
+**The seat carries the turn-context read, 2026-11-10, through the same door** (#423, on
+the operator's word of that date). `Ports` grows one read, `turn_context`, the
+declaration's election as the enter carried it resolved, per `weaver-types-Spec` section
+2, granted as an argument beside `seated` so that no grant can leave it out. It is a
+read the loop answers, and what `independent` asks for is a context, the cut that makes
+it being the flush port above. **Under `independent` every turn is preceded by a flush
+to the identity prefix.** The shipped loop flushes with `keep` zero, which the seam
+bounds at the prefix, directly before each turn it drives, and composes nothing else: no
+re-entry, the conversation being what the election retires, and no continuity line,
+which would carry one turn's context into the next. So the `flush` event is the event
+directly before each `turn.started`, its `resident_after` the identity prefix's length,
+and the first, standing on the prefix already, cuts nothing, its `resident_before` equal
+to its `resident_after` by the seam's bounded cut. The pressure flush cannot arise,
+since each turn starts from the prefix. **The rule holds whether a prompt is seated or
+not**: the flush keeps the identity prefix the open established, the agent's prompt
+where one is seated, and where nothing is seated the prefix holds at most the family's
+start marker and the compiled prompt leads every turn, the flush having retired the copy
+an earlier turn appended. **Loop 0's own turns answer the election too**, the seeding
+turn and the leave's wind-down turn crossing the dev boundary nowhere: under
+`independent` loop 0 makes the same cut directly before each, so the wind-down sees the
+prefix alone and not the last turn, and a record under the election reads one residency
+of turns each preceded by its flush at the prefix, the wind-down included. **Under
+`independent` a prompt seeded within a residency is in force for the seeding turn
+alone**: it enters state as every seeding does and is seated as the prefix by the next
+load, the system prompt being state, but the next turn's flush retires it from the
+decode context, so a new agent is seeded under `continuous` or reloaded before it
+serves, and a storeless agent, whose loads seat nothing, has no seeded prompt in force
+under `independent` past its seeding turn. **Each flush's confirmation gates its turn**,
+loop 1's and loop 0's alike, since only a confirmation shows the context the election
+asks for, and the flush port meets three cases. **A cut the seam refuses** is refused at
+the seam's state check, before any cut (`weaver-harness-spu-decode-contract` section 5),
+so the context stands as it was: the port authors the `refusal`, and the turn does not
+run and answers `ChannelLost`. **A seam that closes before confirming**, or answers out
+of form, leaves the cut's outcome unknown, the SPU able to have cut and then failed, and
+the channel lost: the turn does not run and answers `ChannelLost`, and the record
+carries no `flush` event for the cut, that event being authored only from a
+confirmation's counts. **A record reader reads that absence as an unknown cut, never as
+no cut**: no `flush` event and no `turn.started` for the turn the cut was to precede,
+and, where the SPU hung up, its death authored as an `OrganDeathObserved` fault naming
+no turn. A confirmed cut the recorder will not take leaves the same absence, service
+then ending on the recorder's latch. **A seam that stays open and silent holds the turn
+unbounded**, the flush port's wait having no deadline (#527): the turn does not run, and
+the wait lasts until the channel ends or admin's escalation under `weaver-admin-Spec`
+section 3's bounds ends the run. Under `continuous` nothing changes.
+**Enforced by perturbation-verified tests** in loop 1's suite, over a recording stand-in
+for the seat, and in this crate's, over a scripted decode seam: under `independent` a
+first turn, a later one and one past the pressure line each ask the flush and then the
+turn, with no recall and no shape, seated or not. Under `continuous` the three paths are
+as before. Loop 0's wind-down and seeding turns each send the flush first and author its
+event directly before `turn.started`, neither flushing under `continuous`. A flush that
+answers nothing refuses its turn: loop 1's second turn is never asked once its flush
+answers nothing, and loop 0's wind-down and seeding turns, the seam refusing the cut or
+ending before confirming it, open no bracket and send nothing after the flush, and
+neither authors a `flush` event, the refused cut authoring its `refusal` naming the
+flush and its `keep`. Watched to fail when the election is dropped, when the flush
+follows the turn, when the first-turn test is read under `independent`, when the
+`independent` path is taken under every election, when either of loop 0's flushes is
+dropped or taken under every election, when a turn runs past a flush that answered
+nothing, in loop 1 and at each of loop 0's two turns, when the flush port's refusal goes
+unauthored, and when the `flush` event is authored before its confirmation is read.
+
 **A lifecycle refusal reaches the record where the run stands.** An enter
 refused after its bracket has been authored is clerked into that run, which
 **stays entered**: a bracket that stands is a run in place, holding what the

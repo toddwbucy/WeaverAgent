@@ -286,6 +286,12 @@ pub struct Elections {
     pub boundary: String,
     pub cause: Cause,
     pub library_path: Option<String>,
+    pub turn_context: TurnContext,
+}
+
+pub enum TurnContext {
+    Continuous,
+    Independent,
 }
 
 pub struct Cause {
@@ -896,6 +902,20 @@ edge: asserts
 from: weaver-trace
 to: trace-load-names-its-loop-and-its-member
 ```
+
+**The `load` event names the run's turn-context election**, as of 2026-11-10 on #423,
+per the charter's section 3.1. `turn_context` is `continuous` or `independent`, copied
+from the enter's resolved election per `weaver-types-Spec` section 2, and says whether
+each turn was answered from the session's accumulation or from the identity prefix and
+its own request alone, which `weaver-harness-Spec` section 6 makes visible as a `flush`
+directly before each `turn.started`. It is posture and rides the `Elections` payload on
+the drift reason above, written even where it is the default, so a record older than
+this act lacks the member, which reads as the election being unrecoverable and never as
+`continuous`. The harness authors what the enter carried and reads it from no
+deployment. Enforced by perturbation-verified tests: each value renders by its spelling,
+the default included, and a load authored through the enter names the enter's election.
+Watched to fail when the member is skipped, when it is skipped where it is the default,
+and when the load names `continuous` regardless of the enter.
 
 **The `load` event names its lineage and its stack**, as of 2026-09-06, the lineage
 reshaped on the operator's rulings of 2026-10-02 on #58, per the charter's section 3.1.

@@ -186,3 +186,192 @@ fn the_reentry_rides_between_opening_and_request() {
     let plain = contribution(false, false, None, None, "next ask");
     assert_eq!(texts(&plain), vec!["next ask"]);
 }
+
+/// What the stand-in seat was asked, in order.
+#[derive(Debug, PartialEq)]
+enum Asked {
+    Flush(u64),
+    Recall,
+    Shape,
+    Turn(Vec<(Role, String)>),
+}
+
+/// A recording stand-in for the seat: it answers what the test sets and
+/// records every ask in order, so `compose` is driven whole, the election,
+/// the flush and the composition together. It mints no port: the trait is
+/// this loop's own view of the seat, and `Ports` is its one production
+/// implementation.
+struct Stand {
+    first_turn: bool,
+    seated: bool,
+    turn_context: TurnContext,
+    fullness: Option<(u64, u64)>,
+    /// What each flush answers, in order; a confirmation at the prefix
+    /// once these run out.
+    flushes: std::collections::VecDeque<Option<(u64, u64)>>,
+    asked: Vec<Asked>,
+}
+
+impl Stand {
+    fn new(turn_context: TurnContext, first_turn: bool, seated: bool) -> Self {
+        Stand {
+            first_turn,
+            seated,
+            turn_context,
+            fullness: None,
+            flushes: std::collections::VecDeque::new(),
+            asked: Vec::new(),
+        }
+    }
+}
+
+impl Seat for Stand {
+    fn first_turn(&self) -> bool {
+        self.first_turn
+    }
+    fn seated(&self) -> bool {
+        self.seated
+    }
+    fn turn_context(&self) -> TurnContext {
+        self.turn_context
+    }
+    fn fullness(&self) -> Option<(u64, u64)> {
+        self.fullness
+    }
+    fn flush(&mut self, keep: u64) -> Option<(u64, u64)> {
+        self.asked.push(Asked::Flush(keep));
+        self.flushes.pop_front().unwrap_or(Some((14547, 14547)))
+    }
+    fn recall(&mut self, _last_turns: Option<u64>) -> Option<Vec<Recalled>> {
+        self.asked.push(Asked::Recall);
+        None
+    }
+    fn session_shape(&mut self) -> Option<SessionShape> {
+        self.asked.push(Asked::Shape);
+        None
+    }
+    fn turn(&mut self, delta: Vec<Message>) -> Result<TurnOutcome, TurnError> {
+        let spoken = delta
+            .iter()
+            .map(|message| {
+                (
+                    message.role.clone(),
+                    texts(std::slice::from_ref(message)).join(""),
+                )
+            })
+            .collect();
+        self.asked.push(Asked::Turn(spoken));
+        Err(TurnError::ChannelLost)
+    }
+}
+
+/// **Under `independent` every turn is preceded by a flush to the identity
+/// prefix and composes nothing else** (#423, `weaver-harness-Spec` section 6,
+/// loop 1's turn-context read): the flush cuts to zero, which the seam bounds
+/// at the prefix, directly before the turn; no recall and no shape are asked,
+/// so neither a re-entry nor a continuity line is composed; and where nothing
+/// is seated the compiled prompt leads every turn, the flush having retired
+/// the copy an earlier turn appended. A first turn, a later one and a later
+/// one past the pressure line all take the same path.
+///
+/// Perturbation: drop the election from `compose` and the first case asks the
+/// shape instead of flushing; move the flush after the turn and the order
+/// fails; read the first-turn test under `independent` and the later turns
+/// lose the compiled prompt. Watched to fail under each.
+#[test]
+fn independent_flushes_before_every_turn_and_composes_nothing_else() {
+    for seated in [false, true] {
+        for (first_turn, fullness) in [
+            (true, None),
+            (false, Some((1, 100))),
+            (false, Some((90, 100))),
+        ] {
+            let mut seat = Stand::new(TurnContext::Independent, first_turn, seated);
+            seat.fullness = fullness;
+            let _ = compose(&mut seat, "item");
+            let mut delta = Vec::new();
+            if !seated {
+                delta.push((Role::System, SYSTEM_PROMPT.to_string()));
+            }
+            delta.push((Role::User, "item".to_string()));
+            assert_eq!(
+                seat.asked,
+                vec![Asked::Flush(0), Asked::Turn(delta)],
+                "seated {seated}, first turn {first_turn}, fullness {fullness:?}"
+            );
+        }
+    }
+}
+
+/// **A flush that answers nothing refuses its turn under `independent`**
+/// (`weaver-harness-Spec` section 6's turn-context read): a refused or lost
+/// cut leaves the context the election retires, so the turn never runs on it.
+/// The first turn's flush confirms and the turn runs, and the second's answers
+/// nothing and `compose` answers `ChannelLost` without asking the turn,
+/// seated or not.
+///
+/// Perturbation: let the turn run past the failed flush and the second turn
+/// is asked. Watched to fail under exactly that.
+#[test]
+fn independent_refuses_the_turn_whose_flush_answers_nothing() {
+    for seated in [false, true] {
+        let mut seat = Stand::new(TurnContext::Independent, true, seated);
+        seat.flushes = vec![Some((14547, 14547)), None].into();
+        let _ = compose(&mut seat, "item 1");
+        seat.first_turn = false;
+        let second = compose(&mut seat, "item 2");
+        assert!(
+            matches!(second, Err(TurnError::ChannelLost)),
+            "seated {seated}: the second turn is refused"
+        );
+        assert_eq!(seat.asked.len(), 3, "seated {seated}: {:?}", seat.asked);
+        assert!(matches!(seat.asked[1], Asked::Turn(_)), "{:?}", seat.asked);
+        assert_eq!(seat.asked[2], Asked::Flush(0), "{:?}", seat.asked);
+    }
+}
+
+/// **`continuous` is unchanged** (#423): a first turn with nothing seated asks
+/// the shape and leads with the prompt, a later turn under the line
+/// contributes the request alone with no flush, and a later turn past the
+/// line flushes, recalls and rides the re-entry, as before the election.
+///
+/// Perturbation: take the `independent` path for every election and the
+/// first case flushes. Watched to fail under exactly that.
+#[test]
+fn continuous_is_unchanged() {
+    let mut first = Stand::new(TurnContext::Continuous, true, false);
+    let _ = compose(&mut first, "ask");
+    assert_eq!(
+        first.asked,
+        vec![
+            Asked::Shape,
+            Asked::Turn(vec![
+                (Role::System, SYSTEM_PROMPT.to_string()),
+                (Role::User, "ask".to_string()),
+            ]),
+        ]
+    );
+
+    let mut later = Stand::new(TurnContext::Continuous, false, true);
+    later.fullness = Some((1, 100));
+    let _ = compose(&mut later, "ask");
+    assert_eq!(
+        later.asked,
+        vec![Asked::Turn(vec![(Role::User, "ask".to_string())])]
+    );
+
+    let mut pressured = Stand::new(TurnContext::Continuous, false, true);
+    pressured.fullness = Some((90, 100));
+    let _ = compose(&mut pressured, "ask");
+    assert_eq!(
+        pressured.asked,
+        vec![
+            Asked::Flush(0),
+            Asked::Recall,
+            Asked::Turn(vec![
+                (Role::System, reentry_text(true, None)),
+                (Role::User, "ask".to_string()),
+            ]),
+        ]
+    );
+}

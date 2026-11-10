@@ -156,8 +156,8 @@ pub use event::{
     Finish, FlushCounts, GrantSurface, InvalidUtf8, Kind, Line, Lineage, LoopIdentity,
     MemberRelease, ModelField, ModelOutput, Payload, RecallAccount, RecallAsk, RecallVerb,
     RecalledIdentity, Release, ReleaseOutcome, Reset, RunRef, SavePointTaken, ScoreRatio,
-    SessionRef, StopReason, StoreIdentity, Subsystem, TaskScore, TurnClose, TurnRef, UnloadClose,
-    raw_payload,
+    SessionRef, StopReason, StoreIdentity, Subsystem, TaskScore, TurnClose, TurnContext, TurnRef,
+    UnloadClose, raw_payload,
 };
 pub use failure::{Failure, FieldName, SubmitRefusal, WriteError};
 pub use structure::{Record, WorkingStructure};

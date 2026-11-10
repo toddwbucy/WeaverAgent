@@ -102,6 +102,7 @@ fn enter() -> LifecycleDirective {
             library_path: None,
             drain_bound: None,
             wind_down_bound: None,
+            turn_context: weaver_types::TurnContext::Continuous,
         }),
     }
 }

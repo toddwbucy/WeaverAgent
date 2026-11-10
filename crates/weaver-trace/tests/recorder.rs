@@ -109,6 +109,7 @@ fn elections() -> Payload {
         library_path: None,
         state_store: Default::default(),
         composer: weaver_trace::LoopIdentity::compiled("test"),
+        turn_context: weaver_trace::TurnContext::Continuous,
     }))
 }
 
@@ -1190,6 +1191,7 @@ fn the_load_carries_the_tee_election() {
             library_path: None,
             state_store: Default::default(),
             composer: weaver_trace::LoopIdentity::compiled("test"),
+            turn_context: weaver_trace::TurnContext::Continuous,
         }))),
     ))
     .unwrap();
@@ -1241,6 +1243,7 @@ fn a_declined_surprisal_election_is_written_down() {
             library_path: None,
             state_store: Default::default(),
             composer: weaver_trace::LoopIdentity::compiled("test"),
+            turn_context: weaver_trace::TurnContext::Continuous,
         }))),
     ))
     .unwrap();
@@ -1708,6 +1711,7 @@ fn the_load_names_its_loop_and_its_member() {
             std::path::Path::new("/usr/local/libexec/weaver/loops/dev_loop.py"),
             Some("ab".repeat(32)),
         ),
+        turn_context: weaver_trace::TurnContext::Continuous,
     })
     .expect("renders");
     assert_eq!(rendered["state_member"], serde_json::json!(true));
@@ -1751,6 +1755,7 @@ fn the_load_names_its_loop_and_its_member() {
         library_path: None,
         state_store: Default::default(),
         composer: weaver_trace::LoopIdentity::compiled("worker"),
+        turn_context: weaver_trace::TurnContext::Continuous,
     })
     .expect("renders");
     assert_eq!(
@@ -1758,6 +1763,34 @@ fn the_load_names_its_loop_and_its_member() {
         serde_json::json!(false),
         "false is written, not omitted"
     );
+}
+
+/// **The `load` event names the run's turn-context election**, per
+/// `weaver-trace-Spec` section 3 (#423): `continuous` or `independent`,
+/// written on every load beside the store, so a reader knows whether a turn's
+/// context was the prefix and its own request or the session's accumulation.
+/// Written even where it is the default, absent meaning only that the record
+/// predates the election.
+///
+/// Perturbation: skip the member's serialization, or serialize it only where
+/// it is not the default, and this fails. Watched to fail under both.
+#[test]
+fn the_load_names_its_turn_context() {
+    for (elected, spelled) in [
+        (weaver_trace::TurnContext::Continuous, "continuous"),
+        (weaver_trace::TurnContext::Independent, "independent"),
+    ] {
+        let Payload::Elections(mut payload) = elections() else {
+            unreachable!("the helper builds elections");
+        };
+        payload.turn_context = elected;
+        let rendered = serde_json::to_value(&*payload).expect("renders");
+        assert_eq!(
+            rendered["turn_context"],
+            serde_json::json!(spelled),
+            "{spelled} is written, the default included"
+        );
+    }
 }
 
 /// **`forced_by` is absent from a payload no force joined, and `release` absent
