@@ -1970,18 +1970,24 @@ alone**: it enters state as every seeding does and is seated as the prefix by th
 load, the system prompt being state, but the next turn's flush retires it from the
 decode context, so a new agent is seeded under `continuous` or reloaded before it
 serves, and a storeless agent, whose loads seat nothing, has no seeded prompt in force
-under `independent` past its seeding turn. Each flush's confirmation gates nothing, a
-refused cut being authored by the flush port as any refusal is. Under `continuous`
-nothing changes. **Enforced by perturbation-verified tests** in loop 1's suite, over a
-recording stand-in for the seat, and in this crate's, over a scripted decode seam: under
-`independent` a first turn, a later one and one past the pressure line each ask the
-flush and then the turn, with no recall and no shape, seated or not. Under `continuous`
-the three paths are as before. Loop 0's wind-down and seeding turns each send the flush
-first and author its event directly before `turn.started`, neither flushing under
-`continuous`. Watched to fail when the election is dropped, when the flush follows the
-turn, when the first-turn test is read under `independent`, when the `independent` path
-is taken under every election, and when either of loop 0's flushes is dropped or taken
-under every election.
+under `independent` past its seeding turn. **Each flush's confirmation gates its turn**:
+a cut the seam refuses or never confirms, the refusal authored by the flush port as any
+refusal is, leaves the context the election retires, so the turn does not run and
+answers `ChannelLost`, loop 1's and loop 0's alike. Under `continuous` nothing changes.
+**Enforced by perturbation-verified tests** in loop 1's suite, over a recording stand-in
+for the seat, and in this crate's, over a scripted decode seam: under `independent` a
+first turn, a later one and one past the pressure line each ask the flush and then the
+turn, with no recall and no shape, seated or not. Under `continuous` the three paths are
+as before. Loop 0's wind-down and seeding turns each send the flush first and author its
+event directly before `turn.started`, neither flushing under `continuous`. A flush that
+answers nothing refuses its turn: loop 1's second turn is never asked once its flush
+answers nothing, and loop 0's wind-down and seeding turns, the seam refusing the cut or
+ending before confirming it, open no bracket and send nothing after the flush. Watched
+to fail when the election is dropped, when the flush follows the turn, when the
+first-turn test is read under `independent`, when the `independent` path is taken under
+every election, when either of loop 0's flushes is dropped or taken under every
+election, and when a turn runs past a flush that answered nothing, in loop 1 and at each
+of loop 0's two turns.
 
 **A lifecycle refusal reaches the record where the run stands.** An enter
 refused after its bracket has been authored is clerked into that run, which

@@ -3345,6 +3345,104 @@ fn loop_zeros_own_turns_flush_first_under_independent() {
     }
 }
 
+/// **A flush that answers nothing refuses loop 0's own turn under
+/// `independent`** (`weaver-harness-Spec` section 6's turn-context read): the
+/// seeding turn and the wind-down turn each answer `ChannelLost` without
+/// opening their bracket where the seam refuses the cut or ends before
+/// confirming it, so neither runs on the context the election retires. The
+/// seam hears the flush and nothing after it, and no `turn.started` is
+/// authored.
+///
+/// Perturbation: let the turn run past a failed flush and each case fails,
+/// the bracket opening and the append sent. Watched to fail under exactly
+/// that.
+#[test]
+fn loop_zeros_own_turns_refuse_where_the_independent_flush_answers_nothing() {
+    for winding in [true, false] {
+        for refused in [true, false] {
+            let (near, far) = socketpair(
+                AddressFamily::Unix,
+                SockType::SeqPacket,
+                None,
+                SockFlag::SOCK_CLOEXEC,
+            )
+            .expect("socketpair");
+            if refused {
+                let refusal = weaver_types::TokenRefusal::NotOpen;
+                send(
+                    far.as_raw_fd(),
+                    &serde_json::to_vec(&refusal).unwrap(),
+                    MsgFlags::empty(),
+                )
+                .unwrap();
+            }
+            nix::sys::socket::shutdown(far.as_raw_fd(), nix::sys::socket::Shutdown::Write)
+                .expect("shutdown");
+            let decode = crate::channel::decode_from_owned(near);
+            let (mut recorder, author) = loaded_recorder();
+            let mut turn_ordinal = 3u64;
+            let mut turn_in_flight = None;
+            let (listener, _dir) = test_listener();
+            let mut fullness = None;
+            let mut pressure_reported = false;
+            let load_facts = crate::engine::test_load_facts();
+            let mut ports = Ports::grant(
+                &decode,
+                &author,
+                &mut recorder,
+                &mut turn_ordinal,
+                &mut turn_in_flight,
+                &load_facts,
+                None,
+                &listener,
+                None,
+                None,
+                None,
+                None,
+                &mut fullness,
+                &mut pressure_reported,
+                false,
+                weaver_types::TurnContext::Independent,
+            );
+            let ran = if winding {
+                ports.wind_down(None, weaver_types::Cause { uid: 7 }).0
+            } else {
+                ports.seed(Message {
+                    role: Role::System,
+                    content: vec![ContentBlock::Text {
+                        text: "You are the fixture.".into(),
+                    }],
+                })
+            };
+            drop(ports);
+            let case = format!("winding {winding}, refused {refused}");
+            assert!(
+                matches!(ran, Err(TurnError::ChannelLost)),
+                "{case}: the turn is refused"
+            );
+
+            let mut buf = vec![0u8; 65536];
+            let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("a directive");
+            let first: weaver_types::TokenDirective =
+                serde_json::from_slice(&buf[..n]).expect("the directive parses");
+            assert!(
+                matches!(first, weaver_types::TokenDirective::Flush { keep: 0 }),
+                "{case}: the first directive was {first:?}"
+            );
+            assert!(
+                recv(far.as_raw_fd(), &mut buf, MsgFlags::MSG_DONTWAIT).is_err(),
+                "{case}: nothing follows the flush"
+            );
+            let opened = recorder
+                .structure()
+                .expect("the serving record")
+                .iter()
+                .any(|r| r.kind == Kind::TurnStarted);
+            assert!(!opened, "{case}: no bracket opens");
+        }
+    }
+}
+
 /// **A forced leave heard during a call interrupts it and cancels the
 /// turn** (3.0, S10 x tool return and x turn closes). Perturbation: send
 /// a cancel rather than the interrupt, and the gate fixture fails on it.

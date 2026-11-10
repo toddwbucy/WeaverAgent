@@ -2180,7 +2180,7 @@ fn end_agent_cgroup(
                 record(
                     config,
                     verb,
-                    "the agent's cgroup is removed and its record did not remove; the next verb removes it",
+                    "the agent's cgroup is removed and its record did not remove; it stands for the next load, unload or force-unload",
                 );
             }
             remove_commands(config, verb);
@@ -2191,7 +2191,7 @@ fn end_agent_cgroup(
                 record(
                     config,
                     verb,
-                    "a stale cgroup record did not remove; the next verb removes it",
+                    "a stale cgroup record did not remove; it stands for the next load, unload or force-unload",
                 );
             }
             remove_commands(config, verb);

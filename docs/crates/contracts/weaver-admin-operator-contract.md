@@ -449,11 +449,13 @@ to end. An `unload` or
 finds, in the recorded place, a containment other than the one that load made refuses
 `BoundaryUnverified`, naming both, and acts on nothing. A recorded containment found
 gone was already removed, so a `load`, an `unload` or a `force-unload` clears the stale
-record and goes on, and `show` reads it as nothing standing and leaves the record. A
-record of the containment that does not read refuses `BoundaryUnverified` too, and so
-does a load that finds a containment where the agent's would be made that is not root's.
-A run's end whose containment cannot be removed refuses `BoundaryUnverified`, naming it,
-and publishes nothing.
+record and goes on, and `show` reads it as nothing standing and leaves the record. Where
+clearing it fails, an `unload` or a `force-unload` concludes and leaves the record, and
+a `load` refuses `BoundaryUnverified`, naming the record. A record of the containment
+that does not read refuses `BoundaryUnverified` too, and so does a load that finds a
+containment where the agent's would be made that is not root's. A run's end whose
+containment cannot be removed refuses `BoundaryUnverified`, naming it, and publishes
+nothing.
 `force-unload` takes the leave save point as
 `unload` does and ends the run whether or not it can be taken, refusing
 `SavePointNotTaken` naming `published` where it was taken and did not publish, per

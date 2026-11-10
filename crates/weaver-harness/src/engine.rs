@@ -1050,7 +1050,7 @@ impl<'a> Ports<'a> {
     /// turn; the delta does not, the record holding the prompt once, as the
     /// prefix the next load seats.
     pub fn seed(&mut self, prompt: Message) -> Result<TurnOutcome, TurnError> {
-        self.flush_if_independent();
+        self.flush_if_independent()?;
         self.bracketed(vec![prompt], false)
     }
 
@@ -1059,12 +1059,15 @@ impl<'a> Ports<'a> {
     /// and the wind-down turn cross the dev boundary nowhere, so where the run
     /// elects `independent` loop 0 makes the cut loop 1 makes before every
     /// turn it drives, zero, which the seam bounds at the identity prefix,
-    /// directly before the bracket opens. Its confirmation gates nothing, as
-    /// loop 1's does not, and a refused cut is authored by the flush port.
-    fn flush_if_independent(&mut self) {
-        if self.turn_context == weaver_types::TurnContext::Independent {
-            let _ = self.flush(0);
+    /// directly before the bracket opens. **Its confirmation gates the turn**,
+    /// as loop 1's does: a cut refused or never confirmed answers
+    /// `ChannelLost` and the turn does not run, the refusal itself authored by
+    /// the flush port.
+    fn flush_if_independent(&mut self) -> Result<(), TurnError> {
+        if self.turn_context == weaver_types::TurnContext::Independent && self.flush(0).is_none() {
+            return Err(TurnError::ChannelLost);
         }
+        Ok(())
     }
 
     /// **The leave's wind-down turn** (`weaver-admin-Spec` 3.0, graceful
@@ -1090,8 +1093,10 @@ impl<'a> Ports<'a> {
             }],
         };
         // Under `independent` the wind-down sees the prefix alone, not the
-        // last turn's context (#423).
-        self.flush_if_independent();
+        // last turn's context (#423), or does not run.
+        if let Err(refused) = self.flush_if_independent() {
+            return (Err(refused), self.cut_by_leave);
+        }
         let ran = self.bracketed(vec![request], true);
         (ran, self.cut_by_leave)
     }

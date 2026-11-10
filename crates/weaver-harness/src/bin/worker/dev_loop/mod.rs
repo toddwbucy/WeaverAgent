@@ -124,21 +124,25 @@ pub fn drive(seat: &mut Ports<'_>, text: &str) -> Result<TurnOutcome, TurnError>
 /// The loop's body over any [`Seat`], [`drive`] lending it the granted one.
 pub(crate) fn compose(seat: &mut impl Seat, text: &str) -> Result<TurnOutcome, TurnError> {
     let seated = seat.seated();
-    // **The turn-context election, answered first** (#423): under
-    // `independent` the decode context returns to the identity prefix before
-    // every turn, so each turn is answered from the prefix the open seated and
-    // its own request alone. The cut is zero, which the seam bounds at the
-    // prefix, and it lands directly before the turn's bracket, so the record
-    // shows each `turn.started` preceded by its `flush`; the first, standing
-    // on the prefix already, cuts nothing. Its confirmation gates nothing, as
-    // the pressure flush's does not: a refused cut is authored by the seat.
-    // Nothing else is composed: no re-entry, the conversation being exactly
-    // what the election retires, and no continuity line, which would carry
-    // one turn's context into the next. Where nothing is seated the prefix
-    // holds at most the family's start marker, so the compiled prompt leads
-    // every turn, the flush having retired the copy an earlier turn appended.
+    // **The turn-context election, answered first** (#423): under `independent`
+    // the decode context returns to the identity prefix before every turn, so
+    // each turn is answered from the prefix the open seated and its own request
+    // alone. The cut is zero, which the seam bounds at the prefix, and it lands
+    // directly before the turn's bracket, so the record shows each
+    // `turn.started` preceded by its `flush`; the first, standing on the prefix
+    // already, cuts nothing. **Its confirmation gates the turn**: a cut refused
+    // or never confirmed leaves the context the election retires, so the turn
+    // does not run and the loop answers `ChannelLost`, the refusal itself
+    // authored by the seat. Nothing else is composed: no re-entry, the
+    // conversation being exactly what the election retires, and no continuity
+    // line, which would carry one turn's context into the next. Where nothing
+    // is seated the prefix holds at most the family's start marker, so the
+    // compiled prompt leads every turn, the flush having retired the copy an
+    // earlier turn appended.
     if seat.turn_context() == TurnContext::Independent {
-        let _ = seat.flush(0);
+        if seat.flush(0).is_none() {
+            return Err(TurnError::ChannelLost);
+        }
         return seat.turn(contribution(true, seated, None, None, text));
     }
     let first_turn = seat.first_turn();

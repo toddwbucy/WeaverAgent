@@ -206,6 +206,9 @@ struct Stand {
     seated: bool,
     turn_context: TurnContext,
     fullness: Option<(u64, u64)>,
+    /// What each flush answers, in order; a confirmation at the prefix
+    /// once these run out.
+    flushes: std::collections::VecDeque<Option<(u64, u64)>>,
     asked: Vec<Asked>,
 }
 
@@ -216,6 +219,7 @@ impl Stand {
             seated,
             turn_context,
             fullness: None,
+            flushes: std::collections::VecDeque::new(),
             asked: Vec::new(),
         }
     }
@@ -236,7 +240,7 @@ impl Seat for Stand {
     }
     fn flush(&mut self, keep: u64) -> Option<(u64, u64)> {
         self.asked.push(Asked::Flush(keep));
-        None
+        self.flushes.pop_front().unwrap_or(Some((14547, 14547)))
     }
     fn recall(&mut self, _last_turns: Option<u64>) -> Option<Vec<Recalled>> {
         self.asked.push(Asked::Recall);
@@ -296,6 +300,33 @@ fn independent_flushes_before_every_turn_and_composes_nothing_else() {
                 "seated {seated}, first turn {first_turn}, fullness {fullness:?}"
             );
         }
+    }
+}
+
+/// **A flush that answers nothing refuses its turn under `independent`**
+/// (`weaver-harness-Spec` section 6's turn-context read): a refused or lost
+/// cut leaves the context the election retires, so the turn never runs on it.
+/// The first turn's flush confirms and the turn runs, and the second's answers
+/// nothing and `compose` answers `ChannelLost` without asking the turn,
+/// seated or not.
+///
+/// Perturbation: let the turn run past the failed flush and the second turn
+/// is asked. Watched to fail under exactly that.
+#[test]
+fn independent_refuses_the_turn_whose_flush_answers_nothing() {
+    for seated in [false, true] {
+        let mut seat = Stand::new(TurnContext::Independent, true, seated);
+        seat.flushes = vec![Some((14547, 14547)), None].into();
+        let _ = compose(&mut seat, "item 1");
+        seat.first_turn = false;
+        let second = compose(&mut seat, "item 2");
+        assert!(
+            matches!(second, Err(TurnError::ChannelLost)),
+            "seated {seated}: the second turn is refused"
+        );
+        assert_eq!(seat.asked.len(), 3, "seated {seated}: {:?}", seat.asked);
+        assert!(matches!(seat.asked[1], Asked::Turn(_)), "{:?}", seat.asked);
+        assert_eq!(seat.asked[2], Asked::Flush(0), "{:?}", seat.asked);
     }
 }
 
