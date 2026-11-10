@@ -315,6 +315,7 @@ fn send_pending_tracks_the_exact_staged_operation_through_busy_and_pressure() {
 fn a_failed_send_remains_pending_without_claiming_transport_success() {
     let (mut port, peer) = pair();
     assert!(matches!(port.stage(envelope(7)).unwrap(), Stage::Queued));
+    crate::flow::fixture_eof::hang_up(&peer);
     drop(peer);
     let failure = port.try_send().unwrap_err();
     assert_eq!(failure.fault, ChannelFault::Closed);
@@ -325,6 +326,7 @@ fn a_failed_send_remains_pending_without_claiming_transport_success() {
 #[test]
 fn eof_without_a_packet_does_not_invent_malformed_datagram_evidence() {
     let (mut port, peer) = pair();
+    crate::flow::fixture_eof::hang_up(&peer);
     drop(peer);
     let failure = port.try_receive().unwrap_err();
     assert_eq!(failure.fault, ChannelFault::Closed);
@@ -396,6 +398,7 @@ fn a_failed_send_refuses_withdrawal_and_retains_the_original_queued_bytes() {
         port.stage(outgoing.clone()).unwrap(),
         Stage::Queued
     ));
+    crate::flow::fixture_eof::hang_up(&peer);
     drop(peer);
     let failure = port.try_send().unwrap_err();
     assert_eq!(
@@ -546,6 +549,7 @@ fn a_sent_ticket_and_its_received_answer_survive_later_eof() {
 fn failed_or_short_sends_keep_the_ticket_pending_and_owed() {
     let (mut port, peer) = pair();
     let ticket = tracked(&mut port, envelope(7));
+    crate::flow::fixture_eof::hang_up(&peer);
     drop(peer);
     let failure = port
         .try_send_observed(&mut FakePumpIo::new(100))

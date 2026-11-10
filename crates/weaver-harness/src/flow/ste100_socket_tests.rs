@@ -626,6 +626,7 @@ fn a_reply_before_request_send_completes_is_invalid_not_a_partial_success() {
 #[test]
 fn eof_and_broken_fragment_framing_have_distinct_component_codes() {
     let (mut port, peer) = admit();
+    crate::flow::fixture_eof::hang_up(peer.readiness());
     drop(peer);
     let failure = port.try_result().unwrap_err();
     assert_component(&failure, Ste100ComponentCode::Crashed);

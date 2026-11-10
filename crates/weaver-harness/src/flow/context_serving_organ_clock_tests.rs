@@ -58,6 +58,7 @@ impl Ends {
         .unwrap();
         let mut gate = OrganPort::from_owned(near).unwrap();
         if gate_loss {
+            crate::flow::fixture_eof::hang_up(&far);
             drop(far);
         } else {
             peers.push(far);
@@ -82,6 +83,7 @@ impl Ends {
         if gate_loss {
             peers.push(far);
         } else {
+            crate::flow::fixture_eof::hang_up(&far);
             drop(far);
         }
         let failure = if gate_loss {

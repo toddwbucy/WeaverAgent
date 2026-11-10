@@ -551,6 +551,7 @@ fn accepted_socket_reply_cannot_mint_reuse_after_the_peer_dies() {
         if half_close {
             shutdown(peer.readiness().as_raw_fd(), Shutdown::Write).unwrap();
         } else {
+            crate::flow::fixture_eof::hang_up(peer.readiness());
             drop(peer);
         }
         let failure = classifier.recorded_input(proof, 1.into()).unwrap_err();

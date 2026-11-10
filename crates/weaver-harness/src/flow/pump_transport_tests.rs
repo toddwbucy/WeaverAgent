@@ -269,6 +269,7 @@ fn closed_withdrawal_requires_the_original_ticket_and_preserves_received_bytes()
     let raw = format!(" \n{}\n ", serde_json::to_string_pretty(&original).unwrap());
     send_bytes(&peer, raw.as_bytes());
     assert_eq!(port.try_receive(), Ok(ReceiveProgress::Held));
+    crate::flow::fixture_eof::hang_up(&peer);
     drop(peer);
     let failure = port.try_send_observed(&mut MonotonicIo).unwrap_err();
     assert_eq!(failure.fault, ChannelFault::Closed);
@@ -454,6 +455,7 @@ fn complete_final_reply_before_orderly_exit_is_preserved_for_the_caller() {
         reason: "synthetic refusal".into(),
     };
     send_bytes(&peer, &serde_json::to_vec(&reply).unwrap());
+    crate::flow::fixture_eof::hang_up(&peer);
     drop(peer);
     assert_eq!(port.try_receive(), Ok(ReceiveProgress::Held));
     let failure = port.try_receive().unwrap_err();
@@ -509,6 +511,7 @@ fn empty_live_datagram_differs_from_eof_and_its_interrupted_probe_is_held() {
 
     let (end, peer) = pair();
     let mut port = OrganPort::from_owned(end).unwrap();
+    crate::flow::fixture_eof::hang_up(&peer);
     drop(peer);
     assert_eq!(port.try_receive().unwrap_err().fault, ChannelFault::Closed);
 
@@ -619,7 +622,10 @@ fn short_long_and_closed_decode_series_never_expose_a_partial_completion() {
                 extra.push(b'x');
                 send_bytes(&peer, &extra);
             }
-            2 => drop(peer),
+            2 => {
+                crate::flow::fixture_eof::hang_up(&peer);
+                drop(peer);
+            }
             _ => unreachable!(),
         }
         let failure = port.try_receive().unwrap_err();

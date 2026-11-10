@@ -564,6 +564,7 @@ fn contained_gate_with_no_executing_call_does_not_create_a_terminal_wait() {
         assert!(context.complete_wait(PumpDeadline::Decision).is_some());
         let (channel, peer) = crate::channel::OrganChannel::pair().unwrap();
         let mut gate = OrganPort::from_channel(channel).unwrap();
+        crate::flow::fixture_eof::hang_up(peer.as_fd());
         drop(peer);
         assert_eq!(
             gate.try_receive().unwrap_err().fault,

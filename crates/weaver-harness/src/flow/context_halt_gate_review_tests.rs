@@ -366,6 +366,7 @@ fn halt_gate_stage_refusals_retain_unstaged_input_separately() {
             other.exchange = exchange(900);
             assert!(matches!(port.stage(other).unwrap(), Stage::Queued));
         } else {
+            crate::flow::fixture_eof::hang_up(&peer);
             drop(peer);
             assert!(port.try_receive().is_err());
         }

@@ -169,6 +169,7 @@ fn capture_transport_preserves_one_receive_slot_raw_bytes_and_handles_through_eo
         matches!(watcher.read(&mut [0]), Err(error) if error.kind() == io::ErrorKind::WouldBlock)
     );
     assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    crate::flow::fixture_eof::hang_up(&peer);
     drop(peer);
     assert!(owner.try_receive().is_err());
     let retired = owner.retire_failed();
@@ -630,6 +631,7 @@ fn held_admin_directive_survives_peer_death_without_reading_a_second_one() {
     send_envelope(&peer, 21);
     send_envelope(&peer, 22);
     assert_eq!(owner.try_receive().unwrap(), ReceiveProgress::Held);
+    crate::flow::fixture_eof::hang_up(&peer);
     drop(peer);
     assert!(owner.try_receive().is_err());
     assert_eq!(
@@ -946,6 +948,7 @@ fn held_terminal_failure_wins_over_a_new_ready_completion() {
     let mut decode = DecodePort::from_owned(decode).unwrap();
     send_envelope(&gate_peer, 61);
     assert_eq!(gate.try_receive().unwrap(), ReceiveProgress::Held);
+    crate::flow::fixture_eof::hang_up(&gate_peer);
     drop(gate_peer);
     send_bytes(
         &decode_peer,
@@ -1359,6 +1362,7 @@ fn unheld_terminal_owner_precedes_another_sources_buffered_work() {
     let mut gate = OrganPort::from_owned(gate).unwrap();
     let (decode, decode_peer) = pair();
     let mut decode = DecodePort::from_owned(decode).unwrap();
+    crate::flow::fixture_eof::hang_up(&gate_peer);
     drop(gate_peer);
     send_bytes(
         &decode_peer,
@@ -1411,6 +1415,7 @@ fn terminal_hint_preserves_a_complete_answer_before_reporting_close() {
     let (gate, peer) = pair();
     let mut gate = OrganPort::from_owned(gate).unwrap();
     send_envelope(&peer, 111);
+    crate::flow::fixture_eof::hang_up(&peer);
     drop(peer);
     let mut io = FakePumpIo::new(100);
     let mut pump = CommonPump::new(ClockOrigin::at(100));

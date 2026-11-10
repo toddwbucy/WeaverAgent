@@ -258,6 +258,7 @@ fn eof_retains_a_partial_but_a_complete_reply_preceding_close_is_delivered_once(
             raw_send(&writer, &packet(Tag::Reply, 1, 6, 0, b"abc"));
             assert_eq!(channel.try_receive(), Ok(Receive::Fragment));
         }
+        crate::flow::fixture_eof::hang_up(&writer);
         drop(writer);
         assert_eq!(channel.try_receive(), Err(Fault::Closed));
         assert_eq!(channel.has_partial_receive(), partial);
@@ -270,6 +271,7 @@ fn eof_retains_a_partial_but_a_complete_reply_preceding_close_is_delivered_once(
     let mut channel = Channel::from_owned(reader, 8).unwrap();
     raw_send(&writer, &packet(Tag::Reply, 1, 6, 0, b"abc"));
     raw_send(&writer, &packet(Tag::Reply, 1, 6, 3, b"def"));
+    crate::flow::fixture_eof::hang_up(&writer);
     drop(writer);
     assert_eq!(channel.try_receive(), Ok(Receive::Fragment));
     assert_eq!(
@@ -605,6 +607,7 @@ fn explicit_close_and_failed_send_keep_evidence_and_never_resume() {
     channel
         .begin_send(Tag::Request, 1, b"request".to_vec())
         .unwrap();
+    crate::flow::fixture_eof::hang_up(&reader);
     drop(reader);
     assert!(matches!(channel.try_send(), Err(Fault::Io(_))));
     assert_eq!(channel.outbound.as_ref().unwrap().bytes, b"request");

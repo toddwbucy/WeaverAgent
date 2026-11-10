@@ -8,6 +8,17 @@ use nix::sys::socket::{MsgFlags, recv};
 use std::os::fd::RawFd;
 use std::time::Instant;
 
+/// Shut both directions of a test's socket end before the test drops it, where
+/// the far end's next single poll or send must see the hangup. A concurrent
+/// test's fork holds a copy of every descriptor until its exec, so a drop alone
+/// can leave the socket open. shutdown acts on the socket, not the descriptor.
+/// It cannot stand in for a reset, which only the socket's release raises (#525).
+pub(super) fn hang_up(end: impl std::os::fd::AsFd) {
+    use std::os::fd::AsRawFd;
+    let fd = end.as_fd().as_raw_fd();
+    nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
+}
+
 pub(super) fn await_eof_until(fd: RawFd, deadline: Instant, on_pending: impl FnOnce()) {
     let mut on_pending = Some(on_pending);
     loop {

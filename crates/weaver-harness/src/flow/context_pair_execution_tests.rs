@@ -1550,6 +1550,7 @@ fn rejected_reply_retains_its_exact_author_across_trace_pressure_and_leave_wait(
         .unwrap();
     // Close the original gate while the rejected packet, its actual Decision
     // wait and its author remain retained under trace pressure.
+    crate::flow::fixture_eof::hang_up(&peer);
     drop(peer);
     assert_eq!(
         gate.try_receive().unwrap_err().fault,
