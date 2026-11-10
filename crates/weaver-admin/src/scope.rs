@@ -131,7 +131,8 @@ pub enum ScopeRefused {
     Leftovers(Vec<i32>),
     /// `BoundaryUnverified`, naming the scope and what the request answered,
     /// or that no move followed, that the scope still stood empty at the
-    /// bound, or that a scope standing at its path gave no populated reading.
+    /// bound, or that a scope gave no populated reading and its path did not
+    /// read absent.
     Unverified(String),
 }
 
@@ -146,8 +147,8 @@ pub enum ScopeStanding {
     Empty,
     /// Standing and populated: a run's leftovers (P3).
     Populated,
-    /// Standing and its `cgroup.events` giving no populated reading: neither
-    /// empty nor populated is known.
+    /// No populated reading in its `cgroup.events`, and its path not reading
+    /// absent: neither empty nor populated is known, nor that it is gone.
     Unread,
 }
 
@@ -236,10 +237,11 @@ pub fn standing(site: &Site) -> Result<(ScopeStanding, Option<Cgroup>), ScopeRef
 /// **What an opened scope holds**, by `populated` in its `cgroup.events`.
 /// No populated reading where nothing stands at the scope's path any more is
 /// absent, PID1 having collected it between the open and the read (a load
-/// right after an unload meets that window). Where a directory stands there,
-/// the opened scope or another made since, it is [`ScopeStanding::Unread`],
-/// never populated, empty or absent: the start step asks what stands at the
-/// path now, which a replaced directory does not answer, so it is narrower
+/// right after an unload meets that window). Where the path does not read
+/// absent by then, the opened scope or another directory standing there or
+/// the path not opening, it is [`ScopeStanding::Unread`], never populated,
+/// empty or absent: the start step asks what stands at the path now, which a
+/// replaced directory or a refused open does not answer, so it is narrower
 /// than [`Cgroup::gone`], the run end's question whether its own cgroup ended.
 pub fn read_standing(scope: Cgroup) -> (ScopeStanding, Option<Cgroup>) {
     match scope.populated() {
@@ -366,7 +368,9 @@ where
         }
         StandingAction::RefuseUnread => {
             return Err(ScopeRefused::Unverified(format!(
-                "the scope {path} stands and its cgroup.events gives no populated reading"
+                "the scope {path} gave no populated reading from its cgroup.events, and its \
+                 path does not read absent since: the scope unread, replaced since its \
+                 open, or not opening"
             )));
         }
         StandingAction::AwaitCollection => {

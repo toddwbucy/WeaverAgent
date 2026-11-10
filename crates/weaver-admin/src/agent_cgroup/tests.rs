@@ -677,12 +677,11 @@ fn containment_an_empty_scope_is_waited_out() {
 
 /// **A scope still standing whose `cgroup.events` gives no populated reading
 /// refuses unverified** (6.1, the scope already standing): neither a run's
-/// leftovers nor ending, so the
-/// load refuses `BoundaryUnverified`, naming the read, with no request and
-/// nothing killed. The read is failed by the file's mode, which binds the
-/// suite's own uid under a user scope and not root, as the failed listing's
-/// instrument does. Perturbation: read an unread scope as populated, and the
-/// load refuses `AgentRunning`.
+/// leftovers nor ending, so the load refuses `BoundaryUnverified`, naming the
+/// read, with no request and nothing killed. The read is failed by the file's
+/// mode, which binds the suite's own uid under a user scope and not root, as
+/// the failed listing's instrument does. Perturbation: read an unread scope as
+/// populated, and the load refuses `AgentRunning`.
 #[test]
 #[ignore = "needs a delegated cgroup scope"]
 fn containment_an_unread_scope_refuses_unverified() {
@@ -715,7 +714,7 @@ fn containment_an_unread_scope_refuses_unverified() {
     std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o444)).unwrap();
     end(start_step);
     assert!(
-        matches!(&refused, Err(StartRefused::Unverified(why)) if why.contains("cgroup.events gives no populated reading")),
+        matches!(&refused, Err(StartRefused::Unverified(why)) if why.contains("gave no populated reading from its cgroup.events")),
         "{refused:?}"
     );
     assert_eq!(asked.get(), 0, "no request");
@@ -771,6 +770,35 @@ fn containment_a_scope_replaced_after_its_open_reads_unread() {
         .make_child("weaver-alpha.scope")
         .expect("another directory at the path");
     let (standing, held) = scope::read_standing(opened);
+    assert_eq!(standing, scope::ScopeStanding::Unread);
+    assert!(held.is_some(), "the opened scope is held for its refusal");
+}
+
+/// **A scope whose path does not open after a failed read reads unread**
+/// (6.1, the scope already standing): the opened scope is removed and its
+/// path then refuses its open, so whether anything stands there is not known,
+/// and the start step refuses rather than read the path absent. The open is
+/// refused by the slice's mode, which binds the suite's own uid under a user
+/// scope and not root, as the unread scope's instrument does. Perturbation:
+/// read a path that does not open as absent, and the scope reads absent.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_scope_not_opening_after_its_open_reads_unread() {
+    let scratch = ScratchCgroup::new("unopened-scope");
+    let slice = scratch.cgroup.make_child(scope::SLICE).unwrap();
+    slice.make_child("weaver-alpha.scope").unwrap();
+    let opened = Cgroup::open(&site(&scratch).path()).expect("the scope opens");
+    nix::unistd::unlinkat(
+        slice.fd(),
+        "weaver-alpha.scope",
+        nix::unistd::UnlinkatFlags::RemoveDir,
+    )
+    .expect("the opened scope removed");
+    let directory = std::path::PathBuf::from(containment::CGROUP_ROOT)
+        .join(slice.relative().trim_start_matches('/'));
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (standing, held) = scope::read_standing(opened);
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(standing, scope::ScopeStanding::Unread);
     assert!(held.is_some(), "the opened scope is held for its refusal");
 }
