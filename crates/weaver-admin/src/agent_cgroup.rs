@@ -5,7 +5,8 @@
 //! row reads and act on its answer, so every judgment stays in one place.
 //!
 //! "Root's" is the invoking uid's, root in production: the instruments run
-//! the same code under a delegated scope of the suite's own account.
+//! the same code under a delegated scope of the suite's own account, with a
+//! fake PID1 standing in for the scope's request (`scope`).
 
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::path::Path;
@@ -18,8 +19,9 @@ use crate::containment::{
     self, Cgroup, MadeAction, MadeStep, Record, RecordAction, RecordAtStart, RecordedAt,
     RunEndAction, RunEndStep, Standing, StartAction, StartFacts, StartRefusal,
 };
+use crate::scope::{self, ScopeRefused, Site};
 
-/// The agent's cgroup's name beneath the invoker's, named for the agent's
+/// The agent's cgroup's name beneath its scope, named for the agent's
 /// account.
 pub fn cgroup_name(agent: &str) -> String {
     format!("weaver-{agent}")
@@ -107,10 +109,12 @@ pub enum StartRefused {
 }
 
 /// **The start step's making of the agent's cgroup** (6.1), holding both
-/// locks and before any fork: a temporary record left behind removed; the
-/// floor's mount and the invoker's delegate mark; what stands at the
-/// deterministic path and what the record names, judged by
-/// `start_judgment`; then the cgroup made, its `cgroup.kill` required, the
+/// locks and before any fork: the scope step, which asks PID1 for the
+/// agent's scope holding this process and confirms the move by its own
+/// reading; then, beneath the scope, a temporary record left behind
+/// removed; the floor's mount and the scope's delegate mark and ownership;
+/// what stands at the deterministic path and what the record names, judged
+/// by `start_judgment`; then the cgroup made, its `cgroup.kill` required, the
 /// layout made `0755` by `fchmod` with the three files set to `owner`, and the
 /// record written for `run`. Each failure after the `mkdir` removes what it
 /// made, by `made_judgment`.
@@ -120,20 +124,69 @@ pub fn make(
     run: &str,
     owner: (u32, u32),
 ) -> Result<Made, StartRefused> {
-    let invoker = containment::own_cgroup().and_then(|path| Cgroup::open(&path));
-    make_beneath(invoker, run_directory, agent, run, owner, ROOT)
+    make_in_scope(
+        &Site::of(agent),
+        std::process::id(),
+        scope::busctl,
+        scope::SCOPE_BOUND,
+        run_directory,
+        agent,
+        run,
+        owner,
+        ROOT,
+    )
 }
 
-/// The owner the floor requires of the invoker's cgroup in production.
+/// The owner the floor requires of the scope's cgroup in production.
 const ROOT: u32 = 0;
 
-/// [`make`] beneath a named invoker's cgroup, the one `/proc/self/cgroup`
-/// names in production, so an instrument can stand a delegated invoker of
-/// its own. `floor_owner` is the owner the floor requires of the invoker's
-/// directory and its `cgroup.procs`: root in production, the suite's own
-/// uid under a user scope, which is the level the instruments reach.
+/// **[`make`]'s seam**: the scope step for `pid` at `site` by `request`
+/// within `bound`, then [`make_beneath`] the scope's cgroup it answers.
+/// Production passes the agent's site, its own pid, `busctl`, the scope
+/// bound and root. The instruments pass a site beneath their own delegated
+/// cgroup, a fake PID1 and their own uid (6.1, the instruments: the scope
+/// step, the confirm, the standing scope).
+#[allow(clippy::too_many_arguments)]
+pub fn make_in_scope(
+    site: &Site,
+    pid: u32,
+    request: impl FnOnce(&scope::Call) -> Result<String, String>,
+    bound: Duration,
+    run_directory: BorrowedFd<'_>,
+    agent: &str,
+    run: &str,
+    owner: (u32, u32),
+    floor_owner: u32,
+) -> Result<Made, StartRefused> {
+    let held = scope::enter(site, pid, request, bound).map_err(|refused| match refused {
+        ScopeRefused::Leftovers(pids) => StartRefused::Leftovers(pids),
+        ScopeRefused::Unverified(why) => StartRefused::Unverified(why),
+    })?;
+    make_beneath(Ok(held), run_directory, agent, run, owner, floor_owner)
+}
+
+/// **The root instruments' making**: the agent's cgroup beneath the cgroup
+/// the instrument runs in, a root-owned delegated scope the operator stands
+/// it in, judged by the floor as the agent's scope is, so those instruments
+/// never ask the system's PID1 for a scope.
+#[cfg(test)]
+pub(crate) fn make_beneath_own_cgroup(
+    run_directory: BorrowedFd<'_>,
+    agent: &str,
+    run: &str,
+    owner: (u32, u32),
+) -> Result<Made, StartRefused> {
+    let own = containment::own_cgroup().and_then(|path| Cgroup::open(&path));
+    make_beneath(own, run_directory, agent, run, owner, ROOT)
+}
+
+/// The agent's cgroup made beneath a named cgroup, the agent's scope in
+/// production, so an instrument can judge the floor on a cgroup of its own.
+/// `floor_owner` is the owner the floor requires of the scope's directory
+/// and its delegated files: root in production, the suite's own uid under a
+/// user scope, which is the level the instruments reach.
 pub fn make_beneath(
-    invoker: std::io::Result<Cgroup>,
+    scope: std::io::Result<Cgroup>,
     run_directory: BorrowedFd<'_>,
     agent: &str,
     run: &str,
@@ -147,22 +200,22 @@ pub fn make_beneath(
         nix::unistd::UnlinkatFlags::NoRemoveDir,
     );
     let cgroup2 = containment::is_cgroup2();
-    let delegated = invoker.as_ref().is_ok_and(containment::delegated);
-    let invoker_roots = invoker
+    let delegated = scope.as_ref().is_ok_and(containment::delegated);
+    let scope_roots = scope
         .as_ref()
-        .is_ok_and(|inv| containment::owned_by(inv, floor_owner));
-    let invoker_path = invoker.as_ref().map_or_else(
+        .is_ok_and(|held| containment::owned_by(held, floor_owner));
+    let scope_path = scope.as_ref().map_or_else(
         |_| "an unread cgroup".to_string(),
-        |inv| inv.relative().to_string(),
+        |held| held.relative().to_string(),
     );
     // What stands at the deterministic path: absent only where the open
     // answers `ENOENT`, any other failure refusing rather than reading as
     // absent.
-    let at_path_cgroup = match invoker.as_ref().map(|inv| inv.child(&name)) {
+    let at_path_cgroup = match scope.as_ref().map(|held| held.child(&name)) {
         Ok(Ok(cgroup)) => Some(cgroup),
         Ok(Err(error)) if error.kind() != std::io::ErrorKind::NotFound => {
             return Err(StartRefused::Unverified(format!(
-                "the cgroup {name} beneath {invoker_path} does not open: {error}"
+                "the cgroup {name} beneath {scope_path} does not open: {error}"
             )));
         }
         Ok(Err(_)) | Err(_) => None,
@@ -191,7 +244,7 @@ pub fn make_beneath(
         run_lock_held: false,
         cgroup2,
         delegated,
-        invoker_roots,
+        scope_roots,
         at_path,
         recorded,
     };
@@ -214,10 +267,10 @@ pub fn make_beneath(
                     containment::CGROUP_ROOT
                 )),
                 StartRefusal::NotDelegated => StartRefused::Unverified(format!(
-                    "the invoker's cgroup {invoker_path} is not delegated (no user.delegate or trusted.delegate mark)"
+                    "the scope's cgroup {scope_path} is not delegated (no user.delegate or trusted.delegate mark)"
                 )),
-                StartRefusal::InvokerNotRoots => StartRefused::Unverified(format!(
-                    "the invoker's cgroup {invoker_path}, a file delegated with it, or a cgroup above it is not root's, so a process of the agent could be moved out of its cgroup (#166)"
+                StartRefusal::ScopeNotRoots => StartRefused::Unverified(format!(
+                    "the scope's cgroup {scope_path}, a file delegated with it, or a cgroup above it is not root's, so a process of the agent could be moved out of its cgroup (#166)"
                 )),
                 StartRefusal::NotRoots => {
                     StartRefused::Unverified(format!("a cgroup {name} stands that is not root's"))
@@ -232,11 +285,11 @@ pub fn make_beneath(
             // A1: the empty cgroup standing is removed with any record, then
             // made afresh.
             if at_path == Standing::Empty
-                && let Ok(inv) = &invoker
-                && containment::remove_layout(inv, &name).is_err()
+                && let Ok(held) = &scope
+                && containment::remove_layout(held, &name).is_err()
             {
                 return Err(StartRefused::Unverified(format!(
-                    "the empty cgroup {name} beneath {invoker_path} does not remove"
+                    "the empty cgroup {name} beneath {scope_path} does not remove"
                 )));
             }
             if let Ok(Some(record)) = &record
@@ -269,10 +322,10 @@ pub fn make_beneath(
         }
         StartAction::Make => {}
     }
-    let invoker = invoker.map_err(|error| {
-        StartRefused::Unverified(format!("the invoker's cgroup does not open: {error}"))
+    let scope = scope.map_err(|error| {
+        StartRefused::Unverified(format!("the scope's cgroup does not open: {error}"))
     })?;
-    let made = invoker.make_child(&name);
+    let made = scope.make_child(&name);
     let check = |step: MadeStep, what: &str| -> Result<(), StartRefused> {
         match containment::made_judgment(step) {
             MadeAction::GoOn => Ok(()),
@@ -281,17 +334,17 @@ pub fn make_beneath(
                 // made nothing, so whatever stands at the path, another
                 // account's included, is left alone.
                 if matches!(made, Ok(_) | Err(containment::MakeChildError::Mode(_))) {
-                    let _ = containment::remove_layout(&invoker, &name);
+                    let _ = containment::remove_layout(&scope, &name);
                 }
                 let _ = containment::remove_record(run_directory);
                 Err(StartRefused::Unverified(format!(
-                    "the cgroup {name} beneath {invoker_path}: {what}"
+                    "the cgroup {name} beneath {scope_path}: {what}"
                 )))
             }
         }
     };
-    // The floor's second question: a `mkdir` the invoker's containment
-    // refuses, or what it made not root's, or a mode that does not set.
+    // The floor's third question: a `mkdir` the scope refuses, or what it
+    // made not root's, or a mode that does not set.
     let agent_cgroup = match &made {
         Ok(cgroup) => cgroup,
         Err(containment::MakeChildError::Mode(_)) => {
@@ -442,9 +495,22 @@ pub fn run_end(
         return Ok(Ended::NotOwned);
     }
     let unverified = || EndRefused::Unverified(format!("the cgroup {}", record.path));
-    let cgroup = Cgroup::open(&record.path).map_err(|_| unverified())?;
+    // **A cgroup gone since the record's judgment is A0** (6.1, the scope's
+    // end): PID1 collects the agent's scope once its last process ends, the
+    // agent's cgroup with it, so a run end can meet the path, or its scope's,
+    // absent here as it would at the judgment.
+    let absent = |error: &std::io::Error| error.kind() == std::io::ErrorKind::NotFound;
     let (parent, name) = parent_and_name(&record.path).ok_or_else(unverified)?;
-    let parent = Cgroup::open(&parent).map_err(|_| unverified())?;
+    let opened = Cgroup::open(&record.path).and_then(|cgroup| Ok((cgroup, Cgroup::open(&parent)?)));
+    let (cgroup, parent) = match opened {
+        Ok(opened) => opened,
+        Err(error) if absent(&error) => {
+            return Ok(Ended::Stale {
+                record_removed: containment::remove_record(run_directory).is_ok(),
+            });
+        }
+        Err(_) => return Err(unverified()),
+    };
     let standing = pids(&cgroup);
     let mut next = containment::run_end_next(RunEndStep::Kill {
         written: cgroup.kill().is_ok(),
@@ -452,7 +518,7 @@ pub fn run_end(
     loop {
         next = match next {
             RunEndAction::Wait => containment::run_end_next(RunEndStep::Wait {
-                emptied: cgroup.wait_empty(bound),
+                emptied: cgroup.wait_emptied(bound),
             }),
             RunEndAction::Fallback => containment::run_end_next(RunEndStep::Fallback {
                 emptied: cgroup.fallback_until_empty(bound),
@@ -509,14 +575,22 @@ pub fn holds(run_directory: BorrowedFd<'_>, agent: &str) -> Result<Option<Vec<i3
     match containment::recorded_at(&record) {
         RecordedAt::Absent => Ok(None),
         RecordedAt::Same => {
-            let cgroup = Cgroup::open(&record.path)
-                .map_err(|error| format!("the cgroup {} does not open: {error}", record.path))?;
+            let cgroup = match Cgroup::open(&record.path) {
+                Ok(cgroup) => cgroup,
+                // Collected with its scope since the judgment: A0.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) => {
+                    return Err(format!("the cgroup {} does not open: {error}", record.path));
+                }
+            };
             // **Emptiness is `populated 0`, a failed read read as not empty**
-            // (6.1): a listing that is empty, or fails, never reads as
-            // holding nothing while `populated` does not read 0.
-            match cgroup.populated() {
-                Some(false) => Ok(None),
-                _ => Ok(Some(pids(&cgroup))),
+            // (6.1), unless the cgroup is gone from its path: a listing that
+            // is empty, or fails, never reads as holding nothing while
+            // `populated` does not read 0.
+            if cgroup.emptied() {
+                Ok(None)
+            } else {
+                Ok(Some(pids(&cgroup)))
             }
         }
         RecordedAt::Other | RecordedAt::Unreadable => Err(format!(

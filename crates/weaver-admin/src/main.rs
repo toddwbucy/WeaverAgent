@@ -46,9 +46,10 @@ mod log;
 // Complete replacement operations, inactive until FOUNDATION-TRANSITION cutover.
 #[allow(dead_code)]
 mod offline_state;
-// Paired replacement Enter producer, dormant until the coupled cutover.
 mod random;
 mod save_points;
+mod scope;
+// Paired replacement Enter producer, dormant until the coupled cutover.
 #[allow(dead_code)]
 mod serving_enter;
 // Dormant root lifecycle composition; selected only with the qualified worker.

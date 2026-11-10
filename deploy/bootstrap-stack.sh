@@ -436,4 +436,4 @@ plan "written to $STACK/install-tuple"
 
 say "installed at $REV"
 plan "next: deploy/create-agent.sh <name> --artifact <path> [--apply], one agent at a time"
-plan "then: validate each agent with the validate verb of $(printf '%q' "$PREFIX/bin/weaver-admin") as root, and prove its load with deploy/verify-load.sh as root in a delegated scope (deploy/HowToDeployANewAgent.md section 4)"
+plan "then: validate each agent with the validate verb of $(printf '%q' "$PREFIX/bin/weaver-admin") as root, and prove its load with deploy/verify-load.sh as root (deploy/HowToDeployANewAgent.md section 4)"

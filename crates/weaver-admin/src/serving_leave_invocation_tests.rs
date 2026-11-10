@@ -239,7 +239,8 @@ fn root_case(case: &str) {
         start::take_invocation_lock(&run_dir, crate::verb_table::HolderVerb::Load).unwrap();
     let run_lock = start::take_run_lock(&run_dir).unwrap().unwrap();
     let dir = agent_cgroup::open_run_directory(&run_dir).unwrap();
-    let made = agent_cgroup::make(dir.as_fd(), &f.config.agent, RUN, (0, 0)).unwrap();
+    let made =
+        agent_cgroup::make_beneath_own_cgroup(dir.as_fd(), &f.config.agent, RUN, (0, 0)).unwrap();
     let initial_marker = match case {
         "closed" | "initial-closed-marker" => Some(save_points::Marker::Closed { run: RUN.into() }),
         "foreign-marker" | "initial-foreign-marker" => Some(save_points::Marker::Open {
