@@ -1057,12 +1057,13 @@ impl<'a> Ports<'a> {
     /// **Loop 0's own turns answer the turn-context election** (#423,
     /// `weaver-harness-Spec` section 6's turn-context read): the seeding turn
     /// and the wind-down turn cross the dev boundary nowhere, so where the run
-    /// elects `independent` loop 0 makes the cut loop 1 makes before every
-    /// turn it drives, zero, which the seam bounds at the identity prefix,
-    /// directly before the bracket opens. **Its confirmation gates the turn**,
-    /// as loop 1's does: a cut refused or never confirmed answers
-    /// `ChannelLost` and the turn does not run, the refusal itself authored by
-    /// the flush port.
+    /// elects `independent` loop 0 makes the cut loop 1 makes before every turn
+    /// it drives, zero, which the seam bounds at the identity prefix, directly
+    /// before the bracket opens. **Its confirmation gates the turn**, as loop
+    /// 1's does: a cut refused, or a seam that closes before confirming it,
+    /// answers `ChannelLost` and the turn does not run, the refusal itself
+    /// authored by the flush port. A seam that stays open and silent holds the
+    /// turn unbounded, the flush port's wait having no deadline (#527).
     fn flush_if_independent(&mut self) -> Result<(), TurnError> {
         if self.turn_context == weaver_types::TurnContext::Independent && self.flush(0).is_none() {
             return Err(TurnError::ChannelLost);
