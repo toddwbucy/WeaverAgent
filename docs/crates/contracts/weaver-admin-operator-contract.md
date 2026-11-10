@@ -97,16 +97,17 @@ toddwbucy/WeaverWeb#15: sudo's `pam_session` is off for the connector's user
 #166 the placement is admin's own step, which leaves any session's containment, so a
 session would no longer break the agent's lifetime. It stays off because none is
 needed and the granted rule does not change. A requirement on the boundary is declared
-and checked: the invoker verifies after a load that every constituent `show` names sits
-inside the agent's own scope, `/weaver.slice/weaver-<agent>.scope/weaver-<agent>/`,
-in the agent's containment admin makes there (`weaver-admin-Spec` section 6.1). **The
-host's PID1 must answer the start step's request for that scope, and the scope must be
-delegated, root's, and admitting a child containment that root makes**, or the load
-refuses `BoundaryUnverified`. Root's means its directory and its `cgroup.procs` are
-owned by root, and so is every cgroup above it, so no account but root can move the
-agent's processes out of the agent's containment (#166's guard, the operator's ruling
-of 2026-10-15). PID1 makes the scope so whoever invoked the load, and a load from
-admin-con's unit stands as an operator's does. No prompt, turn, task, or run crosses,
+and checked: **every constituent sits inside the agent's own root-owned delegated
+scope, which admin makes for the load**, in the agent's containment admin makes beneath
+it, and the invoker verifies after a load that every constituent `show` names sits
+there. **The host must let admin make that scope, delegated, root's, and admitting a
+child containment that root makes**, or the load refuses `BoundaryUnverified`. Root's
+means owned by root, the scope and every containment above it, so no account but root
+can move the agent's processes out of the agent's containment (#166's guard, the
+operator's ruling of 2026-10-15). Admin makes the scope the same way whoever invoked
+the load, so a load from admin-con's unit stands as an operator's does. Where the scope
+stands, its slice, and the request that makes it are `weaver-admin-Spec` section 6.1's.
+No prompt, turn, task, or run crosses,
 per apex section 6.
 
 **The invoker's execution context reaches admin and the agent it starts**, whatever
@@ -204,19 +205,20 @@ gives up reads the outcome from the next `show`.
 
 **The agent's lifetime is its own scope's**, on the operator's ruling of 2026-11-07 on
 #166, which replaced the binding to the containment a load ran in (the rulings of
-2026-10-03 on #72 and of 2026-10-14 on #111): the root-owned delegated scope
-`weaver-<agent>.scope` the start step asks PID1 for, in `weaver.slice`. It is enforced
-by that scope, and the program depends on no supervisor for it. The agent lives until
-`unload`, `force-unload`, root stopping its scope, or its own processes ending. The
-invoker's end, admin-con's restart included, ends neither the agent nor a start step
-already in its scope, so the binding under which stopping an agent's admin-con stopped
-that agent (toddwbucy/WeaverWeb#15) is reversed. A systemd unit per agent stays later
-fleet work. A dropped invocation still runs to completion, per the bound above. Three
+2026-10-03 on #72 and of 2026-10-14 on #111): the root-owned delegated scope admin
+makes for the load (section 2, its making `weaver-admin-Spec` section 6.1's). It is
+enforced by that scope, and the program depends on no supervisor for it. The agent
+lives until `unload`, `force-unload`, root stopping its scope, or its own processes
+ending. The invoker's end, admin-con's restart included, ends neither the agent nor a
+start step already in its scope, so the binding under which stopping an agent's
+admin-con stopped that agent (toddwbucy/WeaverWeb#15) is reversed. A unit per agent
+stays later fleet work. A dropped invocation still runs to completion, per the bound
+above. Three
 consequences are the invoker's to build against: a stop of the scope is an unclean stop
 whose next load resets to the latest save point, the invoker's execution context
 reaches the agent (section 2), and the invoker's cgroup limits do not. Admin sets no
-limit on the scope or the slice, so systemd's defaults apply, and a limit on
-`weaver.slice` is later fleet work. admin-con's unit shape is held on
+resource limit on the scope, so the host's defaults apply, and a limit across the
+agents' scopes is later fleet work. admin-con's unit shape is held on
 toddwbucy/WeaverWeb#46.
 
 **At the trace door, the record as a read-only stream**: the relay writes a header line
@@ -435,9 +437,10 @@ names refuses `BoundaryUnverified`** at every verb that publishes (a `load`, an 
 a `save-point`), until the operator clears it (`weaver-admin-Spec` section 6; #140,
 S16). **Containment refuses in these ways** (`weaver-admin-Spec` section 6.1, #111). A
 `load` on a box without a containment that admits a child made by root and ends all of
-its processes at once (the floor is `weaver-admin-Spec` section 6.1's), one whose
-start step is not moved into the agent's scope within the scope bound, or one whose
-scope is not delegated, not root's, or admits no child, refuses `BoundaryUnverified`,
+its processes at once (the floor is `weaver-admin-Spec` section 6.1's), one for which
+admin cannot make the agent's scope and read itself inside it within the bound
+`weaver-admin-Spec` section 6.1 states, or one whose scope is not delegated, not
+root's, or admits no child, refuses `BoundaryUnverified`,
 naming what is missing. A `load` meeting processes of an ended run still standing, in
 the agent's scope or its containment, refuses `AgentRunning`, naming them, for `unload`
 to end. An `unload` or

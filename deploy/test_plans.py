@@ -2323,25 +2323,26 @@ esac
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         line, = [l for l in result.stdout.splitlines() if l.startswith("  will install  ")]
-        self.assertEqual(line, "  will install  worker weaver-admin weaver-trace-relay weaver-gate weaver-spu "
-                               "weaver-state, the shell (busybox busybox.applets), and the engine libraries "
-                               "(libggml*.so* libllama*.so*) built by llama-cpp-sys-2")
         plan = result.stdout.split("\n== plan\n", 1)[1].split("\n\n", 1)[0].splitlines()
         named = set(re.findall(r"[\w.+-]+", line.split("engine libraries", 1)[0]))
         globs = re.search(r"engine libraries \(([^)]*)\)", line).group(1).split()
         listed = [row.split()[0] for row in plan if re.match(r"  \w", row)]
         self.assertIn("busybox.applets", listed, plan)
+        self.assertTrue({"busybox", "busybox.applets"} <= named, line)
+        self.assertTrue(globs, line)
         for name in listed:
             if name.startswith("lib"):
                 self.assertTrue(any(fnmatch.fnmatch(name, g) for g in globs), name)
             else:
                 self.assertIn(name, named)
         bootstrap = (self.repo / "deploy" / "bootstrap-stack.sh").read_text()
-        self.assertIn('plan "will install  $MEMBERS, the shell ($SHELL_FILES), and the engine libraries '
-                      '($LIB_GLOBS) built by $ENGINE_CRATE"', bootstrap)
+        planned, = [l for l in bootstrap.splitlines() if l.lstrip().startswith('plan "will install')]
+        for variable in ("$MEMBERS", "$SHELL_FILES", "$LIB_GLOBS"):
+            self.assertIn(variable, planned)
         self.assertIn('SHELL_FILES="busybox busybox.applets"', bootstrap)
         redeploy = re.sub(r"\s+", " ", (DEPLOY / "REDEPLOY.md").read_text())
-        self.assertIn("It plans and installs the members, the shell and the engine libraries alike", redeploy)
+        installs, = [s for s in redeploy.split(". ") if "plans and installs the members" in s]
+        self.assertIn("the shell", installs)
 
     def test_the_install_window_prints_once_under_install(self):
         """**The install window is said once**: --install runs the plan

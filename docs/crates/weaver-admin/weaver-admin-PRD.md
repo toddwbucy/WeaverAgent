@@ -44,10 +44,11 @@ is the operator in the admin role, per section 7. The crate is an invocation rat
 a resident: it runs when the operator runs a verb, exits when the verb answers, holds
 nothing between verbs, and what persists across invocations is what the filesystem and
 the kernel already hold: the run lock the run's processes hold, released by the kernel
-when the last of them is gone. No init system stands in the agent's lifetime, on the
-operator's ruling of 2026-10-03 on #50: the agent starts like an appliance, when someone
-wants it, and supervision, restart and hardening belong to whoever packages and deploys
-it.
+when the last of them is gone. No init system supervises the agent, on the operator's
+ruling of 2026-10-03 on #50: the agent starts like an appliance, when someone wants it,
+and supervision, restart and hardening belong to whoever packages and deploys it. The
+init system's only part is the transient scope admin asks it for at each load, whose
+lifetime is the agent's (the operator's ruling of 2026-11-07 on #166, section 7).
 
 ```graph
 node: weaver-admin

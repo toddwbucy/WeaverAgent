@@ -171,8 +171,10 @@ to: admin-descriptors-owned-types
 **No async runtime, no D-Bus crate, no logging crate.** The surface's traffic
 is operator-paced and the coordination traffic is per-load, so nothing here
 needs an executor, and threads from the standard library carry the concurrency
-section 2 needs. No init system is reached at all, per section 6, so no bus library
-enters the tree. The operations log of section 8
+section 2 needs. The init system is asked for one thing only, the agent's transient
+scope at each load (section 6.1, since #166), and how that request is carried is
+section 11's open election: the recommended exec of systemd's own `busctl` at a fixed
+path adds no bus library to the tree. The operations log of section 8
 is this crate's own file with this crate's own writer, and a logging framework
 would be a second account with its own schema, which is the arrangement charter
 section 2 rules out for the trace and this Spec declines for the log. The
@@ -1625,7 +1627,9 @@ to: admin-sink-path-dies-at-open-site
 
 **The agent starts the way an appliance does, and the start step is this crate's root
 act**, on the operator's ruling of 2026-10-03 on #50 that the agent leaves systemd. No
-unit is asked of an init system and nothing is installed to wait for the agent: restart
+unit is installed for the agent and nothing is installed to wait for it, and the init
+system is asked for one transient scope per load and nothing else (section 6.1, on the
+operator's ruling of 2026-11-07 on #166): restart
 on a crash or a reboot, sandbox hardening and log collection belong to whoever packages
 and deploys the agent, with systemd, a container or anything else, and are not this
 framework's. What the transient unit did for the agent, the start step does itself, as
@@ -2459,7 +2463,8 @@ rulings of 2026-11-07 and 2026-11-09 on #166).
   its processes, sends no request and kills nothing (I8), and `unload` ends them through
   the record. A scope standing empty is ending: the start step waits within the scope
   bound for PID1 to collect it, and refuses `BoundaryUnverified`, naming it, where it
-  still stands at the bound.
+  still stands at the bound, whether PID1 still holds its unit or left its directory
+  behind, which then refuses every load until root removes it (#520).
 - **The request refused:** where the move does not read within the scope bound (PID1
   unreachable, the request refused, its job failed), the load refuses
   `BoundaryUnverified`, naming what the request answered or that no move followed, and
@@ -2538,12 +2543,19 @@ removes what it made, and stands nothing**, failing closed, as the dial does on 
 kernel without its pidfd (section 7). An agent with no containment would be an agent
 whose tools outlive their calls.
 
-**The scope bound: 10 seconds for the move to read in `/proc/self/cgroup`**, and for a
-scope standing empty to be collected, this Spec's election, a ceiling stated here once,
-as the containment bound is below. The start step reads its own cgroup every
-millisecond, and the wait ends at the move, so the ceiling costs nothing where PID1
-answers. It decides only how long a stalled PID1 holds a load before it refuses, and a
-tighter one would refuse a load falsely while PID1 is busy, a daemon reload among them.
+**The scope bound: 10 seconds for the move to read in `/proc/self/cgroup`, counted from
+the request**, and for a scope standing empty to be collected, this Spec's election, a
+ceiling stated here once, as the containment bound is below. One deadline, set at the
+request, covers the request, the reap of a helper that carries it, and the confirm: the
+request carries the bound as its own call timeout, whatever client section 11 elects,
+so no client waits on PID1 past it (`busctl`'s own default is 25 seconds), the helper
+is reaped before the confirm reads (D2), and the confirm reads until the same deadline.
+The start step reads its own cgroup every millisecond, and the wait ends at the move,
+so the ceiling costs nothing where PID1 answers. It decides only how long a stalled
+PID1 holds a load before it refuses, and a tighter one would refuse a load falsely
+while PID1 is busy, a daemon reload among them. Each wait has its own bound, so a scope
+standing empty and then a stalled request hold a load up to twice the bound. A helper
+that hangs outside its call, where its call timeout does not reach, is #522.
 **Measured on 2026-11-09** (`docs/project/admin-root-scope-measurement-2026-11-09.md`),
 from root stand-in units: the call took 2.6 ms and 3.0 ms, and the move read 3.2 ms
 after the call began where it had landed at the return, and at most 9.6 ms after where
@@ -2716,16 +2728,19 @@ weaver-<agent>/      root's; the agent's cgroup
 - **Admin's start:**
   - **A cgroup already standing**, at the deterministic path (its `mkdir` meeting
     `EEXIST`) or where a record names one: root's and empty (`populated 0`), it is A1,
-    left by a crash with nothing still running or by an invocation that died between
-    its `mkdir` and its record or inside its removal, and is removed with any record and
-    made afresh. One that is not root's refuses `BoundaryUnverified`, naming it.
+    and is removed with any record and made afresh. An A1 that a crash, or an
+    invocation that died inside its removal, leaves beneath the scope goes with the
+    scope when PID1 collects it, before the start step reads (the deterministic path,
+    below). One that is not root's refuses `BoundaryUnverified`, naming it.
   - **A populated cgroup with the run lock free** (the run's leftovers after a crash):
     the load refuses `AgentRunning`, naming the processes, and kills nothing, a load
     never ending a run (I8). `unload` and `force-unload` end it by the run end.
   - **The deterministic path is the scope's**, the same for every load of the agent.
     An empty cgroup a crash left there goes with its scope when PID1 collects it, the
-    start step waiting for that before its request (the scope already standing, above),
-    and one PID1 left behind is the A1 this bullet's first case removes.
+    start step waiting for that before its request (the scope already standing, above).
+    A scope directory PID1 leaves behind with one inside refuses every load at the scope
+    bound until root removes it (#520), so the start step never meets this bullet's
+    first case at the deterministic path.
   - **Its failures.** A `fchmod`, a setting of the three files' owner, or the record's
     write that fails refuses `BoundaryUnverified`, naming it, removes what the start made,
     and stands nothing. A constituent's own write of `0` to its leaf's `cgroup.procs`
@@ -2742,7 +2757,13 @@ weaver-<agent>/      root's; the agent's cgroup
 Spec's election, provisional and measured like section 6's, and stated here once. **A
 read of `cgroup.events` that fails is read as not yet empty**, by the gate, the worker
 and the run end alike, so the wait runs to the bound and ends as a populated cgroup's
-does. **Each
+does. **At the run end alone, a cgroup gone from its recorded path has emptied**: the
+kernel removes only a cgroup with no process and no child, and PID1's collection of the
+agent's emptied scope removes the agent's cgroup with it (the scope's end), so the read
+of a removed cgroup fails, `ENOENT` or `ENODEV`, and a run end's wait or fallback that
+then meets the path absent, or another directory there, reads the cgroup as emptied and
+goes on to the removal, which reads `ENOENT` as removed. A path that does not open for
+any other reason is not gone. **Each
 waiter waits it from its own first kill** (Codex on #161): the gate from its kill, and
 the worker, on the gate's death, from its own, since it cannot know whether the gate's
 kill was delivered. An execution's kill fires at the caller's number, and **its exchange
@@ -2801,7 +2822,7 @@ scope.
 |---|---|---|---|
 | admin's start step, the scope's path absent | P0 | P0 | goes on to the request |
 | admin's start step, the scope standing and populated | P3 | P3 | refuses `AgentRunning`, naming the processes, sends no request and kills nothing (I8). It is reached only with the run lock free (section 3), so the agent's cgroup is A3 |
-| admin's start step, the scope standing and empty | P4 | P0, then the request | waits within the scope bound for PID1 to collect it. Still standing at the bound, it refuses `BoundaryUnverified`, naming it |
+| admin's start step, the scope standing and empty | P4 | P0, then the request | waits within the scope bound for PID1 to collect it. Still standing at the bound, it refuses `BoundaryUnverified`, naming it, and a directory PID1 left behind stands until root removes it (#520) |
 | admin's start step, the request | P0 | P1 | asks PID1 for the scope, holding its own pid |
 | PID1, the start job | P1 | P2 | makes the scope's cgroup in `weaver.slice`, marks it delegated and moves the start step into it |
 | admin's start step, its own reading naming the scope within the bound | P2 | P2 | the floor and the agent's cgroup, unchanged (A0, then A1) |
@@ -2812,7 +2833,7 @@ scope.
 | the invoker's containment stopped or killed | P2 or P3 | unchanged | a start step still running runs on in the scope (measured). Its parent sudo ends and its answer may go unread, and it records its outcome in `admin.log` (`weaver-admin-operator-contract` section 3) |
 | root stops the scope | P2 | P4, then P0 | the start step is killed. The empty `weaver-<agent>/` goes with the scope, and a record left is the next verb's A0 |
 | root stops the scope | P3 | P4, then P0 | every process of the agent ends, an unclean stop. The record stays, the next verb reads A0 and removes it, and the next load resets to the latest save point |
-| `unload` or `force-unload`, the run end | P3 | P4, then P0 | kills and removes the agent's cgroup through the record, as the cgroup's table says. PID1 collects the emptied scope, and a removal that meets `ENOENT` after PID1's trim reads as removed |
+| `unload` or `force-unload`, the run end | P3 | P4, then P0 | kills and removes the agent's cgroup through the record, as the cgroup's table says. PID1 collects the emptied scope, so a wait that meets the cgroup gone from its path reads it as emptied (the containment bound), a removal that meets `ENOENT` after PID1's trim reads as removed, and a cgroup or scope already absent when the run end opens it is A0 |
 | the agent's processes all ending, no verb | P3 | P4, then P0 | the record is stale, and the next verb reads A0 |
 | the agent's account writes a `cgroup.procs` | P3 | unchanged | it moves a process within `worker/` only (C1's first exception). Leaving the scope needs a write to a file of root's (C2) |
 | another account, a connector's among them, writes a `cgroup.procs` of the scope or the slice | P3 | unchanged | refused `EACCES`: neither file is its |
@@ -2822,7 +2843,7 @@ scope.
 | # | Invariant | Held by |
 |---|---|---|
 | D1 | **The start step makes no cgroup until its own reading names the scope it asked for.** The call's answer is never read as the move. | the confirm |
-| D2 | **No process of the agent runs outside `weaver-<agent>/`**, so C4 does not change. The start step forks nothing of the agent before the agent's cgroup exists. A helper that carries the request, where the election of section 11 elects one, is admin's own and root's, forked before the move and so left in the invoker's containment, and the start step reaps it before it reads for the move. | the order within a load (section 3) |
+| D2 | **No process of the agent runs outside `weaver-<agent>/`**, so C4 does not change. The start step forks nothing of the agent before the agent's cgroup exists. A helper that carries the request, where the election of section 11 elects one, is admin's own and root's, forked before the move and so left in the invoker's containment, and the start step reaps it before it reads for the move. The request carries the scope bound as its own call timeout, so one deadline covers the request, the reap and the confirm (the scope bound, and #522 for a helper that hangs outside its call). | the order within a load (section 3), and the scope bound |
 | D3 | **On every path, the agent's cgroup and every cgroup above it to the mount's root are root's**, and the floor checks it. | PID1's scope, and #166's guard |
 | D4 | **The scope's end is its emptiness.** No verb removes a scope, and no refused or killed start step leaves one standing past its own exit. | PID1's collection (`CollectMode=inactive-or-failed`) |
 | D5 | **One path.** A load from an operator's shell and one from admin-con's unit take the same step to the same deterministic path, and a scope the operator wraps a load in changes nothing. | the scope step |
@@ -2874,10 +2895,10 @@ scope.
 | admin's run end, a rollback's included, its write of `cgroup.kill` failing | A3, A1, or A4 left by an earlier run end, once the run lock frees | A4 by the fallback's kills, or as it was | the pinned fallback over the agent's cgroup and its descendants, repeated within the bound. Both failing refuses `WorkerWouldNotExit` |
 | admin's run end, a rollback's included, a removal failing other than with `ENOENT` | A3, A1, or A4 left by an earlier run end, once the run lock frees, killed and emptied | A1 partly removed | refuses `BoundaryUnverified`, naming the cgroup, the record kept for the next `unload`, nothing published, a rollback's marker excepted (its row above) |
 | admin's run end, a rollback's included, the record's removal failing | A3, A1, or A4 left by an earlier run end, once the run lock frees, the cgroup removed (A0) | A0, a stale record | said in `admin.log`, refusing nothing: the next verb reads the absent path as A0 and removes the record |
-| a wait's read of `cgroup.events` failing (the gate's, the worker's or the run end's) | T2 (the gate's or the worker's wait), or the run end's sources, its kill delivered (A4) | as the bound passing | read as not yet empty, so the wait runs to the bound and ends as a populated cgroup's does |
+| a wait's read of `cgroup.events` failing (the gate's, the worker's or the run end's) | T2 (the gate's or the worker's wait), or the run end's sources, its kill delivered (A4) | as the bound passing | read as not yet empty, so the wait runs to the bound and ends as a populated cgroup's does, unless at the run end the cgroup is gone from its path, which reads as emptied (the containment bound) |
 | admin dies inside a run end | A4, A1 partly removed, or A0, a stale record | as left | the next `unload` or `force-unload` writes the kill again, which is idempotent, and finishes the removal, the record last. Where the cgroup is already gone and only its record stands, that verb reads the absent path as A0 and removes the record (the row for a recorded path absent) |
-| admin dies inside the start step | A1 or A2 | as left, or A0 once PID1 collects an emptied scope | A1 goes with the scope when PID1 collects it, the start step having been its last process, and a record left names an absent path, the next verb's A0. An A1 PID1 left behind is removed by the next load. A2 holds the run lock and is the S8b of section 3, ended by `unload` |
-| admin dies between the `mkdir` and the record's write | A1, no record | A0, or A1 where PID1 left it | the scope empties with the start step's death and PID1 collects it with the cgroup beneath it. Where it left the cgroup, the next load's `mkdir` meets `EEXIST` at the deterministic path, finds it root's and empty, removes it and makes it afresh |
+| admin dies inside the start step | A1 or A2 | as left, or A0 once PID1 collects an emptied scope | A1 goes with the scope when PID1 collects it, the start step having been its last process, and a record left names an absent path, the next verb's A0. An A1 PID1 leaves behind with its scope's directory refuses every load `BoundaryUnverified` at the scope bound until root removes it (#520). A2 holds the run lock and is the S8b of section 3, ended by `unload` |
+| admin dies between the `mkdir` and the record's write | A1, no record | A0, or A1 where PID1 left it | the scope empties with the start step's death and PID1 collects it with the cgroup beneath it. Where it left the scope's directory with the cgroup inside, every load refuses `BoundaryUnverified` at the scope bound until root removes it (#520) |
 | a later verb, a cgroup present at the recorded path with another device and inode | any | unchanged | refuses `BoundaryUnverified`, naming the path and both identities, and acts on nothing |
 | a later verb, the recorded path absent | A0, a stale record | A0, no record | the cgroup was already removed: the verb removes the stale record and goes on, acting on nothing there |
 | admin killed between the cgroup's removal and the record's | A0, a stale record | A0, a stale record | the next verb finds the recorded path absent, reads it as A0, removes the record and goes on |
@@ -2965,6 +2986,10 @@ The instruments:
 - **The standing scope:** a populated scope at the start step refuses `AgentRunning`,
   names the processes and kills nothing. Watched to fail when the read before the
   request is dropped and the request's refusal answers instead.
+- **The scope's end at the run end:** the run end's wait and its fallback over a cgroup
+  removed from its path, or with another directory there, end at once, and over a
+  cgroup at its path whose `cgroup.events` does not read run to the bound. Watched to
+  fail when the path's reading is dropped, and when every failed read reads as empty.
 
 ## 7. The coordination channel
 
@@ -4318,7 +4343,9 @@ Each names what settles it, and none is this Spec's to settle alone.
   - **An exec of systemd's own `busctl`, at a fixed path.** It adds no crate to section
     1's argued set, and it is the shorter abstraction this corpus prefers, a subprocess
     CLI over a library. Its path becomes a host requirement beside the `cgroup2` mount,
-    and the helper is D2's, forked before the move and reaped before the confirm.
+    and the helper is D2's, forked before the move and reaped before the confirm, its
+    `--timeout` the scope bound so that its call ends within it (#522 for a hang
+    outside the call).
   - **A D-Bus client crate.** A fourth external crate, with an asynchronous runtime
     beneath it, against a dependency set section 1 argues crate by crate.
   - **The D-Bus wire protocol by hand, over a `nix` socket.** No exec and no crate, but
