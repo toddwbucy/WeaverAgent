@@ -264,7 +264,8 @@ fn scenario(mode: &str, verb: &str) {
     fs::write(f.config.root.join("restore-artifact"), "invalid selector").unwrap();
     let run_lock = start::take_run_lock(&directory).unwrap().unwrap();
     let dir = agent_cgroup::open_run_directory(&directory).unwrap();
-    let made = agent_cgroup::make(dir.as_fd(), &f.config.agent, RUN, (0, 0)).unwrap();
+    let made =
+        agent_cgroup::make_beneath_own_cgroup(dir.as_fd(), &f.config.agent, RUN, (0, 0)).unwrap();
     let data = json!({"mode":mode,"verb":verb,"run":RUN,"report":report,
         "socket":f.config.coordination_socket(),"lock":directory.join("admin.lock"),
         "run_lock":directory.join("run.lock"),

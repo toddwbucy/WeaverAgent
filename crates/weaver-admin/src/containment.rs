@@ -32,6 +32,22 @@ pub const CONTAINMENT_BOUND: Duration = Duration::from_secs(30);
 /// How often a wait reads `cgroup.events`.
 const WAIT_SLICE: Duration = Duration::from_millis(10);
 
+/// **The one deadline poll** every wait here takes (6.1): `done` read at
+/// once and then every `slice` until it answers true or `deadline` passes,
+/// with one last read at the deadline. Answers whether it answered true.
+pub fn poll_until(deadline: Instant, slice: Duration, mut done: impl FnMut() -> bool) -> bool {
+    loop {
+        if done() {
+            return true;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        std::thread::sleep(slice.min(remaining));
+    }
+}
+
 /// The mount of the unified hierarchy.
 pub const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 
@@ -81,11 +97,11 @@ pub struct StartFacts {
     pub run_lock_held: bool,
     pub cgroup2: bool,
     pub delegated: bool,
-    /// The invoker's cgroup, the files delegated with it and every cgroup
+    /// The scope's cgroup, the files delegated with it and every cgroup
     /// above it root's (#166's guard): no account but root can move a
     /// process out of the agent's cgroup.
-    pub invoker_roots: bool,
-    /// At the deterministic path, the invoker's cgroup plus `weaver-<agent>/`.
+    pub scope_roots: bool,
+    /// At the deterministic path, the scope's cgroup plus `weaver-<agent>/`.
     pub at_path: Standing,
     /// What the record names, where one stands.
     pub recorded: RecordAtStart,
@@ -103,7 +119,7 @@ pub enum RecordAtStart {
     Same(Standing),
 }
 
-/// The start step's answer before it forks anything.
+/// The start step's answer before it forks any constituent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartAction {
     /// Make the agent's cgroup afresh (A0).
@@ -126,11 +142,11 @@ pub enum StartRefusal {
     RunLockHeld,
     /// `BoundaryUnverified`: no `cgroup2` mount.
     NoCgroup2,
-    /// `BoundaryUnverified`: the invoker's cgroup carries no delegate mark.
+    /// `BoundaryUnverified`: the scope's cgroup carries no delegate mark.
     NotDelegated,
-    /// `BoundaryUnverified`: the invoker's cgroup, a file delegated with it,
+    /// `BoundaryUnverified`: the scope's cgroup, a file delegated with it,
     /// or a cgroup above it is not root's (#166's guard).
-    InvokerNotRoots,
+    ScopeNotRoots,
     /// `BoundaryUnverified`: a cgroup standing that is not root's.
     NotRoots,
     /// `BoundaryUnverified`: a record that does not read, or a cgroup at the
@@ -154,8 +170,8 @@ pub fn start_judgment(facts: StartFacts) -> StartAction {
     if !facts.delegated {
         return StartAction::Refuse(StartRefusal::NotDelegated);
     }
-    if !facts.invoker_roots {
-        return StartAction::Refuse(StartRefusal::InvokerNotRoots);
+    if !facts.scope_roots {
+        return StartAction::Refuse(StartRefusal::ScopeNotRoots);
     }
     // A record naming a cgroup absent at its path is A0, already removed:
     // the record is stale, and is removed before the `mkdir` (the row for a
@@ -189,8 +205,8 @@ pub fn start_judgment(facts: StartFacts) -> StartAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MadeStep {
     /// The `mkdir` of the agent's own cgroup, `weaver-<agent>/`, failing
-    /// other than with `EEXIST` (the floor's second question: the invoker's
-    /// containment admits no child root makes), or what it made not root's.
+    /// other than with `EEXIST` (the floor's third question: the scope
+    /// admits no child root makes), or what it made not root's.
     CgroupMade(bool),
     /// The `mkdir` of `constituents/`, `worker/`, `run/` or `tools/`.
     LayoutMade(bool),
@@ -369,7 +385,7 @@ impl Cgroup {
     }
 
     /// Opens a cgroup by its path beneath the mount, the one open by path:
-    /// the invoker's own cgroup, or the record's.
+    /// the agent's scope, or the record's.
     pub fn open(relative: &str) -> std::io::Result<Self> {
         let path = PathBuf::from(CGROUP_ROOT).join(relative.trim_start_matches('/'));
         let dir = nix::fcntl::open(
@@ -382,6 +398,17 @@ impl Cgroup {
             dir,
             relative: normalized(relative),
         })
+    }
+
+    /// **Opens a cgroup unless nothing stands at its path**: `None` only
+    /// where the open answers `ENOENT`, any other failure its error, so no
+    /// caller reads a failed open as absent.
+    pub fn open_if_present(relative: &str) -> std::io::Result<Option<Self>> {
+        match Self::open(relative) {
+            Ok(cgroup) => Ok(Some(cgroup)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     /// Opens a child cgroup beneath this one's descriptor.
@@ -411,9 +438,10 @@ impl Cgroup {
             .child(name)
             .map_err(|error| MakeChildError::Mkdir(io_errno(error)))?;
         // **What was opened must be what root made** (the Planner's grade of
-        // #164): the invoker's delegated cgroup is its delegatee's, which can
-        // remove the fresh directory and make its own between the `mkdir`
-        // and the open. One not root's is never opened up or built on.
+        // #164): a delegated cgroup another account owns would let its
+        // delegatee remove the fresh directory and make its own between the
+        // `mkdir` and the open. One not root's is never opened up or built
+        // on.
         if !fstat(made.dir.as_fd()).is_ok_and(|stat| stat.st_uid == nix::unistd::geteuid().as_raw())
         {
             return Err(MakeChildError::NotRoots);
@@ -486,7 +514,8 @@ impl Cgroup {
     }
 
     /// `populated` from `cgroup.events`: `None` where the read fails, which
-    /// every waiter reads as not yet empty (6.1).
+    /// every waiter reads as not yet empty unless the cgroup is gone from its
+    /// path (6.1, [`emptied`](Self::emptied)).
     pub fn populated(&self) -> Option<bool> {
         let events = self.read_file("cgroup.events").ok()?;
         events
@@ -495,20 +524,40 @@ impl Cgroup {
             .map(|value| value.trim() != "0")
     }
 
-    /// **The wait**: `populated 0` within `bound`, a failed read being read as
-    /// not yet empty. Answers whether the cgroup emptied.
-    pub fn wait_empty(&self, bound: Duration) -> bool {
-        let deadline = Instant::now() + bound;
-        loop {
-            if self.populated() == Some(false) {
-                return true;
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return false;
-            }
-            std::thread::sleep(WAIT_SLICE.min(remaining));
+    /// **Gone from its path**: nothing stands at this cgroup's path, or a
+    /// directory with another device and inode does. The kernel removes
+    /// only a cgroup with no process and no child, so a cgroup gone from its
+    /// path is empty: PID1's collection of the agent's emptied scope removes
+    /// the agent's cgroup with it (6.1, the scope's end), which a run end
+    /// can meet after its kill. A path that does not open otherwise is not
+    /// gone.
+    pub fn gone(&self) -> bool {
+        match Cgroup::open_if_present(&self.relative) {
+            Ok(None) => true,
+            Ok(Some(there)) => match (there.identity(), self.identity()) {
+                (Ok(there), Ok(here)) => there != here,
+                _ => false,
+            },
+            Err(_) => false,
         }
+    }
+
+    /// **Emptied, for the run end** (6.1, the run end and the scope's end):
+    /// `populated 0`, or a failed read of `cgroup.events` on a cgroup
+    /// [`gone`](Self::gone) from its path. A failed read of a cgroup still at
+    /// its path is read as not yet empty.
+    pub fn emptied(&self) -> bool {
+        match self.populated() {
+            Some(populated) => !populated,
+            None => self.gone(),
+        }
+    }
+
+    /// **The wait** (6.1, the run end's): [`emptied`](Self::emptied) within
+    /// `bound`, so a failed read of a cgroup still at its path runs to the
+    /// bound. Answers whether the cgroup emptied.
+    pub fn wait_emptied(&self, bound: Duration) -> bool {
+        poll_until(Instant::now() + bound, WAIT_SLICE, || self.emptied())
     }
 
     /// The pids `cgroup.procs` lists for this cgroup alone.
@@ -573,21 +622,14 @@ impl Cgroup {
     }
 
     /// **The fallback step** (6.1, the run end's): passes repeated within
-    /// `bound` until the cgroup empties, so it is its own wait. Answers
-    /// whether it emptied, the run end's `Fallback { emptied }`.
+    /// `bound` until the cgroup has [`emptied`](Self::emptied), so it is its
+    /// own wait. Answers whether it emptied, the run end's
+    /// `Fallback { emptied }`.
     pub fn fallback_until_empty(&self, bound: Duration) -> bool {
-        let deadline = Instant::now() + bound;
-        loop {
+        poll_until(Instant::now() + bound, WAIT_SLICE, || {
             self.signal_pinned_pass();
-            if self.populated() == Some(false) {
-                return true;
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return false;
-            }
-            std::thread::sleep(WAIT_SLICE.min(remaining));
-        }
+            self.emptied()
+        })
     }
 }
 
@@ -624,15 +666,18 @@ fn signal_pinned(pid: i32, relative: &str) -> bool {
 }
 
 /// The unified hierarchy's path `/proc/<pid>/cgroup` names, `/` first.
-fn process_cgroup(pid: i32) -> Option<String> {
+pub(crate) fn process_cgroup(pid: i32) -> Option<String> {
     let text = std::fs::read_to_string(format!("/proc/{pid}/cgroup")).ok()?;
     text.lines()
         .find_map(|line| line.strip_prefix("0::"))
         .map(normalized)
 }
 
-/// The invoking process's own cgroup, `/proc/self/cgroup`'s unified line.
-pub fn own_cgroup() -> std::io::Result<String> {
+/// The invoking process's own cgroup, `/proc/self/cgroup`'s unified line:
+/// the instruments' parent for their scratch cgroups. The start step reads
+/// its own through [`crate::scope::confirm`].
+#[cfg(test)]
+pub(crate) fn own_cgroup() -> std::io::Result<String> {
     let text = std::fs::read_to_string("/proc/self/cgroup")?;
     text.lines()
         .find_map(|line| line.strip_prefix("0::"))
@@ -667,13 +712,13 @@ const DELEGATION_FILES: [&str; 3] = ["cgroup.procs", "cgroup.threads", "cgroup.s
 /// hierarchy systemd makes.
 const ANCESTOR_LIMIT: usize = 64;
 
-/// **The invoker's ownership** (6.1, the floor; #166's guard): the
-/// invoker's directory and every file systemd delegates with it
+/// **The scope's ownership** (6.1, the floor; #166's guard): the
+/// scope's directory and every file systemd delegates with it
 /// (`cgroup.procs`, `cgroup.threads`, `cgroup.subtree_control`) owned by
 /// `uid`, and every cgroup above it up to the mount root, its directory and
 /// its `cgroup.procs`, owned by root or by `uid`: a migration needs write on
 /// the common ancestor's `cgroup.procs`, which can be any cgroup from the
-/// invoker up to the mount root, and a delegatee owning one could move the
+/// scope up to the mount root, and a delegatee owning one could move the
 /// agent's processes beneath it. Under the user scope the levels above
 /// `user@<uid>.service` are root's and the ones below the suite's. Read by `fstat` of the descriptor,
 /// `fstatat` beneath it and `openat` of `..`, never by path. Root in
@@ -692,14 +737,14 @@ fn delegated_files_owned(cgroup: BorrowedFd<'_>, uid: u32) -> bool {
     })
 }
 
-/// Whether every cgroup above the invoker admits `uid`, by
+/// Whether every cgroup above the scope admits `uid`, by
 /// [`ancestor_owners`] and [`ancestors_admit`]. A walk that fails refuses.
 fn ancestors_owned(start: BorrowedFd<'_>, uid: u32) -> bool {
     ancestor_owners(start).is_some_and(|owners| ancestors_admit(&owners, uid))
 }
 
 /// Each ancestor's directory and `cgroup.procs` owners, in that order, from
-/// the invoker's parent up to the mount root, read by `openat` of `..`.
+/// the scope's parent up to the mount root, read by `openat` of `..`.
 /// `None` where the walk cannot read an ancestor, reaches a directory that
 /// is its own parent, or passes [`ANCESTOR_LIMIT`] without meeting the
 /// mount root.
@@ -893,17 +938,17 @@ pub fn remove_record(run_directory: BorrowedFd<'_>) -> nix::Result<()> {
 
 /// **What a later verb finds at the record's path**, for `record_judgment`.
 pub fn recorded_at(record: &Record) -> RecordedAt {
-    match Cgroup::open(&record.path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => RecordedAt::Absent,
+    match Cgroup::open_if_present(&record.path) {
+        Ok(None) => RecordedAt::Absent,
         Err(_) => RecordedAt::Unreadable,
         // The opened directory must be on the cgroup2 mount (6.1, the record).
-        Ok(cgroup)
+        Ok(Some(cgroup))
             if !nix::sys::statfs::fstatfs(cgroup.fd())
                 .is_ok_and(|fs| fs.filesystem_type() == nix::sys::statfs::CGROUP2_SUPER_MAGIC) =>
         {
             RecordedAt::Unreadable
         }
-        Ok(cgroup) => match cgroup.identity() {
+        Ok(Some(cgroup)) => match cgroup.identity() {
             Ok(identity) if identity == (record.dev, record.ino) => RecordedAt::Same,
             Ok(_) => RecordedAt::Other,
             Err(_) => RecordedAt::Unreadable,

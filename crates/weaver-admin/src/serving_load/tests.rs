@@ -432,6 +432,9 @@ fn root_case(case: &str) {
     }
     let _cleanup = Cleanup(&f.config);
     crate::TEST_WORKER_UID.with(|uid| uid.set(Some(65534)));
+    // The root instruments' seam (Spec 6.1): the agent's cgroup beneath the
+    // root scope this instrument runs in, never a scope of the system's PID1.
+    crate::TEST_BENEATH_OWN_CGROUP.with(|seam| seam.set(true));
     let image_path = f
         .config
         .territory
@@ -640,6 +643,7 @@ fn root_case(case: &str) {
     );
     assert!(BEFORE_READY_MARKER.with_borrow_mut(Option::take).is_none());
     crate::TEST_WORKER_UID.with(|uid| uid.set(None));
+    crate::TEST_BENEATH_OWN_CGROUP.with(|seam| seam.set(false));
 }
 
 #[test]

@@ -263,14 +263,11 @@ elif name == 'sudo':
     elif op == 'visudo': sys.exit(1 if os.environ.get('VISUDO_FAIL') else 0)
     elif op.startswith('WEAVER_ADMIN_CONFIG=') and os.environ.get('FIXTURE_ADMIN'):
         # **Admin as a test stands it in** (#99 area 2 review, N5): the
-        # verb and the agent handed to the script FIXTURE_ADMIN names. **A
-        # load comes in a delegated scope** (weaver-admin-Spec 6.1), whose
-        # options are stripped, and a load without one fails the fixture.
-        scope = ['systemd-run', '--scope', '-q', '-p', 'Delegate=yes', '--']
-        scoped = rest[:len(scope)] == scope
-        if scoped: rest = rest[len(scope):]
-        assert rest[0].endswith('/weaver-admin'), rest
-        assert scoped or rest[1] != 'load', ('a load outside a delegated scope', rest)
+        # verb and the agent handed to the script FIXTURE_ADMIN names. **Every
+        # verb comes bare, a load included** (weaver-admin-Spec 6.1): admin's
+        # start step asks PID1 for the agent's own scope, so a wrapper in front
+        # of admin fails the fixture.
+        assert rest[0].endswith('/weaver-admin'), ('admin wrapped', rest)
         sys.exit(subprocess.run([os.environ['FIXTURE_ADMIN'], *rest[1:]]).returncode)
     elif op == 'rm':
         target = pathlib.Path(mapped(rest[-1]))
@@ -1234,13 +1231,12 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
     def verify_fixture(self):
         """An admitted agent whose admin is a stub: `load` starts a real
         process standing in for the run's constituents, lists it in the agent's
-        cgroup beneath the invoker's under a stand-in cgroup mount, and writes
+        cgroup beneath the agent's scope under a stand-in cgroup mount, and writes
         a load event, `show` names it, `unload` ends it and removes the cgroup
         unless KEEP_ALIVE is set (or, for the cgroup, KEEP_CGROUP)."""
         self.env.update(FIXTURE_UID="0", FIXTURE_ACCOUNT_UID=str(os.getuid()))
         cgroup_fs = self.root / "cgroup-fs"
-        own = Path("/proc/self/cgroup").read_text().split("0::", 1)[1].strip()
-        agent_cgroup = cgroup_fs / own.lstrip("/") / "weaver-m1"
+        agent_cgroup = cgroup_fs / "weaver.slice" / "weaver-m1.scope" / "weaver-m1"
 
         root = self.config / "m1"
         root.mkdir()
@@ -1337,19 +1333,20 @@ esac
 
     def test_verify_load_checks_each_constituent_and_that_none_is_left(self):
         # The operator contract section 2: every constituent `show` names runs
-        # as one of the agent's accounts and sits in the invoker's cgroup, a
-        # relay among them for a file sink, and after the unload none is left.
+        # as one of the agent's accounts and sits in the agent's cgroup beneath
+        # its own scope, a relay among them for a file sink, and after the
+        # unload none is left.
         state = self.verify_fixture()
         try:
             result = self.run_script("verify-load.sh", "m1")
         finally:
             self.end_stand_in(state)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        self.assertIn("in constituents beneath the invoker's cgroup", result.stdout)
+        self.assertIn("in constituents beneath the agent's scope", result.stdout)
         self.assertIn("every constituent gone, the agent's cgroup gone, show unloaded", result.stdout)
 
     def test_verify_load_refuses_a_constituent_outside_the_agents_cgroup(self):
-        """**A constituent not in the agent's cgroup beneath the invoker's,
+        """**A constituent not in the agent's cgroup beneath its scope,
         and an agent's cgroup outliving the unload, each refuse**
         (weaver-admin-Spec 6.1): verify-load reads each constituent's leaf
         and the cgroup's absence after the unload. Perturbations: drop the
@@ -1396,7 +1393,7 @@ esac
                     self.end_stand_in(state)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 if passes:
-                    self.assertIn("weaver-m1  in worker/run beneath the invoker's cgroup", result.stdout)
+                    self.assertIn("weaver-m1  in worker/run beneath the agent's scope", result.stdout)
                     self.assertIn("no relay stands among the constituents", result.stderr)
                 else:
                     self.assertIn("is not in ", result.stderr)
@@ -4474,8 +4471,9 @@ class LifecycleStep8bTests(unittest.TestCase):
     With the entry removed, the same agent loads, and that control pins the
     refusal to the entry without reading admin's prose. Admin's cause is
     recorded as measured, stderr being outside its interface (Codex on #171,
-    round 2). The step runs alone, with sudo, systemd-run, setfacl and admin as
-    stand-ins, admin answering its first load and its second in turn.
+    round 2). The step runs alone, with sudo, setfacl and admin as stand-ins,
+    admin answering its first load and its second in turn, and calls admin
+    bare (weaver-admin-Spec 6.1).
     Perturbations: answer anything else with the entry, and the step fails with
     the entry removed and then the agent force-unloaded, its answer checked;
     drop the control load, and a refusal that was not the entry's passes."""
@@ -4490,7 +4488,6 @@ class LifecycleStep8bTests(unittest.TestCase):
         log = shlex.quote(str(self.calls))
         for tool, body in (
                 ("sudo", '#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec env "$@"\n'),
-                ("systemd-run", '#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done\nshift\nexec "$@"\n'),
                 ("setfacl", f'#!/bin/sh\necho "setfacl $1" >> {log}\n')):
             stand_in = self.bin_dir / tool
             stand_in.write_text(body)
@@ -5976,8 +5973,9 @@ class AdminAnswerTests(unittest.TestCase):
         sudo = self.bin_dir / "sudo"
         sudo.write_text('#!/bin/sh\n[ "$1" = "-n" ] && shift\nexec env "$@"\n')
         sudo.chmod(0o755)
-        # A delegated scope (weaver-admin-Spec 6.1), stood in: its options
-        # dropped through `--`, and the verb it carried recorded.
+        # A scope wrapper (weaver-admin-Spec 6.1), stood in so any call is
+        # seen: its options dropped through `--`, and the verb it carried
+        # recorded.
         self.scoped = root / "scoped"
         scope = self.bin_dir / "systemd-run"
         scope.write_text('#!/bin/sh\nwhile [ "$1" != "--" ]; do shift; done\nshift\n'
@@ -6002,8 +6000,10 @@ class AdminAnswerTests(unittest.TestCase):
                              '{"kind":"refused","reason":"boundary_unverified"}\n')
             self.assertIn("admin: boundary unverified: no weaver-state binary beside the worker's",
                           result.stderr)
-        # **Only the load runs in a delegated scope** (weaver-admin-Spec 6.1).
-        self.assertEqual(self.scoped.read_text(), "load\n")
+        # **No verb runs in a scope of its own, a load included**
+        # (weaver-admin-Spec 6.1): admin's start step asks PID1 for the
+        # agent's.
+        self.assertFalse(self.scoped.exists(), "a verb was wrapped in a scope")
 
     def test_both_call_sites_reach_the_helper(self):
         self.assertIn('validate() {\n  admin_answer validate "$1"\n}', self.script)

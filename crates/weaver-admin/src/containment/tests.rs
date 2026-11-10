@@ -19,7 +19,7 @@ fn facts(at_path: Standing, recorded: RecordAtStart) -> StartFacts {
         run_lock_held: false,
         cgroup2: true,
         delegated: true,
-        invoker_roots: true,
+        scope_roots: true,
         at_path,
         recorded,
     }
@@ -52,12 +52,12 @@ fn the_start_step_judges_by_its_rows_in_order() {
         start_judgment(undelegated),
         StartAction::Refuse(StartRefusal::NotDelegated)
     );
-    // #166's guard: an invoker not root's, after the mark, before any mkdir.
+    // #166's guard: a scope not root's, after the mark, before any mkdir.
     let mut not_roots = facts(Standing::Empty, RecordAtStart::None);
-    not_roots.invoker_roots = false;
+    not_roots.scope_roots = false;
     assert_eq!(
         start_judgment(not_roots),
-        StartAction::Refuse(StartRefusal::InvokerNotRoots)
+        StartAction::Refuse(StartRefusal::ScopeNotRoots)
     );
     // A0: made afresh.
     assert_eq!(
@@ -124,17 +124,17 @@ fn the_start_step_judges_by_its_rows_in_order() {
     );
 }
 
-/// **The invoker's ownership reads every delegated file** (6.1, the floor;
+/// **The scope's ownership reads every delegated file** (6.1, the floor;
 /// #166's guard): a directory of the owner is admitted only where its
 /// `cgroup.procs`, `cgroup.threads` and `cgroup.subtree_control` are the
-/// owner's too. A plain directory stands in for the invoker's, reached
+/// owner's too. A plain directory stands in for the scope's, reached
 /// beneath the mount by `..`, since no cgroup's files can be given another
 /// owner without root; its ancestors are not a cgroup's, so the files are
 /// judged here with the walk's own rule tested apart. Perturbation: read
 /// the directory's owner alone, or `cgroup.procs` alone, and it is
 /// admitted.
 #[test]
-fn the_invokers_ownership_reads_every_delegated_file() {
+fn the_scopes_ownership_reads_every_delegated_file() {
     let base = std::env::temp_dir().join(format!("weaver-admin-owned-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
@@ -376,7 +376,7 @@ impl ScratchCgroup {
 impl Drop for ScratchCgroup {
     fn drop(&mut self) {
         let _ = self.cgroup.kill();
-        let _ = self.cgroup.wait_empty(Duration::from_secs(5));
+        let _ = self.cgroup.wait_emptied(Duration::from_secs(5));
         let _ = remove_tree(&self.parent, &self.name);
     }
 }
@@ -408,7 +408,7 @@ fn remove_tree(parent: &Cgroup, name: &str) -> nix::Result<()> {
 }
 
 /// **Sets systemd's mark on a scratch cgroup the suite owns**, standing the
-/// delegated invoker the floor asks for: the user manager's scope carries no
+/// delegated scope the floor asks for: the user manager's scope carries no
 /// mark (measured on 2026-10-14), and cgroupfs lets a cgroup's owner set a
 /// `user.*` extended attribute.
 pub(crate) fn mark_delegated(cgroup: &Cgroup) {
@@ -426,7 +426,7 @@ pub(crate) fn mark_delegated(cgroup: &Cgroup) {
     assert_eq!(
         set,
         0,
-        "user.delegate sets on the scratch invoker: {}",
+        "user.delegate sets on the scratch scope: {}",
         std::io::Error::last_os_error()
     );
 }
@@ -456,7 +456,7 @@ pub(crate) fn escaper_in(cgroup: &Cgroup) -> std::process::Child {
     child
 }
 
-/// **The walk to the mount reads every cgroup above the invoker** (6.1, the
+/// **The walk to the mount reads every cgroup above the scope** (6.1, the
 /// floor; #166's guard), on this host's hierarchy: from a scratch cgroup
 /// under the user scope the levels up to `user@<uid>.service` are the
 /// suite's and the ones above it root's, so the suite's uid is admitted and
@@ -467,7 +467,7 @@ pub(crate) fn escaper_in(cgroup: &Cgroup) -> std::process::Child {
 /// refuse short of the mount root, and the suite's uid is refused.
 #[test]
 #[ignore = "needs a delegated cgroup scope"]
-fn containment_the_walk_reads_every_cgroup_above_the_invoker() {
+fn containment_the_walk_reads_every_cgroup_above_the_scope() {
     let scratch = ScratchCgroup::new("ancestors");
     let suite = nix::unistd::getuid().as_raw();
     assert!(
@@ -564,7 +564,7 @@ fn containment_the_kill_ends_a_double_forked_new_session() {
     );
     scratch.cgroup.kill().unwrap();
     assert!(
-        scratch.cgroup.wait_empty(CONTAINMENT_BOUND),
+        scratch.cgroup.wait_emptied(CONTAINMENT_BOUND),
         "emptied within the bound"
     );
     let _ = child.wait();
@@ -614,12 +614,19 @@ fn containment_a_pid_outside_the_cgroup_is_not_signalled() {
     let _ = outside.wait();
 }
 
-/// **A failed read of `cgroup.events` is read as not yet empty**, so the
-/// wait runs to its bound. Perturbation: read a failed read as empty.
+/// **A cgroup gone from its path has emptied, for the run end** (6.1, the
+/// scope's end): PID1's collection of the agent's emptied scope removes the
+/// agent's cgroup with it, and the kernel removes only an empty cgroup, so
+/// the run end's wait and its fallback end at once over a removed cgroup,
+/// another directory made at its path included, while a failed read of a
+/// cgroup still at its path runs to the bound. Perturbation: drop the
+/// path's reading from `emptied`, and the removed cgroup's waits run to
+/// their bound; read every failed read as empty, and the closed cgroup's
+/// wait ends at once.
 #[test]
 #[ignore = "needs a delegated cgroup scope"]
-fn containment_a_failed_events_read_runs_the_wait_to_its_bound() {
-    let scratch = ScratchCgroup::new("events");
+fn containment_a_cgroup_gone_from_its_path_has_emptied_for_the_run_end() {
+    let scratch = ScratchCgroup::new("gone");
     let leaf = scratch.cgroup.make_child("leaf").unwrap();
     unlinkat(scratch.cgroup.fd(), "leaf", UnlinkatFlags::RemoveDir).unwrap();
     assert_eq!(
@@ -627,9 +634,32 @@ fn containment_a_failed_events_read_runs_the_wait_to_its_bound() {
         None,
         "the removed cgroup's events do not read"
     );
+    assert!(leaf.gone(), "nothing at its path");
     let started = Instant::now();
-    assert!(!leaf.wait_empty(Duration::from_millis(200)));
-    assert!(started.elapsed() >= Duration::from_millis(200));
+    assert!(leaf.wait_emptied(Duration::from_secs(5)));
+    assert!(leaf.fallback_until_empty(Duration::from_secs(5)));
+    scratch.cgroup.make_child("leaf").unwrap();
+    assert!(leaf.gone(), "another directory at its path");
+    assert!(leaf.wait_emptied(Duration::from_secs(5)));
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "the waits ended at once"
+    );
+    let closed = scratch.cgroup.make_child("closed").unwrap();
+    let events = PathBuf::from(CGROUP_ROOT)
+        .join(closed.relative().trim_start_matches('/'))
+        .join("cgroup.events");
+    std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let read = closed.populated();
+    let gone = closed.gone();
+    let waited = closed.wait_emptied(Duration::from_millis(200));
+    std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o444)).unwrap();
+    assert_eq!(read, None, "the closed cgroup's events do not read");
+    assert!(!gone, "a cgroup at its path is not gone");
+    assert!(
+        !waited,
+        "a failed read of a cgroup at its path is not empty"
+    );
 }
 
 /// **The removal goes deepest first and reads `ENOENT` as removed**: a

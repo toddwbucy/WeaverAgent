@@ -73,11 +73,11 @@
 # user exactly this agent's fixed `weaver-admin <verb> <name>` command lines,
 # as root, without a password, with no caller-chosen argument, no SETENV and
 # no env_keep, and turns sudo's `pam_session` off for that user so a session
-# never moves the invocation into another containment. That matters only to
-# `load`, which admin refuses from the connector's own unit until #166's code
-# act lands (today's binary requires the invoker's cgroup to be root's), and
-# it stays so the rule need not change when that act places a connector load
-# in the agent's own scope (weaver-admin-Spec 6.1). The
+# never moves the invocation into another containment. Since #166 admin's
+# start step moves a load into the agent's own scope (weaver-admin-Spec 6.1),
+# leaving any session's containment, so a session would no longer break the
+# agent's lifetime. It stays off because none is needed and the granted rule
+# does not change (the operator contract section 2). The
 # observer role grants `show`, and the operator role adds
 # `validate`, `load`, `unload`, `stop`, `save-point`, `restore` and
 # `force-unload`, the eight lines `VERBS` below names. The rule is checked with `visudo
@@ -833,5 +833,5 @@ if [ "$ADMIN_BASE" = /etc/weaver/admin ]; then
   fi
 fi
 printf '   validate it before loading, with the validate verb of %q for %s as root,\n' "$ADMIN_BINARY" "$NAME"
-printf '   then prove its load with deploy/verify-load.sh as root in a delegated scope (deploy/HowToDeployANewAgent.md section 4),\n'
+printf '   then prove its load with deploy/verify-load.sh as root (deploy/HowToDeployANewAgent.md section 4),\n'
 printf '   then seed its prompt as %s, with the agent loaded: deploy/turn.py %s --system reads %s\n' "$OPERATOR" "$NAME" "$PROMPT"

@@ -2456,8 +2456,9 @@ rulings of 2026-11-07 and 2026-11-09 on #166).
   account, by the floor below, which does not change.
 - **One path:** every load takes the step, from an operator's shell or from admin-con's
   unit alike, so the deterministic path is the same for every load of the agent. A load
-  the operator wraps in a scope of their own moves out of it, and that scope empties and
-  ends.
+  the operator wraps in a scope of another name moves out of it, and that scope empties
+  and ends. One wrapped in a scope of the agent's own name stands populated at the read
+  before the request, and the load refuses `AgentRunning` (the scope already standing).
 - **One scope per agent, in a slice of the agents' own** (the operator's ruling of
   2026-11-09): each agent is one process tree under its own uid, and several agents
   share a host, each in its own scope beneath `weaver.slice`. The scope's name is the
@@ -2470,14 +2471,22 @@ rulings of 2026-11-07 and 2026-11-09 on #166).
   the record. A scope standing empty is ending: the start step waits within the scope
   bound for PID1 to collect it, and refuses `BoundaryUnverified`, naming it, where it
   still stands at the bound, whether PID1 still holds its unit or left its directory
-  behind, which then refuses every load until root removes it (#520).
+  behind, which then refuses every load until root removes it (#520). Where the read's
+  open found a scope and nothing stands at its path by its `cgroup.events` read, PID1
+  having collected it, the scope is absent, and the step goes on to the request: a load
+  right after an unload meets that window. Where its path does not read absent by then,
+  the opened scope or another directory standing there or the path not opening, and no
+  populated reading comes, it is neither, and the load refuses `BoundaryUnverified`,
+  naming the read, sends no request and kills nothing.
 - **The request refused:** where the move does not read within the scope bound (PID1
   unreachable, the request refused, its job failed), the load refuses
   `BoundaryUnverified`, naming what the request answered or that no move followed, and
   makes nothing.
 - **What it keeps:** the agent lives until `unload`, `force-unload`, root stopping its
   scope, or its own processes ending. The invoker's end, a connector's restart
-  included, ends neither the agent nor a start step already in its scope. Root stopping
+  included, ends neither the agent nor a start step already in its scope. Sudo relays
+  `SIGTERM` to admin when the invoker's unit stops, and admin ignores it, as it ignores
+  every terminating signal from its first instruction (section 2). Root stopping
   the scope ends every process of the agent, an unclean stop whose next load resets to
   the latest save point.
 - **The scope's end is its emptiness:** no verb removes a scope. A start step that
@@ -2835,6 +2844,8 @@ scope.
 | admin's start step, the scope's path absent | P0 | P0 | goes on to the request |
 | admin's start step, the scope standing and populated | P3 | P3 | refuses `AgentRunning`, naming the processes, sends no request and kills nothing (I8). It is reached only with the run lock free (section 3), so the agent's cgroup is A3 |
 | admin's start step, the scope standing and empty | P4 | P0, then the request | waits within the scope bound for PID1 to collect it. Still standing at the bound, it refuses `BoundaryUnverified`, naming it, and a directory PID1 left behind stands until root removes it (#520) |
+| admin's start step, nothing standing at the scope's path by its `cgroup.events` read | P4 | P0 | reads it absent, PID1 having collected it since the open, and goes on to the request |
+| admin's start step, no populated reading and the scope's path not reading absent by then: the opened scope or another directory there, or the path not opening | not known (P1 to P4, or a path that does not open) | as found | refuses `BoundaryUnverified`, naming the read, sends no request and kills nothing |
 | admin's start step, the request | P0 | P1 | asks PID1 for the scope, holding its own pid |
 | PID1, the start job | P1 | P2 | makes the scope's cgroup in `weaver.slice`, marks it delegated and moves the start step into it |
 | admin's start step, its own reading naming the scope within the bound | P2 | P2 | the floor and the agent's cgroup, unchanged (A0, then A1) |
@@ -2858,8 +2869,8 @@ scope.
 | D2 | **No process of the agent runs outside `weaver-<agent>/`**, so C4 does not change. The start step forks nothing of the agent before the agent's cgroup exists. A helper that carries the request, where the election of section 11 elects one, is admin's own and root's, forked before the move and so left in the invoker's containment, and the start step reaps it before it reads for the move. The request carries the scope bound as its own call timeout, so one deadline covers the request, the reap and the confirm (the scope bound, and #522 for a helper that hangs outside its call). | the order within a load (section 3), and the scope bound |
 | D3 | **On every path, the agent's cgroup and every cgroup above it to the mount's root are root's**, and the floor checks it. | PID1's scope, and #166's guard |
 | D4 | **The scope's end is its emptiness.** No verb removes a scope, and no refused or killed start step leaves one standing past its own exit. | PID1's collection (`CollectMode=inactive-or-failed`) |
-| D5 | **One path.** A load from an operator's shell and one from admin-con's unit take the same step to the same deterministic path, and a scope the operator wraps a load in changes nothing. | the scope step |
-| D6 | **The agent ends only by `unload`, `force-unload`, root stopping its scope, or its own processes ending.** The invoker's end ends neither the agent nor a start step already moved. | the scope, outside every invoker's containment |
+| D5 | **One path.** A load from an operator's shell and one from admin-con's unit take the same step to the same deterministic path, and a scope of another name the operator wraps a load in changes nothing. | the scope step |
+| D6 | **The agent ends only by `unload`, `force-unload`, root stopping its scope, or its own processes ending.** The invoker's end ends neither the agent nor a start step already moved. Sudo relays `SIGTERM` to its child when the invoker's unit stops, and the start step ignores it from its first instruction (section 2). | the scope, outside every invoker's containment, and section 2's ignored signals |
 | D7 | **At most one scope per agent.** The name is the agent's, PID1 refuses a second unit of that name, and the agent's locks order the start steps. | PID1, and section 3's locks |
 
 **The state table.** One per agent, for the agent's cgroup (`A`) and its `tools/` leaf
@@ -2997,11 +3008,27 @@ The instruments:
   confirm is dropped.
 - **The standing scope:** a populated scope at the start step refuses `AgentRunning`,
   names the processes and kills nothing. Watched to fail when the read before the
-  request is dropped and the request's refusal answers instead.
+  request is dropped and the request's refusal answers instead. A scope still standing
+  whose `cgroup.events` gives no populated reading refuses `BoundaryUnverified`, naming
+  the read, with no request. Watched to refuse `AgentRunning` when an unread scope is
+  read as populated. A scope removed between its open and its read reads absent, and one
+  replaced by another directory reads unread, as does one whose path does not open after
+  its read. Watched to read unread when a failed read is unread whatever stands, absent
+  when a replaced scope is read as gone, and absent when a path that does not open is
+  read as absent.
 - **The scope's end at the run end:** the run end's wait and its fallback over a cgroup
   removed from its path, or with another directory there, end at once, and over a
   cgroup at its path whose `cgroup.events` does not read run to the bound. Watched to
   fail when the path's reading is dropped, and when every failed read reads as empty.
+- **The root instruments' making:** an instrument that runs as root, in a root-owned
+  delegated scope the operator stands it in, makes the agent's cgroup beneath the cgroup
+  it runs in and never asks the system's PID1 for a scope. The serving-leave instruments
+  call that making directly. The serving-load composition instruments drive the load and
+  set the seam beside `make_agent_cgroup` in admin's `main.rs`, which routes the start
+  step's making there. In the suite, production's request refuses, so a test that
+  reaches the scope step without the seam is refused and never answered by PID1. Watched
+  to refuse at production's request when the seam is dropped, and to fail when the
+  suite's request answers.
 
 ## 7. The coordination channel
 

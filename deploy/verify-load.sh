@@ -21,13 +21,14 @@
 # **The constituents are checked as an invoker must check them** (the operator
 # contract section 2, toddwbucy/WeaverWeb#15): every pid `show` names after
 # the load runs as the agent's, its member's or its relay's account and sits
-# in the agent's cgroup beneath this script's own, the containment the load
-# was invoked from (weaver-admin-Spec 6.1): the member and the relay in its
+# in the agent's cgroup beneath the agent's own scope,
+# `/weaver.slice/weaver-<agent>.scope/weaver-<agent>/`, which admin's start
+# step asks PID1 for (weaver-admin-Spec 6.1): the member and the relay in its
 # `constituents/`, the worker in its `worker/run/`. A relay stands among them
 # for a file sink, and after the unload none of them is left, the agent's
 # cgroup is gone, and `show` reads unloaded with no constituent. The script
-# runs where a load may run, in a delegated containment:
-# `sudo systemd-run --scope -p Delegate=yes "$PWD"/deploy/verify-load.sh <agent>`.
+# runs from root's shell, in no scope of its own:
+# `sudo "$PWD"/deploy/verify-load.sh <agent>`.
 set -euo pipefail
 
 say()  { printf '\n== %s\n' "$*"; }
@@ -297,9 +298,8 @@ start_time() {
   [ "$1" != Z ] || return 1
   printf '%s' "${20}"
 }
-# **The agent's cgroup, beneath this script's own** (6.1).
-OWN_CGROUP=$(sed -n 's/^0:://p' /proc/self/cgroup)
-AGENT_CGROUP="/sys/fs/cgroup${OWN_CGROUP%/}/weaver-$AGENT"
+# **The agent's cgroup, beneath the agent's own scope** (6.1).
+AGENT_CGROUP="/sys/fs/cgroup/weaver.slice/weaver-$AGENT.scope/weaver-$AGENT"
 # in_leaf PID LEAF: the pid is listed in the leaf's cgroup.procs.
 in_leaf() { grep -qx -- "$1" "$AGENT_CGROUP/$2/cgroup.procs" 2>/dev/null; }
 declare -A ACCOUNT=()
@@ -317,8 +317,8 @@ for pid in "${PIDS[@]}"; do
   [ "$who" = "weaver-$AGENT-relay" ] && RELAY_SEEN=1
   if [ "$who" = "weaver-$AGENT" ]; then leaf=worker/run; else leaf=constituents; fi
   in_leaf "$pid" "$leaf" \
-    || { FAULT="constituent $pid ($who) is not in $AGENT_CGROUP/$leaf, the agent's cgroup beneath the invoker's"; break; }
-  plan "constituent $pid  $(cat "/proc/$pid/comm" 2>/dev/null)  $who  in $leaf beneath the invoker's cgroup"
+    || { FAULT="constituent $pid ($who) is not in $AGENT_CGROUP/$leaf, the agent's cgroup beneath its scope"; break; }
+  plan "constituent $pid  $(cat "/proc/$pid/comm" 2>/dev/null)  $who  in $leaf beneath the agent's scope"
   RECORDED+=("$pid:$st")
 done
 if [ -z "$FAULT" ] && [ "$SINK_KIND" = file ] && [ "$RELAY_SEEN" -eq 0 ]; then

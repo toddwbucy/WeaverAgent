@@ -46,9 +46,10 @@ mod log;
 // Complete replacement operations, inactive until FOUNDATION-TRANSITION cutover.
 #[allow(dead_code)]
 mod offline_state;
-// Paired replacement Enter producer, dormant until the coupled cutover.
 mod random;
 mod save_points;
+mod scope;
+// Paired replacement Enter producer, dormant until the coupled cutover.
 #[allow(dead_code)]
 mod serving_enter;
 // Dormant root lifecycle composition; selected only with the qualified worker.
@@ -1427,9 +1428,10 @@ fn run_load(
         .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
     // **The run is minted before the agent's cgroup is made**, per Spec
     // section 7 and 6.1: the record names the run its load made it for, and
-    // is written before the first fork. The reference is this crate's, and a
-    // load that cannot read the randomness it rests on refuses rather than
-    // carrying a reference that looks like the others and is not guaranteed.
+    // is written before the first constituent fork. The reference is this
+    // crate's, and a load that cannot read the randomness it rests on refuses
+    // rather than carrying a reference that looks like the others and is not
+    // guaranteed.
     let run_reference =
         channel::mint_run_reference(&agent.0).ok_or(LifecycleRefusal::BoundaryUnverified)?;
     // **The agent's cgroup is made holding both locks, before any
@@ -2085,7 +2087,7 @@ fn make_agent_cgroup(
     use std::os::fd::AsFd;
     let run_directory = agent_cgroup::open_run_directory(&config.run_directory())
         .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
-    agent_cgroup::make(
+    start_agent_cgroup(
         run_directory.as_fd(),
         &agent.0,
         run,
@@ -2107,6 +2109,32 @@ fn make_agent_cgroup(
             LifecycleRefusal::BoundaryUnverified
         }
     })
+}
+
+// #118: a test-only hook, kept beside the production code it observes: the
+// root instruments' seam (Spec 6.1, the root instruments' making). A root
+// instrument that drives the load sets it, and the start step's making then
+// stands the agent's cgroup beneath the cgroup the instrument runs in, so no
+// instrument asks the system's PID1 for a scope.
+#[cfg(test)]
+thread_local! {
+    static TEST_BENEATH_OWN_CGROUP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// **The start step's making itself** (Spec 6.1): the scope step and then
+/// the agent's cgroup beneath the scope, by [`agent_cgroup::make`], or,
+/// under the root instruments' seam, beneath the instrument's own cgroup.
+fn start_agent_cgroup(
+    run_directory: std::os::fd::BorrowedFd<'_>,
+    agent: &str,
+    run: &str,
+    owner: (u32, u32),
+) -> Result<agent_cgroup::Made, agent_cgroup::StartRefused> {
+    #[cfg(test)]
+    if TEST_BENEATH_OWN_CGROUP.with(std::cell::Cell::get) {
+        return agent_cgroup::make_beneath_own_cgroup(run_directory, agent, run, owner);
+    }
+    agent_cgroup::make(run_directory, agent, run, owner)
 }
 
 /// **The run end of the agent's cgroup** (Spec 6.1, admin's run end), under
