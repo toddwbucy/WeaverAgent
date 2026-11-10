@@ -176,6 +176,7 @@ fn publish_seed(root: &Path, config: &ServiceConfig, payload: &EnterPayload) -> 
             drain_bound: payload.drain_bound,
             wind_down_bound: payload.wind_down_bound,
         }),
+        turn_context: None,
     };
     let bound = crate::save_points::serving::declaration::render_fixture(&agent, state_management);
     let draft_text = bound

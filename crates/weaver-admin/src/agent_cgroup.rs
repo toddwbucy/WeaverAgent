@@ -422,7 +422,8 @@ pub enum Ended {
     /// No record stands: nothing to end.
     NoRecord,
     /// The recorded path was absent, A0: the stale record removed, or, where
-    /// its removal failed, left for the next verb.
+    /// its removal failed, left for the next `load`, `unload` or
+    /// `force-unload`, `show` reading it as A0 and leaving it.
     Stale { record_removed: bool },
     /// The record names another load's run: that cgroup is left alone.
     NotOwned,

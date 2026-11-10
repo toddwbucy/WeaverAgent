@@ -94,6 +94,29 @@ pub struct AgentConfig {
     /// parses here to the harness on the enter.
     #[serde(default)]
     pub lifecycle: Option<Lifecycle>,
+    /// **Whether a turn sees the turns before it**, per `weaver-types-Spec`
+    /// section 2 (#423, the operator's word of 2026-11-10): absent means
+    /// `continuous`, the ruled meaning of the field's absence and what every
+    /// load did before the election. Admin resolves the absence at the enter,
+    /// so the worker never re-derives it.
+    #[serde(default)]
+    pub turn_context: Option<TurnContext>,
+}
+
+/// **The turn-context election**, per `weaver-types-Spec` section 2 (#423):
+/// `continuous` keeps the session's context accumulating turn by turn, which
+/// is what every load did before the election, and `independent` returns the
+/// decode context to the identity prefix before every turn, so each turn is
+/// answered from the prefix the open seated and its own request alone.
+/// Closed at two, and a value outside them refuses at the parse naming
+/// `turn-context`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TurnContext {
+    /// The absence's meaning.
+    #[default]
+    Continuous,
+    Independent,
 }
 
 /// The `[lifecycle]` table: the seconds the drain (the quiesce's wait and the
@@ -525,6 +548,7 @@ pub fn parse_boundary(source: &str) -> Result<crate::BoundaryFile, ConfigError> 
 pub fn parse(source: &str) -> Result<AgentConfig, ConfigError> {
     check_provided_engine(source)?;
     check_lifecycle_bounds(source)?;
+    check_turn_context(source)?;
     let config: AgentConfig =
         toml::from_str(source).map_err(|e| classify_toml_error(e.message()))?;
     if config
@@ -622,6 +646,32 @@ fn check_lifecycle_bounds(source: &str) -> Result<(), ConfigError> {
                 kind: ConfigErrorKind::BadValue,
             });
         }
+    }
+    Ok(())
+}
+
+/// **`turn-context` is `continuous` or `independent`**, per
+/// `weaver-types-Spec` section 2 (#423), refusing `BadValue` naming
+/// `turn-context` otherwise. Read off the raw table, so a third value or a
+/// value that is not a string is refused by the key's own name rather than as
+/// the deserializer's unnamed refusal. A source that does not read as TOML is
+/// left to the parse, which names its own fault.
+#[cfg(feature = "config")]
+fn check_turn_context(source: &str) -> Result<(), ConfigError> {
+    let Ok(table) = source.parse::<toml::Table>() else {
+        return Ok(());
+    };
+    let Some(value) = table.get("turn-context") else {
+        return Ok(());
+    };
+    if !value
+        .as_str()
+        .is_some_and(|elected| matches!(elected, "continuous" | "independent"))
+    {
+        return Err(ConfigError {
+            field: Some(FieldName("turn-context".to_string())),
+            kind: ConfigErrorKind::BadValue,
+        });
     }
     Ok(())
 }

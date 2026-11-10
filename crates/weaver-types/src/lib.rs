@@ -111,6 +111,7 @@ pub use config::{
     ConfigErrorKind, DecoderInstruction, DeviceOrdinal, ElectedKindConfig, FieldElection,
     FieldName, GateInstruction, Lifecycle, ModelBinding, REGISTERED_TOOLS, Restore, SHELL_TOOL,
     ShellGrant, SpuInstruction, StateElection, StateStore, StoreEngine, ToolName, TraceSink,
+    TurnContext,
 };
 #[cfg(feature = "config")]
 pub use config::{

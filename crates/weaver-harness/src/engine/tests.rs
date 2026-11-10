@@ -290,6 +290,7 @@ fn a_refused_turn_closes_once_and_names_the_refusal() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -316,6 +317,7 @@ fn a_refused_turn_closes_once_and_names_the_refusal() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         ports.turn(vec![Message {
             role: Role::User,
@@ -425,6 +427,7 @@ fn a_refused_ask_reaches_the_record() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -451,6 +454,7 @@ fn a_refused_ask_reaches_the_record() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         ports.elide(41, 57)
     };
@@ -555,6 +559,7 @@ fn the_elision_event_carries_the_span_the_loop_named() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -581,6 +586,7 @@ fn the_elision_event_carries_the_span_the_loop_named() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         let counts = ports.elide(41, 57).expect("the elision holds");
         assert_eq!(
@@ -719,6 +725,7 @@ fn a_turn_authors_the_whole_bracket() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -746,6 +753,7 @@ fn a_turn_authors_the_whole_bracket() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -935,6 +943,7 @@ fn a_fault_emission_lands_inside_the_bracket_before_the_close() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -962,6 +971,7 @@ fn a_fault_emission_lands_inside_the_bracket_before_the_close() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1153,6 +1163,7 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -1189,6 +1200,7 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1395,6 +1407,7 @@ fn an_ungranted_call(name: &str, shell_granted: bool) {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -1431,6 +1444,7 @@ fn an_ungranted_call(name: &str, shell_granted: bool) {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1597,6 +1611,7 @@ fn each_field_intermediate_authors_its_event() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -1623,6 +1638,7 @@ fn each_field_intermediate_authors_its_event() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1714,6 +1730,7 @@ fn a_supplied_tool_result_refuses_at_the_door() {
         &mut fullness,
         &mut pressure_reported,
         false,
+        weaver_types::TurnContext::Continuous,
     );
     let delta = vec![Message {
         role: Role::ToolResult,
@@ -1907,6 +1924,7 @@ fn dial_mid_stream(
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -1935,6 +1953,7 @@ fn dial_mid_stream(
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -2254,6 +2273,7 @@ fn leave_during_turn(
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -2289,6 +2309,7 @@ fn leave_during_turn(
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         ports.hold_leave(&mut held, None);
         ports.turn(vec![Message {
@@ -2419,6 +2440,7 @@ fn a_directive_mid_turn_with_a_leave_held(
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         ports.hold_leave(&mut held, None);
         ports.turn(vec![Message {
@@ -2588,6 +2610,7 @@ fn a_join_during_the_wind_down_cancels_it_and_turns_the_leave_forced() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         ports.hold_leave(&mut held, None);
         ports.wind_down(None, weaver_types::Cause { uid: 7 })
@@ -2728,6 +2751,7 @@ fn a_leave_dialed_while_the_spu_streams_is_heard() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         ports.hold_leave(&mut held, None);
         ports.turn(vec![Message {
@@ -2858,6 +2882,7 @@ fn a_bound_passing_while_the_spu_streams_cancels_the_turn() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         ports.hold_leave(&mut held, Some(1));
         ports.turn(vec![Message {
@@ -2976,6 +3001,7 @@ fn a_drain_bound_passing_mid_turn_cancels_the_turn_and_turns_the_leave_forced() 
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         ports.hold_leave(&mut held, Some(1));
         ports.turn(vec![Message {
@@ -3150,6 +3176,7 @@ fn a_call_asked_in_the_wind_down_is_never_sent() {
         &mut fullness,
         &mut pressure_reported,
         false,
+        weaver_types::TurnContext::Continuous,
     )
     .wind_down(None, weaver_types::Cause { uid: 7 })
     .0;
@@ -3172,6 +3199,150 @@ fn a_call_asked_in_the_wind_down_is_never_sent() {
         .find(|line| line["kind"] == "turn.closed")
         .unwrap_or_else(|| panic!("the turn closes: {lines:?}"));
     assert_eq!(close["payload"]["close"], "clean", "{close}");
+}
+
+/// **Loop 0's own turns answer the turn-context election** (#423,
+/// `weaver-harness-Spec` section 6's turn-context read): under
+/// `independent` the wind-down turn and the seeding turn are each preceded by
+/// a flush to the identity prefix, the `Flush { keep: 0 }` directive the
+/// first thing the seam hears and the `flush` event, carrying the seam's
+/// counts, the event directly before the turn's `turn.started`. Under
+/// `continuous` neither turn flushes, as before the election.
+///
+/// Perturbation: drop the flush from `Ports::wind_down` and the wind-down
+/// case fails; from `Ports::seed` and the seeding case fails; flush under
+/// every election and the `continuous` cases fail on the stray answer.
+/// Watched to fail under each.
+#[test]
+fn loop_zeros_own_turns_flush_first_under_independent() {
+    for winding in [true, false] {
+        for context in [
+            weaver_types::TurnContext::Independent,
+            weaver_types::TurnContext::Continuous,
+        ] {
+            let (near, far) = socketpair(
+                AddressFamily::Unix,
+                SockType::SeqPacket,
+                None,
+                SockFlag::SOCK_CLOEXEC,
+            )
+            .expect("socketpair");
+            let independent = context == weaver_types::TurnContext::Independent;
+            if independent {
+                let flushed = weaver_types::TokenAnswer::Flushed {
+                    resident_before: 9001,
+                    resident_after: 14547,
+                };
+                send(
+                    far.as_raw_fd(),
+                    &serde_json::to_vec(&flushed).unwrap(),
+                    MsgFlags::empty(),
+                )
+                .unwrap();
+            }
+            let generated = weaver_types::TokenAnswer::Generated(Generation {
+                invalid_utf8: Vec::new(),
+                unrecovered: vec![],
+                content: vec![ContentBlock::Text {
+                    text: "where the work stands".into(),
+                }],
+                emission: "where the work stands".into(),
+                finish: Finish::Completed,
+                resident: 14600,
+                capacity: 32768,
+                request: serde_json::value::RawValue::from_string(
+                    r#"{"rendered":"fixture"}"#.into(),
+                )
+                .unwrap(),
+                measurement: serde_json::value::RawValue::from_string(r#"{}"#.into()).unwrap(),
+            });
+            send(
+                far.as_raw_fd(),
+                &serde_json::to_vec(&generated).unwrap(),
+                MsgFlags::empty(),
+            )
+            .unwrap();
+            // **Nothing more is answered**: a stray directive meets the end of
+            // the stream and the case fails, where a held-open end would hang
+            // it. The directives sent stay readable on this end.
+            nix::sys::socket::shutdown(far.as_raw_fd(), nix::sys::socket::Shutdown::Write)
+                .expect("shutdown");
+            let decode = crate::channel::decode_from_owned(near);
+            let (mut recorder, author) = loaded_recorder();
+            let mut turn_ordinal = 3u64;
+            let mut turn_in_flight = None;
+            let (listener, _dir) = test_listener();
+            let mut fullness = None;
+            let mut pressure_reported = false;
+            let load_facts = crate::engine::test_load_facts();
+            let mut ports = Ports::grant(
+                &decode,
+                &author,
+                &mut recorder,
+                &mut turn_ordinal,
+                &mut turn_in_flight,
+                &load_facts,
+                None,
+                &listener,
+                None,
+                None,
+                None,
+                None,
+                &mut fullness,
+                &mut pressure_reported,
+                false,
+                context,
+            );
+            let ran = if winding {
+                ports.wind_down(None, weaver_types::Cause { uid: 7 }).0
+            } else {
+                ports.seed(Message {
+                    role: Role::System,
+                    content: vec![ContentBlock::Text {
+                        text: "You are the fixture.".into(),
+                    }],
+                })
+            };
+            drop(ports);
+            let case = format!("winding {winding}, {context:?}");
+            assert!(ran.is_ok(), "{case}: {ran:?}");
+
+            // The directives in the order the seam heard them.
+            let mut buf = vec![0u8; 65536];
+            let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("a directive");
+            let first: weaver_types::TokenDirective =
+                serde_json::from_slice(&buf[..n]).expect("the directive parses");
+            assert_eq!(
+                matches!(first, weaver_types::TokenDirective::Flush { keep: 0 }),
+                independent,
+                "{case}: the first directive was {first:?}"
+            );
+
+            // The event directly before the bracket opens.
+            let records: Vec<(Kind, serde_json::Value)> = recorder
+                .structure()
+                .expect("the serving record")
+                .iter()
+                .map(|r| (r.kind, serde_json::from_str(r.line.as_ref()).unwrap()))
+                .collect();
+            let opened = records
+                .iter()
+                .position(|(kind, _)| *kind == Kind::TurnStarted)
+                .unwrap_or_else(|| panic!("{case}: the turn opened"));
+            let (before, line) = &records[opened - 1];
+            if independent {
+                assert_eq!(*before, Kind::Flush, "{case}: {line}");
+                assert_eq!(line["payload"]["resident_before"], 9001, "{case}");
+                assert_eq!(line["payload"]["resident_after"], 14547, "{case}");
+            } else {
+                assert_ne!(*before, Kind::Flush, "{case}: {line}");
+                assert!(
+                    records.iter().all(|(kind, _)| *kind != Kind::Flush),
+                    "{case}: no flush under continuous"
+                );
+            }
+        }
+    }
 }
 
 /// **A forced leave heard during a call interrupts it and cancels the
@@ -3428,6 +3599,7 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -3473,6 +3645,7 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         ports.turn(vec![Message {
             role: Role::User,
@@ -3676,6 +3849,7 @@ fn stop_dialed_mid_stream(latched: bool) {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -3725,6 +3899,7 @@ fn stop_dialed_mid_stream(latched: bool) {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -3859,6 +4034,7 @@ fn a_stop_is_not_answered_after_a_close_over_a_latched_record() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         let generation = Generation {
             invalid_utf8: Vec::new(),
@@ -3979,6 +4155,7 @@ fn a_column_on_the_generate_stream_authors_rather_than_kills() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         ports.turn(vec![Message {
             role: Role::User,
@@ -4045,6 +4222,7 @@ fn with_seat<R>(
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         ask(&mut ports)
     };
@@ -4167,6 +4345,7 @@ fn loaded_recorder() -> (crate::record::Record, Author) {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -4260,6 +4439,7 @@ fn the_recall_after_a_flush_is_recorded_before_the_loop_holds_it() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         assert_eq!(ports.flush(0), Some((27196, 712)), "the flush holds");
         let answered = ports.recall(Some(4)).expect("custody answered");
@@ -4390,6 +4570,7 @@ fn a_replay_answer_is_recorded_by_its_bounds_and_count() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         ports.replay(2_000).expect("custody answered")
     };
@@ -4460,6 +4641,7 @@ fn a_recall_the_member_did_not_answer_records_no_recall() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         assert!(
             ports.recall(Some(4)).is_none(),
@@ -4617,6 +4799,7 @@ fn an_unrecovered_call_is_authored_at_the_answer_and_handed_to_the_loop() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -4644,6 +4827,7 @@ fn an_unrecovered_call_is_authored_at_the_answer_and_handed_to_the_loop() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -4876,6 +5060,7 @@ fn an_unrecovered_call_opens_no_execution_exchange() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -4912,6 +5097,7 @@ fn an_unrecovered_call_opens_no_execution_exchange() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         let delta = vec![Message {
             role: Role::User,
@@ -5103,6 +5289,7 @@ fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -5130,6 +5317,7 @@ fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         let turn = weaver_types::TurnKey("t-1".into());
         ports

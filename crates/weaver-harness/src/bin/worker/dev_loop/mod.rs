@@ -14,6 +14,7 @@
 
 use weaver_harness::{Ports, Recalled, SessionShape, TurnError, TurnOutcome};
 use weaver_traits::{ContentBlock, Message, Role};
+use weaver_types::TurnContext;
 
 // The coupled foundation dispatcher will select this owner after qualification.
 // Its caller supplies the compiled inventory and the real original Enter budget.
@@ -47,6 +48,53 @@ pub(crate) const SYSTEM_PROMPT: &str = "\
 You are a careful assistant. Answer from what you know, say plainly when \
 you do not know, and keep answers as short as the question allows.";
 
+/// **The seat as this loop composes it**: the reads and asks [`compose`]
+/// makes, named once so the loop's own suite can drive it against a
+/// recording stand-in. [`Ports`] is the one production implementation, each
+/// method its port of the same name, and the trait mints nothing: a stand-in
+/// answers what a test sets and holds no port, so the blade of
+/// `weaver-harness-Spec` section 8 is untouched.
+pub(crate) trait Seat {
+    /// Whether no turn has run against this decode session: the assembly's
+    /// message history is empty.
+    fn first_turn(&self) -> bool;
+    fn seated(&self) -> bool;
+    fn turn_context(&self) -> TurnContext;
+    fn fullness(&self) -> Option<(u64, u64)>;
+    fn flush(&mut self, keep: u64) -> Option<(u64, u64)>;
+    fn recall(&mut self, last_turns: Option<u64>) -> Option<Vec<Recalled>>;
+    fn session_shape(&mut self) -> Option<SessionShape>;
+    fn turn(&mut self, delta: Vec<Message>) -> Result<TurnOutcome, TurnError>;
+}
+
+impl Seat for Ports<'_> {
+    fn first_turn(&self) -> bool {
+        self.assembled()
+            .is_none_or(|prompt| prompt.messages.is_empty())
+    }
+    fn seated(&self) -> bool {
+        Ports::seated(self)
+    }
+    fn turn_context(&self) -> TurnContext {
+        Ports::turn_context(self)
+    }
+    fn fullness(&self) -> Option<(u64, u64)> {
+        Ports::fullness(self)
+    }
+    fn flush(&mut self, keep: u64) -> Option<(u64, u64)> {
+        Ports::flush(self, keep)
+    }
+    fn recall(&mut self, last_turns: Option<u64>) -> Option<Vec<Recalled>> {
+        Ports::recall(self, last_turns)
+    }
+    fn session_shape(&mut self) -> Option<SessionShape> {
+        Ports::session_shape(self)
+    }
+    fn turn(&mut self, delta: Vec<Message>) -> Result<TurnOutcome, TurnError> {
+        Ports::turn(self, delta)
+    }
+}
+
 /// The first control loop, loop 1: the system prompt once per session's
 /// standing where nothing is seated, then one turn per request.
 ///
@@ -66,11 +114,34 @@ you do not know, and keep answers as short as the question allows.";
 /// the continuity line, on the first turn or at re-entry, either being a
 /// second system turn beneath the seated one. Where nothing is seated, an
 /// agent before its seeding turn, it pushes both as before.
+///
+/// **Under `turn-context = "independent"` every turn stands alone** (#423,
+/// `weaver-harness-Spec` section 6's turn-context read): see [`compose`].
 pub fn drive(seat: &mut Ports<'_>, text: &str) -> Result<TurnOutcome, TurnError> {
-    let first_turn = seat
-        .assembled()
-        .is_none_or(|prompt| prompt.messages.is_empty());
+    compose(seat, text)
+}
+
+/// The loop's body over any [`Seat`], [`drive`] lending it the granted one.
+pub(crate) fn compose(seat: &mut impl Seat, text: &str) -> Result<TurnOutcome, TurnError> {
     let seated = seat.seated();
+    // **The turn-context election, answered first** (#423): under
+    // `independent` the decode context returns to the identity prefix before
+    // every turn, so each turn is answered from the prefix the open seated and
+    // its own request alone. The cut is zero, which the seam bounds at the
+    // prefix, and it lands directly before the turn's bracket, so the record
+    // shows each `turn.started` preceded by its `flush`; the first, standing
+    // on the prefix already, cuts nothing. Its confirmation gates nothing, as
+    // the pressure flush's does not: a refused cut is authored by the seat.
+    // Nothing else is composed: no re-entry, the conversation being exactly
+    // what the election retires, and no continuity line, which would carry
+    // one turn's context into the next. Where nothing is seated the prefix
+    // holds at most the family's start marker, so the compiled prompt leads
+    // every turn, the flush having retired the copy an earlier turn appended.
+    if seat.turn_context() == TurnContext::Independent {
+        let _ = seat.flush(0);
+        return seat.turn(contribution(true, seated, None, None, text));
+    }
+    let first_turn = seat.first_turn();
     // The context management, per the loop's charter: the decode context
     // is a working set this loop keeps under its ceiling. At pressure the
     // loop elects a flush - the decode context returns to its prefix, the

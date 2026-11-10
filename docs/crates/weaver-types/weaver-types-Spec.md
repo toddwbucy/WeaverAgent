@@ -211,6 +211,7 @@ pub struct AgentConfig {
     pub state_store: Option<StateStore>,
     pub restore: Option<Restore>,
     pub lifecycle: Option<Lifecycle>,
+    pub turn_context: Option<TurnContext>,
 }
 
 pub struct Restore {
@@ -220,6 +221,11 @@ pub struct Restore {
 pub struct Lifecycle {
     pub drain_bound: Option<u64>,
     pub wind_down_bound: Option<u64>,
+}
+
+pub enum TurnContext {
+    Continuous,
+    Independent,
 }
 ```
 
@@ -641,6 +647,27 @@ from the enter, its only source, and answers them back on `Observe` (`LoadFacts`
 construction. The table changes no elected
 behaviour beyond the two bounds and joins no other member; the parser's change and the
 enter's two members are the code act's.
+
+**`turn-context` elects whether a turn sees the turns before it**, on the operator's
+word of 2026-11-10 relayed on #423. `continuous`, the absence's meaning and what every
+load did before the election, keeps the session's context accumulating turn by turn.
+`independent` returns the decode context to the identity prefix before every turn, so
+each turn is answered from the prefix the open seated and its own request alone, which
+is what a batch of held-out items needs to be answered in one residency with nothing
+from another item. It is a top-level key, `turn-context = "continuous"` or
+`turn-context = "independent"`, and not a member of `[state-management]`, which is the
+foundation's serving grammar. A value outside the two, or one that is not a string, refuses
+`BadValue` naming `turn-context`, read off the raw table so the refusal names the key.
+**The election crosses to the harness on the enter, resolved**: admin alone parses the
+declaration, so `EnterPayload` carries `turn_context` always present, `continuous` where
+the declaration is silent, and required on the wire, so the harness, which holds no
+declaration, never re-derives an absence. The harness lends it to loop 1's seat and
+names it on the `load` event, per `weaver-harness-Spec` section 6 and
+`weaver-trace-Spec` section 3. It is not answered on `Observe`: nothing admin decides
+reads it, and `LoadFacts` stays as section 4.2 states it. **The foundation's serving
+path checks the value and honors nothing until its cutover**: `parse_serving_draft`
+refuses a third value as the declaration parse does, and admin's published serving
+declaration carries the key as declared, but no organ on that path reads it.
 
 ```graph
 node: types-required-field-refuses
@@ -1587,6 +1614,7 @@ pub struct EnterPayload {
     pub library_path: Option<String>,
     pub drain_bound: Option<u64>,
     pub wind_down_bound: Option<u64>,
+    pub turn_context: TurnContext,
 }
 
 pub struct Lineage {
@@ -1691,7 +1719,9 @@ the root's `operator` key names, per `weaver-admin-Spec` section 9, so the harne
 admit the seeding line from the operator's peer identity alone and refuse it from every
 other dialer, per `weaver-gate-world-contract` section 2 and `weaver-harness-Spec`
 section 6.1; it is admin's fact, copied from the root and read from no deployment by
-the harness.
+the harness. **`turn_context` rides the enter as of 2026-11-10** (#423), the
+declaration's election resolved by admin, `continuous` where the declaration is silent,
+and required on the wire, per section 2's `turn-context`.
 
 **`EnterBinding` is the kind resolved, and a directive disagreeing with its
 kind is unrepresentable rather than refused.** The config holds the kind as
@@ -2698,6 +2728,19 @@ the one and without the other; `wind-down-bound` alone, the same the other way. 
 to fail when the parse drops the table, so the enter carries no bound where one is
 declared; when a zero bound is admitted; and, for each lone bound, when the parse or the
 payload copies it into the other field or drops it, each field held independently.
+
+**The turn-context election is enforced by perturbation-verified tests at the parse, on
+the wire and at the published declaration** (#423, section 2's `turn-context`): both
+values parse and a silent declaration parses to `None`, which resolves to `continuous`.
+A third value, a wrong case, an empty string and a non-string each refuse `BadValue`
+naming `turn-context`, and the serving draft refuses the same way. `EnterPayload`
+carries each value by its declaration spelling, round-trips, and refuses at the parse
+without the key. Admin's published serving declaration carries a declared value
+through its round trip and stays silent where the declaration is. Watched to fail when
+the check leaves the parse or the serving draft, when a third value is admitted, when
+`independent` is spelled onto `Continuous`, when the default moves to `Independent`,
+when the enter's member takes a default or is skipped, and when the renderer drops the
+key.
 
 **Enforced by a perturbation-verified test at the parse.** Section 2's rule
 that every identity message carries `role: system` is a `BadValue` naming

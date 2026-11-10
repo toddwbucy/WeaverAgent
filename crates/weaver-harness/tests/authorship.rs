@@ -75,6 +75,7 @@ fn unlicensed_message_is_refused_before_submit() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -225,6 +226,7 @@ fn timestamps_are_stamped_at_authoring() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .expect("load");
@@ -295,6 +297,7 @@ fn assembly_sees_only_message_kinds() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .unwrap();
@@ -414,6 +417,7 @@ fn assembly_is_deterministic() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .unwrap();
@@ -496,6 +500,7 @@ fn prompt_part_order_is_fixed() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .unwrap();
@@ -563,6 +568,7 @@ fn fault_payload_is_carried_unchanged() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .unwrap();
@@ -627,6 +633,7 @@ fn undecodable_message_records_are_counted() {
                 library_path: None,
                 state_store: Default::default(),
                 composer: weaver_trace::LoopIdentity::compiled("test"),
+                turn_context: weaver_trace::TurnContext::Continuous,
             }))),
         )
         .unwrap();
@@ -708,6 +715,7 @@ fn an_undecodable_record_refuses_the_seat_and_authors_a_fault() {
                     library_path: None,
                     state_store: Default::default(),
                     composer: weaver_trace::LoopIdentity::compiled("test"),
+                    turn_context: weaver_trace::TurnContext::Continuous,
                 }))),
             )
             .unwrap();

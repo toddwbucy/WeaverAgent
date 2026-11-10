@@ -244,7 +244,10 @@ published by default, marked where it was named at a restore, and none where no 
 point stands, the graceful leave's drain bound and wind-down bound as the declaration's
 `[lifecycle]` sets them, each absent where it is silent and absence meaning unbounded,
 the harness's only source for timing S4 and S5 (`weaver-admin-Spec` section 3, the
-bounds), beside it and apart from it the reset, where the agent's last run did not
+bounds), the turn-context election, resolved to `continuous` where the declaration is
+silent and always present, the harness's only source for whether each turn stands alone
+(`weaver-types-Spec` section 2, #423), beside it and apart from it the reset, where the
+agent's last run did not
 end in a clean unload or was forced to end and its leave save point could not be taken,
 that run and the reason, per `weaver-admin-Spec` section 3, I4, whether or not a save point stands, the digests of the organ binaries admin
 started and of the two it hands the worker to fork, the agent's SPU and the gate, the
@@ -529,7 +532,8 @@ sink handle, the state channel's end where the member stands, the SPU instructio
 fan-out admits, the gate instruction the fan-out starts where the kind declares a Gate,
 the state election the tee applies, resolved to the ruled default where the declaration
 is silent, the store election the member stands on, resolved to the embedded engine
-where the declaration is silent, the
+where the declaration is silent, the turn-context election, resolved to `continuous`
+where the declaration is silent (#423), the
 lineage of the save point the load restores, its digest, the run, sequence and last turn
 it covers, whether it was named at a restore, where the offline builder made it from a
 record that record's session and the run and turn of its cut, resolved by admin from the

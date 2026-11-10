@@ -781,6 +781,23 @@ pub struct Elections {
     /// root names one. Absent otherwise, never null.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub library_path: Option<String>,
+    /// **The run's turn-context election**, per `weaver-trace-Spec` section 3
+    /// (#423): whether every turn was answered from the identity prefix and
+    /// its own request, `independent`, or from the session's accumulation,
+    /// `continuous`, copied from the enter's resolved election. **Serialized
+    /// even where it is the default**, for the surprisal's three-state reason:
+    /// a record written before the election is absent, not `continuous`.
+    pub turn_context: TurnContext,
+}
+
+/// The turn-context election as the load event names it, per
+/// `weaver-trace-Spec` section 3: this crate's spelling, the floor's own
+/// being `weaver-types`'s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TurnContext {
+    Continuous,
+    Independent,
 }
 
 /// Who asked for a change, per `weaver-trace-Spec` section 3: the uid sudo
