@@ -13,6 +13,7 @@
 
 use super::*;
 use crate::containment::tests::{ScratchCgroup, escaper_in, mark_delegated, run_directory};
+use crate::scope::Site;
 use std::cell::Cell;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
@@ -484,10 +485,12 @@ fn containment_the_scope_step_stands_the_agent_beneath_its_scope() {
     let (_dir, fd) = run_directory("scope-step");
     let site = site(&scratch);
     let made = make_in_scope(
-        &site,
-        start_step.id(),
-        fake_pid1(&scratch, true),
-        BOUND,
+        scope::Step {
+            site: site.clone(),
+            pid: start_step.id(),
+            request: fake_pid1(&scratch, true),
+            bound: BOUND,
+        },
         fd.as_fd(),
         "alpha",
         "run-1",
@@ -526,10 +529,12 @@ fn containment_the_confirm_refuses_an_answer_with_no_move() {
     let (_dir, fd) = run_directory("confirm");
     let site = site(&scratch);
     let refused = make_in_scope(
-        &site,
-        start_step.id(),
-        fake_pid1(&scratch, false),
-        Duration::from_millis(200),
+        scope::Step {
+            site: site.clone(),
+            pid: start_step.id(),
+            request: fake_pid1(&scratch, false),
+            bound: Duration::from_millis(200),
+        },
         fd.as_fd(),
         "alpha",
         "run-1",
@@ -569,13 +574,15 @@ fn containment_a_populated_scope_refuses_and_kills_nothing() {
     let (_dir, fd) = run_directory("standing");
     let asked = Cell::new(0);
     let refused = make_in_scope(
-        &site(&scratch),
-        start_step.id(),
-        |call| {
-            asked.set(asked.get() + 1);
-            Err(format!("Call failed: Unit {} already exists.", call.unit))
+        scope::Step {
+            site: site(&scratch),
+            pid: start_step.id(),
+            request: |call: &scope::Call| {
+                asked.set(asked.get() + 1);
+                Err(format!("Call failed: Unit {} already exists.", call.unit))
+            },
+            bound: BOUND,
         },
-        BOUND,
         fd.as_fd(),
         "alpha",
         "run-1",
@@ -619,10 +626,12 @@ fn containment_an_empty_scope_is_waited_out() {
         )
     });
     let made = make_in_scope(
-        &site(&scratch),
-        start_step.id(),
-        fake_pid1(&scratch, true),
-        BOUND,
+        scope::Step {
+            site: site(&scratch),
+            pid: start_step.id(),
+            request: fake_pid1(&scratch, true),
+            bound: BOUND,
+        },
         fd.as_fd(),
         "alpha",
         "run-1",
@@ -643,13 +652,15 @@ fn containment_an_empty_scope_is_waited_out() {
     let (_dir, fd) = run_directory("empty-scope-late");
     let asked = Cell::new(0);
     let refused = make_in_scope(
-        &site(&late),
-        start_step.id(),
-        |_| {
-            asked.set(asked.get() + 1);
-            Ok("o \"/org/freedesktop/systemd1/job/1\"".to_string())
+        scope::Step {
+            site: site(&late),
+            pid: start_step.id(),
+            request: |_: &scope::Call| {
+                asked.set(asked.get() + 1);
+                Ok("o \"/org/freedesktop/systemd1/job/1\"".to_string())
+            },
+            bound: Duration::from_millis(200),
         },
-        Duration::from_millis(200),
         fd.as_fd(),
         "alpha",
         "run-1",
@@ -658,7 +669,52 @@ fn containment_an_empty_scope_is_waited_out() {
     );
     end(start_step);
     assert!(
-        matches!(&refused, Err(StartRefused::Unverified(why)) if why.contains("stands empty past the scope bound")),
+        matches!(&refused, Err(StartRefused::Unverified(why)) if why.contains("still stands empty at the scope bound")),
+        "{refused:?}"
+    );
+    assert_eq!(asked.get(), 0, "no request");
+}
+
+/// **A scope whose `cgroup.events` does not read refuses unverified** (6.1,
+/// the scope already standing): neither a run's leftovers nor ending, so the
+/// load refuses `BoundaryUnverified`, naming the read, with no request and
+/// nothing killed. The read is failed by the file's mode, which binds the
+/// suite's own uid under a user scope and not root, as the failed listing's
+/// instrument does. Perturbation: read an unread scope as populated, and the
+/// load refuses `AgentRunning`.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_an_unread_scope_refuses_unverified() {
+    let scratch = ScratchCgroup::new("unread-scope");
+    let slice = scratch.cgroup.make_child(scope::SLICE).unwrap();
+    let standing = slice.make_child("weaver-alpha.scope").unwrap();
+    let events = std::path::PathBuf::from(containment::CGROUP_ROOT)
+        .join(standing.relative().trim_start_matches('/'))
+        .join("cgroup.events");
+    std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let (_invoker, start_step) = start_step_in(&scratch);
+    let (_dir, fd) = run_directory("unread-scope");
+    let asked = Cell::new(0);
+    let refused = make_in_scope(
+        scope::Step {
+            site: site(&scratch),
+            pid: start_step.id(),
+            request: |_: &scope::Call| {
+                asked.set(asked.get() + 1);
+                Ok("o \"/org/freedesktop/systemd1/job/1\"".to_string())
+            },
+            bound: BOUND,
+        },
+        fd.as_fd(),
+        "alpha",
+        "run-1",
+        owner(),
+        owner().0,
+    );
+    std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o444)).unwrap();
+    end(start_step);
+    assert!(
+        matches!(&refused, Err(StartRefused::Unverified(why)) if why.contains("cgroup.events does not read")),
         "{refused:?}"
     );
     assert_eq!(asked.get(), 0, "no request");

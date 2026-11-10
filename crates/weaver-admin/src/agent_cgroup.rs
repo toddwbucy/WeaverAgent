@@ -19,7 +19,7 @@ use crate::containment::{
     self, Cgroup, MadeAction, MadeStep, Record, RecordAction, RecordAtStart, RecordedAt,
     RunEndAction, RunEndStep, Standing, StartAction, StartFacts, StartRefusal,
 };
-use crate::scope::{self, ScopeRefused, Site};
+use crate::scope::{self, ScopeRefused};
 
 /// The agent's cgroup's name beneath its scope, named for the agent's
 /// account.
@@ -125,10 +125,7 @@ pub fn make(
     owner: (u32, u32),
 ) -> Result<Made, StartRefused> {
     make_in_scope(
-        &Site::of(agent),
-        std::process::id(),
-        scope::busctl,
-        scope::SCOPE_BOUND,
+        scope::Step::production(agent),
         run_directory,
         agent,
         run,
@@ -140,25 +137,20 @@ pub fn make(
 /// The owner the floor requires of the scope's cgroup in production.
 const ROOT: u32 = 0;
 
-/// **[`make`]'s seam**: the scope step for `pid` at `site` by `request`
-/// within `bound`, then [`make_beneath`] the scope's cgroup it answers.
-/// Production passes the agent's site, its own pid, `busctl`, the scope
-/// bound and root. The instruments pass a site beneath their own delegated
-/// cgroup, a fake PID1 and their own uid (6.1, the instruments: the scope
-/// step, the confirm, the standing scope).
-#[allow(clippy::too_many_arguments)]
+/// **[`make`]'s seam**: the scope step `step`, then [`make_beneath`] the
+/// scope's cgroup it answers. Production passes [`scope::Step::production`]
+/// and root. The instruments pass a step at a site beneath their own
+/// delegated cgroup with a fake PID1, and their own uid (6.1, the
+/// instruments: the scope step, the confirm, the standing scope).
 pub fn make_in_scope(
-    site: &Site,
-    pid: u32,
-    request: impl FnOnce(&scope::Call) -> Result<String, String>,
-    bound: Duration,
+    step: scope::Step<impl FnOnce(&scope::Call) -> Result<String, String>>,
     run_directory: BorrowedFd<'_>,
     agent: &str,
     run: &str,
     owner: (u32, u32),
     floor_owner: u32,
 ) -> Result<Made, StartRefused> {
-    let held = scope::enter(site, pid, request, bound).map_err(|refused| match refused {
+    let held = scope::enter(step).map_err(|refused| match refused {
         ScopeRefused::Leftovers(pids) => StartRefused::Leftovers(pids),
         ScopeRefused::Unverified(why) => StartRefused::Unverified(why),
     })?;
@@ -499,17 +491,15 @@ pub fn run_end(
     // end): PID1 collects the agent's scope once its last process ends, the
     // agent's cgroup with it, so a run end can meet the path, or its scope's,
     // absent here as it would at the judgment.
-    let absent = |error: &std::io::Error| error.kind() == std::io::ErrorKind::NotFound;
+    let stale = || Ended::Stale {
+        record_removed: containment::remove_record(run_directory).is_ok(),
+    };
     let (parent, name) = parent_and_name(&record.path).ok_or_else(unverified)?;
-    let opened = Cgroup::open(&record.path).and_then(|cgroup| Ok((cgroup, Cgroup::open(&parent)?)));
-    let (cgroup, parent) = match opened {
-        Ok(opened) => opened,
-        Err(error) if absent(&error) => {
-            return Ok(Ended::Stale {
-                record_removed: containment::remove_record(run_directory).is_ok(),
-            });
-        }
-        Err(_) => return Err(unverified()),
+    let Some(cgroup) = Cgroup::open_if_present(&record.path).map_err(|_| unverified())? else {
+        return Ok(stale());
+    };
+    let Some(parent) = Cgroup::open_if_present(&parent).map_err(|_| unverified())? else {
+        return Ok(stale());
     };
     let standing = pids(&cgroup);
     let mut next = containment::run_end_next(RunEndStep::Kill {
@@ -575,10 +565,10 @@ pub fn holds(run_directory: BorrowedFd<'_>, agent: &str) -> Result<Option<Vec<i3
     match containment::recorded_at(&record) {
         RecordedAt::Absent => Ok(None),
         RecordedAt::Same => {
-            let cgroup = match Cgroup::open(&record.path) {
-                Ok(cgroup) => cgroup,
+            let cgroup = match Cgroup::open_if_present(&record.path) {
+                Ok(Some(cgroup)) => cgroup,
                 // Collected with its scope since the judgment: A0.
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Ok(None) => return Ok(None),
                 Err(error) => {
                     return Err(format!("the cgroup {} does not open: {error}", record.path));
                 }

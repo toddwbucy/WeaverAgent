@@ -32,6 +32,22 @@ pub const CONTAINMENT_BOUND: Duration = Duration::from_secs(30);
 /// How often a wait reads `cgroup.events`.
 const WAIT_SLICE: Duration = Duration::from_millis(10);
 
+/// **The one deadline poll** every wait here takes (6.1): `done` read at
+/// once and then every `slice` until it answers true or `deadline` passes,
+/// with one last read at the deadline. Answers whether it answered true.
+pub fn poll_until(deadline: Instant, slice: Duration, mut done: impl FnMut() -> bool) -> bool {
+    loop {
+        if done() {
+            return true;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        std::thread::sleep(slice.min(remaining));
+    }
+}
+
 /// The mount of the unified hierarchy.
 pub const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 
@@ -384,6 +400,17 @@ impl Cgroup {
         })
     }
 
+    /// **Opens a cgroup unless nothing stands at its path**: `None` only
+    /// where the open answers `ENOENT`, any other failure its error, so no
+    /// caller reads a failed open as absent.
+    pub fn open_if_present(relative: &str) -> std::io::Result<Option<Self>> {
+        match Self::open(relative) {
+            Ok(cgroup) => Ok(Some(cgroup)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Opens a child cgroup beneath this one's descriptor.
     pub fn child(&self, name: &str) -> std::io::Result<Self> {
         let dir = openat(
@@ -505,12 +532,13 @@ impl Cgroup {
     /// can meet after its kill. A path that does not open otherwise is not
     /// gone.
     pub fn gone(&self) -> bool {
-        match Cgroup::open(&self.relative) {
-            Err(error) => error.kind() == std::io::ErrorKind::NotFound,
-            Ok(there) => match (there.identity(), self.identity()) {
+        match Cgroup::open_if_present(&self.relative) {
+            Ok(None) => true,
+            Ok(Some(there)) => match (there.identity(), self.identity()) {
                 (Ok(there), Ok(here)) => there != here,
                 _ => false,
             },
+            Err(_) => false,
         }
     }
 
@@ -529,17 +557,7 @@ impl Cgroup {
     /// `bound`, so a failed read of a cgroup still at its path runs to the
     /// bound. Answers whether the cgroup emptied.
     pub fn wait_emptied(&self, bound: Duration) -> bool {
-        let deadline = Instant::now() + bound;
-        loop {
-            if self.emptied() {
-                return true;
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return false;
-            }
-            std::thread::sleep(WAIT_SLICE.min(remaining));
-        }
+        poll_until(Instant::now() + bound, WAIT_SLICE, || self.emptied())
     }
 
     /// The pids `cgroup.procs` lists for this cgroup alone.
@@ -608,18 +626,10 @@ impl Cgroup {
     /// own wait. Answers whether it emptied, the run end's
     /// `Fallback { emptied }`.
     pub fn fallback_until_empty(&self, bound: Duration) -> bool {
-        let deadline = Instant::now() + bound;
-        loop {
+        poll_until(Instant::now() + bound, WAIT_SLICE, || {
             self.signal_pinned_pass();
-            if self.emptied() {
-                return true;
-            }
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return false;
-            }
-            std::thread::sleep(WAIT_SLICE.min(remaining));
-        }
+            self.emptied()
+        })
     }
 }
 
@@ -928,17 +938,17 @@ pub fn remove_record(run_directory: BorrowedFd<'_>) -> nix::Result<()> {
 
 /// **What a later verb finds at the record's path**, for `record_judgment`.
 pub fn recorded_at(record: &Record) -> RecordedAt {
-    match Cgroup::open(&record.path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => RecordedAt::Absent,
+    match Cgroup::open_if_present(&record.path) {
+        Ok(None) => RecordedAt::Absent,
         Err(_) => RecordedAt::Unreadable,
         // The opened directory must be on the cgroup2 mount (6.1, the record).
-        Ok(cgroup)
+        Ok(Some(cgroup))
             if !nix::sys::statfs::fstatfs(cgroup.fd())
                 .is_ok_and(|fs| fs.filesystem_type() == nix::sys::statfs::CGROUP2_SUPER_MAGIC) =>
         {
             RecordedAt::Unreadable
         }
-        Ok(cgroup) => match cgroup.identity() {
+        Ok(Some(cgroup)) => match cgroup.identity() {
             Ok(identity) if identity == (record.dev, record.ino) => RecordedAt::Same,
             Ok(_) => RecordedAt::Other,
             Err(_) => RecordedAt::Unreadable,

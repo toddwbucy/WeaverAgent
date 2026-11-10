@@ -14,7 +14,8 @@
 //!   the scope, within the scope bound, never the call's answer (D1).
 //!
 //! [`enter`] composes them by the rows [`standing_judgment`] and
-//! [`request_judgment`], the scope's state table's events admin causes.
+//! [`request_judgment`], the scope's state table's events admin causes, for
+//! the inputs a [`Step`] carries.
 
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -24,9 +25,10 @@ use crate::containment::{self, Cgroup};
 /// The slice every agent's scope stands in (6.1, one scope per agent).
 pub const SLICE: &str = "weaver.slice";
 
-/// **The scope bound**, 6.1's election, a ceiling: how long the start step
-/// reads for the move after its request, and how long it waits for PID1 to
-/// collect a scope standing empty.
+/// **The scope bound**, 6.1's election, a ceiling: how long a stalled PID1
+/// holds a load, counted from the request (the call and the read for the
+/// move within it), and how long the start step waits for PID1 to collect a
+/// scope standing empty.
 pub const SCOPE_BOUND: Duration = Duration::from_secs(10);
 
 /// How often the start step reads for the move or the collection (6.1, the
@@ -91,6 +93,34 @@ pub struct Call {
     pub timeout: Duration,
 }
 
+/// The production request's type, [`busctl`]'s.
+pub type Busctl = fn(&Call) -> Result<String, String>;
+
+/// **The scope step's inputs** (6.1): the site, the process the request
+/// moves, the request and the bound, named so that no two of them trade
+/// places at a call. Production's is [`Step::production`]. The instruments
+/// pass a site beneath their own delegated cgroup and a fake PID1.
+pub struct Step<R> {
+    pub site: Site,
+    pub pid: u32,
+    pub request: R,
+    pub bound: Duration,
+}
+
+impl Step<Busctl> {
+    /// **Production's step**: the agent's site, this process's own pid, so
+    /// the confirm reads `/proc/self/cgroup`, [`busctl`] and
+    /// [`SCOPE_BOUND`].
+    pub fn production(agent: &str) -> Self {
+        Step {
+            site: Site::of(agent),
+            pid: std::process::id(),
+            request: busctl,
+            bound: SCOPE_BOUND,
+        }
+    }
+}
+
 /// Why the scope step stood nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeRefused {
@@ -98,7 +128,8 @@ pub enum ScopeRefused {
     /// and never killed (I8).
     Leftovers(Vec<i32>),
     /// `BoundaryUnverified`, naming the scope and what the request answered,
-    /// or that no move followed, or that the scope stood past the bound.
+    /// or that no move followed, that the scope still stood empty at the
+    /// bound, or that its `cgroup.events` did not read.
     Unverified(String),
 }
 
@@ -111,9 +142,11 @@ pub enum ScopeStanding {
     /// Standing and `populated 0`: ending, PID1 stopping and collecting it
     /// (P4).
     Empty,
-    /// Standing and populated, or its `cgroup.events` not read: a run's
-    /// leftovers (P3).
+    /// Standing and populated: a run's leftovers (P3).
     Populated,
+    /// Standing and its `cgroup.events` not read: neither empty nor
+    /// populated is known.
+    Unread,
 }
 
 /// The start step's answer to what stands.
@@ -127,17 +160,34 @@ pub enum StandingAction {
     /// P3: `AgentRunning`, naming the processes, no request and nothing
     /// killed (I8).
     RefuseLeftovers,
+    /// `BoundaryUnverified`, naming the read, no request and nothing
+    /// killed: a scope the step cannot read is neither a run's leftovers
+    /// nor ending.
+    RefuseUnread,
 }
 
 /// **The scope's rows for what stands before the request** (6.1, the
 /// scope's state table): absent goes on, empty is waited out, populated
-/// refuses.
+/// refuses as a run's leftovers, unread refuses as unverified.
 pub fn standing_judgment(standing: ScopeStanding) -> StandingAction {
     match standing {
         ScopeStanding::Absent => StandingAction::Request,
         ScopeStanding::Empty => StandingAction::AwaitCollection,
         ScopeStanding::Populated => StandingAction::RefuseLeftovers,
+        ScopeStanding::Unread => StandingAction::RefuseUnread,
     }
+}
+
+/// What the request and the confirm came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestOutcome {
+    /// The request failed: PID1 unreachable, the call refused, its job failed.
+    Refused,
+    /// The request answered and the start step's own reading did not name
+    /// the scope within the bound.
+    AnsweredNoMove,
+    /// The start step's own reading named the scope within the bound.
+    Moved,
 }
 
 /// The start step's answer to its request.
@@ -156,11 +206,11 @@ pub enum RequestAction {
 
 /// **The scope's rows for the request** (6.1, the scope's state table): only
 /// the start step's own reading of the move goes on.
-pub fn request_judgment(answered: bool, moved: bool) -> RequestAction {
-    match (answered, moved) {
-        (true, true) => RequestAction::GoOn,
-        (true, false) => RequestAction::RefuseNoMove,
-        (false, _) => RequestAction::RefuseAnswered,
+pub fn request_judgment(outcome: RequestOutcome) -> RequestAction {
+    match outcome {
+        RequestOutcome::Moved => RequestAction::GoOn,
+        RequestOutcome::AnsweredNoMove => RequestAction::RefuseNoMove,
+        RequestOutcome::Refused => RequestAction::RefuseAnswered,
     }
 }
 
@@ -169,20 +219,20 @@ pub fn request_judgment(answered: bool, moved: bool) -> RequestAction {
 /// **The read before the request**: what stands at the scope's path, and
 /// the scope's cgroup where one stands, for naming its processes. A path
 /// that does not open other than as absent refuses rather than read as
-/// absent.
+/// absent, and a `cgroup.events` that does not read is [`ScopeStanding::Unread`],
+/// never populated or empty.
 pub fn standing(site: &Site) -> Result<(ScopeStanding, Option<Cgroup>), ScopeRefused> {
     let path = site.path();
-    match Cgroup::open(&path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Ok((ScopeStanding::Absent, None))
-        }
+    match Cgroup::open_if_present(&path) {
+        Ok(None) => Ok((ScopeStanding::Absent, None)),
         Err(error) => Err(ScopeRefused::Unverified(format!(
             "the scope {path} does not open: {error}"
         ))),
-        Ok(scope) => {
+        Ok(Some(scope)) => {
             let standing = match scope.populated() {
                 Some(false) => ScopeStanding::Empty,
-                _ => ScopeStanding::Populated,
+                Some(true) => ScopeStanding::Populated,
+                None => ScopeStanding::Unread,
             };
             Ok((standing, Some(scope)))
         }
@@ -194,17 +244,9 @@ pub fn standing(site: &Site) -> Result<(ScopeStanding, Option<Cgroup>), ScopeRef
 /// `deadline`. Answers whether it was collected.
 pub fn await_collection(site: &Site, deadline: Instant) -> bool {
     let path = site.path();
-    loop {
-        if matches!(Cgroup::open(&path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
-        {
-            return true;
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return false;
-        }
-        std::thread::sleep(SCOPE_POLL.min(remaining));
-    }
+    containment::poll_until(deadline, SCOPE_POLL, || {
+        matches!(Cgroup::open_if_present(&path), Ok(None))
+    })
 }
 
 /// **The confirm** (D1): the start step's own reading of its cgroup, every
@@ -212,16 +254,9 @@ pub fn await_collection(site: &Site, deadline: Instant) -> bool {
 /// passes its own pid, so the reading is `/proc/self/cgroup`'s. Answers
 /// whether the move read.
 pub fn confirm(pid: u32, path: &str, deadline: Instant) -> bool {
-    loop {
-        if containment::process_cgroup(pid as i32).as_deref() == Some(path) {
-            return true;
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return false;
-        }
-        std::thread::sleep(SCOPE_POLL.min(remaining));
-    }
+    containment::poll_until(deadline, SCOPE_POLL, || {
+        containment::process_cgroup(pid as i32).as_deref() == Some(path)
+    })
 }
 
 /// **The request, section 11's election**: an exec of systemd's own
@@ -291,20 +326,22 @@ pub fn busctl_arguments(call: &Call) -> Vec<String> {
 // ------------------------------------------------------------- the step
 
 /// **The scope step** (6.1): the read before the request, the wait for a
-/// scope standing empty, the request for `pid`, and the confirm, each
-/// within `bound`, judged by the rows. Answers the scope's cgroup, opened
-/// once the start step's own reading names it, for the floor to judge.
-/// Production passes [`Site::of`] the agent, its own pid, [`busctl`] and
-/// [`SCOPE_BOUND`]. The instruments pass a site beneath their own delegated
-/// cgroup and a fake PID1.
-pub fn enter(
-    site: &Site,
-    pid: u32,
-    request: impl FnOnce(&Call) -> Result<String, String>,
-    bound: Duration,
-) -> Result<Cgroup, ScopeRefused> {
+/// scope standing empty, the request for the step's pid, and the confirm,
+/// each within its bound, the request's counted from the call, judged by the
+/// rows. Answers the scope's cgroup, opened once the start step's own
+/// reading names it, for the floor to judge.
+pub fn enter<R>(step: Step<R>) -> Result<Cgroup, ScopeRefused>
+where
+    R: FnOnce(&Call) -> Result<String, String>,
+{
+    let Step {
+        site,
+        pid,
+        request,
+        bound,
+    } = step;
     let path = site.path();
-    let (found, scope) = standing(site)?;
+    let (found, scope) = standing(&site)?;
     match standing_judgment(found) {
         StandingAction::RefuseLeftovers => {
             return Err(ScopeRefused::Leftovers(
@@ -314,11 +351,16 @@ pub fn enter(
                     .unwrap_or_default(),
             ));
         }
+        StandingAction::RefuseUnread => {
+            return Err(ScopeRefused::Unverified(format!(
+                "the scope {path} stands and its cgroup.events does not read"
+            )));
+        }
         StandingAction::AwaitCollection => {
             drop(scope);
-            if !await_collection(site, Instant::now() + bound) {
+            if !await_collection(&site, Instant::now() + bound) {
                 return Err(ScopeRefused::Unverified(format!(
-                    "the scope {path} stands empty past the scope bound ({} ms): PID1 has not collected it",
+                    "the scope {path} still stands empty at the scope bound ({} ms)",
                     bound.as_millis()
                 )));
             }
@@ -332,21 +374,22 @@ pub fn enter(
         pid,
         timeout: bound,
     };
-    let answered = request(&call);
-    let moved = answered.is_ok() && confirm(pid, &path, deadline);
-    match request_judgment(answered.is_ok(), moved) {
+    let (outcome, said) = match request(&call) {
+        Err(said) => (RequestOutcome::Refused, said),
+        Ok(answer) if confirm(pid, &path, deadline) => (RequestOutcome::Moved, answer),
+        Ok(answer) => (RequestOutcome::AnsweredNoMove, answer),
+    };
+    match request_judgment(outcome) {
         RequestAction::GoOn => Cgroup::open(&path).map_err(|error| {
             ScopeRefused::Unverified(format!(
                 "the scope {path} does not open after the move: {error}"
             ))
         }),
         RequestAction::RefuseAnswered => Err(ScopeRefused::Unverified(format!(
-            "the request for the scope {path} was refused: {}",
-            answered.err().unwrap_or_default()
+            "the request for the scope {path} was refused: {said}"
         ))),
         RequestAction::RefuseNoMove => Err(ScopeRefused::Unverified(format!(
-            "the request for the scope {path} answered {} and no move followed within the scope bound ({} ms)",
-            answered.unwrap_or_default(),
+            "the request for the scope {path} answered {said} and no move followed within the scope bound ({} ms)",
             bound.as_millis()
         ))),
     }

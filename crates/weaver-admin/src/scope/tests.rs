@@ -17,8 +17,9 @@ fn absent_site() -> Site {
 }
 
 /// **The scope's rows for what stands, transcribed** (6.1, the scope's
-/// state table): absent requests, empty is waited out, populated refuses
-/// with no request. Perturbation: any arm changed.
+/// state table): absent requests, empty is waited out, populated refuses as
+/// a run's leftovers and unread refuses as unverified, both with no request.
+/// Perturbation: any arm changed.
 #[test]
 fn the_scope_rows_answer_what_stands() {
     assert_eq!(
@@ -33,21 +34,38 @@ fn the_scope_rows_answer_what_stands() {
         standing_judgment(ScopeStanding::Populated),
         StandingAction::RefuseLeftovers
     );
+    assert_eq!(
+        standing_judgment(ScopeStanding::Unread),
+        StandingAction::RefuseUnread
+    );
 }
 
 /// **Only the start step's own reading of the move goes on** (6.1, D1):
-/// an answered request with no move refuses, and a refused request refuses
-/// whatever was read. Perturbation: go on at an answer, and the no-move row
-/// stands.
+/// an answered request with no move refuses, and a refused request refuses.
+/// Perturbation: go on at an answer, and the no-move row stands.
 #[test]
 fn the_scope_rows_go_on_only_at_the_move() {
-    assert_eq!(request_judgment(true, true), RequestAction::GoOn);
-    assert_eq!(request_judgment(true, false), RequestAction::RefuseNoMove);
+    assert_eq!(request_judgment(RequestOutcome::Moved), RequestAction::GoOn);
     assert_eq!(
-        request_judgment(false, false),
+        request_judgment(RequestOutcome::AnsweredNoMove),
+        RequestAction::RefuseNoMove
+    );
+    assert_eq!(
+        request_judgment(RequestOutcome::Refused),
         RequestAction::RefuseAnswered
     );
-    assert_eq!(request_judgment(false, true), RequestAction::RefuseAnswered);
+}
+
+/// **Production's step is the agent's site, this process and the scope
+/// bound** (6.1, Where): the pid the request moves is the start step's own,
+/// so the confirm reads `/proc/self/cgroup`. Perturbation: pass any other
+/// pid, site or bound, and the step differs.
+#[test]
+fn production_step_moves_this_process_to_the_agents_scope() {
+    let step = Step::production("alpha");
+    assert_eq!(step.site, Site::of("alpha"));
+    assert_eq!(step.pid, std::process::id());
+    assert_eq!(step.bound, SCOPE_BOUND);
 }
 
 /// **The scope is the agent's, in the agents' slice** (6.1, one scope per
@@ -128,10 +146,10 @@ fn a_refused_request_refuses_naming_its_answer() {
     let site = absent_site();
     let asked = Cell::new(0);
     let started = Instant::now();
-    let refused = enter(
-        &site,
-        std::process::id(),
-        |call| {
+    let refused = enter(Step {
+        site: site.clone(),
+        pid: std::process::id(),
+        request: |call: &Call| {
             asked.set(asked.get() + 1);
             assert_eq!(call.unit, "weaver-alpha.scope");
             assert_eq!(call.slice, SLICE);
@@ -139,8 +157,8 @@ fn a_refused_request_refuses_naming_its_answer() {
             assert_eq!(call.timeout, Duration::from_secs(5));
             Err("Call failed: Unit weaver-alpha.scope already exists.".to_string())
         },
-        Duration::from_secs(5),
-    );
+        bound: Duration::from_secs(5),
+    });
     match refused {
         Err(ScopeRefused::Unverified(why)) => {
             assert!(why.contains("was refused"), "{why}");
@@ -166,12 +184,12 @@ fn an_answer_with_no_move_refuses_at_the_bound() {
     let site = absent_site();
     let bound = Duration::from_millis(50);
     let started = Instant::now();
-    let refused = enter(
-        &site,
-        std::process::id(),
-        |_| Ok("o \"/org/freedesktop/systemd1/job/1\"".to_string()),
+    let refused = enter(Step {
+        site,
+        pid: std::process::id(),
+        request: |_: &Call| Ok("o \"/org/freedesktop/systemd1/job/1\"".to_string()),
         bound,
-    );
+    });
     match refused {
         Err(ScopeRefused::Unverified(why)) => {
             assert!(why.contains("no move followed"), "{why}");
