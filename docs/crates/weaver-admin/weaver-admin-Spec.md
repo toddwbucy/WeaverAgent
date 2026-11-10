@@ -305,23 +305,25 @@ the boundary file's `trace-reader`, per section 9, so the connector's one other 
 with the agent is that same account. The box's gate-con account, `weaver-gatecon`, is
 the one caller every gate rule names, per `weaver-gate-world-contract` section 1, and
 holds no line here, and `weaver-admincon` is in no gate rule, so neither account reaches
-the other's door. An agent laid before 2026-11-10 keeps its per-agent account
-`weaver-<agent>-admincon` of #50 and is not refused for it.
+the other's door. An agent whose rule names its own per-agent account
+`weaver-<agent>-admincon` of #50 keeps it and is not refused for it.
 
-**The account reaches every agent on its box, and the reach is the design**, on the
-operator's ruling of 2026-11-10. It is the trace reader of every agent on the box, it
-passes every territory by the state groups, and through the access groups it reads every
-declaration, prompt draft, `admin.log`, `worker.log` and published save point, which is
-each agent's held state as bytes. It holds the fixed lines of every agent on the box. A
-per-agent account was proposed and overruled, for the operator's reason: WeaverWeb is
+**The account reaches every agent whose rule names it, and the reach is the design**, on
+the operator's ruling of 2026-11-10. It is the trace reader of each such agent, it
+passes each one's territory by its state group, and through its access group it reads
+its declaration, prompt draft, `admin.log`, `worker.log` and published save points,
+which are the agent's held state as bytes. It holds the fixed lines of each such agent.
+A per-agent account was proposed and overruled, for the operator's reason: WeaverWeb is
 the operator's console, at the level of abstraction of a hypervisor's management
 console, a Proxmox console being the operator's comparison, and it never faces the
 public. Full administrative reach over every agent on the box is the console's job, and
 per-agent accounts bound nothing, since the console holds every key. **Attribution
-survives the shared uid**, because each boundary record carries the agent it crossed
-into: `admin.log` stands in the agent's own territory and names the agent and the uid
-sudo reported on every line, per section 8, and the gate and the trace relay are the
-agent's own doors, so a connection either admits reaches that agent alone.
+survives the shared uid**, because each boundary record is the agent's own. `admin.log`
+stands in the agent's own territory and names the agent and the uid sudo reported on
+every line, per section 8. The gate and the trace relay each belong to one agent, so
+every connection that either door admits is a connection to that agent. What WeaverWeb's
+own logs carry per connection is WeaverWeb's to state, and this repository claims
+nothing for a log it does not write.
 
 ```graph
 node: admin-runs-as-root-or-performs-nothing
@@ -1524,24 +1526,24 @@ the same validated name is what section 6's start step interpolates,
 so a name reaching a path or a process has one origin and review reads that origin
 rather than every use. **A name ending in a reserved suffix refuses**: `-state`,
 `-trace`, `-relay`, `-admin` and `-admincon`, the last being the per-agent connector
-account of the operator's ruling of 2026-10-03 on #50, which an agent laid before
-2026-11-10 still carries. The accounts and groups the box provisions for an agent append
-those suffixes to its name, `weaver-<name>-state`, `weaver-<name>-relay` and the rest,
-so an agent named `x-relay` would own `weaver-x-relay`, which is agent `x`'s relay
-account, and the collision would hand one agent another's identity. The suffixes are
-reserved rather than the derivation changed because the derived names are already
-provisioned on running boxes, and the run directory leaves the collision behind by its
-own namespace, per section 3.
+account of the operator's ruling of 2026-10-03 on #50, which an agent whose gate rule
+names the operator still carries. The accounts and groups the box provisions for an
+agent append those suffixes to its name, `weaver-<name>-state`, `weaver-<name>-relay`
+and the rest, so an agent named `x-relay` would own `weaver-x-relay`, which is agent
+`x`'s relay account, and the collision would hand one agent another's identity. The
+suffixes are reserved rather than the derivation changed because the derived names are
+already provisioned on running boxes, and the run directory leaves the collision behind
+by its own namespace, per section 3.
 
 **The names `gatecon` and `admincon` refuse as a reserved suffix does**, on the
 operator's ruling of 2026-11-10. The box's two connector accounts are `weaver-gatecon`
 and `weaver-admincon`, one per box, per section 2 and `weaver-gate-world-contract`
 section 1, so an agent of either name would own one of them as its own identity, the
-caller of every gate on the box or the reader and lifecycle holder of every agent.
-`deploy/create-agent.sh` lays each account where it is absent, and where an account of
-the name stands it judges the account's shape and not only its name, a system account
-with no login shell, no home and no group that reaches the other account's door, so a
-standing account is never adopted unjudged.
+caller of every agent's gate whose rule names it, or the reader and lifecycle holder of
+every agent whose rule names it. `deploy/create-agent.sh` lays each account where it is
+absent, and where an account of the name stands it judges the account's shape and not
+only its name, a system account with no login shell, no home and no group that reaches
+the other account's door, so a standing account is never adopted unjudged.
 
 ```graph
 node: admin-identity-from-validated-name
@@ -3776,8 +3778,8 @@ another agent. It is declared all the same: its digest is written on every line 
 harness for the `load` event's member marked boundary. **It is one file per agent**
 because the root is one agent's and this crate reads nothing shared, and a shared file
 would be a roster of every agent's readers, the fleet view #45 removed from admin. The
-reader it names is `weaver-admincon` for an agent `deploy/create-agent.sh` lays from
-2026-11-10, and the agent's per-agent account for one laid before.
+reader it names is `weaver-admincon`, or, for an agent whose gate rule names the
+operator, that agent's own per-agent account.
 
 **The gate's access rule is constitution, and no kept agent depends on it**, on the
 operator's ruling of 2026-11-10. The rule sits in the declaration, so a changed rule is

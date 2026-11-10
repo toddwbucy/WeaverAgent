@@ -94,11 +94,11 @@ nothing else.
 
 **The world at this door is one declared caller per box**, on the operator's rulings of
 2026-11-10: `weaver-gatecon`, the box's system account that runs WeaverWeb's gate-con,
-which the access rule of every agent `deploy/create-agent.sh` lays on that box from that
-date names alone. The operator's uid is in no such rule, and neither is root. An agent
-laid before that date keeps the rule it was laid with, which names the operator, per
-section 2. The box's admin-con account, `weaver-admincon`, is in no gate rule either,
-per `weaver-admin-operator-contract` section 0, so neither connector account reaches the
+which an agent's access rule names alone. Neither the operator's uid nor root is in such
+a rule. An agent whose rule names the operator instead keeps it and is not refused for
+it, and section 2 states what such an agent alone can receive. The box's admin-con
+account, `weaver-admincon`, is in no gate rule either, per
+`weaver-admin-operator-contract` section 0, so neither connector account reaches the
 other's door. Many people and many turns are WeaverWeb's to carry over gate-con's one
 admission, per #70 item 1. **The rule names one caller by `deploy/create-agent.sh`'s
 convention, and nothing refuses a rule naming more**: enforcing it in code is later work
@@ -135,16 +135,15 @@ gate-con account among them, or with any other `role` value, it is a refused tur
 section 3's path, the refusal naming the role in its JSON rendering, quoted to at most
 256 octets and marked where cut. **A seeding line has a sender only where the agent's
 access rule admits the operator's uid**, since the gate refuses every peer the rule does
-not name before a byte of its ask is read, per section 1. An agent
-`deploy/create-agent.sh` lays names the declared caller of section 1 alone, on the
-operator's ruling of 2026-11-10, so it has no seeding sender, and how such an agent's
-prompt enters is deferred to its own act. An agent whose rule admits the operator, laid
-before that ruling, is seeded as the last step of creating it, run by the operator after
-the load with the draft `system-prompt.md` beside the declaration, and the first save
-point after it is the agent's starting state. A seeding line is bounded as every line
-is, 49,041 octets before the delimiter per `weaver-gate-Spec` section 4. The bound is an
-interim, on the operator's ruling of 2026-11-08, until the seed verb takes seeding off
-the gate at the foundation cutover.
+not name before a byte of its ask is read, per section 1. An agent whose rule names the
+box's gate-con account alone has no seeding sender, and how such an agent's prompt
+enters is deferred to its own act, on the operator's ruling of 2026-11-10. An agent
+whose rule names the operator is seeded as the last step of creating it, run by the
+operator after the load with the draft `system-prompt.md` beside the declaration, and
+the first save point after it is the agent's starting state. A seeding line is bounded
+as every line is, 49,041 octets before the delimiter per `weaver-gate-Spec` section 4.
+The bound is an interim, on the operator's ruling of 2026-11-08, until the seed verb
+takes seeding off the gate at the foundation cutover.
 
 ## 3. What crosses out, and its format
 

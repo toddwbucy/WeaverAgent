@@ -52,16 +52,16 @@ on the operator's ruling of 2026-10-03 on #50: the connector holds only fixed li
 it can write none of the operator's files, and WeaverWeb's audit names the person while
 the box's record names the service uid sudo reports. **One admin-con account serves
 every agent on the box**, `weaver-admincon`, on the operator's rulings of 2026-11-10,
-which supersede #50's per-agent account for every agent `deploy/create-agent.sh` lays
-from that date. It holds the fixed lines of every such agent on the box and is its trace
-reader, and it is in no gate rule, the box's gate-con account being the one caller
-`weaver-gate-world-contract` section 1 names, so neither account reaches the other's
-door. Least privilege holds of what the account can do and not of how many agents it
-reaches: it holds the agents' fixed lines and their read-only doors and nothing else,
-for the reason `weaver-admin-Spec` section 2 states. An agent laid before 2026-11-10
-keeps its per-agent account and is not refused for it. The graph
-carries no node for a principal outside the program, so the party is named in prose and
-the missing category is registered rather than improvised.
+which supersede #50's per-agent account. It holds the fixed lines of each agent whose
+sudo rule names it and is that agent's trace reader, and it is in no gate rule, the
+box's gate-con account being the one caller `weaver-gate-world-contract` section 1
+names, so neither account reaches the other's door. Least privilege holds of what the
+account can do and not of how many agents it reaches: it holds the agents' fixed lines
+and their read-only doors and nothing else, for the reason `weaver-admin-Spec` section 2
+states. An agent whose reader is its own per-agent account and whose gate rule names the
+operator keeps both and is not refused for them. The graph carries no node for a
+principal outside the program, so the party is named in prose and the missing category
+is registered rather than improvised.
 
 ## 1. The boundary
 
@@ -96,9 +96,9 @@ recorded, only where it cannot be taken, per section 4 and `weaver-admin-Spec` s
 3, the forced unload.
 **Which lines a caller may run is the rule the operator installs**: an observer's rule
 grants `show`, and an operator's adds `validate`, `load`, `unload`, `stop`, `save-point`,
-`restore` and `force-unload`, the role split of #50 mapped onto command lines. Nothing else crosses in:
-no argument the caller chooses, no standard input, which the program never reads, and no
-claim of who asked. **The cause the record carries is the uid sudo reports**, and which
+`restore` and `force-unload`, the role split of #50 mapped onto command lines. Nothing
+else crosses in: no argument the caller chooses, no standard input, which the program
+never reads, and no claim of who asked. **The cause the record carries is the uid sudo reports**, and which
 person asked is WeaverWeb's record and never the agent's. **The rule opens no login
 session for these lines**, on the operator's confirmation of 2026-10-03 on
 toddwbucy/WeaverWeb#15: sudo's `pam_session` is off for the connector's user
