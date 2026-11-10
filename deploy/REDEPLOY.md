@@ -14,8 +14,9 @@ already stood up: it needs the stack record to read and a git tree to name the b
 and it refuses without them; a box with no agent root is updated all the same (#39).
 It plans and installs the members, the shell and the engine libraries alike, so the
 commit its closing line names is true of everything that commit builds (the
-operator's ruling of 2026-11-09), and a verified install ends by printing and
-recording the install tuple (section 3, step 6). Its `--install` unloads every
+operator's ruling of 2026-11-09), and a verified install ends, after its verify, by
+printing and recording the install tuple, whose keys section 3 lists under
+bootstrap's step 6. Its `--install` unloads every
 agent before it replaces a binary, waiting on each graceful unload up to 300 seconds
 (`--unload-timeout <s>`) and then joining it with `force-unload`, which still takes the
 leave's save point, and prints which ended the run. A box on the box-wide layout
@@ -55,6 +56,7 @@ something this runbook does not mention, the runbook is what gets amended.
 | Agent root: the agent's admin configuration, one file per key, copied from the stack record, plus `territory`, `operator` and `roles.toml` | `/etc/weaver/admin/<name>/` (root 0755, files 0644) | create-agent |
 | Sudo rule: the connector's fixed command lines | `/etc/sudoers.d/weaver-<name>` (root 0440) | create-agent |
 | Members: `worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state` | `<prefix>/bin/` | bootstrap, update-stack |
+| The agent's shell (#29): the static `busybox` and its applet list `busybox.applets` | `<prefix>/bin/` (root 0755 and 0644), named by the record's `shell-binary` | bootstrap, update-stack |
 | Engine libraries `libggml*`, `libllama*` | `<prefix>/lib/`, reached by `/etc/ld.so.conf.d/weaver.conf` and named by the record's `library-path`, which admin sets as the worker's `LD_LIBRARY_PATH` | bootstrap, update-stack |
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
 | Retired Python SPU, where an older install left it | `<prefix>/python-spu/` | archive and purge only, Python retirement below |
@@ -293,14 +295,16 @@ What it does, so the log can say which step a failure was at:
    elects is tested before it is installed. A
    workspace-wide `cargo test --locked` also compiles and passes (#37). Cargo's output
    goes to a log in the target directory, named as the step begins: a crate that does
-   not compile, a failed test or no test at all refuses, printing the first lines cargo
-   names as the cause and the log's last 60, and naming the log, which is kept (#128).
-   `update-stack.sh`'s test step does the same.
+   not compile, a failed test or no test at all refuses, printing each `failures:`
+   block through its `test result:` line and the first `error` and `panicked at` lines
+   outside them (the log's last 20 where none stands), and naming the log, which is
+   kept (#128). `update-stack.sh`'s test step does the same.
 4. `cargo build --release --locked --workspace --features
    weaver-spu/cuda,weaver-state/sqlite`. The engine is named,
    though it is the default, or the member refuses an agent electing it at load
    (measured 2026-09-11). The CUDA host compiler is `NVCC_CCBIN`, defaulted as
-   `update-stack.sh` defaults it. A build that fails refuses the same way, never going on
+   `update-stack.sh` defaults it. A build that fails refuses with the first lines cargo
+   names as the cause and the log's last 60, naming the log, and never goes on
    to install what an earlier build left in the target directory (#128). Then
    `deploy/build-busybox.sh` builds the agent's shell (#29): busybox 1.36.1, its
    tarball fetched from busybox.net (or, on a box without the network, named by

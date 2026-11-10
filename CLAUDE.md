@@ -24,11 +24,12 @@ process or a network boundary, never linked:
   They are WeaverWeb's and never this repository's, and they start under the operator's
   provisioning, never under admin. Gate-con reaches the gate's socket. Admin-con issues
   admin's fixed command lines through the box's strict sudo rule and, where the trace
-  sink is a file, reads the trace door. The agent's lifetime is bound to the root-owned
-  delegated scope a load runs in (#111). A load through admin-con is refused until #166
-  is ruled, since admin's start step requires the invoker's cgroup and every cgroup above
-  it to be root's (`weaver-admin-Spec` section 6.1). The role map that bounds them is the
-  box's (toddwbucy/WeaverTools#6).
+  sink is a file, reads the trace door. By the Spec, the agent's lifetime is its own
+  root-owned delegated scope's, which admin's start step asks PID1 for and moves into
+  (#166, `weaver-admin-Spec` section 6.1). Until #166's code act lands, admin still
+  places the agent beneath the invoker's cgroup and requires it and every cgroup above
+  it to be root's, so a load through admin-con is refused. The role map that bounds
+  them is the box's (toddwbucy/WeaverTools#6).
 
 The rule that drew the line: a crate a consumer meets across a network boundary gets its
 own repository; the agent keeps everything interior. The suite-level documentation

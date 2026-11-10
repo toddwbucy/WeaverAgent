@@ -441,7 +441,9 @@ for root in "$ADMIN_BASE"/*/; do
   fi
   [ -f "$root/territory" ] && [ ! -L "$root/territory" ] \
     || die "$agent: its root $root names no territory as a regular file, which admin refuses at every verb. $(recreate "$agent")"
-  AGENTS="$AGENTS $agent"
+  # Space-separated with no leading space, so the box facts print the list
+  # in their column; every other use splits it or tests it for empty.
+  AGENTS="${AGENTS:+$AGENTS }$agent"
 done
 # **A stack with no agent is updated all the same** (#39): the refresh, the
 # test, the build and the install need no agent, and the steps that act on
@@ -724,7 +726,11 @@ printf '  built from    %s\n' "$BUILT"
 # read: step 9 prints the `state_store` the load event names, out of the sink,
 # after the member has served it.
 printf '  will build    %s\n' "$FEATURES"
-printf '  will install  %s, and the engine libraries (%s) built by %s\n' "$MEMBERS" "$LIB_GLOBS" "$ENGINE_CRATE"
+# **The line names all three things the plan lists and the install moves**:
+# the members, the shell's two files and the engine libraries, as
+# deploy/REDEPLOY.md says. It named the members and the libraries alone.
+printf '  will install  %s, the shell (%s), and the engine libraries (%s) built by %s\n' \
+  "$MEMBERS" "$SHELL_FILES" "$LIB_GLOBS" "$ENGINE_CRATE"
 # **One line, because the query answers once per device.** Three cards gave
 # three lines into one `%s`, so two of them printed with no label and no
 # indent. The driver is the box's, not the card's, so the first answer is the
@@ -832,8 +838,13 @@ say "tree"
 git remote update origin >/dev/null || die "cannot refresh origin; refusing to build against a stale origin/main"
 BEFORE=$(git rev-parse --short HEAD)
 BRANCH=$(git branch --show-current)
+# **A detached checkout is named by its commit**: `--show-current` answers
+# an empty line there, and a pinned install runs from a detached worktree,
+# so the line read "on branch , not fast-forwarding" on every pinned run.
 if [ "$BRANCH" = "main" ]; then
   git merge --ff-only origin/main >/dev/null 2>&1 || die "main will not fast-forward; resolve by hand"
+elif [ -z "$BRANCH" ]; then
+  printf '  detached at %s, not fast-forwarding\n' "$BEFORE"
 else
   printf '  on branch %s, not fast-forwarding\n' "$BRANCH"
 fi
@@ -894,14 +905,14 @@ say "test"
 # `cargo | grep | awk` answered "0 passed, 0 failed", took grep's status under
 # `pipefail` rather than cargo's, and discarded every diagnostic. Cargo's own
 # status is kept, the counts are read from the log whole, and a failure, a
-# failed test or no test at all prints the first lines cargo names as the
-# cause and the log's last 60 on stderr, and refuses naming the log, which is
-# kept; a clean run removes it. The log is the operator's, beside cargo's own
+# failed test or no test at all prints the failures and the lines cargo names
+# as the cause on stderr, and refuses naming the log, which is kept; a clean
+# run removes it. The log is the operator's, beside cargo's own
 # output in the target directory, named by this run's pid so runs sharing a
 # target directory never write each other's, and named as the step begins so
 # a long step can be followed.
 run_tests() {
-  local log="${BUILT%/release}/weaver-deploy-tests-$$.log" rc=0 totals passed failed
+  local log="${BUILT%/release}/weaver-deploy-tests-$$.log" rc=0 totals passed failed cause
   mkdir -p -- "${BUILT%/release}" || die "cannot make the target directory ${BUILT%/release} for the test step's log"
   printf '  output: %s\n' "$log"
   cargo test --release --locked \
@@ -924,11 +935,30 @@ run_tests() {
   failed=${totals#* }
   printf '  %s passed, %s failed\n' "$passed" "$failed"
   if [ "$rc" -ne 0 ] || [ "$passed" = 0 ]; then
-    # The cause first, where cargo names one, then the run's end: a long
-    # captured output can push the panic or the first error out of the tail.
-    grep -m 12 -E -A 6 '^(error(\[|:)|failures:|---- )|panicked at' -- "$log" >&2 || true
-    printf '   ...\n' >&2
-    tail -n 60 -- "$log" >&2
+    # **The failures and cargo's cause, never the run's end** (the live plan
+    # of 2026-11-09): the harness's suites write queue-pressure JSON lines and
+    # every passing test's line to cargo's stdout, and the log's last 60
+    # carried them, and the failures block a second time, before the
+    # refusal. Echoed, in the log's order: each libtest `failures:` block
+    # through its `test result:` line (a FAILED summary outside a block too),
+    # the block closed by a summary a child's line garbled (#507) as well;
+    # then, outside those blocks, the first 12 of cargo's `error` lines with
+    # the 6 after each, and of `panicked at` lines with the message after
+    # each, which name a crate that did not compile or a test binary that
+    # died. Where none of these stands (a run of no tests), the log's last
+    # 20 lines, which then carry no test's output. The whole output stays in
+    # the kept log.
+    cause=$(awk '
+      /^failures:$/ {held = 1}
+      held || /^test result: FAILED\./ {print; if (/test result: /) held = 0; next}
+      /^error(\[|:)/ && shown < 12 {after = 7; shown++}
+      /panicked at / && shown < 12 {if (after < 2) after = 2; shown++}
+      after > 0 {print; after--}' "$log") || true
+    if [ -n "$cause" ]; then
+      printf '%s\n' "$cause" >&2
+    else
+      tail -n 20 -- "$log" >&2
+    fi
     die "the tests did not pass (cargo exited $rc, $passed passed, $failed failed); the whole output is kept in $log"
   fi
   rm -f -- "$log"
@@ -1089,7 +1119,8 @@ fi
 # **What --install does to the agents, said before it does it** (#99 area 2
 # review, R2): every agent's connector rule is held out of sudo's reading and
 # every agent unloaded before any binary is replaced, and the rules come back
-# after the verify. A plan moves no rule and unloads nothing.
+# after the verify. A plan moves no rule and unloads nothing. An --install
+# runs this plan first, so it says the same before the credential prompt.
 say "the install window"
 if [ -z "$AGENTS" ]; then
   printf '  no agents: --install holds no connector rule and unloads none\n'
@@ -1321,8 +1352,12 @@ restore_rules() {
   return "$failed"
 }
 
-say "the install window: connector rules held, agents unloaded"
-[ -n "$AGENTS" ] || printf '  no agents: no connector rule to hold, none to unload\n'
+# **The window is said once**: step 5's preview said what follows, and this
+# reports each rule held and each agent unloaded under a header of its own.
+# With no agent there is nothing to report. A second "the install window"
+# header over the preview's own "no agents" body printed on every install
+# of a box with no agent (2026-11-09).
+[ -z "$AGENTS" ] || say "holding the connector rules, unloading the agents"
 # **A held name already standing refuses before any rule moves**: it is a rule
 # an earlier run held and never put back (a SIGKILL or a host stop, which run
 # no trap), and `mv -T` would write over it.

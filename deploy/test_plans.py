@@ -6,6 +6,7 @@ The command doubles record every privileged/build invocation. They never
 forward sudo, systemctl, package-manager or Cargo calls to the host.
 """
 
+import fnmatch
 import hashlib
 import json
 import os
@@ -125,7 +126,9 @@ elif name == 'systemctl':
     sys.exit(99)
 elif name == 'git':
     if args[0] == 'rev-parse': print('abcdef0')
-    elif args[0] == 'branch': print('fixture-branch')
+    # FIXTURE_BRANCH set empty stands for a detached checkout, which
+    # `git branch --show-current` answers with an empty line.
+    elif args[0] == 'branch': print(os.environ.get('FIXTURE_BRANCH', 'fixture-branch'))
     elif args[0] == 'ls-tree': print('160000 commit e21cdc11fixturevendoredcommit\tllama.cpp')
 elif name == 'hostname': print('fixture-box')
 elif name == 'nvidia-smi':
@@ -1538,6 +1541,47 @@ esac
         self.assertNotIn("FAULT", result.stdout, "the live devices equal the install tuple's")
         self.assertIn("m1 verified", result.stdout)
 
+    def test_verify_load_prints_the_load_event_through_its_stack_map(self):
+        """**The load event's line ends at a member boundary, after the stack
+        map**, and names the members it leaves to the sink. The cut at 600
+        characters fell inside the declaration digest on the live load of
+        2026-11-09 and never reaches the stack once a lineage stands, while
+        verify-lifecycle reads `stack` from this line. The payload below has
+        the live event's members in the live order. Perturbation: put back
+        `json.dumps(keep)[:600]` and the line neither parses nor holds the
+        stack."""
+        state = self.verify_fixture()
+        stack = {name: "1" * 64 for name in ("weaver-gate", "weaver-spu", "weaver-state",
+                                             "weaver-trace-relay", "worker")}
+        declaration = hashlib.sha256((self.decl / "agent.toml").read_bytes()).hexdigest()
+        payload = {"residual_readout": False, "surprisal": True, "state_member": True,
+                   "state_store": {"engine": "sqlite"}, "declaration": declaration,
+                   "composer": {"binary": "worker"},
+                   "tee": {"all_kinds": True, "keys": [{"kind": "message.user", "paths": ["content"]}]},
+                   "lineage": {"save_point": "5" * 64, "run": "r" * 40, "sequence": "7", "turn": "2",
+                               "named_at_restore": True},
+                   "stack": stack,
+                   "boundary": "/fixture/cgroup/weaver-m1", "cause": {"uid": 0}, "library_path": "/fixture/lib"}
+        event = {"session": "m1-001", "run": "r" * 40, "sequence": "0", "kind": "load",
+                 "subsystem": "harness", "payload": payload}
+        stub = self.root / "installed" / "bin" / "weaver-admin"
+        stub.write_text(stub.read_text().replace(
+            "echo '{\"kind\":\"load\"}'", "echo '" + json.dumps(event) + "'"))
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        lines = result.stdout.splitlines()
+        at = [i for i, line in enumerate(lines) if line.startswith("   load event: ")]
+        self.assertEqual(len(at), 1, result.stdout)
+        printed = json.loads(lines[at[0]].removeprefix("   load event: "))
+        through = list(payload)[:list(payload).index("stack") + 1]
+        self.assertEqual(printed, dict(event, payload={k: payload[k] for k in through}))
+        self.assertGreater(len(lines[at[0]]), 600)
+        self.assertEqual(lines[at[0] + 1],
+                         "   load event cut after its stack map; boundary, cause, library_path are in the sink")
+
     def test_verify_load_refuses_a_constituent_of_another_account(self):
         # Perturbation: drop the account check, and a stranger's process passes.
         state = self.verify_fixture()
@@ -2238,6 +2282,95 @@ esac
         self.assertIn('[ "$BEFORE" != "$AFTER" ] && [ -z "${WEAVER_UPDATE_REEXECUTED:-}" ]', text)
         self.assertLess(text.index('ORIGINAL_ARGS=("$@")'), text.index('INSTALL=0'))
 
+    def test_the_tree_step_names_a_detached_checkout_by_its_commit(self):
+        """**A detached checkout is named by its commit**, never as an empty
+        branch: a pinned install runs from a detached worktree, and the live
+        plan of 2026-11-09 printed "on branch , not fast-forwarding". A
+        branch other than main is still named. Perturbation: drop the
+        detached arm and the first run prints "on branch , not
+        fast-forwarding"."""
+        for branch, said in (("", "detached at abcdef0, not fast-forwarding"),
+                             ("fixture-branch", "on branch fixture-branch, not fast-forwarding")):
+            with self.subTest(branch=branch):
+                self.env["FIXTURE_BRANCH"] = branch
+                shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+                self.log.unlink(missing_ok=True)
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                tree = result.stdout.split("\n== tree\n", 1)[1].split("\n\n", 1)[0].splitlines()
+                self.assertEqual(tree, [f"  {said}", "  abcdef0 -> abcdef0"])
+        self.env.pop("FIXTURE_BRANCH")
+
+    def test_the_agents_line_lines_up_with_the_box_facts(self):
+        """**The agents line sits in the box facts' column**: the list was
+        built with a leading space, so the live plan of 2026-11-09 printed
+        "agents         granite1", one column out. Perturbation: build the
+        list as "$AGENTS $agent" again and the line carries two spaces more
+        than its label's padding."""
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("\n  agents        existing\n", result.stdout)
+
+    def test_the_will_install_line_names_every_file_the_plan_lists(self):
+        """**The box section's install line names what the install
+        installs**: the members, the shell's two files and the engine
+        libraries, as REDEPLOY says update-stack plans and installs them. The
+        live plan of 2026-11-09 left the shell out of the line while its plan
+        section listed busybox and busybox.applets. bootstrap-stack.sh, which
+        installs the same three, has no plan fixture, so its line is read
+        from its text. Perturbation: drop the shell from either script's
+        line, or from REDEPLOY's sentence, and this fails."""
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        line, = [l for l in result.stdout.splitlines() if l.startswith("  will install  ")]
+        plan = result.stdout.split("\n== plan\n", 1)[1].split("\n\n", 1)[0].splitlines()
+        named = set(re.findall(r"[\w.+-]+", line.split("engine libraries", 1)[0]))
+        globs = re.search(r"engine libraries \(([^)]*)\)", line).group(1).split()
+        listed = [row.split()[0] for row in plan if re.match(r"  \w", row)]
+        self.assertIn("busybox.applets", listed, plan)
+        self.assertTrue({"busybox", "busybox.applets"} <= named, line)
+        self.assertTrue(globs, line)
+        for name in listed:
+            if name.startswith("lib"):
+                self.assertTrue(any(fnmatch.fnmatch(name, g) for g in globs), name)
+            else:
+                self.assertIn(name, named)
+        bootstrap = (self.repo / "deploy" / "bootstrap-stack.sh").read_text()
+        planned, = [l for l in bootstrap.splitlines() if l.lstrip().startswith('plan "will install')]
+        for variable in ("$MEMBERS", "$SHELL_FILES", "$LIB_GLOBS"):
+            self.assertIn(variable, planned)
+        self.assertIn('SHELL_FILES="busybox busybox.applets"', bootstrap)
+        redeploy = re.sub(r"\s+", " ", (DEPLOY / "REDEPLOY.md").read_text())
+        installs, = [s for s in redeploy.split(". ") if "plans and installs the members" in s]
+        self.assertIn("the shell", installs)
+
+    def test_the_install_window_prints_once_under_install(self):
+        """**The install window is said once**: --install runs the plan
+        first, so its preview says what the window will do before the
+        credential prompt (#99 area 2 review, R2), and the act reports under
+        a header of its own only where an agent stands to hold and unload.
+        The live install of 2026-11-09, on a box with no agent, printed a
+        second install window header over the same "no agents" body.
+        Perturbation: put the act's old header and its "no agents" line back
+        and two headers and two bodies stand; print the preview in a plan
+        only and --install says nothing before it acts."""
+        plan = self.run_script("update-stack.sh")
+        self.assertEqual(plan.returncode, 0, plan.stdout + plan.stderr)
+        self.assertEqual([l for l in plan.stdout.splitlines() if l.startswith("== the install window")],
+                         ["== the install window"])
+        self.assertIn("plan only: no rule is moved and no agent unloaded", plan.stdout)
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        self.log.unlink(missing_ok=True)
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([l for l in result.stdout.splitlines() if l.startswith("== the install window")],
+                         ["== the install window"])
+        self.assertEqual(result.stdout.count("no agents:"), 1, result.stdout)
+        self.assertIn("  no agents: --install holds no connector rule and unloads none\n", result.stdout)
+        self.assertNotIn("== holding the connector rules", result.stdout)
+        self.assertNotIn("plan only:", result.stdout)
+        self.assertLess(result.stdout.index("== the install window"), result.stdout.index("== install"))
+
     def test_stack_reads_each_declaration_from_its_territory(self):
         # The declaration lives in the territory the root names. One the
         # operator cannot read refuses by name, pointing at the access group,
@@ -2890,7 +3023,9 @@ esac
                         ADMIN_CALLS=str(self.root / "admin-calls"))
         result = self.run_script("update-stack.sh", "--install")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        for said in ("no agents: no connector rule to hold, none to unload", "no agents to reconcile",
+        # The window is said once, by the plan --install runs first
+        # (test_the_install_window_prints_once_under_install).
+        for said in ("no agents: --install holds no connector rule and unloads none", "no agents to reconcile",
                      "no agents to verify", "the box is at"):
             self.assertIn(said, result.stdout)
         self.assertTrue([c for c in self.calls() if c[:2] == ["sudo", "install"]], self.calls())
@@ -3329,6 +3464,12 @@ esac
         self.log.unlink(missing_ok=True)
         result = self.run_script("update-stack.sh", "--install")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # The preview before the credential prompt, then the act under its
+        # own header (test_the_install_window_prints_once_under_install).
+        self.assertEqual([l for l in result.stdout.splitlines() if l.startswith("== the install window")],
+                         ["== the install window"])
+        self.assertLess(result.stdout.index("existing     --install holds /etc/sudoers.d/weaver-existing"),
+                        result.stdout.index("\n== holding the connector rules, unloading the agents\n"))
         self.assertIn(f"held /etc/sudoers.d/weaver-existing as /etc/sudoers.d/.weaver-existing.updating", result.stdout)
         self.assertIn("restored /etc/sudoers.d/weaver-existing", result.stdout)
         self.assertTrue(rule.exists())
@@ -6412,6 +6553,92 @@ exit "${CARGO_EXIT:-0}"
                 self.assertIn("the cause", ran.stderr)
                 self.assertIn("output: ", ran.stdout, "the log is named as the step begins")
 
+    def test_a_refused_test_step_echoes_the_failures_and_not_the_run(self):
+        """**A refused test step echoes the failures and the summary, not the
+        run's last lines.** The harness's suites write queue-pressure JSON
+        lines and every passing test's line to cargo's stdout, and on the
+        live plan of 2026-11-09 the tail of 60 carried them, and the failures
+        block a second time, before the refusal. The echo is each libtest
+        `failures:` block through its `test result:` line, then cargo's own
+        error lines; the refusal names the kept log. The output below is the
+        live log's shape. Perturbation: put the tail back and the pressure
+        line and the passing test print; drop the failures block's read and
+        its test's name is missing."""
+        noise = ('{"depth":1024,"mark":768,"organ":"harness","peak":1,"queue":"trace"}\n'
+                 "test lifecycle::tests::y ... ok\n")
+        stdout = ("running 3 tests\n" + noise * 40
+                  + "\nfailures:\n\n---- lifecycle::tests::x stdout ----\n\n"
+                  "thread 'lifecycle::tests::x' (1) panicked at crates/weaver-harness/src/lifecycle/tests.rs:9:5:\n"
+                  "the cause\n\n\nfailures:\n    lifecycle::tests::x\n\n"
+                  "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; "
+                  "finished in 0.10s\n\n")
+        stderr = "error: test failed, to rerun pass `-p weaver-harness --lib`\n"
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script):
+                ran = self.step(script, "run_tests", stdout=stdout, stderr=stderr, status=101)
+                self.assertNotEqual(ran.returncode, 0)
+                log, = self.kept_logs()
+                echo = ran.stderr.split("\nREFUSED: ", 1)[0]
+                self.assertEqual(echo, "failures:\n\n---- lifecycle::tests::x stdout ----\n\n"
+                                 "thread 'lifecycle::tests::x' (1) panicked at "
+                                 "crates/weaver-harness/src/lifecycle/tests.rs:9:5:\n"
+                                 "the cause\n\n\nfailures:\n    lifecycle::tests::x\n\n"
+                                 "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; "
+                                 "0 filtered out; finished in 0.10s\n"
+                                 "error: test failed, to rerun pass `-p weaver-harness --lib`\n")
+                self.assertIn(f"the tests did not pass (cargo exited 101, 2 passed, 1 failed); "
+                              f"the whole output is kept in {log}", ran.stderr)
+                log.unlink()
+
+    def test_the_echo_names_an_abort_a_garbled_close_and_a_run_of_no_tests(self):
+        """**The trimmed echo still names the cause where no failures block
+        does.** A test binary that aborts leaves no block: its panic and
+        cargo's `Caused by` are echoed, the noise is not. A summary a child's
+        line garbled (#507) still closes its block, so the noise after it is
+        not echoed. A run of no tests leaves nothing to match, and the log's
+        last lines are echoed instead. Perturbations: anchor the block's
+        close again and the noise after the garbled summary prints; drop the
+        panic rule and the abort's cause is missing; drop the fallback and
+        the run of no tests echoes nothing."""
+        noise = ('{"depth":1024,"mark":768,"organ":"harness","peak":1,"queue":"trace"}\n'
+                 "test lifecycle::tests::y ... ok\n")
+        abort = (noise * 20 + "thread 'lifecycle::tests::z' (9) panicked at "
+                 "crates/weaver-harness/src/lifecycle/tests.rs:7:3:\nthe abort's cause\n" + noise * 20)
+        abort_err = ("error: test failed, to rerun pass `-p weaver-harness --lib`\n\nCaused by:\n"
+                     "  process didn't exit successfully: `weaver_harness-0` "
+                     "(signal: 6, SIGABRT: process abort signal)\n")
+        garbled = ("\nfailures:\n    lifecycle::tests::x\n\n" + noise.splitlines()[0]
+                   + "test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; "
+                   "finished in 0.10s\n" + "after the close\n" * 30)
+        none = ("   Compiling weaver-trace v0.1.0\n     Running unittests src/lib.rs\n\nrunning 0 tests\n\n"
+                "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n")
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script, case="abort"):
+                ran = self.step(script, "run_tests", stdout=abort, stderr=abort_err, status=101)
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertIn("panicked at crates/weaver-harness/src/lifecycle/tests.rs:7:3:\n"
+                              "the abort's cause\n", ran.stderr)
+                self.assertIn("(signal: 6, SIGABRT: process abort signal)", ran.stderr)
+                self.assertNotIn('"queue":"trace"', ran.stderr)
+                self.assertNotIn("test lifecycle::tests::y ... ok", ran.stderr)
+                for log in self.kept_logs():
+                    log.unlink()
+            with self.subTest(script=script, case="garbled close"):
+                ran = self.step(script, "run_tests", stdout=garbled, status=101)
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertIn("    lifecycle::tests::x\n", ran.stderr)
+                self.assertIn("test result: FAILED. 2 passed; 1 failed", ran.stderr)
+                self.assertNotIn("after the close", ran.stderr)
+                for log in self.kept_logs():
+                    log.unlink()
+            with self.subTest(script=script, case="no tests"):
+                ran = self.step(script, "run_tests", stdout=none)
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertIn("running 0 tests", ran.stderr.split("\nREFUSED: ", 1)[0])
+                self.assertIn("cargo exited 0, 0 passed, 0 failed", ran.stderr)
+                for log in self.kept_logs():
+                    log.unlink()
+
     def test_the_build_takes_the_cuda_host_compiler_update_stack_takes(self):
         ran = self.step("bootstrap-stack.sh", "run_build")
         self.assertEqual(ran.returncode, 0, ran.stderr)
@@ -7382,7 +7609,23 @@ class AgentTupleInstallTests(unittest.TestCase):
         lines = self.tuple.box_rows(str(self.path), None, "the install tuple is refused: x")
         self.assertIn("[FAULT:", lines[0])
         lines = self.tuple.box_rows(str(self.path), None, None)
-        self.assertIn("[absent:", lines[0])
+        self.assertIn(f"[absent: no install tuple at {self.path}; the box side is unstated]", lines[0])
+
+    def test_no_install_tuple_named_is_said_without_a_placeholder(self):
+        """**No install tuple named reads as a sentence**: verify-load names
+        none where the stack record holds none, and the live box row read
+        "no install tuple at -", the dash standing for the path. Perturbation:
+        pass "-" for the absent path again and the row names it."""
+        lines = self.tuple.box_rows(None, None, None)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("[absent: no install tuple was named; the box side is unstated]", lines[0])
+        self.assertNotIn(" at -", lines[0])
+        declaration = self.dir / "agent.toml"
+        declaration.write_text("")
+        ran = subprocess.run([sys.executable, "-I", str(DEPLOY / "agent_tuple.py"), "rows",
+                              "--declaration", str(declaration)], capture_output=True, text=True, timeout=30)
+        box, = [line for line in ran.stdout.splitlines() if line.lstrip().startswith("box ")]
+        self.assertIn("[absent: no install tuple was named; the box side is unstated]", box)
 
 
 if __name__ == "__main__":

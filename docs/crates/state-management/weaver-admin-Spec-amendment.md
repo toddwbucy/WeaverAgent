@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #439
+**Landing PR:** #518
 
 **Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
@@ -197,9 +197,10 @@ TYPES-PERSIST and does not require an already indexed serving artifact. All othe
 custody and declaration checks still apply. Serving load continues to require the
 verified bound copy under ADMIN-VALIDATION. [PERSIST-5, PERSIST-3, CLASS-2]
 
-Use Spec 6's start step and Spec 6.1's containment, including the root-owned delegated
-invoker, ancestor checks, cgroup record before fork and namespace/credential setup. Mint
-the seed operation's run reference for that containment record. It is not a serving
+Use Spec 6's start step and Spec 6.1's containment, including the scope step and its
+root-owned delegated scope, ancestor checks, cgroup record before fork and
+namespace/credential setup. Mint the seed operation's run reference for that
+containment record. It is not a serving
 session and creates no load or unload event. Stand only the member under its restricted
 identity inside that cgroup, with --mode=seed, fd3 and fd9, no fd4, no gate, no SPU
 decoder, no serving worker, and no preload door. Admin speaks state-seed/1 on this
@@ -606,7 +607,7 @@ serving contract remains applicable.
 | Publication guard | Every post-Commit crash phase, guard update failure and explicit older restore | Load or recover a guarded image, publish after failure or silently choose an older image |
 | ADMIN-SELECTION | Root-key parser and latest/explicit restore index corpus | Put selector in bound copy, accept caller path, or silently reuse a stale selector |
 | ADMIN-LOAD | Different mutable draft and verified copy, fd probes, failed-enter fixtures | Run draft after checking copy or report loaded before boot |
-| ADMIN-SEED | Temporary-member process fixture, shared TYPES-SEED corpus, root verb parser and cgroup probes | Seed live state, require a prior artifact, omit checked scheme/checker inputs, skip invoker/ancestor checks, accept caller path or index before successful seed cleanup |
+| ADMIN-SEED | Temporary-member process fixture, shared TYPES-SEED corpus, root verb parser and cgroup probes | Seed live state, require a prior artifact, omit checked scheme/checker inputs, skip the scope and ancestor checks (the scope's delegation and ownership and every cgroup above it), accept caller path or index before successful seed cleanup |
 | ADMIN-REBIND | Same A/new B artifact and immutable prompt check | Mutate dump or use old B after editing config |
 | ADMIN-INSTALL | Install-mode member over a selected artifact, then load before and after rebind | Publish without the version files, change agent.toml, accept a path, or load a declaration that disagrees with the image |
 | ADMIN-SAVE | Three-party protocol, timeout cleanup then retry, cleanup failure, and fsync/rename failure hooks | Index before Commit, overwrite a good artifact, infer cleanup from silence or retry after FlowFailed |

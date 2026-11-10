@@ -77,6 +77,9 @@ AGENT_DIR=${WEAVER_AGENT_DIR:-/var/lib/weaver-agent}
 refuse_python_install "$PREFIX" "$PREFIX/bin"
 
 MEMBERS="worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
+# The agent's shell (#29): the static busybox and its applet list, installed
+# beside the members, as update-stack.sh names them.
+SHELL_FILES="busybox busybox.applets"
 MEMBER_FEATURES=weaver-state/sqlite
 SPU_FEATURES=weaver-spu/cuda
 FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
@@ -102,7 +105,9 @@ plan "nvcc          $(nvcc --version 2>/dev/null | tail -1 | sed 's/^Build //' |
 CCCL=$(pacman -Q cccl 2>/dev/null | awk '{print $2}' || true)
 plan "cccl          ${CCCL:-unknown}"
 plan "will build    $FEATURES"
-plan "will install  $MEMBERS"
+# The line names all three things this script installs: the members, the
+# shell and the engine libraries. It named the members alone.
+plan "will install  $MEMBERS, the shell ($SHELL_FILES), and the engine libraries ($LIB_GLOBS) built by $ENGINE_CRATE"
 
 cccl_in_window() {
   local v=${1%%-*} lo=3.1.4 hi=3.3.4
@@ -224,14 +229,14 @@ say "test"
 # `cargo | grep | awk` answered "0 passed, 0 failed", took grep's status under
 # `pipefail` rather than cargo's, and discarded every diagnostic. Cargo's own
 # status is kept, the counts are read from the log whole, and a failure, a
-# failed test or no test at all prints the first lines cargo names as the
-# cause and the log's last 60 on stderr, and refuses naming the log, which is
-# kept; a clean run removes it. The log is the operator's, beside cargo's own
+# failed test or no test at all prints the failures and the lines cargo names
+# as the cause on stderr, and refuses naming the log, which is kept; a clean
+# run removes it. The log is the operator's, beside cargo's own
 # output in the target directory, named by this run's pid so runs sharing a
 # target directory never write each other's, and named as the step begins so
 # a long step can be followed.
 run_tests() {
-  local log="${BUILT%/release}/weaver-deploy-tests-$$.log" rc=0 totals passed failed
+  local log="${BUILT%/release}/weaver-deploy-tests-$$.log" rc=0 totals passed failed cause
   mkdir -p -- "${BUILT%/release}" || die "cannot make the target directory ${BUILT%/release} for the test step's log"
   printf '   output: %s\n' "$log"
   cargo test --release --locked \
@@ -254,11 +259,30 @@ run_tests() {
   failed=${totals#* }
   printf '   %s passed, %s failed\n' "$passed" "$failed"
   if [ "$rc" -ne 0 ] || [ "$passed" = 0 ]; then
-    # The cause first, where cargo names one, then the run's end: a long
-    # captured output can push the panic or the first error out of the tail.
-    grep -m 12 -E -A 6 '^(error(\[|:)|failures:|---- )|panicked at' -- "$log" >&2 || true
-    printf '   ...\n' >&2
-    tail -n 60 -- "$log" >&2
+    # **The failures and cargo's cause, never the run's end** (the live plan
+    # of 2026-11-09): the harness's suites write queue-pressure JSON lines and
+    # every passing test's line to cargo's stdout, and the log's last 60
+    # carried them, and the failures block a second time, before the
+    # refusal. Echoed, in the log's order: each libtest `failures:` block
+    # through its `test result:` line (a FAILED summary outside a block too),
+    # the block closed by a summary a child's line garbled (#507) as well;
+    # then, outside those blocks, the first 12 of cargo's `error` lines with
+    # the 6 after each, and of `panicked at` lines with the message after
+    # each, which name a crate that did not compile or a test binary that
+    # died. Where none of these stands (a run of no tests), the log's last
+    # 20 lines, which then carry no test's output. The whole output stays in
+    # the kept log.
+    cause=$(awk '
+      /^failures:$/ {held = 1}
+      held || /^test result: FAILED\./ {print; if (/test result: /) held = 0; next}
+      /^error(\[|:)/ && shown < 12 {after = 7; shown++}
+      /panicked at / && shown < 12 {if (after < 2) after = 2; shown++}
+      after > 0 {print; after--}' "$log") || true
+    if [ -n "$cause" ]; then
+      printf '%s\n' "$cause" >&2
+    else
+      tail -n 20 -- "$log" >&2
+    fi
     die "the tests did not pass (cargo exited $rc, $passed passed, $failed failed); the whole output is kept in $log"
   fi
   rm -f -- "$log"
@@ -404,7 +428,7 @@ sudo install -d -o root -g root -m 0755 "$AGENT_DIR"
 # **The install tuple** (deploy/install-tuple.sh), read from what this run
 # installed, the same record update-stack.sh writes after each install.
 say "tuple"
-TUPLE=$(install_tuple "$REPO" "$COMMIT" "$PREFIX/bin" "$PREFIX/lib" "$FEATURES" "$MEMBERS busybox busybox.applets" "${LIB_NAMES[*]}")
+TUPLE=$(install_tuple "$REPO" "$COMMIT" "$PREFIX/bin" "$PREFIX/lib" "$FEATURES" "$MEMBERS $SHELL_FILES" "${LIB_NAMES[*]}")
 printf '%s\n' "$TUPLE" | sed 's/^/   /'
 printf '%s\n' "$TUPLE" | sudo tee "$STACK/install-tuple" >/dev/null
 sudo chmod 0644 "$STACK/install-tuple"

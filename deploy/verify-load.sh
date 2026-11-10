@@ -194,7 +194,26 @@ for line in sys.stdin:
 for k, n in kinds.most_common(): print(f"   {n:4d}  {k}")
 if load is None: sys.exit("   no load event among them")
 keep = {k: v for k, v in load.items() if k not in ("content",)}
-print("   load event:", json.dumps(keep)[:600])
+# The line ends at a member boundary, after the payload stack map, and names
+# the members after it, which the sink holds whole. The members before the
+# stack are the elections the declaration makes and the lineage the load
+# restored, 1,118 characters through the stack on the live load of
+# 2026-11-09, and the stack is what verify-lifecycle reads from this line and
+# the tuple below binds. The line is for reading, not a bound: a declaration
+# electing a long tee prints a long line, and the sink holds the event. A cut
+# at 600 characters fell inside the declaration digest on the live load of
+# 2026-11-09, and never reaches the stack once a lineage stands. A load with
+# no stack map prints whole.
+payload = keep.get("payload")
+left = []
+if isinstance(payload, dict) and "stack" in payload:
+    names = list(payload)
+    through = names.index("stack") + 1
+    keep["payload"] = {k: payload[k] for k in names[:through]}
+    left = names[through:]
+print("   load event:", json.dumps(keep))
+if left:
+    print("   load event cut after its stack map;", ", ".join(left), "is" if len(left) == 1 else "are", "in the sink")
 # The Open measurement, wherever an event carries it (ADP-3): its adapter
 # member beside the base identity it measured.
 def opens(value):
