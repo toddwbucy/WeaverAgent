@@ -462,13 +462,19 @@ fn admissible(config: &ServiceConfig, agent: &AgentName) -> Result<(), Lifecycle
 /// Spec section 4, since the agent's derived accounts and groups append
 /// `-state`, `-trace`, `-relay`, `-admin` and `-admincon` to `weaver-<name>`,
 /// and an agent named `x-relay` would collide with agent `x`'s relay.
+/// **The names `gatecon` and `admincon` are refused whole**, on the operator's
+/// ruling of 2026-11-10: `weaver-gatecon` and `weaver-admincon` are the box's
+/// two connector accounts, so an agent of either name would own one of them as
+/// its own identity.
 fn well_formed(agent: &str) -> bool {
     const RESERVED: &[&str] = &["-state", "-trace", "-relay", "-admin", "-admincon"];
+    const BOX_ACCOUNTS: &[&str] = &["gatecon", "admincon"];
     !agent.is_empty()
         && agent
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         && !RESERVED.iter().any(|suffix| agent.ends_with(suffix))
+        && !BOX_ACCOUNTS.contains(&agent)
 }
 
 /// The one inventory, called by both `validate` and `load`, so the two cannot
