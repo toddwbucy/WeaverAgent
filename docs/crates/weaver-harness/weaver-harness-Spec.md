@@ -1970,14 +1970,23 @@ alone**: it enters state as every seeding does and is seated as the prefix by th
 load, the system prompt being state, but the next turn's flush retires it from the
 decode context, so a new agent is seeded under `continuous` or reloaded before it
 serves, and a storeless agent, whose loads seat nothing, has no seeded prompt in force
-under `independent` past its seeding turn. **Each flush's confirmation gates its turn**:
-a cut the seam refuses, or a seam that closes before confirming it, the refusal authored
-by the flush port as any refusal is, leaves the context the election retires, so the
-turn does not run and answers `ChannelLost`, loop 1's and loop 0's alike. **A seam that
-stays open and silent holds the turn unbounded**, the flush port's wait having no
-deadline (#527): the turn does not run, and the wait lasts until the channel ends or
-admin's escalation under `weaver-admin-Spec` section 3's bounds ends the run. Under
-`continuous` nothing changes.
+under `independent` past its seeding turn. **Each flush's confirmation gates its turn**,
+loop 1's and loop 0's alike, since only a confirmation shows the context the election
+asks for, and the flush port meets three cases. **A cut the seam refuses** is refused at
+the seam's state check, before any cut (`weaver-harness-spu-decode-contract` section 5),
+so the context stands as it was: the port authors the `refusal`, and the turn does not
+run and answers `ChannelLost`. **A seam that closes before confirming**, or answers out
+of form, leaves the cut's outcome unknown, the SPU able to have cut and then failed, and
+the channel lost: the turn does not run and answers `ChannelLost`, and the record
+carries no `flush` event for the cut, that event being authored only from a
+confirmation's counts. **A record reader reads that absence as an unknown cut, never as
+no cut**: no `flush` event and no `turn.started` for the turn the cut was to precede,
+and, where the SPU hung up, its death authored as an `OrganDeathObserved` fault naming
+no turn. A confirmed cut the recorder will not take leaves the same absence, service
+then ending on the recorder's latch. **A seam that stays open and silent holds the turn
+unbounded**, the flush port's wait having no deadline (#527): the turn does not run, and
+the wait lasts until the channel ends or admin's escalation under `weaver-admin-Spec`
+section 3's bounds ends the run. Under `continuous` nothing changes.
 **Enforced by perturbation-verified tests** in loop 1's suite, over a recording stand-in
 for the seat, and in this crate's, over a scripted decode seam: under `independent` a
 first turn, a later one and one past the pressure line each ask the flush and then the

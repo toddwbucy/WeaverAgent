@@ -130,17 +130,18 @@ pub(crate) fn compose(seat: &mut impl Seat, text: &str) -> Result<TurnOutcome, T
     // alone. The cut is zero, which the seam bounds at the prefix, and it lands
     // directly before the turn's bracket, so the record shows each
     // `turn.started` preceded by its `flush`; the first, standing on the prefix
-    // already, cuts nothing. **Its confirmation gates the turn**: a cut
-    // refused, or a seam that closes before confirming it, leaves the context
-    // the election retires, so the turn does not run and the loop answers
-    // `ChannelLost`, the refusal itself authored by the seat. A seam that stays
-    // open and silent holds the turn unbounded, the flush's wait having no
-    // deadline (#527). Nothing else is composed: no re-entry, the conversation
-    // being exactly what the election retires, and no continuity line, which
-    // would carry one turn's context into the next. Where nothing is seated the
-    // prefix holds at most the family's start marker, so the compiled prompt
-    // leads every turn, the flush having retired the copy an earlier turn
-    // appended.
+    // already, cuts nothing. **Its confirmation gates the turn**: a cut refused
+    // leaves the context as it was and a seam that closes before confirming
+    // leaves the cut's outcome unknown, so neither shows the context the
+    // election asks for, the turn does not run, and the loop answers
+    // `ChannelLost`, a refusal authored by the seat and an unconfirmed cut
+    // leaving no `flush` event. A seam that stays open and silent holds the
+    // turn unbounded, the flush's wait having no deadline (#527). Nothing else
+    // is composed: no re-entry, the conversation being exactly what the
+    // election retires, and no continuity line, which would carry one turn's
+    // context into the next. Where nothing is seated the prefix holds at most
+    // the family's start marker, so the compiled prompt leads every turn, the
+    // flush having retired the copy an earlier turn appended.
     if seat.turn_context() == TurnContext::Independent {
         if seat.flush(0).is_none() {
             return Err(TurnError::ChannelLost);

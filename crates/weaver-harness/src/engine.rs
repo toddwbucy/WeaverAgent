@@ -511,17 +511,18 @@ impl<'a> Ports<'a> {
         *self.fullness
     }
 
-    /// The flush, per `weaver-harness-Spec` section 6's context ports:
-    /// drives the decode seam's standing flush exchange, valid between
-    /// turns, and on confirmation authors the record's `flush` event from
-    /// the counts the confirmation carried, the SPU being the one
-    /// authority on either number. Since the cut ruling of 2026-08-19 the
-    /// call takes `keep`, the resident length the session returns to,
-    /// forwarded to the directive unjudged: the seam bounds it below by
-    /// the identity prefix and above by the resident count, and the
-    /// answered pair says what held. Answers the pair, or `None` where the
-    /// seam refused or broke - the next turn will meet the dead seam
-    /// properly, so nothing here converts it.
+    /// The flush, per `weaver-harness-Spec` section 6's context ports: drives
+    /// the decode seam's standing flush exchange, valid between turns, and on
+    /// confirmation authors the record's `flush` event from the counts the
+    /// confirmation carried, the SPU being the one authority on either number.
+    /// Since the cut ruling of 2026-08-19 the call takes `keep`, the resident
+    /// length the session returns to, forwarded to the directive unjudged: the
+    /// seam bounds it below by the identity prefix and above by the resident
+    /// count, and the answered pair says what held. Answers the pair, or `None`
+    /// where the seam refused or broke, nothing here converting it: under
+    /// `continuous` the next turn meets the dead seam properly, and under
+    /// `independent` the caller refuses the turn (#423), a refused cut having
+    /// left the context as it was and a broken seam the cut's outcome unknown.
     pub fn flush(&mut self, keep: u64) -> Option<(u64, u64)> {
         self.decode
             .send_directive(&TokenDirective::Flush { keep })
@@ -1060,10 +1061,12 @@ impl<'a> Ports<'a> {
     /// elects `independent` loop 0 makes the cut loop 1 makes before every turn
     /// it drives, zero, which the seam bounds at the identity prefix, directly
     /// before the bracket opens. **Its confirmation gates the turn**, as loop
-    /// 1's does: a cut refused, or a seam that closes before confirming it,
-    /// answers `ChannelLost` and the turn does not run, the refusal itself
-    /// authored by the flush port. A seam that stays open and silent holds the
-    /// turn unbounded, the flush port's wait having no deadline (#527).
+    /// 1's does: a cut refused, the context standing as it was, or a seam that
+    /// closes before confirming it, the cut's outcome unknown and no `flush`
+    /// event authored, answers `ChannelLost` and the turn does not run, the
+    /// refusal itself authored by the flush port. A seam that stays open and
+    /// silent holds the turn unbounded, the flush port's wait having no
+    /// deadline (#527).
     fn flush_if_independent(&mut self) -> Result<(), TurnError> {
         if self.turn_context == weaver_types::TurnContext::Independent && self.flush(0).is_none() {
             return Err(TurnError::ChannelLost);
