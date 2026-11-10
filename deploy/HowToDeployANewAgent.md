@@ -319,7 +319,8 @@ session scope carries no mark, so a direct load, and a script that loads, runs i
 scope root makes for it, `sudo systemd-run --scope -p Delegate=yes`, which sits under the
 system slice and not under the operator's login session. A load through the connector's
 rule, from the connector's own unit, is not root's and is refused `boundary_unverified`
-until #166 (the placement and the lifetime binding to the invoker) is ruled.
+until #166's code act lands, after which every load moves into a scope of the agent's
+own (`weaver-admin-Spec` section 6.1).
 
 `validate` answers `{"kind":"validated"}` or a refusal naming the field or the boundary
 piece. `verify-load.sh` validates, first unloads the agent (taking its leave save
@@ -563,11 +564,12 @@ weaver-<name>-admincon ALL=(root) NOPASSWD: /opt/weaver/bin/weaver-admin show <n
 The observer role's rule grants the `show` line alone. Each grant is one fixed command
 line, so the connector can pass no argument of its own, and it runs them with `sudo -n`.
 **The `load` line is granted and refused**: admin refuses a load from the connector's own
-unit `boundary_unverified`, since that unit's cgroup is not root's, until #166 is ruled.
+unit `boundary_unverified`, since that unit's cgroup is not root's, until #166's code
+act lands.
 The other lines start no process and run as before. `!pam_session` keeps sudo from
 opening a session that would move the invocation into another containment, which
-matters only to a load. It stays in the rule, so the rule need not change when #166
-rules how a connector load is placed. `sudo -n -l -U
+matters only to a load. It stays in the rule, so the rule need not change when #166's
+code act places a connector load in the agent's own scope. `sudo -n -l -U
 weaver-<name>-admincon` prints what the rule grants. The connector itself, its service
 and its containment, is WeaverWeb's packaging, and this repository provisions only its
 account, its group, its rule and its place in `roles.toml`.

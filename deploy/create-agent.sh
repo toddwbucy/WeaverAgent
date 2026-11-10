@@ -74,9 +74,10 @@
 # as root, without a password, with no caller-chosen argument, no SETENV and
 # no env_keep, and turns sudo's `pam_session` off for that user so a session
 # never moves the invocation into another containment. That matters only to
-# `load`, which admin refuses from the connector's own unit until #166 is
-# ruled (the invoker's cgroup must be root's, weaver-admin-Spec 6.1), and it
-# stays so the rule need not change when #166 places a connector load. The
+# `load`, which admin refuses from the connector's own unit until #166's code
+# act lands (today's binary requires the invoker's cgroup to be root's), and
+# it stays so the rule need not change when that act places a connector load
+# in the agent's own scope (weaver-admin-Spec 6.1). The
 # observer role grants `show`, and the operator role adds
 # `validate`, `load`, `unload`, `stop`, `save-point`, `restore` and
 # `force-unload`, the eight lines `VERBS` below names. The rule is checked with `visudo

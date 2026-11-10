@@ -838,12 +838,12 @@ middle: the authority the delegation bounded is authority root already holds, an
 the bound that matters, what the agent can reach, is the kernel's and unchanged.
 The worker is detached into its own session and reparented to pid 1 by the start step,
 so nothing of admin's needs to run for the coordination socket or the sink to outlive
-the invocation. **It does not outlive its invoker's containment**, which binds the
-agent's lifetime (the Spec's sections 6 and 6.1), the agent's cgroup always nesting
-beneath the invoker's (the operator's rulings of 2026-10-14 on #111). So an agent is
-bound to the containment it was loaded in, a delegated scope of root's. A load through
-admin-con, whose own unit is not root's, is refused until #166 (the placement and the
-lifetime binding to the invoker) is ruled (the operator's ruling of 2026-10-15).
+the invocation. **It lives as long as the agent's own scope**, which binds the agent's
+lifetime (the Spec's sections 6 and 6.1): the start step asks PID1 for a root-owned
+delegated scope of the agent's own and moves into it before it makes the agent's
+cgroup beneath it (the operator's rulings of 2026-11-07 and 2026-11-09 on #166). So
+the invoker's end ends neither the agent nor a start step already moved, and a load
+from admin-con's unit stands as an operator's does.
 
 **Reading and analysis stay outside the program, and the recut does not move
 them.** A trace carries whatever the agent handled, so the code that parses
@@ -862,13 +862,12 @@ getting wrong.** The smell this corpus rejected was a shared service accepting m
 agents and routing commands among them. A worker running one statically provisioned
 agent identity is the opposite of that: it is the wall drawn around exactly one agent,
 built from OS primitives rather than from a supervisor's bookkeeping. **Keep-alive is
-the invoker's containment's, and keep-alive past a crash or a reboot is the
-packaging's**, on the operator's rulings of 2026-10-03 on #50 and of 2026-10-14 on #111:
-the worker takes its own session and outlives the invocation that started it, never its
-invoker's containment, a delegated scope of root's (a load through admin-con waiting
-on #166), and restarting it on a crash or a reboot
-is for whoever packages and deploys the agent, with systemd, a container or anything
-else, and not this framework's.
+the agent's own scope's, and keep-alive past a crash or a reboot is the packaging's**,
+on the operator's rulings of 2026-10-03 on #50 and of 2026-11-07 on #166: the worker
+takes its own session and outlives the invocation that started it and its invoker's
+containment, living as long as the root-owned delegated scope the start step asks PID1
+for, and restarting it on a crash or a reboot is for whoever packages and deploys the
+agent, with systemd, a container or anything else, and not this framework's.
 
 **The agent's uid is statically provisioned, and a dynamic identity is excluded for two
 reasons that are independent and are recorded as independent.** The first is durability:
@@ -1058,9 +1057,10 @@ second executable separating nothing.
 provisioning artifact that load populates against a residency artifact created at load
 and torn down at unload. Under delegation the init system made one per unit. From
 2026-10-03 this program made none. Since the operator's ruling of 2026-10-14 on #111 it
-makes one per agent, beneath the invoker's own, so the agent stays in its invoker's
-containment, which binds its lifetime and bounds what it consumes, and the kernel kills
-the agent's cgroup whole at every run end (the Spec's section 6.1). A bound of its own is
+makes one per agent, and since the operator's ruling of 2026-11-07 on #166 it makes it
+beneath a transient scope of the agent's own that the start step asks PID1 for, which
+binds the agent's lifetime, and the kernel kills the agent's cgroup whole at every run
+end (the Spec's section 6.1). A bound of its own is
 still the packaging's, and the worker's organs dying with it is still the harness's, per
 `weaver-harness-Spec` section 2.
 
