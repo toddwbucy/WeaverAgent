@@ -179,5 +179,9 @@ pub(crate) fn diagnostic_payload(source: &EnterEnvelope) -> Option<weaver_types:
         library_path: library_path.clone(),
         drain_bound: *drain_bound,
         wind_down_bound: *wind_down_bound,
+        // **A diagnostic binding drives no turn through loop 1's seat**, and
+        // the foundation's enter carries no turn-context election until its
+        // cutover (#423), so the projection names the absence's meaning.
+        turn_context: weaver_types::TurnContext::Continuous,
     })
 }

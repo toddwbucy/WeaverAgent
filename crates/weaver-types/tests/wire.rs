@@ -751,7 +751,43 @@ fn sample_enter_payload() -> weaver_types::EnterPayload {
             all_kinds: false,
             keys: Vec::new(),
         },
+        turn_context: weaver_types::TurnContext::Continuous,
     }
+}
+
+/// **The turn-context election crosses on the enter resolved and always
+/// present** (#423, `weaver-types-Spec` section 2 and
+/// `weaver-admin-harness-contract` section 5): each value serializes by its
+/// declaration spelling and round-trips, and an enter missing the key refuses
+/// at the parse, so no harness re-derives an absence.
+///
+/// Perturbation: give the field `#[serde(default)]` and the missing key reads
+/// `continuous` instead of refusing; spell it `skip_serializing` and neither
+/// value crosses. Watched to fail under both.
+#[test]
+fn the_turn_context_crosses_on_the_enter_and_is_required() {
+    for (elected, spelled) in [
+        (
+            weaver_types::TurnContext::Continuous,
+            "\"turn-context\":\"continuous\"",
+        ),
+        (
+            weaver_types::TurnContext::Independent,
+            "\"turn-context\":\"independent\"",
+        ),
+    ] {
+        let mut payload = sample_enter_payload();
+        payload.turn_context = elected;
+        let json = serde_json::to_string(&payload).expect("serializes");
+        assert!(json.contains(spelled), "{json}");
+        let back: weaver_types::EnterPayload = serde_json::from_str(&json).expect("reads");
+        assert_eq!(back, payload);
+    }
+    let json = serde_json::to_string(&sample_enter_payload()).expect("serializes");
+    let silent = json.replace(",\"turn-context\":\"continuous\"", "");
+    assert_ne!(silent, json, "the key was present to remove");
+    serde_json::from_str::<weaver_types::EnterPayload>(&silent)
+        .expect_err("an enter without the election refuses");
 }
 
 /// **The bounds cross to the harness on the enter**, per `weaver-types-Spec`

@@ -135,6 +135,22 @@ holdings carry any `recall`**: the schema carries no format marker, by the versi
 rule, and the kind's presence is what says the record's recorder and seat record
 recalls. A record holding none is read as older than the kind and certifies as before,
 which is also the case of a run with no state member, whose seat has no recall to make.
+**A flush in a run whose `load` names `turn_context` independent owes no recall**, as of
+2026-11-10 (#423): under that election the source's loop composed no re-entry, each
+turn's request carrying its own delta onto the identity prefix per `weaver-harness-Spec`
+section 6, so no recalled provenance stands to be accounted for, and the walk still
+reproduces each flush's counts as it does any resident edit. The identity step reads the
+election from the `load` event the replay answer carries, the record's own statement of
+it as the diagnostic election carried it across, never inferred from the events that
+followed, as section 3 reads the tee's election from the record's statement of it rather
+than recovering it from what it produced. The holdings carry the member only where the
+diagnostic election names it, per `weaver-analysis-Spec` section 3, which
+toddwbucy/WeaverAnalysis#16 asks to name it. **Where the load or its member is absent
+the rule stands**, and a source whose flushes have no recall refuses as before. Enforced
+by a perturbation-verified test over that shape: it certifies where the load names
+`independent` and refuses where it names `continuous`, names nothing and is absent,
+watched to fail when the election is dropped and when the exemption is granted under
+every load.
 
 **The re-feed exchange landed 2026-08-31 and this walk runs against it.**
 The serving seam's append-and-generate samples, and a replay samples

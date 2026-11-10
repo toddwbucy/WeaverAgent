@@ -22,6 +22,7 @@ fn elections(lineage: Option<Box<Lineage>>) -> Elections {
         boundary: String::new(),
         cause: Cause { uid: 0 },
         library_path: None,
+        turn_context: TurnContext::Continuous,
     }
 }
 

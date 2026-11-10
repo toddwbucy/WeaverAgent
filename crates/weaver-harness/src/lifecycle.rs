@@ -344,6 +344,10 @@ struct Run {
     /// count, which a BOS-prefixing family makes non-zero with nothing
     /// seated.
     seated: bool,
+    /// **The run's turn-context election**, from the enter alone (#423,
+    /// `weaver-harness-Spec` section 6's turn-context read): resolved by
+    /// admin, lent to every seat and named on the load event.
+    turn_context: weaver_types::TurnContext,
     /// The run's own reference, retained so a close can name the run a turn
     /// belongs to, per `weaver-gate-world-contract` section 3. The author
     /// holds its own converted copy for the record, and this is the floor's,
@@ -1110,6 +1114,7 @@ impl Harness {
                     &mut run.fullness,
                     &mut run.pressure_reported,
                     run.seated,
+                    run.turn_context,
                 );
                 ports.hold_leave(&mut run.leave, run.drain_bound);
                 // The seeding turn is loop 0's own and crosses the dev
@@ -1477,6 +1482,7 @@ impl Harness {
             &mut run.fullness,
             &mut run.pressure_reported,
             run.seated,
+            run.turn_context,
         );
         ports.hold_leave(held, None);
         let (ran, _) = ports.wind_down(deadline_after(wind_down_bound), cause);
@@ -2192,6 +2198,13 @@ impl Harness {
                 .map(|election| election.depth),
             surprisal: payload.spu_instruction.decoder.surprisal_election,
             tee: Some(tee_election),
+            // **The turn-context election is the enter's**, per
+            // `weaver-trace-Spec` section 3 (#423): posture, copied from what
+            // admin resolved and read from no deployment.
+            turn_context: match payload.turn_context {
+                weaver_types::TurnContext::Continuous => weaver_trace::TurnContext::Continuous,
+                weaver_types::TurnContext::Independent => weaver_trace::TurnContext::Independent,
+            },
         };
         // **Every serving enter where the member stands asks `restored`
         // before it authors `load`**, per `weaver-harness-Spec` section 6.1
@@ -2303,6 +2316,7 @@ impl Harness {
             operator: payload.operator,
             seeded_bytes: 0,
             seated: false,
+            turn_context: payload.turn_context,
             run: payload.run.clone(),
             spu: None,
             gate: None,
@@ -2852,6 +2866,7 @@ impl Harness {
                     &mut run.fullness,
                     &mut run.pressure_reported,
                     run.seated,
+                    run.turn_context,
                 ))
             }
             // Before enter and after leave there is no standing interior to

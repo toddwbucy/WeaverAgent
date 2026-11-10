@@ -6,7 +6,7 @@
 //! with the `config` feature, which is the parser's whole surface.
 #![cfg(feature = "config")]
 
-use weaver_types::{ConfigErrorKind, FieldName, parse};
+use weaver_types::{ConfigErrorKind, FieldName, TurnContext, parse};
 
 fn full_config() -> String {
     // Top-level keys first, then one table per section: TOML reads a bare key
@@ -783,6 +783,58 @@ fn an_unknown_lifecycle_key_refuses() {
     let source = full_config() + "\n[lifecycle]\ndrain-bounds = 30\n";
     let err = parse(&source).expect_err("refuses");
     assert_eq!(err.kind, ConfigErrorKind::UnknownField);
+}
+
+/// **`turn-context` elects whether a turn sees the turns before it**, per
+/// `weaver-types-Spec` section 2 (#423): both values parse, and a silent
+/// declaration parses to `None`, which admin resolves to `continuous` at the
+/// enter.
+///
+/// Perturbation: map `independent` onto `Continuous` in the enum's serde
+/// spelling and the second case fails; move `#[default]` onto `Independent`
+/// and the resolution of the silent declaration fails. Watched to fail under
+/// each.
+#[test]
+fn turn_context_parses_both_values_and_absence_is_none() {
+    let silent = parse(&full_config()).expect("parses").turn_context;
+    assert_eq!(silent, None);
+    // Admin's resolution at the enter, `unwrap_or_default()`: the absence
+    // means `continuous`, what every load did before the election.
+    assert_eq!(silent.unwrap_or_default(), TurnContext::Continuous);
+    for (value, elected) in [
+        ("continuous", TurnContext::Continuous),
+        ("independent", TurnContext::Independent),
+    ] {
+        // A top-level key is prepended, per `full_config`'s note.
+        let source = format!("turn-context = \"{value}\"\n") + &full_config();
+        assert_eq!(
+            parse(&source).expect("parses").turn_context,
+            Some(elected),
+            "{value}"
+        );
+    }
+}
+
+/// **A value outside the two refuses `BadValue` naming `turn-context`**, per
+/// `weaver-types-Spec` section 2, rather than the deserializer's unnamed
+/// refusal.
+///
+/// Perturbation: drop `check_turn_context` from `parse` and every case still
+/// refuses, but unnamed, so the name assertion fails; admit `"fresh"` in the
+/// check and as a serde alias and the first case parses. Watched to fail
+/// under both.
+#[test]
+fn a_third_turn_context_refuses_naming_the_key() {
+    for value in ["\"fresh\"", "\"Independent\"", "\"\"", "true", "1"] {
+        let source = format!("turn-context = {value}\n") + &full_config();
+        let err = parse(&source).expect_err("refuses");
+        assert_eq!(err.kind, ConfigErrorKind::BadValue, "{value}");
+        assert_eq!(
+            err.field,
+            Some(FieldName("turn-context".to_string())),
+            "{value} is refused by the key's own name"
+        );
+    }
 }
 
 /// The ADP-1 table, appended after the base binding's table.

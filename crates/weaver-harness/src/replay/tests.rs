@@ -142,6 +142,7 @@ fn run_drive_as(
             &mut fullness,
             &mut pressure_reported,
             false,
+            weaver_types::TurnContext::Continuous,
         );
         super::drive(&mut ports, false, "art")
     };
@@ -829,6 +830,54 @@ fn a_post_flush_request_without_a_recall_refuses_certification() {
     assert!(outcome.is_ok());
     let close = lines.last().expect("the close stands");
     assert_eq!(close["payload"]["outcome"]["kind"], "abandoned", "{close}");
+}
+
+/// The source's `load` event as the holdings carry it, naming `turn_context`
+/// where `elected` is given and carrying no such pair where it is not.
+fn load_event(elected: Option<&str>) -> String {
+    let pairs = match elected {
+        Some(value) => format!(r#"{{"turn_context":"{value}"}}"#),
+        None => "{}".to_string(),
+    };
+    format!(r#"{{"envelope":{{"kind":"load","run":"r-1","sequence":"0"}},"pairs":{pairs}}}"#)
+}
+
+/// **A flush in a run whose `load` names `turn_context` independent owes no
+/// recall** (#423), per `diagnostic-replay-loop` section 2: under that
+/// election the loop composes no re-entry, each turn's request carrying its
+/// own delta onto the identity prefix, so no recalled provenance stands to be
+/// accounted for. The route-A shape, a seated open's identity recall, a flush
+/// and a turn with no recall between them, certifies where the load names
+/// `independent`, and refuses as before where it names `continuous`, where it
+/// carries no such pair and where the holdings carry no load.
+///
+/// Perturbation: drop the election from `group` and the independent case
+/// abandons at identity naming the flush, and grant the exemption under every
+/// load and the continuous case certifies. Watched to fail under each.
+#[test]
+fn a_flush_under_an_independent_load_owes_no_recall() {
+    for (load, certifies) in [
+        (Some(load_event(Some("independent"))), true),
+        (Some(load_event(Some("continuous"))), false),
+        (Some(load_event(None)), false),
+        (None, false),
+    ] {
+        let mut events: Vec<String> = load.clone().into_iter().collect();
+        events.extend([
+            recall_event(1, "identity"),
+            generation("t-36", 250, 252),
+            flush_event(255, 26551, 38),
+            generation("t-37", 259, 261),
+        ]);
+        let (outcome, lines) = run_drive(Some(holdings(&events)), m1_spu);
+        assert!(outcome.is_ok());
+        let close = lines.last().expect("the close stands");
+        let expected = if certifies { "certified" } else { "abandoned" };
+        assert_eq!(
+            close["payload"]["outcome"]["kind"], expected,
+            "load {load:?}: {close}"
+        );
+    }
 }
 
 /// conforms: diagnostic-identity-refuses-an-unaccounted-input

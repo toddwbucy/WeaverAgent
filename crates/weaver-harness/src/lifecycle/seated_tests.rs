@@ -317,6 +317,7 @@ fn enter_seated(identity: Option<&'static str>) -> Entered {
             all_kinds: false,
             keys: Vec::new(),
         },
+        turn_context: weaver_types::TurnContext::Continuous,
     };
     let state_end = match identity {
         None => None,

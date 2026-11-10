@@ -692,3 +692,24 @@ fn the_serving_draft_judges_the_declared_adapter() {
     );
     assert_bad(&classify, "classify.model-binding.adapter");
 }
+
+/// **The serving draft checks `turn-context`'s value as the declaration parse
+/// does and honors nothing yet** (#423): both values parse into the agent's
+/// half, and a third refuses naming the key. Nothing on the foundation's path
+/// reads the election until its cutover.
+///
+/// Perturbation: drop `check_turn_context` from `parse_serving_draft` and the
+/// refusal arrives unnamed. Watched to fail under exactly that removal.
+#[test]
+fn the_serving_draft_checks_the_turn_context_value() {
+    let source = format!("turn-context = \"independent\"\n{}", full());
+    let draft = parse_serving_draft(&source).expect("an elected draft parses");
+    assert_eq!(
+        draft.agent.turn_context,
+        Some(super::super::TurnContext::Independent)
+    );
+    assert_bad(
+        &format!("turn-context = \"fresh\"\n{}", full()),
+        "turn-context",
+    );
+}

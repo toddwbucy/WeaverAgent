@@ -133,7 +133,11 @@ a snapshot of 2026-08-25 that still shows an identity table, and
 `docs/crates/weaver-types/weaver-types-Spec.md` section 2 is the authority. A required
 key absent, or any key misspelled, refuses the parse by name, and the optional keys
 (`tool-set`, `binding-kind`, `gate-instruction`, `state-election`, `state-store`,
-`restore`) carry the absence their Spec rules.
+`restore`, `lifecycle`, `turn-context`) carry the absence their Spec rules.
+`turn-context = "independent"` (#423), a top-level key, answers every turn from the
+seated prompt and that turn's request alone, the decode context returned to the prompt
+before each turn and the load event naming the election. Absent, it is `continuous`,
+the conversation accumulating as before.
 
 **Electing the shell** (#29). `tool-set = ["sh"]` offers the agent one tool, a POSIX `sh`
 (busybox's ash) over the stack's listed commands (`<prefix>/bin/busybox.applets`), in
@@ -437,8 +441,13 @@ election's meaning and not a fault.
 
 **Create, load, seed, save-point, unload; production is the next load.** Within the
 seeding residency the prompt is appended context, not the decode session's prefix, so a
-flush there would drop it from the context. Take the save point on demand once the
-seeding has answered, as root or through the connector's rule:
+flush there would drop it from the context. **Under `turn-context = "independent"` every
+turn is preceded by such a flush**, so a prompt seeded within a residency is in force
+for the seeding turn alone: it enters state as every seeding does and the next load
+seats it, but `turn.py --system` seeds under whatever the declaration elects, so seed a
+new agent under `continuous` or reload it before it serves. A storeless agent under
+`independent` has no seeded prompt in force past its seeding turn. Take the save point
+on demand once the seeding has answered, as root or through the connector's rule:
 
 ```sh
 sudo /opt/weaver/bin/weaver-admin save-point <name>   # answers {"kind":"save_point_taken",...}
