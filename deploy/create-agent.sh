@@ -578,22 +578,26 @@ UID_MIN=$(awk '$1 == "UID_MIN" { v = $2 } END { print v }' /etc/login.defs 2>/de
 [[ "$UID_MIN" =~ ^[0-9]+$ ]] || UID_MIN=1000
 # door_crossings NAME: each group NAME holds that reaches the other account's
 # door, space-separated, or nothing. The gate-con account's door is each
-# agent's own group, and the admin-con account's are each agent's state,
-# access and trace groups: so weaver-gatecon holds no -state, -admin or
-# -trace group of any agent, weaver-admincon holds no agent's own group and
-# no -trace group, and neither holds the other's group.
+# agent's own group, and the admin-con account's are each agent's state and
+# access groups. **The admin-con account is judged by what it may hold**: its
+# own group and weaver-<agent>-state and weaver-<agent>-admin groups, and no
+# other weaver- group, so an agent's own group is a crossing whatever
+# hyphens the agent's name carries, as are a trace group and the gate-con
+# account's. **The gate-con account holds no state, access or trace group**,
+# no per-agent connector's group `weaver-<agent>-admincon` of the earlier
+# layout and not the admin-con account's. Admin refuses every agent name
+# ending in a reserved suffix (weaver-admin-Spec section 4), so the suffixes
+# read here name no agent's own group.
 door_crossings() {
-  local held g rest crossed=""
+  local held g crossed=""
   held=$(id -Gn "$1") || die "cannot read the groups of $1"
   for g in $held; do
     case "$1:$g" in
-      "$GATECON_USER:$ADMINCON_USER"|"$ADMINCON_USER:$GATECON_USER") crossed="$crossed $g" ;;
+      "$ADMINCON_USER:$ADMINCON_USER"|"$ADMINCON_USER:"weaver-*-state|"$ADMINCON_USER:"weaver-*-admin) ;;
+      "$ADMINCON_USER:"weaver-*) crossed="$crossed $g" ;;
+      "$GATECON_USER:$ADMINCON_USER") crossed="$crossed $g" ;;
       "$GATECON_USER:"weaver-*-state|"$GATECON_USER:"weaver-*-admin|"$GATECON_USER:"weaver-*-trace) crossed="$crossed $g" ;;
-      "$ADMINCON_USER:"weaver-*-trace) crossed="$crossed $g" ;;
-      "$ADMINCON_USER:"weaver-*)
-        rest=${g#weaver-}
-        # An agent's own group is weaver-<agent>, its name holding no hyphen.
-        [[ "$rest" == *-* || "$g" == "$ADMINCON_USER" ]] || crossed="$crossed $g" ;;
+      "$GATECON_USER:"weaver-*-admincon) crossed="$crossed $g" ;;
     esac
   done
   printf '%s' "${crossed# }"
@@ -609,6 +613,7 @@ judge_box_account() {
   IFS=: read -r _ _ uid gid _ home shell <<<"$line"
   [[ "$uid" =~ ^[0-9]+$ ]] && [ "$uid" -lt "$UID_MIN" ] \
     || die "the account $name stands with uid $uid, not a system account (below UID_MIN $UID_MIN), so it is not adopted as the box's account"
+  [ "$uid" -gt 0 ] || die "the account $name stands with uid 0, root's, so it is not adopted as the box's account"
   case "$shell" in
     /usr/sbin/nologin|/sbin/nologin|/usr/bin/nologin|/bin/false|/usr/bin/false) ;;
     *) die "the account $name stands with the login shell '$shell', so it is not adopted as the box's account" ;;
@@ -706,6 +711,21 @@ for g in "$TRACE_GROUP" "$ACCESS_GROUP" "$AGENT_USER" "$MEMBER_USER"; do
     [ "$group_status" -eq 2 ] || die "cannot read group $g"
   fi
 done
+# **A box account that is absent has no group of its name either**: apply
+# lays it with its own group, which useradd refuses to make over a standing
+# one, so the plan refuses here rather than stop part way.
+for box_account in "$GATECON_USER" "$ADMINCON_USER"; do
+  case "$box_account" in
+    "$GATECON_USER") [ -z "$GATECON_LINE" ] || continue ;;
+    *) [ -z "$ADMINCON_LINE" ] || continue ;;
+  esac
+  if getent group "$box_account" >/dev/null; then
+    die "the group $box_account stands without its account, so the box's account cannot be laid with its own group (look at it, and remove it or lay the account by hand)"
+  else
+    group_status=$?
+    [ "$group_status" -eq 2 ] || die "cannot read group $box_account"
+  fi
+done
 # **A box account that stands is judged before anything is made**, so a
 # standing account of the right name and the wrong shape is never adopted.
 [ -z "$GATECON_LINE" ] || { judge_box_account "$GATECON_USER"; printf '   %s stands, and its shape is the box'"'"'s gate-con account\n' "$GATECON_USER"; }
@@ -728,6 +748,19 @@ if [ "$APPLY" -eq 0 ]; then
 fi
 
 say "accounts"
+# **The box's connector accounts are laid where absent, once per box**, each
+# a system account with no login shell, no home and its own group, then
+# judged as a standing one is. Neither is laid per agent. **They are laid
+# first**, so an account that cannot be laid or judged stops the run before
+# any account of the agent's stands.
+for box_account in "$GATECON_USER" "$ADMINCON_USER"; do
+  line=$(account_line "$box_account") || exit 1
+  if [ -z "$line" ]; then
+    sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$box_account"
+    printf '   laid %s, the box'"'"'s account\n' "$box_account"
+  fi
+  judge_box_account "$box_account"
+done
 # **The agent gets a home and the member does not.** The agent's tools run
 # somewhere, and the retirement of 2026-09-11 found one of three agents with
 # a home and the others without, which is the drift a script ends. The member
@@ -739,24 +772,17 @@ sudo groupadd --system "$ACCESS_GROUP"
 # **The relay's one group is the trace group**, primary and alone, which is
 # what admin's start step sets at its spawn (weaver-admin-Spec section 6).
 sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid "$TRACE_GROUP" "$RELAY_USER"
-# **The box's connector accounts are laid where absent, once per box**, each
-# a system account with no login shell, no home and its own group, then
-# judged as a standing one is. Neither is laid per agent.
-for box_account in "$GATECON_USER" "$ADMINCON_USER"; do
-  line=$(account_line "$box_account") || exit 1
-  if [ -z "$line" ]; then
-    sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$box_account"
-    printf '   laid %s, the box'"'"'s account\n' "$box_account"
-  fi
-  judge_box_account "$box_account"
-done
 GATECON_LINE=$(account_line "$GATECON_USER") || exit 1
 [ -n "$GATECON_LINE" ] || die "$GATECON_USER does not stand after it was laid"
 GATECON_UID=$(uid_in "$GATECON_LINE") || exit 1
 [ "$GATECON_UID" -ne 0 ] || die "$GATECON_USER carries uid 0, and no access rule names root"
+ADMINCON_LINE=$(account_line "$ADMINCON_USER") || exit 1
+[ -n "$ADMINCON_LINE" ] || die "$ADMINCON_USER does not stand after it was laid"
+ADMINCON_UID=$(uid_in "$ADMINCON_LINE") || exit 1
 # **The gate-con account joins the agent's own group**, which the gate's
-# socket admits by (weaver-gate-Spec section 3), and nothing else of the
-# agent's. **The admin-con account joins the state group for passage and the
+# socket admits by (weaver-gate-Spec section 3). The group also reads the
+# agent's tool home and lists its runtime directory, a reach that Spec states
+# as the design, and gate-con joins no other group of the agent's. **The admin-con account joins the state group for passage and the
 # access group for reading**, never the agent's own group or the trace group:
 # it reaches the trace through the relay's door alone.
 sudo usermod -aG "$AGENT_USER" "$GATECON_USER"
@@ -777,7 +803,7 @@ sudo chmod 2750 "/home/$AGENT_USER"
 printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
   "$AGENT_USER" "$(id -u "$AGENT_USER")" "$MEMBER_USER" "$(id -u "$MEMBER_USER")" \
   "$RELAY_USER" "$(id -u "$RELAY_USER")" "$GATECON_USER" "$GATECON_UID" \
-  "$ADMINCON_USER" "$(uid_in "$(account_line "$ADMINCON_USER")")"
+  "$ADMINCON_USER" "$ADMINCON_UID"
 # **The declaration is rendered again with the uid the gate-con account
 # holds**, and parse-checked again, before it is written.
 DECLARATION_TEXT=$(render_declaration)

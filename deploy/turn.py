@@ -185,17 +185,23 @@ def main() -> int:
             print(f"no gate at {path}: is {agent} loaded?", file=sys.stderr)
             return 1
         except PermissionError:
-            print(f"refused at {path}: uid {os.getuid()} is not in the declaration's allowed-uids, which "
-                  f"names the box's gate-con account weaver-gatecon for an agent create-agent.sh lays, or "
-                  f"this process does not hold group weaver-{agent}; run it as weaver-gatecon "
-                  f"(sudo -n -u weaver-gatecon python3 -I - {agent} ... < deploy/turn.py)",
+            # **The socket's mode turns away a uid outside the agent's group**
+            # at the connect; the access rule turns away a uid in the group
+            # but not in the rule after the accept, as a close (below).
+            print(f"refused at {path}: this process does not hold group weaver-{agent}, which the gate's "
+                  f"socket admits by; the caller of an agent create-agent.sh lays is the box's gate-con "
+                  f"account: sudo -n -u weaver-gatecon python3 -I - {agent} \"<text>\" < deploy/turn.py",
                   file=sys.stderr)
             return 1
-        s.sendall(line + b"\n")
-        line = s.makefile("r", encoding="utf-8").readline()
+        try:
+            s.sendall(line + b"\n")
+            line = s.makefile("r", encoding="utf-8").readline()
+        except (BrokenPipeError, ConnectionResetError):
+            line = ""
     elapsed = time.monotonic() - started
     if not line:
-        print("the gate closed without an answer", file=sys.stderr)
+        print(f"the gate closed without an answer: uid {os.getuid()} may hold the group and not be in the "
+              f"declaration's allowed-uids, which the gate refuses by closing", file=sys.stderr)
         return 1
     if raw:
         sys.stdout.write(line)

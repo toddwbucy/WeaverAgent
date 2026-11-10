@@ -426,8 +426,9 @@ failed check.
 `deploy/verify-lifecycle.sh --agent <throwaway>`, run as the operator, verifies a whole
 lifecycle end to end
 (create with the box's accounts, load, an unseeded turn through the gate as gate-con,
-save points, restore, a measurement of the operator's seeding with the throwaway
-agent's rule moved to the operator's uid and back, force-unload, crash recovery, the
+save points, restore, a measurement with the throwaway agent's rule moved to the
+operator's uid and back, in which a turn as gate-con is refused and an ordinary turn as
+the operator is answered (no seeding line is sent), force-unload, crash recovery, the
 refusal by name of a root of an older layout, the refusal of a load over an access
 entry on the trace, take-down) on a throwaway agent it creates; it plans
 unless given `--apply`, and `--keep` stops it before the take-down so the checks it

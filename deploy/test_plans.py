@@ -1036,6 +1036,15 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
             (dict(BOX_PASSWD={"weaver-admincon": "weaver-admincon:x:991:991::/home/weaver-admincon:/usr/sbin/nologin"},
                   ADMINCON_GROUPS="weaver-admincon weaver-existing-state weaver-existing"),
              None, "holds weaver-existing, which reaches"),
+            # An agent's own group whatever hyphens its name carries.
+            (dict(BOX_PASSWD={"weaver-admincon": "weaver-admincon:x:991:991::/home/weaver-admincon:/usr/sbin/nologin"},
+                  ADMINCON_GROUPS="weaver-admincon weaver-my-bot-state weaver-my-bot"),
+             None, "holds weaver-my-bot, which reaches"),
+            # The earlier layout's per-agent connector group, on gate-con.
+            (dict(BOX_PASSWD={"weaver-gatecon": well}, GATECON_GROUPS="weaver-gatecon weaver-old-admincon"),
+             None, "holds weaver-old-admincon, which reaches"),
+            (dict(BOX_PASSWD={"weaver-admincon": "weaver-admincon:x:0:991::/home/weaver-admincon:/usr/sbin/nologin"},
+                  BOX_GROUP={"991": "weaver-admincon:x:991:"}), None, "stands with uid 0, root's"),
         )
         home = self.root / "home" / "weaver-gatecon"
         for env, layout, said in cases:
@@ -1062,6 +1071,26 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertIn("weaver-admincon  the box's, absent: laid at --apply", result.stdout)
         self.assertIn("weaver-gatecon stands, and its shape is the box's gate-con account", result.stdout)
         self.assertIn("allowed-uids = [990] (weaver-gatecon alone)", result.stdout)
+
+    def test_a_box_group_without_its_account_refuses_in_the_plan(self):
+        # **An absent box account with a group of its name standing refuses
+        # before anything is made**: apply would lay the account with its own
+        # group, which useradd refuses over a standing one, after the agent's
+        # accounts. Perturbation: drop the plan's group check and the plan
+        # passes.
+        for box in ("weaver-gatecon", "weaver-admincon"):
+            with self.subTest(box=box):
+                self.env["COLLISION_GROUP"] = box
+                result = self.create()
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(f"the group {box} stands without its account", result.stderr)
+        self.env.pop("COLLISION_GROUP", None)
+        self.assert_unprivileged()
+        script = (DEPLOY / "create-agent.sh").read_text()
+        accounts = script.index('say "accounts"')
+        self.assertLess(script.index('sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$box_account"', accounts),
+                        script.index('--create-home --user-group "$AGENT_USER"', accounts),
+                        "the box's accounts are laid before any of the agent's")
 
     def test_the_box_accounts_names_are_not_agents(self):
         # weaver-admin-Spec section 4: an agent named gatecon or admincon would
