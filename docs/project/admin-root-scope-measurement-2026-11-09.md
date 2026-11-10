@@ -73,12 +73,22 @@ holder and modification time, and the runtime directory, which lost a stale `gat
 
 **The execution context the connector's unit handed down.** `NoNewPrivileges=no`, the
 full capability bounding set, no system call or address family filter, no private or
-protected view, and every namespace and mount the same as PID 1's. The soft open-files
-limit was 2048 (systemd's `DefaultLimitNOFILESoft`), against 1048576 in the operator's
-login shell, and the locked-memory limit was 8 MiB in both. So a connector load starts
-its agent under a soft open-files limit 512 times lower than a shell load, unless sudo,
-admin or the worker raises it. That is the first concrete item of the operator
-contract's "resource limits sized for the agent".
+protected view, and every namespace and mount the same as PID 1's. The open-files limit
+was soft 2048 and hard 2097152, systemd's manager defaults (`DefaultLimitNOFILESoft` and
+`DefaultLimitNOFILE`), and the locked-memory limit was 8 MiB.
+
+**A shell load read the same limits.** On 2026-11-10 (UTC) a batch of loads started
+from a shell, through the same `systemd-run --scope -p Delegate=yes` wrapper, ran every
+process in its chain at soft 2048 and hard 2097152, each with an 8 MiB locked-memory
+limit: the batch's own script, `sudo`, `verify-load.sh`, and the loaded agent's worker,
+SPU, trace relay and state member. Neither `sudo`, admin nor the worker raised the limit
+along that chain. The operator's interactive shell read soft 1048576 the same day, and
+the batch did not descend from it. So neither measured path raises the limit, and the
+operator contract's "resource limits sized for the agent, model loading included, or
+unset" is an obligation on whoever lays the install, this repository's
+`deploy/update-stack.sh` included, since WeaverWeb's install builds on it (the
+operator's ruling of 2026-11-09). The connector's invoker was measured here, and its
+agent's constituents are Part C's to read.
 
 ## Part B0: the request, from root stand-in units
 
