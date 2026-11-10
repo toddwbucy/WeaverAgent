@@ -47,8 +47,9 @@ the kernel already hold: the run lock the run's processes hold, released by the 
 when the last of them is gone. No init system supervises the agent, on the operator's
 ruling of 2026-10-03 on #50: the agent starts like an appliance, when someone wants it,
 and supervision, restart and hardening belong to whoever packages and deploys it. The
-init system's only part is the transient scope admin asks it for at each load, whose
-lifetime is the agent's (the operator's ruling of 2026-11-07 on #166, section 7).
+init system's only part is the transient scope admin asks it for at each operation that
+stands the agent's containment, the load's scope bounding the agent's lifetime (the
+operator's ruling of 2026-11-07 on #166, section 7).
 
 ```graph
 node: weaver-admin

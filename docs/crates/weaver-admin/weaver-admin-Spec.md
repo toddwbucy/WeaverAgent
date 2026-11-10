@@ -172,9 +172,10 @@ to: admin-descriptors-owned-types
 is operator-paced and the coordination traffic is per-load, so nothing here
 needs an executor, and threads from the standard library carry the concurrency
 section 2 needs. The init system is asked for one thing only, the agent's transient
-scope at each load (section 6.1, since #166), and how that request is carried is
-section 11's open election: the recommended exec of systemd's own `busctl` at a fixed
-path adds no bus library to the tree. The operations log of section 8
+scope for each operation that stands the start step's containment (section 6.1, since
+#166), and how that request is carried is section 11's open election: the recommended
+exec of systemd's own `busctl` at a fixed path adds no bus library to the tree. The
+operations log of section 8
 is this crate's own file with this crate's own writer, and a logging framework
 would be a second account with its own schema, which is the arrangement charter
 section 2 rules out for the trace and this Spec declines for the log. The
@@ -1628,8 +1629,9 @@ to: admin-sink-path-dies-at-open-site
 **The agent starts the way an appliance does, and the start step is this crate's root
 act**, on the operator's ruling of 2026-10-03 on #50 that the agent leaves systemd. No
 unit is installed for the agent and nothing is installed to wait for it, and the init
-system is asked for one transient scope per load and nothing else (section 6.1, on the
-operator's ruling of 2026-11-07 on #166): restart
+system is asked for nothing but one transient scope per operation that stands the start
+step's containment, today the load and at the foundation cutover the seed and
+install-governing (section 6.1, on the operator's ruling of 2026-11-07 on #166): restart
 on a crash or a reboot, sandbox hardening and log collection belong to whoever packages
 and deploys the agent, with systemd, a container or anything else, and are not this
 framework's. What the transient unit did for the agent, the start step does itself, as
@@ -1798,12 +1800,13 @@ terminal, and the start step moves itself into the agent's own scope before it m
 the agent's cgroup (section 6.1), so every process it starts lives there. The invoker's
 end, admin-con's restart included, ends neither the agent nor a start step already
 moved, and root stopping the scope stops the agent, an unclean stop. This crate asks
-PID1 for one transient scope per load and for nothing else: no unit per agent, no
-restart and no supervision. The consequences are stated in
-`weaver-admin-operator-contract` section 3: a stop of the scope is an unclean stop that
-resets the next load to the latest save point, the invoker's execution context reaches
-the agent, and the invoker's cgroup limits do not. The same ruling reverses
-toddwbucy/WeaverWeb#15's binding of the agent to admin-con.
+PID1 for one transient scope per operation that stands the start step's containment,
+the load and, at the foundation cutover, the seed and install-governing (section 6.1),
+and for nothing else: no unit per agent, no restart and no supervision. The
+consequences are stated in `weaver-admin-operator-contract` section 3: a stop of the
+scope is an unclean stop that resets the next load to the latest save point, the
+invoker's execution context reaches the agent, and the invoker's cgroup limits do not.
+The same ruling reverses toddwbucy/WeaverWeb#15's binding of the agent to admin-con.
 
 **A failed dial is answered from the worker's own exit, which the start step can read.**
 The invocation is the worker's parent until it exits, so where the dial's bound expires
@@ -2422,13 +2425,16 @@ carry a part of it cite it for the mechanism and carry only their own party's pa
 
 **It specifies a host** (the operator's rulings of 2026-10-14 on #111 and of 2026-11-07
 on #166): systemd as PID1, answering the transient-unit call on the system bus, and the
-agent's cgroup beneath a scope PID1 makes for the load, delegated, root's and admitting
-a child root makes. A container or cgroup-namespace deployment is later work, tested and
-built toward then, and this section specifies none of it. **It adds one transient scope
-per load and no unit per agent** (the operator's ruling of 2026-11-07 on #166): systemd
-never starts or restarts the agent, and stops it only where root stops its scope. The
-scope's request is all this section asks of systemd, and a unit per agent stays later
-fleet work.
+agent's cgroup beneath a scope PID1 makes for the operation, delegated, root's and
+admitting a child root makes. A container or cgroup-namespace deployment is later work,
+tested and built toward then, and this section specifies none of it. **It adds one
+transient scope per operation that stands this containment and no unit per agent**
+(the operator's ruling of 2026-11-07 on #166): today the load, and at the foundation
+cutover the seed and install-governing, which stand the state member in the start
+step's containment (`weaver-admin-Spec-amendment` section 2, ADMIN-SEED and
+ADMIN-INSTALL). systemd never starts or restarts the agent, and stops it only where
+root stops its scope. The scope's request is all this section asks of systemd, and a
+unit per agent stays later fleet work.
 
 **The agent's cgroup is made beneath a scope of its own that the start step asks PID1
 for, so its lifetime is the scope's** (section 6, the lifetime, and the operator's
@@ -2477,12 +2483,18 @@ rulings of 2026-11-07 and 2026-11-09 on #166).
 - **The scope's end is its emptiness:** no verb removes a scope. A start step that
   refuses or rolls back exits and leaves the scope empty, and PID1 stops and collects
   it, the empty cgroup beneath it with it (measured, below). A run end empties it the
-  same way.
+  same way. At the cutover a seed or an install-governing takes the same step to the
+  same scope, `weaver-<agent>.scope`, under the agent's two locks with no agent loaded
+  (D7), and its scope ends by the same rule: once it has reaped its member, removed its
+  cgroup and exited, the scope is empty and PID1 collects it, and one it leaves
+  standing is the next operation's to read, as a load reads one (the scope already
+  standing).
 - **The record:** because every later verb runs outside the agent's scope (from an
   operator's shell or from admin-con's unit), the start step records the agent's
   cgroup's path in `cgroup` in the run directory, root's and `0600`, beside `run.lock`,
-  before its first fork. **It is written atomically** (Codex on #161): to a temporary in
-  the run directory, synced, renamed over `cgroup`, and the run directory synced, so a
+  before its first constituent fork (a helper that carries the scope's request forks
+  before it, D2). **It is written atomically** (Codex on #161): to a temporary in the
+  run directory, synced, renamed over `cgroup`, and the run directory synced, so a
   crash leaves the old record, the new one, or none, never a partial one. A load that
   meets a temporary left behind removes it. **The record holds the cgroup directory's
   identity beside its path** (Codex on #161): the device and inode the loader's `fstat`
@@ -2604,12 +2616,12 @@ weaver-<agent>/      root's; the agent's cgroup
   exception, below). No controller is enabled on any of them, so cgroup v2's rule against
   processes in an inner cgroup does not bind today.
 - **Root places every constituent itself.** The start step makes the cgroups, sets the
-  three files' owner and writes the record before it forks anything, holding both locks
-  (section 3, the order within a load). Each constituent is placed by its own child
-  writing `0` to its leaf's `cgroup.procs`, through a descriptor opened before the fork,
-  after the fork and before the privilege drop and the exec. So no constituent runs an
-  instruction of its own outside the agent's cgroup, and every fork after inherits its
-  parent's cgroup.
+  three files' owner and writes the record before it forks any constituent, holding both
+  locks (section 3, the order within a load). Each constituent is placed by its own
+  child writing `0` to its leaf's `cgroup.procs`, through a descriptor opened before the
+  fork, after the fork and before the privilege drop and the exec. So no constituent
+  runs an instruction of its own outside the agent's cgroup, and every fork after
+  inherits its parent's cgroup.
 - **Each shell's child moves itself into `tools/` before its exec** (`weaver-gate-Spec`
   section 8): in its `pre_exec`, with its parent-death signal set, it writes `0` to
   `tools/cgroup.procs`, opened by `openat` beneath a descriptor of `tools/` the worker
@@ -2856,7 +2868,7 @@ scope.
 | State | Meaning |
 |---|---|
 | A0 | absent at the deterministic path, whatever the record: a stale record is a sub-case, which the next verb removes |
-| A1 | standing, empty, no run: the start step's own before its first fork, a run's after its last process ended and before its run end, a crash's after nothing of it ran on, or an invocation's that died inside its removal |
+| A1 | standing, empty, no run: the start step's own before its first constituent fork, a run's after its last process ended and before its run end, a crash's after nothing of it ran on, or an invocation's that died inside its removal |
 | A2 | populated, the run lock held: a run stands |
 | A3 | populated, the run lock free: a run's leftovers after a crash |
 | A4 | killed, not yet empty: inside a run end's bound |

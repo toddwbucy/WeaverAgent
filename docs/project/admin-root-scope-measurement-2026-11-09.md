@@ -148,10 +148,12 @@ standing. So no install lays a slice unit, and the slice outlives its scopes.
 **A dry run under the operator's user manager**, made before B0, agreed in kind: the
 call returned a job, and the move followed it by about 18 ms.
 
-## What follows the code
+## What remains: Parts B1 to B5 before the code act merges, then Part C
 
-Parts B1 to B5 emulate the placement with `systemd-run --scope -p Delegate=yes
---slice=weaver.slice` under the GPU lease, reading the placement, a connector's refused
+Part B0, above, is the part of Part B taken before the code was drafted. Parts B1 to B5
+are the rest of Part B, and they gate the code act's merge, not its drafting. They run
+under the GPU lease and emulate the placement with `systemd-run --scope -p Delegate=yes
+--slice=weaver.slice`, reading the placement, a connector's refused
 write to the scope's `cgroup.procs`, a connector's restart and the run end. Part C reads
 the ruling's facts through the real granted line once the code act lands, with a
 constituent's inherited context (`NoNewPrivs`, the bounding set, the limits and its
