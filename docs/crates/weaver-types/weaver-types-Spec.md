@@ -366,7 +366,8 @@ under either fails its parse by name at the first load rather than seating a pre
 state does not hold. The remedy is the seeding turn: the prompt's text goes into
 `system-prompt.md` beside the declaration, the key or the table is removed, and the
 seeding step sends the draft through the gate after the load, per
-`weaver-harness-Spec` section 6.1.
+`weaver-harness-Spec` section 6.1, where the agent's access rule admits the operator,
+per `weaver-gate-world-contract` section 2.
 
 **`surprisal_election` is a bare `bool` and `field_election` is an
 `Option`, which is a difference in what each has to say rather than an
@@ -1021,8 +1022,9 @@ test this crate can pretend to run.
 
 **Admin's lifecycle has no wire of its own**, on the operator's rulings of 2026-10-03 on
 #50: a caller that is not the operator at the shell reaches the verbs through a sudo
-rule the operator installs, which grants this agent's connector fixed `weaver-admin`
-command lines and reads nothing else from the caller, per `weaver-admin-Spec` section 2.
+rule the operator installs, which grants the box's admin-con account the agent's fixed
+`weaver-admin` command lines and reads nothing else from the caller, per
+`weaver-admin-Spec` section 2.
 What crosses is the command line the rule names and the one `lifecycle-answer` or
 `lifecycle-refusal` object it prints, the floor's existing shapes, so this section
 carries no request type for it. **The trace door has one**, and the boundary file and a
@@ -1069,11 +1071,13 @@ one `trace_reader` the trace relay admits, in a root-owned file in the agent's r
 by `parse_boundary`**, behind the `config` feature beside `parse`, a total parse like
 the declaration's, `fn parse_boundary(source: &str) -> Result<BoundaryFile,
 ConfigError>`, kept apart from it because the file is boundary and never constitution,
-per `weaver-admin-Spec` section 9. **The trace reader is a user, and only a user**, the
-connector's own service user, on the operator's ruling of 2026-10-03 on #50: a group
-would admit every member of it to the agent's whole record, and a bare name that could
-resolve to a user and a group of the same name is what an explicit kind once guarded
-against, so the kind is fixed instead. The relay admits that uid alone. **The name
+per `weaver-admin-Spec` section 9. **The trace reader is a user, and only a user**, on
+the operator's ruling of 2026-10-03 on #50, the box's admin-con account
+`weaver-admincon` since the operator's rulings of 2026-11-10, per `weaver-admin-Spec`
+section 2: a group would admit every member of it to the agent's whole record, and a
+bare name that could resolve to a user and a group of the same name is what an explicit
+kind once guarded against, so the kind is fixed instead. The relay admits that uid
+alone. **The name
 resolves at `validate` and `load`**: a reader that is the agent's or its state member's
 account refuses, per `weaver-admin-PRD` section 7's rule that no grant names the agent,
 so the agent never reaches its own record through the boundary, and a reader that does
@@ -1082,7 +1086,7 @@ grouped to, refuses too, a reader the filesystem would turn away before the rela
 credential check runs being a door that cannot open.
 
 ```toml
-trace-reader = "weaver-<agent>-admincon"
+trace-reader = "weaver-admincon"
 ```
 
 **The door's framing is lines on a stream socket.** The reader sends exactly one

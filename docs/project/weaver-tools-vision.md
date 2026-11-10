@@ -472,9 +472,10 @@ the gate and `admin-con` beside admin, the names the 2026-10-02 ruling gives
 (toddwbucy/WeaverTools#6). **Nothing dials a connector.** Each is a client of its door's
 socket on one side and a client of the WeaverWeb server on the other, dialing out to it
 over mutual TLS, so the agent listens to nothing new and the connectors listen to
-nothing at all. They are one agent's own, bound by certificate to that agent and one
-plane, run as their own unprivileged service users, and start under the operator's
-provisioning, never under admin. Their code is WeaverWeb's, in its repository or their
+nothing at all. Each is bound by certificate to one agent and one plane, runs under its
+plane's unprivileged system account, one per box, `weaver-gatecon` or `weaver-admincon`
+on the operator's rulings of 2026-11-10, and starts under the operator's provisioning,
+never under admin. Their code is WeaverWeb's, in its repository or their
 own and never in this one, and an agent works with no connectors at all.
 
 **This repository stops at its two doors.** Each door's contract is its interface, and
@@ -489,13 +490,15 @@ WeaverWeb authenticates the person and decides, in its own IAM, what that person
 of which agent, and it records the person in its own audit. admin-con maps WeaverWeb's
 abstract verb to one of the agent's fixed `weaver-admin <verb> <agent>` command lines,
 so no command crosses a wire, and runs it with `sudo -n` through a strict sudo rule the
-operator installs as the box's own boundary: it names the connector's own service user,
+operator installs as the box's own boundary: it names the box's admin-con account,
 grants only that agent's lines its role allows, and takes nothing from the caller, no
 argument, no environment and no standard input ("the box decides", weaver-admin-Spec
 section 2). The connector's ceiling is the rule's lines, which it reads with `sudo -n
 -l` and never writes. The observer role's rule grants `show`, and the operator role's
-adds `validate`, `load`, `unload` and `stop`. A compromised server or connector reaches
-no further than the lines that rule grants, at most starting and stopping its one agent.
+adds `validate`, `load`, `unload`, `stop`, `save-point`, `restore` and `force-unload`. A
+compromised server or connector reaches no further than the lines the rules grant, at
+most the lifecycle of every agent on its box, which is the console's reach
+(weaver-admin-Spec section 2).
 **The person never reaches admin**: where the connector runs a verb, the cause the
 agent's record carries is the uid sudo reports, the connector's, and which person asked
 stays WeaverWeb's record. gate-con carries no person at all, the gate admitting it like
@@ -511,8 +514,8 @@ connector stops its agent (the operator contract section 2, toddwbucy/WeaverWeb#
 **The door contracts carry no principal, and the amendment once predicted here is
 withdrawn.** An earlier form of this section had each connector pass a verified
 principal across its door and both door contracts amended to carry it. The three gates
-make that unnecessary: authorization at the door rests on the connector's own service
-user and the lines its sudo rule grants, the person's identity stays WeaverWeb's, and
+make that unnecessary: authorization at the door rests on the connector's system
+account and the lines its sudo rule grants, the person's identity stays WeaverWeb's, and
 nothing of the person enters the agent, the cause it records being the uid sudo reports.
 The connectors build against the two external contracts the ruling of 2026-08-01 wrote,
 `weaver-gate-world-contract` and `weaver-admin-operator-contract`, as #50 extends the

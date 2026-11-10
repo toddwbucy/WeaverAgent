@@ -92,6 +92,18 @@ principal**, so an elected tool cannot dial the agent's own mouth and prompt it
 through its own front door. Whoever connects gets to converse with the agent and gets
 nothing else.
 
+**The world at this door is one declared caller per box**, on the operator's rulings of
+2026-11-10: `weaver-gatecon`, the box's system account that runs WeaverWeb's gate-con,
+which the access rule of every agent `deploy/create-agent.sh` lays on that box from that
+date names alone. The operator's uid is in no such rule, and neither is root. An agent
+laid before that date keeps the rule it was laid with, which names the operator, per
+section 2. The box's admin-con account, `weaver-admincon`, is in no gate rule either,
+per `weaver-admin-operator-contract` section 0, so neither connector account reaches the
+other's door. Many people and many turns are WeaverWeb's to carry over gate-con's one
+admission, per #70 item 1. **The rule names one caller by `deploy/create-agent.sh`'s
+convention, and nothing refuses a rule naming more**: enforcing it in code is later work
+under #70.
+
 **The mechanism is the Spec's.** What this page requires is that the identity be
 verified by the channel rather than claimed in the message, and that a peer failing
 the predicate be refused before any byte of its ask is read. What supplies that
@@ -118,16 +130,21 @@ prompt as a turn: the harness seats the text as the agent's identity prefix, rec
 it, and answers the turn as any other, per `weaver-harness-Spec` section 6.1. **It is
 admitted from the operator's uid alone**, the uid the box's root names as the operator
 and the enter carries, judged by the harness on the dialer's peer identity, which the
-gate relays as it relays every line, parsing nothing; from any other dialer, the
-connector's service user among them, or with any other `role` value, it is a refused
-turn by section 3's path, the refusal naming the role in its JSON rendering, quoted to
-at most 256 octets and marked where cut. The seeding is the last step of
-creating an agent, run by the operator after the load with the draft
-`system-prompt.md` beside the declaration, and the first save point after it is the
-agent's starting state. A seeding line is bounded as every line is, 49,041 octets
-before the delimiter per `weaver-gate-Spec` section 4. The bound is an interim, on the
-operator's ruling of 2026-11-08, until the seed verb takes seeding off the gate at the
-foundation cutover.
+gate relays as it relays every line, parsing nothing. From any other dialer, the box's
+gate-con account among them, or with any other `role` value, it is a refused turn by
+section 3's path, the refusal naming the role in its JSON rendering, quoted to at most
+256 octets and marked where cut. **A seeding line has a sender only where the agent's
+access rule admits the operator's uid**, since the gate refuses every peer the rule does
+not name before a byte of its ask is read, per section 1. An agent
+`deploy/create-agent.sh` lays names the declared caller of section 1 alone, on the
+operator's ruling of 2026-11-10, so it has no seeding sender, and how such an agent's
+prompt enters is deferred to its own act. An agent whose rule admits the operator, laid
+before that ruling, is seeded as the last step of creating it, run by the operator after
+the load with the draft `system-prompt.md` beside the declaration, and the first save
+point after it is the agent's starting state. A seeding line is bounded as every line
+is, 49,041 octets before the delimiter per `weaver-gate-Spec` section 4. The bound is an
+interim, on the operator's ruling of 2026-11-08, until the seed verb takes seeding off
+the gate at the foundation cutover.
 
 ## 3. What crosses out, and its format
 
@@ -312,3 +329,9 @@ undeclared node being the dangling target Document Format section 4 rules out.
   the same act.
 - `WeaverTools-Document-Format.md`: the external-principal party category rides
   `weaver-admin-operator-contract`'s register entry.
+- `weaver-admin-operator-contract` sections 0 to 2, `weaver-admin-PRD` section 7,
+  `weaver-admin-Spec` sections 2, 4 and 9, `weaver-gate-Spec` section 3,
+  `weaver-types-Spec` section 3.1 and `weaver-harness-Spec` section 6.1: the box's two
+  connector accounts and section 1's one declared caller, on the operator's rulings of
+  2026-11-10. Landed in the same act. WeaverWeb's own documents are its repository's to
+  change.

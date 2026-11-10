@@ -547,8 +547,9 @@ common umasks it widens the group's reach:
 
 Connecting needs the write bit, so at `0022` the group could not connect and
 now can, and at `0077` the socket was the owner's alone. **That is the
-intent and it is conditional.** The operator reaches the socket by membership
-in the agent's group, which is what `0770` is for, and the whole boundary
+intent and it is conditional.** The caller the agent's access rule declares, per
+`weaver-gate-world-contract` section 1, reaches the socket by membership in the agent's
+group, which is what `0770` is for, and the whole boundary
 therefore rests on `Group={identity}` making that group exactly one agent -
 per `weaver-admin-Spec` section 6, whose start step drops the worker to that group by
 name. Where the worker's group were a shared one,
@@ -609,8 +610,8 @@ neither figure was anyone's election.
 Connecting to a Unix socket requires write permission, so denying the write
 bit outside owner and group is what excludes a uid. The read and execute
 bits others would hold under a laxer mode buy them nothing on a socket. The
-operator reaches the socket through membership in the agent's group, which
-is the provisioning already owed, and no one else reaches it at all.
+declared caller reaches the socket through membership in the agent's group,
+which is the provisioning already owed, and no one else reaches it at all.
 
 **Two locks, answering different adversaries.** The mode stops a stranger
 from reaching the door, and the credential check below stops one who does. A

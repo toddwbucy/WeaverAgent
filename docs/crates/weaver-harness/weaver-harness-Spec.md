@@ -2594,7 +2594,7 @@ beside its `text`, and such a line is admitted only where the frame's `dialer`, 
 peer uid the gate read at accept and carries inward per
 `weaver-harness-gate-contract` section 2, is the operator's uid the enter carries,
 `operator` of `weaver-types-Spec` section 4; a line whose dialer is absent or is any
-other uid, the connector's service user among them, or whose `role` is any other
+other uid, the box's gate-con account among them, or whose `role` is any other
 value, is a refused turn, the response frame's `refused` kind naming the role, and the
 channel stands. **A refusal reason quotes at most 256 octets of client content**
 (`ECHO_BOUND`, `weaver-types-Spec` section 4, #504): the role's JSON rendering as the
