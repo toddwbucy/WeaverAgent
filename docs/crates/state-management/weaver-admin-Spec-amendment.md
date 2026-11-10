@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #439
+**Landing PR:** #518
 
 **Version:** 0.25 **Date filed:** 2026-10-21 **Parent:** weaver-admin-PRD
 
@@ -197,9 +197,10 @@ TYPES-PERSIST and does not require an already indexed serving artifact. All othe
 custody and declaration checks still apply. Serving load continues to require the
 verified bound copy under ADMIN-VALIDATION. [PERSIST-5, PERSIST-3, CLASS-2]
 
-Use Spec 6's start step and Spec 6.1's containment, including the root-owned delegated
-invoker, ancestor checks, cgroup record before fork and namespace/credential setup. Mint
-the seed operation's run reference for that containment record. It is not a serving
+Use Spec 6's start step and Spec 6.1's containment, including the scope step and its
+root-owned delegated scope, ancestor checks, cgroup record before fork and
+namespace/credential setup. Mint the seed operation's run reference for that
+containment record. It is not a serving
 session and creates no load or unload event. Stand only the member under its restricted
 identity inside that cgroup, with --mode=seed, fd3 and fd9, no fd4, no gate, no SPU
 decoder, no serving worker, and no preload door. Admin speaks state-seed/1 on this
