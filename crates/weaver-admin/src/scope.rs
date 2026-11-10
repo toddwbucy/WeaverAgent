@@ -29,7 +29,8 @@ pub const SLICE: &str = "weaver.slice";
 /// stalled PID1 holds a load, counted from the request (the call and the read
 /// for the move within it), and how long the start step waits for PID1 to
 /// collect a scope standing empty. Each wait has its own, so a scope standing
-/// empty and then a stalled request hold a load up to twice the bound.
+/// empty and then a stalled request hold a load up to twice the bound, a
+/// hang of the helper outside its call aside (#522).
 pub const SCOPE_BOUND: Duration = Duration::from_secs(10);
 
 /// How often the start step reads for the move or the collection (6.1, the
@@ -130,7 +131,7 @@ pub enum ScopeRefused {
     Leftovers(Vec<i32>),
     /// `BoundaryUnverified`, naming the scope and what the request answered,
     /// or that no move followed, that the scope still stood empty at the
-    /// bound, or that its `cgroup.events` did not read.
+    /// bound, or that a scope standing at its path gave no populated reading.
     Unverified(String),
 }
 
@@ -233,15 +234,20 @@ pub fn standing(site: &Site) -> Result<(ScopeStanding, Option<Cgroup>), ScopeRef
 }
 
 /// **What an opened scope holds**, by `populated` in its `cgroup.events`.
-/// No populated reading on a scope [gone](Cgroup::gone) from its path since
-/// the open is absent, PID1 having collected it between the open and the
-/// read (a load right after an unload meets that window), and on a scope
-/// still standing it is [`ScopeStanding::Unread`], never populated or empty.
+/// No populated reading where nothing stands at the scope's path any more is
+/// absent, PID1 having collected it between the open and the read (a load
+/// right after an unload meets that window). Where a directory stands there,
+/// the opened scope or another made since, it is [`ScopeStanding::Unread`],
+/// never populated, empty or absent: the start step asks what stands at the
+/// path now, which a replaced directory does not answer, so it is narrower
+/// than [`Cgroup::gone`], the run end's question whether its own cgroup ended.
 pub fn read_standing(scope: Cgroup) -> (ScopeStanding, Option<Cgroup>) {
     match scope.populated() {
         Some(false) => (ScopeStanding::Empty, Some(scope)),
         Some(true) => (ScopeStanding::Populated, Some(scope)),
-        None if scope.gone() => (ScopeStanding::Absent, None),
+        None if matches!(Cgroup::open_if_present(scope.relative()), Ok(None)) => {
+            (ScopeStanding::Absent, None)
+        }
         None => (ScopeStanding::Unread, Some(scope)),
     }
 }

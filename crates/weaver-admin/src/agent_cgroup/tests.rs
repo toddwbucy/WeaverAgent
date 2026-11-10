@@ -675,8 +675,9 @@ fn containment_an_empty_scope_is_waited_out() {
     assert_eq!(asked.get(), 0, "no request");
 }
 
-/// **A scope whose `cgroup.events` does not read refuses unverified** (6.1,
-/// the scope already standing): neither a run's leftovers nor ending, so the
+/// **A scope still standing whose `cgroup.events` gives no populated reading
+/// refuses unverified** (6.1, the scope already standing): neither a run's
+/// leftovers nor ending, so the
 /// load refuses `BoundaryUnverified`, naming the read, with no request and
 /// nothing killed. The read is failed by the file's mode, which binds the
 /// suite's own uid under a user scope and not root, as the failed listing's
@@ -745,4 +746,31 @@ fn containment_a_scope_collected_after_its_open_reads_absent() {
         held.is_none(),
         "nothing is held for a scope gone from its path"
     );
+}
+
+/// **A scope replaced after its open reads unread** (6.1, the scope already
+/// standing): the opened scope is removed and another directory made at its
+/// path, so the failed read meets a path that is not empty, and the start
+/// step refuses rather than request over a directory it never read.
+/// Perturbation: read a scope gone by any measure as absent (`Cgroup::gone`,
+/// the run end's wider reading), and the replaced scope reads absent.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_scope_replaced_after_its_open_reads_unread() {
+    let scratch = ScratchCgroup::new("replaced-scope");
+    let slice = scratch.cgroup.make_child(scope::SLICE).unwrap();
+    slice.make_child("weaver-alpha.scope").unwrap();
+    let opened = Cgroup::open(&site(&scratch).path()).expect("the scope opens");
+    nix::unistd::unlinkat(
+        slice.fd(),
+        "weaver-alpha.scope",
+        nix::unistd::UnlinkatFlags::RemoveDir,
+    )
+    .expect("the opened scope removed");
+    slice
+        .make_child("weaver-alpha.scope")
+        .expect("another directory at the path");
+    let (standing, held) = scope::read_standing(opened);
+    assert_eq!(standing, scope::ScopeStanding::Unread);
+    assert!(held.is_some(), "the opened scope is held for its refusal");
 }

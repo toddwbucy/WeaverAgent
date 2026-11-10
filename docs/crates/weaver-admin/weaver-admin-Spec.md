@@ -2471,12 +2471,13 @@ rulings of 2026-11-07 and 2026-11-09 on #166).
   the record. A scope standing empty is ending: the start step waits within the scope
   bound for PID1 to collect it, and refuses `BoundaryUnverified`, naming it, where it
   still stands at the bound, whether PID1 still holds its unit or left its directory
-  behind, which then refuses every load until root removes it (#520). A scope gone from
-  its path between the read's open and its `cgroup.events` read, PID1 having collected
-  it, is absent, and the step goes on to the request: a load right after an unload meets
-  that window. One still standing whose `cgroup.events` gives no populated reading is
-  neither, and the load refuses `BoundaryUnverified`, naming the read, sends no request
-  and kills nothing.
+  behind, which then refuses every load until root removes it (#520). Where the read's
+  open found a scope and nothing stands at its path by its `cgroup.events` read, PID1
+  having collected it, the scope is absent, and the step goes on to the request: a load
+  right after an unload meets that window. Where a directory stands there, the opened
+  scope or another made since, and no populated reading comes, it is neither, and the
+  load refuses `BoundaryUnverified`, naming the read, sends no request and kills
+  nothing.
 - **The request refused:** where the move does not read within the scope bound (PID1
   unreachable, the request refused, its job failed), the load refuses
   `BoundaryUnverified`, naming what the request answered or that no move followed, and
@@ -2843,8 +2844,8 @@ scope.
 | admin's start step, the scope's path absent | P0 | P0 | goes on to the request |
 | admin's start step, the scope standing and populated | P3 | P3 | refuses `AgentRunning`, naming the processes, sends no request and kills nothing (I8). It is reached only with the run lock free (section 3), so the agent's cgroup is A3 |
 | admin's start step, the scope standing and empty | P4 | P0, then the request | waits within the scope bound for PID1 to collect it. Still standing at the bound, it refuses `BoundaryUnverified`, naming it, and a directory PID1 left behind stands until root removes it (#520) |
-| admin's start step, the scope gone from its path between its open and its `cgroup.events` read | P4 | P0 | reads it absent, PID1 having collected it, and goes on to the request |
-| admin's start step, the scope standing and its `cgroup.events` giving no populated reading | P3 or P4 | as found | refuses `BoundaryUnverified`, naming the read, sends no request and kills nothing |
+| admin's start step, nothing standing at the scope's path by its `cgroup.events` read | P4 | P0 | reads it absent, PID1 having collected it since the open, and goes on to the request |
+| admin's start step, a directory standing at the scope's path, the opened one or another, and no populated reading | P3 or P4 | as found | refuses `BoundaryUnverified`, naming the read, sends no request and kills nothing |
 | admin's start step, the request | P0 | P1 | asks PID1 for the scope, holding its own pid |
 | PID1, the start job | P1 | P2 | makes the scope's cgroup in `weaver.slice`, marks it delegated and moves the start step into it |
 | admin's start step, its own reading naming the scope within the bound | P2 | P2 | the floor and the agent's cgroup, unchanged (A0, then A1) |
@@ -3007,11 +3008,12 @@ The instruments:
   confirm is dropped.
 - **The standing scope:** a populated scope at the start step refuses `AgentRunning`,
   names the processes and kills nothing. Watched to fail when the read before the
-  request is dropped and the request's refusal answers instead. A scope whose
-  `cgroup.events` does not read refuses `BoundaryUnverified`, naming the read, with no
-  request. Watched to refuse `AgentRunning` when an unread scope is read as populated. A
-  scope removed between its open and its read reads absent. Watched to read unread when
-  a failed read is unread whatever stands.
+  request is dropped and the request's refusal answers instead. A scope still standing
+  whose `cgroup.events` gives no populated reading refuses `BoundaryUnverified`, naming
+  the read, with no request. Watched to refuse `AgentRunning` when an unread scope is
+  read as populated. A scope removed between its open and its read reads absent, and one
+  replaced by another directory reads unread. Watched to read unread when a failed read
+  is unread whatever stands, and absent when a replaced scope is read as gone.
 - **The scope's end at the run end:** the run end's wait and its fallback over a cgroup
   removed from its path, or with another directory there, end at once, and over a
   cgroup at its path whose `cgroup.events` does not read run to the bound. Watched to
