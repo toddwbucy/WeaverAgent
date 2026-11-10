@@ -2510,9 +2510,13 @@ rulings of 2026-11-07 and 2026-11-09 on #166).
   read on the directory it made. **It names the run the load made it for**, the run
   reference that load minted, so the record says whose cgroup it is. A later verb opens
   the recorded path and compares the identity. **A recorded cgroup absent at its path is
-  A0, already removed** (Codex on #161): the verb removes the stale record and goes on,
-  acting on nothing there, so an admin killed between the cgroup's removal and the
-  record's wedges nothing. **Only a cgroup present at the path with another device and
+  A0, already removed** (Codex on #161): a `load`, an `unload` or a `force-unload`, the
+  verbs whose start step or run end acts on the record, removes the stale record and
+  goes on, acting on nothing there, so an admin killed between the cgroup's removal and
+  the record's wedges nothing. **`show`, the read-only verb, reads the absent path as A0
+  and leaves the record**, its ladder reading (rung (iv)) writing nothing, so the record
+  stands until the next `load`, `unload` or `force-unload` removes it, as measured on
+  2026-11-10 (#166 Part B). **Only a cgroup present at the path with another device and
   inode refuses `BoundaryUnverified`**, naming both, and the verb acts on nothing, so a
   verb that reaches another cgroup at that path fails closed rather than act on it.
   Every later verb finds the cgroup through that record, never through its own
@@ -2744,8 +2748,9 @@ weaver-<agent>/      root's; the agent's cgroup
     A removal that fails other than with `ENOENT` refuses `BoundaryUnverified`, naming the
     cgroup, its record left for the next `unload`. Past either, nothing is published, no
     marker is written and no state answered, and the next `unload` concludes the run. A
-    removal of the record that fails, the cgroup already gone, is said in `admin.log` and
-    refuses nothing: the next verb reads the absent path as A0 and removes the record.
+    removal of the record that fails, the cgroup already gone, is said in `admin.log`
+    and refuses nothing: the next `load`, `unload` or `force-unload` reads the absent
+    path as A0 and removes the record, and `show` reads A0 and leaves it.
 - **Admin's start:**
   - **A cgroup already standing**, at the deterministic path (its `mkdir` meeting
     `EEXIST`) or where a record names one: root's and empty (`populated 0`), it is A1,
@@ -2854,10 +2859,10 @@ scope.
 | admin's start step, the constituents placed, its answer given, its exit | P2 | P3 | the agent's cgroup is A2 |
 | the invoker's containment stopped or killed | P0 or P1 | P0 | the start step dies with it, having made nothing. A start job left for a dead pid fails, and PID1 starts no scope with no live process (measured) |
 | the invoker's containment stopped or killed | P2 or P3 | unchanged | a start step still running runs on in the scope (measured). Its parent sudo ends and its answer may go unread, and it records its outcome in `admin.log` (`weaver-admin-operator-contract` section 3) |
-| root stops the scope | P2 | P4, then P0 | the start step is killed. The empty `weaver-<agent>/` goes with the scope, and a record left is the next verb's A0 |
-| root stops the scope | P3 | P4, then P0 | every process of the agent ends, an unclean stop. The record stays, the next verb reads A0 and removes it, and the next load resets to the latest save point |
+| root stops the scope | P2 | P4, then P0 | the start step is killed. The empty `weaver-<agent>/` goes with the scope, and a record left names an absent path, A0, which `show` reads and leaves and the next `load`, `unload` or `force-unload` removes |
+| root stops the scope | P3 | P4, then P0 | every process of the agent ends, an unclean stop. The record stays: `show` reads A0 and leaves it, the next `load`, `unload` or `force-unload` reads A0 and removes it, and the next load resets to the latest save point |
 | `unload` or `force-unload`, the run end | P3 | P4, then P0 | kills and removes the agent's cgroup through the record, as the cgroup's table says. PID1 collects the emptied scope, so a wait that meets the cgroup gone from its path reads it as emptied (the containment bound), a removal that meets `ENOENT` after PID1's trim reads as removed, and a cgroup or scope already absent when the run end opens it is A0 |
-| the agent's processes all ending, no verb | P3 | P4, then P0 | the record is stale, and the next verb reads A0 |
+| the agent's processes all ending, no verb | P3 | P4, then P0 | the record is stale, its path absent, A0: `show` reads A0 and leaves the record, and the next `load`, `unload` or `force-unload` reads A0 and removes it |
 | the agent's account writes a `cgroup.procs` | P3 | unchanged | it moves a process within `worker/` only (C1's first exception). Leaving the scope needs a write to a file of root's (C2) |
 | another account, a connector's among them, writes a `cgroup.procs` of the scope or the slice | P3 | unchanged | refused `EACCES`: neither file is its |
 
@@ -2878,7 +2883,7 @@ scope.
 
 | State | Meaning |
 |---|---|
-| A0 | absent at the deterministic path, whatever the record: a stale record is a sub-case, which the next verb removes |
+| A0 | absent at the deterministic path, whatever the record: a stale record is a sub-case, which the next `load`, `unload` or `force-unload` removes and `show` leaves |
 | A1 | standing, empty, no run: the start step's own before its first constituent fork, a run's after its last process ended and before its run end, a crash's after nothing of it ran on, or an invocation's that died inside its removal |
 | A2 | populated, the run lock held: a run stands |
 | A3 | populated, the run lock free: a run's leftovers after a crash |
@@ -2917,14 +2922,15 @@ scope.
 | admin's run end, a rollback's included, not empty within the bound | A3, A1, or A4 left by an earlier run end, once the run lock frees, its kill delivered (A4) | A4 | refuses `WorkerWouldNotExit`, naming the pids, nothing published and no marker written, a rollback's marker excepted (its row above) |
 | admin's run end, a rollback's included, its write of `cgroup.kill` failing | A3, A1, or A4 left by an earlier run end, once the run lock frees | A4 by the fallback's kills, or as it was | the pinned fallback over the agent's cgroup and its descendants, repeated within the bound. Both failing refuses `WorkerWouldNotExit` |
 | admin's run end, a rollback's included, a removal failing other than with `ENOENT` | A3, A1, or A4 left by an earlier run end, once the run lock frees, killed and emptied | A1 partly removed | refuses `BoundaryUnverified`, naming the cgroup, the record kept for the next `unload`, nothing published, a rollback's marker excepted (its row above) |
-| admin's run end, a rollback's included, the record's removal failing | A3, A1, or A4 left by an earlier run end, once the run lock frees, the cgroup removed (A0) | A0, a stale record | said in `admin.log`, refusing nothing: the next verb reads the absent path as A0 and removes the record |
+| admin's run end, a rollback's included, the record's removal failing | A3, A1, or A4 left by an earlier run end, once the run lock frees, the cgroup removed (A0) | A0, a stale record | said in `admin.log`, refusing nothing: the next `load`, `unload` or `force-unload` reads the absent path as A0 and removes the record, and `show` reads A0 and leaves it |
 | a wait's read of `cgroup.events` failing (the gate's, the worker's or the run end's) | T2 (the gate's or the worker's wait), or the run end's sources, its kill delivered (A4) | as the bound passing | read as not yet empty, so the wait runs to the bound and ends as a populated cgroup's does, unless at the run end the cgroup is gone from its path, which reads as emptied (the containment bound) |
 | admin dies inside a run end | A4, A1 partly removed, or A0, a stale record | as left | the next `unload` or `force-unload` writes the kill again, which is idempotent, and finishes the removal, the record last. Where the cgroup is already gone and only its record stands, that verb reads the absent path as A0 and removes the record (the row for a recorded path absent) |
-| admin dies inside the start step | A1 or A2 | as left, or A0 once PID1 collects an emptied scope | A1 goes with the scope when PID1 collects it, the start step having been its last process, and a record left names an absent path, the next verb's A0. An A1 PID1 leaves behind with its scope's directory refuses every load `BoundaryUnverified` at the scope bound until root removes it (#520). A2 holds the run lock and is the S8b of section 3, ended by `unload` |
+| admin dies inside the start step | A1 or A2 | as left, or A0 once PID1 collects an emptied scope | A1 goes with the scope when PID1 collects it, the start step having been its last process, and a record left names an absent path, A0, which `show` reads and leaves and the next `load`, `unload` or `force-unload` removes. An A1 PID1 leaves behind with its scope's directory refuses every load `BoundaryUnverified` at the scope bound until root removes it (#520). A2 holds the run lock and is the S8b of section 3, ended by `unload` |
 | admin dies between the `mkdir` and the record's write | A1, no record | A0, or A1 where PID1 left it | the scope empties with the start step's death and PID1 collects it with the cgroup beneath it. Where it left the scope's directory with the cgroup inside, every load refuses `BoundaryUnverified` at the scope bound until root removes it (#520) |
 | a later verb, a cgroup present at the recorded path with another device and inode | any | unchanged | refuses `BoundaryUnverified`, naming the path and both identities, and acts on nothing |
-| a later verb, the recorded path absent | A0, a stale record | A0, no record | the cgroup was already removed: the verb removes the stale record and goes on, acting on nothing there |
-| admin killed between the cgroup's removal and the record's | A0, a stale record | A0, a stale record | the next verb finds the recorded path absent, reads it as A0, removes the record and goes on |
+| a later `load`, `unload` or `force-unload`, the recorded path absent | A0, a stale record | A0, no record | the cgroup was already removed: the verb removes the stale record and goes on, acting on nothing there |
+| `show`, the recorded path absent | A0, a stale record | A0, a stale record | reads A0 and answers by the ladder (rung (iv)), writing nothing: the record stands for the next `load`, `unload` or `force-unload`, measured 2026-11-10 (#166 Part B) |
+| admin killed between the cgroup's removal and the record's | A0, a stale record | A0, a stale record | the next `load`, `unload` or `force-unload` finds the recorded path absent, reads it as A0, removes the record and goes on, and `show` reads A0 and leaves it |
 | admin dies while writing the record | A1, a temporary record and no record (or the previous record) | as left | the next load removes the temporary, then judges the cgroup at the deterministic path as above, the rename never having exposed a partial record |
 | admin's start step, `EEXIST` on a populated cgroup | A3 | A3 | refuses `AgentRunning`, naming the processes, and kills nothing (I8) |
 | admin's start step, `EEXIST` on a cgroup not root's | any | unchanged | refuses `BoundaryUnverified`, naming it |
