@@ -75,7 +75,7 @@ fn parent_and_name(relative: &str) -> Option<(String, String)> {
 
 /// What the start step made, held until the constituents stand: the record
 /// and the two `cgroup.procs` descriptors the constituents' children move
-/// themselves through, opened before any fork.
+/// themselves through, opened before any constituent fork.
 #[derive(Debug)]
 pub struct Made {
     pub record: Record,
@@ -109,15 +109,15 @@ pub enum StartRefused {
 }
 
 /// **The start step's making of the agent's cgroup** (6.1), holding both
-/// locks and before any fork: the scope step, which asks PID1 for the
-/// agent's scope holding this process and confirms the move by its own
-/// reading; then, beneath the scope, a temporary record left behind
-/// removed; the floor's mount and the scope's delegate mark and ownership;
-/// what stands at the deterministic path and what the record names, judged
-/// by `start_judgment`; then the cgroup made, its `cgroup.kill` required, the
-/// layout made `0755` by `fchmod` with the three files set to `owner`, and the
-/// record written for `run`. Each failure after the `mkdir` removes what it
-/// made, by `made_judgment`.
+/// locks and before any constituent fork: the scope step, which asks PID1 for
+/// the agent's scope holding this process and confirms the move by its own
+/// reading; then, beneath the scope, a temporary record left behind removed;
+/// the floor's mount and the scope's delegate mark and ownership; what stands
+/// at the deterministic path and what the record names, judged by
+/// `start_judgment`; then the cgroup made, its `cgroup.kill` required, the
+/// layout made `0755` by `fchmod` with the three files set to `owner`, and
+/// the record written for `run`. Each failure after the `mkdir` removes what
+/// it made, by `made_judgment`.
 pub fn make(
     run_directory: BorrowedFd<'_>,
     agent: &str,

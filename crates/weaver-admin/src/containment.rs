@@ -119,7 +119,7 @@ pub enum RecordAtStart {
     Same(Standing),
 }
 
-/// The start step's answer before it forks anything.
+/// The start step's answer before it forks any constituent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartAction {
     /// Make the agent's cgroup afresh (A0).

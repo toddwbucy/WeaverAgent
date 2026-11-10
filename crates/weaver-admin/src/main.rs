@@ -1428,9 +1428,10 @@ fn run_load(
         .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
     // **The run is minted before the agent's cgroup is made**, per Spec
     // section 7 and 6.1: the record names the run its load made it for, and
-    // is written before the first fork. The reference is this crate's, and a
-    // load that cannot read the randomness it rests on refuses rather than
-    // carrying a reference that looks like the others and is not guaranteed.
+    // is written before the first constituent fork. The reference is this
+    // crate's, and a load that cannot read the randomness it rests on refuses
+    // rather than carrying a reference that looks like the others and is not
+    // guaranteed.
     let run_reference =
         channel::mint_run_reference(&agent.0).ok_or(LifecycleRefusal::BoundaryUnverified)?;
     // **The agent's cgroup is made holding both locks, before any
