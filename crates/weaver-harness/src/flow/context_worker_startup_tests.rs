@@ -1396,14 +1396,12 @@ fn circuit(mode: &str) {
         } else {
             assert!(response.is_none(), "expiry produces no substitute answer");
         }
-        reader.set_nonblocking(true).unwrap();
-        member.set_nonblocking(true).unwrap();
-        assert_eq!(reader.read(&mut [0]).unwrap(), 0, "no load/refusal trace");
-        assert_eq!(
-            (&member).read(&mut [0]).unwrap(),
-            0,
-            "actual unadmitted descriptors closed, no state Open"
-        );
+        // No load or refusal trace, the unadmitted descriptors closed and no
+        // state Open: end-of-file waited for, since a concurrent fork's copy
+        // outlives the close until its exec (`fixture_eof`).
+        let cap = std::time::Instant::now() + Duration::from_secs(5);
+        crate::flow::fixture_eof::await_eof_until(reader.as_raw_fd(), cap, || {});
+        crate::flow::fixture_eof::await_eof_until(member.as_raw_fd(), cap, || {});
         drop(peer);
         before_load_probe(&mut admission, &path, &mut clock);
         assert!(admission.adopt_with_io(&mut clock).is_err());

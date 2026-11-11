@@ -186,12 +186,14 @@ fn replacement_enter_adoption_refusals_retain_original_bytes_and_unconsumed_hand
 fn replacement_enter_malformed_and_truncated_packets_close_received_handles() {
     for bytes in [b"malformed".to_vec(), vec![b'x'; MAX_ENVELOPE_BYTES + 1]] {
         let (mut owner, peer) = receiver();
-        let (sink, mut sink_peer) = UnixStream::pair().unwrap();
+        let (sink, sink_peer) = UnixStream::pair().unwrap();
         send(&peer, &bytes, &[sink.as_raw_fd()]);
         drop(sink);
         assert!(owner.advance(&mut FakePumpIo::new(1)).is_err());
-        sink_peer.set_nonblocking(true).unwrap();
-        assert_eq!(sink_peer.read(&mut [0]).unwrap(), 0);
+        // End-of-file waited for: a concurrent fork's copy outlives the close until
+        // its exec (`fixture_eof`).
+        let cap = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        crate::flow::fixture_eof::await_eof_until(sink_peer.as_raw_fd(), cap, || {});
         assert!(owner.into_received().is_err());
     }
 }
@@ -230,8 +232,8 @@ fn enter_parse_and_constructor_delay_spend_the_original_window() {
     }
     for future in [false, true] {
         let (mut owner, peer) = receiver();
-        let (sink, mut reader) = UnixStream::pair().unwrap();
-        let (state, mut member) = UnixStream::pair().unwrap();
+        let (sink, reader) = UnixStream::pair().unwrap();
+        let (state, member) = UnixStream::pair().unwrap();
         let bytes = if future {
             timed_packet(150, 300)
         } else {
@@ -265,14 +267,11 @@ fn enter_parse_and_constructor_delay_spend_the_original_window() {
         if future {
             drop(failure);
         }
-        reader.set_nonblocking(true).unwrap();
-        member.set_nonblocking(true).unwrap();
-        assert_eq!(
-            reader.read(&mut [0]).unwrap(),
-            0,
-            "no manufactured load/refusal trace"
-        );
-        assert_eq!(member.read(&mut [0]).unwrap(), 0, "no state Open");
+        // End-of-file waited for: a concurrent fork's copy outlives the close until
+        // its exec (`fixture_eof`).
+        let cap = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        crate::flow::fixture_eof::await_eof_until(reader.as_raw_fd(), cap, || {});
+        crate::flow::fixture_eof::await_eof_until(member.as_raw_fd(), cap, || {});
     }
 }
 
@@ -340,8 +339,8 @@ fn enter_expiring_inside_context_constructor_closes_only_unadmitted_handles() {
         }
     }
     let (mut owner, peer) = receiver();
-    let (sink, mut reader) = UnixStream::pair().unwrap();
-    let (state, mut member) = UnixStream::pair().unwrap();
+    let (sink, reader) = UnixStream::pair().unwrap();
+    let (state, member) = UnixStream::pair().unwrap();
     let bytes = timed_packet(1, 200);
     send(&peer, &bytes, &[sink.as_raw_fd(), state.as_raw_fd()]);
     drop((sink, state));
@@ -353,10 +352,11 @@ fn enter_expiring_inside_context_constructor_closes_only_unadmitted_handles() {
         .expect("no expired context");
     assert!(error.detail.contains("expired before context construction"));
     assert_eq!(error.source.wire(), bytes);
-    reader.set_nonblocking(true).unwrap();
-    member.set_nonblocking(true).unwrap();
-    assert_eq!(reader.read(&mut [0]).unwrap(), 0);
-    assert_eq!(member.read(&mut [0]).unwrap(), 0);
+    // End-of-file waited for: a concurrent fork's copy outlives the close until
+    // its exec (`fixture_eof`).
+    let cap = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    crate::flow::fixture_eof::await_eof_until(reader.as_raw_fd(), cap, || {});
+    crate::flow::fixture_eof::await_eof_until(member.as_raw_fd(), cap, || {});
 }
 
 #[test]

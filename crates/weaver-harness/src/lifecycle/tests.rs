@@ -4199,12 +4199,18 @@ fn a_spu_that_never_answers_release_reads_unconfirmed() {
 /// **An organ that never exits is killed, then reaped, at the shared
 /// deadline** (Review Focus 5): the SPU answers its release and stays
 /// running, and the leave returns by the deadline with the process gone.
+/// **The writer is held** (`stalled_writer`), so `unload` cannot reach the
+/// stream by the spent deadline and the answer is no `Left` (I2) whatever
+/// the scheduling. With a free sink the writer thread could write `unload`
+/// between its submission and the drain, which reads the empty queue before
+/// the deadline, and the leave then rightly answered `Left`.
 /// Perturbation: reap without the kill, and the leave waits on the
 /// process.
 #[test]
 fn an_organ_that_never_exits_is_killed_then_reaped() {
     let (mut run, _spare, _sink) = entered_run(None);
     releasing_spu(&mut run);
+    let reader = stalled_writer(&mut run, 32, 8_192);
     let mut child = std::process::Command::new("sleep")
         .arg("30")
         .spawn()
@@ -4232,6 +4238,15 @@ fn an_organ_that_never_exits_is_killed_then_reaped() {
     );
     // Already reaped by the leave: the handle's own wait finds no child.
     assert!(child.wait().is_err(), "the leave reaped it");
+    let kinds: Vec<String> = record_then_drop(run, reader)
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        kinds.last().map(String::as_str),
+        Some("unload"),
+        "{kinds:?}"
+    );
 }
 
 /// A pending leave on admin's connection, directed `directed` and
