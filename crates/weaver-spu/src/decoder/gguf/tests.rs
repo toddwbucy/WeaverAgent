@@ -607,31 +607,46 @@ fn window_decides() -> EffectiveKnobs {
     }
 }
 
-/// The three best tokens of the standing distribution, best first, after
-/// checking that a penalised token cannot outrank the third.
+/// The engine the window tests read, the prompt decoded, and the three best
+/// tokens of the distribution it leaves standing, best first.
 ///
-/// A positive logit is divided by the penalty and a negative one
-/// multiplied, so a penalised token lands at or below `best / 1e4`. The
-/// third must stand above that for the window, rather than the logits,
-/// to decide which of the three a draw takes.
-fn three_best(engine: &GgufEngine<'_>) -> [TokenId; 3] {
-    let logits = engine.distribution().expect("a distribution stands");
-    let mut ranked: Vec<(usize, f32)> = logits.iter().copied().enumerate().collect();
-    ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
-    let best = ranked[0].1;
-    assert!(
-        ranked[2].1 > best.max(0.0) / 1.0e4,
-        "the third logit {} must outrank a penalised best {}",
-        ranked[2].1,
-        best
-    );
-    [0, 1, 2].map(|i| TokenId(ranked[i].0 as u32))
+/// **The ranking is checked before it is trusted.** The four best logits
+/// must be strictly ordered, since the engine's top-k breaks a tie in an
+/// order this ranking does not know, and the third must outrank a
+/// penalised best: a positive logit is divided by the penalty and a
+/// negative one multiplied, so a penalised token lands at or below
+/// `best / 1e4`, and the window rather than the logits then decides which
+/// of the three a draw takes.
+fn window_fixture(model: &ResidentModel) -> (GgufEngine<'_>, [TokenId; 3]) {
+    let mut engine =
+        GgufEngine::open(model, &window_decides(), 512, false).expect("the context opens");
+    engine
+        .decode_at(&[TokenId(9707), TokenId(11), TokenId(1879)], 0)
+        .expect("the prompt decodes");
+    let best = {
+        let logits = engine.distribution().expect("a distribution stands");
+        let mut ranked: Vec<(usize, f32)> = logits.iter().copied().enumerate().collect();
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+        assert!(
+            ranked[0].1 > ranked[1].1 && ranked[1].1 > ranked[2].1 && ranked[2].1 > ranked[3].1,
+            "the four best logits must be strictly ordered: {:?}",
+            &ranked[..4]
+        );
+        assert!(
+            ranked[2].1 > ranked[0].1.max(0.0) / 1.0e4,
+            "the third logit {} must outrank a penalised best {}",
+            ranked[2].1,
+            ranked[0].1
+        );
+        [0, 1, 2].map(|i| TokenId(ranked[i].0 as u32))
+    };
+    (engine, best)
 }
 
-/// **Each draw enters the penalty window once**, per `weaver-spu-Spec`
-/// section 8.5: the window is the last `repetition_window` resident
-/// positions, and on GGUF the engine's own sample accepts the token it
-/// draws.
+/// **Each draw of a generation enters the penalty window once**, per
+/// `weaver-spu-Spec` section 8.5: in a generation the window is the last
+/// `repetition_window` resident positions, and on GGUF the engine's own
+/// sample accepts the token it draws.
 ///
 /// Read at the seam with two draws from one distribution. The window holds
 /// the best token, so the first draw takes the second best. Counted once,
@@ -645,12 +660,7 @@ fn three_best(engine: &GgufEngine<'_>) -> [TokenId; 3] {
 #[test]
 fn each_draw_enters_the_penalty_window_once() {
     let Some(model) = model_or_skip() else { return };
-    let mut engine =
-        GgufEngine::open(&model, &window_decides(), 512, false).expect("the context opens");
-    engine
-        .decode_at(&[TokenId(9707), TokenId(11), TokenId(1879)], 0)
-        .expect("the prompt decodes");
-    let [best, second, third] = three_best(&engine);
+    let (mut engine, [best, second, third]) = window_fixture(&model);
 
     engine
         .reseed(4242, &[best])
@@ -683,12 +693,7 @@ fn each_draw_enters_the_penalty_window_once() {
 #[test]
 fn a_reseed_tail_enters_the_window_once_per_position() {
     let Some(model) = model_or_skip() else { return };
-    let mut engine =
-        GgufEngine::open(&model, &window_decides(), 512, false).expect("the context opens");
-    engine
-        .decode_at(&[TokenId(9707), TokenId(11), TokenId(1879)], 0)
-        .expect("the prompt decodes");
-    let [best, second, third] = three_best(&engine);
+    let (mut engine, [best, second, third]) = window_fixture(&model);
 
     engine
         .reseed(4242, &[best, second])

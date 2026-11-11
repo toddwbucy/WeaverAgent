@@ -344,9 +344,10 @@ impl<'a> GgufEngine<'a> {
     /// Open a context over a resident model and build its sampler from the
     /// binary's resolved knobs.
     ///
-    /// **The sampler is built once, from the effective values.** The knobs
-    /// resolved at the composition root per Spec section 8, so nothing here
-    /// re-reads a disposition or learns which side supplied a value.
+    /// **The knobs are taken once, as the effective values**, resolved at the
+    /// composition root per Spec section 8, so nothing here re-reads a
+    /// disposition or learns which side supplied a value. The chain is
+    /// rebuilt from them at every generation's reseed, per section 8.5.
     /// **The readout election arrives here and nowhere later.** `cb_eval`
     /// is a context parameter, so a tap can only be installed as the context
     /// is created, which is why the election travels from admit rather than
@@ -588,12 +589,12 @@ impl Backend for GgufEngine<'_> {
             .logits_at
             .ok_or_else(|| Self::engine_fault("no decode has left a distribution to sample"))?;
         // **The draw is accepted once, by the engine**, per `weaver-spu-Spec`
-        // section 8.5: the window is the last `repetition_window` resident
-        // positions, each counted once. `llama_sampler_sample` accepts the
-        // token it returns before returning it, so the chain's penalty ring
-        // already holds this draw. A second accept here put every draw in
-        // the ring twice, which left a ring of 64 covering the last 32 drawn
-        // tokens where the native path reads 64 positions.
+        // section 8.5: in a generation the window is the last
+        // `repetition_window` resident positions, each counted once.
+        // `llama_sampler_sample` accepts the token it returns before
+        // returning it, so the chain's penalty ring already holds this draw,
+        // and an accept here would count it twice and halve the positions
+        // the window covers.
         let token = self.sampler.sample(&self.context, at);
         u32::try_from(token.0)
             .map(TokenId)

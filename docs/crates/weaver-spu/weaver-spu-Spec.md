@@ -2841,15 +2841,15 @@ native path already read the tail directly and the GGUF chain accumulated
 its own copy, so reading one source makes the two agree by construction
 rather than by two implementations staying in step.
 
-**Each token enters the window once.** A window of `repetition_window`
-tokens holds that many positions: the tail the reseed hands over enters one
-token per position, and each draw since enters once. On GGUF the engine's
-own sample accepts the token it draws before answering it, so the crate
-accepts nothing after the draw. Accepting it again put every draw in the
-window twice, and a window of 64 covered the last 32 draws while the native
-path read 64 positions. The watch is two draws from one distribution under
-a two-slot window: counted once, the second draw avoids both earlier
-tokens, and counted twice, the first token has left the window.
+**In a generation, each token enters the window once.** A window of
+`repetition_window` tokens holds that many resident positions: the tail the
+reseed hands over enters one token per position, and each draw since enters
+once, the draw being what becomes resident. On GGUF the engine's own sample
+accepts the token it draws before answering it, so the crate accepts
+nothing after the draw; a second accept would count each draw twice and
+halve the positions the window covers. The watch is two draws from one
+distribution under a two-slot window: counted once, the second draw avoids
+both earlier tokens, and counted twice, the first token has left the window.
 
 **This retires the flush's coupling to sampling rather than repairing
 it.** The GGUF chain's reset cleared the penalty window and reseeded the
