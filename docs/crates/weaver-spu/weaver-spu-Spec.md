@@ -1446,7 +1446,7 @@ are retained, but no ReFed, emission parse or completed-path measurement is inve
 If the whole recorded path completed before the cancel was polled, the normal ReFed
 stands and the cancel is handled at rest. There is no second terminal for the re-feed.
 A refused re-feed starts no drive, so a cancel that crosses the refusal is likewise
-handled at rest and answers AtRest; the refusal is the re-feed's terminal.
+handled at rest and answers AtRest. The refusal is the re-feed's terminal.
 A prefill, token or terminator failure, a malformed seam or a failed intermediate send
 remains a fault and cannot become RefeedInterrupted. Token-boundary polling makes no
 wall-time promise about a stuck prefill or kernel. Once cancellation is accepted, the
@@ -2840,6 +2840,16 @@ window's length being a knob and the tail being where the tokens are: the
 native path already read the tail directly and the GGUF chain accumulated
 its own copy, so reading one source makes the two agree by construction
 rather than by two implementations staying in step.
+
+**In a generation, each token enters the window once.** A window of
+`repetition_window` tokens holds that many resident positions: the tail the
+reseed hands over enters one token per position, and each draw since enters
+once, the draw being what becomes resident. On GGUF the engine's own sample
+accepts the token it draws before answering it, so the crate accepts
+nothing after the draw. A second accept would count each draw twice and
+halve the positions the window covers. The watch is two draws from one
+distribution under a two-slot window: counted once, the second draw avoids
+both earlier tokens, and counted twice, the first token has left the window.
 
 **This retires the flush's coupling to sampling rather than repairing
 it.** The GGUF chain's reset cleared the penalty window and reseeded the
