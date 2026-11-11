@@ -1157,8 +1157,8 @@ of these renders a new name, and adds its row to the table below in the same act
 
 | Name | Mechanism |
 |---|---|
-| `gguf-sampler-0` | Never rendered. Builds before #537's merge: penalties, top-k, top-p, temperature, dist; the u64 seed folded to u32 (high half XOR low half); the derivation of section 8.5; the window seeded from the tail at the reseed, then two accepts per draw (the engine's and the crate's). |
-| `gguf-sampler-1` | The first name rendered. #537's merge onward: as `gguf-sampler-0`, with one accept per draw. |
+| `gguf-sampler-0` | Never rendered. Builds before #537's merge. The chain is penalties, top-k, top-p, temperature, dist. The u64 seed is folded to u32 (high half XOR low half), and derived as section 8.5 says. The window is seeded from the tail at the reseed, then takes two accepts per draw (the engine's and the crate's). |
+| `gguf-sampler-1` | The first name rendered. #537's merge, `2828fc9075ca13c7bc2344bbda8a375c4421c54c` (2026-11-11), onward: as `gguf-sampler-0`, with one accept per draw. |
 | `gguf-sampler-2` | Reserved for the act that makes the re-feed's window follow residency on GGUF: the window then holds the token made resident, drawn or recorded, and not the draw. That act renders this name and replaces this row. |
 
 **A record with no `engine` block carries no name.** Its mechanism is told by the SPU's
@@ -1188,7 +1188,7 @@ because the crate owns more of the arithmetic.
 | attention | The crate's own code, with an F32 softmax on the pair path. |
 | RoPE | `config.json`'s `rope_theta` and `max_position_embeddings`. The missing capacity check against the second is a separate finding. |
 | KV | The crate's own cache, in the model's element type. |
-| mechanism | `native-sampler-1`: penalty, temperature, top-k, top-p, dist; top-p on the scaled probabilities; a 64-bit seed; the window read from the resident tokens at each draw. |
+| mechanism | `native-sampler-1`. The chain is penalty, temperature, top-k, top-p, dist, with top-p on the scaled probabilities. The seed is 64 bits. The window is read from the resident tokens at each draw. |
 | flush | The family constant, as on GGUF. |
 | device | The device ordinals and the pair's division. |
 
