@@ -180,7 +180,13 @@ fn capture_transport_preserves_one_receive_slot_raw_bytes_and_handles_through_eo
     );
     assert!(retired.failure.is_some());
     drop(held);
-    assert_eq!(watcher.read(&mut [0]).unwrap(), 0);
+    // End-of-file waited for, since a concurrent fork's copy of the handle
+    // outlives the drop until its exec (`fixture_eof`).
+    crate::flow::fixture_eof::await_eof_until(
+        watcher.as_raw_fd(),
+        std::time::Instant::now() + Duration::from_secs(5),
+        || {},
+    );
 }
 
 #[test]

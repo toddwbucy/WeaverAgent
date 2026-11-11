@@ -631,16 +631,13 @@ fn bootstrap_must_match_the_recorded_load_before_any_classifier_bytes_are_sent()
         assert!(fx.context.flow.starting_classifier().is_none());
         assert!(fx.context.flow.standing_classifier().is_none());
         assert_eq!(fx.context.barrier.recorder().structure().len(), count);
-        let mut bytes = [0; 128];
-        assert_eq!(
-            nix::sys::socket::recv(
-                peer.as_raw_fd(),
-                &mut bytes,
-                nix::sys::socket::MsgFlags::MSG_DONTWAIT
-            )
-            .unwrap(),
-            0,
-            "refusal closed the supplied end without sending bootstrap bytes"
+        // The refusal closed the supplied end without sending bootstrap bytes:
+        // end-of-file waited for, since a concurrent fork's copy outlives the
+        // close until its exec (`fixture_eof`), and a byte still fails.
+        crate::flow::fixture_eof::await_eof_until(
+            peer.as_raw_fd(),
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+            || {},
         );
     }
 }

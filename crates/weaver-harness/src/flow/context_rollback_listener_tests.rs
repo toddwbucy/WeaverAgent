@@ -701,13 +701,12 @@ pub(super) fn drive(
         assert!(rollback.into_prepared().is_ok());
         return;
     }
-    for witness in &mut witnesses {
-        witness.set_nonblocking(true).unwrap();
-        assert_eq!(
-            witness.read(&mut [0; 1]).unwrap(),
-            0,
-            "refused Enter handle leaked or was adopted"
-        );
+    // A refused Enter handle neither leaked nor adopted: end-of-file waited
+    // for, since a concurrent fork's copy outlives the close until its exec
+    // (`fixture_eof`).
+    let cap = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    for witness in &witnesses {
+        crate::flow::fixture_eof::await_eof_until(witness.as_raw_fd(), cap, || {});
     }
     let answer = heard.expect("listener did not answer before Grants completed");
     assert_eq!(answer.exchange, ask.exchange);

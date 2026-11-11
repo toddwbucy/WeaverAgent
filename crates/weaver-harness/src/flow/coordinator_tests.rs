@@ -433,9 +433,19 @@ impl Fixture {
         self.elapse(3);
     }
 
+    /// **The bound counts turns that could progress, not turns spent waiting
+    /// on trace capacity** (#512). A turn whose author is held by a full
+    /// trace queue returns `Advance::Pending` with the barrier still pending,
+    /// and the queue empties only as the writer thread writes and the test's
+    /// drain thread reads, so under load a run of such turns, each a few
+    /// microseconds, spent the whole bound before either thread was scheduled.
+    /// Such a turn now waits on the writer's capacity descriptor, as the pump
+    /// does, and is not counted; the fixture deadline only stops a hang.
     fn drive(&mut self, reject_first: bool) {
         let mut answered = self.requests.len();
-        for _ in 0..256 {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        let mut turns = 0;
+        while turns < 256 {
             self.transport().unwrap();
             let progress = self.advance().unwrap();
             self.answer_classifier(reject_first && self.classifier_replies == 0);
@@ -450,8 +460,32 @@ impl Fixture {
             {
                 return;
             }
+            if progress == Advance::Pending && self.barrier.pending().is_some() {
+                self.await_trace_capacity(deadline);
+            } else {
+                turns += 1;
+            }
         }
         panic!("bounded fixture did not finish ordered filing");
+    }
+
+    /// One wait on the trace writer's capacity descriptor, the readiness the
+    /// pump waits on for a held author, by the fixture deadline. The wait is
+    /// short and the wake consumed, so a wake that came before the wait, or
+    /// a queue that freed with no new wake, costs one more turn and no more.
+    /// A pending event is not always held by capacity (an observation may
+    /// wait on its source allowance), so a hold that never clears ends at
+    /// the deadline, named as a held author, not as the trace.
+    fn await_trace_capacity(&mut self, deadline: Instant) {
+        use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+        assert!(
+            Instant::now() < deadline,
+            "a held author made no progress by the fixture deadline: {:?}",
+            self.barrier.pending().map(|event| event.envelope.kind)
+        );
+        let mut fds = [PollFd::new(self.barrier.capacity_fd(), PollFlags::POLLIN)];
+        let _ = poll(&mut fds, PollTimeout::from(10_u16));
+        self.barrier.try_capacity_wake(&mut self.budget).unwrap();
     }
 
     pub(in crate::flow) fn until_file(&mut self) {
