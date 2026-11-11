@@ -181,7 +181,14 @@ ruling of 2026-08-12, the SPU
 rendering it whole per the custody act of 2026-08-11, its measurement:
 the token identifiers, the per-token signals, the timings, the block
 partition, and, where the residency was admitted with readout elected, the
-residual reductions. Beside the two boxes, as the generation's own typed
+residual reductions. **The measurement also carries the residency's
+`engine` and `device` blocks**, per `weaver-spu-Spec` sections 3.1 and 6
+on the operator's ruling of 2026-11-11: the engine settings whose change
+would invalidate the KV cache, and the device settings, the same bytes in
+every generation of a residency. The harness carries them opaque. At the
+foundation cutover the opened answer carries the same two blocks, per the
+SPU-OPEN amendment (`state-management/weaver-spu-Spec-amendment.md`).
+Beside the two boxes, as the generation's own typed
 members and never inside the measurement, the session's fullness as the
 generation closed: the resident token count and the capacity, added
 2026-08-19 so the loop that elects a flush sees the pressure before the

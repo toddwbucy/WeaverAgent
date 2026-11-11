@@ -1028,6 +1028,170 @@ from: weaver-spu
 to: spu-no-idempotence-no-retry
 ```
 
+### 3.1 What the engine resolved
+
+**The record carries the engine's theta**, on the operator's ruling of 2026-11-11. Theta
+is every engine setting whose change would invalidate the KV cache: a setting under which
+the same weights, prompt and seed can produce different logits. A replay is judged
+against the setting a generation ran under, so the record carries that setting and not a
+default a reader must assume. The device settings are kept apart from theta. They say how
+fast the engine calculated, not what it calculated, with one exception stated below. This
+subsection names every member, its status and its source. Section 6 says where the two
+blocks travel.
+
+**Each member has one of four statuses.**
+
+- **read back**: the crate asks the engine, or its own process, after the context is made
+  and records the answer.
+- **set**: the crate sets the value explicitly and records the value it set. A setting is
+  set wherever the engine cannot be asked.
+- **known**: the value is the crate's own construction, and the crate records it.
+- **known by metadata and digest**: the model's raw metadata keys, recorded as the model
+  carries them. The engine's build digest (`build`, below) pins the rule that resolves
+  them. The crate chooses none of these values.
+
+**The engine cannot be asked for most of its context.** llama.cpp has no public getter
+for flash attention as resolved, the KV element types, the offload flags, or the resolved
+RoPE and YaRN values. These values reach only the engine's log callback. The wrapper
+(`llama-cpp-2`) keeps every raw handle crate-private: the context, the model, the
+sampler and the parameter structs. So a getter the wrapper does not wrap cannot be
+called from this crate. This crate changes no wrapper code. It reads back what the
+wrapper exposes, and sets explicitly what it cannot read.
+
+**An explicit set moves no draw.** Each value this crate sets is the value the engine
+resolved before the set existed, measured on each device lane. The act that makes a
+setting explicit changes no token and no f32 bit of any measurement. Its first test is
+that identity: the same seed and prompt give the same tokens and the same per-token
+entropy and surprisal f32 bits before and after, on the lane.
+
+#### 3.1.1 The engine block (GGUF)
+
+The `engine` block is one object. Its members are in this order.
+
+| Member | Status | Value and source |
+|---|---|---|
+| `backend` | known | `"gguf"`, the backend the container derived (`decoder::backend::for_container`). |
+| `mechanism` | known | The sampler mechanism's name (3.1.3). |
+| `flush` | known | The resolved family's flush mechanism, `"truncate-to-position"` or `"reestablish-and-reprefill"` (`family::Declaration::flush`, section 4.4). |
+| `build.ggml_version`, `build.ggml_commit` | read back | `ggml_version()` and `ggml_commit()`, free functions of the engine's library. |
+| `build.libraries` | read back | One entry for each libllama and libggml file this process mapped, in path order: `path`, the path as mapped, and `sha256`, the hex digest of the file's bytes. The SPU reads the mapped paths from its own `/proc/self/maps`. It does not read admin's `library-path` key, which names a directory and not the files the loader chose. |
+| `read_back.n_ctx` | read back | The context capacity as the engine padded it. |
+| `read_back.n_batch`, `read_back.n_ubatch` | read back | The batch sizes the context holds. |
+| `read_back.n_layer`, `read_back.n_ctx_train` | read back | The model's layer count and training context length. |
+| `read_back.rope_type` | read back | The RoPE type as the wrapper reports it: `"norm"`, `"neox"`, `"mrope"` or `"vision"`. `null` means none or a type the wrapper does not recognise (3.1.4). |
+| `read_back.file_type` | read back | The model's `general.file_type` metadata value, the quantization. The weights hash (section 3) already covers the tensors' bytes. |
+| `set.n_ubatch` | set | 512, the engine's default before the set. |
+| `set.type_k`, `set.type_v` | set | `"f16"`, the KV element types. |
+| `set.flash_attn` | set | `"enabled"` or `"disabled"`. Never auto. AUTO resolves during graph reserve and reports its choice only in the log. So the crate sets the value AUTO resolved to on the lane, measured from that log line per placement. |
+| `set.offload_kqv`, `set.op_offload`, `set.swa_full`, `set.kv_unified` | set | `true`, `true`, `true`, `false`: the engine's defaults at `e21cdc11`. |
+| `set.n_gpu_layers`, `set.split_mode`, `set.main_gpu`, `set.tensor_split` | set | The placement this crate already sets (`decoder::gguf::placement_params`): every layer offloaded, `"none"` on one device and `"layer"` across several, main device 0, and the division's split values. The engine offloads min(`n_gpu_layers`, `n_layer` + 1) layers. The record carries the set value and `n_layer`, and a reader derives the count. The engine reports the actual count only in its log. |
+| `metadata` | known by metadata and digest | One `{key, value}` pair for every key of the model's metadata that names RoPE or its scaling (`<arch>.rope.*`), and for `<arch>.context_length`, in key order. `value` is the string the engine's metadata reader returns. The crate passes no RoPE value and no key override, so these keys are the values in use. It is a list and not an object keyed by name: the model names the keys, so an object keyed by them could not be closed. |
+
+The engine's `defrag_thold` is not recorded: this engine ignores it.
+
+#### 3.1.2 The device block
+
+The `device` block is one object. Its members are about how fast the engine calculated.
+
+| Member | Status | Value and source |
+|---|---|---|
+| `n_threads`, `n_threads_batch` | set | 4 each, the engine's default before the set. |
+| `use_mmap`, `use_mlock` | set | `true` and `false`, the engine's defaults. |
+| `mmap_supported`, `mlock_supported` | read back | What the engine reports this platform supports. The engine can drop mmap without an error where it is not supported, so the set value alone does not say what happened. |
+| `headroom` | known | Admin's headroom key, which reaches the SPU as an argument (section 3). |
+| `cuda_device_order` | known | The process's `CUDA_DEVICE_ORDER`, or `null` where it is unset. |
+| `devices` | read back | The engine's backend device list, in its order: `name`, `description` and `memory_total` of each. |
+
+The engine's `check_tensors` has no wrapper setter. It stays at the engine's default,
+`false`, and is not recorded.
+
+**On a run with no GPU, the thread count may bear on the logits.** The CPU backend
+divides its work by the thread count, and this crate has not measured that a different
+division gives the same bits. So on a CPU-only run, `n_threads` and `n_threads_batch`
+are read as theta as well, and a reader does not take the split between the two blocks
+as absolute (the operator's line of 2026-11-11).
+
+**The two shapes, in their emitted order.** Every object is closed: a missing, unknown
+or duplicate member is invalid. Counts are JSON numbers. A `tensor_split` on one device
+is the empty list. `headroom` is in bytes.
+
+```text
+engine = {
+    backend: "gguf",
+    mechanism: String,
+    flush: "truncate-to-position" | "reestablish-and-reprefill",
+    build: {
+        ggml_version: String,
+        ggml_commit: String,
+        libraries: [{path: String, sha256: String}]
+    },
+    read_back: {
+        n_ctx: u64, n_batch: u64, n_ubatch: u64, n_layer: u64, n_ctx_train: u64,
+        rope_type: null | "norm" | "neox" | "mrope" | "vision",
+        file_type: String
+    },
+    set: {
+        n_ubatch: u64, type_k: String, type_v: String,
+        flash_attn: "enabled" | "disabled",
+        offload_kqv: bool, op_offload: bool, swa_full: bool, kv_unified: bool,
+        n_gpu_layers: u32, split_mode: "none" | "layer", main_gpu: u32,
+        tensor_split: [f32]
+    },
+    metadata: [{key: String, value: String}]
+}
+device = {
+    n_threads: u32, n_threads_batch: u32,
+    use_mmap: bool, use_mlock: bool, mmap_supported: bool, mlock_supported: bool,
+    headroom: u64,
+    cuda_device_order: null | String,
+    devices: [{name: String, description: String, memory_total: u64}]
+}
+```
+
+#### 3.1.3 The mechanism name
+
+**The mechanism name changes whenever the sampler's arithmetic changes.** One name
+covers the chain's order, each sampler's arithmetic, the seed's width and fold, the
+seed's derivation (section 8.5) and the penalty window's rule. The act that changes any
+of these renders a new name, and adds its row to the table below in the same act.
+
+| Name | Mechanism |
+|---|---|
+| `gguf-sampler-0` | Never rendered. Builds before #537's merge: penalties, top-k, top-p, temperature, dist; the u64 seed folded to u32 (high half XOR low half); the derivation of section 8.5; the window seeded from the tail at the reseed, then two accepts per draw (the engine's and the crate's). |
+| `gguf-sampler-1` | The first name rendered. #537's merge onward: as `gguf-sampler-0`, with one accept per draw. |
+| `gguf-sampler-2` | Reserved for the act that makes the re-feed's window follow residency on GGUF: the window then holds the token made resident, drawn or recorded, and not the draw. That act renders this name and replaces this row. |
+
+**A record with no `engine` block carries no name.** Its mechanism is told by the SPU's
+digest in the `load` event's `stack` (`weaver-trace-Spec` section 3), against the builds
+before and after #537's merge. A build between #537's merge and the act that renders the
+block is `gguf-sampler-1` with no name in its record.
+
+#### 3.1.4 What this subsection does not fix
+
+- **The wrapper's RoPE type has no IMROPE arm.** `LlamaModel::rope_type` maps
+  `LLAMA_ROPE_TYPE_IMROPE`, and any later type, to `None`, the same answer it gives for
+  none. So a `null` `rope_type` does not tell the two apart. The `metadata` keys and the
+  `build` digest still pin the resolution. This act does not change the wrapper for it.
+- **The device block is measured at the residency, not at each draw.** A device's free
+  memory and clocks move during a run, and the record carries neither.
+
+#### 3.1.5 The native engine
+
+The native (candle) path renders the same two blocks in a later act. Its members differ,
+because the crate owns more of the arithmetic.
+
+| Item | Native |
+|---|---|
+| `backend` | `"native"` |
+| build | The candle revision and its CUDA features, and the provenance of the crate's own kernels (`kernels/PROVENANCE.md`). |
+| element type | BF16, a constant of the crate (`decoder/native.rs`). |
+| attention | The crate's own code, with an F32 softmax on the pair path. |
+| RoPE | `config.json`'s `rope_theta` and `max_position_embeddings`. The missing capacity check against the second is a separate finding. |
+| KV | The crate's own cache, in the model's element type. |
+| mechanism | `native-sampler-1`: penalty, temperature, top-k, top-p, dist; top-p on the scaled probabilities; a 64-bit seed; the window read from the resident tokens at each draw. |
+| flush | The family constant, as on GGUF. |
+| device | The device ordinals and the pair's division. |
+
 ## 4. The decode submodule
 
 ### 4.1 The backend seam
@@ -2126,7 +2290,8 @@ vectors, the timings the charter's row names, the model identity and its weights
 from section 3, the adapter identity beside them (`adapter`: `null` for a base-only load,
 or `artifact`, `sha256` and `scale` of the resident adapter, the scale written as the f32
 itself and never through a generic JSON value, per the adapter binding amendment ADP-3,
-which puts the same member in the Open measurement), the prompt-block partition, the residual reductions when elected, the
+which puts the same member in the Open measurement), the engine and device blocks of
+section 3.1, the prompt-block partition, the residual reductions when elected, the
 session's resident token count and its capacity as the generation closed - the
 generation's own typed members beside the two spliced boxes, never measurement members,
 per issue #221's arc and `weaver-types-Spec` section 4.4 - and beside the measurement
@@ -2148,6 +2313,29 @@ in force, and `terminator`, the turn ender of the renderer the resolved entry na
 box is the request's rather than the measurement's on the rule the template identity
 settles just above: a bound is an input-side fact, what the generation was told, and the
 `finish` it explains is what was read off the answer.
+
+**The engine and device blocks travel in the measurement, and the Open answer carries
+them too**, per section 3.1 on the operator's ruling of 2026-11-11. They are the
+measurement's members `engine` and `device`, after `adapter`. This crate renders them, as
+it renders `model` and `weights_hash`. The harness carries them opaque, and the trace
+crate learns no member name. They are measured once per residency, after the context is
+made, so every generation of a residency carries the same two blocks byte for byte. The
+Open answer's measurement carries the same two blocks, per SPU-OPEN
+([amendment][open-facts]), so on the flow path they land once in the boot placement. The
+legacy path checks the Opened answer and drops its evidence, so there a generation's
+measurement is the only record of them. **The `load` event cannot carry them**, because
+the harness authors `load` before it starts the SPU. Admit stays free of payload, per
+`weaver-harness-spu-contract` section 2, and no event kind is added.
+
+**The blocks cost about 1650 bytes a generation, and the shape after the cutover is the
+operator's choice.** An example of a two-card load's blocks, built on 2026-11-11 from real
+values, measures 1211 bytes for `engine` and 439 for `device` in compact JSON. 623 bytes
+of it are the five library entries. Every generation repeats those bytes. After the
+foundation cutover, the Open answer carries the blocks once per residency on every path.
+A generation could then carry only a digest of the two blocks' canonical bytes, beside
+the residency's whole blocks in the boot placement. This document renders the whole
+blocks in both places. The digest shape is proposed and not built. The operator chooses
+between the two after the cutover, and only the shape chosen is built.
 
 **The values are the resolved ones and never the declared ones.** The
 ceiling arrives frozen from the composition root or tunable from the

@@ -308,7 +308,7 @@ its closure.
 | `fault` | a fault the worker survived, reported by an organ and authored by the harness |
 | `model.request` | the decode boundary, request side |
 | `model.output` | the decode boundary, response side, with the session's resident count and capacity as the generation closed |
-| `model.measurement` | input and output token identifiers, entropies, the generation's perplexity, the decode timings, model identity with its weights hash, the prompt-block partition, and where their elections stand the surprisals and the residual reductions with the two counts that describe their shape |
+| `model.measurement` | input and output token identifiers, entropies, the generation's perplexity, the decode timings, model identity with its weights hash, the resident adapter's identity, the engine and device blocks (the adapter and the two blocks are SPU content the trace does not interpret), the prompt-block partition, and where their elections stand the surprisals and the residual reductions with the two counts that describe their shape |
 | `classify.request` | the label seam, request side: the content the loop sent for classification |
 | `classify.output` | the label seam, response side: every label of the artifact's head scored |
 | `model.field` | one decode position's ranked candidates with their probabilities and the rank the draw landed on, when the field election stands |

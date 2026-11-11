@@ -73,6 +73,8 @@ measurement = {
     model: String,
     weights_hash: String,
     adapter: null | {artifact: String, sha256: String, scale: f32},
+    engine: {...},
+    device: {...},
     prefix_token_ids: Vec<u32>,
     blocks: [{label: "identity-prefix", start: 0, end: u64}]
 }
@@ -85,8 +87,12 @@ admitted residency's existing section 6 meanings. adapter is the resident adapte
 identity beside them, null for a base-only load, per the weaver-spu adapter binding
 amendment ADP-3: artifact is the path for the reader and is never compared, and scale is
 written as the f32 itself. A measurement without the member is invalid, as is one whose
-member is neither null nor that closed object. prefix_token_ids is the actual ordered
-vector supplied to this successful session.open, not a second tokenization. Its checked
+member is neither null nor that closed object. engine and device are the residency's
+engine and device blocks. SPU Spec section 3.1 closes their members and their order. They
+are the same bytes that every generation measurement of this residency carries, per SPU
+Spec section 6. A measurement without either member is invalid. Every object inside them
+is closed, as every object here is. prefix_token_ids is the actual ordered vector
+supplied to this successful session.open, not a second tokenization. Its checked
 length equals prefix_tokens. blocks contains exactly one block, whose label is
 identity-prefix and whose UTF-8 byte interval is [0, request.rendered.len()). It covers
 the complete render, not token indices or the stored prompt's byte interval. No new
