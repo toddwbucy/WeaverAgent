@@ -132,8 +132,8 @@ fn before_enter_answers_only_the_original_ordinary_opener_and_closes_unused_hand
         let mut fx = Fixture::new();
         let request = ordinary(73, directive);
         let bytes = serde_json::to_vec(&request).unwrap();
-        let (sink, mut trace) = UnixStream::pair().unwrap();
-        let (state, mut member) = UnixStream::pair().unwrap();
+        let (sink, trace) = UnixStream::pair().unwrap();
+        let (state, member) = UnixStream::pair().unwrap();
         fx.request(&bytes, &[sink.as_raw_fd(), state.as_raw_fd()]);
         drop((sink, state));
         assert_eq!(
@@ -159,10 +159,11 @@ fn before_enter_answers_only_the_original_ordinary_opener_and_closes_unused_hand
                 Payload::Refusal(LifecycleRefusal::OutOfOrder)
             ));
         }
-        trace.set_nonblocking(true).unwrap();
-        member.set_nonblocking(true).unwrap();
-        assert_eq!(trace.read(&mut [0]).unwrap(), 0);
-        assert_eq!(member.read(&mut [0]).unwrap(), 0);
+        // End-of-file waited for: a concurrent fork's copy outlives the
+        // owner's close until its exec (`fixture_eof`).
+        let cap = Instant::now() + Duration::from_secs(5);
+        await_eof_until(trace.as_raw_fd(), cap, || {});
+        await_eof_until(member.as_raw_fd(), cap, || {});
         assert_eq!(fx.owner.binding_kind(), None);
         assert_eq!(fx.owner.process_exit(), None);
     }
@@ -1161,8 +1162,8 @@ fn legacy_enter_cannot_fall_back_to_an_ordinary_before_enter_directive() {
     assert!(weaver_types::state_flow::enter::EnterEnvelope::decode(&bytes).is_err());
 
     let mut fx = Fixture::new();
-    let (sink, mut trace) = UnixStream::pair().unwrap();
-    let (state, mut member) = UnixStream::pair().unwrap();
+    let (sink, trace) = UnixStream::pair().unwrap();
+    let (state, member) = UnixStream::pair().unwrap();
     fx.request(&bytes, &[sink.as_raw_fd(), state.as_raw_fd()]);
     drop((sink, state));
     assert_eq!(
@@ -1179,8 +1180,9 @@ fn legacy_enter_cannot_fall_back_to_an_ordinary_before_enter_directive() {
         "no replacement lifecycle answer"
     );
     assert!(fx.owner.take_delivery_loss().is_none());
-    trace.set_nonblocking(true).unwrap();
-    member.set_nonblocking(true).unwrap();
-    assert_eq!(trace.read(&mut [0]).unwrap(), 0);
-    assert_eq!(member.read(&mut [0]).unwrap(), 0);
+    // End-of-file waited for: a concurrent fork's copy outlives the owner's
+    // close until its exec (`fixture_eof`).
+    let cap = Instant::now() + Duration::from_secs(5);
+    await_eof_until(trace.as_raw_fd(), cap, || {});
+    await_eof_until(member.as_raw_fd(), cap, || {});
 }

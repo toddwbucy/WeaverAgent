@@ -70,7 +70,7 @@ pub(super) fn event(kind: Kind, payload: Option<Payload>) -> AuthoredEvent {
 
 #[test]
 fn admission_constructor_preserves_failure_origin_and_closes_unadmitted_handles() {
-    use std::io::Read;
+    use std::os::fd::AsRawFd;
 
     struct ConstructorClock {
         now: Option<u64>,
@@ -94,8 +94,8 @@ fn admission_constructor_preserves_failure_origin_and_closes_unadmitted_handles(
     }
 
     for case in ["clock", "expired", "identity"] {
-        let (sink, mut reader) = UnixStream::pair().unwrap();
-        let (state, mut peer) = UnixStream::pair().unwrap();
+        let (sink, reader) = UnixStream::pair().unwrap();
+        let (state, peer) = UnixStream::pair().unwrap();
         reader.set_nonblocking(true).unwrap();
         peer.set_nonblocking(true).unwrap();
         let mut clock = ConstructorClock {
@@ -143,8 +143,14 @@ fn admission_constructor_preserves_failure_origin_and_closes_unadmitted_handles(
             }
             (_, error) => panic!("{case}: incorrect constructor disposition {error:?}"),
         }
-        assert_eq!(reader.read(&mut [0]).unwrap(), 0, "no trace before load");
-        assert_eq!(peer.read(&mut [0]).unwrap(), 0, "no state Open before load");
+        // **Closure is read as end-of-file, waited for** (`fixture_eof`): a
+        // concurrent test's fork holds a copy of both ends until its exec, so
+        // a single nonblocking read can see a live writer after `admit` has
+        // closed its own. A byte on either end is still refused: no trace
+        // before load, no state Open before load.
+        let cap = std::time::Instant::now() + Duration::from_secs(5);
+        crate::flow::fixture_eof::await_eof_until(reader.as_raw_fd(), cap, || {});
+        crate::flow::fixture_eof::await_eof_until(peer.as_raw_fd(), cap, || {});
     }
 }
 
