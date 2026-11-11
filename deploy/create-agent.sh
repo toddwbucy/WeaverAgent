@@ -633,6 +633,11 @@ judge_box_account() {
     || die "the account $name stands with a home at $home, so it is not adopted as the box's account"
   group_line=$(getent group "$gid") || die "the account $name's primary group $gid does not resolve"
   IFS=: read -r gname _ _ members <<<"$group_line"
+  # **Its own is by name** (CodeRabbit on #533): a group no one else holds can
+  # still be an agent's, such as weaver-<n>-admin, which the allow-list below
+  # admits, and that agent's take-down could then not remove it.
+  [ "$gname" = "$name" ] \
+    || die "the account $name's primary group is $gname, not its own group $name, so it is not adopted as the box's account"
   [ -z "$members" ] || [ "$members" = "$name" ] \
     || die "the account $name's primary group $gname is shared with $members, so it is not adopted as the box's account"
   sharers=$(getent passwd | awk -F: -v g="$gid" -v n="$name" '$4 == g && $1 != n { printf "%s ", $1 }')

@@ -443,11 +443,15 @@ as_can() { # as_can ACCOUNT TEST...: yes where the account passes the test
   if sudo -n -u "$1" "${@:2}" >/dev/null 2>&1; then printf yes; else printf no; fi
 }
 # holds_group ACCOUNT GROUP: yes where the group database gives ACCOUNT the
-# group GROUP, read without matching a pipeline that stops early.
+# group GROUP, no where it gives ACCOUNT groups without it, read without
+# matching a pipeline that stops early. **A lookup that fails answers
+# `unreadable`** (CodeRabbit on #533), never `no`, so an expectation of `no`
+# fails on it rather than passing without a reading. Every caller asks of an
+# account that stands.
 holds_group() {
   local held
-  held=" $(id -Gn "$1" 2>/dev/null || true) "
-  case "$held" in *" $2 "*) printf yes ;; *) printf no ;; esac
+  held=$(id -Gn "$1" 2>/dev/null) || { printf unreadable; return 0; }
+  case " $held " in *" $2 "*) printf yes ;; *) printf no ;; esac
 }
 # box_groups_outside ACCOUNT: the groups the box's account ACCOUNT holds
 # outside what it may hold, space-separated, or `none`, by create-agent.sh's
@@ -699,11 +703,13 @@ restore_key()   { printf '%s' "$1" | base64 -d | sudo -n tee -- "$R/territory" >
 restore_absent() { sudo -n rm -f -- "$1"; }
 # restore_rule B64: step 5b's measurement put back, the declaration byte for
 # byte and the operator out of the agent's own group, each attempted whatever
-# the other answers.
+# the other answers. **The removal is attempted unless the group database
+# says `no`**, so an unreadable answer tries it and gpasswd's own refusal
+# fails the restore rather than a skipped removal passing it.
 restore_rule() {
   local rc=0
   printf '%s' "$1" | base64 -d | sudo -n tee -- "$DECL" >/dev/null || rc=1
-  if [ "$(holds_group "$OPERATOR" "$AU")" = yes ]; then
+  if [ "$(holds_group "$OPERATOR" "$AU")" != no ]; then
     sudo -n gpasswd -d "$OPERATOR" "$AU" >/dev/null || rc=1
   fi
   return "$rc"

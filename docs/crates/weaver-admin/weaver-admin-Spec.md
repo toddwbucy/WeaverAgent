@@ -3778,8 +3778,8 @@ another agent. It is declared all the same: its digest is written on every line 
 harness for the `load` event's member marked boundary. **It is one file per agent**
 because the root is one agent's and this crate reads nothing shared, and a shared file
 would be a roster of every agent's readers, the fleet view #45 removed from admin. The
-reader it names is `weaver-admincon`, or, for an agent whose gate rule names the
-operator, that agent's own per-agent account.
+reader it names is `weaver-admincon`, or, for an agent laid by an earlier
+`create-agent.sh`, the per-agent account it was laid with.
 
 **The gate's access rule is constitution, and no kept agent depends on it**, on the
 operator's ruling of 2026-11-10. The rule sits in the declaration, so a changed rule is

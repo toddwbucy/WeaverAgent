@@ -6,6 +6,7 @@ The command doubles record every privileged/build invocation. They never
 forward sudo, systemctl, package-manager or Cargo calls to the host.
 """
 
+import base64
 import fnmatch
 import hashlib
 import json
@@ -1064,6 +1065,12 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
              None, "holds weaver-existing-relay, outside what the box's account may hold"),
             (dict(BOX_PASSWD={"weaver-admincon": "weaver-admincon:x:0:991::/home/weaver-admincon:/usr/sbin/nologin"},
                   BOX_GROUP={"991": "weaver-admincon:x:991:"}), None, "stands with uid 0, root's"),
+            # **A primary group of its own is its own by name** (CodeRabbit on
+            # #533): an agent's access group that no one else holds, and that
+            # the allow-list admits, is still not the account's own.
+            (dict(BOX_PASSWD={"weaver-admincon": "weaver-admincon:x:991:1700::/home/weaver-admincon:/usr/sbin/nologin"},
+                  BOX_GROUP={"1700": "weaver-m1-admin:x:1700:"}, ADMINCON_GROUPS="weaver-m1-admin"),
+             None, "primary group is weaver-m1-admin, not its own group weaver-admincon"),
         )
         home = self.root / "home" / "weaver-gatecon"
         for env, layout, said in cases:
@@ -4254,6 +4261,80 @@ class LifecycleTeardownTests(unittest.TestCase):
         self.assertIn("force-unload answers the unloaded state", result.stderr)
         self.assertIn("found:    {\"kind\":\"config_invalid\"}", result.stderr)
         self.assertNotIn("GOES-ON", result.stdout)
+
+
+class LifecycleGroupLookupTests(unittest.TestCase):
+    """**A group lookup that fails is its own answer** (CodeRabbit on #533):
+    `holds_group` answers `unreadable` where `id -Gn` fails, so an
+    expectation of `no` fails on it, and step 5b's `restore_rule` attempts
+    the operator's removal unless the answer is `no`, so gpasswd's refusal
+    fails the restore rather than a skipped removal passing it. Run as the
+    script defines them, with stand-ins for sudo, id and gpasswd.
+    Perturbation: put back `$(id -Gn "$1" 2>/dev/null || true)` and the
+    failed lookup answers `no`, the expectation passes and the restore
+    skips the removal."""
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-groups-")
+        self.addCleanup(self.scratch.cleanup)
+        root = Path(self.scratch.name)
+        self.bin_dir = root / "bin"
+        self.bin_dir.mkdir()
+        self.calls = root / "gpasswd-calls"
+        for name, body in (
+            ("sudo", '[ "$1" = "-n" ] && shift\nexec env "$@"\n'),
+            ("id", '[ -n "$ID_GROUPS" ] || exit 1\nprintf "%s\\n" "$ID_GROUPS"\n'),
+            ("gpasswd", 'printf "%s\\n" "$*" >>"$GPASSWD_CALLS"\nexit "${GPASSWD_RC:-0}"\n'),
+        ):
+            stand_in = self.bin_dir / name
+            stand_in.write_text("#!/bin/sh\n" + body)
+            stand_in.chmod(0o755)
+        self.decl = root / "agent.toml"
+        self.decl.write_text("moved\n")
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        self.functions = ("set -euo pipefail\n"
+                          + f'STEP_LABEL="step 5b (test)"; OPERATOR=op; AU=weaver-m1; DECL={shlex.quote(str(self.decl))}\n'
+                          + lifecycle_functions(script, "fail", "pass", "expect_eq", "holds_group", "restore_rule"))
+
+    def run_program(self, body, **env):
+        full = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"],
+                "GPASSWD_CALLS": str(self.calls), "ID_GROUPS": "", **env}
+        full.pop("BASH_ENV", None)
+        return subprocess.run(["bash", "-c", self.functions + body], env=full, text=True,
+                              capture_output=True, timeout=20)
+
+    def test_the_answers_read_the_group_database(self):
+        for groups, said in (("op weaver-m1-trace weaver-m1", "yes"),
+                             ("op weaver-m1-trace", "no"),
+                             ("", "unreadable")):
+            with self.subTest(groups=groups):
+                result = self.run_program('holds_group op weaver-m1\n', ID_GROUPS=groups)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, said)
+
+    def test_an_expected_no_fails_on_an_unreadable_lookup(self):
+        result = self.run_program('expect_eq "op is out of weaver-m1" no "$(holds_group op weaver-m1)"\n'
+                                  'echo GOES-ON\n')
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("found:    unreadable", result.stderr)
+        self.assertNotIn("GOES-ON", result.stdout)
+
+    def test_the_restore_removes_unless_the_answer_is_no(self):
+        original = base64.b64encode(b"original\n").decode()
+        for groups, gpasswd_rc, rc, removed in (("op weaver-m1", "0", 0, True),
+                                                ("op", "0", 0, False),
+                                                ("", "0", 0, True),
+                                                ("", "3", 1, True)):
+            with self.subTest(groups=groups, gpasswd_rc=gpasswd_rc):
+                self.calls.unlink(missing_ok=True)
+                self.decl.write_text("moved\n")
+                result = self.run_program(f'rc=0; restore_rule {original} || rc=$?; echo "rc=$rc"\n',
+                                          ID_GROUPS=groups, GPASSWD_RC=gpasswd_rc)
+                self.assertIn(f"rc={rc}", result.stdout, result.stderr)
+                self.assertEqual(self.decl.read_text(), "original\n")
+                self.assertEqual(self.calls.exists(), removed)
+                if removed:
+                    self.assertEqual(self.calls.read_text(), "-d op weaver-m1\n")
 
 
 class LifecycleArchiveReadBackTests(unittest.TestCase):

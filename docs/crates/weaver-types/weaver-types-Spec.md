@@ -1073,8 +1073,9 @@ the declaration's, `fn parse_boundary(source: &str) -> Result<BoundaryFile,
 ConfigError>`, kept apart from it because the file is boundary and never constitution,
 per `weaver-admin-Spec` section 9. **The trace reader is a user, and only a user**, on
 the operator's ruling of 2026-10-03 on #50: the box's admin-con account
-`weaver-admincon` on the operator's rulings of 2026-11-10, or the agent's own per-agent
-account where its gate rule names the operator, per `weaver-admin-Spec` section 2. A
+`weaver-admincon` on the operator's rulings of 2026-11-10, or, for an agent laid by an
+earlier `create-agent.sh`, the per-agent account it was laid with, per
+`weaver-admin-Spec` section 2. A
 group would admit every member of it to the agent's whole record, and a
 bare name that could resolve to a user and a group of the same name is what an explicit
 kind once guarded against, so the kind is fixed instead. The relay admits that uid

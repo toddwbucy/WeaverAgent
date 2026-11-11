@@ -506,10 +506,11 @@ any client, by its kernel-checked uid or group against the declaration's allow-l
 (`allowed-uids`, `allowed-gids`). For a file sink, admin-con reads the trace through the
 trace relay admin's start step stands beside it, which admits exactly the one reader the
 agent's `roles.toml` declares, the connector's user, rather than through any grant into
-the territory. **The agent fails closed with its connector** where WeaverWeb's packaging
-gives the connector a containment of its own: sudo opens no session for it
-(`!pam_session`), so an agent it loads lives in that containment, and stopping the
-connector stops its agent (the operator contract section 2, toddwbucy/WeaverWeb#15).
+the territory. **The agent's lifetime is its own, not its connector's**: admin's start
+step moves every constituent into the agent's own root-owned delegated scope, whoever
+invoked the load (`weaver-admin-Spec` section 6.1, #166), so stopping the connector
+leaves its agents running, and an agent stops by admin's `unload` or by stopping its
+scope (the operator contract section 2).
 
 **The door contracts carry no principal, and the amendment once predicted here is
 withdrawn.** An earlier form of this section had each connector pass a verified
