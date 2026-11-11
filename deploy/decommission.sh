@@ -163,10 +163,38 @@ for b in "${!BIN_DIRS[@]}"; do PREFIXES["$(dirname "$b")"]=1; done
 # Agents: roots, allow-lists, and accounts.
 declare -A AGENTS=()
 for a in $ALLOWED; do AGENTS["$a"]=1; done
-mapfile -t WEAVER_USERS < <(getent passwd | awk -F: '$1 ~ /^weaver-/ {print $1}')
-mapfile -t WEAVER_GROUPS < <(getent group | awk -F: '$1 ~ /^weaver-/ {print $1}')
+# **The box's two connector accounts are not agents** (weaver-admin-Spec
+# section 2, the operator's rulings of 2026-11-10): `weaver-gatecon` runs
+# WeaverWeb's gate-con and `weaver-admincon` its admin-con, one of each per
+# box, laid by create-agent.sh. They are listed apart, never read as agents,
+# and removed after every agent's accounts.
+is_box_account() {
+  [ "$1" = weaver-gatecon ] || [ "$1" = weaver-admincon ]
+}
+box_account_role() {
+  case "$1" in
+    weaver-gatecon) printf "the box's gate-con account, which WeaverWeb's gate-con runs under" ;;
+    weaver-admincon) printf "the box's admin-con account, which WeaverWeb's admin-con runs under" ;;
+  esac
+}
+# **Every agent's accounts first and the box's accounts last**, so the purge,
+# which removes them in this order, takes the box's accounts after every
+# agent's.
+# weaver_names passwd|group: the weaver- names, the box's last.
+weaver_names() {
+  local -a agents=() box=()
+  local n
+  while IFS= read -r n; do
+    if is_box_account "$n"; then box+=("$n"); else agents+=("$n"); fi
+  done < <(getent "$1" | awk -F: '$1 ~ /^weaver-/ {print $1}')
+  [ ${#agents[@]} -eq 0 ] || printf '%s\n' "${agents[@]}"
+  [ ${#box[@]} -eq 0 ] || printf '%s\n' "${box[@]}"
+}
+mapfile -t WEAVER_USERS < <(weaver_names passwd)
+mapfile -t WEAVER_GROUPS < <(weaver_names group)
 # Every account and group the agent's provisioning makes carries one of the
 # reserved suffixes (weaver-admin-Spec section 4), stripped to the agent's name.
+# The per-agent `-admincon` stays among them for an agent laid with one.
 strip_suffix() {
   local n=${1#weaver-}
   for suffix in -admincon -state -relay -trace -admin; do
@@ -174,8 +202,8 @@ strip_suffix() {
   done
   printf '%s' "$n"
 }
-for u in "${WEAVER_USERS[@]}"; do AGENTS["$(strip_suffix "$u")"]=1; done
-for g in "${WEAVER_GROUPS[@]}"; do AGENTS["$(strip_suffix "$g")"]=1; done
+for u in "${WEAVER_USERS[@]}"; do is_box_account "$u" || AGENTS["$(strip_suffix "$u")"]=1; done
+for g in "${WEAVER_GROUPS[@]}"; do is_box_account "$g" || AGENTS["$(strip_suffix "$g")"]=1; done
 # **sudo_rules DIR: the agents' sudo rules standing or held in DIR**: the
 # ones create-agent.sh installs, root's to read; any an archive of this
 # script disabled for its snapshot; and any an install of update-stack.sh
@@ -217,6 +245,9 @@ for a in "${!AGENTS[@]}"; do
 done
 plan "accounts: ${WEAVER_USERS[*]:-none}"
 plan "groups:   ${WEAVER_GROUPS[*]:-none}"
+for u in weaver-gatecon weaver-admincon; do
+  getent passwd "$u" >/dev/null 2>&1 && plan "$u: $(box_account_role "$u"), not an agent; the purge removes it after every agent's accounts"
+done
 
 say "units"
 mapfile -t UNITS < <(systemctl list-units 'weaver-worker@*' --all --no-legend --plain 2>/dev/null | awk '{print $1}')
@@ -315,10 +346,17 @@ query_runs() {
   done
   # **A process under any agent's account is a run**, whatever its root says:
   # a run whose root was removed or lost is found by its accounts, every
-  # constituent running as one of them (Codex on #79).
+  # constituent running as one of them (Codex on #79). **A process under a box
+  # account is WeaverWeb's connector and not an agent's run**: it is said, and
+  # the purge removes that account last, where it fails while the connector
+  # still runs.
   local u
   for u in "${WEAVER_USERS[@]}"; do
     if pgrep -u "$u" >/dev/null 2>&1; then
+      if is_box_account "$u"; then
+        plan "$u  processes under $(box_account_role "$u"): not an agent; stop it before the purge removes the account"
+        continue
+      fi
       plan "$u  running: processes under the account"
       RUNNING+=("$u (processes)")
     fi
@@ -1072,6 +1110,13 @@ while IFS= read -r line; do
       # Without -r (Codex on #159, round 3, second reader): a home this purge
       # judged went as a path in step 2, and -r would remove one it did not,
       # a home outside /home or one made again, and the mail spool.
+      elif is_box_account "$name"; then
+        # **The box's accounts go last, said as what they are**: userdel
+        # refuses an account a process still runs under, so a connector left
+        # running keeps its account, named.
+        if userdel "$name" 2>/dev/null; then plan "removed user $name, $(box_account_role "$name")"
+        else plan "user $name: not removed: $(box_account_role "$name"), which may still run; stop it, then rerun the purge"; PURGE_FAILED=1
+        fi
       elif userdel "$name" 2>/dev/null; then plan "removed user $name"
       else plan "user $name: not removed"; PURGE_FAILED=1
       fi ;;
@@ -1081,8 +1126,9 @@ while IFS= read -r line; do
   kind=${line%% *} name=${line#* }
   case $kind in
     # **A group userdel already removed is done** (#140): userdel removes a
-    # user's private group with the user (USERGROUPS_ENAB), so the connector's
-    # weaver-<agent>-admincon, the list's last group, is gone by now. It is
+    # user's private group with the user (USERGROUPS_ENAB), so the box's
+    # weaver-gatecon and weaver-admincon, the list's last groups, and an older
+    # agent's weaver-<agent>-admincon are gone by now. Each is
     # said, never taken for a failure, and every arm ends in a status this
     # loop's last line can stand on, so no caller under `set -e` stops here.
     group)

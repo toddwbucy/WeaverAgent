@@ -7563,13 +7563,13 @@ fn the_request_parse_admits_the_system_role_alone() {
 /// does the operator's line carrying no text, and the channel stands**,
 /// per `weaver-harness-Spec` section 6.1's seeding clause and
 /// `weaver-types-Spec` section 5: a frame carrying no dialer, a frame
-/// carrying another uid, the connector's service user's say, and the
-/// operator's frame whose text is empty each answer `refused`, the first
-/// two naming the role and the third the door's rule, no seat is
+/// carrying another uid, the box's gate-con account's say among them, and
+/// the operator's frame whose text is empty each answer `refused`, the
+/// first two naming the role and the third the door's rule, no seat is
 /// granted, nothing is authored, and the next frame is served.
 /// Perturbations: carry the frame without its dialer at the gate and
 /// every seeding line is the first case; skip the dialer's comparison
-/// here and the second case seats a prefix from the connector's uid, the
+/// here and the second case seats a prefix from the other uid, the
 /// seat granted and the record carrying a `message.system`; drop the
 /// empty-text rule from `author_identity` and the third case authors an
 /// empty prefix and turns on it.

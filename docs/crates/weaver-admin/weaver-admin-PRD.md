@@ -12,7 +12,7 @@ reshaped this charter are recorded in it rather than pending against it, and sec
 **External boundary:** `weaver-admin-operator-contract`, for the granted command lines,
 the record's exit and the trace door, its party outside the program
 **Editorial:** Per the Working Rules.
-**Landing PR:** #518
+**Landing PR:** #533
 
 ---
 
@@ -812,7 +812,7 @@ management is a new role with its own ruling. The operator holds sudo and starts
 agent as root so that its permissions can be established, its user, its runtime
 directory and its sink, and everything else is downhill from that. Where WeaverWeb's
 admin-con issues the lifecycle for the operator, it does so through a rule the operator
-installs, which grants this agent's admin-con user fixed `weaver-admin` command lines
+installs, which grants the box's admin-con account fixed `weaver-admin` command lines
 for this agent and reads nothing else from the caller, per the Spec's section 2. That is
 a statement about what this program is designed for and **not a guarantee about
 conduct** - holding the seat does not make its holder careful. An agent driving its own

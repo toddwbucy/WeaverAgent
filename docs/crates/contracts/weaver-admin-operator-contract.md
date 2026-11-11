@@ -11,7 +11,7 @@ same ruling.
 **Document ID:** `weaver-admin-operator-contract`
 **Parent:** `weaver-agent-PRD`, invariant 5.3
 **Editorial:** Per the Working Rules.
-**Landing PR:** #518
+**Landing PR:** #533
 
 ---
 
@@ -46,20 +46,29 @@ to: weaver-admin
 
 The second party is the operator, one person in the operator role, per
 `weaver-admin-PRD` section 7: at a root shell a human holding sudo, and through a sudo
-rule the operator installs, this agent's own connector acting for that person under its
-own service user, never the operator's account, on the operator's ruling of 2026-10-03
-on #50: human and machine accounts stay separate, the connector holds only the fixed
-lines, so it can write none of the operator's files, and WeaverWeb's audit names the
-person while the box's record names the service uid sudo reports. The graph
-carries no node for a principal outside the program, so the party is named in prose and
-the missing category is registered rather than improvised.
+rule the operator installs, the box's admin-con acting for that person under its own
+system account, never the operator's account. Human and machine accounts stay separate,
+on the operator's ruling of 2026-10-03 on #50: the connector holds only fixed lines, so
+it can write none of the operator's files, and WeaverWeb's audit names the person while
+the box's record names the service uid sudo reports. **One admin-con account serves
+every agent on the box**, `weaver-admincon`, on the operator's rulings of 2026-11-10,
+which supersede #50's per-agent account. It holds the fixed lines of each agent whose
+sudo rule names it and is that agent's trace reader, and it is in no gate rule, the
+box's gate-con account being the one caller `weaver-gate-world-contract` section 1
+names, so neither account reaches the other's door. Least privilege holds of what the
+account can do and not of how many agents it reaches: it holds the agents' fixed lines
+and their read-only doors and nothing else, for the reason `weaver-admin-Spec` section 2
+states. An agent whose reader is its own per-agent account and whose gate rule names the
+operator keeps both and is not refused for them. The graph carries no node for a
+principal outside the program, so the party is named in prose and the missing category
+is registered rather than improvised.
 
 ## 1. The boundary
 
 **This contract binds three crossings: the command lines, the sink, and the trace
 door.** **The command lines** are `weaver-admin <verb> <agent>` run as root, at a root
 shell or through a sudo rule the operator installs as the box's own boundary, which
-names this agent's connector user and the exact command lines for this agent and allows
+names the box's admin-con account and the exact command lines for this agent and allows
 no caller-chosen argument, per `weaver-admin-Spec` section 2. An executed program is no
 seam by the Working Process test, and what this contract fixes is which lines exist and
 what each prints. **The wire between WeaverWeb and its connector is WeaverWeb's**:
@@ -87,9 +96,9 @@ recorded, only where it cannot be taken, per section 4 and `weaver-admin-Spec` s
 3, the forced unload.
 **Which lines a caller may run is the rule the operator installs**: an observer's rule
 grants `show`, and an operator's adds `validate`, `load`, `unload`, `stop`, `save-point`,
-`restore` and `force-unload`, the role split of #50 mapped onto command lines. Nothing else crosses in:
-no argument the caller chooses, no standard input, which the program never reads, and no
-claim of who asked. **The cause the record carries is the uid sudo reports**, and which
+`restore` and `force-unload`, the role split of #50 mapped onto command lines. Nothing
+else crosses in: no argument the caller chooses, no standard input, which the program
+never reads, and no claim of who asked. **The cause the record carries is the uid sudo reports**, and which
 person asked is WeaverWeb's record and never the agent's. **The rule opens no login
 session for these lines**, on the operator's confirmation of 2026-10-03 on
 toddwbucy/WeaverWeb#15: sudo's `pam_session` is off for the connector's user
@@ -124,8 +133,8 @@ provide (the operator's ruling of 2026-11-09 on #166).
 
 **At the trace door, one request line**: a byte offset on a record boundary and the
 digest of the record before it, the shape `TraceRequest` of `weaver-types-Spec` section
-3.1, from the one `trace-reader` the agent's boundary file declares, the agent's own
-admin-con. Every other caller is refused: one outside the agent's access group by the
+3.1, from the one `trace-reader` the agent's boundary file declares, the box's admin-con
+account. Every other caller is refused: one outside the agent's access group by the
 box before the relay sees it, and one inside the group but not the reader by the relay,
 which logs it. The newest connection from the reader replaces the old.
 
@@ -591,4 +600,11 @@ gate rather than a defect in this clause.
   toddwbucy/WeaverWeb#15 above is reversed. WeaverWeb's half (its Spec section 8's
   install paragraph, the execution-context obligation of section 2, item 1 of
   toddwbucy/WeaverWeb#46 and its PRD's Run row) is filed on toddwbucy/WeaverWeb, one
+  issue per interface question, once this act merges.
+- The box's two connector accounts, on the operator's rulings of 2026-11-10. Sections 0
+  to 2 here, `weaver-gate-world-contract` sections 1, 2 and 8, `weaver-admin-PRD`
+  section 7, `weaver-admin-Spec` sections 2, 4 and 9, `weaver-gate-Spec` section 3,
+  `weaver-types-Spec` section 3.1 and `weaver-harness-Spec` section 6.1 replace the
+  per-agent connector account with `weaver-admincon` and `weaver-gatecon`, one of each
+  per box, landing in one act. WeaverWeb's half is filed on toddwbucy/WeaverWeb, one
   issue per interface question, once this act merges.
