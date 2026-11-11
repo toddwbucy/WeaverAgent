@@ -4725,6 +4725,137 @@ class LifecycleBoxGroupsTests(unittest.TestCase):
         self.assertIn('expect_eq "$u holds no group outside what the box\'s account may hold" none', script)
 
 
+class LifecycleUnseededTurnTests(unittest.TestCase):
+    """**An unseeded agent's turn is read by the seeding's mark, not by the
+    kind** (the operator's live run of 2026-11-10 on a throwaway agent, which
+    stopped in step 2): the check refused any `message.system`, and the run's
+    one turn, answered, recorded `turn.started message.system message.user
+    message.assistant turn.closed`, the system message the loop's compiled
+    prompt, led into the first turn because nothing was seated
+    (Loops/basic-inference-loop.md section 6, ADP-4). A seeding is the
+    turnless `message.system` the identity door authors (weaver-harness-Spec
+    section 6.1), so `unseeded_turn` refuses a turnless one and asks the
+    bracket to be led by a `message.system` of the turn. The events are in
+    the envelope shape of the recorded trace
+    `crates/weaver-state/src/engine/recorded-karl.ndjson` (a turnless event
+    carries no `turn` key, sequences as strings), the run's own kinds and
+    order as the run printed them. Steps 4 and 5b asserted a recall after a
+    load, which the harness writes only for an identity answer that returns
+    events (weaver-trace-Spec section 3, `lifecycle.rs` skipping an empty
+    answer), so they now want none, read beside the load event so a read that
+    failed answers `unread` rather than an empty count (the self-check of
+    2026-11-10, which also asked for a broken bracket, an open never closed
+    and messages of a turn the bracket does not name to fail).
+    Perturbation: put back `"message.system" not in ks` and the run's shape
+    fails; drop the turnless test and the seeded shapes pass; drop the lead
+    test and a seated turn passes; drop the open-at-the-end test, the stray
+    close test or the bracket's own turn from the comparison and its case
+    passes; drop the load witness and a failed read answers `none`."""
+
+    def setUp(self):
+        self.script = (DEPLOY / "verify-lifecycle.sh").read_text()
+
+    @staticmethod
+    def event(kind, sequence, turn="t-1", **payload):
+        e = {"session": "s-vtest-1", "run": "2026-11-10T23:00:00.000Z-vtest1-0123456789abcdef",
+             "sequence": str(sequence), "kind": kind, "subsystem": "harness",
+             "wall_ms": 1794351600000 + sequence, "monotonic_ns": str(1000 * sequence)}
+        if turn is not None:
+            e["turn"] = turn
+        if payload:
+            e["payload"] = payload
+        return json.dumps(e, separators=(",", ":"), sort_keys=True)
+
+    def judge(self, name, events):
+        program = lifecycle_functions(self.script, name) + name + "\n"
+        run = subprocess.run(["bash", "-c", program], input="".join(e + "\n" for e in events),
+                             text=True, capture_output=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        return run.stdout.strip()
+
+    def test_the_runs_unseeded_turn_reads_as_one(self):
+        ev = self.event
+        the_run = [ev("turn.started", 1), ev("message.system", 2), ev("message.user", 3),
+                   ev("message.assistant", 4), ev("turn.closed", 5)]
+        self.assertEqual(self.judge("unseeded_turn", the_run), "one unseeded turn")
+
+    def test_a_seeding_or_a_wrong_bracket_is_named(self):
+        ev = self.event
+        turn = [ev("turn.started", 5, "t-2"), ev("message.system", 6, "t-2"),
+                ev("message.user", 7, "t-2"), ev("message.assistant", 8, "t-2"),
+                ev("turn.closed", 9, "t-2")]
+        seeding = [ev("message.system", 1, None), ev("turn.started", 2),
+                   ev("message.assistant", 3), ev("turn.closed", 4)]
+        for name, events, found in (
+                ("a seeding, then a turn", seeding + turn,
+                 "message.system(turnless) turn.started message.assistant turn.closed turn.started"
+                 " message.system message.user message.assistant turn.closed"),
+                ("a turnless system message before the turn", [ev("message.system", 1, None)] + turn,
+                 "message.system(turnless) turn.started message.system message.user"
+                 " message.assistant turn.closed"),
+                ("a seated turn, no loop prompt",
+                 [ev("turn.started", 1), ev("message.user", 2), ev("message.assistant", 3),
+                  ev("turn.closed", 4)],
+                 "turn.started message.user message.assistant turn.closed"),
+                ("the loop prompt after the user", [ev("turn.started", 1), ev("message.user", 2),
+                                                    ev("message.system", 3), ev("message.assistant", 4),
+                                                    ev("turn.closed", 5)],
+                 "turn.started message.user message.system message.assistant turn.closed"),
+                ("a system message of another turn",
+                 [ev("turn.started", 1), ev("message.system", 2, "t-9"), ev("message.user", 3),
+                  ev("message.assistant", 4), ev("turn.closed", 5)],
+                 "turn.started message.system message.user message.assistant turn.closed"),
+                ("no answer", [ev("turn.started", 1), ev("message.system", 2), ev("message.user", 3),
+                               ev("turn.closed", 4)],
+                 "turn.started message.system message.user turn.closed"),
+                ("two turns", turn + turn,
+                 " ".join(["turn.started message.system message.user message.assistant turn.closed"] * 2)),
+                ("a turn, then one left open", turn + turn[:3],
+                 "turn.started message.system message.user message.assistant turn.closed"
+                 " turn.started message.system message.user"),
+                ("a close with no open", [ev("turn.closed", 0, "t-0")] + turn,
+                 "turn.closed turn.started message.system message.user message.assistant turn.closed"),
+                ("an open inside an open", turn[:1] + turn,
+                 "turn.started turn.started message.system message.user message.assistant turn.closed"),
+                ("the messages of a turn the bracket does not name",
+                 [ev("turn.started", 1), ev("message.system", 2, "t-9"), ev("message.user", 3, "t-9"),
+                  ev("message.assistant", 4, "t-9"), ev("turn.closed", 5)],
+                 "turn.started message.system message.user message.assistant turn.closed"),
+                ("an event with no kind", turn + [json.dumps({"turn": "t-2"})],
+                 "turn.started message.system message.user message.assistant turn.closed None")):
+            with self.subTest(name):
+                self.assertEqual(self.judge("unseeded_turn", events), found)
+
+    def test_identity_recalls_need_the_load_read_and_count_only_identity(self):
+        ev = self.event
+        load = ev("load", 1, None, declaration="d", boundary="b", cause={"uid": 0})
+        identity = ev("recall", 2, None, ask={"verb": "identity"},
+                      returned=[{"run": "r", "sequence": "1", "kind": "message.system"}])
+        recall = ev("recall", 3, None, ask={"verb": "recall", "last_turns": 4},
+                    returned=[{"run": "r", "turn": "t-1", "sequence": "3", "kind": "message.user"}])
+        for name, events, said in (
+                ("a failed read", [], "unread"),
+                ("recalls with no load read", [recall], "unread"),
+                ("the load alone", [load], "none"),
+                ("the load and a recall of the recall verb", [load, recall], "none"),
+                ("the load and an identity recall", [load, identity, recall], "1"),
+                ("a recall whose payload is null", [load, ev("recall", 4, None).replace(
+                    '"kind":"recall"', '"kind":"recall","payload":null')], "malformed 2"),
+                ("a recall whose ask is a string", [load, ev("recall", 4, None, ask="identity")],
+                 "malformed 2"),
+                ("a line that is not JSON", [load, "{not json"], "malformed 2")):
+            with self.subTest(name):
+                self.assertEqual(self.judge("identity_recalls", events), said)
+
+    def test_the_steps_read_through_them(self):
+        self.assertIn("message.assistant turn.closed | unseeded_turn)", self.script)
+        site = ('expect_eq "the load is read and wrote no identity recall (nothing seated)" none \\\n'
+                '    "$(events_since "$start" load recall | identity_recalls)"')
+        self.assertEqual(self.script.count(site), 2, "steps 4 and 5b")
+        self.assertNotIn('[ -n "$(events_since "$start" recall)" ]', self.script)
+        self.assertNotIn('"message.system" not in ks', self.script)
+
+
 class LifecycleStep5bRestoreTests(unittest.TestCase):
     """**Step 5b's measurement is put back on every exit, the trap
     included** (the Planner's condition on the code act of #533): the
