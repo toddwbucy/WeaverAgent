@@ -214,6 +214,18 @@ elif name == 'cargo':
             (lib / f'{stem}.so.{version}').write_text(f"fixture {stem} {os.environ.get('ENGINE_BUILD', 'a')}")
             (lib / f'{stem}.so.0').symlink_to(f'{stem}.so.{version}')
             (lib / f'{stem}.so').symlink_to(f'{stem}.so.0')
+        # The configure cache cmake leaves in out/build, in the shape a live
+        # build wrote on 2026-11-11: the OpenSSL lookup is recorded off only
+        # where the build's environment carried the variable, as the fork's
+        # build script passes every CMAKE_* variable to cmake. STALE_ENGINE
+        # stands for an engine a build before the rule configured, which
+        # cargo reuses without rerunning the build script, whatever the
+        # environment now holds.
+        (out / 'build').mkdir()
+        cache = 'CMAKE_BUILD_TYPE:STRING=Release\nLLAMA_OPENSSL:BOOL=ON\n'
+        if os.environ.get('CMAKE_DISABLE_FIND_PACKAGE_OpenSSL') == 'ON' and not os.environ.get('STALE_ENGINE'):
+            cache += 'CMAKE_DISABLE_FIND_PACKAGE_OpenSSL:UNINITIALIZED=ON\n'
+        (out / 'build' / 'CMakeCache.txt').write_text(cache)
         # A second engine directory, newer by mtime, as a shared target holds
         # one per engine pin it has built: the build did not use it.
         if os.environ.get('DECOY_ENGINE'):
@@ -479,6 +491,7 @@ class PlanTests(unittest.TestCase):
                      "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
                      "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF", "ENGINE_BUILD", "NO_ENGINE_MESSAGE",
                      "LDD_MISSING", "CUDA_LIB_DIR", "DECOY_ENGINE", "LDD_ELSEWHERE", "LDD_STATIC",
+                     "CMAKE_DISABLE_FIND_PACKAGE_OpenSSL", "STALE_ENGINE",
                      "BOX_PASSWD", "BOX_GROUP", "EXTRA_PASSWD", "GATECON_GROUPS", "ADMINCON_GROUPS",
                      "GATECON_JOINED", "ADMINCON_JOINED",
                      "LD_LIBRARY_PATH", "LD_PRELOAD", "NO_NVIDIA"):
@@ -3364,6 +3377,91 @@ esac
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn(said, result.stderr)
                 self.assertFalse(any(c[0] == "cargo" for c in self.calls()), self.calls())
+
+    def engine_cache(self):
+        """The configure cache the cargo double leaves in the engine's
+        out_dir, resolved as `engine_out` resolves that directory."""
+        out = self.root / 'target with "quotes"' / "release" / "build" / "llama-cpp-sys-2-fixture" / "out"
+        return Path(os.path.realpath(out)) / "build" / "CMakeCache.txt"
+
+    def bootstrap(self, *args):
+        """bootstrap-stack.sh on a box that holds no stack: its record, admin
+        base, prefix and agent directory named under the fixture and absent.
+        Its plan stops in this fixture at the member check that follows the
+        engine's output directory, because the cargo double's members are
+        not executable."""
+        self.env.update(WEAVER_STACK_RECORD=str(self.root / "new-stack"),
+                        WEAVER_ADMIN_CONFIG=str(self.root / "new-admin"),
+                        WEAVER_PREFIX=str(self.root / "new-prefix"),
+                        WEAVER_AGENT_DIR=str(self.root / "new-agents"))
+        return self.run_script("bootstrap-stack.sh", *args)
+
+    def test_both_scripts_build_the_engine_with_its_openssl_lookup_off(self):
+        """**Both stack scripts build the engine without HTTPS**
+        (weaver-spu-Spec section 1.1, deploy/engine-libraries.sh): every
+        cargo run either script makes carries
+        CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON, over an OFF in the operator's
+        shell. The cargo double, as the fork's build script does, records
+        the lookup off in the engine's configure cache only where the
+        build's environment carried it, the cache line a live build wrote on
+        2026-11-11, whose cmake then printed "OpenSSL not found, HTTPS
+        support disabled". Bootstrap passes its engine check and stops at
+        the member check after it (`bootstrap`). Perturbation: drop the
+        export and both scripts refuse the engine they have just built."""
+        self.env["CMAKE_DISABLE_FIND_PACKAGE_OpenSSL"] = "OFF"
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("CMAKE_DISABLE_FIND_PACKAGE_OpenSSL:UNINITIALIZED=ON\n", self.engine_cache().read_text())
+        self.assertIn("plan only. rerun with --install", result.stdout)
+        shutil.rmtree(self.root / 'target with "quotes"')
+        result = self.bootstrap()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("CMAKE_DISABLE_FIND_PACKAGE_OpenSSL:UNINITIALIZED=ON\n", self.engine_cache().read_text())
+        self.assertNotIn("configure cache", result.stderr)
+        self.assertIn('release/worker was not built', result.stderr)
+
+    def test_an_engine_configured_before_the_rule_refuses_before_anything_is_installed(self):
+        """**An engine a build before the rule configured refuses** in both
+        scripts, right after the build names its output directory and before
+        any plan or install. Cargo reruns no build script when the variable
+        changes, so a warm target hands back an engine whose configure cache
+        still has the OpenSSL lookup on. The refusal names the cache, a fresh
+        target first, and then the clean, which `cargo clean --dry-run` showed
+        on 2026-11-11 to remove every build directory and fingerprint of the
+        engine in the target. An --install refuses before any sudo call that
+        places a file. Perturbation: drop either script's call and its stale engine
+        plans (update-stack) or reaches the member check (bootstrap)."""
+        self.env["STALE_ENGINE"] = "1"
+        said = f"the engine's configure cache at {self.engine_cache()} does not turn its OpenSSL lookup off"
+        clean = ("Build into a fresh CARGO_TARGET_DIR, or remove it with 'cargo clean --release -p "
+                 "llama-cpp-sys-2 --locked', which removes every build of the engine in this target, those "
+                 "of every checkout sharing it included")
+        target = self.root / 'target with "quotes"'
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(said, result.stderr)
+        self.assertIn(clean, result.stderr)
+        self.assertNotIn("engine out", result.stdout)
+        self.assertNotIn("== plan", result.stdout)
+        self.assertEqual(list(target.glob("weaver-deploy-messages-*")), [], "the messages file is removed")
+        self.assert_unprivileged()
+        shutil.rmtree(target)
+        self.log.unlink(missing_ok=True)
+        result = self.library_install()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(said, result.stderr)
+        placed = [c for c in self.calls() if c[:2] in (["sudo", "install"], ["sudo", "cp"], ["sudo", "tee"],
+                                                       ["sudo", "mv"], ["sudo", "ldconfig"])]
+        self.assertEqual(placed, [], self.calls())
+        self.assertEqual((self.lib_dir / "libllama.so.0.0.1").read_text(), "fixture libllama a")
+        shutil.rmtree(target)
+        self.log.unlink(missing_ok=True)
+        result = self.bootstrap()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(said, result.stderr)
+        self.assertIn(clean, result.stderr)
+        self.assertNotIn("was not built", result.stderr)
+        self.assert_unprivileged()
 
     def test_a_loader_entry_refuses_a_cuda_directory_root_does_not_hold_closed(self):
         """**Where the plan would write the loader's entry, the CUDA directory
@@ -6962,6 +7060,76 @@ class EngineLibrariesTests(unittest.TestCase):
         # operator's variables before it clears them; ldd's own line is last.
         self.assertEqual(ran.stdout.splitlines()[-1], "/opt/fixture/lib|unset|unset|/x/weaver-spu", ran.stderr)
 
+    def test_the_repository_cargo_config_forces_the_openssl_lookup_off(self):
+        """**The build holds the rule** (weaver-spu-Spec section 1.1): the
+        repository's `.cargo/config.toml` holds one setting, `[env]`
+        CMAKE_DISABLE_FIND_PACKAGE_OpenSSL forced ON, so every cargo run
+        started inside the tree builds the engine without HTTPS whatever the
+        shell holds, and its comment names the Spec section and the OpenSSL
+        and engine revisions that forced it. Cargo hands an `[env]` value to
+        a dependency's build script, and `force` wins over the shell
+        (measured on 2026-11-11 with a probe crate). Perturbations: drop
+        `force`, set OFF, or drop the key, and this fails."""
+        import tomllib
+        path = DEPLOY.parent / ".cargo" / "config.toml"
+        text = path.read_text()
+        self.assertEqual(tomllib.loads(text),
+                         {"env": {"CMAKE_DISABLE_FIND_PACKAGE_OpenSSL": {"value": "ON", "force": True}}})
+        self.assertFalse(any(ord(c) > 127 for c in text), "ASCII")
+        for named in ("weaver-spu-Spec section 1.1", "OpenSSL", "4.1.0", "cpp-httplib 0.40.0", "e21cdc11",
+                      "bebe55d6a90069e13bc6c38eefc707a700014550"):
+            self.assertIn(named, re.sub(r"\s*\n#\s*", " ", text))
+
+    def test_sourcing_the_file_exports_the_openssl_lookup_off(self):
+        """**The variable reaches every process either script starts**,
+        exported ON over whatever the caller's environment held, since the
+        fork's build script reads it from cargo's environment. Perturbation:
+        drop `export` and the child reads the caller's value; default it with
+        `${...:-ON}` and the caller's OFF stands."""
+        for given in ("OFF", "", "ON"):
+            with self.subTest(given=given):
+                ran = self.run_bash("printenv CMAKE_DISABLE_FIND_PACKAGE_OpenSSL",
+                                    CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=given)
+                self.assertEqual((ran.returncode, ran.stdout), (0, "ON\n"), ran.stderr)
+
+    def test_engine_without_https_passes_only_a_cache_recording_the_lookup_off(self):
+        """**`engine_without_https` passes only a configure cache that records
+        the lookup off as cmake writes a definition**: the whole line, the
+        name, a type and `=ON`. The first case is the line the live build of
+        2026-11-11 left. A missing cache, a cache from before the rule, the
+        lookup recorded OFF, and a line that only contains the definition
+        refuse, naming the cache and the clean. Perturbations: drop `-x` and
+        the commented and prefixed lines pass; drop the value and OFF
+        passes."""
+        helpers = "die() { printf 'REFUSED: %s\\n' \"$*\" >&2; exit 1; }\n"
+        out = self.dir / "out"
+        (out / "build").mkdir(parents=True)
+        cache = out / "build" / "CMakeCache.txt"
+        for text, passes in (
+                ("CMAKE_BUILD_TYPE:STRING=Release\nCMAKE_DISABLE_FIND_PACKAGE_OpenSSL:UNINITIALIZED=ON\n", True),
+                ("CMAKE_DISABLE_FIND_PACKAGE_OpenSSL:BOOL=ON\n", True),
+                (None, False),
+                ("LLAMA_OPENSSL:BOOL=ON\n", False),
+                ("CMAKE_DISABLE_FIND_PACKAGE_OpenSSL:UNINITIALIZED=OFF\n", False),
+                ("CMAKE_DISABLE_FIND_PACKAGE_OpenSSL:UNINITIALIZED=ONE\n", False),
+                ("//CMAKE_DISABLE_FIND_PACKAGE_OpenSSL:UNINITIALIZED=ON\n", False),
+                ("XCMAKE_DISABLE_FIND_PACKAGE_OpenSSL:UNINITIALIZED=ON\n", False),
+                # cmake writes every cache entry with a type.
+                ("CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON\n", False)):
+            with self.subTest(text=text):
+                cache.unlink(missing_ok=True)
+                if text is not None:
+                    cache.write_text(text)
+                ran = self.run_bash(helpers + f"engine_without_https {shlex.quote(str(out))}; echo passed")
+                if passes:
+                    self.assertEqual((ran.returncode, ran.stdout), (0, "passed\n"), ran.stderr)
+                else:
+                    self.assertEqual(ran.returncode, 1, ran.stdout)
+                    self.assertNotIn("passed", ran.stdout)
+                    self.assertIn(f"REFUSED: the engine's configure cache at {cache} does not turn its "
+                                  "OpenSSL lookup off", ran.stderr)
+                    self.assertIn("'cargo clean --release -p llama-cpp-sys-2 --locked'", ran.stderr)
+
     def test_loader_dir_refuses_what_root_does_not_hold_closed(self):
         update = (DEPLOY / "update-stack.sh").read_text()
         helpers = ("die() { printf 'REFUSED: %s\\n' \"$*\" >&2; exit 1; }\n"
@@ -6985,9 +7153,12 @@ class EngineLibrariesTests(unittest.TestCase):
         """Neither script keeps a copy of its own: each sources the file and
         assigns none of its constants, makes its build's messages file with
         mktemp under an exit trap, calls `engine_out` once and removes the
-        file, places every library through `install_library`, checks the SPU
-        through `spu_ldd` and `engine_resolved` and runs no bare ldd, judges
-        the CUDA directory before it writes the entry, and lists no `build/`
+        file, judges the engine's configure cache through
+        `engine_without_https` once, between naming the output directory and
+        taking its lib/, and sets the OpenSSL variable nowhere itself, places
+        every library through `install_library`, checks the SPU through
+        `spu_ldd` and `engine_resolved` and runs no bare ldd, judges the CUDA
+        directory before it writes the entry, and lists no `build/`
         directory. Bootstrap's build sends its messages to the file and its
         diagnostics to the kept log, and judges the CUDA directory before it
         builds."""
@@ -6997,13 +7168,18 @@ class EngineLibrariesTests(unittest.TestCase):
             with self.subTest(script=name):
                 self.assertIn('source "$REPO/deploy/engine-libraries.sh"', text)
                 for defined in ("engine_out() {", "loader_dir() {", "install_library() {", "spu_ldd() {",
-                                "engine_resolved() {"):
+                                "engine_resolved() {", "engine_without_https() {"):
                     self.assertNotIn(defined, text)
                 for constant in ("ENGINE_CRATE=", "LIB_GLOBS=", "LDSO_CONF=", "CUDA_LIB_DIR="):
                     self.assertNotRegex(text, rf"(?m)^\s*{constant}")
                 self.assertEqual(text.count(call), 1)
                 take = text.index(call)
                 self.assertEqual(text.index('rm -f -- "$BUILD_MESSAGES"\ntrap - EXIT\n', take) - take, len(call))
+                check = 'engine_without_https "$SYS_OUT"\n'
+                self.assertEqual(text.count(check), 1)
+                self.assertLess(take, text.index(check))
+                self.assertLess(text.index(check), text.index('SYS_OUT="$SYS_OUT/lib"\n'))
+                self.assertNotRegex(text, r"(?m)^[^#\n]*CMAKE_DISABLE_FIND_PACKAGE_OpenSSL")
                 self.assertEqual(text.count('BUILD_MESSAGES=$(mktemp "${BUILT%/release}/weaver-deploy-messages-XXXXXX")'), 1)
                 self.assertEqual(text.count("""trap 'rm -f -- "$BUILD_MESSAGES"' EXIT"""), 1)
                 self.assertNotRegex(text, r"ls [^\n]*build/")

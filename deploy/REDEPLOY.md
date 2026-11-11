@@ -306,7 +306,20 @@ What it does, so the log can say which step a failure was at:
    (measured 2026-09-11). The CUDA host compiler is `NVCC_CCBIN`, defaulted as
    `update-stack.sh` defaults it. A build that fails refuses with the first lines cargo
    names as the cause and the log's last 60, naming the log, and never goes on
-   to install what an earlier build left in the target directory (#128). Then
+   to install what an earlier build left in the target directory (#128). The engine is
+   built with its OpenSSL lookup off (`CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON`,
+   weaver-spu-Spec section 1.1): nothing in the agent downloads a model, and the
+   cpp-httplib bundled with llama.cpp does not compile against OpenSSL 4.1. The
+   repository's `.cargo/config.toml` forces the variable for every cargo run started
+   inside the tree, a hand run included, and both scripts export it as well from
+   `deploy/engine-libraries.sh` for every cargo run they make, step 3's included. A
+   cargo run started outside the tree (with `--manifest-path`, say) does not read the
+   file and needs the variable in its environment. The engine's build script does not
+   rerun when that variable changes, so an engine that an earlier build in the same
+   target configured with the lookup on refuses right after the build, before anything
+   is planned. A fresh `CARGO_TARGET_DIR` never meets it. `cargo clean --release -p
+   llama-cpp-sys-2 --locked` also clears it, but removes every build of the engine in
+   that target, those of every checkout sharing it included. Then
    `deploy/build-busybox.sh` builds the agent's shell (#29): busybox 1.36.1, its
    tarball fetched from busybox.net (or, on a box without the network, named by
    `BUSYBOX_TARBALL=<path>` in the environment of `bootstrap-stack.sh` or
@@ -442,7 +455,8 @@ thing the next box will hit first.
   business, not this runbook's.
 - `CARGO_TARGET_DIR` is set there and shared. Export a fresh one for the install so
   the members are built from this tree and not compared against another project's
-  output.
+  output. Every engine the shared target held on 2026-11-11 was configured with its
+  OpenSSL lookup on, which the build step refuses (section 3, step 4).
 - The bulk store is local (`/bulk-store`, exported to the thinkpad as
   `/mnt/bulk-store`). Name the archive path on the olympus side.
 - `~/.cargo/config.toml` may carry a `CUDARC_CUDA_VERSION` override. Remove it

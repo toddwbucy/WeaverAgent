@@ -293,6 +293,29 @@ revisions rather than abbreviations, because an abbreviation is unambiguous only
 until the repository
 it names grows a collision, and this Spec is the durable record.
 
+**The engine is built without HTTPS, because nothing in the agent downloads a model.**
+The build holds the rule in the repository's `.cargo/config.toml`, which forces
+`CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON` for every cargo run started inside the tree. Both
+stack scripts export it as well for every cargo run they make
+(`deploy/engine-libraries.sh`), a belt beside the file. The fork's build script passes
+every `CMAKE_*` variable in its environment to cmake. llama.cpp's one OpenSSL lookup, in its vendored
+cpp-httplib, then finds nothing, and httplib is compiled without TLS. httplib serves only
+llama.cpp's model downloader, `common/download.cpp` and `common/hf-cache.cpp`, in
+llama.cpp's static `common` library. The fork links that library into every binary that
+links the engine, and the linker takes neither the downloader nor httplib from it, since
+nothing in the SPU calls them. On 2026-11-11 `weaver-spu`,
+`weaver-spu-classify`, `worker` and the five engine libraries named no libssl or libcrypto
+and held no httplib or X509 symbol, in the stack installed before this rule and in a build
+under it alike. The rule was forced that day, when the box's OpenSSL moved to 4.1.0 and
+the cpp-httplib 0.40.0 in the vendored llama.cpp at `e21cdc11` stopped compiling against
+it (a `const X509_NAME*` passed where `X509_NAME*` is taken). It is revisited at the next
+engine move, and an httplib that compiles again does not by itself lift it, since the
+agent still downloads nothing. **The fork's build script does not rerun when the variable
+changes**: it declares no `rerun-if-env-changed` for `CMAKE_*`, so a target whose engine
+was configured before the rule keeps HTTPS on. Each stack script reads the engine's
+configure cache after its build and refuses an engine that does not record the lookup
+off, naming a fresh target first and then the `cargo clean` that removes it.
+
 **Vendoring to crates.io was tried against `0.11.0` on 2026-09-28 and cannot land at
 that release**, which is the record #699's items 639.2 and 639.3 ask for where the move
 does not go. Read from the published sources rather than from the fork's account of
