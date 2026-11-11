@@ -593,6 +593,113 @@ fn a_reseed_restores_the_window_it_is_handed() {
     );
 }
 
+/// Knobs that make the penalty window decide the draw: a two-slot window,
+/// a penalty that sinks any token in it, and a top-k of one, so each draw
+/// is the best token the window leaves standing and no luck enters.
+fn window_decides() -> EffectiveKnobs {
+    EffectiveKnobs {
+        temperature: 0.7,
+        top_k: 1,
+        top_p: 0.95,
+        repetition_penalty: 1.0e4,
+        repetition_window: 2,
+        seed: 11,
+    }
+}
+
+/// The three best tokens of the standing distribution, best first, after
+/// checking that a penalised token cannot outrank the third.
+///
+/// A positive logit is divided by the penalty and a negative one
+/// multiplied, so a penalised token lands at or below `best / 1e4`. The
+/// third must stand above that for the window, rather than the logits,
+/// to decide which of the three a draw takes.
+fn three_best(engine: &GgufEngine<'_>) -> [TokenId; 3] {
+    let logits = engine.distribution().expect("a distribution stands");
+    let mut ranked: Vec<(usize, f32)> = logits.iter().copied().enumerate().collect();
+    ranked.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let best = ranked[0].1;
+    assert!(
+        ranked[2].1 > best.max(0.0) / 1.0e4,
+        "the third logit {} must outrank a penalised best {}",
+        ranked[2].1,
+        best
+    );
+    [0, 1, 2].map(|i| TokenId(ranked[i].0 as u32))
+}
+
+/// **Each draw enters the penalty window once**, per `weaver-spu-Spec`
+/// section 8.5: the window is the last `repetition_window` resident
+/// positions, and on GGUF the engine's own sample accepts the token it
+/// draws.
+///
+/// Read at the seam with two draws from one distribution. The window holds
+/// the best token, so the first draw takes the second best. Counted once,
+/// the two-slot window then holds the best and the second best, and the
+/// second draw takes the third. Counted twice, the first draw fills both
+/// slots and pushes the best out of the window, and the second draw takes
+/// the best again.
+///
+/// Perturbation: put `self.sampler.accept(token)` back after the sample in
+/// `GgufEngine::sample` and the second draw answers the best token.
+#[test]
+fn each_draw_enters_the_penalty_window_once() {
+    let Some(model) = model_or_skip() else { return };
+    let mut engine =
+        GgufEngine::open(&model, &window_decides(), 512, false).expect("the context opens");
+    engine
+        .decode_at(&[TokenId(9707), TokenId(11), TokenId(1879)], 0)
+        .expect("the prompt decodes");
+    let [best, second, third] = three_best(&engine);
+
+    engine
+        .reseed(4242, &[best])
+        .expect("the window holds the best");
+    let first = engine.sample().expect("the first draw");
+    assert_eq!(
+        first, second,
+        "the window sinks the best, so the second is drawn"
+    );
+    let next = engine
+        .sample()
+        .expect("the second draw, from the same distribution");
+    assert_eq!(
+        next, third,
+        "counted once, the window holds the best and the second, so the third \
+         is drawn; the best ({best:?}) means the first draw was counted twice"
+    );
+}
+
+/// **A reseed's tail enters the window once per position**, the same
+/// count as a draw, so a window restored from the tail and a window built
+/// by drawing hold the same positions.
+///
+/// The reseed hands a two-token tail to a two-slot window. Counted once,
+/// both stay and the draw takes the third best. Counted twice, the second
+/// token fills both slots and pushes the first out.
+///
+/// Perturbation: feed each token of the window to `accept_many` twice in
+/// `GgufEngine::reseed` and the draw answers the best token.
+#[test]
+fn a_reseed_tail_enters_the_window_once_per_position() {
+    let Some(model) = model_or_skip() else { return };
+    let mut engine =
+        GgufEngine::open(&model, &window_decides(), 512, false).expect("the context opens");
+    engine
+        .decode_at(&[TokenId(9707), TokenId(11), TokenId(1879)], 0)
+        .expect("the prompt decodes");
+    let [best, second, third] = three_best(&engine);
+
+    engine
+        .reseed(4242, &[best, second])
+        .expect("the window holds the best two");
+    assert_eq!(
+        engine.sample().expect("a token is drawn"),
+        third,
+        "both tail positions stand in the window, so the third is drawn"
+    );
+}
+
 /// **A closed engine answers every ask with a refusal**, rather than a
 /// stale value from the state it held.
 #[test]

@@ -587,10 +587,14 @@ impl Backend for GgufEngine<'_> {
         let at = self
             .logits_at
             .ok_or_else(|| Self::engine_fault("no decode has left a distribution to sample"))?;
+        // **The draw is accepted once, by the engine**, per `weaver-spu-Spec`
+        // section 8.5: the window is the last `repetition_window` resident
+        // positions, each counted once. `llama_sampler_sample` accepts the
+        // token it returns before returning it, so the chain's penalty ring
+        // already holds this draw. A second accept here put every draw in
+        // the ring twice, which left a ring of 64 covering the last 32 drawn
+        // tokens where the native path reads 64 positions.
         let token = self.sampler.sample(&self.context, at);
-        // The penalty window is a function of what was drawn, so the sampler is
-        // told what it drew.
-        self.sampler.accept(token);
         u32::try_from(token.0)
             .map(TokenId)
             .map_err(|_| Self::engine_fault("the engine answered a negative token"))
