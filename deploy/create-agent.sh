@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Create one agent on this box: its accounts, its territory with the state
 # store behind its member's seam, the declaration and the prompt draft in it,
-# its root of admin configuration, and the sudo rule its connector runs the
-# verbs through.
+# its root of admin configuration, and the sudo rule the box's admin-con
+# account runs its verbs through, laying the box's two connector accounts
+# where they are absent.
 #
 #   ./deploy/create-agent.sh fred --engine sqlite --artifact /path/to.gguf            plan only
 #   ./deploy/create-agent.sh fred --engine sqlite --artifact /path/to.gguf --apply    act
@@ -11,7 +12,8 @@
 # engine retired on the operator's ruling of 2026-10-02 on #1), --session <name>
 # (default <name>-001), --spu <path> (this agent's SPU, in place of the
 # stack record's `spu-binary`), --connector-role operator|observer (default
-# operator: which command lines the connector's sudo rule grants), and
+# operator: which command lines the agent's sudo rule grants the box's
+# admin-con account), and
 # --adapter <path> --adapter-sha256 <hex> --adapter-scale <number>
 # --base-blake3 <hex>, all four or none, which write the binding's `adapter`
 # table (weaver-spu adapter binding amendment ADP-1 and ADP-5).
@@ -47,30 +49,42 @@
 # passage and lists nothing (the operator's ruling of 2026-10-08 on #1). The
 # access group `weaver-<name>-admin` groups the files beneath it, the
 # declaration, the draft, the logs and `save-points/` with the published save
-# points, and reads them and never writes, so the connector reads the
+# points, and reads them and never writes, so the admin-con account reads the
 # declaration and a save point and can rewrite neither. The operator joins
 # both groups to read without sudo.
 #
 # **The system prompt is state and not a field** (operator's ruling of
 # 2026-10-06): the declaration carries no identity, admin reads no prompt, and
-# the prompt enters the agent through its gate as the operator's seeding turn,
-# `deploy/turn.py <name> --system`, after the first load. This script writes
-# the draft that turn reads, `system-prompt.md` beside the declaration, and
-# never opens the gate itself: seeding is a turn against a loaded agent, and
-# this script makes an agent that is not yet loaded.
+# the prompt enters the agent through its gate. This script still writes the
+# draft, `system-prompt.md` beside the declaration, and never opens the gate.
+# An agent it lays has no seeding sender: its gate admits the box's gate-con
+# account alone, and the harness admits a seeding line from the operator's uid
+# alone, so how its prompt enters is deferred to its own act
+# (weaver-gate-world-contract section 2).
 #
-# **Three accounts and two groups beyond the agent's own**, per
-# weaver-admin-Spec sections 4, 6 and 9 (the operator's rulings of 2026-10-03
-# on #50): the state member `weaver-<name>-state`, the trace relay
-# `weaver-<name>-relay` whose one group is the trace group
-# `weaver-<name>-trace`, the access group `weaver-<name>-admin` the trace door
-# is grouped to, and the connector's service user `weaver-<name>-admincon`,
-# which holds the access group, is the boundary file's `trace-reader`, and is
-# the one user the sudo rule names.
+# **Two accounts and two groups beyond the agent's own**, per
+# weaver-admin-Spec sections 4, 6 and 9: the state member
+# `weaver-<name>-state`, the trace relay `weaver-<name>-relay` whose one group
+# is the trace group `weaver-<name>-trace`, and the access group
+# `weaver-<name>-admin` the trace door is grouped to.
+#
+# **The box's two connector accounts, one per plane** (weaver-admin-Spec
+# section 2 and weaver-gate-world-contract section 1, the operator's rulings
+# of 2026-11-10): `weaver-gatecon`, which runs WeaverWeb's gate-con and is the
+# one uid the access rule names, joins the agent's own group, through which
+# the gate's socket admits it. `weaver-admincon`, which runs admin-con, joins
+# the state and access groups, is the boundary file's `trace-reader`, and is
+# the one user the sudo rule names. Each is laid where it is absent and, where
+# an account of the name stands, judged before it is used: a system account
+# with no login shell, no home, a primary group of its own, and no group that
+# reaches the other account's door. Neither is ever laid per agent, and the
+# names `gatecon` and `admincon` are refused as agents' (weaver-admin-Spec
+# section 4). The rule naming one caller is this script's convention, and
+# nothing refuses a rule naming more (#70).
 #
 # **The sudo rule is strict** (weaver-admin-Spec section 2, the operator
-# contract section 2): `/etc/sudoers.d/weaver-<name>` grants the connector's
-# user exactly this agent's fixed `weaver-admin <verb> <name>` command lines,
+# contract section 2): `/etc/sudoers.d/weaver-<name>` grants the admin-con
+# account exactly this agent's fixed `weaver-admin <verb> <name>` command lines,
 # as root, without a password, with no caller-chosen argument, no SETENV and
 # no env_keep, and turns sudo's `pam_session` off for that user so a session
 # never moves the invocation into another containment. Since #166 admin's
@@ -158,6 +172,12 @@ done
 # all three accept without quoting.
 [ -n "$NAME" ] || die "name the agent: create-agent.sh <name> --artifact <path>"
 [[ "$NAME" =~ ^[a-z][a-z0-9]{1,15}$ ]] || die "the name is lowercase letters and digits, 2 to 16 characters: '$NAME'"
+# **The box's connector accounts' names are not agents'** (weaver-admin-Spec
+# section 4): an agent named gatecon would own weaver-gatecon, the caller of
+# every gate on the box, as its own identity. Admin refuses both names too.
+case "$NAME" in
+  gatecon|admincon) die "'$NAME' is reserved: weaver-$NAME is the box's $NAME account (weaver-admin-Spec section 4), so no agent takes the name" ;;
+esac
 [ -n "$ARTIFACT" ] || die "name the artifact the decoder binds: --artifact <path>"
 SESSION=${SESSION:-$NAME-001}
 # **The session and the artifact are written into TOML strings, so a value a
@@ -219,8 +239,9 @@ case "$CONNECTOR_ROLE" in
   *) die "--connector-role is operator or observer: '$CONNECTOR_ROLE'" ;;
 esac
 # **The operator is the account running this script**, never root: the root's
-# `operator` key names their uid, the gate admits them by it, and every root
-# step below asks for sudo itself.
+# `operator` key names their uid, and every root step below asks for sudo
+# itself. The gate does not admit the operator: its rule names the box's
+# gate-con account alone (weaver-gate-world-contract section 1).
 [ "$(id -u)" -ne 0 ] || die "run as the operator, not under sudo: the root's operator key names this uid, and --apply asks for sudo itself"
 
 
@@ -244,7 +265,8 @@ STATE_GROUP="$MEMBER_USER"         # the member's primary group: the territory's
 TRACE_GROUP="weaver-$NAME-trace"   # the trace's readers: the operator and the relay, never the member
 RELAY_USER="weaver-$NAME-relay"    # the trace relay's uid, its one group the trace group
 ACCESS_GROUP="weaver-$NAME-admin"  # the territory's files' group and the trace door's: reads, never writes
-CONNECTOR_USER="weaver-$NAME-admincon"  # the connector's service user: the reader, and the sudo rule's one user
+GATECON_USER=weaver-gatecon        # the box's gate-con account: the one uid the access rule names
+ADMINCON_USER=weaver-admincon      # the box's admin-con account: the reader, and the sudo rule's one user
 SUDO_RULE="/etc/sudoers.d/weaver-$NAME"
 ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
@@ -408,6 +430,38 @@ DECLARATION="$HOME_DIR/agent.toml"
 PROMPT="$HOME_DIR/system-prompt.md"
 SAVE_POINTS="$HOME_DIR/save-points"
 
+# **account_line NAME: the account's passwd line, or nothing where it is
+# absent**; a lookup that cannot answer refuses rather than reading as absence.
+account_line() {
+  local line rc=0
+  line=$(getent passwd "$1") || rc=$?
+  case $rc in
+    0) printf '%s' "$line" ;;
+    2) ;;
+    *) die "cannot read account $1" ;;
+  esac
+}
+# **uid_in LINE: the uid a passwd line carries**, refused where it is not a
+# number.
+uid_in() {
+  local uid
+  IFS=: read -r _ _ uid _ <<<"$1"
+  [[ "$uid" =~ ^[0-9]+$ ]] || die "an account carries no numeric uid: $1"
+  printf '%s' "$uid"
+}
+# **The box's connector accounts as they stand now**, read at the top level so
+# a lookup that refuses ends the run rather than a command substitution alone.
+GATECON_LINE=$(account_line "$GATECON_USER") || exit 1
+ADMINCON_LINE=$(account_line "$ADMINCON_USER") || exit 1
+# **The access rule names the box's gate-con account alone**
+# (weaver-gate-world-contract section 1). Where the account stands its uid is
+# known now. Where it does not, it is laid at --apply and the declaration is
+# rendered again with the uid it takes, the parse check below having read a
+# placeholder that is never written.
+GATECON_UID=""
+[ -z "$GATECON_LINE" ] || { GATECON_UID=$(uid_in "$GATECON_LINE") || exit 1; }
+GATECON_UID_SHOWN=${GATECON_UID:-"the uid $GATECON_USER takes when --apply lays it"}
+
 # **The declaration is rendered once, here, and parse-checked before anything
 # is provisioned**, so a value that breaks it refuses before an account or a
 # database exists rather than after. The check is TOML syntax through
@@ -453,7 +507,7 @@ artifact = "$ARTIFACT"
 devices = [0]$ADAPTER_TABLE
 
 [gate-instruction.access-rule]
-allowed-uids = [$(id -u "$OPERATOR")]
+allowed-uids = [${GATECON_UID:-65534}]
 allowed-gids = []
 denied-uids = []
 
@@ -516,6 +570,83 @@ refuse_existing() {
   answer=$(path_answer -e "$1") || exit 1
   [ "$answer" = no ] || die "$2 already exists: $1"
 }
+
+# **The box's connector accounts are judged by their shape, not only their
+# name** (weaver-admin-Spec section 4): a standing account of the name is
+# adopted only where it is the account this script would lay.
+UID_MIN=$(awk '$1 == "UID_MIN" { v = $2 } END { print v }' /etc/login.defs 2>/dev/null || true)
+[[ "$UID_MIN" =~ ^[0-9]+$ ]] || UID_MIN=1000
+# agent_name_ok N: N is a name admin's name check admits (weaver-admin-Spec
+# section 4): ASCII letters, digits, `-` and `_`, no reserved suffix, and not
+# a box account's name.
+agent_name_ok() {
+  [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+  case "$1" in
+    *-state|*-trace|*-relay|*-admin|*-admincon|gatecon|admincon) return 1 ;;
+  esac
+  return 0
+}
+# door_crossings NAME: each group NAME holds outside what the box's account
+# NAME may hold, space-separated, or nothing. **Each account is judged by an
+# allow-list, inside the weaver- namespace and outside it alike**, so a group
+# such as wheel, sudo, disk or docker refuses as a weaver- group would:
+# - weaver-admincon may hold its own group and agents' state and access
+#   groups, weaver-<n>-state and weaver-<n>-admin, and nothing else;
+# - weaver-gatecon may hold its own group and agents' own groups, weaver-<n>,
+#   and nothing else.
+# <n> is a name agent_name_ok admits, so a trace, relay, state, access or
+# per-agent connector group is never read as an agent's own group.
+door_crossings() {
+  local held g n crossed=""
+  held=$(id -Gn "$1") || die "cannot read the groups of $1"
+  for g in $held; do
+    n=""
+    case "$1:$g" in
+      "$1:$1") continue ;;
+      "$ADMINCON_USER:"weaver-*-state) n=${g#weaver-}; n=${n%-state} ;;
+      "$ADMINCON_USER:"weaver-*-admin) n=${g#weaver-}; n=${n%-admin} ;;
+      "$GATECON_USER:"weaver-*) n=${g#weaver-} ;;
+    esac
+    [ -n "$n" ] && agent_name_ok "$n" && continue
+    crossed="$crossed $g"
+  done
+  printf '%s' "${crossed# }"
+}
+# judge_box_account NAME: refuses by name where the standing account NAME is
+# not a system account with no login shell, no home and a primary group of
+# its own that no other account shares, or where it holds a group reaching
+# the other account's door.
+judge_box_account() {
+  local name=$1 line uid gid home shell home_stands group_line gname members sharers crossed
+  line=$(account_line "$name") || exit 1
+  [ -n "$line" ] || die "the account $name does not stand"
+  IFS=: read -r _ _ uid gid _ home shell <<<"$line"
+  [[ "$uid" =~ ^[0-9]+$ ]] && [ "$uid" -lt "$UID_MIN" ] \
+    || die "the account $name stands with uid $uid, not a system account (below UID_MIN $UID_MIN), so it is not adopted as the box's account"
+  [ "$uid" -gt 0 ] || die "the account $name stands with uid 0, root's, so it is not adopted as the box's account"
+  case "$shell" in
+    /usr/sbin/nologin|/sbin/nologin|/usr/bin/nologin|/bin/false|/usr/bin/false) ;;
+    *) die "the account $name stands with the login shell '$shell', so it is not adopted as the box's account" ;;
+  esac
+  home_stands=$(path_answer -e "$home") || exit 1
+  [ "$home_stands" = no ] \
+    || die "the account $name stands with a home at $home, so it is not adopted as the box's account"
+  group_line=$(getent group "$gid") || die "the account $name's primary group $gid does not resolve"
+  IFS=: read -r gname _ _ members <<<"$group_line"
+  # **Its own is by name** (CodeRabbit on #533): a group no one else holds can
+  # still be an agent's, such as weaver-<n>-admin, which the allow-list below
+  # admits, and that agent's take-down could then not remove it.
+  [ "$gname" = "$name" ] \
+    || die "the account $name's primary group is $gname, not its own group $name, so it is not adopted as the box's account"
+  [ -z "$members" ] || [ "$members" = "$name" ] \
+    || die "the account $name's primary group $gname is shared with $members, so it is not adopted as the box's account"
+  sharers=$(getent passwd | awk -F: -v g="$gid" -v n="$name" '$4 == g && $1 != n { printf "%s ", $1 }')
+  [ -z "$sharers" ] \
+    || die "the account $name's primary group $gname is the primary group of ${sharers% } too, so it is not adopted as the box's account"
+  crossed=$(door_crossings "$name") || exit 1
+  [ -z "$crossed" ] \
+    || die "the account $name holds $crossed, outside what the box's account may hold (weaver-admin-Spec section 2), so it is not adopted as the box's account"
+}
 require_path -d "$ADMIN_BASE" "the admin base is missing or not a directory (bootstrap-stack.sh makes it)"
 require_path -x "$ADMIN_BASE" "the admin base cannot be traversed"
 # **The base is judged as admin judges every directory above a root**, before
@@ -535,14 +666,26 @@ bad=$(creatable_in "$ADMIN_BASE") || die "the admin base $ADMIN_BASE lets anothe
 # identity map, the territory's owner and the spawn's uid are one fact rather
 # than three the operator keeps agreeing.
 
+# **Which box account is laid and which is judged**, said in the plan: one
+# that stands is judged in the checks below before anything is made.
+box_account_plan() { # box_account_plan LINE: the account's passwd line as read above
+  if [ -n "$1" ]; then
+    printf 'found standing: judged below (system uid, no login shell, no home, its own primary group, no group reaching the other door)'
+  else
+    printf 'absent: laid at --apply (system, nologin, no home, its own group)'
+  fi
+}
 say "plan for agent '$NAME'"
 plan "agent account   $AGENT_USER      (system, nologin, the worker's uid)"
 plan "member account  $MEMBER_USER     (system, nologin, owns the state room, passes the territory by its own group $STATE_GROUP)"
 plan "trace group     $TRACE_GROUP     (system group: the trace's readers, never the member)"
 plan "relay account   $RELAY_USER      (system, nologin, no home, its one group $TRACE_GROUP)"
 plan "access group    $ACCESS_GROUP    (system group: the territory's files' and the trace door's, reads and never writes)"
-plan "connector       $CONNECTOR_USER  (system, nologin, no home, holds $STATE_GROUP and $ACCESS_GROUP, the trace reader)"
-plan "operator        $OPERATOR joins groups $AGENT_USER, $TRACE_GROUP, $STATE_GROUP and $ACCESS_GROUP"
+plan "gate-con        $GATECON_USER  the box's, $(box_account_plan "$GATECON_LINE")"
+plan "                joins $AGENT_USER, the gate socket's group: the one caller the access rule names"
+plan "admin-con       $ADMINCON_USER  the box's, $(box_account_plan "$ADMINCON_LINE")"
+plan "                joins $STATE_GROUP and $ACCESS_GROUP: the trace reader and the sudo rule's user"
+plan "operator        $OPERATOR joins groups $TRACE_GROUP, $STATE_GROUP and $ACCESS_GROUP, never $AGENT_USER"
 plan "home            /home/$AGENT_USER        the agent's own, where its tools run"
 plan "territory       $HOME_DIR        root:$STATE_GROUP 0710, passage for the state group alone"
 plan "trace           $HOME_DIR/trace.ndjson  root:$TRACE_GROUP 0640, made before the first load"
@@ -552,18 +695,19 @@ plan "save points     $SAVE_POINTS     root:$ACCESS_GROUP 0750, the published co
 plan "agent root      $AGENT_ROOT      root 0755, keys 0644, copied from $STACK"
 plan "spu-binary      $SPU_BINARY$( [ -n "$SPU_OVERRIDE" ] && printf '  (--spu, in place of the stack record'"'"'s)' )"
 plan "operator key    $OPERATOR_UID ($OPERATOR)"
-plan "roles.toml      trace-reader = $CONNECTOR_USER"
+plan "roles.toml      trace-reader = $ADMINCON_USER"
+plan "access rule     allowed-uids = [$GATECON_UID_SHOWN] ($GATECON_USER alone)"
 plan "declaration     $DECLARATION     root:$ACCESS_GROUP 0640, session $SESSION, artifact $ARTIFACT; edited with sudoedit"
 [ "$ADAPTER_GIVEN" -eq 0 ] || plan "adapter         $ADAPTER at scale $ADAPTER_SCALE, declared sha256 $ADAPTER_SHA256 over base blake3 $BASE_BLAKE3; checked by the SPU at admission"
-plan "prompt draft    $PROMPT     root:$ACCESS_GROUP 0640, sent by deploy/turn.py $NAME --system after the first load"
+plan "prompt draft    $PROMPT     root:$ACCESS_GROUP 0640, a draft: the agent has no seeding sender (weaver-gate-world-contract section 2)"
 plan "logs            $HOME_DIR/admin.log and worker.log, made by admin at the first verb"
-plan "sudo rule       $SUDO_RULE      $CONNECTOR_USER, $CONNECTOR_ROLE: $VERBS, !pam_session"
+plan "sudo rule       $SUDO_RULE      $ADMINCON_USER, $CONNECTOR_ROLE: $VERBS, !pam_session"
 plan "store engine    $ENGINE         which the deployed member must carry"
 
 # What must not already be there. Creation is refused rather than merged,
 # because a half-made agent that looks whole is worse than an absent one.
 say "checks"
-for u in "$AGENT_USER" "$MEMBER_USER" "$RELAY_USER" "$CONNECTOR_USER"; do
+for u in "$AGENT_USER" "$MEMBER_USER" "$RELAY_USER"; do
   if getent passwd "$u" >/dev/null; then
     die "the account $u already exists"
   else
@@ -572,9 +716,9 @@ for u in "$AGENT_USER" "$MEMBER_USER" "$RELAY_USER" "$CONNECTOR_USER"; do
   fi
 done
 # The groups this run makes, the trace and access groups and the same-named
-# group `useradd --user-group` makes for the agent, the member and the
-# connector, each checked before anything is provisioned (Codex on #79).
-for g in "$TRACE_GROUP" "$ACCESS_GROUP" "$AGENT_USER" "$MEMBER_USER" "$CONNECTOR_USER"; do
+# group `useradd --user-group` makes for the agent and the member, each
+# checked before anything is provisioned (Codex on #79).
+for g in "$TRACE_GROUP" "$ACCESS_GROUP" "$AGENT_USER" "$MEMBER_USER"; do
   if getent group "$g" >/dev/null; then
     die "the group $g already exists"
   else
@@ -582,6 +726,25 @@ for g in "$TRACE_GROUP" "$ACCESS_GROUP" "$AGENT_USER" "$MEMBER_USER" "$CONNECTOR
     [ "$group_status" -eq 2 ] || die "cannot read group $g"
   fi
 done
+# **A box account that is absent has no group of its name either**: apply
+# lays it with its own group, which useradd refuses to make over a standing
+# one, so the plan refuses here rather than stop part way.
+for box_account in "$GATECON_USER" "$ADMINCON_USER"; do
+  case "$box_account" in
+    "$GATECON_USER") [ -z "$GATECON_LINE" ] || continue ;;
+    *) [ -z "$ADMINCON_LINE" ] || continue ;;
+  esac
+  if getent group "$box_account" >/dev/null; then
+    die "the group $box_account stands without its account, so the box's account cannot be laid with its own group (look at it, and remove it or lay the account by hand)"
+  else
+    group_status=$?
+    [ "$group_status" -eq 2 ] || die "cannot read group $box_account"
+  fi
+done
+# **A box account that stands is judged before anything is made**, so a
+# standing account of the right name and the wrong shape is never adopted.
+[ -z "$GATECON_LINE" ] || { judge_box_account "$GATECON_USER"; printf '   %s stands, and its shape is the box'"'"'s gate-con account\n' "$GATECON_USER"; }
+[ -z "$ADMINCON_LINE" ] || { judge_box_account "$ADMINCON_USER"; printf '   %s stands, and its shape is the box'"'"'s admin-con account\n' "$ADMINCON_USER"; }
 refuse_existing "/home/$AGENT_USER" "agent home"
 refuse_existing "$HOME_DIR" "territory"
 refuse_existing "$AGENT_ROOT" "agent root"
@@ -600,6 +763,19 @@ if [ "$APPLY" -eq 0 ]; then
 fi
 
 say "accounts"
+# **The box's connector accounts are laid where absent, once per box**, each
+# a system account with no login shell, no home and its own group, then
+# judged as a standing one is. Neither is laid per agent. **They are laid
+# first**, so an account that cannot be laid or judged stops the run before
+# any account of the agent's stands.
+for box_account in "$GATECON_USER" "$ADMINCON_USER"; do
+  line=$(account_line "$box_account") || exit 1
+  if [ -z "$line" ]; then
+    sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$box_account"
+    printf '   laid %s, the box'"'"'s account\n' "$box_account"
+  fi
+  judge_box_account "$box_account"
+done
 # **The agent gets a home and the member does not.** The agent's tools run
 # somewhere, and the retirement of 2026-09-11 found one of three agents with
 # a home and the others without, which is the drift a script ends. The member
@@ -611,25 +787,56 @@ sudo groupadd --system "$ACCESS_GROUP"
 # **The relay's one group is the trace group**, primary and alone, which is
 # what admin's start step sets at its spawn (weaver-admin-Spec section 6).
 sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid "$TRACE_GROUP" "$RELAY_USER"
-# **The connector holds the access group and nothing of the agent's**: it
-# reaches the trace through the door alone, never by the trace group.
-sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group --groups "$STATE_GROUP,$ACCESS_GROUP" "$CONNECTOR_USER"
+GATECON_LINE=$(account_line "$GATECON_USER") || exit 1
+[ -n "$GATECON_LINE" ] || die "$GATECON_USER does not stand after it was laid"
+GATECON_UID=$(uid_in "$GATECON_LINE") || exit 1
+[ "$GATECON_UID" -ne 0 ] || die "$GATECON_USER carries uid 0, and no access rule names root"
+ADMINCON_LINE=$(account_line "$ADMINCON_USER") || exit 1
+[ -n "$ADMINCON_LINE" ] || die "$ADMINCON_USER does not stand after it was laid"
+ADMINCON_UID=$(uid_in "$ADMINCON_LINE") || exit 1
+# **The gate-con account joins the agent's own group**, which the gate's
+# socket admits by (weaver-gate-Spec section 3). The group also reads the
+# agent's tool home and lists its runtime directory, a reach that Spec states
+# as the design, and gate-con joins no other group of the agent's. **The admin-con account joins the state group for passage and the
+# access group for reading**, never the agent's own group or the trace group:
+# it reaches the trace through the relay's door alone.
+sudo usermod -aG "$AGENT_USER" "$GATECON_USER"
+sudo usermod -aG "$STATE_GROUP,$ACCESS_GROUP" "$ADMINCON_USER"
 # **The member holds its own group alone** (the operator's ruling of
 # 2026-10-08 on #1): the territory is 0710 under that group, so the member
 # passes to its own room by it, and the access group, which reads admin.log,
 # worker.log, the declaration, the draft and the published save points, is
 # not the member's.
-# **The operator reads without sudo through its groups**: the gate's socket
-# by the agent's group, the trace by its group, and the declaration, the
-# draft, the logs and the save points by the access group, past the
-# territory, which the state group passes. The state group buys the operator
-# passage of the territory and nothing more, the state room being the
-# member's alone.
-sudo usermod -aG "$AGENT_USER,$TRACE_GROUP,$STATE_GROUP,$ACCESS_GROUP" "$OPERATOR"
+# **The operator reads without sudo through its groups**: the trace by its
+# group, and the declaration, the draft, the logs and the save points by the
+# access group, past the territory, which the state group passes. The state
+# group buys the operator passage of the territory and nothing more, the
+# state room being the member's alone. The operator does not join the agent's
+# own group: it does not dial the gate (weaver-gate-world-contract section 1).
+sudo usermod -aG "$TRACE_GROUP,$STATE_GROUP,$ACCESS_GROUP" "$OPERATOR"
 sudo chmod 2750 "/home/$AGENT_USER"
-printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
+printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
   "$AGENT_USER" "$(id -u "$AGENT_USER")" "$MEMBER_USER" "$(id -u "$MEMBER_USER")" \
-  "$RELAY_USER" "$(id -u "$RELAY_USER")" "$CONNECTOR_USER" "$(id -u "$CONNECTOR_USER")"
+  "$RELAY_USER" "$(id -u "$RELAY_USER")" "$GATECON_USER" "$GATECON_UID" \
+  "$ADMINCON_USER" "$ADMINCON_UID"
+# **The declaration is rendered again with the uid the gate-con account
+# holds**, and parse-checked again, before it is written.
+DECLARATION_TEXT=$(render_declaration)
+printf '%s\n' "$DECLARATION_TEXT" | python3 -c 'import sys, tomllib; tomllib.loads(sys.stdin.read())' 2>/dev/null \
+  || die "the declaration rendered with $GATECON_USER's uid does not parse as TOML"
+# **The rule written names the gate-con account's uid and nothing else**: the
+# plan renders a placeholder, 65534, where the account is absent, so the
+# rendered rule is asserted to be exactly `allowed-uids = [<its uid>]` here and
+# again at the write, and refused otherwise.
+rule_names_gatecon() {
+  local rules
+  [[ "$GATECON_UID" =~ ^[0-9]+$ ]] && [ "$GATECON_UID" -gt 0 ] && [ "$GATECON_UID" -ne 65534 ] \
+    || die "$GATECON_USER's uid '$GATECON_UID' is not a uid an access rule may name"
+  rules=$(grep -E '^allowed-uids' <<<"$DECLARATION_TEXT" || true)
+  [ "$rules" = "allowed-uids = [$GATECON_UID]" ] \
+    || die "the declaration's access rule reads '$rules', not allowed-uids = [$GATECON_UID] ($GATECON_USER alone), so it is not written"
+}
+rule_names_gatecon
 
 say "territory"
 # **The whole agent lives here, and the group passes and never writes** (the
@@ -637,7 +844,8 @@ say "territory"
 # The territory is root's, grouped to the state group, 0710 and not setgid
 # (the operator's ruling of 2026-10-08 on #1): the state group passes to what
 # stands in it by name and lists nothing. The member holds that group as its
-# primary group, and the operator and the connector join it for passage. The
+# primary group, and the operator and the admin-con account join it for
+# passage. The
 # agent's own uid holds it not, so it cannot pass to the trace, which is the
 # denial admin's load asks of the sink's directory. Nothing written here
 # takes the territory's group. Admin makes the member's room at
@@ -663,12 +871,13 @@ sudo install -d -o root -g "$ACCESS_GROUP" -m 00750 "$SAVE_POINTS"
 
 say "declaration"
 # **Written as root into root's directory**, root:$ACCESS_GROUP 0640 each:
-# the declaration the operator edits from here with `sudoedit`, and the draft
-# `deploy/turn.py --system` reads through the access group. Neither is read
+# the declaration the operator edits from here with `sudoedit`, and the
+# prompt draft, read through the access group. Neither is read
 # by a uid outside the access group, and admin refuses a declaration grouped
 # or moded otherwise (weaver-admin-Spec section 9). Nothing lands in the operator's
 # home. The territory was refused above where it stood, so neither file is
 # written over.
+rule_names_gatecon
 printf '%s\n' "$DECLARATION_TEXT" | sudo tee "$DECLARATION" >/dev/null
 printf '%s' "$PROMPT_TEXT" | sudo tee "$PROMPT" >/dev/null
 sudo chown root:"$ACCESS_GROUP" "$DECLARATION" "$PROMPT"
@@ -691,9 +900,10 @@ for key in $REQUIRED_KEYS $OPTIONAL_KEYS; do
 done
 printf '%s\n' "$HOME_DIR" | sudo tee "$STAGE/territory" >/dev/null
 printf '%s\n' "$OPERATOR_UID" | sudo tee "$STAGE/operator" >/dev/null
-# **The boundary file names the trace door's one reader**, the connector's
-# user, in the shape of weaver-types-Spec section 3.1 and nothing else.
-printf 'trace-reader = "%s"\n' "$CONNECTOR_USER" | sudo tee "$STAGE/roles.toml" >/dev/null
+# **The boundary file names the trace door's one reader**, the box's
+# admin-con account, in the shape of weaver-types-Spec section 3.1 and
+# nothing else.
+printf 'trace-reader = "%s"\n' "$ADMINCON_USER" | sudo tee "$STAGE/roles.toml" >/dev/null
 sudo chmod 0644 "$STAGE"/*
 printf '   staged at %s\n' "$STAGE"
 
@@ -735,35 +945,44 @@ else
 fi
 
 # **The access group reads and never writes** (the operator's ruling of
-# 2026-10-07 on #1): the connector, which holds it, reads the declaration and
-# cannot rewrite it, the draft or the save points directory, since a connector
-# that could rewrite the declaration would choose what admin loads.
-sudo -u "$CONNECTOR_USER" test -r "$DECLARATION" \
-  || die "the connector $CONNECTOR_USER cannot read the declaration $DECLARATION through $STATE_GROUP and $ACCESS_GROUP: the territory's or the file's group or mode is wrong"
+# 2026-10-07 on #1): the admin-con account, which holds it, reads the
+# declaration and cannot rewrite it, the draft or the save points directory,
+# since an account that could rewrite the declaration would choose what admin
+# loads.
+sudo -u "$ADMINCON_USER" test -r "$DECLARATION" \
+  || die "the admin-con account $ADMINCON_USER cannot read the declaration $DECLARATION through $STATE_GROUP and $ACCESS_GROUP: the territory's or the file's group or mode is wrong"
 for f in "$DECLARATION" "$PROMPT" "$SAVE_POINTS"; do
-  if sudo -u "$CONNECTOR_USER" test -w "$f"; then
-    die "THE ACCESS GROUP CAN WRITE $f: the connector could rewrite what admin loads"
+  if sudo -u "$ADMINCON_USER" test -w "$f"; then
+    die "THE ACCESS GROUP CAN WRITE $f: the admin-con account could rewrite what admin loads"
   fi
 done
-printf '   %s reads the declaration and writes nothing of the territory\n' "$CONNECTOR_USER"
+printf '   %s reads the declaration and writes nothing of the territory\n' "$ADMINCON_USER"
 
-# **The relay and the connector hold exactly their groups**: the relay the
-# trace group alone, the connector its own, the state group for passage and
-# the access group for reading, and neither any group of the agent's.
+# **The relay and the two box accounts hold exactly their groups of this
+# agent**: the relay the trace group alone; the admin-con account the state
+# group for passage and the access group for reading, never the agent's own
+# group or the trace group; the gate-con account the agent's own group, for
+# the gate's socket. **Neither box account holds a group outside what it may
+# hold**, of this agent, of any other or outside the weaver- namespace
+# (weaver-admin-Spec section 2), by the same allow-list as the judge above.
 relay_groups=$(id -Gn "$RELAY_USER")
 [ "$relay_groups" = "$TRACE_GROUP" ] || die "the relay account $RELAY_USER holds '$relay_groups', not the trace group alone"
-connector_groups=" $(id -Gn "$CONNECTOR_USER") "
-[[ "$connector_groups" == *" $ACCESS_GROUP "* ]] || die "the connector $CONNECTOR_USER does not hold $ACCESS_GROUP, so the trace door would turn it away"
-[[ "$connector_groups" == *" $STATE_GROUP "* ]] || die "the connector $CONNECTOR_USER does not hold $STATE_GROUP, so it cannot pass the territory"
-for g in "$AGENT_USER" "$TRACE_GROUP"; do
-  [[ "$connector_groups" != *" $g "* ]] || die "the connector $CONNECTOR_USER holds $g, which reaches the agent's territory or trace by group"
+admincon_groups=" $(id -Gn "$ADMINCON_USER") "
+[[ "$admincon_groups" == *" $ACCESS_GROUP "* ]] || die "the admin-con account $ADMINCON_USER does not hold $ACCESS_GROUP, so the trace door would turn it away"
+[[ "$admincon_groups" == *" $STATE_GROUP "* ]] || die "the admin-con account $ADMINCON_USER does not hold $STATE_GROUP, so it cannot pass the territory"
+gatecon_groups=" $(id -Gn "$GATECON_USER") "
+[[ "$gatecon_groups" == *" $AGENT_USER "* ]] || die "the gate-con account $GATECON_USER does not hold $AGENT_USER, so the gate's socket would turn it away"
+for box_account in "$GATECON_USER" "$ADMINCON_USER"; do
+  crossed=$(door_crossings "$box_account") || exit 1
+  [ -z "$crossed" ] || die "the account $box_account holds $crossed, outside what the box's account may hold (weaver-admin-Spec section 2)"
 done
-printf '   %s holds %s alone, %s holds%s\n' "$RELAY_USER" "$TRACE_GROUP" "$CONNECTOR_USER" "${connector_groups% }"
+printf '   %s holds %s alone, %s holds%s, %s holds%s\n' "$RELAY_USER" "$TRACE_GROUP" \
+  "$ADMINCON_USER" "${admincon_groups% }" "$GATECON_USER" "${gatecon_groups% }"
 
 say "sudo rule"
 # **Rendered, checked by visudo, then installed root 0440.** Each grant is one
 # fixed command line with its arguments, so sudo matches it exactly and the
-# connector can pass none of its own.
+# admin-con account can pass none of its own.
 sudo -n grep -qE '^[#@]includedir[[:space:]]+/etc/sudoers\.d([[:space:]]|$)' /etc/sudoers \
   || die "/etc/sudoers does not include /etc/sudoers.d, so a rule there would never be read"
 lines=""
@@ -771,10 +990,11 @@ for verb in $VERBS; do
   lines="$lines${lines:+, }$ADMIN_BINARY $verb $NAME"
 done
 RULE_TEXT=$(cat <<SUDOERS
-# weaver-$NAME: the connector's fixed command lines, per weaver-admin-Spec
-# section 2. Written by deploy/create-agent.sh, $CONNECTOR_ROLE role.
-Defaults:$CONNECTOR_USER !pam_session
-$CONNECTOR_USER ALL=(root) NOPASSWD: $lines
+# weaver-$NAME: the box's admin-con account's fixed command lines for this
+# agent, per weaver-admin-Spec section 2. Written by deploy/create-agent.sh,
+# $CONNECTOR_ROLE role.
+Defaults:$ADMINCON_USER !pam_session
+$ADMINCON_USER ALL=(root) NOPASSWD: $lines
 SUDOERS
 )
 # Staged under a dot-name sudo skips, checked, then moved into place.
@@ -787,7 +1007,7 @@ if ! sudo visudo -cqf "$rule_stage"; then
 fi
 sudo mv -T -- "$rule_stage" "$SUDO_RULE"
 printf '   %s installed: %s\n' "$SUDO_RULE" "$VERBS"
-sudo -n -l -U "$CONNECTOR_USER" | sed -n '/may run the following/,$p' | sed 's/^/   /'
+sudo -n -l -U "$ADMINCON_USER" | sed -n '/may run the following/,$p' | sed 's/^/   /'
 
 say "admission"
 # **Moving the root into place is the admission**: before it every admin verb
@@ -797,21 +1017,25 @@ printf '   %s admitted at %s\n' "$NAME" "$AGENT_ROOT"
 
 say "made"
 # **The group add applies to a login taken after it.** `usermod -aG` changes
-# the account and not a session already running, so a shell that predates this
-# run cannot reach the gate's socket until it takes the group (#673, measured
-# on the W4a run of 2026-09-25).
-printf '   %s joined groups %s, %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$AGENT_USER" "$TRACE_GROUP" "$STATE_GROUP" "$ACCESS_GROUP"
+# the account and not a process already running (#673, measured on the W4a
+# run of 2026-09-25): a gate-con already running under the gate-con account
+# cannot reach this agent's socket, nor an admin-con this agent's trace door,
+# until it starts again, and an operator's shell takes its groups at a new
+# login.
+printf '   %s joined %s, and %s joined %s and %s: a gate-con or admin-con already running\n' "$GATECON_USER" "$AGENT_USER" "$ADMINCON_USER" "$STATE_GROUP" "$ACCESS_GROUP"
+printf '   under either account takes the groups only when it starts again\n'
+printf '   %s joined groups %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$TRACE_GROUP" "$STATE_GROUP" "$ACCESS_GROUP"
 printf '   login before the groups apply (`newgrp` selects one group in one shell)\n'
 printf '   the declaration %s is root'"'"'s: edit it with sudoedit, and read it, the draft, the logs and\n' "$DECLARATION"
 printf '   the save points under %s through %s\n' "$HOME_DIR" "$ACCESS_GROUP"
-# **probe_connector VERB: the connector reaches a line through its rule**, as
-# the stand-in for admin-con: the operator's sudo becomes the connector's user,
+# **probe_connector VERB: the admin-con account reaches a line through its
+# rule**, as the stand-in for admin-con: the operator's sudo becomes the account,
 # and that user runs `sudo -n`, which only the rule can satisfy. It succeeds
 # only on the answer the verb owes, `validated` for validate and a state for
 # show, and prints what came back either way (Codex on #79).
 probe_connector() {
   local said answer
-  said=$(sudo -n -u "$CONNECTOR_USER" sudo -n "$ADMIN_BINARY" "$1" "$NAME" 2>&1) || true
+  said=$(sudo -n -u "$ADMINCON_USER" sudo -n "$ADMIN_BINARY" "$1" "$NAME" 2>&1) || true
   answer=$(printf '%s\n' "$said" | tail -n 1)
   printf '%s' "$answer"
   python3 -c '
@@ -827,11 +1051,13 @@ if [ "$ADMIN_BASE" = /etc/weaver/admin ]; then
   check_verb=show
   [ "$CONNECTOR_ROLE" = operator ] && check_verb=validate
   if answer=$(probe_connector "$check_verb"); then
-    printf '   %s ran %s through its rule: %s\n' "$CONNECTOR_USER" "$check_verb" "$answer"
+    printf '   %s ran %s through its rule: %s\n' "$ADMINCON_USER" "$check_verb" "$answer"
   else
-    die "$NAME is admitted, but its connector $CONNECTOR_USER could not run $check_verb through $SUDO_RULE: $answer. Another sudo policy may override the rule. Listing what it grants the connector is in deploy/HowToDeployANewAgent.md section 5."
+    die "$NAME is admitted, but the admin-con account $ADMINCON_USER could not run $check_verb through $SUDO_RULE: $answer. Another sudo policy may override the rule. Listing what it grants the account is in deploy/HowToDeployANewAgent.md section 5."
   fi
 fi
 printf '   validate it before loading, with the validate verb of %q for %s as root,\n' "$ADMIN_BINARY" "$NAME"
 printf '   then prove its load with deploy/verify-load.sh as root (deploy/HowToDeployANewAgent.md section 4),\n'
-printf '   then seed its prompt as %s, with the agent loaded: deploy/turn.py %s --system reads %s\n' "$OPERATOR" "$NAME" "$PROMPT"
+printf '   then send a turn as %s (deploy/HowToDeployANewAgent.md section 4). Its gate admits %s\n' "$GATECON_USER" "$GATECON_USER"
+printf '   alone, so it has no seeding sender: %s is a draft, and how its prompt enters is deferred\n' "$PROMPT"
+printf '   (weaver-gate-world-contract section 2)\n'

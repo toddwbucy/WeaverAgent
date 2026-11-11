@@ -8,7 +8,7 @@ workflow. Code is written against it under the gates of Working Process section 
 **Document ID:** `weaver-gate-Spec`
 **Parent:** `weaver-gate-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #72
+**Landing PR:** #533
 
 ---
 
@@ -547,13 +547,21 @@ common umasks it widens the group's reach:
 
 Connecting needs the write bit, so at `0022` the group could not connect and
 now can, and at `0077` the socket was the owner's alone. **That is the
-intent and it is conditional.** The operator reaches the socket by membership
-in the agent's group, which is what `0770` is for, and the whole boundary
-therefore rests on `Group={identity}` making that group exactly one agent -
-per `weaver-admin-Spec` section 6, whose start step drops the worker to that group by
-name. Where the worker's group were a shared one,
-`users` or `nogroup`, this mode would hand connect rights to everyone in it.
-A dev run outside the start step has no such guarantee and no such boundary.
+intent and it is conditional.** The caller the agent's access rule declares, per
+`weaver-gate-world-contract` section 1, reaches the socket by membership in the
+agent's group, which is what `0770` is for, and the whole boundary therefore
+rests on `Group={identity}` making that group one agent's own, its members the
+agent and its declared caller, per `weaver-admin-Spec` section 6, whose start
+step drops the worker to that group by name. Where the worker's group were a
+shared one, `users` or `nogroup`, this mode would hand connect rights to
+everyone in it. **The box's gate-con account is a member of the group of every
+agent whose rule names it**, so each group stays one agent's while one account
+outside every agent holds them all. The membership gives it more than the
+socket: the group also reads the agent's tool home and lists its runtime
+directory, the access the operator held one agent at a time before the
+operator's rulings of 2026-11-10. That reach is the design, for the reason
+`weaver-admin-Spec` section 2 gives for the box's admin-con account. A dev run
+outside the start step has no such guarantee and no such boundary.
 
 **The election is made in the creating call and not on the path
 afterwards.** A `chmod` after the bind would answer the same question and
@@ -609,8 +617,8 @@ neither figure was anyone's election.
 Connecting to a Unix socket requires write permission, so denying the write
 bit outside owner and group is what excludes a uid. The read and execute
 bits others would hold under a laxer mode buy them nothing on a socket. The
-operator reaches the socket through membership in the agent's group, which
-is the provisioning already owed, and no one else reaches it at all.
+declared caller reaches the socket through membership in the agent's group,
+which is the provisioning already owed, and no one else reaches it at all.
 
 **Two locks, answering different adversaries.** The mode stops a stranger
 from reaching the door, and the credential check below stops one who does. A

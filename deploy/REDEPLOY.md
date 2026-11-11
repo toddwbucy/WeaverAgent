@@ -54,13 +54,14 @@ something this runbook does not mention, the runbook is what gets amended.
 | Stack record: the box-wide defaults, one file per key, read by the scripts and never by admin, and the install tuple | `/etc/weaver/stack/` | bootstrap; update-stack rewrites `install-tuple` |
 | Admin base, empty until an agent is made | `/etc/weaver/admin/` (root 0755, and a delegated invocation under sudo reads only this one) | bootstrap |
 | Agent root: the agent's admin configuration, one file per key, copied from the stack record, plus `territory`, `operator` and `roles.toml` | `/etc/weaver/admin/<name>/` (root 0755, files 0644) | create-agent |
-| Sudo rule: the connector's fixed command lines | `/etc/sudoers.d/weaver-<name>` (root 0440) | create-agent |
+| Sudo rule: the agent's fixed command lines, granted to the box's admin-con account | `/etc/sudoers.d/weaver-<name>` (root 0440) | create-agent |
 | Members: `worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state` | `<prefix>/bin/` | bootstrap, update-stack |
 | The agent's shell (#29): the static `busybox` and its applet list `busybox.applets` | `<prefix>/bin/` (root 0755 and 0644), named by the record's `shell-binary` | bootstrap, update-stack |
 | Engine libraries `libggml*`, `libllama*` | `<prefix>/lib/`, reached by `/etc/ld.so.conf.d/weaver.conf` and named by the record's `library-path`, which admin sets as the worker's `LD_LIBRARY_PATH` | bootstrap, update-stack |
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
 | Retired Python SPU, where an older install left it | `<prefix>/python-spu/` | archive and purge only, Python retirement below |
-| Accounts: the agent's `weaver-<name>` (home `/home/weaver-<name>`, 2750), the member's `weaver-<name>-state`, the relay's `weaver-<name>-relay`, the connector's `weaver-<name>-admincon`, and the groups `weaver-<name>-trace` and `weaver-<name>-admin` | passwd | create-agent |
+| Accounts: the agent's `weaver-<name>` (home `/home/weaver-<name>`, 2750), the member's `weaver-<name>-state`, the relay's `weaver-<name>-relay`, and the groups `weaver-<name>-trace` and `weaver-<name>-admin`; an agent laid by an earlier create-agent also has its own connector `weaver-<name>-admincon` | passwd | create-agent |
+| The box's two connector accounts, one per box: `weaver-gatecon` (WeaverWeb's gate-con, in each agent's group `weaver-<name>`) and `weaver-admincon` (WeaverWeb's admin-con, in each agent's state and access groups), no home, nologin | passwd | create-agent, at the first run that finds each absent; decommission removes them after every agent's accounts |
 | Territory `weaver-<name>/` (root:weaver-<name>-state 0710, passage for the state group alone) with `agent.toml` and `system-prompt.md` (root:weaver-<name>-admin 0640), `admin.log` and `worker.log` once admin has run a verb (root:weaver-<name>-admin 0640), `save-points/` (root:weaver-<name>-admin 0750, the published save points 0640 and the manifest root 0644), `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640); the whole agent, on the operator's ruling of 2026-10-07 on #1 | the stack record's `agent-directory`,  default `/var/lib/weaver-agent` | create-agent, admin for the logs and the save points |
 | Run directory: `run.lock`, `admin.lock` and the trace door `trace.sock` | `<coordination-root>/weaver.run/<name>/` (root 0755, on tmpfs under `/run`) | admin, at its first verb |
 
@@ -368,31 +369,38 @@ deploy/create-agent.sh m1 --artifact /opt/weaver/models/qwen2.5-0.5b-instruct-q6
 ```
 
 The store is the embedded sqlite engine, the default (the service engine retired on the
-operator's ruling of 2026-10-02 on #1). The script makes the four accounts and the two
-groups, the territory (root:weaver-<name>-state 0710 under the stack record's
-`agent-directory`, made canonical, with no access entries), its trace
-(root:weaver-<name>-trace 0640, which the member cannot read), the declaration and the
-prompt draft in the territory (root:weaver-<name>-admin 0640; `sudoedit` edits the declaration) and
-`save-points/` beside them (root:weaver-<name>-admin 0750), and the agent root staged
-under a dot-name: every key copied from the stack record, `territory`, `operator` and
-`roles.toml`. **The territory is the state group's and passes it; the access group reads
-the files** (the operator's ruling of 2026-10-08 on #1). The member holds the state group
-alone, the connector holds the state group for passage and the access group for reading,
-and the agent's own uid holds neither. It then proves the boundary (the member cannot
-read the trace, the relay holds the trace group alone and the connector the state and
-access groups and no group of the agent's or the trace's, the member can write its
-state room and the agent's own uid can pass neither it nor the territory, and the
-connector reads the declaration and writes nothing of the territory), installs the sudo
-rule once `visudo` passes it, and only then moves the root into place, which is the
-admission. The operator joins four groups: `weaver-<name>` for the gate's socket,
+operator's ruling of 2026-10-02 on #1). The script lays the box's two connector accounts
+where they are absent and judges them by their shape where they stand
+(`HowToDeployANewAgent.md` section 0), makes the agent's three accounts and two groups,
+the territory (root:weaver-<name>-state 0710 under the stack record's `agent-directory`,
+made canonical, with no access entries), its trace (root:weaver-<name>-trace 0640, which
+the member cannot read), the declaration and the prompt draft in the territory
+(root:weaver-<name>-admin 0640; `sudoedit` edits the declaration) and `save-points/`
+beside them (root:weaver-<name>-admin 0750), and the agent root staged under a dot-name:
+every key copied from the stack record, `territory`, `operator` and `roles.toml`. **The
+territory is the state group's and passes it; the access group reads the files** (the
+operator's ruling of 2026-10-08 on #1). The member holds the state group alone, the
+box's admin-con account holds the state group for passage and the access group for
+reading, the box's gate-con account holds the agent's group for the gate's socket, and
+the agent's own uid holds neither the state nor the access group. It then proves the
+boundary (the member cannot read the trace, the relay holds the trace group alone,
+admin-con's account the state and access groups and no group of the agent's or the
+trace's, and gate-con's the agent's group and nothing of the territory or the trace, the
+member can write its state room and the agent's own uid can pass neither it nor the
+territory, and admin-con's account reads the declaration and writes nothing of the
+territory), installs the sudo rule once `visudo` passes it, and only then moves the root
+into place, which is the admission. The operator joins three groups:
 `weaver-<name>-trace` for the trace, `weaver-<name>-state` to pass the territory and
 `weaver-<name>-admin` to read the declaration, the draft, the logs and the save points.
-They need a fresh login before they apply (`newgrp` selects one group in one shell).
+The gate's caller is the box's gate-con account alone, so the agent has no seeding
+sender (`HowToDeployANewAgent.md` section 4). They need a fresh login before they apply
+(`newgrp` selects one group in one shell).
 
 An agent electing no store (`[state-store] engine = "none"`) is made by hand, since
 there is no member or store to provision or probe: `HowToDeployANewAgent.md` section 3.
 Karl on the thinkpad is this case, and its declaration is carried byte for byte between
-boxes, with its prompt draft beside it and seeded through the gate on the new box
+boxes, with its prompt draft beside it, its access rule moved to the gate-con account's
+uid, and, where it has a seeding sender, seeded through the gate on the new box
 (`HowToDeployANewAgent.md` section 4), because the determinism runs compare against
 both.
 
@@ -413,9 +421,9 @@ agent's cgroup beneath it (`weaver-admin-Spec` section 6.1, `HowToDeployANewAgen
 section 4). A failed load needs no clearing by hand: whatever it started dies with its
 worker or is ended by the next `unload`. It does not retry the load.
 
-`verify-load.sh` proves a load; `deploy/turn.py <name> "<text>"` proves a turn, run as
-the operator from a session that holds the agent's group (a fresh login, or `newgrp`),
-after the seeding turn (`HowToDeployANewAgent.md` section 4).
+`verify-load.sh` proves a load; a turn proves a turn, run as the box's gate-con account,
+the one caller the agent's rule names: `sudo -n -u weaver-gatecon python3 -I - <name>
+"<text>" < deploy/turn.py` (`HowToDeployANewAgent.md` section 4).
 
 ## 5. What to record in the run log
 
