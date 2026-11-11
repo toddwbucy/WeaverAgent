@@ -2556,14 +2556,18 @@ open, and the open seats the answer: the turnless `message.system` events of the
 run the restored holdings carry, in order and with their boundaries, byte for byte,
 which is the prompt the seeding turn entered or a later seeding replaced, carried by
 the save point the load restored. An empty answer is an agent not yet seeded, which
-opens with no prefix and is seeded by its first turn, per the seeding clause below. **A
+opens with no prefix, its turns led by the loop's compiled prompt
+(`Loops/basic-inference-loop.md` section 6), until a seeding turn enters one, per the
+seeding clause below. An agent whose access rule admits no seeding sender receives none,
+per `weaver-gate-world-contract` section 2 on the operator's ruling of 2026-11-10. **A
 serving load with no member elected asks nothing and seats nothing**: a store of
 `none` is the operator's election that nothing holds state across loads, the prompt
-included, so such an agent is seeded in every residency, as its first turn, and the
-seeding turn is admitted there as anywhere, since it is the one way the prompt enters. The
-declaration carries no identity and the enter no prompt, per `weaver-types-Spec`
-sections 2 and 4, so this crate holds no file, no path and no handle into the
-territory's declaration or draft. **The load writes none of what it seats to the record**, on
+included, so such an agent, where its access rule admits a seeding sender, is seeded in
+every residency, as its first turn, and the seeding turn is admitted there as anywhere,
+since it is the one way the prompt enters. The declaration carries no identity and the
+enter no prompt, per `weaver-types-Spec` sections 2 and 4, so this crate holds no file,
+no path and no handle into the territory's declaration or draft. **The load writes none
+of what it seats to the record**, on
 the operator's ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are not tied together once the agent is unloaded: the `load` event's lineage names the save point the session started from, the
 `recall` of the identity ask names the events the member handed back for seating, and
 the prompt's text is on the trace where it was entered, at the seeding turn, and
