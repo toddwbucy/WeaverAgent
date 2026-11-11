@@ -485,6 +485,67 @@ with open(path) as f:
         if not kinds or e.get("kind") in kinds: print(json.dumps(e, separators=(",", ":"), sort_keys=True))'
 events_since() { local start=$1; shift; sudo -n python3 -c "$TRACE_PY" "$TRACE" "$start" "$@"; }
 last_event() { events_since 0 "$1" | tail -n 1; }
+# **One unseeded turn, read from the record**, the events on stdin. A seeding is
+# the turnless message.system the identity door authors, the event carrying no
+# `turn` (weaver-harness-Spec section 6.1), and an agent with no seeding sender
+# holds none. Its first turn is led by the loop's compiled prompt, a
+# message.system inside the bracket carrying the turn, since nothing is seated
+# (Loops/basic-inference-loop.md section 6, ADP-4). The prompt's words are the
+# loop's (dev_loop's SYSTEM_PROMPT) and are not read here: the mark is the turn
+# and the position. The bracket's open and close carry its turn as every event
+# inside does (engine.rs authors both with the key), and an event outside a
+# bracket, a close with no open or an open never closed is a broken record.
+# Prints "one unseeded turn", or the kinds found, a turnless event marked.
+unseeded_turn() {
+  python3 -c 'import json, sys
+es = [json.loads(l) for l in sys.stdin if l.strip()]
+def mark(e): return str(e.get("kind")) + ("" if "turn" in e else "(turnless)")
+brackets, cur, broken = [], None, False
+for e in es:
+    k = e.get("kind")
+    if k == "turn.started":
+        broken = broken or cur is not None
+        cur = [e]
+    elif k == "turn.closed":
+        if cur is None: broken = True
+        else: brackets.append(cur + [e])
+        cur = None
+    elif cur is not None: cur.append(e)
+    else: broken = True
+broken = broken or cur is not None
+b = brackets[0] if len(brackets) == 1 else []
+ks = [e.get("kind") for e in b[1:-1]]
+ok = (not broken and len(brackets) == 1 and all("turn" in e for e in b)
+      and len({e.get("turn") for e in b}) == 1
+      and ks[:1] == ["message.system"] and ks.count("message.system") == 1
+      and "message.user" in ks and "message.assistant" in ks)
+print("one unseeded turn" if ok else " ".join(mark(e) for e in es))'
+}
+# **No identity recall after a load, the load itself read**: the events on
+# stdin are the load and recall events since the load's start. The harness
+# authors a recall for every answered ask that returns events
+# (weaver-trace-Spec section 3), so an unseeded agent's load, whose identity
+# answer is empty, writes none; that the member answered is the load standing
+# idle, a missed identity ask refusing the enter (weaver-harness-Spec section
+# 6.1). The load event is the witness that the trace was read at all, so a read
+# that failed or found nothing answers "unread", not "none". Prints "none", the
+# identity recalls' count, "unread", or "malformed <line>".
+identity_recalls() {
+  python3 -c 'import json, sys
+loads = recalls = 0
+for n, l in enumerate(sys.stdin, 1):
+    if not l.strip(): continue
+    try: e = json.loads(l)
+    except ValueError: print("malformed", n); sys.exit(0)
+    k = e.get("kind") if isinstance(e, dict) else None
+    p = e.get("payload") if isinstance(e, dict) else None
+    ask = p.get("ask") if isinstance(p, dict) else None
+    if k == "load": loads += 1
+    elif k == "recall" and isinstance(ask, dict):
+        recalls += ask.get("verb") == "identity"
+    elif k == "recall": print("malformed", n); sys.exit(0)
+print("unread" if loads == 0 else "none" if recalls == 0 else recalls)'
+}
 trace_lines() { sudo -n python3 -c 'import sys; print(sum(1 for _ in open(sys.argv[1])))' "$TRACE"; }
 # The manifest's lines, ordinal, arrival, name and digest, in file order.
 manifest() {
@@ -849,7 +910,8 @@ step_2() {
   run_line "deploy/turn.py $A \"Name three primary colours.\"   (as $GATECON, the source on stdin)"
   want "validated; verify-load prints validate validated, load idle, N > 0 new lines, a load event naming composer, state_member and stack, a $AU-relay constituent, left serving, == $A verified"
   want "the load event carries no lineage and no reset, and names declaration, boundary and cause"
-  want "no message.system: the agent has no seeding sender; one bracket with message.user and message.assistant"
+  want "no turnless message.system, the seeding's mark (weaver-harness-Spec section 6.1): the agent has no seeding sender"
+  want "one bracket, led by the loop's compiled prompt as a message.system of the turn (nothing seated, ADP-4), with message.user and message.assistant"
   want "the run marker names the load's run, open"
   want "admin.log and worker.log root:$AU-admin 640; $COORD/weaver.run and $RUN_DIR root:root 755; run.lock and admin.lock root:root 600; trace.sock root:$AU-admin 660 socket"
   want "$RUNTIME_DIR $AU:$AU 750; gate.sock $AU:$AU 770 socket; coordination.sock $AU:$AU 700 socket"
@@ -884,18 +946,7 @@ step_2() {
   json_req RUN "$load" run "the load event names its run"
   turn "Name three primary colours."
   local seq
-  seq=$(events_since "$start" message.system turn.started message.user message.assistant turn.closed | python3 -c 'import json, sys
-ks = [json.loads(l).get("kind") for l in sys.stdin if l.strip()]
-brackets, cur = [], None
-for k in ks:
-    if k == "turn.started": cur = []
-    elif k == "turn.closed":
-        if cur is not None: brackets.append(cur)
-        cur = None
-    elif cur is not None: cur.append(k)
-ok = ("message.system" not in ks and len(brackets) == 1
-      and "message.user" in brackets[0] and "message.assistant" in brackets[0])
-print("one unseeded turn" if ok else " ".join(ks))')
+  seq=$(events_since "$start" message.system turn.started message.user message.assistant turn.closed | unseeded_turn)
   expect_eq "one unseeded turn is on the record" "one unseeded turn" "$seq"
   expect_marker "$RUN" open
   expect_lay "$T/admin.log" "root:$AU-admin 640 regular file"
@@ -943,7 +994,7 @@ step_4() {
   run_line "weaver-admin unload $A; weaver-admin show $A; weaver-admin load $A"
   run_line "deploy/turn.py $A \"In one sentence, what did I ask you to name before?\"   (as $GATECON)"
   want "unloaded; the marker closed; a second manifest line arrived leave (SP_B); the unload event not forced; a save_point event for SP_B"
-  want "show unloaded with no constituent; load idle; its lineage names SP_B and the previous run, named_at_restore false, no reset; a recall event after it"
+  want "show unloaded with no constituent; load idle; its lineage names SP_B and the previous run, named_at_restore false, no reset; no identity recall after it (nothing seated: the member's answer returns no events)"
   want "reported, not checked: the trace queue's peak depth at the unload, from worker.log (#120)"
   [ "$APPLY" -eq 1 ] || return 0
   local log_at; log_at=$(file_size "$T/worker.log")
@@ -963,8 +1014,8 @@ step_4() {
   expect_at "the lineage names the previous run" "$RUN" "$load" payload.lineage.run
   expect_eq "SP_B was not named at restore" false "$(json_at "$load" payload.lineage.named_at_restore)"
   expect_eq "the load carries no reset" absent "$(json_at "$load" payload.reset)"
-  expect_eq "the member answered the restore (a recall event)" yes \
-    "$( [ -n "$(events_since "$start" recall)" ] && echo yes || echo no)"
+  expect_eq "the load is read and wrote no identity recall (nothing seated)" none \
+    "$(events_since "$start" load recall | identity_recalls)"
   json_req RUN "$load" run "the load event names its run"
   turn "In one sentence, what did I ask you to name before?"
   end_step
@@ -1031,7 +1082,7 @@ step_5b() {
   run_line "$OPERATOR out of $AU with allowed-uids = [$OPERATOR_UID] (the perturbation); weaver-admin validate $A"
   run_line "the measurement put back; weaver-admin validate $A; weaver-admin load $A"
   want "validated; load idle; its declaration digest differs from the load before and its boundary digest is equal"
-  want "its lineage names the newest manifest line, named_at_restore false, no reset, and a recall event follows"
+  want "its lineage names the newest manifest line, named_at_restore false, no reset, and no identity recall follows (nothing seated)"
   want "the tuple's bind declaration row reads recorded"
   want "a turn as $GATECON is refused (no answer); a turn as $OPERATOR is answered: a rule naming the operator is still admitted"
   want "SP_A, an older save point, restores and loads under the moved rule (N6 does not read the declaration)"
@@ -1069,8 +1120,8 @@ step_5b() {
   expect_at "the lineage names the newest manifest line" "$(manifest_field last 4)" "$load" payload.lineage.save_point
   expect_eq "the newest was not named at restore" false "$(json_at "$load" payload.lineage.named_at_restore)"
   expect_eq "the load carries no reset" absent "$(json_at "$load" payload.reset)"
-  expect_eq "the member answered the restore (a recall event)" yes \
-    "$( [ -n "$(events_since "$start" recall)" ] && echo yes || echo no)"
+  expect_eq "the load is read and wrote no identity recall (nothing seated)" none \
+    "$(events_since "$start" load recall | identity_recalls)"
   rows=$(sudo -n python3 -I "$CHECKOUT/deploy/agent_tuple.py" rows --declaration "$DECL" --sink "$TRACE" \
     --from-line "$((start + 1))" 2>&1 || true)
   bind=$(grep -F 'bind    declaration' <<<"$rows" || true)
