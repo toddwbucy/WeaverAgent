@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Sourced by bootstrap-stack.sh and update-stack.sh, never by an agent: the
-# engine's shared libraries as both stack scripts select, install and check
-# them, stated once.
+# engine's shared libraries as both stack scripts build, select, install and
+# check them, stated once.
 
 # **The engine's shared objects.** llama-cpp-sys-2 builds them into its own
 # `out/lib` under the target's `build/` directory, each versioned file beside
@@ -16,6 +16,24 @@ ENGINE_CRATE=llama-cpp-sys-2
 LIB_GLOBS='libggml*.so* libllama*.so*'
 LDSO_CONF=/etc/ld.so.conf.d/weaver.conf
 CUDA_LIB_DIR=${CUDA_LIB_DIR:-/opt/cuda/lib64}
+
+# **The engine is built without HTTPS** (weaver-spu-Spec section 1.1). Nothing
+# in the agent downloads a model, and the only user of OpenSSL in the engine's
+# build is llama.cpp's bundled cpp-httplib, which serves only the model
+# downloader in llama.cpp's static `common` library. The fork links that
+# library into the SPU, and the linker takes neither the downloader nor
+# httplib from it. On 2026-11-11 that httplib (0.40.0, in the vendored
+# llama.cpp at e21cdc11) stopped compiling against the box's OpenSSL 4.1.0.
+# The fork's build script passes every `CMAKE_*` variable in its environment
+# to cmake. The repository's `.cargo/config.toml` forces it for every cargo
+# run started inside the tree, and this export is the belt beside that file:
+# it turns llama.cpp's one OpenSSL lookup off for every cargo run either
+# script makes, over any value the operator's shell holds.
+# The build script declares no `rerun-if-env-changed` for it, so an engine a
+# target configured before this rule keeps that configuration, and each script
+# judges the engine's configure cache after its build
+# (`engine_without_https`).
+export CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON
 
 # **Which engine libraries a build made is asked of cargo, never guessed from
 # the target directory.** A shared target holds one
@@ -60,6 +78,21 @@ out, build = os.path.realpath(dirs.pop()), os.path.realpath(sys.argv[3])
 if out == build or os.path.commonpath([out, build]) != build or not os.path.isdir(out):
     sys.exit(1)
 print(out)' "$2" "$id" "$3"
+}
+
+# engine_without_https OUT: refuses, through the sourcing script's `die`,
+# unless the configure cache cmake left in the engine's out_dir OUT records
+# the OpenSSL lookup off, in the form cmake writes a definition: the name, a
+# type (UNINITIALIZED where the definition named none) and `=ON`. A cache
+# that is missing, or records the lookup any other way, is an engine a build
+# before the rule configured, which cargo reuses without rerunning its build
+# script. A fresh target configures the engine afresh. `cargo clean -p`
+# removes every build directory and fingerprint of the engine in that target
+# (measured on 2026-11-11 with `--dry-run`), every checkout's where checkouts
+# share the target, so the refusal names the fresh target first.
+engine_without_https() {
+  grep -Eqx 'CMAKE_DISABLE_FIND_PACKAGE_OpenSSL:[A-Z]+=ON' -- "$1/build/CMakeCache.txt" 2>/dev/null \
+    || die "the engine's configure cache at $1/build/CMakeCache.txt does not turn its OpenSSL lookup off, so a build in this target configured it before the stack built the engine without HTTPS, and the engine's build script does not rerun when that setting changes (deploy/engine-libraries.sh). Build into a fresh CARGO_TARGET_DIR, or remove it with 'cargo clean --release -p $ENGINE_CRATE --locked', which removes every build of the engine in this target, those of every checkout sharing it included"
 }
 
 # install_library FROM TO: places one engine library as root's. A link is
