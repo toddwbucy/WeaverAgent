@@ -3,7 +3,7 @@ use super::*;
 
 pub(super) fn events(mode: &str, turn: &str, pressure: bool) -> Vec<serde_json::Value> {
     let mut events = vec![
-        serde_json::json!({"envelope":{"kind":"model.request","run":"r-1","turn":turn,"sequence":"4"},"pairs":{"rendered":if mode.contains("-send-") {send_pressure::rendered()} else {"hi".into()},"template":"tmpl","sampling":{"seed":37}}}),
+        serde_json::json!({"envelope":{"kind":"model.request","run":"r-1","turn":turn,"sequence":"4"},"pairs":{"rendered":if mode.contains("-send-") {send_pressure::rendered()} else {"hi".into()},"template":"tmpl","sampling":crate::flow::context::test_sampling_record()}}),
         serde_json::json!({"envelope":{"kind":"model.measurement","run":"r-1","turn":turn,"sequence":"6"},"pairs":{"input_tokens":[1,2],"output_tokens":if pressure {vec![3,4,5]} else {vec![3]},"model":"art","weights_hash":"h"}}),
     ];
     if mode.ends_with("-ticket-leave") {
@@ -14,7 +14,7 @@ pub(super) fn events(mode: &str, turn: &str, pressure: bool) -> Vec<serde_json::
             events.push(serde_json::json!({"envelope":{"kind":"elision","run":"r-1","sequence":"7"},"pairs":{"from":4,"to":5,"resident_before":6,"resident_after":5}}));
         }
         events.extend([
-            serde_json::json!({"envelope":{"kind":"model.request","run":"r-1","turn":"t-2","sequence":"8"},"pairs":{"rendered":"hi","template":"tmpl","sampling":{"seed":37}}}),
+            serde_json::json!({"envelope":{"kind":"model.request","run":"r-1","turn":"t-2","sequence":"8"},"pairs":{"rendered":"hi","template":"tmpl","sampling":crate::flow::context::test_sampling_record()}}),
             serde_json::json!({"envelope":{"kind":"model.measurement","run":"r-1","turn":"t-2","sequence":"10"},"pairs":{"input_tokens":[1,2],"output_tokens":[4],"model":"art","weights_hash":"h"}}),
         ]);
     }

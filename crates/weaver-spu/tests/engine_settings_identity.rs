@@ -12,10 +12,13 @@
 //! the tokens and each token's entropy and surprisal as f32 bits, so a
 //! comparison reads bit identity and not closeness.
 //!
-//! **The theta blocks ride beside the record.** Where the session rendered
-//! its `engine` and `device` blocks (section 3.1), they are written as they
-//! were rendered to `<out>.theta.json`, so a device run puts on file the
-//! blocks a real placement rendered. The record itself stays comparable with
+//! **The theta blocks ride beside the record.** The session renders its
+//! `engine` and `device` blocks (section 3.1), a GGUF open refusing where it
+//! cannot, and they are written as they were rendered beside the record, at
+//! `<out>` with its extension replaced by `theta.json` (`record.json` gives
+//! `record.theta.json`), so a device run puts on file the blocks a real
+//! placement rendered. A session holding no blocks fails the run rather than
+//! passing it without them. The record itself stays comparable with
 //! a tree that renders none, but the file reads `Session::blocks`, so it
 //! copies into a tree from the act that renders the blocks onward. A tree
 //! before that act takes this file as it stood at that act's base.
@@ -183,17 +186,20 @@ fn record_one_generation_on_the_lane() {
         generated.signals.entropy_bits.is_some() && generated.signals.surprisal_bits.is_some(),
         "the run measured both signals, so the record compares more than the tokens"
     );
+    // The blocks are taken before anything is written, so a run that fails
+    // for want of them leaves no record on file to pass as a complete one.
+    let blocks = session
+        .blocks()
+        .expect("a GGUF session renders its theta blocks");
     std::fs::write(&out, format!("{record}\n")).expect("the record writes");
-    if let Some(blocks) = session.blocks() {
-        let theta = out.with_extension("theta.json");
-        let text = format!(
-            "{{\"engine\":{},\"device\":{}}}\n",
-            blocks.engine.get(),
-            blocks.device.get()
-        );
-        std::fs::write(&theta, text).expect("the theta blocks write");
-        eprintln!("wrote the theta blocks to {}", theta.display());
-    }
+    let theta = out.with_extension("theta.json");
+    let text = format!(
+        "{{\"engine\":{},\"device\":{}}}\n",
+        blocks.engine.get(),
+        blocks.device.get()
+    );
+    std::fs::write(&theta, text).expect("the theta blocks write");
+    eprintln!("wrote the theta blocks to {}", theta.display());
     eprintln!(
         "recorded {} tokens on {:?} to {}",
         generated.tokens.len(),

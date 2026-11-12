@@ -176,7 +176,7 @@ fn diagnostic_spu_child() {
     let answer: TokenAnswer = serde_json::from_value(serde_json::json!({
         "kind":"re_fed", "body":{
             "emission":"hi","finish":"completed","content":[{"type":"text","text":"hi"}],
-            "request":{"rendered":"hi","template":"tmpl","sampling":{"seed":37}},
+            "request":{"rendered":"hi","template":"tmpl","sampling":crate::flow::context::test_sampling_record()},
             "measurement":{"input_tokens":[1,2],"output_tokens":[3],"model":"art","weights_hash":"h"},
             "resident":6,"capacity":64
         }
@@ -438,7 +438,7 @@ pub(super) fn control(
             let replay = lines.next().unwrap().unwrap();
             assert_eq!(serde_json::from_str::<serde_json::Value>(&replay).unwrap(), serde_json::json!({"ask":{"replay":{}}}));
             writeln!(state_writer, "{}", serde_json::json!({"answer":{"replay":{"events":[
-                {"envelope":{"kind":"model.request","run":"r-1","turn":"t-1","sequence":"4"},"pairs":{"rendered":"hi","template":"tmpl","sampling":{"seed":37}}},
+                {"envelope":{"kind":"model.request","run":"r-1","turn":"t-1","sequence":"4"},"pairs":{"rendered":"hi","template":"tmpl","sampling":crate::flow::context::test_sampling_record()}},
                 {"envelope":{"kind":"model.measurement","run":"r-1","turn":"t-1","sequence":"6"},"pairs":{"input_tokens":[1,2],"output_tokens":[3],"model":"art","weights_hash":"h"}}
             ]}}})).unwrap();
             assert!(lines.next().is_none(), "Diagnostic must neither tee content nor request a save");

@@ -171,7 +171,7 @@ fn completed() -> TokenAnswer {
     serde_json::from_value(serde_json::json!({
         "kind":"re_fed", "body":{
             "emission":"hi","finish":"completed","content":[{"type":"text","text":"hi"}],
-            "request":{"rendered":"hi","template":"tmpl","sampling":{"seed":37}},
+            "request":{"rendered":"hi","template":"tmpl","sampling":crate::flow::context::test_sampling_record()},
             "measurement":{"input_tokens":[1,2],"output_tokens":[3],"model":"art","weights_hash":"h"},
             "resident":6,"capacity":64
         }

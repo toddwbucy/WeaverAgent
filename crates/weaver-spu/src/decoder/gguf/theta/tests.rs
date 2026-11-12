@@ -217,8 +217,19 @@ fn a_device_order_that_is_not_utf8_refuses() {
 /// uppercase, and this fails.
 #[test]
 fn a_library_digest_is_the_sha256_of_its_bytes() {
+    use std::io::Write as _;
     let path = std::env::temp_dir().join(format!("theta-digest-{}", std::process::id()));
-    std::fs::write(&path, b"abc").expect("the file writes");
+    // Made exclusively, so a path planted there, a link included, refuses
+    // rather than being written through. A leftover from an earlier run that
+    // panicked under the same pid is removed first, and removing a link
+    // removes the link and not its target.
+    let _ = std::fs::remove_file(&path);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .and_then(|mut file| file.write_all(b"abc"))
+        .expect("the file is made afresh and writes");
     let digest = file_sha256(&path);
     std::fs::remove_file(&path).expect("the file is removed");
     assert_eq!(

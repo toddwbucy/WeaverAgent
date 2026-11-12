@@ -474,6 +474,17 @@ pub(in crate::flow) const TEST_SAMPLING: weaver_types::Sampling = weaver_types::
     seed: 11,
 };
 
+/// [`TEST_SAMPLING`] as a recorded `model.request` holds it: the six members
+/// a replay requires whole (`diagnostic-replay-loop` section 2), so a fixture
+/// record re-feeds under the set its re-feed assertions expect. It goes
+/// through the record's text, as a real record does, so an `f32` member
+/// reads as its shortest spelling (`0.7`) and not as its widened `f64`.
+#[cfg(test)]
+pub(in crate::flow) fn test_sampling_record() -> serde_json::Value {
+    let text = serde_json::to_string(&TEST_SAMPLING).expect("the six members serialize");
+    serde_json::from_str(&text).expect("the record's text parses")
+}
+
 impl RecordingContext {
     /// The exact pre-load constructor, with typed failures for the admission
     /// owner. Consumed descriptors close on error; no state Open is sent here.

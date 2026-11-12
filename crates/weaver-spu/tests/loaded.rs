@@ -685,7 +685,16 @@ mod seam_success {
         let (decode_parent, child_decode) = seqpacket_pair();
         let log_path =
             std::env::temp_dir().join(format!("weaver-spu-judge-child-{}.log", std::process::id()));
-        let log = std::fs::File::create(&log_path).expect("a child log file");
+        // Made exclusively, so a path planted there, a link included,
+        // refuses rather than being written through. A leftover from an
+        // earlier run that panicked under the same pid is removed first, and
+        // removing a link removes the link and not its target.
+        let _ = std::fs::remove_file(&log_path);
+        let log = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&log_path)
+            .expect("a child log file, made afresh");
         let mut command = spu_command();
         command
             .stdin(Stdio::null())
