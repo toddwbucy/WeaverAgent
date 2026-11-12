@@ -1078,6 +1078,11 @@ fn a_fault_emission_lands_inside_the_bracket_before_the_close() {
 ///
 /// Perturbation: drop the `execute_call` loop and route calls as plain
 /// text, and this fails at the kinds assertion missing the tool bracket.
+///
+/// The peer also reads the carried set off both appends: the tool round
+/// carries the turn's set and bound, per `weaver-harness-Spec` section 6.1.
+/// Perturbation: change the seat's carried set after the first send in
+/// `generate_once`, and the tool round's check fails.
 #[test]
 fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
     let (near, far) = socketpair(
@@ -1103,10 +1108,20 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
         let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv append");
         let directive: weaver_types::TokenDirective =
             serde_json::from_slice(&buf[..n]).expect("the append parses");
-        assert!(matches!(
-            directive,
-            weaver_types::TokenDirective::AppendAndGenerate { .. }
-        ));
+        let weaver_types::TokenDirective::AppendAndGenerate {
+            sampling: first_sampling,
+            max_tokens: first_bound,
+            ..
+        } = directive
+        else {
+            panic!("round one is an append");
+        };
+        let carried = crate::engine::test_carried();
+        assert_eq!(
+            first_sampling, carried.sampling,
+            "round one carries the run's set"
+        );
+        assert_eq!(first_bound, carried.max_tokens, "and the run's bound");
         send_answer(&weaver_types::TokenAnswer::Generated(Generation {
             invalid_utf8: Vec::new(),
             unrecovered: vec![],
@@ -1131,9 +1146,23 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
         let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv round 2");
         let directive: weaver_types::TokenDirective =
             serde_json::from_slice(&buf[..n]).expect("round 2 parses");
-        let weaver_types::TokenDirective::AppendAndGenerate { delta, .. } = directive else {
+        let weaver_types::TokenDirective::AppendAndGenerate {
+            delta,
+            sampling,
+            max_tokens,
+            ..
+        } = directive
+        else {
             panic!("round two is an append");
         };
+        // **The tool round carries the turn's set**: every generation of a
+        // turn carries the same values and bound, and only the SPU's derived
+        // `generation_seed` differs between them.
+        assert_eq!(
+            sampling, first_sampling,
+            "the tool round carries the turn's values"
+        );
+        assert_eq!(max_tokens, first_bound, "and the turn's bound");
         assert_eq!(delta.len(), 1, "one tool-result message crosses");
         assert!(matches!(delta[0].role, Role::ToolResult));
         assert!(

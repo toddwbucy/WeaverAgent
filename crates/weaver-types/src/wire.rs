@@ -1258,22 +1258,38 @@ impl Sampling {
     /// defaults with it at load and the SPU judges every carried set with it,
     /// so the early refusal and the binding one cannot drift apart.
     pub fn out_of_range(&self) -> Option<SamplingMember> {
-        if !self.temperature.is_finite() || self.temperature < 0.0 {
+        if !Self::temperature_in_range(f64::from(self.temperature)) {
             return Some(SamplingMember::Temperature);
         }
         if self.top_k >= SAMPLING_COUNT_CEILING {
             return Some(SamplingMember::TopK);
         }
-        if !self.top_p.is_finite() || self.top_p <= 0.0 || self.top_p > 1.0 {
+        if !Self::top_p_in_range(f64::from(self.top_p)) {
             return Some(SamplingMember::TopP);
         }
-        if !self.repetition_penalty.is_finite() || self.repetition_penalty <= 0.0 {
+        if !Self::repetition_penalty_in_range(f64::from(self.repetition_penalty)) {
             return Some(SamplingMember::RepetitionPenalty);
         }
         if self.repetition_window >= SAMPLING_COUNT_CEILING {
             return Some(SamplingMember::RepetitionWindow);
         }
         None
+    }
+
+    // **The three real ranges, stated once.** Each takes an `f64`, so the
+    // declaration's reader judges a value as written before it is narrowed,
+    // and this rule judges a carried `f32` widened, which is exact. The same
+    // predicate answers both, so the two refusals cannot drift apart.
+    pub(crate) fn temperature_in_range(value: f64) -> bool {
+        value.is_finite() && value >= 0.0
+    }
+
+    pub(crate) fn top_p_in_range(value: f64) -> bool {
+        value.is_finite() && value > 0.0 && value <= 1.0
+    }
+
+    pub(crate) fn repetition_penalty_in_range(value: f64) -> bool {
+        value.is_finite() && value > 0.0
     }
 }
 

@@ -3057,6 +3057,9 @@ generation, and it speaks the wire as raw JSON so that one file runs in the tree
 the carrier and in the tree after it. It compares, byte for byte, every token frame and
 the closing answer's request box, emission, finish and content, and the measurement
 less its `timings`, which holds the tokens and the entropy and surprisal values.
+Both runs load one build of the engine libraries, because two builds of one engine
+source can differ in their library digests, which the measurement's engine block
+records.
 
 ## 8.5 The seed's derivation
 

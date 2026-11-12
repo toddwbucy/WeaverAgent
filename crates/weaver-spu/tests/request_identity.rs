@@ -20,14 +20,31 @@
 //! admit the same ceiling and the append's bound is that ceiling, so the
 //! two shapes ask for one generation.
 //!
-//! Run each tree with the lane's mask, then compare:
+//! **Both runs load one build of the engine libraries.** The measurement's
+//! engine block names each library the process loaded and its digest, and two
+//! builds of one engine source in two targets differed in four of five
+//! digests when this instrument first ran (2026-11-12), so two runs on their
+//! own builds differ there whatever the carrier does. `cargo test` puts its
+//! own target's library directory first on `LD_LIBRARY_PATH`, so the tree
+//! after the carrier runs its built test binary directly, with
+//! `LD_LIBRARY_PATH` naming the library directory of the tree before's build.
+//!
+//! Run the tree before with the lane's mask, then the tree after on that
+//! build's libraries, then compare:
 //!
 //! ```text
 //! CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<ordinals> \
 //! WEAVER_IDENTITY_ARTIFACT=<gguf> WEAVER_IDENTITY_OUT=<json> \
-//! WEAVER_IDENTITY_SHAPE=<admit|carried> \
+//! WEAVER_IDENTITY_SHAPE=admit \
 //! cargo test -p weaver-spu --features cuda,gguf --locked \
 //!     --test request_identity -- --ignored --exact record_one_turn_through_the_binary
+//!
+//! LD_LIBRARY_PATH=<the tree before's llama-cpp-sys-2 out/lib> \
+//! CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<ordinals> \
+//! WEAVER_IDENTITY_ARTIFACT=<gguf> WEAVER_IDENTITY_OUT=<json> \
+//! WEAVER_IDENTITY_SHAPE=carried \
+//! <the tree after's request_identity test binary> \
+//!     --ignored --exact record_one_turn_through_the_binary
 //!
 //! WEAVER_IDENTITY_BEFORE=<json> WEAVER_IDENTITY_AFTER=<json> \
 //! cargo test -p weaver-spu --features cuda,gguf --locked \
@@ -194,7 +211,12 @@ fn record_one_turn_through_the_binary() {
             serde_json::from_str(member(&members, "kind")).expect("the answer names its kind");
         (kind, members, text)
     };
-    let text = |role: &str, text: &str| serde_json::json!({"role": role, "content": [{"type": "text", "text": text}]});
+    let text = |role: &str, text: &str| {
+        serde_json::json!({
+            "role": role,
+            "content": [{"type": "text", "text": text}],
+        })
+    };
 
     send(serde_json::json!({
         "kind": "open",

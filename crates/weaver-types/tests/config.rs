@@ -977,8 +977,9 @@ const SIX: &str = "temperature = 0.7, top-k = 40, top-p = 0.95, repetition-penal
 /// naming `tunable-values.<name>`, and nothing is defaulted. The parser itself
 /// requires none of them, the harness being the reader that judges them.
 ///
-/// Perturbation: default a missing name in `sampling_defaults`, or cast a
-/// count before judging it, and the matching case fails.
+/// Perturbation: default a missing name in `sampling_defaults`, cast a count
+/// before judging it, or judge a real only after narrowing it, and the matching
+/// case fails.
 #[test]
 fn the_sampling_defaults_read_whole_and_refuse_by_name() {
     let read = with_tunables(SIX)
@@ -1020,6 +1021,10 @@ fn the_sampling_defaults_read_whole_and_refuse_by_name() {
         ("top-p", "0"),
         ("top-p", "1.5"),
         ("repetition-penalty", "0"),
+        // Judged as written, before the narrowing to `f32` rounds it in
+        // range or to the greedy zero.
+        ("top-p", "1.00000001"),
+        ("temperature", "1e-50"),
     ] {
         let replaced: Vec<String> = SIX
             .split(", ")

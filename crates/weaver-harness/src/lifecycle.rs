@@ -3441,15 +3441,6 @@ fn release_spu(
     outcome
 }
 
-/// Reads a dead organ's exit status and names what killed it, so a placement
-/// fault is not reported to the peer as a residency problem.
-///
-/// **The child writes no status**, and that is deliberate rather than an
-/// omission: a setup-status pipe would put a fourth call between fork and
-/// exec, and `weaver-harness-Spec` section 2.2 enumerates exactly three "and
-/// nothing else". The exit status carries the same fact without adding one,
-/// and it is read here - after the exchange observed closure - where the child
-/// is already dead and there is no race to lose.
 /// The six sampling defaults a test's declaration carries, at the deploy
 /// scripts' constants, so a serving enter's reader reads them whole.
 #[cfg(test)]
@@ -3596,6 +3587,15 @@ fn open_evidence_refusal(
     LifecycleRefusal::NoResidency
 }
 
+/// Reads a dead organ's exit status and names what killed it, so a placement
+/// fault is not reported to the peer as a residency problem.
+///
+/// **The child writes no status**, and that is deliberate rather than an
+/// omission: a setup-status pipe would put a fourth call between fork and
+/// exec, and `weaver-harness-Spec` section 2.2 enumerates exactly three "and
+/// nothing else". The exit status carries the same fact without adding one,
+/// and it is read here - after the exchange observed closure - where the child
+/// is already dead and there is no race to lose.
 fn classify_organ_death(pid: nix::unistd::Pid) -> Option<LifecycleRefusal> {
     // **The wait does not block.** An organ that closed its end and kept
     // running would otherwise hold the serving thread here forever, which is

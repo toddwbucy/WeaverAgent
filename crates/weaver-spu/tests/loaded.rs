@@ -41,8 +41,6 @@ use weaver_types::{ArtifactRef, DecoderInstruction, DeviceOrdinal, ModelBinding,
 /// out differently.
 const MODEL: &str = "/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf";
 
-/// The SPU binary under the PAIR-1 mask for ordinal 0, the binding every
-/// test here names, as the harness's fork composes it.
 /// The values every generation of these tests carries, at the constants the
 /// deploy scripts write, beside the declared seed each test names
 /// (`weaver-spu-Spec` section 8).
@@ -57,6 +55,22 @@ fn carried(seed: u64) -> weaver_types::Sampling {
     }
 }
 
+/// A set with every member off the values [`carried`] holds, for the watches
+/// that read the members back out of a request: a request rendering a fixed
+/// value cannot match one of these by accident.
+fn moved(seed: u64) -> weaver_types::Sampling {
+    weaver_types::Sampling {
+        temperature: 0.6,
+        top_k: 33,
+        top_p: 0.9,
+        repetition_penalty: 1.05,
+        repetition_window: 48,
+        seed,
+    }
+}
+
+/// The SPU binary under the PAIR-1 mask for ordinal 0, the binding every
+/// test here names, as the harness's fork composes it.
 fn spu_command() -> std::process::Command {
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
     command
@@ -1028,12 +1042,16 @@ mod seam_success {
         });
         assert_opened(recv());
 
+        // **A set no constant here holds, and a bound below the ceiling**, so
+        // a request that renders anything but what this generation carried
+        // fails below.
+        let set = moved(37);
         send(&TokenDirective::AppendAndGenerate {
             tool_schemas: vec![],
             turn: TurnKey("t-1".into()),
             delta: vec![message("Say one word.")],
-            sampling: carried(37),
-            max_tokens: 4096,
+            sampling: set,
+            max_tokens: 512,
         });
         // **The stream precedes the close and never disagrees with it**, per
         // the contract's coherence guarantee: token frames arrive as drawn,
@@ -1074,22 +1092,26 @@ mod seam_success {
             request["template"].as_str().is_some(),
             "and the template identity"
         );
-        assert!(
-            request["sampling"]["temperature"].is_number(),
-            "and the effective sampling"
-        );
-        // **The carried seed reaches the request**, per `weaver-spu-Spec`
-        // section 8: the value the generation carries is the value the
-        // request reports, so a recorded run names the draw it was and is
-        // re-entered by carrying it again.
-        //
-        // **The value is 37, which no constant in this crate holds**, so a
-        // request rendering anything but the carried seed fails here. Render
-        // a fixed seed in the request's `sampling` block in place of the
-        // carried one and this fails, which is the perturbation.
+        // **The request states the set and the bound this generation
+        // carried**, per `weaver-spu-Spec` section 8 and
+        // `weaver-harness-spu-decode-contract` section 8: member for member,
+        // under the names the carried set renders, with `generation_seed`
+        // beside them and the bound in `stop`. A recorded run so names the
+        // draw it was and is re-entered by carrying it again. Every value is
+        // one no constant here holds, so a request rendering a fixed member,
+        // or the session's ceiling in place of the carried bound, fails.
+        // Render the request's `top_p` from a constant, or its `max_tokens`
+        // from the ceiling, and this fails, which is the perturbation.
+        let stated = serde_json::to_value(set).expect("the carried set renders");
+        for (member, value) in stated.as_object().expect("the set is an object") {
+            assert_eq!(
+                &request["sampling"][member], value,
+                "the request states the carried {member}"
+            );
+        }
         assert_eq!(
-            request["sampling"]["seed"], 37.0,
-            "the declared seed is the effective one"
+            request["stop"]["max_tokens"], 512,
+            "the request states the carried bound, not the ceiling"
         );
         let measurement: serde_json::Value =
             serde_json::from_str(generation.measurement.get()).expect("the measurement is JSON");
@@ -1711,7 +1733,7 @@ mod seam_success {
                         text: "Name any three colors.".into(),
                     }],
                 }],
-                sampling: carried(37),
+                sampling: moved(37),
                 max_tokens: 64,
             },
         );
@@ -1740,7 +1762,7 @@ mod seam_success {
             "the source generated something"
         );
         let recorded_emission = generation.emission.clone();
-        let recorded_seed = request["sampling"]["generation_seed"].clone();
+        let recorded_sampling = request["sampling"].clone();
         close(lifecycle, decode, child, log_path, "source");
 
         // **The replay pass**: a fresh residency, the permission granted,
@@ -1761,7 +1783,7 @@ mod seam_success {
                 turn: TurnKey("t-1".into()),
                 rendered: rendered.clone(),
                 path: vec![],
-                sampling: carried(37),
+                sampling: moved(37),
             },
         );
         let frame = decode.recv_octets().expect("the refusal arrives");
@@ -1777,7 +1799,7 @@ mod seam_success {
                 turn: TurnKey("t-1".into()),
                 rendered,
                 path: recorded_output.clone(),
-                sampling: carried(37),
+                sampling: moved(37),
             },
         );
         // **Under this instruction the re-feed answers in one frame, so the
@@ -1817,9 +1839,16 @@ mod seam_success {
             refed.emission, recorded_emission,
             "the emission is the recorded path's text"
         );
+        // **The re-fed request states the recorded set whole**, per
+        // `weaver-spu-Spec` sections 4.6 and 8.5: the six members the re-feed
+        // carried, which are the source's, and the `generation_seed` derived
+        // from them, so the replay derived the seed the source drew from. The
+        // set stands off every constant here, so a re-feed request rendering
+        // a fixed member fails. Render the re-feed's `top_k` from a constant
+        // and this fails, which is the perturbation.
         assert_eq!(
-            refed_request["sampling"]["generation_seed"], recorded_seed,
-            "the replay derived the seed the source drew from"
+            refed_request["sampling"], recorded_sampling,
+            "the re-fed request states the recorded values, the derived seed among them"
         );
         close(lifecycle, decode, child, log_path, "replay");
     }

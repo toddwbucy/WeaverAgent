@@ -10,6 +10,9 @@ struct Log {
     /// Every reseed the session asked for, in order: the seed it
     /// derived and the penalty window it read from the resident tail.
     reseeds: Vec<(u64, Vec<TokenId>)>,
+    /// The sampling set each reseed was handed, in order, so a test reads
+    /// what reached the backend rather than what the caller built.
+    samplings: Vec<crate::sampling::Sampling>,
     decoded: Vec<(Vec<TokenId>, usize)>,
     truncated: Vec<usize>,
     reestablished: usize,
@@ -56,10 +59,12 @@ impl Backend for Recorder {
     fn reseed(
         &mut self,
         seed: u64,
-        _: &crate::sampling::Sampling,
+        sampling: &crate::sampling::Sampling,
         window: &[TokenId],
     ) -> Result<(), DecodeFault> {
-        self.0.borrow_mut().reseeds.push((seed, window.to_vec()));
+        let mut log = self.0.borrow_mut();
+        log.reseeds.push((seed, window.to_vec()));
+        log.samplings.push(*sampling);
         Ok(())
     }
 
@@ -653,6 +658,96 @@ impl CancelPoll for CancelsAfter {
         self.polls += 1;
         now
     }
+}
+
+/// **Each generation's carried set is the one that reaches the backend**,
+/// per `weaver-spu-Spec` section 8: two generations carrying different sets,
+/// then a re-feed carrying a third, hand the backend's reseed exactly those
+/// three, in order. No member of any set equals a deploy constant, so a set
+/// held from an earlier generation or compiled in reads as a mismatch.
+///
+/// Perturbation: hand `reseed` the first generation's set at every later
+/// generation, or a fixed set, and this fails on the second entry. Watched
+/// under a fixed set in `append_and_generate`.
+#[test]
+fn each_generation_hands_the_backend_the_set_it_carried() {
+    use crate::sampling::Sampling;
+    let sets = [
+        Sampling {
+            temperature: 0.5,
+            top_k: 7,
+            top_p: 0.6,
+            repetition_penalty: 1.3,
+            repetition_window: 8,
+            seed: 1,
+        },
+        Sampling {
+            temperature: 1.25,
+            top_k: 3,
+            top_p: 0.875,
+            repetition_penalty: 1.0625,
+            repetition_window: 16,
+            seed: 2,
+        },
+        Sampling {
+            temperature: 0.25,
+            top_k: 5,
+            top_p: 0.5,
+            repetition_penalty: 1.5,
+            repetition_window: 4,
+            seed: 3,
+        },
+    ];
+    let log = Rc::new(RefCell::new(Log {
+        script: vec![TokenId(99), TokenId(99)],
+        ..Default::default()
+    }));
+    let mut session = Session::new(
+        Box::new(Recorder(Rc::clone(&log), DISTRIBUTION.to_vec())),
+        64,
+        FlushMechanism::TruncateToPosition,
+        false,
+    );
+    session.open(&[TokenId(4)]).expect("the prefix lands");
+    for sampling in &sets[..2] {
+        session
+            .append_and_generate(
+                &[TokenId(5)],
+                &stop_at(0),
+                &mut NeverCancels,
+                &mut |_| {},
+                PositionedSinks {
+                    field: None,
+                    on_column: &mut |_, _| {},
+                },
+                SamplerBuild {
+                    seed: sampling.seed,
+                    sampling: *sampling,
+                },
+            )
+            .expect("the generation runs");
+    }
+    session
+        .refeed(
+            &[TokenId(6)],
+            &[TokenId(7)],
+            TokenId(0),
+            &mut NeverCancels,
+            PositionedSinks {
+                field: None,
+                on_column: &mut |_, _| {},
+            },
+            SamplerBuild {
+                seed: sets[2].seed,
+                sampling: sets[2],
+            },
+        )
+        .expect("the re-feed runs");
+    assert_eq!(
+        log.borrow().samplings,
+        sets.to_vec(),
+        "each reseed was handed the set its generation carried"
+    );
 }
 
 fn stop_at(terminator: u32) -> StopCondition {

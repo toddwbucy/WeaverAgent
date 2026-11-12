@@ -2901,6 +2901,15 @@ fn the_diagnostic_enter_forks_no_gate() {
 /// Skips loudly without the fixture and both built binaries. Build the
 /// SPU with the device features first:
 /// `cargo build -p weaver-spu --features cuda,gguf`.
+///
+/// **It needs the worker's cgroup layout too, and fails without it rather
+/// than skipping.** The serving enter opens `tools/` beside the worker's own
+/// `run/` leaf (`weaver-harness-Spec` section 2.2), so a run from a login
+/// session refuses the gate's arm `BoundaryUnverified` before the turn. An
+/// unprivileged run stands the layout in a delegated user scope
+/// (`systemd-run --user --scope -p Delegate=yes`): make `worker/run` and
+/// `worker/tools` under the scope's cgroup, move the shell into `worker/run`,
+/// and run the test from there.
 #[test]
 fn the_turn_rehearses_on_the_device() {
     let fixture = std::path::Path::new("/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf");

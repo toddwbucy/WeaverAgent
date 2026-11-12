@@ -360,6 +360,12 @@ impl DecoderInstruction {
     /// is judged before its cast, because a float cast to an integer answers
     /// for every input. The ranges are [`crate::Sampling::out_of_range`]'s, the
     /// rule the SPU judges every carried set by.
+    ///
+    /// **A real is judged as written, then narrowed.** The narrowing to `f32`
+    /// rounds, so `top-p = 1.00000001` would become `1.0` and pass, and a
+    /// `temperature` of `1e-50` would become `0.0`, which the engines read as
+    /// greedy decoding. So the declared value must be in range itself, and a
+    /// nonzero value must stay nonzero once narrowed.
     pub fn sampling_defaults(&self) -> Result<crate::Sampling, FieldName> {
         let named = |name: &str| FieldName(format!("tunable-values.{name}"));
         let value = |name: &str| {
@@ -375,11 +381,22 @@ impl DecoderInstruction {
             }
             Ok(v)
         };
+        let real = |name: &str, in_range: fn(f64) -> bool| -> Result<f32, FieldName> {
+            let v = value(name)?;
+            let narrowed = v as f32;
+            if !in_range(v) || (v != 0.0 && narrowed == 0.0) {
+                return Err(named(name));
+            }
+            Ok(narrowed)
+        };
         let sampling = crate::Sampling {
-            temperature: value("temperature")? as f32,
+            temperature: real("temperature", crate::Sampling::temperature_in_range)?,
             top_k: count("top-k", 2f64.powi(32))? as u32,
-            top_p: value("top-p")? as f32,
-            repetition_penalty: value("repetition-penalty")? as f32,
+            top_p: real("top-p", crate::Sampling::top_p_in_range)?,
+            repetition_penalty: real(
+                "repetition-penalty",
+                crate::Sampling::repetition_penalty_in_range,
+            )?,
             repetition_window: count("repetition-window", 2f64.powi(32))? as u32,
             seed: count("seed", 2f64.powi(64))? as u64,
         };
