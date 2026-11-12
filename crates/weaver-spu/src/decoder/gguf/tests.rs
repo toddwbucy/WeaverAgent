@@ -851,6 +851,61 @@ fn a_reseed_tail_enters_the_window_once_per_position() {
     );
 }
 
+/// **The settings this crate sets move no draw**, per `weaver-spu-Spec`
+/// section 3.1: each value `engine_settings` sets is the value the engine
+/// resolved before the set existed, so the engine opened with them and the
+/// engine opened with its own defaults draw the same tokens from the same
+/// distributions.
+///
+/// Read on the host lane, in lockstep: two contexts of one model, one opened
+/// as every serving open is and one with the engine's defaults left in
+/// place, each reseeded with one seed and the prompt as its tail, each draw
+/// decoded into both. At every position the two distributions agree bit for
+/// bit, which carries every signal the session measures from them, and the
+/// two draws agree. The run is longer than the window, under the frozen
+/// penalty. A device load goes through the admission, which opens with this
+/// crate's settings only, so the device lanes are read by the instrument
+/// `tests/engine_settings_identity.rs`, run on the tree before the act and
+/// the tree after it.
+///
+/// Perturbation: set flash attention disabled in `engine_settings` and the
+/// two distributions part.
+#[test]
+fn the_engine_settings_move_no_draw() {
+    let Some(model) = model_or_skip() else { return };
+    let knobs = frozen();
+    let steps = knobs.repetition_window as usize + 32;
+    let prompt = [TokenId(9707), TokenId(11), TokenId(1879)];
+
+    let mut set = GgufEngine::open(&model, &knobs, 512, false).expect("the context opens");
+    let mut defaults = GgufEngine::open_with(&model, &knobs, 512, false, |params| params)
+        .expect("the context opens with the engine's defaults");
+    for engine in [&mut set, &mut defaults] {
+        engine.decode_at(&prompt, 0).expect("the prompt decodes");
+        engine.reseed(4242, &prompt).expect("the reseed");
+    }
+
+    for step in 0..steps {
+        let same = {
+            let a = set.distribution().expect("a distribution stands");
+            let b = defaults.distribution().expect("a distribution stands");
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+        };
+        assert!(same, "the two distributions differ at step {step}");
+        let drawn = set.sample().expect("a token is drawn");
+        assert_eq!(
+            drawn,
+            defaults.sample().expect("a token is drawn"),
+            "the two draws differ at step {step}"
+        );
+        for engine in [&mut set, &mut defaults] {
+            engine
+                .decode_at(&[drawn], prompt.len() + step)
+                .expect("the draw decodes");
+        }
+    }
+}
+
 /// **A closed engine answers every ask with a refusal**, rather than a
 /// stale value from the state it held.
 #[test]

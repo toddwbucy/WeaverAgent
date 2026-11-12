@@ -47,7 +47,7 @@
 use std::sync::OnceLock;
 
 use llama_cpp_2::context::LlamaContext;
-use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::context::params::{KvCacheType, LlamaContextParams};
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::{LlamaLoraAdapter, LlamaModel};
@@ -292,6 +292,36 @@ pub(crate) fn placement_params(division: &Division) -> Result<LlamaModelParams, 
         .map_err(|error| format!("tensor split {:?}: {error}", division.split_values()))
 }
 
+/// **The context settings this crate sets rather than leaves to the engine**,
+/// per `weaver-spu-Spec` section 3.1.1. Each is the value the engine resolved
+/// before the set existed, so a set moves no draw (section 3.1), and each is
+/// then a value the record can state rather than an engine default it cannot
+/// read back. The placement's settings (the offloaded layers, the split mode,
+/// the main device and the tensor split) are set already, by
+/// [`placement_params`].
+///
+/// - `n_ubatch` 512, `type_k` and `type_v` f16, `offload_kqv`, `op_offload`
+///   and `swa_full` on, `kv_unified` off: the engine's defaults at the pinned
+///   engine, `e21cdc11` (`llama_context_default_params`).
+/// - **Flash attention enabled, never auto.** AUTO resolves during the
+///   graph reserve and reports its choice only in the log, as `Flash
+///   Attention was auto, set to enabled` or `... disabled`. It resolved to
+///   enabled on every lane measured: one card and two cards under layer split
+///   (the verify loads of the install at `61d99dce`, 2026-11-11) and the host.
+///   AUTO disables it only where some layer's attention op cannot sit on that
+///   layer's device, and no lane this crate serves has shown that.
+fn engine_settings(params: LlamaContextParams) -> LlamaContextParams {
+    params
+        .with_n_ubatch(512)
+        .with_type_k(KvCacheType::F16)
+        .with_type_v(KvCacheType::F16)
+        .with_flash_attention_policy(llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_ENABLED)
+        .with_offload_kqv(true)
+        .with_op_offload(true)
+        .with_swa_full(true)
+        .with_kv_unified(false)
+}
+
 /// The GGUF engine, per `weaver-spu-Spec` section 4.
 ///
 /// **It borrows the residency it decodes against.** `LlamaContext` borrows the
@@ -364,6 +394,20 @@ impl<'a> GgufEngine<'a> {
         capacity: u32,
         readout: bool,
     ) -> Result<GgufEngine<'a>, DecodeFault> {
+        Self::open_with(model, knobs, capacity, readout, engine_settings)
+    }
+
+    /// [`GgufEngine::open`] with the context settings a parameter, so the
+    /// identity watch can open the engine with its own defaults beside the
+    /// settings this crate sets. Every serving open passes
+    /// [`engine_settings`].
+    fn open_with(
+        model: &'a ResidentModel,
+        knobs: &EffectiveKnobs,
+        capacity: u32,
+        readout: bool,
+        settings: impl FnOnce(LlamaContextParams) -> LlamaContextParams,
+    ) -> Result<GgufEngine<'a>, DecodeFault> {
         let backend = backend().map_err(|_| DecodeFault::Engine {
             detail: "the llama backend is not initialised".into(),
         })?;
@@ -375,9 +419,11 @@ impl<'a> GgufEngine<'a> {
         // which is the disagreement `decode_at` exists to prevent.
         let capacity = std::num::NonZeroU32::new(capacity)
             .ok_or_else(|| Self::engine_fault("a session capacity of zero serves nothing"))?;
-        let params = LlamaContextParams::default()
-            .with_n_ctx(Some(capacity))
-            .with_n_batch(capacity.get());
+        let params = settings(
+            LlamaContextParams::default()
+                .with_n_ctx(Some(capacity))
+                .with_n_batch(capacity.get()),
+        );
         // The state is allocated before the context because the context is
         // handed its address, and it is leaked out of its box here so that
         // no later `&mut self` claims the pointee the callback writes to.

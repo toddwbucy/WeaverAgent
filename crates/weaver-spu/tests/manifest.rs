@@ -133,6 +133,14 @@ const TABLE: &[(&str, &[&str], &[&str])] = &[
         &["cuda", "gguf"],
         &["WEAVER_ARTIFACT_DIVISION"],
     ),
+    // The device half of the engine settings' identity watch, run by name
+    // under a lane's mask. The record's path is an input the run is handed,
+    // as the artifact is, so it carries the prefix too.
+    (
+        "engine_settings_identity.rs",
+        &["cuda", "gguf"],
+        &["WEAVER_IDENTITY_ARTIFACT", "WEAVER_IDENTITY_OUT"],
+    ),
 ];
 
 /// The prefix `markers.rs` builds its per-family names from.
