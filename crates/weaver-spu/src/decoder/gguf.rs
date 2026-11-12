@@ -524,6 +524,36 @@ impl<'a> GgufEngine<'a> {
             .map_err(|_| Self::engine_fault("the engine answered a negative token"))
     }
 
+    /// **The crate's tokens as the engine's, converted rather than wrapped.**
+    /// The draw refuses a value it cannot represent, and a `TokenId` is a
+    /// `u32`, so the inbound half owes the same posture: `as i32` would turn
+    /// anything above `i32::MAX` into a negative id and hand it to llama.cpp
+    /// without a word.
+    fn engine_ids(tokens: &[TokenId]) -> Result<Vec<LlamaToken>, DecodeFault> {
+        tokens
+            .iter()
+            .map(|token| {
+                i32::try_from(token.0)
+                    .map(LlamaToken)
+                    .map_err(|_| Self::engine_fault("the token is outside the engine's range"))
+            })
+            .collect()
+    }
+
+    /// **Each token enters the window or the engine faults**, per
+    /// `weaver-spu-Spec` section 8.5. `accept_many` drops the status each
+    /// accept answers, so a token the chain refused would leave the window a
+    /// position short and every later draw reading the wrong one, with
+    /// nothing in the record to say so.
+    fn enter_window(sampler: &mut LlamaSampler, ids: &[LlamaToken]) -> Result<(), DecodeFault> {
+        for id in ids {
+            sampler.try_accept(*id).map_err(|error| {
+                Self::engine_fault(format!("the window refused a token: {error}"))
+            })?;
+        }
+        Ok(())
+    }
+
     /// The tap's state where one stands.
     fn tap_mut(&mut self) -> Option<&mut gguf_tap::TapState> {
         // Safety: the pointer came from `Box::leak`, this struct is its one
@@ -560,8 +590,9 @@ impl Backend for GgufEngine<'_> {
         if self.closed {
             return Err(Self::engine_fault("the engine is closed"));
         }
+        let ids = Self::engine_ids(window)?;
         let mut sampler = Self::chain(&self.knobs, seed);
-        sampler.accept_many(window.iter().map(|token| LlamaToken(token.0 as i32)));
+        Self::enter_window(&mut sampler, &ids)?;
         self.sampler = sampler;
         Ok(())
     }
@@ -573,20 +604,10 @@ impl Backend for GgufEngine<'_> {
         if tokens.is_empty() {
             return Ok(());
         }
-        // **The token converts rather than wrapping.** The draw already
-        // refuses a value it cannot represent, and a `TokenId` is a `u32`, so
-        // the inbound half owes the same posture: `as i32` would turn
-        // anything above `i32::MAX` into a negative id and hand it to
-        // llama.cpp without a word. Converted once, before the batch, because
-        // the batch and the window's accept below both take the ids.
-        let ids = tokens
-            .iter()
-            .map(|token| {
-                i32::try_from(token.0)
-                    .map(LlamaToken)
-                    .map_err(|_| Self::engine_fault("the token is outside the engine's range"))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        // Converted once, before the batch, because the batch and the
+        // window's accept below both take the ids, and a token the engine
+        // cannot represent refuses before anything is decoded.
+        let ids = Self::engine_ids(tokens)?;
         let mut batch = LlamaBatch::new(ids.len(), 1);
         let last = ids.len() - 1;
         for (offset, id) in ids.iter().enumerate() {
@@ -618,7 +639,12 @@ impl Backend for GgufEngine<'_> {
         // the native path's window reads from its resident tail. A decode
         // outside a generation's loop (the prefill, the terminator, a
         // flush's re-prefill) enters a chain the next reseed replaces.
-        self.sampler.accept_many(&ids);
+        //
+        // **A fault from here on follows a decode that ran**: a refused
+        // accept, or the tap's commit below. The tokens stand in the cache,
+        // and the window holds what it accepted. The fault poisons the
+        // session, which closes this engine, so nothing draws from either.
+        Self::enter_window(&mut self.sampler, &ids)?;
         self.logits_at = Some(last as i32);
         // **The tap's fault is raised by the decode it happened in.** The
         // callback cannot fail the graph without abandoning the rest of it,

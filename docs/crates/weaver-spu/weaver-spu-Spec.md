@@ -1176,7 +1176,9 @@ device = {
 **The mechanism name changes whenever the sampler's arithmetic changes.** One name
 covers the chain's order, each sampler's arithmetic, the seed's width and fold, the
 seed's derivation (section 8.5) and the penalty window's rule. The act that changes any
-of these renders a new name, and adds its row to the table below in the same act.
+of these names a new mechanism and adds its row to the table below in the same act. A
+build renders its mechanism's name in the `engine` block, and no build renders one
+before the act that adds that block.
 
 | Name | Mechanism |
 |---|---|
@@ -1187,8 +1189,9 @@ of these renders a new name, and adds its row to the table below in the same act
 **A record with no `engine` block carries no name.** Its mechanism is told by the SPU's
 digest in the `load` event's `stack` (`weaver-trace-Spec` section 3), against the builds
 before and after #537's merge and the re-feed window act's merge. A build between #537's
-merge and the re-feed window act's merge is `gguf-sampler-1`, and a build from that merge
-until the act that renders the block is `gguf-sampler-2`, each with no name in its record.
+merge and the re-feed window act's merge is `gguf-sampler-1`, and a build from that
+merge until the act that renders the block is `gguf-sampler-2`, each with no name in its
+record.
 
 #### 3.1.4 What this subsection does not fix
 
@@ -1610,15 +1613,15 @@ knobs of section 8 through the sampler exactly as a generation runs them, and wh
 generation emits the drawn token and streams its piece, the drive records the draw's
 identifier into the measurement's output slots and appends the recorded token instead,
 streaming nothing. The penalty window follows the appended tokens, so it holds the
-recorded path and not the draws (section 8.5). The field and the column intermediates cross where their elections
-stand, on the same sites the generation crosses them. The completed answer wraps the
-generation shape under the floor's own `ReFed` arm. The variant keeps a supplied path
-out of a sampled path's clothes. The permission is judged where
-every admitted member is judged, and the two-arm registry is the charter's, cited rather
-than restated. **The watches are the building act's**, per the pattern section 7's
-unasked vector set: the drive is unbuilt, its instruments cannot exist before it, and
-the act that builds it buys them in the same motion or their tags stand as the lie 13.7
-refuses. The building act bought them, four watches below, each seen red under the
+recorded path and not the draws (section 8.5). The field and the column intermediates
+cross where their elections stand, on the same sites the generation crosses them. The
+completed answer wraps the generation shape under the floor's own `ReFed` arm. The
+variant keeps a supplied path out of a sampled path's clothes. The permission is judged
+where every admitted member is judged, and the two-arm registry is the charter's, cited
+rather than restated. **The watches are the building act's**, per the pattern section
+7's unasked vector set: the drive is unbuilt, its instruments cannot exist before it,
+and the act that builds it buys them in the same motion or their tags stand as the lie
+13.7 refuses. The building act bought them, four watches below, each seen red under the
 perturbation it names before its tag landed.
 
 **A matching cancel returns RefeedInterrupted after a coherent prefix.** The drive

@@ -98,6 +98,11 @@ pub trait Backend {
     /// **The position is absolute and supplied by the caller** rather than
     /// tracked here, so the session holds the one account of what is resident
     /// and a backend cannot disagree with it.
+    ///
+    /// **What a decode makes resident enters the penalty window**, once per
+    /// position, per `weaver-spu-Spec` section 8.5. The decode is the one
+    /// place a token enters it, in every drive: in a generation the draw, in
+    /// a re-feed the recorded token.
     fn decode_at(&mut self, tokens: &[TokenId], position: usize) -> Result<(), DecodeFault>;
 
     /// The distribution over the vocabulary at the current state, as logits.
@@ -111,6 +116,10 @@ pub trait Backend {
     fn distribution(&self) -> Result<&[f32], DecodeFault>;
 
     /// Sample one token from the current state.
+    ///
+    /// **The draw enters nothing in the penalty window** (section 8.5). The
+    /// token enters when a decode makes it resident, which in a re-feed is
+    /// the recorded token and not this draw.
     fn sample(&mut self) -> Result<TokenId, DecodeFault>;
 
     /// Build this generation's sampler from its derived seed, per

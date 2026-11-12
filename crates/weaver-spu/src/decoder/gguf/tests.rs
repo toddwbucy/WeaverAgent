@@ -834,7 +834,7 @@ fn lockstep_with_the_engine(model: &ResidentModel, knobs: &EffectiveKnobs, decla
 /// both stay and the draw takes the third best. Counted twice, the second
 /// token fills both slots and pushes the first out.
 ///
-/// Perturbation: feed each token of the window to `accept_many` twice in
+/// Perturbation: enter each token of the window twice in
 /// `GgufEngine::reseed` and the draw answers the best token.
 #[test]
 fn a_reseed_tail_enters_the_window_once_per_position() {
