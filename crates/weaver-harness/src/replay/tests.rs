@@ -21,7 +21,7 @@ fn sink() -> (OwnedFd, crate::scratch::Scratch) {
         std::process::id(),
         std::thread::current().id()
     )));
-    let file = std::fs::File::create(&path).expect("sink");
+    let file = crate::scratch::exclusive_file(&path);
     (OwnedFd::from(file), path)
 }
 

@@ -4348,7 +4348,7 @@ fn a_column_on_the_generate_stream_authors_rather_than_kills() {
         std::process::id(),
         std::thread::current().id()
     )));
-    let sink = OwnedFd::from(std::fs::File::create(&sink_path).expect("sink"));
+    let sink = OwnedFd::from(crate::scratch::exclusive_file(&sink_path));
     let mut recorder = crate::record::Record::from(
         weaver_diagnostic::Recorder::receive(
             sink,
@@ -4910,7 +4910,7 @@ fn tempfile() -> OwnedFd {
         std::process::id(),
         std::thread::current().id()
     ));
-    let file = std::fs::File::create(&path).expect("sink");
+    let file = crate::scratch::exclusive_file(&path);
     std::fs::remove_file(&path).ok();
     OwnedFd::from(file)
 }

@@ -7,7 +7,6 @@
 //! The authorship and assembly tests of `weaver-harness-Spec` section 8,
 //! including the fourth walk. Each names its perturbation.
 
-use std::fs::File;
 use std::os::fd::OwnedFd;
 
 use weaver_harness::{Author, Record, assemble, licensed};
@@ -21,7 +20,16 @@ fn recorder() -> Record {
         std::process::id(),
         std::thread::current().id()
     ));
-    let file = File::create(&path).expect("sink");
+    // Made exclusively, so a path planted there, a link included, refuses
+    // rather than being written through. A leftover from an earlier run that
+    // panicked under the same pid is removed first, and removing a link
+    // removes the link and not its target.
+    let _ = std::fs::remove_file(&path);
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .expect("sink");
     // Nothing reads the sink by name, so the name goes at once and the
     // recorder writes through its descriptor: no run leaves the file behind,
     // pass or fail (#690 item C2.9).

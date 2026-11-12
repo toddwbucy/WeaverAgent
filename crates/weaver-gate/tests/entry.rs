@@ -49,7 +49,16 @@ fn spawn_gate_with(
         std::process::id(),
         COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     )));
-    let log = std::fs::File::create(&log_path).expect("a child log file");
+    // Made exclusively, so a path planted there, a link included, refuses
+    // rather than being written through. A leftover from an earlier run that
+    // panicked under the same pid is removed first, and removing a link
+    // removes the link and not its target.
+    let _ = std::fs::remove_file(&log_path.0);
+    let log = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&log_path.0)
+        .expect("a child log file");
     let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-gate"));
     command
         .stdin(Stdio::null())

@@ -294,7 +294,15 @@ fn an_exit_is_heard_within_a_slice() {
         waiting
             .recv_timeout(Duration::from_secs(2))
             .expect("supervisor reached poll with live child");
-        std::fs::write(release, "exit").unwrap();
+        // Made exclusively, the test having removed any leftover at its
+        // start, so a path planted there, a link included, refuses rather
+        // than being written through.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(release)
+            .and_then(|mut file| std::io::Write::write_all(&mut file, b"exit"))
+            .unwrap();
     });
     let (gate, _harness) = pair();
     let started = Instant::now();

@@ -555,7 +555,7 @@ fn the_serving_binary_admits_a_declared_adapter_and_records_it() {
         "weaver-spu-adapter-binding-{}.log",
         std::process::id()
     ));
-    let log = std::fs::File::create(&log_path).expect("a child log file");
+    let log = common::exclusive_file(&log_path);
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
     command
         .env("CUDA_DEVICE_ORDER", "PCI_BUS_ID")

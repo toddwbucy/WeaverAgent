@@ -13,7 +13,16 @@ fn the_member_keeps_the_run_lock_close_on_exec() {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::MetadataExt;
     let path = std::env::temp_dir().join(format!("weaver-run-lock-{}", std::process::id()));
-    let file = std::fs::File::create(&path).expect("a stand-in lock file");
+    // Made exclusively, so a path planted there, a link included, refuses
+    // rather than being written through. A leftover from an earlier run that
+    // panicked under the same pid is removed first, and removing a link
+    // removes the link and not its target.
+    let _ = std::fs::remove_file(&path);
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .expect("a stand-in lock file");
     // SAFETY: F_DUPFD on a descriptor this test owns answers a fresh
     // number at or above the floor, leaving the original untouched.
     let fd = unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_DUPFD, 700) };

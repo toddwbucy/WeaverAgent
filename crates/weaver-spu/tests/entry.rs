@@ -9,7 +9,6 @@
 //! count check is about descriptors this process was handed, and the dumpable
 //! flag is read from outside by an observer the process cannot lie to.
 
-use std::fs::File;
 use std::os::fd::{AsRawFd, RawFd};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -33,7 +32,7 @@ fn spawn_holding(child_ends: Vec<RawFd>) -> (Child, PathBuf) {
         std::process::id(),
         COUNTER.fetch_add(1, Ordering::Relaxed)
     ));
-    let log = File::create(&log_path).expect("a child log file");
+    let log = common::exclusive_file(&log_path);
     let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-spu"));
     command
         .stdin(Stdio::null())

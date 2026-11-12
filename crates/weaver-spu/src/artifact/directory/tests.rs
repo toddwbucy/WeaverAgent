@@ -59,7 +59,17 @@ fn write(tag: &str, bytes: &[u8]) -> (std::path::PathBuf, impl Drop) {
         "weaver-spu-directory-{tag}-{}.gguf",
         std::process::id()
     ));
-    std::fs::write(&path, bytes).expect("a fixture");
+    // Made exclusively, so a path planted there, a link included, refuses
+    // rather than being written through. A leftover from an earlier run that
+    // panicked under the same pid is removed first, and removing a link
+    // removes the link and not its target.
+    let _ = std::fs::remove_file(&path);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .and_then(|mut file| std::io::Write::write_all(&mut file, bytes))
+        .expect("a fixture");
     (path.clone(), Remove(path))
 }
 

@@ -190,7 +190,16 @@ fn received_descriptors_are_close_on_exec() {
         std::process::id(),
         std::thread::current().id()
     )));
-    let sink = std::fs::File::create(&sink_path.0).expect("sink");
+    // Made exclusively, so a path planted there, a link included, refuses
+    // rather than being written through. A leftover from an earlier run that
+    // panicked under the same pid is removed first, and removing a link
+    // removes the link and not its target.
+    let _ = std::fs::remove_file(&sink_path.0);
+    let sink = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&sink_path.0)
+        .expect("sink");
     let sink = OwnedFd::from(sink);
     let (state_end, _member_end) =
         std::os::unix::net::UnixStream::pair().expect("the member's pair");

@@ -59,7 +59,16 @@ fn sink() -> (OwnedFd, Scratch) {
         std::process::id(),
         std::thread::current().id()
     )));
-    let file = File::create(&path).expect("temp sink");
+    // Made exclusively, so a path planted there, a link included, refuses
+    // rather than being written through. A leftover from an earlier run that
+    // panicked under the same pid is removed first, and removing a link
+    // removes the link and not its target.
+    let _ = std::fs::remove_file(&path.0);
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path.0)
+        .expect("temp sink");
     (OwnedFd::from(file), path)
 }
 

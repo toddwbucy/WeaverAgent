@@ -261,7 +261,7 @@ fn entered_run(turn: Option<&str>) -> (Run, OrganChannel, crate::scratch::Scratc
         std::process::id(),
         std::thread::current().id()
     )));
-    let sink = OwnedFd::from(File::create(&path).expect("sink"));
+    let sink = OwnedFd::from(crate::scratch::exclusive_file(&path));
     let session = SessionId("s-1".to_string());
     let mut recorder = crate::record::Record::from(
         Recorder::receive(sink, RunRef("r-1".into()), SessionRef(session.0.clone()))
@@ -6514,7 +6514,7 @@ fn a_diagnostic_run_grants_no_frame_seat() {
         std::process::id(),
         std::thread::current().id()
     )));
-    let sink = OwnedFd::from(File::create(&sink_path).expect("sink"));
+    let sink = OwnedFd::from(crate::scratch::exclusive_file(&sink_path));
     run.recorder = crate::record::Record::from(
         weaver_diagnostic::Recorder::receive(
             sink,
