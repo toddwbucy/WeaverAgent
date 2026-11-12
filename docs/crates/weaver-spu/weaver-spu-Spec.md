@@ -1181,13 +1181,14 @@ of these renders a new name, and adds its row to the table below in the same act
 | Name | Mechanism |
 |---|---|
 | `gguf-sampler-0` | Never rendered. Builds before #537's merge. The chain is penalties, top-k, top-p, temperature, dist. The u64 seed is folded to u32 (high half XOR low half), and derived as section 8.5 says. The window is seeded from the tail at the reseed, then takes two accepts per draw (the engine's and the crate's). |
-| `gguf-sampler-1` | The first name rendered. #537's merge, `2828fc9075ca13c7bc2344bbda8a375c4421c54c` (2026-11-11), onward: as `gguf-sampler-0`, with one accept per draw. |
-| `gguf-sampler-2` | Reserved for the act that makes the re-feed's window follow residency on GGUF: the window then holds the token made resident, drawn or recorded, and not the draw. That act renders this name and replaces this row. |
+| `gguf-sampler-1` | Never rendered. #537's merge, `2828fc9075ca13c7bc2344bbda8a375c4421c54c` (2026-11-11), up to the re-feed window act's merge: as `gguf-sampler-0`, with one accept per draw. The engine's own sample accepts the draw, so in a re-feed the window holds the draws. |
+| `gguf-sampler-2` | The first name rendered. The re-feed window act's merge onward (the operator's ruling (b) of 2026-11-11): as `gguf-sampler-1`, except that the draw accepts nothing and the decode accepts each token it makes resident, once per position (section 8.5). A generation's window is `gguf-sampler-1`'s. In a re-feed the window holds the recorded tokens and not the draws. |
 
 **A record with no `engine` block carries no name.** Its mechanism is told by the SPU's
 digest in the `load` event's `stack` (`weaver-trace-Spec` section 3), against the builds
-before and after #537's merge. A build between #537's merge and the act that renders the
-block is `gguf-sampler-1` with no name in its record.
+before and after #537's merge and the re-feed window act's merge. A build between #537's
+merge and the re-feed window act's merge is `gguf-sampler-1`, and a build from that merge
+until the act that renders the block is `gguf-sampler-2`, each with no name in its record.
 
 #### 3.1.4 What this subsection does not fix
 
