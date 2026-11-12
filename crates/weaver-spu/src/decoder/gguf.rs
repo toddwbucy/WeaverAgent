@@ -53,6 +53,8 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::{LlamaLoraAdapter, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
+use llama_cpp_2::token::data::LlamaTokenData;
+use llama_cpp_2::token::data_array::LlamaTokenDataArray;
 
 use crate::decoder::backend::{Backend, DecodeFault, TokenId};
 use crate::decoder::gguf_tap;
@@ -304,6 +306,10 @@ pub(crate) fn placement_params(division: &Division) -> Result<LlamaModelParams, 
 pub struct GgufEngine<'a> {
     context: LlamaContext<'a>,
     sampler: LlamaSampler,
+    /// The draw's candidate array, one entry per vocabulary token, refilled
+    /// at each draw. Held so a draw after the first allocates nothing: the
+    /// chain's filters shorten the array and leave its capacity standing.
+    candidates: LlamaTokenDataArray,
     /// The batch index whose logits the last decode left standing, which is the
     /// only position `distribution` and `sample` may read. `None` before the
     /// first decode, so a sample before any decode refuses rather than reading
@@ -439,6 +445,7 @@ impl<'a> GgufEngine<'a> {
         Ok(GgufEngine {
             context,
             sampler,
+            candidates: LlamaTokenDataArray::new(Vec::new(), false),
             logits_at: None,
             closed: false,
             knobs: *knobs,
@@ -476,6 +483,44 @@ impl<'a> GgufEngine<'a> {
             // contribution in the value that reaches the draw.
             LlamaSampler::dist(((seed >> 32) ^ (seed & 0xFFFF_FFFF)) as u32),
         ])
+    }
+
+    /// One draw from `logits` through the chain, **with nothing accepted**,
+    /// per `weaver-spu-Spec` section 8.5: the window holds the tokens made
+    /// resident, and [`Backend::decode_at`] is where a token becomes
+    /// resident, so the accept is there and not here.
+    ///
+    /// **The array is the one the engine's own sample builds.**
+    /// `llama_sampler_sample` on its host path fills one entry per
+    /// vocabulary token in token order, each the token's logit with a zero
+    /// probability, marks it unsorted with nothing selected, applies the
+    /// chain and answers the selected entry. This builds the same array and
+    /// applies the same chain, so a generation draws what the engine's
+    /// sample drew. What it leaves out is the accept that sample makes
+    /// before answering, which in a re-feed put the draw in the window
+    /// where the recorded token is what became resident.
+    fn draw(
+        sampler: &LlamaSampler,
+        candidates: &mut LlamaTokenDataArray,
+        logits: &[f32],
+    ) -> Result<TokenId, DecodeFault> {
+        candidates.data.clear();
+        for (id, logit) in logits.iter().enumerate() {
+            let id = i32::try_from(id)
+                .map_err(|_| Self::engine_fault("the vocabulary exceeds the engine's range"))?;
+            candidates
+                .data
+                .push(LlamaTokenData::new(LlamaToken(id), *logit, 0.0));
+        }
+        candidates.selected = None;
+        candidates.sorted = false;
+        sampler.apply(candidates);
+        let token = candidates
+            .selected_token()
+            .ok_or_else(|| Self::engine_fault("the chain selected no token"))?;
+        u32::try_from(token.0)
+            .map(TokenId)
+            .map_err(|_| Self::engine_fault("the engine answered a negative token"))
     }
 
     /// The tap's state where one stands.
@@ -527,9 +572,23 @@ impl Backend for GgufEngine<'_> {
         if tokens.is_empty() {
             return Ok(());
         }
-        let mut batch = LlamaBatch::new(tokens.len(), 1);
-        let last = tokens.len() - 1;
-        for (offset, token) in tokens.iter().enumerate() {
+        // **The token converts rather than wrapping.** The draw already
+        // refuses a value it cannot represent, and a `TokenId` is a `u32`, so
+        // the inbound half owes the same posture: `as i32` would turn
+        // anything above `i32::MAX` into a negative id and hand it to
+        // llama.cpp without a word. Converted once, before the batch, because
+        // the batch and the window's accept below both take the ids.
+        let ids = tokens
+            .iter()
+            .map(|token| {
+                i32::try_from(token.0)
+                    .map(LlamaToken)
+                    .map_err(|_| Self::engine_fault("the token is outside the engine's range"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut batch = LlamaBatch::new(ids.len(), 1);
+        let last = ids.len() - 1;
+        for (offset, id) in ids.iter().enumerate() {
             // **The addition needs no overflow check and carries none.** The
             // review asked for one, and there is no input that reaches it:
             // offsets run from zero, so the first pass converts `position`
@@ -539,24 +598,26 @@ impl Backend for GgufEngine<'_> {
             // loop's own order removes.
             let pos = i32::try_from(position + offset)
                 .map_err(|_| Self::engine_fault("position exceeds the engine's range"))?;
-            // **The token converts rather than wrapping.** `sample` below
-            // already refuses a value it cannot represent, and a `TokenId` is a
-            // `u32`, so the inbound half owes the same posture: `as i32` would
-            // turn anything above `i32::MAX` into a negative id and hand it to
-            // llama.cpp without a word.
-            let id = i32::try_from(token.0)
-                .map_err(|_| Self::engine_fault("the token is outside the engine's range"))?;
             // **Logits are asked for on the last token only.** Every earlier
             // token is context being made resident, and asking for its
             // distribution would allocate a vocabulary-wide buffer per token
             // for a reading nothing takes.
             batch
-                .add(LlamaToken(id), pos, &[0], offset == last)
+                .add(*id, pos, &[0], offset == last)
                 .map_err(|error| Self::engine_fault(format!("batch add: {error}")))?;
         }
         self.context
             .decode(&mut batch)
             .map_err(|error| Self::engine_fault(format!("decode: {error}")))?;
+        // **What became resident enters the window, once per position**, per
+        // `weaver-spu-Spec` section 8.5, and only after the decode answered,
+        // so a refused decode leaves the window as it was. In a generation
+        // this is the draw, so a generation's window is what the engine's own
+        // sample built. In a re-feed it is the recorded token, which is what
+        // the native path's window reads from its resident tail. A decode
+        // outside a generation's loop (the prefill, the terminator, a
+        // flush's re-prefill) enters a chain the next reseed replaces.
+        self.sampler.accept_many(&ids);
         self.logits_at = Some(last as i32);
         // **The tap's fault is raised by the decode it happened in.** The
         // callback cannot fail the graph without abandoning the rest of it,
@@ -588,17 +649,14 @@ impl Backend for GgufEngine<'_> {
         let at = self
             .logits_at
             .ok_or_else(|| Self::engine_fault("no decode has left a distribution to sample"))?;
-        // **The draw is accepted once, by the engine**, per `weaver-spu-Spec`
-        // section 8.5: in a generation the window is the last
-        // `repetition_window` resident positions, each counted once.
-        // `llama_sampler_sample` accepts the token it returns before
-        // returning it, so the chain's penalty ring already holds this draw,
-        // and an accept here would count it twice and halve the positions
-        // the window covers.
-        let token = self.sampler.sample(&self.context, at);
-        u32::try_from(token.0)
-            .map(TokenId)
-            .map_err(|_| Self::engine_fault("the engine answered a negative token"))
+        // **The draw accepts nothing**, per `weaver-spu-Spec` section 8.5:
+        // the window is the last `repetition_window` resident positions, and
+        // the token that becomes resident is accepted by the decode that
+        // makes it so. In a generation that is this draw, one call later. In
+        // a re-feed it is the recorded token, which the draw may disagree
+        // with.
+        let logits = self.context.get_logits_ith(at);
+        Self::draw(&self.sampler, &mut self.candidates, logits)
     }
 
     fn truncate_to(&mut self, position: usize) -> Result<(), DecodeFault> {

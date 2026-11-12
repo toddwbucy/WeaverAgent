@@ -1608,7 +1608,8 @@ contribution tokenizes and appends verbatim, no renderer on the way per the ruli
 knobs of section 8 through the sampler exactly as a generation runs them, and where a
 generation emits the drawn token and streams its piece, the drive records the draw's
 identifier into the measurement's output slots and appends the recorded token instead,
-streaming nothing. The field and the column intermediates cross where their elections
+streaming nothing. The penalty window follows the appended tokens, so it holds the
+recorded path and not the draws (section 8.5). The field and the column intermediates cross where their elections
 stand, on the same sites the generation crosses them. The completed answer wraps the
 generation shape under the floor's own `ReFed` arm. The variant keeps a supplied path
 out of a sampled path's clothes. The permission is judged where
@@ -3052,15 +3053,31 @@ native path already read the tail directly and the GGUF chain accumulated
 its own copy, so reading one source makes the two agree by construction
 rather than by two implementations staying in step.
 
-**In a generation, each token enters the window once.** A window of
-`repetition_window` tokens holds that many resident positions: the tail the
-reseed hands over enters one token per position, and each draw since enters
-once, the draw being what becomes resident. On GGUF the engine's own sample
-accepts the token it draws before answering it, so the crate accepts
-nothing after the draw. A second accept would count each draw twice and
-halve the positions the window covers. The watch is two draws from one
-distribution under a two-slot window: counted once, the second draw avoids
-both earlier tokens, and counted twice, the first token has left the window.
+**Each token that becomes resident enters the window once, in every
+drive.** A window of `repetition_window` tokens holds that many resident
+positions. The tail the reseed hands over enters one token per position,
+and each token decoded since enters once. In a generation that token is the
+draw. In a re-feed (section 4.6) it is the recorded token, and the draw at
+the same position enters nothing, so a draw that departs from the record
+does not move the window the next draw sees. The native path reads the
+window from its resident tail at each draw. On GGUF the decode accepts the
+tokens it made resident into the chain, and the crate draws through the
+chain without the engine's own sample, because that sample accepts the
+token it draws before it answers it. A second accept would count each
+token twice and halve the positions the window covers.
+
+**The watches probe the window at the engine seam with crafted logits**, so
+the model's distribution does not decide the reading. The knobs are a
+two-slot window, a penalty that sinks any token in it and a top-k of one.
+A draw is decoded and the window is probed: counted once, it holds the
+reseed tail's token and the draw, and counted twice, the tail's token has
+left it. In a re-feed, a recorded token that differs from the draw is
+decoded and the window is probed: it holds the recorded token and not the
+draw. A third watch holds the crate's draw to the engine's own: one seed
+and one prompt drive the crate's draw on one context and the engine's
+sample on a twin, and the two answer the same token and the same
+distribution at every position, under the penalty, for longer than the
+window.
 
 **This retires the flush's coupling to sampling rather than repairing
 it.** The GGUF chain's reset cleared the penalty window and reseeded the

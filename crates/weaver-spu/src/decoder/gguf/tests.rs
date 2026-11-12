@@ -643,46 +643,173 @@ fn window_fixture(model: &ResidentModel) -> (GgufEngine<'_>, [TokenId; 3]) {
     (engine, best)
 }
 
-/// **Each draw of a generation enters the penalty window once**, per
-/// `weaver-spu-Spec` section 8.5: in a generation the window is the last
-/// `repetition_window` resident positions, and on GGUF the engine's own
-/// sample accepts the token it draws.
+impl GgufEngine<'_> {
+    /// Which of three tokens the chain draws from logits that rank them
+    /// first, second and third, every other token at zero, which is a
+    /// reading of the penalty window the model's distribution cannot
+    /// decide.
+    ///
+    /// Under [`window_decides`] a token in the window falls from its logit
+    /// to a ten-thousandth of it, still above every zero, and the top-k of
+    /// one takes the best that stands. So the answer is the first of the
+    /// three outside the window, or the first of them where all three are
+    /// in it. The probe goes through the draw `sample` itself makes, and
+    /// accepts nothing, so it does not move the window it reads.
+    fn probe(&mut self, ranked: [TokenId; 3]) -> TokenId {
+        let width = self.distribution().expect("a distribution stands").len();
+        let mut logits = vec![0.0_f32; width];
+        for (token, logit) in ranked.iter().zip([3.0, 2.0, 1.0]) {
+            logits[token.0 as usize] = logit;
+        }
+        GgufEngine::draw(&self.sampler, &mut self.candidates, &logits).expect("the probe draws")
+    }
+}
+
+/// **Each decoded token enters the penalty window once**, per
+/// `weaver-spu-Spec` section 8.5: the window is the last
+/// `repetition_window` resident positions, and on GGUF the decode is
+/// what accepts a token into the chain.
 ///
-/// Read at the seam with two draws from one distribution. The window holds
-/// the best token, so the first draw takes the second best. Counted once,
-/// the two-slot window then holds the best and the second best, and the
-/// second draw takes the third. Counted twice, the first draw fills both
-/// slots and pushes the best out of the window, and the second draw takes
-/// the best again.
+/// The reseed puts the best token in the window, so the draw takes the
+/// second best, and the draw is decoded as a generation decodes it. The
+/// probe then ranks the best, the second and the third. Counted once, the
+/// two-slot window holds the best and the second, and the probe answers
+/// the third. Counted twice, the draw fills both slots and pushes the best
+/// out, and the probe answers the best. Not counted, only the best stands
+/// in the window, and the probe answers the second.
 ///
-/// Perturbation: put `self.sampler.accept(token)` back after the sample in
-/// `GgufEngine::sample` and the second draw answers the best token.
+/// Perturbation: draw through the engine's own sample in
+/// `GgufEngine::sample` (`self.sampler.sample(&self.context, at)`, which
+/// accepts the draw before the decode accepts it again) and the probe
+/// answers the best. Drop the accept from `GgufEngine::decode_at` and it
+/// answers the second.
 #[test]
-fn each_draw_enters_the_penalty_window_once() {
+fn each_decoded_token_enters_the_penalty_window_once() {
     let Some(model) = model_or_skip() else { return };
     let (mut engine, [best, second, third]) = window_fixture(&model);
 
     engine
         .reseed(4242, &[best])
         .expect("the window holds the best");
-    let first = engine.sample().expect("the first draw");
+    let draw = engine.sample().expect("a token is drawn");
     assert_eq!(
-        first, second,
+        draw, second,
         "the window sinks the best, so the second is drawn"
     );
-    let next = engine
-        .sample()
-        .expect("the second draw, from the same distribution");
+    engine.decode_at(&[draw], 3).expect("the draw decodes");
     assert_eq!(
-        next, third,
-        "counted once, the window holds the best and the second, so the third \
-         is drawn; the best ({best:?}) means the first draw was counted twice"
+        engine.probe([best, second, third]),
+        third,
+        "counted once, the window holds the best and the draw, so the probe \
+         answers the third. The best ({best:?}) means the draw was counted \
+         twice, and the second ({second:?}) that it was not counted"
     );
 }
 
+/// **A re-feed's window holds the recorded token and not the draw**, per
+/// `weaver-spu-Spec` sections 4.6 and 8.5: the drive draws at each
+/// position and then decodes the recorded token, and what is decoded is
+/// what becomes resident and what enters the window. The native path
+/// reads its window from the resident tail, so this is also where the two
+/// engines meet on a re-fed path.
+///
+/// The reseed leaves the window empty, so the draw takes the best token.
+/// The record departs from it: the third best is decoded in its place.
+/// The probe then ranks the recorded token, the draw and the second.
+/// Holding the recorded token alone, the window sinks it, and the probe
+/// answers the draw. Holding the draw alone, or nothing, the probe answers
+/// the recorded token. Holding both, it answers the second.
+///
+/// Perturbation: draw through the engine's own sample in
+/// `GgufEngine::sample` and drop the accept from `GgufEngine::decode_at`,
+/// which is the engine before this ruling, and the probe answers the
+/// recorded token.
+#[test]
+fn a_refeed_window_holds_the_recorded_token_and_not_the_draw() {
+    let Some(model) = model_or_skip() else { return };
+    let (mut engine, [best, second, third]) = window_fixture(&model);
+
+    engine.reseed(4242, &[]).expect("the window is empty");
+    let draw = engine.sample().expect("a token is drawn");
+    assert_eq!(
+        draw, best,
+        "nothing stands in the window, so the best is drawn"
+    );
+    let recorded = third;
+    engine
+        .decode_at(&[recorded], 3)
+        .expect("the recorded token decodes");
+    assert_eq!(
+        engine.probe([recorded, draw, second]),
+        draw,
+        "the window holds the recorded token, so the probe answers the draw. \
+         The recorded token ({recorded:?}) means the window holds the draw or \
+         nothing, and the second ({second:?}) that it holds both"
+    );
+}
+
+/// **The crate's draw is the engine's own draw** wherever the decoded
+/// token is the draw, which is every generation. `sample` builds the
+/// candidate array that `llama_sampler_sample` builds and leaves out only
+/// its accept, and `decode_at` accepts the same token one call later, so
+/// a generation draws what it drew before the re-feed ruling of
+/// 2026-11-11. This is the watch that holds the two together if a later
+/// engine changes how its sample builds the array.
+///
+/// One seed and one prompt drive two contexts of one model. The first
+/// runs a generation's own calls: reseed with the tail, then draw and
+/// decode. The twin draws through `llama_sampler_sample` on a chain built
+/// from the same knobs and seed and restored from the same tail, decoding
+/// the same token. The two answer the same token at every position, and
+/// the same distribution bit for bit, which carries every signal the
+/// session measures from it. The run is longer than the window, under the
+/// frozen penalty.
+///
+/// Perturbation: mark the candidate array sorted in `GgufEngine::draw`, or
+/// drop the accept from `GgufEngine::decode_at`, and the two draw
+/// differently.
+#[test]
+fn the_crates_draw_is_the_engines_own_draw() {
+    let Some(model) = model_or_skip() else { return };
+    let knobs = frozen();
+    let steps = knobs.repetition_window as usize + 32;
+    let prompt = [TokenId(9707), TokenId(11), TokenId(1879)];
+    let seed = 4242;
+
+    let mut ours = engine(&model);
+    ours.decode_at(&prompt, 0).expect("the prompt decodes");
+    ours.reseed(seed, &prompt).expect("the reseed");
+
+    let mut twin = engine(&model);
+    twin.decode_at(&prompt, 0)
+        .expect("the twin's prompt decodes");
+    let mut theirs = GgufEngine::chain(&knobs, seed);
+    theirs.accept_many(prompt.iter().map(|token| LlamaToken(token.0 as i32)));
+
+    for step in 0..steps {
+        let same = {
+            let a = ours.distribution().expect("a distribution stands");
+            let b = twin.distribution().expect("the twin's distribution stands");
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+        };
+        assert!(same, "the two distributions differ at step {step}");
+        let at = twin.logits_at.expect("the twin's logits stand");
+        let engines = theirs.sample(&twin.context, at);
+        let crates = ours.sample().expect("a token is drawn");
+        assert_eq!(
+            crates.0 as i32, engines.0,
+            "the crate's draw departs from the engine's own at step {step}"
+        );
+        ours.decode_at(&[crates], prompt.len() + step)
+            .expect("the draw decodes");
+        twin.decode_at(&[crates], prompt.len() + step)
+            .expect("the twin decodes the same token");
+    }
+}
+
 /// **A reseed's tail enters the window once per position**, the same
-/// count as a draw, so a window restored from the tail and a window built
-/// by drawing hold the same positions.
+/// count as a decode, so a window restored from the tail and a window built
+/// by decoding hold the same positions.
 ///
 /// The reseed hands a two-token tail to a two-slot window. Counted once,
 /// both stay and the draw takes the third best. Counted twice, the second
