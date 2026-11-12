@@ -916,20 +916,20 @@ generation, and nothing is retained here afterward: produced, reported,
 gone, per section 3's no-state rule.
 
 **The bound the generation ran under travels with it**, per the ruling of
-2026-08-21 on issue #258 and `weaver-trace-PRD` section 3.2. The resolved
-per-turn ceiling and the stop condition in force are effective values, and
-section 13.8's disposition rule already says an effective value is recorded
-whichever side set it, so this is that rule reaching a value it had not
-reached rather than a new obligation. **The ceiling is the case that forces
-it.** It is frozen in the composition root or set in an operator's file, per
-`weaver-spu-Spec` section 8, so a consumer holding the record alone can read
-`finish: "length"` and have no way to learn where the cut fell. The stop
-token set is the same shape of fact for a generation that ended on one.
+2026-08-21 on issue #258 and `weaver-trace-PRD` section 3.2. The token bound
+the generation carried and the stop condition in force are values it ran
+under, and section 13.8 already has the record hold every such value, so
+this is that rule reaching a value it had not reached rather than a new
+obligation. **The bound is the case that forces it.** The loop sends it with
+the generation, per `weaver-spu-Spec` section 8, so a consumer holding the
+record alone could read `finish: "length"` and have no way to learn where
+the cut fell. The stop token set is the same shape of fact for a generation
+that ended on one.
 
 **This is the producing side rather than the field list**, per 13.6: what a
 consumer is owed is `weaver-trace-PRD`'s, and what this charter fixes is
-that the values are the resolved ones this crate holds at the moment of the
-generation, not the declared ones an instruction carried.
+that the values are the ones the generation carried and sampled with, not
+the declaration's defaults.
 
 ### 13.7 Residual readout
 
@@ -1022,16 +1022,18 @@ what makes the tap cheap enough to elect. A later act that widens the copy
 widens the bound with it, against this clause rather than against a
 mechanism claim.
 
-### 13.8 Sampling, and the dispositions
+### 13.8 Sampling, and the carrier
 
-**Every sampling knob carries a disposition, and seed is a knob.** Per the
-composability ruling of 2026-08-02: each knob is frozen at the worker's
-composition root or left operator-tunable, the builder's election per knob,
-and the effective values are recorded whichever side set them, because a
-disposition changes who sets a value and never whether the record holds
-it. The prior program never made its seed configurable at all, so the
-disposition mechanism is the seed's first real home.
-The knob enumeration and its types are the Spec's and the floor's.
+**Every generation carries its sampling values, and seed is one of them.** Per
+the operator's ruling of 2026-11-11: the sampler's mechanism is locked at load
+and recorded as theta, and its values ride with the turn. The declaration
+supplies the defaults, the harness's loop sends them with every generation,
+and the record holds the values each generation ran under. The per-knob
+dispositions of the composability ruling of 2026-08-02 (frozen at the worker's
+composition root or left operator-tunable) retire for the sampling values, as
+the Planner's default pending the operator's ruling, and stay for the session
+parameters. The prior program never made its seed configurable at all.
+The carried set, its ranges and its types are the Spec's and the floor's.
 
 **The declared seed is the run's, and each generation draws from its own,
 derived.** Per the operator's ruling of 2026-08-21 on issue #255. An
@@ -1069,14 +1071,11 @@ luck through a different filter and answers something else. And the same
 resident tail and the same weights standing behind all of it, since the
 state governs the distribution the whole apparatus is read against.
 
-**The values are the requirement rather than where they come from.** Today
-every one but the seed is frozen at the composition root, so a re-entry on
-the same binary carries them without asking, and the record holds them
-regardless because a disposition changes who sets a value and never
-whether the record holds it. That is what makes them re-suppliable when a
-binary changes its mind about which are frozen, and it is why apex section
-8 lists the sampling parameters among what deterministic re-feed requires
-rather than listing the seed alone.
+**The values are the requirement rather than where they come from.** The
+record holds every generation's values, so a re-entry reads them from the
+record and carries them, whatever the declaration says on the day. A re-feed
+does exactly that. It is why apex section 8 lists the sampling parameters
+among what deterministic re-feed requires rather than listing the seed alone.
 
 **The derived value is what a re-entry reproduces rather than what it is
 given.** It is recorded so a reader can check that the stream came out
@@ -1096,14 +1095,13 @@ than the sampler's position. That is what a paired comparison needed and
 could not have while one stream ran the length of a residency.
 
 **Both seeds are recorded, and the requirement is this charter's.** The
-disposition rule above already has the effective values recorded whichever
-side set them, because a disposition changes who sets a value and never
-whether the record holds it. Under derivation the effective value is two
-values, and neither alone answers what a reader needs: the declared seed
-does not say what a generation drew from, and the derived seed does not
-say what to declare in order to re-enter it. A record carrying one of them
-supports neither re-entry nor audit. Which members carry them and how they
-spell is the Spec's.
+clause above already has the record hold the values each generation ran
+under, whoever set them. Under derivation the effective value is two values,
+and neither alone answers what a reader needs: the declared seed does not
+say what a generation drew from, and the derived seed does not say what to
+declare in order to re-enter it. A record carrying one of them supports
+neither re-entry nor audit. Which members carry them and how they spell is
+the Spec's.
 
 **The sampler holds nothing across generations.** It is built for each
 from the derived seed, and the penalty window is restored from the
@@ -1211,10 +1209,14 @@ top-k election puts in the field, and that wall is a fact about the run
 where the reported depth is an artifact of the reporting. Distinguishing
 them requires reporting past the wall: at a depth below the cutoff the
 two coincide exactly where the field is widest, which is where anyone
-looks. A declaration electing the field at a depth below the sampling
-cutoff therefore refuses at admit, naming both numbers, and the margin
-above the cutoff is what makes the wall a measurement rather than an
-assumption.
+looks. A field below the sampling cutoff therefore refuses before any
+device work it would waste, naming both numbers: at load against the
+declaration's default top-k, before a replay's first re-feed against the
+recorded ones, and at each generation against the top-k it carries
+(`weaver-spu-Spec` sections 7.5 and 8). A top-k of zero keeps every
+candidate, so its cutoff is the whole vocabulary and no field reports
+past it. The margin above the cutoff is what makes the wall a
+measurement rather than an assumption.
 
 **The election is per feature, per load, and recorded.** No profile
 names a bundle of elections, because a named bundle's contents drift and
@@ -1358,10 +1360,11 @@ as the one act standing between the diagnostic papers and a running null replay.
 drive per recorded generation: the recorded rendered contribution appends verbatim, no
 renderer on the way, the forward passes run along the recorded token path, and at each
 position the draw is computed exactly as a generation would compute it - the derived
-seed of 13.8, the effective knobs, the sampler consuming the distribution - **and the
-recorded token appends whatever the draw said**. A divergent draw is a finding carried
-in the answer, never a fork in the path, so every later position stays comparable to its
-recorded self instead of drifting behind the first divergence.
+seed of 13.8, the sampling values the re-feed carries, the sampler consuming the
+distribution - **and the recorded token appends whatever the draw said**. A divergent
+draw is a finding carried in the answer, never a fork in the path, so every later
+position stays comparable to its recorded self instead of drifting behind the first
+divergence.
 
 **The drive draws no token of its own, and the answer's type is what makes
 that checkable.** No token intermediate crosses, there being no drawn piece

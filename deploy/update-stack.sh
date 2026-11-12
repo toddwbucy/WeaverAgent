@@ -533,6 +533,52 @@ for agent in $AGENTS; do
   done
 done
 
+# **A declaration lacking a sampling default is named, before the build**
+# (weaver-harness-Spec section 6.1): the harness this installs reads six names
+# from spu-instruction.decoder's tunable-values at every load and refuses the
+# load where any is missing, naming it. A plan names each such agent with the
+# keys it lacks and goes on. An --install refuses while any stands, before
+# anything is replaced, since every load of that agent after the install
+# would refuse. The values that keep the behaviour of the build before the
+# sampling carrier are the ones create-agent.sh writes. A declaration whose
+# binding-kind is diagnostic is passed: the reader requires none of the six
+# there, and an absent binding-kind means serving, as admin reads it.
+SAMPLING_NAMES="temperature top-k top-p repetition-penalty repetition-window seed"
+SAMPLING_TODAY="temperature = 0.7, top-k = 40, top-p = 0.95, repetition-penalty = 1.1, repetition-window = 64"
+SAMPLING_SHORT=()
+for agent in $AGENTS; do
+  decl=$(declaration_of "$agent") || exit 1
+  rc=0
+  kind=$(declared_in "$decl" binding-kind string) || rc=$?
+  case $rc in
+    0) [ "$kind" != diagnostic ] || continue ;;
+    3) ;;
+    *) die "$agent: the declaration's binding-kind does not read, see above" ;;
+  esac
+  lacking=""
+  for name in $SAMPLING_NAMES; do
+    rc=0
+    declared_in "$decl" "spu-instruction.decoder.tunable-values.$name" any >/dev/null || rc=$?
+    case $rc in
+      0) ;;
+      3) lacking="${lacking:+$lacking, }$name" ;;
+      *) die "$agent: the declaration's spu-instruction.decoder.tunable-values does not read, see above" ;;
+    esac
+  done
+  [ -z "$lacking" ] || SAMPLING_SHORT+=("$agent: its declaration $decl lacks tunable-values $lacking")
+done
+if [ ${#SAMPLING_SHORT[@]} -gt 0 ]; then
+  say "agents whose declaration lacks a sampling default"
+  printf '  %s\n' "${SAMPLING_SHORT[@]}"
+  printf '  every load of these after the install refuses, naming the first missing key.\n'
+  printf '  add each key to spu-instruction.decoder tunable-values with sudoedit. The values\n'
+  printf '  that keep the behaviour of the build before this one: %s.\n' "$SAMPLING_TODAY"
+  printf '  seed was already required and keeps the value the agent declared.\n'
+  printf '  the build standing now reads none of the five, so they can be added before the install.\n'
+  [ "$INSTALL" -eq 0 ] \
+    || die "an --install refuses while an agent's declaration lacks a sampling default, named above. Add the keys, then rerun."
+fi
+
 # **Every agent's territory and sink are judged as the admin this installs
 # judges them, before anything is built** (#99 area 2 review, N1): admin
 # refuses at every verb a territory that is not root's, grouped to the state

@@ -247,17 +247,18 @@ that held only the parse held an empty assistant turn where the model had writte
 call. Adding the kind moves `weaver-trace-PRD` section 3.1 and this contract together,
 per section 7.
 
-**The rendered form and its template identity, with `model.request`.** The
-harness submits what the model was asked this turn, the turn's delta as
-rendered and the identity of the template that produced it, beside the
-effective sampling values for the turn, per the operator's ruling of
-2026-08-12: the seam is append-only, so the full effective context is the
-accumulation the record determines rather than a quantity any one event
-stores. It has the rendered form because the
-family library returns it on the report path, per `weaver-spu-PRD` section
-13.4, and it submits it because a record holding only canonical messages
-forces a replay through a template that may have changed, per
-`weaver-trace-PRD` section 3.2.
+**The rendered form and its template identity, with `model.request`.**
+The harness submits what the model was asked this turn, the turn's delta
+as rendered and the identity of the template that produced it, beside
+the sampling values the generation carried (`weaver-spu-Spec` section 8,
+the operator's ruling of 2026-11-11), per the operator's ruling of
+2026-08-12: the seam is append-only, so the full effective context is
+the accumulation the record determines rather than a quantity any one
+event stores. It has the rendered form because the family library
+returns it on the report path, per `weaver-spu-PRD` section 13.4, and it
+submits it because a record holding only canonical messages forces a
+replay through a template that may have changed, per `weaver-trace-PRD`
+section 3.2.
 
 **Every judgment the loop makes, recorded.** The loop is state management and state is
 rebuilt from the record alone, per `weaver-agent-PRD` section 5.5, so the harness

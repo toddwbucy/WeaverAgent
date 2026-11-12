@@ -40,7 +40,6 @@ use weaver_spu::lora::observation::judge_division;
 use weaver_spu::readout::ReadoutElection;
 use weaver_spu::residency::Headroom;
 use weaver_spu::room::Layout;
-use weaver_spu::sampling::EffectiveKnobs;
 use weaver_types::{ArtifactRef, ModelBinding};
 
 /// The pair, by ordinal.
@@ -173,17 +172,9 @@ fn the_observed_division_matches_the_computed_one_on_the_pair_child() {
                 false,
             )
             .unwrap_or_else(|refusal| panic!("the pair admits: {refusal:?}"));
-        let knobs = EffectiveKnobs {
-            temperature: 0.0,
-            top_k: 1,
-            top_p: 1.0,
-            repetition_penalty: 1.0,
-            repetition_window: 0,
-            seed: 11,
-        };
         // One session, so the KV cache is allocated once and records once.
         let session = resident
-            .open_session(&knobs, POSITIONS)
+            .open_session(POSITIONS)
             .expect("a session opens, allocating the cache");
         // **No context on a non-member device**, read while the model is
         // resident and its cache allocated, so the driver's figure on each

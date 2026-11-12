@@ -1085,18 +1085,8 @@ fn window_phase(phase: &str) {
     eprintln!("window: {phase}: {after_load} records kept after the load");
     assert!(after_load > 0, "the window holds the load's records");
     if phase == "sessions" {
-        let knobs = crate::sampling::EffectiveKnobs {
-            temperature: 0.0,
-            top_k: 1,
-            top_p: 1.0,
-            repetition_penalty: 1.0,
-            repetition_window: 0,
-            seed: 0,
-        };
         for open in ["first", "second"] {
-            let session = resident
-                .open_session(&knobs, 4096)
-                .expect("a session opens");
+            let session = resident.open_session(4096).expect("a session opens");
             assert_eq!(kept(), 0, "the window is closed after the {open} open");
             drop(session);
         }

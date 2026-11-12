@@ -1,115 +1,121 @@
 use super::*;
 
-fn all_frozen() -> Knobs {
-    Knobs {
-        temperature: Disposition::Frozen(0.7),
-        top_k: Disposition::Frozen(40),
-        top_p: Disposition::Frozen(0.95),
-        repetition_penalty: Disposition::Frozen(1.1),
-        repetition_window: Disposition::Frozen(64),
-        seed: Disposition::Frozen(11),
+/// The constants the composition root froze before the carrier, which the
+/// identity of `weaver-spu-Spec` section 8 sets the defaults to.
+fn carried() -> Sampling {
+    Sampling {
+        temperature: 0.7,
+        top_k: 40,
+        top_p: 0.95,
+        repetition_penalty: 1.1,
+        repetition_window: 64,
+        seed: 11,
     }
 }
 
-/// **Frozen values never cross the wire.** Only the operator-tunable
-/// remainder travels on the token seam, and the list that says which is
-/// derived from the elections rather than maintained beside them.
+/// **Each member outside its range refuses by name**, per `weaver-spu-Spec`
+/// section 8's table, and each edge the table admits is admitted.
 ///
-/// Perturbation: make `tunable_names` push a name unconditionally for any
-/// knob, or return every name, and this test fails on the all-frozen case.
-/// Watched under exactly that change.
+/// Perturbation: drop any one check from `Sampling::out_of_range` and its row
+/// here fails, the out-of-range value judged in range. Watched under each.
 #[test]
-fn a_frozen_knob_is_not_on_the_wire() {
-    assert_eq!(all_frozen().tunable_names(), Vec::<&str>::new());
-
-    let mut knobs = all_frozen();
-    knobs.seed = Disposition::OperatorTunable;
-    knobs.top_p = Disposition::OperatorTunable;
-    assert_eq!(knobs.tunable_names(), vec!["top-p", "seed"]);
+fn each_member_out_of_range_refuses_by_name_and_each_edge_is_served() {
+    let refused = |change: fn(&mut Sampling), member: SamplingMember| {
+        let mut sampling = carried();
+        change(&mut sampling);
+        assert_eq!(
+            judge(&sampling, Some((512, 512)), None),
+            Err(TokenRefusal::SamplingOutOfRange { member }),
+            "{sampling:?} is out of range at {member:?}"
+        );
+    };
+    refused(|s| s.temperature = -0.1, SamplingMember::Temperature);
+    refused(|s| s.temperature = f32::NAN, SamplingMember::Temperature);
+    refused(
+        |s| s.temperature = f32::INFINITY,
+        SamplingMember::Temperature,
+    );
+    refused(|s| s.top_k = 1 << 31, SamplingMember::TopK);
+    refused(|s| s.top_p = 0.0, SamplingMember::TopP);
+    refused(|s| s.top_p = 1.0001, SamplingMember::TopP);
+    refused(|s| s.top_p = f32::NAN, SamplingMember::TopP);
+    refused(
+        |s| s.repetition_penalty = 0.0,
+        SamplingMember::RepetitionPenalty,
+    );
+    refused(
+        |s| s.repetition_penalty = f32::INFINITY,
+        SamplingMember::RepetitionPenalty,
+    );
+    refused(
+        |s| s.repetition_window = 1 << 31,
+        SamplingMember::RepetitionWindow,
+    );
+    let served = |change: fn(&mut Sampling)| {
+        let mut sampling = carried();
+        change(&mut sampling);
+        assert_eq!(
+            judge(&sampling, Some((512, 512)), None),
+            Ok(()),
+            "{sampling:?} is in range"
+        );
+    };
+    served(|s| s.temperature = 0.0);
+    served(|s| s.top_k = 0);
+    served(|s| s.top_k = (1 << 31) - 1);
+    served(|s| s.top_p = 1.0);
+    served(|s| s.repetition_penalty = 1.0);
+    served(|s| s.repetition_window = 0);
+    served(|s| s.seed = u64::MAX);
 }
 
-/// **The effective values are what the record holds, whichever side set
-/// them.** A frozen knob resolves to its compiled value and a tunable one
-/// to what was supplied, and the result carries all six either way, so a
-/// replay reads one list rather than joining two.
-#[test]
-fn the_effective_values_carry_every_knob_from_either_side() {
-    let mut knobs = all_frozen();
-    knobs.temperature = Disposition::OperatorTunable;
-    let mut supplied = TunableValues::new();
-    supplied.insert("temperature".into(), 0.2);
-
-    let effective = knobs.resolve(&supplied).expect("every tunable supplied");
-    assert_eq!(effective.temperature, 0.2, "the tunable came from the wire");
-    assert_eq!(effective.seed, 11, "and the frozen one from the binary");
-    assert_eq!(effective.top_k, 40);
-}
-
-/// A frozen knob ignores a value supplied under its name. Frozen means the
-/// wire never carried it, so a value arriving anyway is a fact with no
-/// effect rather than a conflict to adjudicate.
-#[test]
-fn a_supplied_value_cannot_move_a_frozen_knob() {
-    let mut supplied = TunableValues::new();
-    supplied.insert("seed".into(), 999.0);
-    let effective = all_frozen().resolve(&supplied).expect("nothing is tunable");
-    assert_eq!(effective.seed, 11, "the compiled value stands");
-}
-
-/// **A tunable knob with no value refuses rather than defaulting**, naming
-/// the knob. A default here would be an election this crate made on the
-/// operator's behalf, which is the thing the disposition type exists to
-/// prevent.
+/// **The bound is the generation's and the ceiling the session's**: a bound
+/// above the ceiling refuses, one at it or below is served, zero included,
+/// and a re-feed carries none to judge.
 ///
-/// Perturbation: give the `OperatorTunable` arm of `take` a fallback value
-/// and this test fails. Watched under exactly that change.
+/// Perturbation: compare with `>=` and the bound at the ceiling refuses.
+/// Drop the comparison and the bound above it is served. Watched under both.
 #[test]
-fn a_tunable_knob_with_no_value_refuses_by_name() {
-    let mut knobs = all_frozen();
-    knobs.repetition_window = Disposition::OperatorTunable;
+fn a_bound_above_the_ceiling_refuses_and_one_at_it_is_served() {
     assert_eq!(
-        knobs.resolve(&TunableValues::new()),
-        Err(KnobRefusal::Unsupplied {
-            knob: "repetition-window"
+        judge(&carried(), Some((513, 512)), None),
+        Err(TokenRefusal::SamplingOutOfRange {
+            member: SamplingMember::MaxTokens
         })
     );
+    assert_eq!(judge(&carried(), Some((512, 512)), None), Ok(()));
+    assert_eq!(judge(&carried(), Some((0, 512)), None), Ok(()));
+    assert_eq!(judge(&carried(), None, None), Ok(()));
 }
 
-/// **A value supplied in the declaration reaches the engine's inputs**,
-/// per `weaver-spu-Spec` section 8, which is the point of the route: the
-/// values arrive with the instruction at admit and the engine takes them
-/// when the session opens. The frozen half is asserted beside it, because
-/// a route that moved a frozen value would take a deployment's lock away.
+/// **A field the cutoff hides refuses with both numbers**, per
+/// `weaver-spu-Spec` section 7.5: a `top_k` above the depth, and a `top_k`
+/// of zero, whose cutoff is the whole vocabulary. A depth at or past the
+/// cutoff stands, and no election judges nothing.
 ///
-/// Perturbation: have `Knobs::resolve` read its own frozen value for an
-/// `OperatorTunable` disposition and this test fails, the temperature
-/// reading 0.7 where the declaration said 0.2.
+/// Perturbation: compare the depth alone (`depth < top_k`) and the zero case
+/// is served. Watched under exactly that change.
 #[test]
-fn a_declared_value_resolves_and_a_frozen_one_does_not_move() {
-    let elections = Knobs {
-        temperature: Disposition::OperatorTunable,
-        top_k: Disposition::Frozen(40),
-        top_p: Disposition::Frozen(0.95),
-        repetition_penalty: Disposition::Frozen(1.1),
-        repetition_window: Disposition::Frozen(64),
-        seed: Disposition::Frozen(11),
-    };
-    let supplied: TunableValues = [
-        ("temperature".to_string(), 0.2f64),
-        // A name this binary froze, ignored where it appears.
-        ("seed".to_string(), 99f64),
-    ]
-    .into_iter()
-    .collect();
-    let effective = elections.resolve(&supplied).expect("resolves");
+fn a_field_below_the_cutoff_refuses_with_both_numbers_and_zero_among_them() {
     assert_eq!(
-        effective.temperature, 0.2,
-        "the declaration's value resolved"
+        judge(&carried(), Some((512, 512)), Some(20)),
+        Err(TokenRefusal::FieldBelowCutoff {
+            depth: 20,
+            top_k: 40
+        })
     );
+    let mut zero = carried();
+    zero.top_k = 0;
     assert_eq!(
-        effective.seed, 11,
-        "and a frozen parameter is not moved by a declaration naming it"
+        judge(&zero, Some((512, 512)), Some(20)),
+        Err(TokenRefusal::FieldBelowCutoff {
+            depth: 20,
+            top_k: 0
+        })
     );
+    assert_eq!(judge(&zero, Some((512, 512)), None), Ok(()));
+    assert_eq!(judge(&carried(), Some((512, 512)), Some(40)), Ok(()));
+    assert_eq!(judge(&carried(), None, Some(64)), Ok(()));
 }
 
 /// **A count supplied as anything but a count refuses**, per

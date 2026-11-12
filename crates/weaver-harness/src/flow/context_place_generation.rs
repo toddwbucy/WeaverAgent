@@ -42,6 +42,7 @@ impl RecordingContext {
             phase: self.phase,
             work: AccountWork::Generation(Box::new(GenerationTransaction {
                 grant: Some(grant),
+                asked: None,
                 native_admission: None,
                 reservation: None,
                 terminal: None,
@@ -127,10 +128,21 @@ impl RecordingContext {
                 });
             }
         };
+        // **The residency's carried set rides every generation**, per
+        // `weaver-harness-Spec` section 6.1: the defaults judged at adoption
+        // and the ceiling the checked Open stated, which `valid` above found
+        // standing.
+        let max_tokens = self.place_engine.as_ref().unwrap().limits().2;
+        let asked = TokenAsk::AppendAndGenerate {
+            sampling: self.sampling,
+            max_tokens,
+        };
         let directive = TokenDirective::AppendAndGenerate {
             turn: TurnKey(grant.turn.0.clone()),
             delta: grant.delta.clone(),
             tool_schemas: grant.schemas.clone(),
+            sampling: self.sampling,
+            max_tokens,
         };
         let reservation = match decode.stage_placement(directive) {
             Ok(DecodeStage::Queued(r)) => r,
@@ -160,6 +172,7 @@ impl RecordingContext {
         self.barrier.set_place_owed(true);
         self.generation = Some(GenerationTransaction {
             grant: Some(grant),
+            asked: Some(asked),
             native_admission: Some(native_admission),
             reservation: Some(reservation),
             terminal: None,
@@ -481,8 +494,12 @@ impl RecordingContext {
                 work.intermediates.push(received);
             }
             DecodeReply::Refusal(refusal) => {
+                let Some(asked) = work.asked.clone() else {
+                    work.terminal = Some(received);
+                    return Err(self.place_fault(io, "a refusal answered an append never staged"));
+                };
                 let record = RefusalRecord::Decode {
-                    asked: TokenAsk::AppendAndGenerate,
+                    asked,
                     refusal: refusal.clone(),
                 };
                 let payload = serde_json::value::to_raw_value(&record)

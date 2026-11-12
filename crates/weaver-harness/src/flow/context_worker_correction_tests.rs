@@ -145,6 +145,7 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                         turn,
                         delta,
                         tool_schemas,
+                        ..
                     } => {
                         assert_eq!(turn.0, "generation-turn");
                         let (original, schemas) =

@@ -193,7 +193,7 @@ fn residency_peer(
                     panic!("unexpected residency request")
                 };
                 assert_eq!(residency, FixtureResidency::BeforeAdmit);
-                assert_eq!(instruction, instruction_fixture());
+                assert_eq!(instruction, admitted_fixture());
                 assert_eq!(request.position, Position::Open);
                 assert_eq!(request.exchange.opener, Opener::Harness);
                 if mode == "delay" || mode == "full" {
@@ -309,7 +309,7 @@ fn residency_peer(
                 let answer = TokenAnswer::Opened(weaver_types::Opened { session, prefix_tokens: 3, capacity: 16384,
                     generation_limit: 16, terminal_tokens: 1,
                     request: serde_json::value::to_raw_value(&serde_json::json!({"rendered":rendered,"template":"fixture"})).unwrap(),
-                    measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","adapter":null,"prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap() });
+                    measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","adapter":null,"engine":null,"device":null,"prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap() });
                 packet!(decode.as_raw_fd(), &answer);
                 if mode.contains("generation") {
                     super::super::worker_startup::input::generation::tests::spu_after_open(
@@ -393,7 +393,7 @@ fn residency_fixture_ending(ending: FixtureEnding, mode: &str) {
             },
             position: Position::Open,
             payload: weaver_types::Payload::Directive(LifecycleDirective::Admit {
-                instruction: instruction_fixture(),
+                instruction: admitted_fixture(),
             }),
         };
         lifecycle.send(&request).unwrap();
@@ -477,9 +477,15 @@ fn instruction_fixture() -> SpuInstruction {
             surprisal_election: false,
             refeed_permission: false,
             column_permission: false,
-            tunable_values: Default::default(),
+            tunable_values: crate::lifecycle::test_tunable_values(),
         },
     }
+}
+
+/// The fixture as the admit carries it: the sampling defaults stripped, since
+/// they ride each generation instead.
+fn admitted_fixture() -> SpuInstruction {
+    crate::lifecycle::admitted_instruction(&instruction_fixture())
 }
 
 struct BinaryFixture(PathBuf);
@@ -519,8 +525,12 @@ pub(in crate::flow::context) fn drive<'a>(
     });
     let instruction = startup
         .original_enter()
-        .map(|original| original.envelope().enter().spu_instruction.clone())
-        .unwrap_or_else(instruction_fixture);
+        // The admit carries the instruction less the six sampling names, as
+        // `FoundationRun::begin` builds it.
+        .map(|original| {
+            crate::lifecycle::admitted_instruction(&original.envelope().enter().spu_instruction)
+        })
+        .unwrap_or_else(admitted_fixture);
     let mut owner = ResidencyComposition::new(
         startup,
         ResidencyRequest {
@@ -628,7 +638,7 @@ pub(in crate::flow::context) fn drive<'a>(
                 *stopped = Some(account);
                 return None;
             }
-            assert_eq!(account.request.instruction, instruction_fixture());
+            assert_eq!(account.request.instruction, admitted_fixture());
             match mode {
                 "refuse" => {
                     assert!(matches!(account.cause, ResidencyStop::Refused));

@@ -688,7 +688,7 @@ fn circuit_with_fixture(
                 };
                 let answer = TokenAnswer::Opened(Opened { session: SessionId("session".into()), prefix_tokens: 3, capacity: 16384, generation_limit, terminal_tokens: 1,
                     request: serde_json::value::to_raw_value(&serde_json::json!({"rendered":rendered,"template":"fixture"})).unwrap(),
-                    measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","adapter":null,"prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap() });
+                    measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","adapter":null,"engine":null,"device":null,"prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap() });
                 let raw = serde_json::to_vec(&answer).unwrap();
                 assert_eq!(
                     send(

@@ -117,6 +117,7 @@ pub(in crate::flow::context) fn spu(mode: &str, fd: i32) {
                 turn,
                 delta,
                 tool_schemas,
+                ..
             } => {
                 assert_eq!(turn.0, if prior { "session-0" } else { "wind-down-0" });
                 assert_eq!(delta, measured.take().unwrap());

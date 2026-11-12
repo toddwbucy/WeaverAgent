@@ -500,7 +500,7 @@ binding-kind = "serving"
 [spu-instruction.decoder]
 residual-readout-election = false
 surprisal-election = true
-tunable-values = { context-capacity = 32768, max-tokens-per-turn = 4096, seed = 451234785645 }
+tunable-values = { context-capacity = 32768, max-tokens-per-turn = 4096, seed = 451234785645, temperature = 0.7, top-k = 40, top-p = 0.95, repetition-penalty = 1.1, repetition-window = 64 }
 
 [spu-instruction.decoder.model-binding]
 artifact = "$ARTIFACT"

@@ -30,7 +30,7 @@ use weaver_spu::decoder::backend::TokenId;
 use weaver_spu::decoder::session::{NeverCancels, PositionedSinks, SamplerBuild, StopCondition};
 use weaver_spu::readout::ReadoutElection;
 use weaver_spu::residency::{Headroom, Residency};
-use weaver_spu::sampling::EffectiveKnobs;
+use weaver_spu::sampling::Sampling;
 use weaver_types::{ArtifactRef, ModelBinding};
 
 /// The pair, by ordinal.
@@ -89,7 +89,7 @@ fn generate_plain(resident: &weaver_spu::residency::Resident) -> (Vec<TokenId>, 
     let prefix = resident
         .tokenize("The capital of France is")
         .expect("a plain prompt tokenizes");
-    let knobs = EffectiveKnobs {
+    let sampling = Sampling {
         temperature: 0.0,
         top_k: 1,
         top_p: 1.0,
@@ -97,7 +97,7 @@ fn generate_plain(resident: &weaver_spu::residency::Resident) -> (Vec<TokenId>, 
         repetition_window: 0,
         seed: 11,
     };
-    let mut session = resident.open_session(&knobs, 4096).expect("session opens");
+    let mut session = resident.open_session(4096).expect("session opens");
     session.open(&prefix).expect("prefix decodes");
     let eos = resident
         .declared_eos()
@@ -116,10 +116,7 @@ fn generate_plain(resident: &weaver_spu::residency::Resident) -> (Vec<TokenId>, 
                 field: None,
                 on_column: &mut |_, _| {},
             },
-            SamplerBuild {
-                seed: 11,
-                penalty_window: 64,
-            },
+            SamplerBuild { seed: 11, sampling },
         )
         .expect("generates");
     let text = resident.detokenize(&generated.tokens).expect("detokenizes");

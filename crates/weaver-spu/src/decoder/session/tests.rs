@@ -10,6 +10,9 @@ struct Log {
     /// Every reseed the session asked for, in order: the seed it
     /// derived and the penalty window it read from the resident tail.
     reseeds: Vec<(u64, Vec<TokenId>)>,
+    /// The sampling set each reseed was handed, in order, so a test reads
+    /// what reached the backend rather than what the caller built.
+    samplings: Vec<crate::sampling::Sampling>,
     decoded: Vec<(Vec<TokenId>, usize)>,
     truncated: Vec<usize>,
     reestablished: usize,
@@ -53,8 +56,15 @@ impl Backend for Recorder {
     /// The seam's own, recorded rather than acted on: this backend
     /// samples from a script, so what a reseed does here is note that
     /// it happened and with what.
-    fn reseed(&mut self, seed: u64, window: &[TokenId]) -> Result<(), DecodeFault> {
-        self.0.borrow_mut().reseeds.push((seed, window.to_vec()));
+    fn reseed(
+        &mut self,
+        seed: u64,
+        sampling: &crate::sampling::Sampling,
+        window: &[TokenId],
+    ) -> Result<(), DecodeFault> {
+        let mut log = self.0.borrow_mut();
+        log.reseeds.push((seed, window.to_vec()));
+        log.samplings.push(*sampling);
         Ok(())
     }
 
@@ -202,7 +212,7 @@ fn placement_facts_clamp_without_backend_or_session_effects_across_real_operatio
                 },
                 SamplerBuild {
                     seed: 17,
-                    penalty_window: 32,
+                    sampling: carried_with_window(32),
                 },
             )
             .unwrap();
@@ -269,7 +279,7 @@ fn each_positioned_sink_fires_at_the_position_it_names() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("the generation runs");
@@ -359,7 +369,7 @@ fn the_refeed_appends_the_recorded_token_whatever_the_draw_said() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("the re-feed runs");
@@ -435,7 +445,7 @@ fn an_asked_column_that_does_not_arrive_faults() {
         },
         SamplerBuild {
             seed: 11,
-            penalty_window: 64,
+            sampling: carried_with_window(64),
         },
     );
     assert!(
@@ -485,7 +495,7 @@ fn a_step_that_cannot_be_measured_makes_the_whole_run_absent() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("the generation runs");
@@ -539,7 +549,7 @@ fn the_distribution_is_read_before_the_draw_at_every_step() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("the generation runs");
@@ -600,7 +610,7 @@ fn a_cancelled_refeed_lands_only_the_prefix_its_draws_count() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("the re-feed runs");
@@ -648,6 +658,96 @@ impl CancelPoll for CancelsAfter {
         self.polls += 1;
         now
     }
+}
+
+/// **Each generation's carried set is the one that reaches the backend**,
+/// per `weaver-spu-Spec` section 8: two generations carrying different sets,
+/// then a re-feed carrying a third, hand the backend's reseed exactly those
+/// three, in order. No member of any set equals a deploy constant, so a set
+/// held from an earlier generation or compiled in reads as a mismatch.
+///
+/// Perturbation: hand `reseed` the first generation's set at every later
+/// generation, or a fixed set, and this fails on the second entry. Watched
+/// under a fixed set in `append_and_generate`.
+#[test]
+fn each_generation_hands_the_backend_the_set_it_carried() {
+    use crate::sampling::Sampling;
+    let sets = [
+        Sampling {
+            temperature: 0.5,
+            top_k: 7,
+            top_p: 0.6,
+            repetition_penalty: 1.3,
+            repetition_window: 8,
+            seed: 1,
+        },
+        Sampling {
+            temperature: 1.25,
+            top_k: 3,
+            top_p: 0.875,
+            repetition_penalty: 1.0625,
+            repetition_window: 16,
+            seed: 2,
+        },
+        Sampling {
+            temperature: 0.25,
+            top_k: 5,
+            top_p: 0.5,
+            repetition_penalty: 1.5,
+            repetition_window: 4,
+            seed: 3,
+        },
+    ];
+    let log = Rc::new(RefCell::new(Log {
+        script: vec![TokenId(99), TokenId(99)],
+        ..Default::default()
+    }));
+    let mut session = Session::new(
+        Box::new(Recorder(Rc::clone(&log), DISTRIBUTION.to_vec())),
+        64,
+        FlushMechanism::TruncateToPosition,
+        false,
+    );
+    session.open(&[TokenId(4)]).expect("the prefix lands");
+    for sampling in &sets[..2] {
+        session
+            .append_and_generate(
+                &[TokenId(5)],
+                &stop_at(0),
+                &mut NeverCancels,
+                &mut |_| {},
+                PositionedSinks {
+                    field: None,
+                    on_column: &mut |_, _| {},
+                },
+                SamplerBuild {
+                    seed: sampling.seed,
+                    sampling: *sampling,
+                },
+            )
+            .expect("the generation runs");
+    }
+    session
+        .refeed(
+            &[TokenId(6)],
+            &[TokenId(7)],
+            TokenId(0),
+            &mut NeverCancels,
+            PositionedSinks {
+                field: None,
+                on_column: &mut |_, _| {},
+            },
+            SamplerBuild {
+                seed: sets[2].seed,
+                sampling: sets[2],
+            },
+        )
+        .expect("the re-feed runs");
+    assert_eq!(
+        log.borrow().samplings,
+        sets.to_vec(),
+        "each reseed was handed the set its generation carried"
+    );
 }
 
 fn stop_at(terminator: u32) -> StopCondition {
@@ -735,7 +835,7 @@ fn the_stream_fires_for_exactly_the_retained_tokens() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("the generation runs");
@@ -768,7 +868,7 @@ fn the_delta_decodes_at_the_resident_end_never_at_the_prefix() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("first turn");
@@ -791,7 +891,7 @@ fn the_delta_decodes_at_the_resident_end_never_at_the_prefix() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("second turn");
@@ -824,7 +924,7 @@ fn the_resident_length_never_rewinds_across_turns() {
                 },
                 SamplerBuild {
                     seed: 11,
-                    penalty_window: 64,
+                    sampling: carried_with_window(64),
                 },
             )
             .expect("a turn");
@@ -857,7 +957,7 @@ fn the_terminator_lands_on_the_clean_path() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("a turn");
@@ -892,7 +992,7 @@ fn the_terminator_lands_on_the_cancelled_path_too() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("a cancelled turn");
@@ -927,7 +1027,7 @@ fn the_cancel_is_bounded_by_one_token() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("a cancelled turn");
@@ -963,7 +1063,7 @@ fn an_overflowing_delta_refuses_with_the_session_s_account() {
         },
         SamplerBuild {
             seed: 11,
-            penalty_window: 64,
+            sampling: carried_with_window(64),
         },
     );
     match refusal {
@@ -1001,7 +1101,7 @@ fn a_truncating_family_flushes_by_truncating_to_the_prefix() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("a turn");
@@ -1031,7 +1131,7 @@ fn the_cuts_bounds_hold_at_their_edges() {
                 },
                 SamplerBuild {
                     seed: 11,
-                    penalty_window: 64,
+                    sampling: carried_with_window(64),
                 },
             )
             .expect("a turn");
@@ -1103,7 +1203,7 @@ fn a_second_open_refuses_rather_than_rewinding() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("a turn");
@@ -1147,7 +1247,7 @@ fn a_failed_flush_closes_the_session() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         ),
         Err(DecodeFault::NotOpen),
@@ -1182,7 +1282,7 @@ fn an_engine_fault_mid_generation_closes_the_session() {
                 },
                 SamplerBuild {
                     seed: 11,
-                    penalty_window: 64,
+                    sampling: carried_with_window(64),
                 },
             )
             .is_err(),
@@ -1200,7 +1300,7 @@ fn an_engine_fault_mid_generation_closes_the_session() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         ),
         Err(DecodeFault::NotOpen),
@@ -1250,7 +1350,7 @@ fn an_unremovable_span_refuses_and_the_session_stands() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .expect("a generation stands so there is an interior");
@@ -1327,7 +1427,7 @@ fn the_elision_removes_its_span_and_keeps_the_rest_in_order() {
                     },
                     SamplerBuild {
                         seed: 11,
-                        penalty_window: 64,
+                        sampling: carried_with_window(64),
                     },
                 )
                 .expect("the generation runs");
@@ -1400,7 +1500,7 @@ fn the_sampler_is_rebuilt_per_generation_across_a_flush() {
             },
             SamplerBuild {
                 seed: 0xAAAA,
-                penalty_window: 2,
+                sampling: carried_with_window(2),
             },
         )
         .expect("the first generation runs");
@@ -1418,7 +1518,7 @@ fn the_sampler_is_rebuilt_per_generation_across_a_flush() {
             },
             SamplerBuild {
                 seed: 0xBBBB,
-                penalty_window: 2,
+                sampling: carried_with_window(2),
             },
         )
         .expect("the second generation runs");
@@ -1490,7 +1590,7 @@ fn the_drawn_stop_is_recorded_where_a_stop_ended_the_generation() {
                 },
                 SamplerBuild {
                     seed: 11,
-                    penalty_window: 64,
+                    sampling: carried_with_window(64),
                 },
             )
             .expect("a turn")
@@ -1502,4 +1602,17 @@ fn the_drawn_stop_is_recorded_where_a_stop_ended_the_generation() {
     let cut = run(vec![TokenId(7), TokenId(8), TokenId(9)], 1);
     assert_eq!(cut.stopped, Stopped::LimitReached);
     assert_eq!(cut.drawn_stop, None, "the limit drew no stop");
+}
+
+/// A carried set with the given penalty window, the rest at the constants the
+/// composition root froze before the carrier (`weaver-spu-Spec` section 8).
+fn carried_with_window(window: u32) -> crate::sampling::Sampling {
+    crate::sampling::Sampling {
+        temperature: 0.7,
+        top_k: 40,
+        top_p: 0.95,
+        repetition_penalty: 1.1,
+        repetition_window: window,
+        seed: 0,
+    }
 }

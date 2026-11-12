@@ -65,7 +65,7 @@ fn sealed_answer() -> String {
     concat!(
         r#"{"answer":{"replay":{"events":["#,
         r#"{"envelope":{"kind":"model.request","run":"r-1","turn":"t-1","sequence":"4"},"#,
-        r#""pairs":{"rendered":"hi","template":"tmpl","sampling":{"seed":37}}},"#,
+        r#""pairs":{"rendered":"hi","template":"tmpl","sampling":{"temperature":0.7,"top_k":40,"top_p":0.95,"repetition_penalty":1.1,"repetition_window":64,"seed":37,"generation_seed":5}}},"#,
         r#"{"envelope":{"kind":"model.measurement","run":"r-1","turn":"t-1","sequence":"6"},"#,
         r#""pairs":{"input_tokens":[1,2],"output_tokens":[3],"model":"art","weights_hash":"h"}}"#,
         r#"]}}}"#,
@@ -87,6 +87,16 @@ fn run_drive_as(
     custodian: Option<String>,
     decode_script: fn(std::os::fd::OwnedFd),
     destination: &str,
+) -> (Result<(), crate::engine::TurnError>, Vec<serde_json::Value>) {
+    run_drive_at(custodian, decode_script, destination, None)
+}
+
+/// A drive under an elected field of `field_depth`, where one stands.
+fn run_drive_at(
+    custodian: Option<String>,
+    decode_script: fn(std::os::fd::OwnedFd),
+    destination: &str,
+    field_depth: Option<u32>,
 ) -> (Result<(), crate::engine::TurnError>, Vec<serde_json::Value>) {
     let (sink_fd, path) = sink();
     let mut record = diagnostic_record(sink_fd, destination);
@@ -143,8 +153,9 @@ fn run_drive_as(
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
-        super::drive(&mut ports, false, "art")
+        super::drive(&mut ports, false, "art", field_depth)
     };
     drop(decode);
     drop(state);
@@ -230,6 +241,207 @@ fn refused_holdings_author_no_identity() {
     );
 }
 
+/// One recorded generation whose `sampling` block is `block`, as the
+/// custodian would answer it.
+fn answer_with_sampling(block: &str) -> String {
+    format!(
+        concat!(
+            r#"{{"answer":{{"replay":{{"events":["#,
+            r#"{{"envelope":{{"kind":"model.request","run":"r-1","turn":"t-1","sequence":"4"}},"#,
+            r#""pairs":{{"rendered":"hi","template":"tmpl","sampling":{}}}}},"#,
+            r#"{{"envelope":{{"kind":"model.measurement","run":"r-1","turn":"t-1","sequence":"6"}},"#,
+            r#""pairs":{{"input_tokens":[1,2],"output_tokens":[3],"model":"art","weights_hash":"h"}}}}"#,
+            r#"]}}}}}}"#,
+            "\n"
+        ),
+        block
+    )
+}
+
+/// A recorded set no default of this crate holds, member for member.
+const RECORDED: &str = r#"{"temperature":0.5,"top_k":7,"top_p":0.9,"repetition_penalty":1.3,"repetition_window":16,"seed":37,"generation_seed":5}"#;
+
+/// **Each re-feed carries the six members its recorded generation ran
+/// under**, per `diagnostic-replay-loop` section 2 and
+/// `weaver-harness-Spec` section 6.1: the stand-in reads the directive's
+/// `sampling` and requires the recorded block less `generation_seed`, which
+/// is the SPU's own record of the draw. The recorded values differ from the
+/// seat's carried set in every member, so a re-feed sent with any other set
+/// fails here.
+///
+/// Perturbation: pass `crate::engine::test_carried().sampling`, or any fixed
+/// set, to `seat.refeed` in `drive` in place of `source.carried`, and the
+/// stand-in's assertion fails.
+#[test]
+fn a_refeed_carries_the_recorded_values() {
+    fn checks_the_carried_set(far: std::os::fd::OwnedFd) {
+        let mut buf = vec![0u8; 65536];
+        let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("takes the re-feed");
+        let directive: serde_json::Value =
+            serde_json::from_slice(&buf[..n]).expect("the directive parses");
+        assert_eq!(
+            directive["kind"], "re_feed",
+            "the drive crossed: {directive}"
+        );
+        assert_eq!(
+            directive["sampling"],
+            serde_json::json!({
+                "temperature": 0.5,
+                "top_k": 7,
+                "top_p": 0.9,
+                "repetition_penalty": 1.3,
+                "repetition_window": 16,
+                "seed": 37,
+            }),
+            "the re-feed carries the recorded six: {directive}"
+        );
+        let refed = format!(
+            concat!(
+                r#"{{"kind":"re_fed","body":{{"emission":"hi","finish":"completed","#,
+                r#""content":[{{"type":"text","text":"hi"}}],"#,
+                r#""request":{{"rendered":"hi","template":"tmpl","sampling":{}}},"#,
+                r#""measurement":{{"input_tokens":[1,2],"output_tokens":[3],"#,
+                r#""model":"art","weights_hash":"h"}},"#,
+                r#""resident":6,"capacity":64}}}}"#
+            ),
+            RECORDED
+        );
+        send(far.as_raw_fd(), refed.as_bytes(), MsgFlags::empty()).expect("answers");
+    }
+    let (outcome, lines) = run_drive(Some(answer_with_sampling(RECORDED)), checks_the_carried_set);
+    assert!(outcome.is_ok());
+    let close = lines.last().expect("the close stands");
+    assert_eq!(
+        close["payload"]["outcome"]["kind"], "certified",
+        "the recorded set re-fed certifies: {close}"
+    );
+}
+
+/// **A recorded block missing a member fails input identity**, before any
+/// re-feed, naming the turn and the member, per `diagnostic-replay-loop`
+/// section 3, step 1: a default in its place would re-feed under a value
+/// the source never ran with. A block holding the six and more reads, the
+/// `generation_seed` beside them being the SPU's own record.
+///
+/// Perturbation: default a missing member in `carried_members` and the
+/// pass reaches the re-feed, which the idle stand-in never answers.
+#[test]
+fn a_recorded_block_missing_a_member_refuses_at_identity() {
+    for (member, block) in [
+        (
+            "temperature",
+            r#"{"top_k":7,"top_p":0.9,"repetition_penalty":1.3,"repetition_window":16,"seed":37}"#,
+        ),
+        (
+            "top_k",
+            r#"{"temperature":0.5,"top_p":0.9,"repetition_penalty":1.3,"repetition_window":16,"seed":37}"#,
+        ),
+        (
+            "top_p",
+            r#"{"temperature":0.5,"top_k":7,"repetition_penalty":1.3,"repetition_window":16,"seed":37}"#,
+        ),
+        (
+            "repetition_penalty",
+            r#"{"temperature":0.5,"top_k":7,"top_p":0.9,"repetition_window":16,"seed":37}"#,
+        ),
+        (
+            "repetition_window",
+            r#"{"temperature":0.5,"top_k":7,"top_p":0.9,"repetition_penalty":1.3,"seed":37}"#,
+        ),
+        (
+            "seed",
+            r#"{"temperature":0.5,"top_k":7,"top_p":0.9,"repetition_penalty":1.3,"repetition_window":16}"#,
+        ),
+    ] {
+        let (outcome, lines) = run_drive(Some(answer_with_sampling(block)), idle_decode);
+        assert!(outcome.is_ok(), "{member}");
+        assert!(
+            lines.iter().all(|l| l["kind"] != "replay.identity"),
+            "without {member} no identity is authored"
+        );
+        let close = lines.last().expect("the close stands");
+        assert_eq!(
+            close["payload"]["outcome"]["reason"]["kind"], "identity_refused",
+            "without {member}: {close}"
+        );
+        let detail = close["payload"]["outcome"]["reason"]["detail"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            detail.contains("t-1") && detail.contains(member),
+            "the refusal names the turn and {member}: {detail}"
+        );
+    }
+}
+
+/// **A recorded `top_k` the elected field cannot report past fails input
+/// identity**, before any re-feed, naming both numbers, per
+/// `diagnostic-replay-loop` section 3, step 1 and `weaver-spu-Spec` section
+/// 7.5: every re-feed of that generation would refuse as `FieldBelowCutoff`.
+/// Zero refuses too, its cutoff being the whole vocabulary. The control, a
+/// depth at the recorded `top_k`, certifies.
+///
+/// Perturbation: drop the depth check from `drive` and both refusing cases
+/// reach the re-feed, which the idle stand-in never answers.
+#[test]
+fn a_recorded_top_k_past_the_field_depth_refuses_at_identity() {
+    let zero = RECORDED.replace(r#""top_k":7"#, r#""top_k":0"#);
+    for (label, block, depth) in [("above", RECORDED.to_string(), 6), ("zero", zero, 64)] {
+        let (outcome, lines) = run_drive_at(
+            Some(answer_with_sampling(&block)),
+            idle_decode,
+            "s-d",
+            Some(depth),
+        );
+        assert!(outcome.is_ok(), "{label}");
+        let close = lines.last().expect("the close stands");
+        assert_eq!(
+            close["payload"]["outcome"]["reason"]["kind"], "identity_refused",
+            "{label}: {close}"
+        );
+        let detail = close["payload"]["outcome"]["reason"]["detail"]
+            .as_str()
+            .unwrap_or_default();
+        let top_k = if label == "zero" {
+            "top_k 0"
+        } else {
+            "top_k 7"
+        };
+        assert!(
+            detail.contains(top_k) && detail.contains(&format!("depth {depth}")),
+            "{label}: the refusal names both numbers: {detail}"
+        );
+    }
+    fn answers_the_recorded(far: std::os::fd::OwnedFd) {
+        let mut buf = vec![0u8; 65536];
+        let _ = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("takes the re-feed");
+        let refed = format!(
+            concat!(
+                r#"{{"kind":"re_fed","body":{{"emission":"hi","finish":"completed","#,
+                r#""content":[{{"type":"text","text":"hi"}}],"#,
+                r#""request":{{"rendered":"hi","template":"tmpl","sampling":{}}},"#,
+                r#""measurement":{{"input_tokens":[1,2],"output_tokens":[3],"#,
+                r#""model":"art","weights_hash":"h"}},"#,
+                r#""resident":6,"capacity":64}}}}"#
+            ),
+            RECORDED
+        );
+        send(far.as_raw_fd(), refed.as_bytes(), MsgFlags::empty()).expect("answers");
+    }
+    let (outcome, lines) = run_drive_at(
+        Some(answer_with_sampling(RECORDED)),
+        answers_the_recorded,
+        "s-d",
+        Some(7),
+    );
+    assert!(outcome.is_ok());
+    let close = lines.last().expect("the close stands");
+    assert_eq!(
+        close["payload"]["outcome"]["kind"], "certified",
+        "a depth at the recorded top_k certifies: {close}"
+    );
+}
+
 /// **A pass that died manufactures no outcome.** The decode peer takes
 /// the re-feed directive and closes, the drive loses the channel, and
 /// the record ends where the replay stopped: the bracket closed
@@ -281,7 +493,7 @@ fn answers_refed(far: std::os::fd::OwnedFd) {
     let refed = concat!(
         r#"{"kind":"re_fed","body":{"emission":"hi","finish":"completed","#,
         r#""content":[{"type":"text","text":"hi"}],"#,
-        r#""request":{"rendered":"hi","template":"tmpl","sampling":{"seed":37}},"#,
+        r#""request":{"rendered":"hi","template":"tmpl","sampling":{"temperature":0.7,"top_k":40,"top_p":0.95,"repetition_penalty":1.1,"repetition_window":64,"seed":37,"generation_seed":5}},"#,
         r#""measurement":{"input_tokens":[1,2],"output_tokens":[3],"#,
         r#""model":"art","weights_hash":"h"},"#,
         r#""resident":6,"capacity":64}}"#
@@ -373,7 +585,7 @@ fn a_matching_replay_certifies_under_the_runs_own_session() {
 #[test]
 fn a_diagnostic_destination_certifies_without_renaming_source_evidence() {
     const SOURCE: &str = concat!(
-        r#"{"session":"s-source","run":"r-source","turn":"t-1","sequence":"4","kind":"model.request","payload":{"rendered":"hi","template":"tmpl","sampling":{"seed":37}}}"#,
+        r#"{"session":"s-source","run":"r-source","turn":"t-1","sequence":"4","kind":"model.request","payload":{"rendered":"hi","template":"tmpl","sampling":{"temperature":0.7,"top_k":40,"top_p":0.95,"repetition_penalty":1.1,"repetition_window":64,"seed":37,"generation_seed":5}}}"#,
         "\n",
         r#"{"session":"s-source","run":"r-source","turn":"t-1","sequence":"6","kind":"model.measurement","payload":{"input_tokens":[1,2],"output_tokens":[3],"model":"art","weights_hash":"h"}}"#,
         "\n",
@@ -466,7 +678,7 @@ fn input_differs(far: std::os::fd::OwnedFd) {
 const DRAW_DIFFERS: &str = concat!(
     r#"{"kind":"re_fed","body":{"emission":"yo","finish":"completed","#,
     r#""content":[{"type":"text","text":"yo"}],"#,
-    r#""request":{"rendered":"hi","template":"tmpl","sampling":{"seed":37}},"#,
+    r#""request":{"rendered":"hi","template":"tmpl","sampling":{"temperature":0.7,"top_k":40,"top_p":0.95,"repetition_penalty":1.1,"repetition_window":64,"seed":37,"generation_seed":5}},"#,
     r#""measurement":{"input_tokens":[1,2],"output_tokens":[4],"#,
     r#""model":"art","weights_hash":"h"},"#,
     r#""resident":6,"capacity":64}}"#
@@ -477,7 +689,7 @@ const DRAW_DIFFERS: &str = concat!(
 const INPUT_DIFFERS: &str = concat!(
     r#"{"kind":"re_fed","body":{"emission":"hi","finish":"completed","#,
     r#""content":[{"type":"text","text":"hi"}],"#,
-    r#""request":{"rendered":"hi","template":"tmpl","sampling":{"seed":37}},"#,
+    r#""request":{"rendered":"hi","template":"tmpl","sampling":{"temperature":0.7,"top_k":40,"top_p":0.95,"repetition_penalty":1.1,"repetition_window":64,"seed":37,"generation_seed":5}},"#,
     r#""measurement":{"input_tokens":[1,9],"output_tokens":[3],"#,
     r#""model":"art","weights_hash":"h"},"#,
     r#""resident":6,"capacity":64}}"#
@@ -531,7 +743,7 @@ fn resident_spu(far: std::os::fd::OwnedFd, mut resident: u64, starts: &[u64]) {
                     concat!(
                         r#"{{"kind":"re_fed","body":{{"emission":"hi","finish":"completed","#,
                         r#""content":[{{"type":"text","text":"hi"}}],"#,
-                        r#""request":{{"rendered":"hi","template":"tmpl","sampling":{{"seed":37}}}},"#,
+                        r#""request":{{"rendered":"hi","template":"tmpl","sampling":{{"temperature":0.7,"top_k":40,"top_p":0.95,"repetition_penalty":1.1,"repetition_window":64,"seed":37,"generation_seed":5}}}},"#,
                         r#""measurement":{{"input_tokens":[1,2],"output_tokens":[{}],"#,
                         r#""model":"art","weights_hash":"h"}},"#,
                         r#""resident":{},"capacity":32768}}}}"#
@@ -553,7 +765,7 @@ fn generation(turn: &str, request: u64, measurement: u64) -> String {
     format!(
         concat!(
             r#"{{"envelope":{{"kind":"model.request","run":"r-1","turn":"{t}","sequence":"{a}"}},"#,
-            r#""pairs":{{"rendered":"hi","template":"tmpl","sampling":{{"seed":37}}}}}},"#,
+            r#""pairs":{{"rendered":"hi","template":"tmpl","sampling":{{"temperature":0.7,"top_k":40,"top_p":0.95,"repetition_penalty":1.1,"repetition_window":64,"seed":37,"generation_seed":5}}}}}},"#,
             r#"{{"envelope":{{"kind":"model.measurement","run":"r-1","turn":"{t}","sequence":"{b}"}},"#,
             r#""pairs":{{"input_tokens":[1,2],"output_tokens":[3],"model":"art","weights_hash":"h"}}}}"#
         ),
@@ -702,7 +914,7 @@ fn the_replay_certifies_past_an_elision() {
 #[test]
 fn an_edit_without_its_place_or_its_counts_refuses_the_grouping() {
     let inside = holdings(&[
-        r#"{"envelope":{"kind":"model.request","run":"r-1","turn":"t-1","sequence":"4"},"pairs":{"rendered":"hi","template":"tmpl","sampling":{"seed":37}}}"#.to_string(),
+        r#"{"envelope":{"kind":"model.request","run":"r-1","turn":"t-1","sequence":"4"},"pairs":{"rendered":"hi","template":"tmpl","sampling":{"temperature":0.7,"top_k":40,"top_p":0.95,"repetition_penalty":1.1,"repetition_window":64,"seed":37,"generation_seed":5}}}"#.to_string(),
         flush_event(5, 6, 3),
         r#"{"envelope":{"kind":"model.measurement","run":"r-1","turn":"t-1","sequence":"6"},"pairs":{"input_tokens":[1,2],"output_tokens":[3],"model":"art","weights_hash":"h"}}"#.to_string(),
     ]);

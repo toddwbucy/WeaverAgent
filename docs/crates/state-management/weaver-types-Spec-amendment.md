@@ -1211,7 +1211,7 @@ PLACE-3, PLACE-5, PLACE-6]
 
 | Type and variant | Required fields |
 | --- | --- |
-| TokenDirective::AppendAndGenerate | Existing turn:TurnKey and delta:Vec<Message>, plus tool_schemas:Vec<String> |
+| TokenDirective::AppendAndGenerate | Existing turn:TurnKey, delta:Vec<Message>, sampling:Sampling and max_tokens:u64, plus tool_schemas:Vec<String> |
 | TokenDirective::MeasureDelta | keep:u64, delta:Vec<Message>, tool_schemas:Vec<String> |
 | TokenAnswer::Opened(Opened) | Adjacent-tag body is the named Opened wrapper below |
 | TokenAnswer::DeltaMeasured | resident:u64, prefix_tokens:u64, keep:u64, input_tokens:u64, capacity:u64 |
@@ -1244,7 +1244,8 @@ No new floor measurement mirror or generation variant is introduced.
 CUT-RELOAD's ReloadTail, ReloadItem, StagedTail, Staged, ReloadRefused, Busy and
 ReloadCode are private harness types defined by Spec 06. They add no wire arm.
 STAGED-APPEND consumes the pinned tail in the next ordinary AppendAndGenerate. ReFeed's
-rendered string, nonempty token path and ReFed answer retain their diagnostic meaning.
+rendered string, nonempty token path, sampling set and ReFed answer retain their
+diagnostic meaning.
 [SEAM-2, PLACE-5, R20-15, R20-16]
 
 SpanRef and argument occurrences remain separate types. UnitOccurrenceId is

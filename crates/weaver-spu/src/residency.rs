@@ -207,6 +207,10 @@ pub struct Admission<'a> {
     /// The PAIR-3 division a multi-device GGUF load splits by, `None` for
     /// the native backend, whose pair keeps its own tensor-parallel design.
     division: Option<&'a Division>,
+    /// The headroom the room judgment held beside each share, in bytes, which
+    /// the record's `device` block states (`weaver-spu-Spec` section 3.1.2).
+    #[cfg(feature = "gguf")]
+    headroom: u64,
     /// What makes the door a door: nothing outside this module constructs one.
     _admitted: (),
 }
@@ -215,6 +219,10 @@ impl Admission<'_> {
     #[cfg(feature = "gguf")]
     pub(crate) fn adapter(&self) -> Option<&crate::lora::Prepared> {
         self.adapter
+    }
+    #[cfg(feature = "gguf")]
+    pub(crate) fn headroom(&self) -> u64 {
+        self.headroom
     }
     pub fn path(&self) -> &Path {
         self.path
@@ -417,38 +425,37 @@ impl Resident {
     /// context borrows its model, and this holds the model, so the returned
     /// session cannot outlive the residency it decodes against. The lifetime
     /// carries that rather than a rule a caller has to keep.
-    pub fn open_session(
-        &self,
-        knobs: &crate::sampling::EffectiveKnobs,
-        capacity: u32,
-    ) -> Result<Session<'_>, DecodeFault> {
+    pub fn open_session(&self, capacity: u32) -> Result<Session<'_>, DecodeFault> {
         backend::for_container(self.header.container)?;
-        // On a build carrying no engine the two below are consumed by no arm,
+        // On a build carrying no engine the capacity is consumed by no arm,
         // and saying so here is cheaper than shaping the signature around a
         // build that cannot serve anything anyway.
         #[cfg(not(any(feature = "gguf", feature = "cuda")))]
-        let _ = (knobs, capacity);
+        let _ = capacity;
         match &self.model {
             #[cfg(feature = "gguf")]
             LoadedModel::Gguf(model) => {
                 let engine = crate::decoder::gguf::GgufEngine::open(
                     model,
-                    knobs,
                     capacity,
                     self.readout.elected(),
                 )?;
+                let flush = self.flush_mechanism()?;
+                // The blocks are read once the context is made, and every
+                // measurement of the session carries them (Spec section 3.1).
+                let blocks = crate::decoder::gguf::render_blocks(model, &engine, flush)?;
                 Ok(Session::new(
                     Box::new(engine),
                     capacity as usize,
-                    self.flush_mechanism()?,
+                    flush,
                     self.surprisal_elected,
-                ))
+                )
+                .with_blocks(blocks))
             }
             #[cfg(feature = "cuda")]
             LoadedModel::Native(model) => {
                 let engine = crate::decoder::native::NativeEngine::open(
                     model,
-                    knobs,
                     capacity,
                     self.readout.elected(),
                 )?;
@@ -895,6 +902,8 @@ impl Residency {
             header: &header,
             devices: &binding.devices,
             division: plan.division.as_ref(),
+            #[cfg(feature = "gguf")]
+            headroom: headroom.0,
             _admitted: (),
         };
         let model = load(&admission)?;
