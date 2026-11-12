@@ -12,6 +12,14 @@
 //! the tokens and each token's entropy and surprisal as f32 bits, so a
 //! comparison reads bit identity and not closeness.
 //!
+//! **The theta blocks ride beside the record.** Where the session rendered
+//! its `engine` and `device` blocks (section 3.1), they are written as they
+//! were rendered to `<out>.theta.json`, so a device run puts on file the
+//! blocks a real placement rendered. The record itself stays comparable with
+//! a tree that renders none, but the file reads `Session::blocks`, so it
+//! copies into a tree from the act that renders the blocks onward. A tree
+//! before that act takes this file as it stood at that act's base.
+//!
 //! **The tree before an act does not hold this file.** It is copied into that
 //! checkout's `tests/` untracked for the run and removed after. Each record
 //! carries the commit its tree stood at and that tree's `git status` lines,
@@ -44,7 +52,7 @@ use std::process::Command;
 use weaver_spu::decoder::session::{NeverCancels, PositionedSinks, SamplerBuild, StopCondition};
 use weaver_spu::readout::ReadoutElection;
 use weaver_spu::residency::{Headroom, Residency};
-use weaver_spu::sampling::EffectiveKnobs;
+use weaver_spu::sampling::Sampling;
 use weaver_types::{ArtifactRef, DeviceOrdinal, ModelBinding};
 
 /// Longer than the penalty window, so the window wraps inside the run.
@@ -116,7 +124,7 @@ fn record_one_generation_on_the_lane() {
         .expect("the prompt tokenizes");
     // The frozen declaration the host watches use: a real declaration, so
     // the draw reads the distribution's values and not only their order.
-    let knobs = EffectiveKnobs {
+    let sampling = Sampling {
         temperature: 0.7,
         top_k: 40,
         top_p: 0.95,
@@ -124,9 +132,7 @@ fn record_one_generation_on_the_lane() {
         repetition_window: 64,
         seed: SEED,
     };
-    let mut session = resident
-        .open_session(&knobs, 4096)
-        .expect("the session opens");
+    let mut session = resident.open_session(4096).expect("the session opens");
     session.open(&prefix).expect("the prefix decodes");
     let terminator = resident
         .declared_eos()
@@ -149,7 +155,7 @@ fn record_one_generation_on_the_lane() {
             },
             SamplerBuild {
                 seed: SEED,
-                penalty_window: 64,
+                sampling,
             },
         )
         .expect("the generation runs");
@@ -178,6 +184,16 @@ fn record_one_generation_on_the_lane() {
         "the run measured both signals, so the record compares more than the tokens"
     );
     std::fs::write(&out, format!("{record}\n")).expect("the record writes");
+    if let Some(blocks) = session.blocks() {
+        let theta = out.with_extension("theta.json");
+        let text = format!(
+            "{{\"engine\":{},\"device\":{}}}\n",
+            blocks.engine.get(),
+            blocks.device.get()
+        );
+        std::fs::write(&theta, text).expect("the theta blocks write");
+        eprintln!("wrote the theta blocks to {}", theta.display());
+    }
     eprintln!(
         "recorded {} tokens on {:?} to {}",
         generated.tokens.len(),

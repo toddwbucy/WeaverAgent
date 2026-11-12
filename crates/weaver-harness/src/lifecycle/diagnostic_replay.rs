@@ -337,6 +337,7 @@ impl Setup<'_> {
         seat.replayed = true;
         let reader_elected = seat.reader_elected;
         let artifact = seat.artifact.clone();
+        let field_depth = run.load.field;
         let spu = run.spu.as_ref().ok_or(ChannelFault::Closed)?;
         let driven = {
             let mut ports = ReplayPorts {
@@ -347,7 +348,7 @@ impl Setup<'_> {
                 state: run.state.as_mut(),
                 failed: false,
             };
-            crate::replay::drive(&mut ports, reader_elected, &artifact)
+            crate::replay::drive(&mut ports, reader_elected, &artifact, field_depth)
                 .map_err(|_| ChannelFault::Closed)
         };
         if self.replay.as_ref().unwrap().decode_dead {
@@ -674,12 +675,14 @@ impl ReplayPorts<'_, '_> {
         turn: &TurnKey,
         rendered: String,
         path: Vec<u32>,
+        sampling: weaver_types::Sampling,
     ) -> Result<Option<weaver_types::Generation>, TurnError> {
         let path_len = path.len() as u64;
         if !self.send(&TokenDirective::ReFeed {
             turn: turn.clone(),
             rendered,
             path,
+            sampling,
         })? {
             return Ok(None);
         }
@@ -1005,8 +1008,9 @@ impl ReplaySeat for ReplayPorts<'_, '_> {
         turn: &TurnKey,
         rendered: String,
         path: Vec<u32>,
+        sampling: weaver_types::Sampling,
     ) -> Result<Option<weaver_types::Generation>, TurnError> {
-        let result = self.refeed_inner(turn, rendered, path);
+        let result = self.refeed_inner(turn, rendered, path, sampling);
         if matches!(result, Err(TurnError::ChannelLost)) {
             self.failed = true;
             let control = self.management.replay.as_mut().unwrap();

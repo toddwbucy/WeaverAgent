@@ -28,7 +28,7 @@ fn object<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a Map<String, Value>>
 /// amendment ADP-3: `null` for a base-only load, or the closed object
 /// `artifact`, `sha256`, `scale` for an adapted one, the digest in the state
 /// flow's own spelling and the scale a number that narrows to a finite f32.
-/// An absent member fails the five-member shape.
+/// An absent member fails the seven-member shape.
 fn adapter_shape(adapter: &Value) -> bool {
     if adapter.is_null() {
         return true;
@@ -42,6 +42,15 @@ fn adapter_shape(adapter: &Value) -> bool {
                 .as_f64()
                 .is_some_and(|scale| (scale as f32).is_finite())
     })
+}
+
+/// **The `engine` and `device` blocks are stated either way and carried
+/// opaque**, per SPU-OPEN and HARNESS-OPEN: each is an object, or `null`
+/// where the SPU's backend renders none yet (`weaver-spu-Spec` section
+/// 3.1.5). Their members are the SPU's vocabulary (section 3.1), so the
+/// harness checks the kind and never the contents.
+fn theta_block_shape(block: &Value) -> bool {
+    block.is_null() || block.is_object()
 }
 
 pub(crate) fn validate(opened: &Opened, session: &SessionId) -> Result<(), OpenEvidenceError> {
@@ -70,6 +79,8 @@ pub(crate) fn validate(opened: &Opened, session: &SessionId) -> Result<(), OpenE
             "model",
             "weights_hash",
             "adapter",
+            "engine",
+            "device",
             "prefix_token_ids",
             "blocks",
         ],
@@ -78,6 +89,8 @@ pub(crate) fn validate(opened: &Opened, session: &SessionId) -> Result<(), OpenE
     if !measurement["model"].is_string()
         || !measurement["weights_hash"].is_string()
         || !adapter_shape(&measurement["adapter"])
+        || !theta_block_shape(&measurement["engine"])
+        || !theta_block_shape(&measurement["device"])
     {
         return Err(OpenEvidenceError::Measurement);
     }

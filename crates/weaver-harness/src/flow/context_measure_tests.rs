@@ -901,6 +901,8 @@ fn a_generic_decode_consumer_cannot_take_a_held_measurement_or_stage_after_send(
         turn: TurnKey("bypass".into()),
         delta: vec![],
         tool_schemas: vec![],
+        sampling: crate::flow::context::TEST_SAMPLING,
+        max_tokens: 16,
     };
     assert!(
         matches!(peer.decode.stage(second.clone()).unwrap(), Stage::Busy(returned) if returned == second)

@@ -290,7 +290,7 @@ tool-set = []
 [spu-instruction.decoder]
 residual-readout-election = false
 surprisal-election = true
-tunable-values = { seed = 451234785645, context-capacity = 16384, max-tokens-per-turn = 1024 }
+tunable-values = { seed = 451234785645, context-capacity = 16384, max-tokens-per-turn = 1024, temperature = 0.7, top-k = 40, top-p = 0.95, repetition-penalty = 1.1, repetition-window = 64 }
 
 [spu-instruction.decoder.model-binding]
 artifact = "/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf"
@@ -309,6 +309,14 @@ create = true
 [state-store]
 engine = "none"
 ```
+
+**`tunable-values` carries the six sampling defaults every generation sends**
+(`weaver-harness-Spec` section 6.1): `temperature`, `top-k`, `top-p`,
+`repetition-penalty`, `repetition-window` and `seed`, each required. A serving
+declaration missing one refuses every load, the refusal naming `tunable-values.<name>`,
+and `update-stack.sh` names each standing agent that lacks one before it builds. The
+values above are the ones the build before the sampling carrier compiled in, so writing
+them keeps the values an agent samples with.
 
 Top-level keys first, then each table, since TOML reads a bare key after a table header
 as that table's. The inline `[[spu-instruction.decoder.identity]]` table of a

@@ -39,6 +39,8 @@ fn stage_generation(decode: &mut DecodePort, bytes: usize) -> TokenDirective {
             }],
         }],
         tool_schemas: vec![],
+        sampling: crate::flow::context::TEST_SAMPLING,
+        max_tokens: 16,
     };
     assert!(matches!(
         decode.stage(request.clone()).unwrap(),

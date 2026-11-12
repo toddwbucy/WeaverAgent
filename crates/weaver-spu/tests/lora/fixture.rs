@@ -52,7 +52,7 @@ use weaver_spu::lora::{Fixture, Request};
 use weaver_spu::readout::ReadoutElection;
 use weaver_spu::residency::{Headroom, LoadedModel};
 use weaver_spu::room::Layout;
-use weaver_spu::sampling::EffectiveKnobs;
+use weaver_spu::sampling::Sampling;
 use weaver_types::{AdapterBinding, ArtifactRef, DeviceOrdinal, ModelBinding};
 
 /// The child marker: the arm a child process runs. Not a fixture, so it
@@ -71,7 +71,7 @@ pub const CAPACITY: u32 = 32768;
 pub const HEADROOM_BYTES: u64 = 0;
 
 /// Greedy decoding: the reference sampled with `do_sample = false`.
-pub const KNOBS: EffectiveKnobs = EffectiveKnobs {
+pub const SAMPLING: Sampling = Sampling {
     temperature: 0.0,
     top_k: 1,
     top_p: 1.0,
@@ -770,9 +770,7 @@ pub fn child() -> bool {
     for entry in &selected {
         stage(&format!("decode {}", entry.id));
         let started = Instant::now();
-        let mut session = resident
-            .open_session(&KNOBS, CAPACITY)
-            .expect("a session opens");
+        let mut session = resident.open_session(CAPACITY).expect("a session opens");
         session
             .open(&entry.input_ids)
             .expect("the frozen prompt decodes");
@@ -792,7 +790,7 @@ pub fn child() -> bool {
                 },
                 SamplerBuild {
                     seed: 0,
-                    penalty_window: 0,
+                    sampling: SAMPLING,
                 },
             )
             .expect("the entry generates");
@@ -899,12 +897,12 @@ pub fn child() -> bool {
         "capacity": CAPACITY,
         "headroom_bytes": HEADROOM_BYTES,
         "knobs": {
-            "temperature": KNOBS.temperature,
-            "top_k": KNOBS.top_k,
-            "top_p": KNOBS.top_p,
-            "repetition_penalty": KNOBS.repetition_penalty,
-            "repetition_window": KNOBS.repetition_window,
-            "seed": KNOBS.seed,
+            "temperature": SAMPLING.temperature,
+            "top_k": SAMPLING.top_k,
+            "top_p": SAMPLING.top_p,
+            "repetition_penalty": SAMPLING.repetition_penalty,
+            "repetition_window": SAMPLING.repetition_window,
+            "seed": SAMPLING.seed,
         },
         "admit_seconds": admit_seconds,
         "source": source(),

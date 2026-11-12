@@ -42,7 +42,6 @@ use candle_transformers::models::qwen2::{Config, ModelForCausalLM};
 use super::backend::{Backend, DecodeFault, TokenId};
 use crate::family::{FamilyName, FamilyRefusal, same_key};
 use crate::residency::{Admission, AdmitRefusal};
-use crate::sampling::EffectiveKnobs;
 
 /// The weights resident on the device, held by the residency.
 ///
@@ -348,14 +347,14 @@ pub struct NativeEngine {
     /// `sample` may read. `None` before the first decode, so a sample before
     /// any decode refuses rather than reading a buffer nothing filled.
     logits: Option<Vec<f32>>,
-    sampler: LogitsProcessor,
-    /// The sampling shape the knobs describe, held so each generation's
-    /// sampler is rebuilt from it and the derived seed, per
-    /// `weaver-spu-Spec` section 8.5.
-    sampling: Sampling,
-    /// The repetition knobs, applied at sample over the resident tail: an
-    /// effective value the record claims was in effect must be in effect,
-    /// and the GGUF engine applies these in its sampler chain.
+    /// The sampler, built at each generation's reseed from the values it
+    /// carried and the derived seed (`weaver-spu-Spec` sections 8 and 8.5).
+    /// `None` until the first generation builds one, so a draw before any
+    /// reseed faults rather than drawing under values nobody sent.
+    sampler: Option<LogitsProcessor>,
+    /// The carried repetition values, applied at sample over the resident
+    /// tail and set at each reseed: a value the record claims was in effect
+    /// must be in effect, and the GGUF engine applies these in its chain.
     repetition_penalty: f32,
     repetition_window: usize,
     capacity: usize,
@@ -371,10 +370,35 @@ pub struct NativeEngine {
 }
 
 impl NativeEngine {
+    /// The sampling mode one generation's carried values describe, the way
+    /// the GGUF engine's chain does: temperature zero is argmax, and the
+    /// top-k and top-p gates compose where both are live.
+    ///
+    /// **A top-k of zero disables the gate rather than refusing**, which is
+    /// the GGUF engine's semantics for the same value: llama.cpp reads
+    /// k <= 0 as keep-everything, and the two engines answering one value two
+    /// ways would make the recorded values mean different things per
+    /// container.
+    fn mode(carried: &crate::sampling::Sampling) -> Sampling {
+        if carried.temperature <= 0.0 {
+            Sampling::ArgMax
+        } else if carried.top_k == 0 {
+            Sampling::TopP {
+                p: carried.top_p as f64,
+                temperature: carried.temperature as f64,
+            }
+        } else {
+            Sampling::TopKThenTopP {
+                k: carried.top_k as usize,
+                p: carried.top_p as f64,
+                temperature: carried.temperature as f64,
+            }
+        }
+    }
+
     /// Open a session over the residency.
     pub fn open(
         model: &ResidentModel,
-        knobs: &EffectiveKnobs,
         capacity: u32,
         readout: bool,
     ) -> Result<NativeEngine, DecodeFault> {
@@ -384,28 +408,6 @@ impl NativeEngine {
             });
         }
         let device = model.device.clone();
-        // The sampling chain mirrors the effective knobs the way the GGUF
-        // engine's sampler does: temperature zero is argmax, and the top-k
-        // and top-p gates compose where both are live.
-        // **A top-k of zero disables the gate rather than refusing**, which
-        // is the GGUF engine's semantics for the same knob: llama.cpp reads
-        // k <= 0 as keep-everything, and the two engines answering one knob
-        // two ways would make the effective values mean different things per
-        // container.
-        let sampling = if knobs.temperature <= 0.0 {
-            Sampling::ArgMax
-        } else if knobs.top_k == 0 {
-            Sampling::TopP {
-                p: knobs.top_p as f64,
-                temperature: knobs.temperature as f64,
-            }
-        } else {
-            Sampling::TopKThenTopP {
-                k: knobs.top_k as usize,
-                p: knobs.top_p as f64,
-                temperature: knobs.temperature as f64,
-            }
-        };
         Ok(NativeEngine {
             model: match &model.model {
                 Forward::Single(single) => {
@@ -422,10 +424,9 @@ impl NativeEngine {
             device,
             resident: Vec::new(),
             logits: None,
-            sampler: LogitsProcessor::from_sampling(knobs.seed, sampling.clone()),
-            sampling,
-            repetition_penalty: knobs.repetition_penalty,
-            repetition_window: knobs.repetition_window as usize,
+            sampler: None,
+            repetition_penalty: 1.0,
+            repetition_window: 0,
             capacity: capacity as usize,
             readout,
             reduction: crate::readout::Reduction::new(),
@@ -517,14 +518,22 @@ pub(crate) fn layer_norm_figure(layer: &Tensor) -> candle_core::Result<f32> {
 }
 
 impl Backend for NativeEngine {
-    /// **Rebuilt outright**, per `weaver-spu-Spec` section 8.5. A
+    /// **Rebuilt outright from the carried values**, per `weaver-spu-Spec`
+    /// sections 8 and 8.5: the mode, the filters and the penalty. A
     /// `LogitsProcessor` is a plain value holding the sampler and nothing
     /// else: this path applies the repetition penalty itself, reading the
     /// resident tail at each draw, so the window argument is already
     /// satisfied by state this engine keeps and rebuilding costs nothing
     /// beyond the value.
-    fn reseed(&mut self, seed: u64, _window: &[TokenId]) -> Result<(), DecodeFault> {
-        self.sampler = LogitsProcessor::from_sampling(seed, self.sampling.clone());
+    fn reseed(
+        &mut self,
+        seed: u64,
+        sampling: &crate::sampling::Sampling,
+        _window: &[TokenId],
+    ) -> Result<(), DecodeFault> {
+        self.sampler = Some(LogitsProcessor::from_sampling(seed, Self::mode(sampling)));
+        self.repetition_penalty = sampling.repetition_penalty;
+        self.repetition_window = sampling.repetition_window as usize;
         Ok(())
     }
 
@@ -595,8 +604,8 @@ impl Backend for NativeEngine {
             .ok_or_else(|| Self::engine_fault("no decode has produced a distribution"))?;
         let mut tensor = Tensor::new(logits, &Device::Cpu)
             .map_err(|error| Self::engine_fault(&format!("logits tensor: {error}")))?;
-        // The penalty reads the resident tail, the same window the knobs
-        // describe. `distribution` stays the raw measurement: the signals
+        // The penalty reads the resident tail, the same window the carried
+        // values describe. `distribution` stays the raw measurement: the signals
         // read the model's own distribution, and the penalty is the
         // sampler's business, which is where the GGUF chain applies it too.
         if self.repetition_penalty != 1.0 && self.repetition_window > 0 {
@@ -611,6 +620,8 @@ impl Backend for NativeEngine {
         }
         let token = self
             .sampler
+            .as_mut()
+            .ok_or_else(|| Self::engine_fault("no generation has built a sampler to draw from"))?
             .sample(&tensor)
             .map_err(|error| Self::engine_fault(&format!("sample: {error}")))?;
         Ok(TokenId(token))

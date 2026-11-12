@@ -106,7 +106,7 @@ mod device {
     use weaver_spu::readout::ReadoutElection;
     use weaver_spu::residency::{Headroom, Residency, Resident};
     use weaver_spu::sampling::{
-        Disposition, EffectiveKnobs, EffectiveSessionParameters, SessionParameters, TunableValues,
+        Disposition, EffectiveSessionParameters, Sampling, SessionParameters, TunableValues,
     };
     use weaver_types::{ArtifactRef, DeviceOrdinal, ModelBinding, TurnKey};
 
@@ -210,8 +210,21 @@ mod device {
         }
     }
 
-    fn knobs() -> EffectiveKnobs {
-        EffectiveKnobs {
+    /// **What the theta blocks read as on this residency's backend**, per
+    /// `weaver-spu-Spec` sections 3.1 and 3.1.5: objects on GGUF, `null` on
+    /// the native path until its act.
+    fn theta_shape(resident: &Resident) -> fn(&serde_json::Value) -> bool {
+        #[allow(unreachable_patterns)]
+        match resident.model() {
+            #[cfg(feature = "gguf")]
+            weaver_spu::residency::LoadedModel::Gguf(_) => serde_json::Value::is_object,
+            _ => serde_json::Value::is_null,
+        }
+    }
+
+    /// The set every generation of these tests carries.
+    fn carried() -> Sampling {
+        Sampling {
             temperature: 0.7,
             top_k: 40,
             top_p: 0.95,
@@ -227,9 +240,7 @@ mod device {
             .render_identity(&[text(Role::System, "Answer briefly.")])
             .unwrap();
         let tokens = resident.tokenize(&prefix).unwrap();
-        let mut session = resident
-            .open_session(&knobs(), parameters.context_capacity)
-            .unwrap();
+        let mut session = resident.open_session(parameters.context_capacity).unwrap();
         session.open(&tokens).unwrap();
         OpenedSession::from_open(
             session,
@@ -261,7 +272,7 @@ mod device {
             },
             SamplerBuild {
                 seed,
-                penalty_window: 32,
+                sampling: carried(),
             },
         )
     }
@@ -398,6 +409,7 @@ mod device {
             );
             let report: serde_json::Value = serde_json::from_str(&crate::render_measurement(
                 resident,
+                standing.session.blocks(),
                 &prepared.tokens,
                 &generated,
                 prepared.rendered.len(),
@@ -406,6 +418,11 @@ mod device {
             assert!(
                 report["adapter"].is_null(),
                 "a base-only load states its absent adapter (ADP-3)"
+            );
+            let theta = theta_shape(resident);
+            assert!(
+                theta(&report["engine"]) && theta(&report["device"]),
+                "a generation carries its backend's theta blocks (Spec 6, 3.1.5)"
             );
             assert_eq!(
                 report["input_tokens"].as_array().unwrap().len(),
@@ -471,6 +488,7 @@ mod device {
         let template = resident.declaration.template;
         let model = resident.artifact.display().to_string();
         let weights_hash = resident.weights_hash.0.clone();
+        let theta_kind = theta_shape(resident);
         let (client, server) = decode_pair();
         let client = std::thread::spawn(move || {
             let channel = decode_from_owned(client);
@@ -507,11 +525,25 @@ mod device {
             assert_eq!(opened.generation_limit, facts.generation_limit);
             assert_eq!(opened.terminal_tokens, 1);
             let request: serde_json::Value = serde_json::from_str(opened.request.get()).unwrap();
-            let measurement: serde_json::Value =
+            let mut measurement: serde_json::Value =
                 serde_json::from_str(opened.measurement.get()).unwrap();
             assert_eq!(
                 request,
                 serde_json::json!({"rendered":prefix,"template":template})
+            );
+            // The theta blocks' members are pinned by `decoder::gguf::theta`'s
+            // tests. Here: the Open answer carries both, as its backend renders
+            // them.
+            let theta = measurement.as_object_mut().unwrap();
+            assert!(
+                theta
+                    .remove("engine")
+                    .is_some_and(|block| theta_kind(&block))
+            );
+            assert!(
+                theta
+                    .remove("device")
+                    .is_some_and(|block| theta_kind(&block))
             );
             assert_eq!(
                 measurement,
@@ -552,6 +584,8 @@ mod device {
                 turn: TurnKey("placement seam turn".into()),
                 delta: delta.clone(),
                 tool_schemas: schemas.clone(),
+                sampling: carried(),
+                max_tokens: parameters.max_tokens_per_turn as u64,
             });
             let generated = loop {
                 match receive() {
@@ -607,6 +641,8 @@ mod device {
                 turn: TurnKey("placement seam turn".into()),
                 delta: delta.clone(),
                 tool_schemas: schemas.clone(),
+                sampling: carried(),
+                max_tokens: parameters.max_tokens_per_turn as u64,
             });
             let second = loop {
                 match receive() {
@@ -623,7 +659,7 @@ mod device {
             assert_eq!(
                 second_request["sampling"]["generation_seed"],
                 serde_json::json!(weaver_spu::sampling::derived_seed(
-                    knobs().seed,
+                    carried().seed,
                     &TurnKey("placement seam turn".into()),
                     1,
                 ))
@@ -692,7 +728,6 @@ mod device {
 
     fn wire_effective(parameters: EffectiveSessionParameters, refeed: bool) -> crate::Effective {
         crate::Effective {
-            knobs: knobs(),
             session: parameters,
             field_depth: None,
             refeed_permission: refeed,
@@ -719,12 +754,15 @@ mod device {
                 turn: TurnKey("active measure".into()),
                 rendered: prepared.rendered,
                 path: vec![resident.tokenize("one").unwrap()[0].0; 8],
+                sampling: carried(),
             }
         } else {
             TokenDirective::AppendAndGenerate {
                 turn: TurnKey("active measure".into()),
                 delta,
                 tool_schemas: vec![],
+                sampling: carried(),
+                max_tokens: parameters.max_tokens_per_turn as u64,
             }
         };
         let (client, server) = decode_pair();

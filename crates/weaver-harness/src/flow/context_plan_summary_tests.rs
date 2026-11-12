@@ -1991,6 +1991,8 @@ fn plan_summary_common_pump_holds_actual_generation_until_each_required_refresh_
             turn: weaver_types::TurnKey("next-round".into()),
             delta: vec![],
             tool_schemas: vec![],
+            sampling: crate::flow::context::TEST_SAMPLING,
+            max_tokens: 16,
         };
         assert!(matches!(
             decode.stage(append.clone()).unwrap(),
@@ -2055,6 +2057,8 @@ fn plan_summary_revoked_cache_blocks_generation_but_allows_actual_cancel_transpo
                 turn,
                 delta: vec![],
                 tool_schemas: vec![],
+                sampling: crate::flow::context::TEST_SAMPLING,
+                max_tokens: 16,
             }
         };
         assert!(matches!(
