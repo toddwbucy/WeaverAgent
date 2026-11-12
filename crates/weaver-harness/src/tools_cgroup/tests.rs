@@ -365,7 +365,11 @@ fn stand_in_opens_from_own() {
         Ok(tools) => tools.relative().to_string(),
         Err(refused) => format!("refused: {refused:?}"),
     };
-    std::fs::write(report, answer).unwrap();
+    std::io::Write::write_all(
+        &mut crate::scratch::exclusive_file(std::path::Path::new(&report)),
+        answer.as_bytes(),
+    )
+    .unwrap();
 }
 
 /// **Nothing read is nothing delivered** (6.1, the worker's rows with the

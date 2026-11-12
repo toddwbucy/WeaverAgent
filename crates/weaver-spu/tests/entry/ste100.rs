@@ -24,7 +24,7 @@ impl Process {
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::from(File::create(&log).unwrap()));
+            .stderr(Stdio::from(super::common::exclusive_file(&log)));
         place_inherited(&mut command, ends);
         Self {
             child: command.spawn().expect("built STE100 duty starts"),

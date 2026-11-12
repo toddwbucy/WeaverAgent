@@ -40,9 +40,13 @@ fn tempfile() -> std::fs::File {
         std::process::id(),
         std::thread::current().id()
     ));
+    // Made exclusively, so a path planted there, a link included, refuses
+    // rather than being written through. A leftover from an earlier run that
+    // panicked under the same pid is removed first, and removing a link
+    // removes the link and not its target.
+    let _ = std::fs::remove_file(&path);
     let file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .read(true)
         .write(true)
         .open(&path)

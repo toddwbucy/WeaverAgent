@@ -68,8 +68,14 @@ fn a_link_at_the_logs_name_is_refused() {
 fn a_log_is_set_to_its_owner_and_0640() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let path = std::env::temp_dir().join(format!("weaver-admin-log-owner-{}", std::process::id()));
+    // Made exclusively after the leftover is removed, so a path planted in
+    // between, a link included, refuses rather than being written through.
     let _ = std::fs::remove_file(&path);
-    std::fs::write(&path, "").unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
     let (uid, gid) = (
         nix::unistd::getuid().as_raw(),

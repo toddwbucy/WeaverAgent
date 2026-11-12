@@ -251,7 +251,16 @@ impl ChildFixture {
             std::env::temp_dir().join(format!("weaver-startup-child-{}-{id}", std::process::id()));
         let exe = std::env::current_exe().unwrap();
         let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
-        std::fs::write(&path, format!("#!/bin/sh\nexport WEAVER_STARTUP_COMPOSITION_CHILD={}\nexec {} --exact flow::context::startup_composition::tests::startup_composition_child --nocapture\n", quote(mode), quote(exe.to_str().unwrap()))).unwrap();
+        let script = format!(
+            "#!/bin/sh\nexport WEAVER_STARTUP_COMPOSITION_CHILD={}\nexec {} --exact flow::context::startup_composition::tests::startup_composition_child --nocapture\n",
+            quote(mode),
+            quote(exe.to_str().unwrap())
+        );
+        std::io::Write::write_all(
+            &mut crate::scratch::exclusive_file(&path),
+            script.as_bytes(),
+        )
+        .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self { path }
     }

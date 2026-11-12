@@ -25,7 +25,11 @@ fn organ_parent_stand_in() {
         )
     }
     .expect("the fork");
-    std::fs::write(&report, pid.to_string()).expect("the report");
+    std::io::Write::write_all(
+        &mut crate::scratch::exclusive_file(std::path::Path::new(&report)),
+        pid.to_string().as_bytes(),
+    )
+    .expect("the report");
     std::thread::sleep(std::time::Duration::from_secs(60));
 }
 

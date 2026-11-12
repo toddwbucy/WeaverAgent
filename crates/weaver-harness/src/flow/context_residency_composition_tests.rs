@@ -498,7 +498,16 @@ impl BinaryFixture {
             std::process::id()
         ));
         let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
-        std::fs::write(&path, format!("#!/bin/sh\nexport WEAVER_RESIDENCY_COMPOSITION_CHILD={}\nexec {} --exact flow::context::residency_composition::tests::residency_composition_child --nocapture\n",quote(mode),quote(std::env::current_exe().unwrap().to_str().unwrap()))).unwrap();
+        let script = format!(
+            "#!/bin/sh\nexport WEAVER_RESIDENCY_COMPOSITION_CHILD={}\nexec {} --exact flow::context::residency_composition::tests::residency_composition_child --nocapture\n",
+            quote(mode),
+            quote(std::env::current_exe().unwrap().to_str().unwrap())
+        );
+        std::io::Write::write_all(
+            &mut crate::scratch::exclusive_file(&path),
+            script.as_bytes(),
+        )
+        .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         Self(path)
     }
