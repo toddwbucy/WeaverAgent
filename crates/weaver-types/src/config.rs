@@ -365,7 +365,10 @@ impl DecoderInstruction {
     /// rounds, so `top-p = 1.00000001` would become `1.0` and pass, and a
     /// `temperature` of `1e-50` would become `0.0`, which the engines read as
     /// greedy decoding. So the declared value must be in range itself, and a
-    /// nonzero value must stay nonzero once narrowed.
+    /// nonzero value must stay nonzero once narrowed. The narrowed set is then
+    /// judged by the same rule, which refuses a value that narrowed past
+    /// `f32`'s range to infinity, so `temperature = 1e39` never reaches the
+    /// carried set.
     pub fn sampling_defaults(&self) -> Result<crate::Sampling, FieldName> {
         let named = |name: &str| FieldName(format!("tunable-values.{name}"));
         let value = |name: &str| {

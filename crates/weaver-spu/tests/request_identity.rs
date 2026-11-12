@@ -305,6 +305,25 @@ fn the_two_records_agree() {
     for key in ["artifact", "devices"] {
         assert_eq!(before[key], after[key], "the two runs share the {key}");
     }
+    // **Both runs loaded one build of the engine libraries**, per the module
+    // doc: two builds of one source differ in their library digests, so a
+    // pair from two builds is refused here by name, before the measurement's
+    // comparison could read that difference as the carrier's.
+    let engine_build = |record: &serde_json::Value| -> serde_json::Value {
+        let measurement: serde_json::Value = serde_json::from_str(
+            record["measurement"]
+                .as_str()
+                .expect("the measurement's bytes"),
+        )
+        .expect("the measurement is JSON");
+        measurement["engine"]["build"].clone()
+    };
+    assert_eq!(
+        engine_build(&before),
+        engine_build(&after),
+        "the two runs loaded different builds of the engine libraries: run both against one \
+         build, as the module doc says"
+    );
     for key in ["token_frames", "request", "emission", "finish", "content"] {
         assert_eq!(before[key], after[key], "the {key} bytes agree");
     }

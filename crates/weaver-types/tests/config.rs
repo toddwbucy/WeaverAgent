@@ -1025,6 +1025,14 @@ fn the_sampling_defaults_read_whole_and_refuse_by_name() {
         // range or to the greedy zero.
         ("top-p", "1.00000001"),
         ("temperature", "1e-50"),
+        // A nonzero value narrowing to zero refuses for every real, the two
+        // whose range excludes zero as well as `temperature`.
+        ("top-p", "1e-50"),
+        ("repetition-penalty", "1e-50"),
+        // In range as written and narrowing past `f32`'s range to infinity:
+        // the narrowed set's judgement refuses it.
+        ("temperature", "1e39"),
+        ("repetition-penalty", "1e39"),
     ] {
         let replaced: Vec<String> = SIX
             .split(", ")
