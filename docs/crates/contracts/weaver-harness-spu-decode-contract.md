@@ -185,7 +185,8 @@ residual reductions. **The measurement also carries the residency's
 `engine` and `device` blocks**, per `weaver-spu-Spec` sections 3.1 and 6
 on the operator's ruling of 2026-11-11: the engine settings whose change
 would invalidate the KV cache, and the device settings, the same bytes in
-every generation of a residency. The harness carries them opaque. At the
+every generation of a session, or `null` on a backend that renders none yet
+(`weaver-spu-Spec` section 3.1.5). The harness carries them opaque. At the
 foundation cutover the opened answer carries the same two blocks, per the
 SPU-OPEN amendment (`state-management/weaver-spu-Spec-amendment.md`).
 Beside the two boxes, as the generation's own typed

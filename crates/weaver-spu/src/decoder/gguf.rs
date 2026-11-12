@@ -878,6 +878,9 @@ fn host_only(path: &std::path::Path) -> Result<ResidentModel, DecodeFault> {
     let backend = backend().map_err(|_| DecodeFault::Engine {
         detail: "backend".into(),
     })?;
+    // The engine's own split mode stays: under split mode none the loader
+    // checks `main_gpu` against the device count, and with the cards hidden
+    // that count is zero, so the load refuses.
     let params = LlamaModelParams::default().with_n_gpu_layers(0);
     let model = LlamaModel::load_from_file(backend, path, &params).map_err(|error| {
         DecodeFault::Engine {

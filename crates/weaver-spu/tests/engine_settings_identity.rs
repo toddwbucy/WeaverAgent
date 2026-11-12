@@ -16,7 +16,9 @@
 //! its `engine` and `device` blocks (section 3.1), they are written as they
 //! were rendered to `<out>.theta.json`, so a device run puts on file the
 //! blocks a real placement rendered. The record itself stays comparable with
-//! a tree that renders none.
+//! a tree that renders none, but the file reads `Session::blocks`, so it
+//! copies into a tree from the act that renders the blocks onward. A tree
+//! before that act takes this file as it stood at that act's base.
 //!
 //! **The tree before an act does not hold this file.** It is copied into that
 //! checkout's `tests/` untracked for the run and removed after. Each record

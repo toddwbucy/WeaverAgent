@@ -19,7 +19,6 @@
 
 use std::collections::BTreeSet;
 use std::ffi::CStr;
-use std::io::Read;
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -182,8 +181,7 @@ pub(crate) fn gather(
         mmap_supported: llama_cpp_2::mmap_supported(),
         mlock_supported: llama_cpp_2::mlock_supported(),
         headroom,
-        cuda_device_order: std::env::var_os("CUDA_DEVICE_ORDER")
-            .map(|order| order.to_string_lossy().into_owned()),
+        cuda_device_order: device_order(std::env::var_os("CUDA_DEVICE_ORDER"))?,
         devices: llama_cpp_2::list_llama_ggml_backend_devices()
             .into_iter()
             .map(|device| BackendDevice {
@@ -193,6 +191,18 @@ pub(crate) fn gather(
             })
             .collect(),
     })
+}
+
+/// **The process's `CUDA_DEVICE_ORDER` as the record states it**: `None`
+/// where it is unset, and a refusal where it is not UTF-8, since a lossy
+/// rendering would state a value the process never had.
+fn device_order(raw: Option<std::ffi::OsString>) -> Result<Option<String>, String> {
+    raw.map(|order| {
+        order
+            .into_string()
+            .map_err(|_| "CUDA_DEVICE_ORDER is not UTF-8, so the record cannot state it".into())
+    })
+    .transpose()
 }
 
 /// Write one member: a comma unless it leads, the key, and the value as
@@ -357,20 +367,23 @@ fn kv_name(kind: KvCacheType) -> Result<&'static str, String> {
         .map_err(|_| format!("the KV type {kind:?} has a name that is not UTF-8"))
 }
 
-static BUILD: OnceLock<Result<Build, String>> = OnceLock::new();
+static BUILD: OnceLock<Build> = OnceLock::new();
 
 /// The engine's build, read once per process.
+///
+/// **Only a build that was read is kept.** A failed read refuses this load
+/// and leaves the next load to read again, so a passing fault (a descriptor
+/// limit, a read cut short) does not refuse every later load of the process.
 fn build() -> Result<&'static Build, String> {
-    BUILD
-        .get_or_init(|| {
-            Ok(Build {
-                ggml_version: engine_string(llama_cpp_sys_2::ggml_version, "ggml_version")?,
-                ggml_commit: engine_string(llama_cpp_sys_2::ggml_commit, "ggml_commit")?,
-                libraries: mapped_libraries()?,
-            })
-        })
-        .as_ref()
-        .map_err(Clone::clone)
+    if let Some(build) = BUILD.get() {
+        return Ok(build);
+    }
+    let read = Build {
+        ggml_version: engine_string(llama_cpp_sys_2::ggml_version, "ggml_version")?,
+        ggml_commit: engine_string(llama_cpp_sys_2::ggml_commit, "ggml_commit")?,
+        libraries: mapped_libraries()?,
+    };
+    Ok(BUILD.get_or_init(|| read))
 }
 
 fn engine_string(
@@ -383,9 +396,12 @@ fn engine_string(
     if text.is_null() {
         return Err(format!("{what} answered nothing"));
     }
-    Ok(unsafe { CStr::from_ptr(text) }
-        .to_string_lossy()
-        .into_owned())
+    // Not UTF-8 refuses, as `device_order` does: a lossy rendering would
+    // state a build the engine never named.
+    unsafe { CStr::from_ptr(text) }
+        .to_str()
+        .map(str::to_owned)
+        .map_err(|_| format!("{what} is not UTF-8, so the record cannot state it"))
 }
 
 /// **Each libllama and libggml file this process mapped**, read from its own
@@ -450,24 +466,12 @@ pub(super) fn engine_library(line: &str) -> Result<Option<&str>, String> {
 }
 
 fn file_sha256(path: &Path) -> Result<String, String> {
-    let mut file =
-        std::fs::File::open(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let failed = |error: std::io::Error| format!("{}: {error}", path.display());
+    let mut file = std::fs::File::open(path).map_err(failed)?;
     let mut hasher = Sha256::new();
-    let mut buffer = vec![0u8; 1 << 20];
-    loop {
-        let read = file
-            .read(&mut buffer)
-            .map_err(|error| format!("{}: {error}", path.display()))?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-    }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
+    // `io::copy` retries a read the kernel interrupted.
+    std::io::copy(&mut file, &mut hasher).map_err(failed)?;
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 #[cfg(test)]

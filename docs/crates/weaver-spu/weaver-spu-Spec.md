@@ -1117,9 +1117,11 @@ The engine's `defrag_thold` is not recorded: this engine ignores it.
 (`theta::ContextSet::of`) and the model's, and not from the constants that built them.
 So the record states what the engine received.
 
-**Nothing is guessed.** A value the load cannot read refuses the load. A block the
-session open cannot render faults the open as an engine fault. No measurement states a
-value the crate did not read or set.
+**Nothing is guessed.** A value the load cannot read refuses the load. A text value that
+is not UTF-8 (the engine's build strings, `CUDA_DEVICE_ORDER`) is one: a lossy rendering
+would state a value the process never had. A block the session open cannot render
+faults the open as an engine fault. No measurement states a value the crate did not
+read or set.
 
 #### 3.1.2 The device block
 
@@ -1132,7 +1134,7 @@ The `device` block is one object. Its members are about how fast the engine calc
 | `mmap_supported`, `mlock_supported` | read back | What the engine reports this platform supports. The engine can drop mmap without an error where it is not supported, so the set value alone does not say what happened. |
 | `headroom` | known | Admin's headroom key, which reaches the SPU as an argument (section 3). |
 | `cuda_device_order` | known | The process's `CUDA_DEVICE_ORDER`, or `null` where it is unset. |
-| `devices` | read back | The engine's backend device list, in its order: `name`, `description` and `memory_total` of each. |
+| `devices` | read back | The engine's backend device list, in its order: `name`, `description` and `memory_total` of each. The SPU runs under its binding's mask (PAIR-1), so the list is the residency's cards and the host. The binding's ordinals are in the `load` event. |
 
 The engine's `check_tensors` has no wrapper setter. It stays at the engine's default,
 `false`, and is not recorded.
@@ -1208,6 +1210,10 @@ record.
   `LLAMA_ROPE_TYPE_IMROPE`, and any later type, to `None`, the same answer it gives for
   none. So a `null` `rope_type` does not tell the two apart. The `metadata` keys and the
   `build` digest still pin the resolution. This act does not change the wrapper for it.
+- **A library overwritten in place is not detected.** A file rewritten under the same
+  path keeps its inode, and the kernel marks no ` (deleted)`, so `build.libraries`
+  digests the new bytes and not the ones mapped. A replacement that unlinks the old
+  file is refused (3.1.1).
 - **The device block is measured at the residency, not at each draw.** A device's free
   memory and clocks move during a run, and the record carries neither.
 - **Flash attention is set enabled on every placement.** AUTO resolved to enabled on

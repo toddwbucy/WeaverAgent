@@ -187,3 +187,75 @@ fn a_maps_line_names_an_engine_library_by_its_file_name() {
         "{deleted:?}"
     );
 }
+
+/// **A device order that is not UTF-8 refuses**, rather than a lossy
+/// rendering stating a value the process never had. Unset is `None`.
+///
+/// Perturbation: render it through `to_string_lossy`, and this fails.
+#[test]
+fn a_device_order_that_is_not_utf8_refuses() {
+    use std::os::unix::ffi::OsStringExt;
+    assert_eq!(device_order(None), Ok(None));
+    assert_eq!(
+        device_order(Some("PCI_BUS_ID".into())),
+        Ok(Some("PCI_BUS_ID".into()))
+    );
+    let refused = device_order(Some(std::ffi::OsString::from_vec(vec![b'P', 0xff])));
+    assert!(
+        refused
+            .as_ref()
+            .is_err_and(|detail| detail.contains("not UTF-8")),
+        "{refused:?}"
+    );
+}
+
+/// **A library's digest is SHA-256 over the file's bytes, in lowercase
+/// hex**, the spelling section 3.1.1's `build.libraries` row gives. Read
+/// against the standard test vector for `abc`.
+///
+/// Perturbation: hash none of the file's bytes, or spell the digest in
+/// uppercase, and this fails.
+#[test]
+fn a_library_digest_is_the_sha256_of_its_bytes() {
+    let path = std::env::temp_dir().join(format!("theta-digest-{}", std::process::id()));
+    std::fs::write(&path, b"abc").expect("the file writes");
+    let digest = file_sha256(&path);
+    std::fs::remove_file(&path).expect("the file is removed");
+    assert_eq!(
+        digest.as_deref(),
+        Ok("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    );
+}
+
+unsafe extern "C" fn named_build() -> *const std::os::raw::c_char {
+    c"b1234".as_ptr()
+}
+
+unsafe extern "C" fn mangled_build() -> *const std::os::raw::c_char {
+    c"b\xff".as_ptr()
+}
+
+unsafe extern "C" fn no_build() -> *const std::os::raw::c_char {
+    std::ptr::null()
+}
+
+/// **An engine build string that is not UTF-8 refuses**, as the device
+/// order does, and a null answer refuses. A UTF-8 one is carried as read.
+///
+/// Perturbation: render it through `to_string_lossy`, and this fails.
+#[test]
+fn an_engine_string_that_is_not_utf8_refuses() {
+    assert_eq!(
+        engine_string(named_build, "ggml_version"),
+        Ok("b1234".into())
+    );
+    let mangled = engine_string(mangled_build, "ggml_version");
+    assert!(
+        mangled
+            .as_ref()
+            .is_err_and(|detail| detail.contains("ggml_version is not UTF-8")),
+        "{mangled:?}"
+    );
+    let absent = engine_string(no_build, "ggml_commit");
+    assert_eq!(absent, Err("ggml_commit answered nothing".into()));
+}
