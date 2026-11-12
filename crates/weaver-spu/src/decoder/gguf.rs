@@ -504,14 +504,15 @@ impl<'a> GgufEngine<'a> {
         candidates: &mut LlamaTokenDataArray,
         logits: &[f32],
     ) -> Result<TokenId, DecodeFault> {
+        // The width is checked once, so every id below it converts.
+        let width = i32::try_from(logits.len())
+            .map_err(|_| Self::engine_fault("the vocabulary exceeds the engine's range"))?;
         candidates.data.clear();
-        for (id, logit) in logits.iter().enumerate() {
-            let id = i32::try_from(id)
-                .map_err(|_| Self::engine_fault("the vocabulary exceeds the engine's range"))?;
-            candidates
-                .data
-                .push(LlamaTokenData::new(LlamaToken(id), *logit, 0.0));
-        }
+        candidates.data.extend(
+            (0..width)
+                .zip(logits)
+                .map(|(id, logit)| LlamaTokenData::new(LlamaToken(id), *logit, 0.0)),
+        );
         candidates.selected = None;
         candidates.sorted = false;
         sampler.apply(candidates);
