@@ -142,7 +142,7 @@ fn diagnostic_spu_child() {
     packet!(decode.as_raw_fd(), &TokenAnswer::Opened(weaver_types::Opened {
         session, prefix_tokens: 3, capacity: 16384, generation_limit: 16, terminal_tokens: 1,
         request: serde_json::value::to_raw_value(&serde_json::json!({"rendered":rendered,"template":"fixture"})).unwrap(),
-        measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"art","weights_hash":"h","adapter":null,"prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap(),
+        measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"art","weights_hash":"h","adapter":null,"engine":null,"device":null,"prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap(),
     }));
     if mode.ends_with("invalid-open") {
         finish_refused_enter(&root, &lifecycle, &decode);
@@ -156,6 +156,7 @@ fn diagnostic_spu_child() {
         turn,
         rendered,
         path,
+        ..
     } = take!(decode.as_raw_fd())
     else {
         panic!("replay must re-feed")

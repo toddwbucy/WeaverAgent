@@ -151,7 +151,7 @@ pub(super) fn prior_admission() -> LifecycleDirective {
                 surprisal_election: false,
                 refeed_permission: false,
                 column_permission: false,
-                tunable_values: Default::default(),
+                tunable_values: crate::lifecycle::test_tunable_values(),
             },
         },
     }

@@ -42,7 +42,7 @@
 //! claims the other's half, because a pin says a rewind cannot be written and
 //! says nothing about a turn that re-prefills through the append path instead.
 
-use crate::decoder::backend::{Backend, DecodeFault, FlushMechanism, TokenId};
+use crate::decoder::backend::{Backend, Blocks, DecodeFault, FlushMechanism, TokenId};
 use crate::measurement;
 
 /// Why a generation stopped.
@@ -141,16 +141,24 @@ impl CancelPoll for NeverCancels {
 ///
 /// **Grouped because the two fix one reseed together and nothing else.** The
 /// seed is the caller's, derived from the declared one and the generation's
-/// identity, and crosses to [`Backend::reseed`]. The window is the length of
-/// resident tail the penalty knobs describe, and it is spent on this side of
-/// that seam, cutting the slice the reseed is handed rather than crossing as
-/// an argument of its own. A generation and a re-feed build the sampler the
-/// same way, which is why one type serves both.
+/// identity. The sampling values are the ones the generation carried, per
+/// `weaver-spu-Spec` section 8, and both cross to [`Backend::reseed`], which
+/// builds the whole sampler from them. The penalty window's length is the
+/// carried `repetition_window`, spent on this side of that seam, cutting the
+/// slice the reseed is handed. A generation and a re-feed build the sampler
+/// the same way, which is why one type serves both.
 pub struct SamplerBuild {
     /// This generation's derived seed.
     pub seed: u64,
+    /// The values this generation carried.
+    pub sampling: crate::sampling::Sampling,
+}
+
+impl SamplerBuild {
     /// How much of the resident tail the penalty reads, in tokens.
-    pub penalty_window: usize,
+    fn penalty_window(&self) -> usize {
+        self.sampling.repetition_window as usize
+    }
 }
 
 /// Where a retained position's field lands: the position, the ranked
@@ -223,6 +231,11 @@ pub struct Session<'a> {
     /// residency answers to that. A parameter on the generation would
     /// invite a caller to disagree with the load it is serving.
     surprisal_elected: bool,
+    /// The residency's `engine` and `device` blocks, rendered where this
+    /// session opened (`weaver-spu-Spec` section 3.1), `None` on a backend
+    /// that renders none yet. Fixed for the session, like the election
+    /// above, so every measurement it answers carries the same bytes.
+    blocks: Option<Blocks>,
 }
 
 /// Checked, immutable placement facts from a serviceable open session.
@@ -252,7 +265,21 @@ impl<'a> Session<'a> {
             flush_mechanism,
             columns_asked: false,
             surprisal_elected,
+            blocks: None,
         }
+    }
+
+    /// The session with the blocks its backend rendered after the context was
+    /// made, per `weaver-spu-Spec` section 3.1.
+    pub fn with_blocks(mut self, blocks: Blocks) -> Session<'a> {
+        self.blocks = Some(blocks);
+        self
+    }
+
+    /// The residency's `engine` and `device` blocks, `None` where the backend
+    /// renders none (section 3.1.5).
+    pub fn blocks(&self) -> Option<&Blocks> {
+        self.blocks.as_ref()
     }
 
     /// Arm the column answer, per the open's one ask: the tap's hold and
@@ -417,9 +444,12 @@ impl<'a> Session<'a> {
         // generation ever consumed, appendable and quietly wrong, which is
         // the disagreement the poison exists to refuse. This sits after a
         // commit and therefore takes the commit's discipline.
-        let window_start = self.resident.len().saturating_sub(sampler.penalty_window);
+        let window_start = self.resident.len().saturating_sub(sampler.penalty_window());
         let window: Vec<TokenId> = self.resident[window_start..].to_vec();
-        if let Err(fault) = self.backend.reseed(sampler.seed, &window) {
+        if let Err(fault) = self
+            .backend
+            .reseed(sampler.seed, &sampler.sampling, &window)
+        {
             return Err(self.poison(fault));
         }
         let decode_started = std::time::Instant::now();
@@ -621,9 +651,12 @@ impl<'a> Session<'a> {
         // derived seed, the resident tail's window - because the recomputed
         // draw is only evidence if it is the draw the source would have
         // made.
-        let window_start = self.resident.len().saturating_sub(sampler.penalty_window);
+        let window_start = self.resident.len().saturating_sub(sampler.penalty_window());
         let window: Vec<TokenId> = self.resident[window_start..].to_vec();
-        if let Err(fault) = self.backend.reseed(sampler.seed, &window) {
+        if let Err(fault) = self
+            .backend
+            .reseed(sampler.seed, &sampler.sampling, &window)
+        {
             return Err(self.poison(fault));
         }
         let decode_started = std::time::Instant::now();

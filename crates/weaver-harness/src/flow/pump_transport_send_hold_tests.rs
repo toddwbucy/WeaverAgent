@@ -26,6 +26,8 @@ fn append(large: bool) -> TokenDirective {
             vec![]
         },
         tool_schemas: vec![],
+        sampling: crate::flow::context::TEST_SAMPLING,
+        max_tokens: 16,
     }
 }
 fn received(peer: &OwnedFd) -> Option<Vec<u8>> {

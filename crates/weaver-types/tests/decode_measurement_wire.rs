@@ -15,11 +15,26 @@ fn delta() -> Vec<Message> {
     }]
 }
 
+/// A carried set whose floats are exact in binary, so the bytes are fixed,
+/// and whose seed is the widest the wire carries.
+fn sampling() -> weaver_types::Sampling {
+    weaver_types::Sampling {
+        temperature: 0.5,
+        top_k: 40,
+        top_p: 0.75,
+        repetition_penalty: 1.25,
+        repetition_window: 64,
+        seed: u64::MAX,
+    }
+}
+
 fn append() -> TokenDirective {
     TokenDirective::AppendAndGenerate {
         turn: TurnKey("turn-7".into()),
         delta: delta(),
         tool_schemas: vec!["second".into(), "first\nlast".into()],
+        sampling: sampling(),
+        max_tokens: 42,
     }
 }
 
@@ -66,7 +81,9 @@ fn append_keeps_internal_tag_and_exact_ordered_schemas() {
         concat!(
             r#"{"kind":"append_and_generate","turn":"turn-7","delta":["#,
             r#"{"role":"user","content":[{"type":"text","text":"Read item."}]}],"#,
-            r#""tool_schemas":["second","first\nlast"]}"#,
+            r#""tool_schemas":["second","first\nlast"],"#,
+            r#""sampling":{"temperature":0.5,"top_k":40,"top_p":0.75,"repetition_penalty":1.25,"#,
+            r#""repetition_window":64,"seed":18446744073709551615},"max_tokens":42}"#,
         )
     );
     assert_eq!(
@@ -267,6 +284,8 @@ fn every_proposal_member_is_required_and_null_is_not_a_default() {
             turn: TurnKey("turn-7".into()),
             delta: vec![],
             tool_schemas: vec![],
+            sampling: sampling(),
+            max_tokens: 0,
         },
         TokenDirective::MeasureDelta {
             keep: 0,
@@ -279,6 +298,49 @@ fn every_proposal_member_is_required_and_null_is_not_a_default() {
         assert_eq!(
             serde_json::from_str::<TokenDirective>(&bytes).unwrap(),
             proposal
+        );
+    }
+}
+
+/// **Every carried member is required, and no seventh is read**, per
+/// `weaver-spu-Spec` section 8: a generation whose set lacks a member, holds
+/// one as null, or holds a name beyond the six refuses at the parse, on the
+/// append and on the re-feed, so no default stands in and no stray name rides
+/// in unread. The recorded block's `generation_seed` is the SPU's own record
+/// and is not a member a generation carries.
+///
+/// Perturbation: derive `Default` for `Sampling` and mark the struct
+/// `#[serde(default)]`, or drop `deny_unknown_fields`, and the matching case
+/// fails.
+#[test]
+fn every_carried_member_is_required_and_no_seventh_is_read() {
+    let refeed = TokenDirective::ReFeed {
+        turn: TurnKey("replay-1".into()),
+        rendered: "r".into(),
+        path: vec![1],
+        sampling: sampling(),
+    };
+    for directive in [append(), refeed] {
+        let canonical = serde_json::to_value(&directive).unwrap();
+        for member in canonical["sampling"].as_object().unwrap().keys() {
+            let mut missing = canonical.clone();
+            missing["sampling"].as_object_mut().unwrap().remove(member);
+            assert!(
+                serde_json::from_str::<TokenDirective>(&missing.to_string()).is_err(),
+                "absent {member} must refuse: {missing}"
+            );
+            let mut null = canonical.clone();
+            null["sampling"][member] = Value::Null;
+            assert!(
+                serde_json::from_str::<TokenDirective>(&null.to_string()).is_err(),
+                "null {member} must refuse: {null}"
+            );
+        }
+        let mut seventh = canonical.clone();
+        seventh["sampling"]["generation_seed"] = serde_json::json!(5);
+        assert!(
+            serde_json::from_str::<TokenDirective>(&seventh.to_string()).is_err(),
+            "a seventh member must refuse: {seventh}"
         );
     }
 }
@@ -431,13 +493,15 @@ fn refeed_keeps_its_recorded_rendering_and_path_without_schema_member() {
         turn: TurnKey("replay-1".into()),
         rendered: "recorded\nbytes".into(),
         path: vec![0, u32::MAX],
+        sampling: sampling(),
     };
     let bytes = serde_json::to_string(&directive).unwrap();
     assert_eq!(
         bytes,
         concat!(
             r#"{"kind":"re_feed","turn":"replay-1","rendered":"recorded\nbytes","#,
-            r#""path":[0,4294967295]}"#,
+            r#""path":[0,4294967295],"sampling":{"temperature":0.5,"top_k":40,"top_p":0.75,"#,
+            r#""repetition_penalty":1.25,"repetition_window":64,"seed":18446744073709551615}}"#,
         )
     );
     assert_eq!(

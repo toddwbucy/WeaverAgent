@@ -122,22 +122,28 @@ pub trait Backend {
     /// the recorded token and not this draw.
     fn sample(&mut self) -> Result<TokenId, DecodeFault>;
 
-    /// Build this generation's sampler from its derived seed, per
-    /// `weaver-spu-Spec` section 8.5.
+    /// Build this generation's sampler from its derived seed and the values
+    /// it carried, per `weaver-spu-Spec` sections 8 and 8.5.
     ///
     /// **Called at the start of every generation and nowhere else.** The
-    /// sampler holds nothing between generations: it is built here from
-    /// the seed the derivation named, and the penalty window is restored
+    /// sampler holds nothing between generations: it is built here, mode,
+    /// filters and penalty, from the carried values and the seed the
+    /// derivation named, and the penalty window is restored
     /// from the resident tail the caller supplies rather than accumulated
     /// across generations. One stream standing for a residency is what
     /// made a generation's draws depend on every draw before it, and what
     /// let a flush reseed the draw while clearing the window.
     ///
-    /// `window` is the resident tail the penalty knobs describe, newest
+    /// `window` is the resident tail the carried penalty describes, newest
     /// last, already truncated to the window length by the caller. After a
     /// flush it is the truncated tail, so nothing needs clearing and the
     /// accident cannot recur.
-    fn reseed(&mut self, seed: u64, window: &[TokenId]) -> Result<(), DecodeFault>;
+    fn reseed(
+        &mut self,
+        seed: u64,
+        sampling: &crate::sampling::Sampling,
+        window: &[TokenId],
+    ) -> Result<(), DecodeFault>;
 
     /// Truncate resident state back to a position.
     ///
@@ -193,6 +199,48 @@ pub enum FlushMechanism {
     /// The family cannot roll back, so the outcome is reached by re-establishing
     /// the session and decoding the prefix again. Expensive and correct.
     ReestablishAndReprefill,
+}
+
+impl FlushMechanism {
+    /// The name the `engine` block's `flush` member carries, per
+    /// `weaver-spu-Spec` section 3.1.1.
+    pub fn name(self) -> &'static str {
+        match self {
+            FlushMechanism::TruncateToPosition => "truncate-to-position",
+            FlushMechanism::ReestablishAndReprefill => "reestablish-and-reprefill",
+        }
+    }
+}
+
+/// **The residency's `engine` and `device` blocks, rendered once**, per
+/// `weaver-spu-Spec` sections 3.1 and 6. A backend renders them where its
+/// session opens, after its context is made, and every measurement of the
+/// session splices the same bytes: the Open answer's and each generation's.
+///
+/// They are held rendered, as raw JSON, rather than as values, because a
+/// generic JSON value would widen the `f32` members to `f64` and write a
+/// split of `0.1` as `0.10000000149011612`, the rule the adapter's scale
+/// already follows (ADP-3). The harness carries them opaque.
+#[derive(Debug)]
+pub struct Blocks {
+    pub engine: Box<serde_json::value::RawValue>,
+    pub device: Box<serde_json::value::RawValue>,
+}
+
+impl Blocks {
+    /// Write the measurement's `engine` and `device` members, each led by
+    /// its comma, after the member before them.
+    ///
+    /// **A backend that renders no blocks writes both as `null`**, per
+    /// section 3.1.5: the native path renders its own in a later act, and
+    /// until then its measurements state the absence rather than omit the
+    /// members, as `adapter` states a base-only load.
+    pub fn write_members(blocks: Option<&Blocks>, out: &mut Vec<u8>) {
+        out.extend_from_slice(b",\"engine\":");
+        out.extend_from_slice(blocks.map_or("null", |b| b.engine.get()).as_bytes());
+        out.extend_from_slice(b",\"device\":");
+        out.extend_from_slice(blocks.map_or("null", |b| b.device.get()).as_bytes());
+    }
 }
 
 /// Derive the backend from the artifact's container.

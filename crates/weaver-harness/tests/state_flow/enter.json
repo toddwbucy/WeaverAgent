@@ -261,7 +261,14 @@
       "refeed-permission": false,
       "residual-readout-election": false,
       "surprisal-election": false,
-      "tunable-values": {}
+      "tunable-values": {
+        "repetition-penalty": 1.1,
+        "repetition-window": 64,
+        "seed": 11,
+        "temperature": 0.7,
+        "top-k": 40,
+        "top-p": 0.95
+      }
     }
   },
   "stack": {

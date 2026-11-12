@@ -115,7 +115,8 @@ takes the walk rather than trusting them.
                                 free steps, and the weights hash, section 3
     src/measurement.rs          measurement production, section 6
     src/readout.rs              the residual tap and its reduction, section 7
-    src/sampling.rs             the knobs and their dispositions, section 8
+    src/sampling.rs             the carried set, its ranges, and the session
+                                parameters' dispositions, section 8
     src/family/mod.rs           the family surface and its registry, section 5
     src/family/<name>.rs        one module per family, seven of them, template
                                 and parsing
@@ -487,6 +488,8 @@ Process section 6 names the two invocations that reach them.
 | `two_card.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_TWO_CARD`, `WEAVER_ARTIFACT_SPLIT` |
 | `readout_neutral.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_READOUT`, `WEAVER_ARTIFACT_READOUT_LAYERS` |
 | `observed_division.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_DIVISION` |
+| `engine_settings_identity.rs` | `cuda` and `gguf` | `WEAVER_IDENTITY_ARTIFACT`, `WEAVER_IDENTITY_OUT` |
+| `request_identity.rs` | `cuda` and `gguf` | `WEAVER_IDENTITY_AFTER`, `WEAVER_IDENTITY_ARTIFACT`, `WEAVER_IDENTITY_BEFORE`, `WEAVER_IDENTITY_OUT`, `WEAVER_IDENTITY_SHAPE` |
 | `lora_proof.rs` | `cuda` and `gguf` | `WEAVER_LORA_BASE`, `WEAVER_LORA_BASE_BLAKE3`, `WEAVER_LORA_ADAPTER`, `WEAVER_LORA_ADAPTER_SHA256`, `WEAVER_LORA_SCALE`, `WEAVER_LORA_DEVICES`, `WEAVER_LORA_ENTRIES`, `WEAVER_LORA_REPORT`, `WEAVER_LORA_PINNED_ID` |
 | `lora_heldout.rs` | `cuda` and `gguf` | `WEAVER_LORA_BASE`, `WEAVER_LORA_BASE_BLAKE3`, `WEAVER_LORA_ADAPTER`, `WEAVER_LORA_ADAPTER_SHA256`, `WEAVER_LORA_SCALE`, `WEAVER_LORA_DEVICES`, `WEAVER_LORA_ENTRIES`, `WEAVER_LORA_REPORT` |
 
@@ -498,9 +501,10 @@ process of its own binary under that binding's
 SPU binary it spawns, as the harness's fork does. The targets run under the lease line
 `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1`, or with no mask. A run with the
 cards hidden (`CUDA_VISIBLE_DEVICES=`) skips every device test, except
-`observed_division.rs`, `lora_proof.rs` and `lora_heldout.rs`: each is an explicit
+`observed_division.rs`, `lora_proof.rs`, `lora_heldout.rs`,
+`engine_settings_identity.rs` and `request_identity.rs`: each is an explicit
 accelerator instrument run with `--ignored`, and each fails by name without its
-artifacts or the device pair.
+artifacts or its devices.
 
 **Two targets name a fixture they do not read, and the first form of this
 table recorded the mention as a read.** `seam.rs` cites `WEAVER_TEST_GGUF` in a
@@ -1097,20 +1101,30 @@ The `engine` block is one object. Its members are in this order.
 | `mechanism` | known | The sampler mechanism's name (3.1.3). |
 | `flush` | known | The resolved family's flush mechanism, `"truncate-to-position"` or `"reestablish-and-reprefill"` (`family::Declaration::flush`, section 4.4). |
 | `build.ggml_version`, `build.ggml_commit` | read back | `ggml_version()` and `ggml_commit()`, free functions of the engine's library. |
-| `build.libraries` | read back | One entry for each libllama and libggml file this process mapped, in path order: `path`, the path as mapped, and `sha256`, the hex digest of the file's bytes. The SPU reads the mapped paths from its own `/proc/self/maps`. It does not read admin's `library-path` key, which names a directory and not the files the loader chose. The digests are what carry the engine's build options: an option that changes the engine's bytes changes a digest. Two options are known today. The OpenSSL lookup is turned off (section 1.1, #538, merged at `61d99dcea6af3867d3437abecd09c609b5897db5` on 2026-11-11). The build's parallelism reaches the engine's configure line, an input not known to change a byte. |
+| `build.libraries` | read back | One entry for each libllama and libggml file this process mapped, in path order: `path`, the path as mapped, and `sha256`, the hex digest of the file's bytes. The SPU reads the mapped paths from its own `/proc/self/maps`. It does not read admin's `library-path` key, which names a directory and not the files the loader chose. The digests are what carry the engine's build options: an option that changes the engine's bytes changes a digest. Two options are known today. The OpenSSL lookup is turned off (section 1.1, #538, merged at `61d99dcea6af3867d3437abecd09c609b5897db5` on 2026-11-11). The build's parallelism reaches the engine's configure line, an input not known to change a byte. A mapping the kernel marks ` (deleted)` refuses the load, since its path names other bytes than the ones mapped. So does a process that maps no engine library: the crate links the engine dynamically (the wrapper's `dynamic-link` feature). |
 | `read_back.n_ctx` | read back | The context capacity as the engine padded it. |
 | `read_back.n_batch`, `read_back.n_ubatch` | read back | The batch sizes the context holds. |
 | `read_back.n_layer`, `read_back.n_ctx_train` | read back | The model's layer count and training context length. |
 | `read_back.rope_type` | read back | The RoPE type as the wrapper reports it: `"norm"`, `"neox"`, `"mrope"` or `"vision"`. `null` means none or a type the wrapper does not recognise (3.1.4). |
-| `read_back.file_type` | read back | The model's `general.file_type` metadata value, the quantization. The weights hash (section 3) already covers the tensors' bytes. |
+| `read_back.file_type` | read back | The model's `general.file_type` metadata value, the quantization. The weights hash (section 3) already covers the tensors' bytes. A model without the key refuses the load. |
 | `set.n_ubatch` | set | 512, the engine's default before the set. |
 | `set.type_k`, `set.type_v` | set | `"f16"`, the KV element types. |
-| `set.flash_attn` | set | `"enabled"` or `"disabled"`. Never auto. AUTO resolves during graph reserve and reports its choice only in the log. So the crate sets the value AUTO resolved to on the lane, measured from that log line per placement. |
+| `set.flash_attn` | set | `"enabled"` or `"disabled"`. Never auto. AUTO resolves during graph reserve and reports its choice only in the log. So the crate sets the value AUTO resolved to on the lane, measured from that log line per placement. A context whose value is auto renders no blocks, and its session does not open. |
 | `set.offload_kqv`, `set.op_offload`, `set.swa_full`, `set.kv_unified` | set | `true`, `true`, `true`, `false`: the engine's defaults at `e21cdc11`. |
-| `set.n_gpu_layers`, `set.split_mode`, `set.main_gpu`, `set.tensor_split` | set | The placement this crate already sets (`decoder::gguf::placement_params`): every layer offloaded, `"none"` on one device and `"layer"` across several, main device 0, and the division's split values. The engine offloads min(`n_gpu_layers`, `n_layer` + 1) layers. The record carries the set value and `n_layer`, and a reader derives the count. The engine reports the actual count only in its log. |
+| `set.n_gpu_layers`, `set.split_mode`, `set.main_gpu`, `set.tensor_split` | set | The placement this crate already sets (`decoder::gguf::placement_params`): every layer offloaded, `"none"` on one device and `"layer"` across several, main device 0, and the division's split values. `n_gpu_layers` is the value the engine received, 2147483647: the wrapper narrows the crate's `u32::MAX` to `i32::MAX`. The split is the empty list on one device, from `decoder::gguf::handed_split`, the one function that hands the split to the loader. The engine offloads min(`n_gpu_layers`, `n_layer` + 1) layers. The record carries the set value and `n_layer`, and a reader derives the count. The engine reports the actual count only in its log. |
 | `metadata` | known by metadata and digest | One `{key, value}` pair for every key of the model's metadata that names RoPE or its scaling (`<arch>.rope.*`), and for `<arch>.context_length`, in key order. `value` is the string the engine's metadata reader returns. The crate passes no RoPE value and no key override, so these keys are the values in use. It is a list and not an object keyed by name: the model names the keys, so an object keyed by them could not be closed. |
 
 The engine's `defrag_thold` is not recorded: this engine ignores it.
+
+**Each `set` value is read from the parameters the engine was handed**, the context's
+(`theta::ContextSet::of`) and the model's, and not from the constants that built them.
+So the record states what the engine received.
+
+**Nothing is guessed.** A value the load cannot read refuses the load. A text value that
+is not UTF-8 (the engine's build strings, `CUDA_DEVICE_ORDER`) is one: a lossy rendering
+would state a value the process never had. A block the session open cannot render
+faults the open as an engine fault. No measurement states a value the crate did not
+read or set.
 
 #### 3.1.2 The device block
 
@@ -1123,7 +1137,7 @@ The `device` block is one object. Its members are about how fast the engine calc
 | `mmap_supported`, `mlock_supported` | read back | What the engine reports this platform supports. The engine can drop mmap without an error where it is not supported, so the set value alone does not say what happened. |
 | `headroom` | known | Admin's headroom key, which reaches the SPU as an argument (section 3). |
 | `cuda_device_order` | known | The process's `CUDA_DEVICE_ORDER`, or `null` where it is unset. |
-| `devices` | read back | The engine's backend device list, in its order: `name`, `description` and `memory_total` of each. |
+| `devices` | read back | The engine's backend device list, in its order: `name`, `description` and `memory_total` of each. The SPU runs under its binding's mask (PAIR-1), so the list is the residency's cards and the host. The binding's ordinals are in the `load` event. |
 
 The engine's `check_tensors` has no wrapper setter. It stays at the engine's default,
 `false`, and is not recorded.
@@ -1199,13 +1213,35 @@ record.
   `LLAMA_ROPE_TYPE_IMROPE`, and any later type, to `None`, the same answer it gives for
   none. So a `null` `rope_type` does not tell the two apart. The `metadata` keys and the
   `build` digest still pin the resolution. This act does not change the wrapper for it.
+- **A library overwritten in place is not detected.** A file rewritten under the same
+  path keeps its inode, and the kernel marks no ` (deleted)`, so `build.libraries`
+  digests the new bytes and not the ones mapped. A replacement that unlinks the old
+  file is refused (3.1.1).
 - **The device block is measured at the residency, not at each draw.** A device's free
   memory and clocks move during a run, and the record carries neither.
+- **Flash attention is set enabled on every placement.** AUTO resolved to enabled on
+  every placement measured on 2026-11-11: the host, one card and two cards under layer
+  split, across the qwen2, qwen3, gemma4 and granite families. AUTO disables it where
+  some layer's attention op cannot sit on that layer's device. On such a placement the
+  set value would move the draws, and the engine would run that op on another device.
+  No placement this crate serves has shown it. The engine reports the resolution only
+  in the log, and this act reads no log.
+- **Two engine overrides bear on no registered family.** For the `grok` architecture
+  the engine forces flash attention off. A graph that adds a bias to the attention
+  scores (the `t5` architectures) skips flash attention. The registry admits neither,
+  so neither override reaches a record.
+- **The fused Gated Delta Net choice is neither set nor recorded.** The engine resolves
+  it during the graph reserve, from whether each layer's fused op can sit on that
+  layer's device, and reports it only in the log. No context parameter sets it. It
+  bears on the `qwen35` and `qwen35moe` families, whose layers carry Gated Delta Net,
+  and the mechanism that would carry it is the operator's ruling.
 
 #### 3.1.5 The native engine
 
 The native (candle) path renders the same two blocks in a later act. Its members differ,
-because the crate owns more of the arithmetic.
+because the crate owns more of the arithmetic. Until that act the native path renders
+neither block. Its Open answer and its generations write `engine` and `device` as
+`null`, as `adapter` states a base-only load, and never omit them.
 
 | Item | Native |
 |---|---|
@@ -1341,10 +1377,11 @@ refuses a span that reaches into the prefix - and no operation short of those tw
 reduces it at all, the close over a backend fault clearing the account with the session,
 per charter sections 13.3 and 13.13.
 
-**The session's capacity carries a `Disposition` and is elected like a knob.**
-It is frozen with its value compiled in, or operator-tunable and supplied in
-`decoder.tunable_values` under the name `context-capacity`. The mechanism is
-section 8's and is not restated here beyond naming what it governs.
+**The session's capacity carries a `Disposition` and is elected as the
+generation ceiling is.** It is frozen with its value compiled in, or
+operator-tunable and supplied in `decoder.tunable_values` under the name
+`context-capacity`. The mechanism is section 8's and is not restated here beyond
+naming what it governs.
 
 **An earlier wording of this clause put the capacity on argv as a deployment
 fact, and that was wrong.** The ground offered was that what a device holds at a
@@ -1367,6 +1404,12 @@ its value compiled in, or operator-tunable under the name `max-tokens-per-turn`.
 The constant has stood in the composition root since the decode act with no
 document naming it, which is the absence this paragraph closes rather than a
 decision it reverses.
+
+**The ceiling is the session's room, and each generation carries its own bound
+under it** (section 8, the operator's ruling of 2026-11-11). The ceiling stays an
+admit-time session parameter. Open states it as `generation_limit` (SPU-OPEN), and
+the harness plans room against it. A generation's `max_tokens` above it refuses.
+The loop's default bound is the ceiling as Open states it.
 
 ```graph
 node: spu-session-parameters-carry-dispositions
@@ -1608,21 +1651,21 @@ ask.
 the decode contract's sixth exchange, added 2026-08-31. The drive is the append's
 machinery with the draw's destination changed and the renderer bypassed: the rendered
 contribution tokenizes and appends verbatim, no renderer on the way per the ruling of
-2026-08-12, the per-position loop runs the derived seed of section 8.5 and the effective
-knobs of section 8 through the sampler exactly as a generation runs them, and where a
-generation emits the drawn token and streams its piece, the drive records the draw's
-identifier into the measurement's output slots and appends the recorded token instead,
-streaming nothing. The penalty window follows the appended tokens, so it holds the
-recorded path and not the draws (section 8.5). The field and the column intermediates
-cross where their elections stand, on the same sites the generation crosses them. The
-completed answer wraps the generation shape under the floor's own `ReFed` arm. The
-variant keeps a supplied path out of a sampled path's clothes. The permission is judged
-where every admitted member is judged, and the two-arm registry is the charter's, cited
-rather than restated. **The watches are the building act's**, per the pattern section
-7's unasked vector set: the drive is unbuilt, its instruments cannot exist before it,
-and the act that builds it buys them in the same motion or their tags stand as the lie
-13.7 refuses. The building act bought them, four watches below, each seen red under the
-perturbation it names before its tag landed.
+2026-08-12, the per-position loop runs the derived seed of section 8.5 and the sampling
+values the re-feed carries (section 8) through the sampler exactly as a generation runs
+them, and where a generation emits the drawn token and streams its piece, the drive
+records the draw's identifier into the measurement's output slots and appends the
+recorded token instead, streaming nothing. The penalty window follows the appended
+tokens, so it holds the recorded path and not the draws (section 8.5). The field and the
+column intermediates cross where their elections stand, on the same sites the generation
+crosses them. The completed answer wraps the generation shape under the floor's own
+`ReFed` arm. The variant keeps a supplied path out of a sampled path's clothes. The
+permission is judged where every admitted member is judged, and the two-arm registry is
+the charter's, cited rather than restated. **The watches are the building act's**, per
+the pattern section 7's unasked vector set: the drive is unbuilt, its instruments cannot
+exist before it, and the act that builds it buys them in the same motion or their tags
+stand as the lie 13.7 refuses. The building act bought them, four watches below, each
+seen red under the perturbation it names before its tag landed.
 
 **A matching cancel returns RefeedInterrupted after a coherent prefix.** The drive
 polls cancellation at the same token boundaries as generation. It checks the turn
@@ -2315,19 +2358,19 @@ resident length, per issue #461.
 
 **What travels with a generation.** The token identifiers in and out, the two signal
 vectors, the timings the charter's row names, the model identity and its weights hash
-from section 3, the adapter identity beside them (`adapter`: `null` for a base-only load,
-or `artifact`, `sha256` and `scale` of the resident adapter, the scale written as the f32
-itself and never through a generic JSON value, per the adapter binding amendment ADP-3,
-which puts the same member in the Open measurement), the engine and device blocks of
-section 3.1, the prompt-block partition, the residual reductions when elected, the
+from section 3, the adapter identity beside them (`adapter`: `null` for a base-only
+load, or `artifact`, `sha256` and `scale` of the resident adapter, the scale written as
+the f32 itself and never through a generic JSON value, per the adapter binding amendment
+ADP-3, which puts the same member in the Open measurement), the engine and device blocks
+of section 3.1, the prompt-block partition, the residual reductions when elected, the
 session's resident token count and its capacity as the generation closed - the
 generation's own typed members beside the two spliced boxes, never measurement members,
 per issue #221's arc and `weaver-types-Spec` section 4.4 - and beside the measurement
 the model.request content whole, per the custody act of 2026-08-11: the turn's delta as
 the resolved entry's renderer rendered it, per the ruling of 2026-08-12, the template
-identity, and the turn's effective sampling values, rendered by this crate because the
-template and the knobs are this crate's, and spliced into the record's request box as
-the measurement splices into its own. **The template identity is the request's member
+identity, and the sampling values the generation carried, rendered by this crate because
+the template and the sampler are this crate's, and spliced into the record's request box
+as the measurement splices into its own. **The template identity is the request's member
 and not the measurement's**, per the ruling of 2026-08-17 on #129: it is an input-side
 fact, what was asked rather than what was read off the answer, which is the sampling
 values' own ground for sitting where they sit, and the earlier text listing it in both
@@ -2336,40 +2379,43 @@ and `weaver-trace-PRD` section 3 already carried it this way, and this clause ca
 to them. The harness carries both opaque, neither assembled from members it would parse
 the splice to read. **The generation's bound renders in the request's box beside the
 sampling values**, per charter section 13.6's clause of this date. It is a `stop` object
-carrying `max_tokens`, the resolved per-turn ceiling, `stop_tokens`, the identifier set
-in force, and `terminator`, the turn ender of the renderer the resolved entry names. The
-box is the request's rather than the measurement's on the rule the template identity
-settles just above: a bound is an input-side fact, what the generation was told, and the
-`finish` it explains is what was read off the answer.
+carrying `max_tokens`, the bound the generation carried (section 8), `stop_tokens`, the
+identifier set in force, and `terminator`, the turn ender of the renderer the resolved
+entry names. The box is the request's rather than the measurement's on the rule the
+template identity settles just above: a bound is an input-side fact, what the generation
+was told, and the `finish` it explains is what was read off the answer.
 
 **The engine and device blocks travel in the measurement, and the Open answer carries
 them too**, per section 3.1 on the operator's ruling of 2026-11-11. They are the
 measurement's members `engine` and `device`, after `adapter`. This crate renders them, as
 it renders `model` and `weights_hash`. The harness carries them opaque, and the trace
-crate learns no member name. They are measured once per residency, after the context is
-made, so every generation of a residency carries the same two blocks byte for byte. The
-Open answer's measurement carries the same two blocks, per SPU-OPEN
-([amendment][open-facts]), so on the flow path they land once in the boot placement. The
+crate learns no member name. They are rendered once where a session opens, after its
+context is made (`decoder::gguf::render_blocks`), and the session holds the bytes. So
+every generation of a session carries the same two blocks byte for byte, and so does its
+Open answer's measurement, per SPU-OPEN ([amendment][open-facts]). On the flow path they
+land once in the boot placement. A backend that renders no blocks yet writes both as
+`null` (3.1.5), and the harness checks each as an object or `null` (HARNESS-OPEN). The
 legacy path checks the Opened answer and drops its evidence, so there a generation's
 measurement is the only record of them. **The `load` event cannot carry them**, because
 the harness authors `load` before it starts the SPU. Admit stays free of payload, per
 `weaver-harness-spu-contract` section 2, and no event kind is added.
 
-**The blocks cost about 1650 bytes a generation, and the shape after the cutover is the
-operator's choice.** An example of a two-card load's blocks, built on 2026-11-11 from real
-values, measures 1211 bytes for `engine` and 439 for `device` in compact JSON. 623 bytes
-of it are the five library entries. Every generation repeats those bytes. After the
+**The blocks cost about 2 KB a generation, and the shape after the cutover is the
+operator's choice.** The blocks the GGUF session rendered on 2026-11-12 measure 2016
+bytes on one card (1661 for `engine` and 355 for `device`) and 2273 on a pair (1841 and
+432), in compact JSON. 1043 bytes of each are the five library entries, whose length
+follows the paths the box maps. Every generation repeats those bytes. After the
 foundation cutover, the Open answer carries the blocks once per residency on every path.
 A generation could then carry only a digest of the two blocks' canonical bytes, beside
 the residency's whole blocks in the boot placement. This document renders the whole
 blocks in both places. The digest shape is proposed and not built. The operator chooses
 between the two after the cutover, and only the shape chosen is built.
 
-**The values are the resolved ones and never the declared ones.** The
-ceiling arrives frozen from the composition root or tunable from the
-operator's file, so this crate renders what `effective.session` holds at the
-generation rather than what any instruction carried, which is the same rule
-the sampling block already follows. **The stop object is absent from no
+**The values are the ones the generation ran under.** The `sampling` block and
+`max_tokens` render what the generation carried, which section 8's checks admitted
+unchanged, so the carrier and the record agree member for member. A re-feed carries
+no bound, its length being its recorded path's, so its `max_tokens` renders the
+session's ceiling. **The stop object is absent from no
 generation**, because unlike an unproduced reading there is no state in
 which a generation ran under no bound, so a missing `stop` is a defect
 rather than an absence with a meaning.
@@ -2761,13 +2807,19 @@ realized rank beside them, probabilities rather than logits because the
 consumer's axis is probability and a consumer re-normalising per position
 would be doing the same arithmetic this crate already did.
 
-**The depth refuses below the sampling cutoff, at admit.** Charter
-section 13.11 rules the floor and the mechanism is this section's: the
-effective top-k of section 8 is known at admit, the declared depth is
-known at admit, and a depth below it refuses there naming both numbers.
-Refusing at the first turn instead would spend the admit's device work to
-learn what a comparison of two integers answers, which is the
-fail-cheap-or-lie-expensive rule again.
+**The depth refuses below the sampling cutoff, before any device work it would
+waste.** Charter section 13.11 rules the floor and the mechanism is this
+section's. The cutoff is the `top_k` each generation carries (section 8), so this
+crate judges it at each generation, before any append. A `top_k` above the depth
+refuses as `FieldBelowCutoff`, which carries both numbers. A `top_k` of zero
+refuses the same way, because zero keeps every candidate and its cutoff is the
+whole vocabulary. Under a serving binding the harness judges the declaration's
+default against the depth at load (`weaver-harness-Spec` section 6.1), before the
+admit's device work. Under a diagnostic binding the replay's input identity judges
+each recorded `top_k` before any re-feed (`diagnostic-replay-loop` section 3).
+Refusing at the first turn instead would spend that work to learn what a
+comparison of two integers answers, which is the fail-cheap-or-lie-expensive rule
+again.
 
 ```graph
 node: spu-field-depth-refused-below-the-cutoff
@@ -2803,10 +2855,96 @@ message is not sent. A consumer counts what was produced rather than
 filtering what was not, per the decode contract's section 2, and why the
 election did not stand is the load event's to say rather than this seam's.
 
-## 8. Sampling, and the dispositions
+## 8. Sampling, and the carrier
 
-**Every knob carries a `Disposition`, elected at the worker's composition
-root.** Per the composability ruling of 2026-08-02 and charter section 13.8:
+**Every generation carries the values it samples with**, per the operator's ruling of
+2026-11-11. The sampler's mechanism is theta: it is locked at load, and the engine block
+names it (section 3.1.3). Its values ride with the turn. The declaration supplies the
+defaults, the harness's loop sends them with every generation, and the record states the
+values each generation ran under.
+
+**The carried set is six sampling values and one bound.** `AppendAndGenerate` carries
+`sampling`, which holds `temperature`, `top_k`, `top_p`, `repetition_penalty`,
+`repetition_window` and `seed`, and beside it `max_tokens`, the generation's token bound
+(`weaver-types-Spec` section 4.4). Every member is required, and this crate defaults
+none: a directive that lacks one does not parse. The names are the ones the request's
+`sampling` block and `stop` object already use (section 6). The types are the ones those
+members already render: `f32` for `temperature`, `top_p` and `repetition_penalty`, `u32`
+for `top_k` and `repetition_window`, and `u64` for `seed` and `max_tokens`. So what a
+generation carried and what its request records compare member for member, and the
+rendered bytes do not move.
+
+**Both engines build the whole sampler from the carried values at each generation**: the
+mode, the filters and the penalty, as well as the stream (section 8.5). The penalty
+window is still restored from the resident tail, at the carried `repetition_window`. An
+earlier form of this section sent the values once, in the declaration at admit, because
+the engine built its sampler once at session open. Section 8.5's per-generation build
+had already made that ground false for the stream. Both engines still took the values
+once, at open, and rebuilt each generation's sampler from them. The carrier hands each
+generation its own.
+
+**Each value is judged before the generation touches the session.** A value outside its
+range refuses the directive with `SamplingOutOfRange`, which names the member. The
+refusal comes before any append, and the session stays as the directive found it. The
+ask the harness records carries the whole set (`weaver-types-Spec` section 4.4), so the
+refused value is in the record.
+
+| Member | Range | Why |
+|---|---|---|
+| `temperature` | finite, 0 or more | Zero is the argmax draw on both engines. |
+| `top_k` | a count below 2^31 | The GGUF engine takes it as a signed 32-bit integer. Zero keeps every candidate on both engines. Where a field is elected, a `top_k` above the field's depth refuses as `FieldBelowCutoff`, and so does zero, whose cutoff is the whole vocabulary (section 7.5). |
+| `top_p` | finite, more than 0 and at most 1 | One keeps every candidate. |
+| `repetition_penalty` | finite, more than 0 | One leaves the logits as they are. |
+| `repetition_window` | a count below 2^31 | The GGUF engine takes it as a signed 32-bit integer. Zero holds no window. |
+| `seed` | any `u64` | No value is refused. |
+| `max_tokens` | at most the session's ceiling | Section 4.2. A zero bound is not refused, because the grammar refuses no zero ceiling (SPU-OPEN reports one unchanged). The generation it bounds reaches its limit before its first draw. |
+
+**The field's depth is judged at each generation now.** Until the carrier it was judged
+at admit, against the frozen `top_k`. Under a serving binding the harness's reader also
+judges the declaration's default at load (`weaver-harness-Spec` section 6.1), so a
+declaration that every generation would refuse still fails before any device work. Under
+a diagnostic binding the values arrive with the replay, after admit, so the replay's
+input identity judges each recorded `top_k` against the depth before any re-feed
+(`diagnostic-replay-loop` section 3).
+
+**The bound is the generation's, and the ceiling is the session's.** This is the
+operator's ruling of 2026-11-11 and not a departure from it. The value that rides with
+the turn is the generation's bound, per turn as the ruling lists it. The ceiling is the
+room the session was placed with. Section 4.2 keeps it an admit-time session parameter,
+stated at Open as `generation_limit` (SPU-OPEN), and the harness plans room against it.
+A generation that asks for more than the room is refused, not served short. The
+declaration's `max-tokens-per-turn` sets the ceiling. The loop's default bound is that
+ceiling as Open states it, so a binary that freezes the ceiling cannot leave the loop a
+default that every generation would refuse. The key's name is the grammar's, and the
+bound is per generation: each generation of a turn, tool rounds included, is bounded by
+its own `max_tokens`. How a turn's budget splits across its tool rounds is the loop's
+question, and section 12 lists it.
+
+**Retiring the ceiling was considered and left out.** The harness could plan room
+against the bound it will send, with no `generation_limit` at Open. That would move
+SPU-OPEN, the shared Open corpus, OPEN-FACTS in `state-management-spec-06` and the
+harness's placement fit, for nothing this act reads.
+
+**The dispositions retire for the carried set, and that is open for the operator's
+ruling.** Until this act each sampling knob carried a `Disposition`: `Frozen` with its
+value compiled in, or `OperatorTunable` and read from `decoder.tunable_values` at admit.
+The seed alone was tunable, on the operator's ruling of 2026-08-20, because a
+distribution gathered while temperature or the filters varied would report the sampler
+rather than the task. The carrier makes that the loop's and the operator's choice, not
+the binary's, and the record states every value of every generation either way. This is
+the Planner's default on the operator's words of 2026-11-11, and the operator rules on
+it.
+
+**A production lock is an addition and not a redesign, if the operator asks for one.**
+It would be a value the composition root compiles for a member, held by two refusals
+that name the member. The SPU refuses a generation that carries a different value. At
+admit, the SPU refuses an instruction whose default for the member differs, so a
+declaration that every generation would refuse fails at load. For that check alone, the
+lock's act adds the locked members' defaults to what the harness forwards at admit. The
+carrier, the record and the loop's reader do not move.
+
+**The session parameters keep their dispositions.** The context capacity and the
+generation ceiling are elected at the worker's composition root (section 4.2):
 
 ```rust
 pub enum Disposition<T> {
@@ -2815,13 +2953,12 @@ pub enum Disposition<T> {
 }
 ```
 
-A knob is `Frozen` with its value compiled into the binary, or
-`OperatorTunable` and routed from the agent's configuration at load. The
-machinery beneath takes a plain value and never learns which side supplied it,
-which is what makes the two dispositions cost the same and a change between
-them one line and a recompile. A knob left without an election does not
-compile, the type carrying no third case and no default, which is the claim
-section 10 sorts under the compiler.
+A parameter is `Frozen` with its value compiled into the binary, or `OperatorTunable`
+and routed from the agent's configuration at load. The machinery beneath takes a plain
+value and never learns which side supplied it, so the two dispositions cost the same,
+and a change between them is one line and a recompile. A parameter left without an
+election does not compile: the type carries no third case and no default, which is the
+claim section 10 sorts under the compiler.
 
 ```graph
 node: spu-disposition-compels-election
@@ -2833,34 +2970,11 @@ from: weaver-spu
 to: spu-disposition-compels-election
 ```
 
-**The knob set is temperature, top-k, top-p, the repetition penalty and its
-window, and the seed.** The seed is a knob for the first time in this code's
-lineage: the archived tree carried it as a hardcoded default and a determinism
-test and never made it configurable, so the disposition mechanism is its first
-real home.
-
-**The seed is operator-tunable as of 2026-08-20 and the rest of the surface
-stays frozen**, per the operator's ruling and apex section 8's own terms. That
-section makes stochastic re-entry from a declared starting field available
-"when the binary declares one" and says what freezing buys: a frozen seed
-"narrows variance and buys audit rather than determinism". Freezing it here
-bought neither, because one binary then draws one trajectory per task however
-many times it is run, and a distribution over a task needs draws rather than
-repetitions of one. Re-entry survives the move and improves: the effective
-seed rides every `model.request`'s sampling block already, so a recorded run
-names the draw it was and is re-entered by declaring that seed again, which is
-the same property held per run instead of per binary. What must not move
-beside it is the rest of the surface - temperature, the truncating filters,
-and the penalty pair stay `Frozen` - because a distribution gathered while
-those varied would report the sampler rather than the task. The no-defaulting
-rule reaches the new election in full: a declaration that supplies no `seed`
-refuses the load naming it, per this section's own rule below, so a run can
-never draw under a seed nobody chose. Compile-pin
-on the operator's election of 2026-08-04, superseding this clause's earlier
-non-purchase ruling: the membership is a struct literal a doctest reads, every
-member riding its `Disposition`, so a knob added or dropped stops the build,
-and the bullet section 10 was missing is the bullet that now reads it. The
-ruling's premise was the missing bullet, so the ruling falls with it.
+**The carried set's membership is a struct literal that a doctest reads.** It names
+every member of `weaver-types`' `Sampling`, the seed among them, so a member added or
+dropped stops the build. The seed is a member for the first time in this code's lineage:
+the archived tree carried it as a hardcoded default and a determinism test, and never
+made it configurable.
 
 ```graph
 node: spu-knob-set-includes-the-seed
@@ -2872,71 +2986,43 @@ from: weaver-spu
 to: spu-knob-set-includes-the-seed
 ```
 
-**Frozen values never cross the wire and that is checkable.** Only the
-operator-tunable remainder crosses at all, and section 10 makes it a test
-rather than a promise.
+**No sampling value reaches this crate at admit.** The harness takes the six sampling
+names out of the map before it forwards the instruction (`weaver-harness-spu-contract`
+section 2). An instruction that names one refuses at admit as `ConfigInvalid` on
+`tunable-values.<name>`, so no value arrives by two routes.
 
-**The remainder crosses in the declaration at admit, not on the token seam,
-and this act moves it.** The earlier route had a value sourced from the agent's
-configuration at load, transported per turn on the token seam, and consumed at
-`open_session`, and those three do not meet: the engine builds its sampler once
-at open, so a value arriving with a token directive has no engine to reach.
-That is why every knob is `Frozen` today, which reads as an election and is a
-forced hand.
+**Every generation of a turn carries the same set.** The loop reads the defaults once at
+load and sends them with every generation of every turn, the seeding and the tool rounds
+included. So two generations of one turn differ only in their `generation_seed` (section
+8.5).
 
-`decoder.tunable_values` carries the remainder instead, arriving once with the
-instruction the admit already brings, at the moment the session is about to
-open. Resolution stays where it was, `Knobs::resolve` against the supplied map,
-and neither the dispositions nor the resolve change shape.
+**A re-feed carries its recorded generation's values, never the declaration's of the
+day.** `ReFeed` carries `sampling`: the six members that the recorded `model.request`'s
+`sampling` block holds. `generation_seed` stays the check (section 8.5). A recorded
+block that lacks a member fails input identity before any re-feed, as any record missing
+what its claim requires does (`diagnostic-replay-loop` section 3). A re-feed carries no
+bound. It draws no token of its own and runs the length of its recorded path, so its
+request's `max_tokens` renders the session's ceiling, as it did before the carrier. A
+diagnostic binding therefore reads no sampling default. The six are not required in its
+declaration, and the harness takes out any it names and uses none of them, so
+WeaverAnalysis's derived declaration does not move.
 
-**What this is watched by reads one direction.** The capture of section 10
-fails when a sampling value reaches this crate on the token seam and ignores
-what leaves on it, because `Generation` carries the request this crate rendered
-whole with its effective sampling among it, per charter section 13.8's rule that
-the record holds what a turn ran with whichever side set it. A capture reading
-both directions would fail on the record and call it a leak.
+**The carrier is the seam that later acts feed.** In this act the loop sends the
+declaration's defaults. A value the world sends with a turn through the gate
+(`weaver-gate-world-contract`) and a value a loop builder chooses are later acts. Each
+feeds this carrier, and neither brings its own.
 
-**The token seam's tunable map goes rather than staying unread.** With the
-values arriving at admit, a map on the token directive would be a payload field
-whose only reader is unbuilt, which apex section 9 refuses in the same words it
-refuses an empty joint. A per-turn tunable remains possible and is a different
-feature, changing a value mid-session, and it wants the engine to rebuild its
-sampler between turns. When that is built it brings its own carrier back rather
-than finding one waiting.
+**What this buys is the iteration loop the disposition mechanism was for, without the
+recompile.** A developer moves a default in the agent's declaration and reloads, and the
+next generation samples with it. The record names the values of every generation, so two
+runs under different defaults are told apart from the record alone.
 
-**What this buys is the iteration loop the disposition mechanism was for.** A parameter
-left tunable is set in the agent's declaration and reaches the engine on the next load,
-so a developer moves it by reloading the agent. A parameter frozen for a production
-binary cannot be moved by any declaration and never travels. Which is which stays one
-line and a recompile at the composition root.
-
-```graph
-node: spu-tunables-arrive-in-the-declaration
-kind: assertion
-tag: perturbation
-
-edge: asserts
-from: weaver-spu
-to: spu-tunables-arrive-in-the-declaration
-```
-
-```graph
-node: spu-frozen-values-never-cross
-kind: assertion
-tag: perturbation
-
-edge: asserts
-from: weaver-spu
-to: spu-frozen-values-never-cross
-```
-
-**The effective values are what the record holds, whichever side set them.**
-This crate reports the values it sampled with into `model.request`'s payload,
-per `weaver-trace-PRD` section 3.2, so a frozen knob is as visible in the
-record as a tunable one and a replay reads one list rather than joining two.
-Review's by non-purchase, and it is the near twin of the test above read the
-other way: that one asserts what the seam does not carry and this one asserts
-what the record does.
+**The effective values are what the record holds.** This crate renders the values each
+generation sampled with into `model.request`'s payload, per `weaver-trace-PRD` section
+3.2: the six in its `sampling` block and the bound in its `stop` object. A replay reads
+them there and nowhere else. The claim is review's by non-purchase. It is the near twin
+of section 10's capture, read the other way: the capture holds the carried set against
+the recorded block, and this clause asserts what the record holds.
 
 ```graph
 node: spu-effective-values-recorded
@@ -2948,7 +3034,39 @@ from: weaver-spu
 to: spu-effective-values-recorded
 ```
 
+**The carrier's acceptance is an identity, and the code act reads it before any other
+test.** Set the declaration's defaults to the constants the composition root froze
+before the carrier: `temperature` 0.7, `top-k` 40, `top-p` 0.95, `repetition-penalty`
+1.1 and `repetition-window` 64, with the declaration's own `seed` and
+`max-tokens-per-turn`. For the same artifact, context, seed and turn reference, the
+record is then byte-identical to the record before the carrier, with two exceptions:
+- The bytes that differ between any two runs today may differ, and no others: the
+  envelope's `session`, `run`, `wall_ms` and `monotonic_ns`, and the measurement's
+  `timings`.
+- The carrier adds two members to the record, and only on a refused append: the
+  `refusal` event's ask carries the set and the bound the directive was sent
+  (`weaver-types-Spec` section 4.4). A run with no refused append writes no byte that
+  the carrier changed.
+
+The request's `sampling` block and `stop` object keep their members, their order and
+their value types. The `load` event carries no sampling value, and the Open answer does
+not move. The code act reads the identity with the request-identity device instrument
+(`tests/request_identity.rs`) on one card and on the pair. The request box is rendered
+in the binary, so the instrument drives the binary through one admit, one open and one
+generation, and it speaks the wire as raw JSON so that one file runs in the tree before
+the carrier and in the tree after it. It compares, byte for byte, every token frame and
+the closing answer's request box, emission, finish and content, and the measurement
+less its `timings`, which holds the tokens and the entropy and surprisal values.
+Both runs load one build of the engine libraries, because two builds of one engine
+source can differ in their library digests, which the measurement's engine block
+records.
+
 ## 8.5 The seed's derivation
+
+**The declared seed is the `seed` the generation carries** (section 8): the
+declaration's default, which the loop sends with every generation, or, for a
+re-feed, the recorded generation's value. The name stays because the records
+already use it, and the derivation below does not change.
 
 **One function, stated here so two readers cannot differ.** The derived
 seed of a generation is `splitmix64` applied to the declared seed mixed
@@ -3028,7 +3146,8 @@ against.
 
 The block is the record's own, one place holding every value the sampler
 ran with, so a re-entry reads it rather than assembling the surface from
-a declaration that may have moved since.
+a declaration that may have moved since. A re-feed carries exactly that
+(section 8).
 
 **`generation_seed` is not among what is supplied.** It is the recorded value a
 correct re-entry reproduces, which makes it the check rather than an
@@ -3113,7 +3232,7 @@ to: spu-sampler-holds-nothing-between-generations
 **The request records both seeds, under these two names.** The rendered
 sampling block of the `model.request` carries them as `u64`:
 
-    seed              the declared run seed, resolved from the disposition
+    seed              the declared seed, as the generation carried it
     generation_seed   the derived value this generation drew from
 
 **`seed` keeps the meaning it already had**, which is the reason for the
@@ -3125,8 +3244,8 @@ record, and the 2026-08-20 corpus is the one this program's first findings
 rest on. The new member takes the new name.
 
 **Neither is called effective**, and this section's prose does not use the
-word for them either: this crate already spends it on the knobs a
-disposition resolved, and `seed` is one of those. A member named for the
+word for them either: this crate already spends it on the values a
+generation ran under, and `seed` is one of those. A member named for the
 derivation says what it is without borrowing a word that already means
 something one layer up.
 
@@ -3134,7 +3253,7 @@ Both are recorded because either alone is a half-answer. The declared seed
 does not say what a generation drew from, and the derived seed does not
 say what to declare in order to re-enter it. Section 10's capture of the
 sampling block reads both members and their values, the same instrument
-that already watches which knobs cross.
+that holds the carried set against the recorded block.
 
 This crate renders the block, so the pair reaches the record without the
 trace crate learning either name.
@@ -3328,11 +3447,11 @@ across the change.
   crate's matches loudly. `weaver-types-Spec` section 4.2 argues that property
   and declares its record, and this crate consumes it.
 - Descriptors are owned types end to end.
-- `Disposition<T>` makes a knob without an election a compile error, so a
-  builder cannot leave one unstated.
-- The knob struct is a literal a doctest reads, every member named and the seed
-  among them, so section 8's set is membership the build checks rather than a
-  list a builder consults.
+- `Disposition<T>` makes a session parameter without an election a compile error,
+  so a builder cannot leave one unstated.
+- The carried set is a struct literal a doctest reads (`weaver-types`' `Sampling`),
+  every member named and the seed among them, so section 8's set is membership the
+  build checks rather than a list a builder consults.
 - The signal vectors' field is an option of a non-empty vector, its doctest
   reading the field's type, so the empty vector section 6 forbids is
   unrepresentable and the pairing is what remains for review there.
@@ -3513,9 +3632,31 @@ than a code fact.
 - Signals are pre-sampler: the entropy of a step matches the distribution
   before sampling, confirmed by watching it collapse when the computation moves
   after the sampler.
-- Frozen knobs never cross: a capture of the token seam contains no frozen
-  value, confirmed by watching one appear when a knob's disposition is changed
-  to tunable without changing the binary's declaration.
+- The carrier's acceptance is section 8's identity, read first, on one card and
+  on the pair. It is confirmed by watching it fail when a default differs from
+  the constant it replaces.
+- Every generation samples with what it carried: a capture of the token seam holds
+  each `AppendAndGenerate`'s `sampling` and `max_tokens` beside the `model.request`
+  the generation answered, and each member matches. Confirmed by watching it fail
+  when this crate renders a value it held from admit in place of the carried one.
+- No sampling value reaches this crate at admit: an instruction whose map names
+  one of the six refuses, naming it. Confirmed by watching the admit succeed when
+  the refusal is dropped.
+- Each range refuses by name before any append, the session unchanged. Confirmed,
+  member by member, by watching the out-of-range value served when its check is
+  dropped.
+- Where a field is elected, a `top_k` above its depth, or zero, refuses as
+  `FieldBelowCutoff` with both numbers, before any append. Confirmed by watching the
+  generation served when the check is dropped, and served at zero when zero is
+  compared as a count.
+- Two generations of one turn carry the same set: a turn with a tool round records
+  two requests whose `sampling` blocks differ only in `generation_seed` and whose
+  `max_tokens` match. Confirmed by watching it fail when the loop varies a member
+  by the generation's ordinal.
+- A re-feed draws under its recorded generation's values: on a recorded run whose
+  values differ from the declaration's defaults, the replay's comparison of the
+  `sampling` block passes. Confirmed by watching it fail when the replay sends the
+  declaration's defaults instead.
 - Readout elected but untappable refuses at admit, confirmed by watching the
   load succeed and the first turn fail when the check moves off the admit path.
 - The adapter binding amendment's rows (ADP-6) that this crate holds, each watched
@@ -3551,7 +3692,7 @@ comparisons crossed is therefore a fact about the carry that a reader
 establishes and a runner cannot.
 
 **Which invariant each claim serves, and why most serve none.** Fourteen `grounds`
-edges run from eleven of the eighty-nine: four to
+edges run from eleven of the eighty-seven: four to
 `axiom-contract-is-a-complete-interface`, six to
 `axiom-floor-is-vocabulary-behavior-is-socket`, three to
 `axiom-harness-integrates-by-the-loop`, and one to `axiom-organ-and-submodule`.
@@ -3572,7 +3713,7 @@ being such a reach. **The floor-link record is the sixth**, and its edge there i
 plainest of them: the crate links the floor at all because a socket cannot carry
 shared vocabulary, which section 1.1 argues where the record sits.
 Remove the invariant and the session is still append-only, the registry still
-substitutes nothing, and every sampling knob still carries a disposition, so those
+substitutes nothing, and every session parameter still carries a disposition, so those
 ground in nothing.
 `axiom-join-key-travels-with-the-work` takes nothing from this crate, and the absence is
 that invariant's own scope rather than a gap: every directive on the residency seam
@@ -3618,8 +3759,9 @@ this section sorts by instrument and the arguments are elsewhere, so a block
 here would sit apart from the prose that earns it. Four are the exception and
 sit at the end of this section, being the claims argued only here: the fork
 seam's doctest, the path-taking loader's two pinned shapes, that same claim's
-general prohibition, and the kernels' comparisons. Eighty-nine records in
-all, the custody act of 2026-09-05 adding the artifact refusal's account and
+general prohibition, and the kernels' comparisons. Eighty-seven records in
+all, the carrier act of 2026-11-12 retiring two that the carried values made
+false, the custody act of 2026-09-05 adding the artifact refusal's account and
 the definitions act of the same date the closing count's review record,
 the elections taking nodes because gate H1 would otherwise leave the largest
 decisions in this Spec untraceable. Four of these arrived with the
@@ -3632,12 +3774,12 @@ section's sorting against the elections outside it, is retired for a count that
 needs no reading.** It read thirty-one and twenty-nine against a total of sixty,
 was never brought forward, and by 2026-09-15 disagreed with the total three
 paragraphs above it: that sixty and the nineteen records it put since sum to
-seventy-nine where the crate carries eighty-nine. It was never recoverable
+seventy-nine where the crate then carried eighty-nine. It was never recoverable
 mechanically either, since which bullet here covers which record is a judgment and
 an election is a reading rather than a tag. Where each record is declared is a
 fact, and this is the count, each subsection counting to its section: nine in
 section 1, seven in section 2, eleven in section 3, eighteen in section 4, nine in
-section 5, seven in section 6, ten in section 7, two in section 7.5, five in
+section 5, seven in section 6, ten in section 7, two in section 7.5, three in
 section 8, two in section 8.5, three in section 9, four in this section, and two
 in section 11. **Sections 0 and 12 declare none and the zero is stated rather
 than left out**, section 0 saying what this document is and section 12 holding
@@ -3837,11 +3979,24 @@ Each names what settles it, and none is this Spec's to settle alone.
   the artifact's declared window bounds the answer without being it. The
   ceiling settles against what a turn is allowed to spend before the backstop
   fires, which is a judgement rather than a measurement.
-- **Which parameters this binary leaves tunable.** The election is the
+- **Which session parameters this binary leaves tunable.** The election is the
   builder's per charter section 13.8 and it is a deployment's question rather
   than this Spec's, the way the family set is. What this Spec fixes is that
-  every parameter carries an election and none defaults, not which way any
-  deployment casts it.
+  every session parameter carries an election and none defaults, not which way
+  any deployment casts it.
+- **The dispositions' retirement for the carried set, and the ceiling's split.**
+  Both are the operator's to rule on (section 8). A production lock, if the
+  operator asks for one, takes the shape section 8 states.
+- **How a turn's budget splits across its tool rounds.** Each generation is bounded
+  by its own `max_tokens` (section 8). A turn-wide budget would be the loop's, and
+  nothing is built for it.
+- **What a later act that varies the values within a run moves.** In this act every
+  generation of a run carries the declaration's defaults, and the bound is the
+  ceiling. Two readers rest on that. `weaver-analysis-web-contract` section 2 treats a
+  run whose generations disagree on the declared sampling members as a defect.
+  `weaver-analysis-Spec` section 3 derives a replay's ceiling from a request's
+  `stop.max_tokens`. An act that lets the world or a loop vary a value, or send a
+  bound below the ceiling, moves both and reaches every party to them.
 - **Whether the artifact's declared shape is verified against its tensor
   data.** Charter section 9's second staged item, priced by what the check
   costs on the admit path.

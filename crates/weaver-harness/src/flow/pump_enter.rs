@@ -476,6 +476,19 @@ impl ReceivedEnter {
                     "Enter store or artifact identity disagrees".to_owned(),
                 ));
             }
+            // **The reader judges the sampling defaults before any handle is
+            // consumed**, per `weaver-harness-Spec` section 6.1: a declaration
+            // every generation would refuse refuses the enter, typed.
+            let sampling = crate::lifecycle::judge_sampling_defaults(
+                &payload.spu_instruction.decoder,
+                &mut std::io::stderr(),
+            )
+            .map_err(|refusal| {
+                (
+                    AdoptionFailureKind::Refused(refusal),
+                    "Enter sampling defaults refused".to_owned(),
+                )
+            })?;
             if self.message.sink.is_none() || self.message.state.is_none() {
                 return Err((
                     AdoptionFailureKind::Refused(LifecycleRefusal::DescriptorsUnusable),
@@ -508,6 +521,7 @@ impl ReceivedEnter {
                 payload.run.0.clone(),
                 payload.operator,
                 state_management.flow.clone(),
+                sampling,
                 super::super::clock::AbsoluteBound::from_absolute(
                     enter_window.began_ns.0,
                     enter_window.deadline_ns.0,

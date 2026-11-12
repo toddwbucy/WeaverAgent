@@ -105,6 +105,7 @@ pub(super) fn spu(mode: &str, fd: i32) {
             turn,
             delta: appended,
             tool_schemas,
+            ..
         } = request
         else {
             panic!("the measured delta must be consumed by generation");

@@ -657,6 +657,8 @@ fn decode_send_retains_preamble_and_each_slice_without_looping() {
     let input = TokenDirective::AppendAndGenerate {
         turn: weaver_types::TurnKey("run:1".into()),
         tool_schemas: Vec::new(),
+        sampling: crate::flow::context::TEST_SAMPLING,
+        max_tokens: 16,
         delta: vec![weaver_traits::Message {
             role: weaver_traits::Role::User,
             content: vec![weaver_traits::ContentBlock::Text {

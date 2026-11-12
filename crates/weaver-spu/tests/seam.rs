@@ -91,7 +91,6 @@ fn instruction() -> SpuInstruction {
             tunable_values: [
                 ("max-tokens-per-turn".to_string(), 4096.0),
                 ("context-capacity".to_string(), 4096.0),
-                ("seed".to_string(), 11.0),
             ]
             .into_iter()
             .collect(),

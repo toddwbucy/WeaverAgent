@@ -98,23 +98,23 @@ fn every_generation_measurement_leads_with_the_typed_adapter() {
     let rest = serde_json::json!({"model": "m", "blocks": []});
     let rest = rest.as_object().expect("an object");
     assert_eq!(
-        super::lead_with_adapter(None, rest),
-        r#"{"adapter":null,"blocks":[],"model":"m"}"#
+        super::lead_with_adapter(None, None, rest),
+        r#"{"adapter":null,"engine":null,"device":null,"blocks":[],"model":"m"}"#
     );
     assert_eq!(
-        super::lead_with_adapter(None, &serde_json::Map::new()),
-        r#"{"adapter":null}"#
+        super::lead_with_adapter(None, None, &serde_json::Map::new()),
+        r#"{"adapter":null,"engine":null,"device":null}"#
     );
     let adapter = weaver_spu::lora::RecordedAdapter {
         artifact: "/models/adapter.gguf".into(),
         sha256: "a".repeat(64),
         scale: 0.7,
     };
-    let rendered = super::lead_with_adapter(Some(&adapter), rest);
+    let rendered = super::lead_with_adapter(Some(&adapter), None, rest);
     assert_eq!(
         rendered,
         format!(
-            r#"{{"adapter":{{"artifact":"/models/adapter.gguf","sha256":"{}","scale":0.7}},"blocks":[],"model":"m"}}"#,
+            r#"{{"adapter":{{"artifact":"/models/adapter.gguf","sha256":"{}","scale":0.7}},"engine":null,"device":null,"blocks":[],"model":"m"}}"#,
             "a".repeat(64)
         )
     );
@@ -195,8 +195,6 @@ fn instruction() -> SpuInstruction {
             tunable_values: [
                 ("max-tokens-per-turn".to_string(), 4096.0),
                 ("context-capacity".to_string(), 4096.0),
-                // The seat's own draw, tunable as of 2026-08-20.
-                ("seed".to_string(), 11.0),
             ]
             .into_iter()
             .collect(),
@@ -297,6 +295,48 @@ fn a_second_admit_is_refused_at_the_position() {
         HEADROOM_BYTES,
     );
     assert_eq!(second, Payload::Refusal(LifecycleRefusal::OutOfOrder));
+}
+
+/// **An admit carrying any sampling name refuses, naming it**, per
+/// `weaver-spu-Spec` section 8 and `weaver-harness-spu-contract` section 2:
+/// the harness takes the six names out before it forwards the instruction,
+/// so a name standing here is a value arriving by a second route. The refusal
+/// comes before residency is asked, so the artifact this fixture names, which
+/// does not resolve, is never reached, and the one admission is spent.
+///
+/// Perturbation: drop the sampling-name check from `dispatch` and every case
+/// answers `ArtifactUnresolvable`.
+#[test]
+fn an_admit_carrying_a_sampling_name_refuses_naming_it() {
+    for name in weaver_types::SAMPLING_DEFAULT_NAMES {
+        let mut residency = Residency::new();
+        let mut position = SeamPosition::BeforeAdmit;
+        let mut carrying = instruction();
+        carrying
+            .decoder
+            .tunable_values
+            .insert(name.to_string(), 1.0);
+        assert_eq!(
+            dispatch(
+                &mut position,
+                &mut residency,
+                &directive(LifecycleDirective::Admit {
+                    instruction: carrying,
+                }),
+                &mut None,
+                HEADROOM_BYTES,
+            ),
+            Payload::Refusal(LifecycleRefusal::ConfigInvalid {
+                field: Some(weaver_types::FieldName(format!("tunable-values.{name}"))),
+            }),
+            "{name} at admit refuses by name"
+        );
+        assert_eq!(
+            position,
+            SeamPosition::AdmitRefused,
+            "{name} spends the admission"
+        );
+    }
 }
 
 /// **Only admit and release cross this seam.** Every other case of the
@@ -469,6 +509,15 @@ fn append() -> TokenDirective {
         tool_schemas: vec![],
         turn: weaver_types::TurnKey("t-1".into()),
         delta: vec![],
+        sampling: weaver_spu::sampling::Sampling {
+            temperature: 0.7,
+            top_k: 40,
+            top_p: 0.95,
+            repetition_penalty: 1.1,
+            repetition_window: 64,
+            seed: 0,
+        },
+        max_tokens: 512,
     }
 }
 

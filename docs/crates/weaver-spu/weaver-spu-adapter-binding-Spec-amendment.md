@@ -219,9 +219,9 @@ the next:
 
 | Site | Change |
 | --- | --- |
-| `placement.rs::open_evidence` | The Open measurement carries `adapter`. The closed shape becomes `model`, `weights_hash`, `adapter`, `prefix_token_ids`, `blocks` |
+| `placement.rs::open_evidence` | The Open measurement carries `adapter`, after `weights_hash`. SPU-OPEN states the whole closed shape |
 | `main.rs::render_measurement` | Every generation's measurement carries `adapter`, the actual loaded identity, `null` for base-only |
-| `weaver-harness/src/open_evidence.rs` | Validates the five-member shape and refuses a measurement without `adapter` |
+| `weaver-harness/src/open_evidence.rs` | Validates SPU-OPEN's closed shape and refuses a measurement without `adapter` |
 | `weaver-harness/src/replay.rs` | `SourceGeneration` and `ReplayIdentity` carry the adapter. `measurement_members` refuses a record whose measurement has no `adapter` path (absent is not `null`). The identity check before the walk (`refuse_identity`) compares the record's adapter with the loaded binding's, as it compares the model, and the per-generation comparison treats an adapter mismatch as `IdentityBroken`, as it treats the weights hash |
 | `weaver-diagnostic/src/event.rs::ReplayIdentity` | Carries the adapter |
 | `weaver-analysis-state` contract, then WeaverAnalysis | The election carries `adapter` as part of `model.measurement`'s identity. `preload_door.rs`'s `SELECTION` is the test oracle of that election and follows the contract |
@@ -337,7 +337,7 @@ The request type derives `PartialEq` so the one-path row can compare.
 | A non-dyadic scale replays clean | An adapted load at scale 0.7 replays with its identity intact, Open against generation and record against declaration | Compare the scale as f64 |
 | The engine log keeps flowing | A line the engine logs under the capture reaches the SPU's stderr | Swallow it |
 | The identity is recorded | A base-only Open measurement carries `"adapter": null`, and an adapted one (the LORA-7 fixture) carries the object | Omit the member for base-only |
-| The shape stays closed | The harness refuses an Open measurement without `adapter` | Accept the four-member shape |
+| The shape stays closed | The harness refuses an Open measurement without `adapter` | Accept a measurement without `adapter` |
 | Replay refuses an old record | A record whose measurement has no `adapter` path refuses, naming it | Read absent as `null` |
 | Replay judges the adapter before the walk | A record whose adapter differs from the loaded binding's refuses at `refuse_identity` | Compare the model alone |
 | Replay judges the adapter per generation | A re-fed measurement whose adapter differs from the source's returns `IdentityBroken` | Compare the weights hash alone |

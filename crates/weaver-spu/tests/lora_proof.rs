@@ -594,7 +594,6 @@ fn the_serving_binary_admits_a_declared_adapter_and_records_it() {
                     tunable_values: [
                         ("max-tokens-per-turn".to_string(), 4.0),
                         ("context-capacity".to_string(), 4096.0),
-                        ("seed".to_string(), 11.0),
                     ]
                     .into_iter()
                     .collect(),
@@ -663,6 +662,15 @@ fn the_serving_binary_admits_a_declared_adapter_and_records_it() {
         tool_schemas: vec![],
         turn: TurnKey("t-1".into()),
         delta: vec![text(Role::User, "Name one colour.")],
+        sampling: weaver_types::Sampling {
+            temperature: 0.7,
+            top_k: 40,
+            top_p: 0.95,
+            repetition_penalty: 1.1,
+            repetition_window: 64,
+            seed: 11,
+        },
+        max_tokens: 4,
     });
     let generation = loop {
         match recv() {
