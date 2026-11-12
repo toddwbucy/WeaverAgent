@@ -3077,8 +3077,10 @@ decoded and the window is probed: it holds the recorded token and not the
 draw. A third watch holds the crate's draw to the engine's own: one seed
 and one prompt drive the crate's draw on one context and the engine's
 sample on a twin, and the two answer the same token and the same
-distribution at every position, under the penalty, for longer than the
-window.
+distribution at every position, for longer than the window, with the
+penalty on and with it off. The second declaration is the one that reads
+the array's sorted flag, because a penalty that acts marks the array
+unsorted after it.
 
 **This retires the flush's coupling to sampling rather than repairing
 it.** The GGUF chain's reset cleared the penalty window and reseeded the

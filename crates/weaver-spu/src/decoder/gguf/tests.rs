@@ -762,28 +762,44 @@ fn a_refeed_window_holds_the_recorded_token_and_not_the_draw() {
 /// from the same knobs and seed and restored from the same tail, decoding
 /// the same token. The two answer the same token at every position, and
 /// the same distribution bit for bit, which carries every signal the
-/// session measures from it. The run is longer than the window, under the
-/// frozen penalty.
+/// session measures from it. The run is longer than the window.
 ///
-/// Perturbation: mark the candidate array sorted in `GgufEngine::draw`, or
-/// drop the accept from `GgufEngine::decode_at`, and the two draw
-/// differently.
+/// **Two declarations, the frozen penalty on and the penalty off.** A
+/// penalty that acts marks the array unsorted after it, so with the penalty
+/// on the array's own sorted flag never reaches top-k. With the penalty at
+/// 1.0 the penalty sampler returns at once and the flag the crate built
+/// reaches top-k as built, so the second declaration is what reads it.
+///
+/// Perturbation: drop the accept from `GgufEngine::decode_at` and the
+/// first declaration's draws part. Mark the candidate array sorted in
+/// `GgufEngine::draw` and the second's do.
 #[test]
 fn the_crates_draw_is_the_engines_own_draw() {
     let Some(model) = model_or_skip() else { return };
-    let knobs = frozen();
+    let on = frozen();
+    let off = EffectiveKnobs {
+        repetition_penalty: 1.0,
+        ..on
+    };
+    for (knobs, declaration) in [(on, "the penalty on"), (off, "the penalty off")] {
+        lockstep_with_the_engine(&model, &knobs, declaration);
+    }
+}
+
+/// One declaration of [`the_crates_draw_is_the_engines_own_draw`].
+fn lockstep_with_the_engine(model: &ResidentModel, knobs: &EffectiveKnobs, declaration: &str) {
     let steps = knobs.repetition_window as usize + 32;
     let prompt = [TokenId(9707), TokenId(11), TokenId(1879)];
     let seed = 4242;
 
-    let mut ours = engine(&model);
+    let mut ours = GgufEngine::open(model, knobs, 512, false).expect("the context opens");
     ours.decode_at(&prompt, 0).expect("the prompt decodes");
     ours.reseed(seed, &prompt).expect("the reseed");
 
-    let mut twin = engine(&model);
+    let mut twin = GgufEngine::open(model, knobs, 512, false).expect("the twin opens");
     twin.decode_at(&prompt, 0)
         .expect("the twin's prompt decodes");
-    let mut theirs = GgufEngine::chain(&knobs, seed);
+    let mut theirs = GgufEngine::chain(knobs, seed);
     theirs.accept_many(prompt.iter().map(|token| LlamaToken(token.0 as i32)));
 
     for step in 0..steps {
@@ -792,13 +808,16 @@ fn the_crates_draw_is_the_engines_own_draw() {
             let b = twin.distribution().expect("the twin's distribution stands");
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
         };
-        assert!(same, "the two distributions differ at step {step}");
+        assert!(
+            same,
+            "with {declaration}, the two distributions differ at step {step}"
+        );
         let at = twin.logits_at.expect("the twin's logits stand");
         let engines = theirs.sample(&twin.context, at);
         let crates = ours.sample().expect("a token is drawn");
         assert_eq!(
             crates.0 as i32, engines.0,
-            "the crate's draw departs from the engine's own at step {step}"
+            "with {declaration}, the crate's draw departs from the engine's own at step {step}"
         );
         ours.decode_at(&[crates], prompt.len() + step)
             .expect("the draw decodes");
