@@ -183,17 +183,25 @@ revoked, and not replaced. An SPU that needs a binding or an election it was not
 has a failed admission rather than a second request to make, because there is no
 exchange in which it asks for one.
 
-**The instruction now carries the operator-tunable values, and the once is why
-it can.** The sampling values and the session parameters a binary left movable
-arrive with the binding, per `weaver-spu-Spec` section 8, having previously
-travelled the decode seam per turn where the engine could not reach them. One
-crossing suits them: the SPU builds its sampler when the session opens, which is
-after this exchange and before any turn, so a value that crosses once and early
-is a value in hand at the only moment it is read. A parameter the binary froze
-is ignored where it appears here, frozen meaning compiled in and never carried,
-so this exchange gains no power to move what a deployment locked.
+**The instruction carries the session parameters a binary left movable, and the
+once is why it can.** The context capacity and the generation ceiling arrive with
+the binding, per `weaver-spu-Spec` sections 4.2 and 8: the session is placed once,
+so a value that crosses once and early is in hand when it is read. A parameter the
+binary froze is ignored where it appears here, frozen meaning compiled in and never
+carried, so this exchange gains no power to move what a deployment locked.
 
-**No exchange carries a path.** The harness sends the instruction it was handed and
+**The sampling values do not cross here.** They ride each generation on the
+decode seam (`weaver-harness-spu-decode-contract` section 2), on the operator's
+ruling of 2026-11-11, and the declaration's map holds the loop's defaults for
+them. The harness takes the six sampling names (`temperature`, `top-k`, `top-p`,
+`repetition-penalty`, `repetition-window`, `seed`) out of the map before it
+forwards the instruction. An instruction that names one refuses at admit, naming
+it, so no value reaches the SPU by two routes. `max-tokens-per-turn` stays in
+the instruction as the session's ceiling. The loop's default bound is that
+ceiling as the Open answer states it (`generation_limit`).
+
+**No exchange carries a path.** The harness sends the instruction it was handed,
+less the sampling defaults its loop holds, and
 the SPU resolves the binding inside it against what it can reach, and neither party
 learns a trace path or a record name from the other. This is the handle
 discipline of `weaver-harness-PRD` section 5
@@ -292,28 +300,32 @@ because the harness answers nothing on this seam. The cases:
 - the artifact does not parse, or declares a shape this crate cannot serve
 - the device cannot take what admission requires
 - an election asks a readout the family's engine cannot honor
-- an election asks a field depth below the sampling cutoff
+- the instruction names a sampling value, one of the six names the harness takes out
+  of the map (section 2)
 - the directive is out of order for the channel's state
 - there is no residency to release
 
 **What each election is judged against at admit, and what refuses.** Three
-elections cross inside `spu-instruction` and the SPU judges each against
-what this deployment can honor, per `weaver-spu-PRD` sections 13.7, 13.11,
-and 13.12. The readout refuses where the family's engine cannot tap it. The
-field refuses where the declared depth falls below the sampling cutoff, per
-`weaver-spu-Spec`'s rule that a depth reporting no further than the sampler
-already cuts cannot distinguish the sampler's wall from the reporting's
-edge. The surprisal is judged against nothing and refuses on no ground: it
-sizes nothing and asks the engine for nothing the generation was not
-already computing, so it is carried and obeyed rather than tested.
+elections cross inside `spu-instruction` and the SPU judges each against what
+this deployment can honor, per `weaver-spu-PRD` sections 13.7, 13.11, and 13.12.
+The readout refuses where the family's engine cannot tap it. The field's depth
+is judged against the sampling cutoff, per `weaver-spu-Spec`'s rule that a depth
+reporting no further than the sampler already cuts cannot distinguish the
+sampler's wall from the reporting's edge. The cutoff is `top_k`, which rides
+each generation (`weaver-spu-Spec` section 8), so the SPU judges it at each
+generation on the decode seam (`FieldBelowCutoff`, zero included). The harness
+judges the declaration's default at load, and a replay's input identity judges
+the recorded ones. It is no longer an admit case. The surprisal is judged
+against nothing and refuses on no ground: it sizes nothing and asks the engine
+for nothing the generation was not already computing, so it is carried and
+obeyed rather than tested.
 
 **No new refusal type and no new exchange arrive with any of them.** The
 wire type is `lifecycle-refusal` as it has been, the cases above are its
 cases, and an election's rejection reaches the harness the way every admit
-refusal does, typed and naming itself. The enumeration gains the field's
-case because that case existed at the far end of this seam and this
-document had not named it, which is a defect in the enumeration rather than
-a change to the seam.
+refusal does, typed and naming itself. A sampling name in the instruction
+refuses as `ConfigInvalid` on `tunable-values.<name>`, the shape a bad
+tunable value already took at admit.
 
 **A refusal on this seam is clerked, 2026-08-22.** Per the operator's ruling
 that a refusal is clerked in one kind for every seam. The SPU's refusal
