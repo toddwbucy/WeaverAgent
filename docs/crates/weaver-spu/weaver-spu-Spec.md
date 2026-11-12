@@ -1202,6 +1202,22 @@ record.
   `build` digest still pin the resolution. This act does not change the wrapper for it.
 - **The device block is measured at the residency, not at each draw.** A device's free
   memory and clocks move during a run, and the record carries neither.
+- **Flash attention is set enabled on every placement.** AUTO resolved to enabled on
+  every placement measured on 2026-11-11: the host, one card and two cards under layer
+  split, across the qwen2, qwen3, gemma4 and granite families. AUTO disables it where
+  some layer's attention op cannot sit on that layer's device. On such a placement the
+  set value would move the draws, and the engine would run that op on another device.
+  No placement this crate serves has shown it. The engine reports the resolution only
+  in the log, and this act reads no log.
+- **Two engine overrides bear on no registered family.** For the `grok` architecture
+  the engine forces flash attention off. A graph that adds a bias to the attention
+  scores (the `t5` architectures) skips flash attention. The registry admits neither,
+  so neither override reaches a record.
+- **The fused Gated Delta Net choice is neither set nor recorded.** The engine resolves
+  it during the graph reserve, from whether each layer's fused op can sit on that
+  layer's device, and reports it only in the log. No context parameter sets it. It
+  bears on the `qwen35` and `qwen35moe` families, whose layers carry Gated Delta Net,
+  and the mechanism that would carry it is the operator's ruling.
 
 #### 3.1.5 The native engine
 

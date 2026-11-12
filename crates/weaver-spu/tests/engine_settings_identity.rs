@@ -12,6 +12,17 @@
 //! the tokens and each token's entropy and surprisal as f32 bits, so a
 //! comparison reads bit identity and not closeness.
 //!
+//! **The tree before an act does not hold this file.** It is copied into that
+//! checkout's `tests/` untracked for the run and removed after. Each record
+//! carries the commit its tree stood at and that tree's `git status` lines,
+//! so the copied file shows as untracked in the before record, and two
+//! records from swapped or stale trees cannot pass as a before and an after.
+//!
+//! **The prompt is short and the generation decodes one token at a time**, so
+//! a run never splits a batch into micro-batches and cannot observe
+//! `n_ubatch`. That value, and every other set but flash attention, is the
+//! engine's own default, which a host watch holds.
+//!
 //! Run with the lane's mask, as the harness launches the SPU (PAIR-1):
 //!
 //! ```text
@@ -27,7 +38,8 @@
 
 #![cfg(all(feature = "gguf", feature = "cuda"))]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use weaver_spu::decoder::session::{NeverCancels, PositionedSinks, SamplerBuild, StopCondition};
 use weaver_spu::readout::ReadoutElection;
@@ -41,6 +53,26 @@ const SEED: u64 = 4242;
 
 fn named(variable: &str) -> String {
     std::env::var(variable).unwrap_or_else(|_| panic!("{variable} names this run's input"))
+}
+
+/// The commit the tree stood at and its `git status` lines, so a record
+/// names the build that made it.
+fn tree() -> serde_json::Value {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let git = |args: &[&str]| -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(out.status.success(), "git {args:?} answers");
+        String::from_utf8(out.stdout).expect("git answers in UTF-8")
+    };
+    serde_json::json!({
+        "head": git(&["rev-parse", "HEAD"]).trim(),
+        "status": git(&["status", "--porcelain"]).lines().collect::<Vec<_>>(),
+    })
 }
 
 #[test]
@@ -128,6 +160,7 @@ fn record_one_generation_on_the_lane() {
             .unwrap_or_default()
     };
     let record = serde_json::json!({
+        "tree": tree(),
         "artifact": artifact.to_string_lossy(),
         "devices": devices.iter().map(|d| d.0).collect::<Vec<_>>(),
         "seed": SEED,

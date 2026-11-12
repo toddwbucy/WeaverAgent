@@ -851,11 +851,61 @@ fn a_reseed_tail_enters_the_window_once_per_position() {
     );
 }
 
+/// **Every value this crate sets but flash attention is the engine's own
+/// default**, per `weaver-spu-Spec` sections 3.1.1 and 3.1.2, so setting it
+/// leaves the parameters the engine is handed as they were, whatever a
+/// fixture can observe of it. Flash attention is the one set that changes
+/// them, from AUTO to enabled, and
+/// [`the_engine_settings_move_no_draw`] reads that one in lockstep.
+///
+/// The defaults are read from the engine's own constructors at the pinned
+/// engine, so an engine whose default moves fails here, and the act that
+/// moves the pin measures the new value before it sets it.
+///
+/// Perturbation: set `n_ubatch` 256 in `engine_settings`, or `use_mmap` off
+/// in `placement_params`, and this test fails.
+#[test]
+fn every_set_value_but_flash_attention_is_the_engines_default() {
+    let engines = LlamaContextParams::default();
+    let ours = engine_settings(LlamaContextParams::default());
+    assert_eq!(ours.n_ubatch(), engines.n_ubatch(), "n_ubatch");
+    assert_eq!(ours.type_k(), engines.type_k(), "type_k");
+    assert_eq!(ours.type_v(), engines.type_v(), "type_v");
+    assert_eq!(ours.offload_kqv(), engines.offload_kqv(), "offload_kqv");
+    assert_eq!(ours.op_offload(), engines.op_offload(), "op_offload");
+    assert_eq!(ours.swa_full(), engines.swa_full(), "swa_full");
+    assert_eq!(ours.kv_unified(), engines.kv_unified(), "kv_unified");
+    assert_eq!(ours.n_threads(), engines.n_threads(), "n_threads");
+    assert_eq!(
+        ours.n_threads_batch(),
+        engines.n_threads_batch(),
+        "n_threads_batch"
+    );
+    assert_eq!(
+        engines.flash_attention_policy(),
+        llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_AUTO,
+        "the engine's default is AUTO, which the record cannot state"
+    );
+    assert_eq!(
+        ours.flash_attention_policy(),
+        llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_ENABLED,
+        "flash attention is set enabled, never auto"
+    );
+
+    let models = LlamaModelParams::default();
+    for devices in [1, 2] {
+        let placed = placement_params(&Division::even(64, devices).expect("a division"))
+            .expect("parameters");
+        assert_eq!(placed.use_mmap(), models.use_mmap(), "use_mmap");
+        assert_eq!(placed.use_mlock(), models.use_mlock(), "use_mlock");
+    }
+}
+
 /// **The settings this crate sets move no draw**, per `weaver-spu-Spec`
-/// section 3.1: each value `engine_settings` sets is the value the engine
-/// resolved before the set existed, so the engine opened with them and the
-/// engine opened with its own defaults draw the same tokens from the same
-/// distributions.
+/// section 3.1. Flash attention is the one set that hands the engine a
+/// different value, enabled where its default is AUTO, so this reads that
+/// set where it can bear on the logits. The others are the engine's defaults
+/// ([`every_set_value_but_flash_attention_is_the_engines_default`]).
 ///
 /// Read on the host lane, in lockstep: two contexts of one model, one opened
 /// as every serving open is and one with the engine's defaults left in
@@ -868,8 +918,8 @@ fn a_reseed_tail_enters_the_window_once_per_position() {
 /// `tests/engine_settings_identity.rs`, run on the tree before the act and
 /// the tree after it.
 ///
-/// Perturbation: set flash attention disabled in `engine_settings` and the
-/// two distributions part.
+/// Perturbation: set flash attention disabled in `engine_settings`, or the K
+/// cache to q8_0, and the two distributions part at the first position.
 #[test]
 fn the_engine_settings_move_no_draw() {
     let Some(model) = model_or_skip() else { return };

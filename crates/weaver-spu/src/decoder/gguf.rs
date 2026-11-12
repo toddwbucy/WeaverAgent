@@ -275,6 +275,9 @@ impl ResidentModel {
 /// multi-device set, because an empty split restores the engine's
 /// free-memory default.
 ///
+/// `use_mmap` on and `use_mlock` off are the engine's defaults, set so the
+/// record states them (`weaver-spu-Spec` section 3.1.2).
+///
 /// One defect stays on the pinned fork and upstream: `add_cpu_buft_override`
 /// stores its pattern's pointer with no lifetime tied to the parameters, so a
 /// pattern freed before load dangles. Nothing here calls it, and any later
@@ -282,7 +285,9 @@ impl ResidentModel {
 pub(crate) fn placement_params(division: &Division) -> Result<LlamaModelParams, String> {
     let params = LlamaModelParams::default()
         .with_n_gpu_layers(u32::MAX)
-        .with_main_gpu(0);
+        .with_main_gpu(0)
+        .with_use_mmap(true)
+        .with_use_mlock(false);
     if division.counts().len() == 1 {
         return Ok(params.with_split_mode(LlamaSplitMode::None));
     }
@@ -301,15 +306,18 @@ pub(crate) fn placement_params(division: &Division) -> Result<LlamaModelParams, 
 /// [`placement_params`].
 ///
 /// - `n_ubatch` 512, `type_k` and `type_v` f16, `offload_kqv`, `op_offload`
-///   and `swa_full` on, `kv_unified` off: the engine's defaults at the pinned
-///   engine, `e21cdc11` (`llama_context_default_params`).
+///   and `swa_full` on, `kv_unified` off, and `n_threads` and
+///   `n_threads_batch` 4 (section 3.1.2): the engine's defaults at the pinned
+///   engine, `e21cdc11` (`llama_context_default_params`). A watch holds each
+///   to the engine's default, so an engine whose default moves fails it.
 /// - **Flash attention enabled, never auto.** AUTO resolves during the
 ///   graph reserve and reports its choice only in the log, as `Flash
 ///   Attention was auto, set to enabled` or `... disabled`. It resolved to
-///   enabled on every lane measured: one card and two cards under layer split
-///   (the verify loads of the install at `61d99dce`, 2026-11-11) and the host.
-///   AUTO disables it only where some layer's attention op cannot sit on that
-///   layer's device, and no lane this crate serves has shown that.
+///   enabled on every lane measured on 2026-11-11: the host, one card and two
+///   cards under layer split, across the qwen2, qwen3, gemma4 and granite
+///   families. AUTO disables it only where some layer's attention op cannot
+///   sit on that layer's device. There this set would move the placement's
+///   draws, which section 3.1.4 records as not fixed.
 fn engine_settings(params: LlamaContextParams) -> LlamaContextParams {
     params
         .with_n_ubatch(512)
@@ -320,6 +328,8 @@ fn engine_settings(params: LlamaContextParams) -> LlamaContextParams {
         .with_op_offload(true)
         .with_swa_full(true)
         .with_kv_unified(false)
+        .with_n_threads(4)
+        .with_n_threads_batch(4)
 }
 
 /// The GGUF engine, per `weaver-spu-Spec` section 4.
