@@ -195,6 +195,48 @@ pub enum FlushMechanism {
     ReestablishAndReprefill,
 }
 
+impl FlushMechanism {
+    /// The name the `engine` block's `flush` member carries, per
+    /// `weaver-spu-Spec` section 3.1.1.
+    pub fn name(self) -> &'static str {
+        match self {
+            FlushMechanism::TruncateToPosition => "truncate-to-position",
+            FlushMechanism::ReestablishAndReprefill => "reestablish-and-reprefill",
+        }
+    }
+}
+
+/// **The residency's `engine` and `device` blocks, rendered once**, per
+/// `weaver-spu-Spec` sections 3.1 and 6. A backend renders them where its
+/// session opens, after its context is made, and every measurement of the
+/// session splices the same bytes: the Open answer's and each generation's.
+///
+/// They are held rendered, as raw JSON, rather than as values, because a
+/// generic JSON value would widen the `f32` members to `f64` and write a
+/// split of `0.1` as `0.10000000149011612`, the rule the adapter's scale
+/// already follows (ADP-3). The harness carries them opaque.
+#[derive(Debug)]
+pub struct Blocks {
+    pub engine: Box<serde_json::value::RawValue>,
+    pub device: Box<serde_json::value::RawValue>,
+}
+
+impl Blocks {
+    /// Write the measurement's `engine` and `device` members, each led by
+    /// its comma, after the member before them.
+    ///
+    /// **A backend that renders no blocks writes both as `null`**, per
+    /// section 3.1.5: the native path renders its own in a later act, and
+    /// until then its measurements state the absence rather than omit the
+    /// members, as `adapter` states a base-only load.
+    pub fn write_members(blocks: Option<&Blocks>, out: &mut Vec<u8>) {
+        out.extend_from_slice(b",\"engine\":");
+        out.extend_from_slice(blocks.map_or("null", |b| b.engine.get()).as_bytes());
+        out.extend_from_slice(b",\"device\":");
+        out.extend_from_slice(blocks.map_or("null", |b| b.device.get()).as_bytes());
+    }
+}
+
 /// Derive the backend from the artifact's container.
 ///
 /// **Nothing elects a backend separately.** This is the whole derivation, and

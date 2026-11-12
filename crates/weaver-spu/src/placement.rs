@@ -91,6 +91,7 @@ impl<'r> OpenedSession<'r> {
         }
         let standing = Self::from_open(session, resident, parameters, stop);
         let facts = standing.open_facts().map_err(PlacementFailure::Decode)?;
+        let session_blocks = standing.session.blocks();
         let evidence = open_evidence(
             session_id,
             facts,
@@ -98,6 +99,7 @@ impl<'r> OpenedSession<'r> {
             &resident.artifact.display().to_string(),
             &resident.weights_hash.0,
             resident.adapter(),
+            session_blocks,
             &prepared,
         )
         .map_err(PlacementFailure::Decode)?;
@@ -182,6 +184,9 @@ pub(super) fn prepare_identity(
     Ok(PreparedIdentity { rendered, tokens })
 }
 
+// Each argument after the counts is one member of the two boxes, taken in
+// the order they are written, so a bundle would only rename the list.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn open_evidence(
     session: SessionId,
     facts: OpenFacts,
@@ -189,6 +194,7 @@ pub(super) fn open_evidence(
     model: &str,
     weights_hash: &str,
     adapter: Option<&weaver_spu::lora::RecordedAdapter>,
+    blocks: Option<&weaver_spu::decoder::backend::Blocks>,
     prepared: &PreparedIdentity,
 ) -> Result<Opened, DecodeFault> {
     if facts.prefix_tokens != count(prepared.tokens.len())? {
@@ -215,6 +221,9 @@ pub(super) fn open_evidence(
     // ADP-3: the adapter identity beside the base's, always present.
     measurement.extend_from_slice(b",\"adapter\":");
     weaver_spu::lora::RecordedAdapter::write_member(adapter, &mut measurement).map_err(encoding)?;
+    // SPU-OPEN: the residency's engine and device blocks, the same bytes every
+    // generation of the session carries (Spec sections 3.1 and 6).
+    weaver_spu::decoder::backend::Blocks::write_members(blocks, &mut measurement);
     measurement.extend_from_slice(b",\"prefix_token_ids\":[");
     for (index, token) in prepared.tokens.iter().enumerate() {
         if index != 0 {

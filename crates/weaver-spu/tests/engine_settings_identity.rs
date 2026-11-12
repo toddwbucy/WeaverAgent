@@ -12,6 +12,12 @@
 //! the tokens and each token's entropy and surprisal as f32 bits, so a
 //! comparison reads bit identity and not closeness.
 //!
+//! **The theta blocks ride beside the record.** Where the session rendered
+//! its `engine` and `device` blocks (section 3.1), they are written as they
+//! were rendered to `<out>.theta.json`, so a device run puts on file the
+//! blocks a real placement rendered. The record itself stays comparable with
+//! a tree that renders none.
+//!
 //! **The tree before an act does not hold this file.** It is copied into that
 //! checkout's `tests/` untracked for the run and removed after. Each record
 //! carries the commit its tree stood at and that tree's `git status` lines,
@@ -178,6 +184,16 @@ fn record_one_generation_on_the_lane() {
         "the run measured both signals, so the record compares more than the tokens"
     );
     std::fs::write(&out, format!("{record}\n")).expect("the record writes");
+    if let Some(blocks) = session.blocks() {
+        let theta = out.with_extension("theta.json");
+        let text = format!(
+            "{{\"engine\":{},\"device\":{}}}\n",
+            blocks.engine.get(),
+            blocks.device.get()
+        );
+        std::fs::write(&theta, text).expect("the theta blocks write");
+        eprintln!("wrote the theta blocks to {}", theta.display());
+    }
     eprintln!(
         "recorded {} tokens on {:?} to {}",
         generated.tokens.len(),

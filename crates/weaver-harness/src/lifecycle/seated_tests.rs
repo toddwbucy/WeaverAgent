@@ -129,7 +129,7 @@ fn seated_spu_child() {
             terminal_tokens: 1,
             request: raw(serde_json::json!({ "rendered": rendered, "template": "llama" })),
             measurement: raw(serde_json::json!({
-                "model": "m", "weights_hash": "h", "adapter": null, "prefix_token_ids": ids,
+                "model": "m", "weights_hash": "h", "adapter": null, "engine": null, "device": null, "prefix_token_ids": ids,
                 "blocks": [{ "label": "identity-prefix", "start": 0, "end": rendered.len() }],
             })),
         }))

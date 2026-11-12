@@ -56,7 +56,7 @@ use llama_cpp_2::token::LlamaToken;
 use llama_cpp_2::token::data::LlamaTokenData;
 use llama_cpp_2::token::data_array::LlamaTokenDataArray;
 
-use crate::decoder::backend::{Backend, DecodeFault, TokenId};
+use crate::decoder::backend::{Backend, Blocks, DecodeFault, FlushMechanism, TokenId};
 use crate::decoder::gguf_tap;
 use crate::sampling::EffectiveKnobs;
 use llama_cpp_2::model::params::{LlamaModelParams, LlamaSplitMode};
@@ -99,6 +99,10 @@ pub struct ResidentModel {
     // Boxed, so an adapted residency does not widen `LoadedModel`'s variant.
     adapter: Option<Box<ResidentAdapter>>,
     model: LlamaModel,
+    /// What the load resolved, for the `engine` and `device` blocks
+    /// (`weaver-spu-Spec` section 3.1), gathered once here. Boxed, as the
+    /// adapter is, so the facts do not widen `LoadedModel`'s variant.
+    facts: Box<theta::ResidencyFacts>,
 }
 
 struct ResidentAdapter {
@@ -192,6 +196,16 @@ impl ResidentModel {
                 }
             })?
         };
+        // The load's own facts for the record, read while the parameters it
+        // was handed stand.
+        let facts = theta::gather(
+            &model,
+            &params,
+            handed_split(division),
+            admission.headroom(),
+        )
+        .map(Box::new)
+        .map_err(|detail| AdmitRefusal::LoadFailed { detail })?;
         // LORA-3: load after the base. A failed observer drops both through
         // the model owner. A successful handle alone is not qualification.
         let adapter = if let Some(prepared) = admission.adapter() {
@@ -228,7 +242,11 @@ impl ResidentModel {
         } else {
             None
         };
-        Ok(ResidentModel { adapter, model })
+        Ok(ResidentModel {
+            adapter,
+            model,
+            facts,
+        })
     }
 
     /// The adapter as the record states it (ADP-3), `None` for a base-only
@@ -288,13 +306,26 @@ pub(crate) fn placement_params(division: &Division) -> Result<LlamaModelParams, 
         .with_main_gpu(0)
         .with_use_mmap(true)
         .with_use_mlock(false);
-    if division.counts().len() == 1 {
+    let split = handed_split(division);
+    if split.is_empty() {
         return Ok(params.with_split_mode(LlamaSplitMode::None));
     }
     params
         .with_split_mode(LlamaSplitMode::Layer)
-        .with_tensor_split(&division.split_values())
-        .map_err(|error| format!("tensor split {:?}: {error}", division.split_values()))
+        .with_tensor_split(&split)
+        .map_err(|error| format!("tensor split {split:?}: {error}"))
+}
+
+/// **The tensor split this crate hands the loader**: none on one device, and
+/// the division's split values across several. The wrapper reads no split
+/// back, so the record's `set.tensor_split` (`weaver-spu-Spec` section 3.1.1)
+/// is this value, from the one function that hands it over.
+fn handed_split(division: &Division) -> Vec<f32> {
+    if division.counts().len() == 1 {
+        Vec::new()
+    } else {
+        division.split_values()
+    }
 }
 
 /// **The context settings this crate sets rather than leaves to the engine**,
@@ -371,6 +402,9 @@ pub struct GgufEngine<'a> {
     /// thereby shared: this struct is the one owner and [`Drop`] is what
     /// frees it.
     tap: Option<std::ptr::NonNull<gguf_tap::TapState>>,
+    /// What the context was handed, read from its parameters, for the
+    /// record's `set` members (`weaver-spu-Spec` section 3.1.1).
+    set: theta::ContextSet,
 }
 
 impl Drop for GgufEngine<'_> {
@@ -434,6 +468,7 @@ impl<'a> GgufEngine<'a> {
                 .with_n_ctx(Some(capacity))
                 .with_n_batch(capacity.get()),
         );
+        let set = theta::ContextSet::of(&params);
         // The state is allocated before the context because the context is
         // handed its address, and it is leaked out of its box here so that
         // no later `&mut self` claims the pointee the callback writes to.
@@ -506,6 +541,7 @@ impl<'a> GgufEngine<'a> {
             closed: false,
             knobs: *knobs,
             tap,
+            set,
         })
     }
 
@@ -848,11 +884,28 @@ fn host_only(path: &std::path::Path) -> Result<ResidentModel, DecodeFault> {
             detail: format!("host_only load: {error}"),
         }
     })?;
+    let facts = theta::gather(&model, &params, Vec::new(), 0)
+        .map(Box::new)
+        .map_err(|detail| DecodeFault::Engine { detail })?;
     Ok(ResidentModel {
         adapter: None,
         model,
+        facts,
     })
 }
+
+/// **The residency's `engine` and `device` blocks**, rendered from what the
+/// load resolved and what this engine's context resolved, per
+/// `weaver-spu-Spec` section 3.1. Called once, where the session opens.
+pub(crate) fn render_blocks(
+    model: &ResidentModel,
+    engine: &GgufEngine<'_>,
+    flush: FlushMechanism,
+) -> Result<Blocks, DecodeFault> {
+    theta::render(&model.facts, &engine.set, &engine.context, flush)
+}
+
+mod theta;
 
 #[cfg(test)]
 mod tests;

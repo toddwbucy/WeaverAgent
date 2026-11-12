@@ -1674,7 +1674,9 @@ in measurement.prefix_token_ids as u32, its checked vector length against prefix
 and exactly one identity-prefix
 interval from zero through the
 decoded rendered string's UTF-8 byte length. Reject unknown, missing or duplicate
-members. Preserve both raw boxes unchanged without creating a usable token-vector
+members. Check engine and device each as an object or null and carry them opaque: their
+members are the SPU's vocabulary (SPU Spec section 3.1), and the harness reads none of
+them. Preserve both raw boxes unchanged without creating a usable token-vector
 cache. The harness has no renderer and must not compare rendered text with the
 unframed BootHead Text. Producer fixtures prove rendering/token/prefill truth.
 [PROMPT-1, PERSIST-6, PLACE-1, PLACE-5, SEAM-2]

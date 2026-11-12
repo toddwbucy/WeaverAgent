@@ -995,3 +995,283 @@ fn the_parameters_for_a_pair_carry_the_division() {
     assert!(single.tensor_split().is_empty());
     assert_eq!(single.main_gpu(), 0);
 }
+
+/// **The record's split is the split the loader was handed**, per
+/// `weaver-spu-Spec` section 3.1.1's `set.tensor_split`: the wrapper reads
+/// no split back, so `gather` is handed [`handed_split`], the one function
+/// [`placement_params`] hands the loader. It is the division's values across
+/// several devices and the empty list on one.
+///
+/// Perturbation: hand the record the division's values on one device too,
+/// and this fails.
+#[test]
+fn the_record_states_the_split_the_loader_was_handed() {
+    for devices in [1, 2, 3] {
+        let division = Division::even(64, devices).expect("a division");
+        let handed = handed_split(&division);
+        let params = placement_params(&division).expect("parameters");
+        assert_eq!(&params.tensor_split()[..handed.len()], handed.as_slice());
+        assert!(
+            params.tensor_split()[handed.len()..]
+                .iter()
+                .all(|v| *v == 0.0)
+        );
+        assert_eq!(handed.is_empty(), devices == 1, "{devices} devices");
+    }
+}
+
+/// **The host residency renders both theta blocks, closed, from what the
+/// engine resolved**, per `weaver-spu-Spec` sections 3.1.1 and 3.1.2. The
+/// order and the writing are pinned by `theta`'s own tests. This reads the
+/// values on a real context: the set values are `engine_settings`', the
+/// read-backs the context's and the model's own, the metadata the model's
+/// RoPE keys in key order, and each mapped engine library digested.
+///
+/// Perturbation: render `rope_type` as `null`, or gather the metadata of
+/// every key, and this fails.
+#[test]
+fn the_host_residency_renders_both_theta_blocks_from_the_engine() {
+    let Some(model) = model_or_skip() else { return };
+    let engine = engine(&model);
+    let blocks = render_blocks(&model, &engine, FlushMechanism::TruncateToPosition)
+        .expect("the blocks render");
+    let block: serde_json::Value = serde_json::from_str(blocks.engine.get()).expect("JSON");
+    let device: serde_json::Value = serde_json::from_str(blocks.device.get()).expect("JSON");
+    let closed = |value: &serde_json::Value, keys: &[&str], what: &str| {
+        let mut have: Vec<&str> = value
+            .as_object()
+            .unwrap_or_else(|| panic!("{what} is an object"))
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let mut want = keys.to_vec();
+        have.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(have, want, "{what}");
+    };
+    closed(
+        &block,
+        &[
+            "backend",
+            "mechanism",
+            "flush",
+            "build",
+            "read_back",
+            "set",
+            "metadata",
+        ],
+        "engine",
+    );
+    closed(
+        &block["build"],
+        &["ggml_version", "ggml_commit", "libraries"],
+        "build",
+    );
+    closed(
+        &block["read_back"],
+        &[
+            "n_ctx",
+            "n_batch",
+            "n_ubatch",
+            "n_layer",
+            "n_ctx_train",
+            "rope_type",
+            "file_type",
+        ],
+        "read_back",
+    );
+    closed(
+        &block["set"],
+        &[
+            "n_ubatch",
+            "type_k",
+            "type_v",
+            "flash_attn",
+            "offload_kqv",
+            "op_offload",
+            "swa_full",
+            "kv_unified",
+            "n_gpu_layers",
+            "split_mode",
+            "main_gpu",
+            "tensor_split",
+        ],
+        "set",
+    );
+    closed(
+        &device,
+        &[
+            "n_threads",
+            "n_threads_batch",
+            "use_mmap",
+            "use_mlock",
+            "mmap_supported",
+            "mlock_supported",
+            "headroom",
+            "cuda_device_order",
+            "devices",
+        ],
+        "device",
+    );
+
+    assert_eq!(block["backend"], "gguf");
+    assert_eq!(block["mechanism"], "gguf-sampler-2");
+    assert_eq!(block["flush"], "truncate-to-position");
+    assert!(
+        block["build"]["ggml_version"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty())
+    );
+    assert!(
+        block["build"]["ggml_commit"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty())
+    );
+    let libraries = block["build"]["libraries"].as_array().expect("a list");
+    assert!(!libraries.is_empty(), "the engine is linked dynamically");
+    let mut previous = String::new();
+    for library in libraries {
+        closed(library, &["path", "sha256"], "a library");
+        let path = library["path"].as_str().expect("a path");
+        let name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("a file name");
+        assert!(
+            name.starts_with("libllama") || name.starts_with("libggml"),
+            "{path}"
+        );
+        assert!(path > previous.as_str(), "path order: {path}");
+        previous = path.to_owned();
+        let digest = library["sha256"].as_str().expect("a digest");
+        assert_eq!(digest.len(), 64);
+        assert!(
+            digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        );
+    }
+
+    let read_back = &block["read_back"];
+    assert_eq!(read_back["n_ctx"], u64::from(engine.context.n_ctx()));
+    assert_eq!(read_back["n_batch"], u64::from(engine.context.n_batch()));
+    assert_eq!(read_back["n_ubatch"], 512);
+    assert_eq!(read_back["n_layer"], u64::from(model.model.n_layer()));
+    assert_eq!(
+        read_back["n_ctx_train"],
+        u64::from(model.model.n_ctx_train())
+    );
+    assert_eq!(read_back["rope_type"], "neox", "qwen2 rotates NeoX-style");
+    assert_eq!(
+        read_back["file_type"],
+        model
+            .model
+            .meta_val_str("general.file_type")
+            .expect("the key")
+    );
+
+    let set = &block["set"];
+    assert_eq!(set["n_ubatch"], 512);
+    assert_eq!(set["type_k"], "f16");
+    assert_eq!(set["type_v"], "f16");
+    assert_eq!(set["flash_attn"], "enabled");
+    assert_eq!(set["offload_kqv"], true);
+    assert_eq!(set["op_offload"], true);
+    assert_eq!(set["swa_full"], true);
+    assert_eq!(set["kv_unified"], false);
+    // The host load offloads nothing and leaves the engine's split mode.
+    assert_eq!(set["n_gpu_layers"], 0);
+    assert_eq!(set["split_mode"], "layer");
+    assert_eq!(set["main_gpu"], 0);
+    assert_eq!(set["tensor_split"], serde_json::json!([]));
+
+    let metadata = block["metadata"].as_array().expect("a list");
+    let keys: Vec<&str> = metadata
+        .iter()
+        .map(|meta| {
+            closed(meta, &["key", "value"], "a metadata pair");
+            meta["key"].as_str().expect("a key")
+        })
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort_unstable();
+    assert_eq!(keys, sorted, "key order");
+    assert!(
+        keys.iter()
+            .all(|key| key.starts_with("qwen2.rope.") || *key == "qwen2.context_length"),
+        "{keys:?}"
+    );
+    assert!(keys.contains(&"qwen2.rope.freq_base"), "{keys:?}");
+    let context_length = metadata
+        .iter()
+        .find(|meta| meta["key"] == "qwen2.context_length")
+        .expect("the context length");
+    assert_eq!(
+        context_length["value"],
+        model.model.n_ctx_train().to_string()
+    );
+
+    assert_eq!(device["n_threads"], 4);
+    assert_eq!(device["n_threads_batch"], 4);
+    assert_eq!(device["use_mmap"], true);
+    assert_eq!(device["use_mlock"], false);
+    assert_eq!(device["mmap_supported"], llama_cpp_2::mmap_supported());
+    assert_eq!(device["mlock_supported"], llama_cpp_2::mlock_supported());
+    assert_eq!(device["headroom"], 0);
+    assert_eq!(
+        device["cuda_device_order"],
+        std::env::var("CUDA_DEVICE_ORDER").map_or(serde_json::Value::Null, Into::into)
+    );
+    let devices = device["devices"].as_array().expect("a list");
+    assert_eq!(
+        devices.len(),
+        llama_cpp_2::list_llama_ggml_backend_devices().len()
+    );
+    for listed in devices {
+        closed(listed, &["name", "description", "memory_total"], "a device");
+    }
+}
+
+/// **A context left at AUTO flash attention renders no blocks**, per
+/// `weaver-spu-Spec` section 3.1.1: `set.flash_attn` is `"enabled"` or
+/// `"disabled"`, never auto, because AUTO's choice reaches only the log. A
+/// context opened with the engine's defaults is that context, and the
+/// render refuses it as an engine fault rather than stating a value it does
+/// not know.
+///
+/// Perturbation: render AUTO as `"enabled"`, and this fails.
+#[test]
+fn a_context_left_at_auto_flash_attention_renders_no_blocks() {
+    let Some(model) = model_or_skip() else { return };
+    let defaults = GgufEngine::open_with(&model, &frozen(), 512, false, |params| params)
+        .expect("the context opens with the engine's defaults");
+    let refused = render_blocks(&model, &defaults, FlushMechanism::TruncateToPosition);
+    assert!(
+        matches!(&refused, Err(DecodeFault::Engine { detail }) if detail.contains("never auto")),
+        "{:?}",
+        refused.map(|_| ())
+    );
+}
+
+/// **The `set` members state what the context was handed**, per
+/// `weaver-spu-Spec` section 3.1.1: they are read from the parameters the
+/// context was made with (`theta::ContextSet::of`), not from the constants
+/// that built them. A context handed a q8_0 K cache states q8_0, and the
+/// members it was not handed differently stay as `engine_settings` set them.
+///
+/// Perturbation: read `type_k` in `ContextSet::of` as a constant f16, and
+/// this fails.
+#[test]
+fn the_set_members_state_what_the_context_was_handed() {
+    let Some(model) = model_or_skip() else { return };
+    let handed = GgufEngine::open_with(&model, &frozen(), 512, false, |params| {
+        engine_settings(params).with_type_k(KvCacheType::Q8_0)
+    })
+    .expect("the context opens with a q8_0 K cache");
+    let blocks = render_blocks(&model, &handed, FlushMechanism::TruncateToPosition)
+        .expect("the blocks render");
+    let block: serde_json::Value = serde_json::from_str(blocks.engine.get()).expect("JSON");
+    assert_eq!(block["set"]["type_k"], "q8_0");
+    assert_eq!(block["set"]["type_v"], "f16");
+    assert_eq!(block["set"]["flash_attn"], "enabled");
+}

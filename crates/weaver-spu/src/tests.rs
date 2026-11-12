@@ -98,23 +98,23 @@ fn every_generation_measurement_leads_with_the_typed_adapter() {
     let rest = serde_json::json!({"model": "m", "blocks": []});
     let rest = rest.as_object().expect("an object");
     assert_eq!(
-        super::lead_with_adapter(None, rest),
-        r#"{"adapter":null,"blocks":[],"model":"m"}"#
+        super::lead_with_adapter(None, None, rest),
+        r#"{"adapter":null,"engine":null,"device":null,"blocks":[],"model":"m"}"#
     );
     assert_eq!(
-        super::lead_with_adapter(None, &serde_json::Map::new()),
-        r#"{"adapter":null}"#
+        super::lead_with_adapter(None, None, &serde_json::Map::new()),
+        r#"{"adapter":null,"engine":null,"device":null}"#
     );
     let adapter = weaver_spu::lora::RecordedAdapter {
         artifact: "/models/adapter.gguf".into(),
         sha256: "a".repeat(64),
         scale: 0.7,
     };
-    let rendered = super::lead_with_adapter(Some(&adapter), rest);
+    let rendered = super::lead_with_adapter(Some(&adapter), None, rest);
     assert_eq!(
         rendered,
         format!(
-            r#"{{"adapter":{{"artifact":"/models/adapter.gguf","sha256":"{}","scale":0.7}},"blocks":[],"model":"m"}}"#,
+            r#"{{"adapter":{{"artifact":"/models/adapter.gguf","sha256":"{}","scale":0.7}},"engine":null,"device":null,"blocks":[],"model":"m"}}"#,
             "a".repeat(64)
         )
     );

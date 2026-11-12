@@ -398,6 +398,7 @@ fn finish_refeed(
 /// section 6, the turn's delta being the one span this measurement covers.
 fn render_measurement(
     resident: &Resident,
+    blocks: Option<&weaver_spu::decoder::backend::Blocks>,
     input_tokens: &[TokenId],
     generated: &weaver_spu::decoder::session::Generated,
     delta_text_len: usize,
@@ -459,7 +460,7 @@ fn render_measurement(
     let members = measurement
         .as_object()
         .expect("the measurement is built as an object literal");
-    lead_with_adapter(resident.adapter(), members)
+    lead_with_adapter(resident.adapter(), blocks, members)
 }
 
 /// **The adapter identity leads every generation's measurement, written
@@ -469,17 +470,26 @@ fn render_measurement(
 /// the f32 scale to f64. The members follow in the map's order, each written
 /// by serde_json into the one buffer, so an empty map still closes a valid
 /// object. The generic members never carry `adapter`.
+///
+/// **The `engine` and `device` blocks follow the adapter**, per Spec section
+/// 6, spliced as the bytes the session rendered once, so a generation's
+/// blocks are its Open answer's byte for byte and their `f32` members are
+/// never widened through a generic value.
 fn lead_with_adapter(
     adapter: Option<&weaver_spu::lora::RecordedAdapter>,
+    blocks: Option<&weaver_spu::decoder::backend::Blocks>,
     members: &serde_json::Map<String, serde_json::Value>,
 ) -> String {
     debug_assert!(
-        !members.contains_key("adapter"),
-        "the typed adapter is the measurement's only adapter member"
+        !members.contains_key("adapter")
+            && !members.contains_key("engine")
+            && !members.contains_key("device"),
+        "the typed adapter and the rendered blocks are the measurement's only such members"
     );
     let mut rendered = b"{\"adapter\":".to_vec();
     let written =
         weaver_spu::lora::RecordedAdapter::write_member(adapter, &mut rendered).and_then(|()| {
+            weaver_spu::decoder::backend::Blocks::write_members(blocks, &mut rendered);
             members.iter().try_for_each(|(key, value)| {
                 rendered.push(b',');
                 serde_json::to_writer(&mut rendered, key)?;
@@ -859,8 +869,13 @@ fn serve_decode(
                     Stopped::Cancelled | Stopped::CapacityReached => Finish::Stopped,
                     Stopped::LimitReached => Finish::Length,
                 };
-                let measurement =
-                    render_measurement(resident, &delta_tokens, &generated, delta_text.len());
+                let measurement = render_measurement(
+                    resident,
+                    standing.session.blocks(),
+                    &delta_tokens,
+                    &generated,
+                    delta_text.len(),
+                );
                 let measurement = match serde_json::value::RawValue::from_string(measurement) {
                     Ok(raw) => raw,
                     Err(_) => {
@@ -1140,8 +1155,13 @@ fn serve_decode(
                     Stopped::Cancelled | Stopped::CapacityReached => Finish::Stopped,
                     Stopped::LimitReached => Finish::Length,
                 };
-                let measurement =
-                    render_measurement(resident, &delta_tokens, &generated, rendered.len());
+                let measurement = render_measurement(
+                    resident,
+                    standing.session.blocks(),
+                    &delta_tokens,
+                    &generated,
+                    rendered.len(),
+                );
                 let measurement = match serde_json::value::RawValue::from_string(measurement) {
                     Ok(raw) => raw,
                     Err(_) => {

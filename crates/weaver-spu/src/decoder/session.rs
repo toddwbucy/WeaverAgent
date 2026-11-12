@@ -42,7 +42,7 @@
 //! claims the other's half, because a pin says a rewind cannot be written and
 //! says nothing about a turn that re-prefills through the append path instead.
 
-use crate::decoder::backend::{Backend, DecodeFault, FlushMechanism, TokenId};
+use crate::decoder::backend::{Backend, Blocks, DecodeFault, FlushMechanism, TokenId};
 use crate::measurement;
 
 /// Why a generation stopped.
@@ -223,6 +223,11 @@ pub struct Session<'a> {
     /// residency answers to that. A parameter on the generation would
     /// invite a caller to disagree with the load it is serving.
     surprisal_elected: bool,
+    /// The residency's `engine` and `device` blocks, rendered where this
+    /// session opened (`weaver-spu-Spec` section 3.1), `None` on a backend
+    /// that renders none yet. Fixed for the session, like the election
+    /// above, so every measurement it answers carries the same bytes.
+    blocks: Option<Blocks>,
 }
 
 /// Checked, immutable placement facts from a serviceable open session.
@@ -252,7 +257,21 @@ impl<'a> Session<'a> {
             flush_mechanism,
             columns_asked: false,
             surprisal_elected,
+            blocks: None,
         }
+    }
+
+    /// The session with the blocks its backend rendered after the context was
+    /// made, per `weaver-spu-Spec` section 3.1.
+    pub fn with_blocks(mut self, blocks: Blocks) -> Session<'a> {
+        self.blocks = Some(blocks);
+        self
+    }
+
+    /// The residency's `engine` and `device` blocks, `None` where the backend
+    /// renders none (section 3.1.5).
+    pub fn blocks(&self) -> Option<&Blocks> {
+        self.blocks.as_ref()
     }
 
     /// Arm the column answer, per the open's one ask: the tap's hold and

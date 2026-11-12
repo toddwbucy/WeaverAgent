@@ -49,7 +49,7 @@ fn diagnostic_open_retains_each_evidence_cause_and_the_original_refusal() {
         serde_json::value::RawValue::from_string(value.to_string()).unwrap()
     };
     let measurement = serde_json::json!({
-        "model": "private-model", "weights_hash": "private-hash", "adapter": null, "prefix_token_ids": [7],
+        "model": "private-model", "weights_hash": "private-hash", "adapter": null, "engine": null, "device": null, "prefix_token_ids": [7],
         "blocks": [{ "label": "identity-prefix", "start": 0, "end": "private-evidence".len() }],
     });
     let valid = weaver_types::Opened {
@@ -9406,7 +9406,7 @@ fn containment_an_undelivered_unwind_sweep_is_its_own_fault() {
 /// It owns no placement budget. The foundation boot owner supplies that check.
 #[test]
 fn opening_requires_the_complete_paired_answer_and_not_a_measurement() {
-    let opened = r#"{"kind":"opened","body":{"session":"paired-open","prefix_tokens":1,"capacity":4096,"generation_limit":128,"terminal_tokens":1,"request":{"rendered":"x","template":"t"},"measurement":{"model":"m","weights_hash":"h","adapter":null,"prefix_token_ids":[7],"blocks":[{"label":"identity-prefix","start":0,"end":1}]}}}"#;
+    let opened = r#"{"kind":"opened","body":{"session":"paired-open","prefix_tokens":1,"capacity":4096,"generation_limit":128,"terminal_tokens":1,"request":{"rendered":"x","template":"t"},"measurement":{"model":"m","weights_hash":"h","adapter":null,"engine":null,"device":null,"prefix_token_ids":[7],"blocks":[{"label":"identity-prefix","start":0,"end":1}]}}}"#;
     let cases = [
         (opened, Ok(())),
         (r#"{"kind":"opened"}"#, Err(LifecycleRefusal::NoResidency)),

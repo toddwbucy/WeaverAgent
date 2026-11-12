@@ -434,7 +434,7 @@ fn failed_enter_process_open_then_release_peer() {
     let opened = weaver_types::Opened { session, prefix_tokens: 3, capacity: 16384,
         generation_limit: 16, terminal_tokens: 1,
         request: serde_json::value::to_raw_value(&serde_json::json!({"rendered":rendered,"template":"fixture"})).unwrap(),
-        measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","adapter":null,
+        measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"fixture","weights_hash":"fixture","adapter":null,"engine":null,"device":null,
             "prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap(),
     };
     let response = serde_json::to_vec(&weaver_types::TokenAnswer::Opened(opened)).unwrap();

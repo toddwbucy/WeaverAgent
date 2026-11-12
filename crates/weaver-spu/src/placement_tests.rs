@@ -210,6 +210,18 @@ mod device {
         }
     }
 
+    /// **What the theta blocks read as on this residency's backend**, per
+    /// `weaver-spu-Spec` sections 3.1 and 3.1.5: objects on GGUF, `null` on
+    /// the native path until its act.
+    fn theta_shape(resident: &Resident) -> fn(&serde_json::Value) -> bool {
+        #[allow(unreachable_patterns)]
+        match resident.model() {
+            #[cfg(feature = "gguf")]
+            weaver_spu::residency::LoadedModel::Gguf(_) => serde_json::Value::is_object,
+            _ => serde_json::Value::is_null,
+        }
+    }
+
     fn knobs() -> EffectiveKnobs {
         EffectiveKnobs {
             temperature: 0.7,
@@ -398,6 +410,7 @@ mod device {
             );
             let report: serde_json::Value = serde_json::from_str(&crate::render_measurement(
                 resident,
+                standing.session.blocks(),
                 &prepared.tokens,
                 &generated,
                 prepared.rendered.len(),
@@ -406,6 +419,11 @@ mod device {
             assert!(
                 report["adapter"].is_null(),
                 "a base-only load states its absent adapter (ADP-3)"
+            );
+            let theta = theta_shape(resident);
+            assert!(
+                theta(&report["engine"]) && theta(&report["device"]),
+                "a generation carries its backend's theta blocks (Spec 6, 3.1.5)"
             );
             assert_eq!(
                 report["input_tokens"].as_array().unwrap().len(),
@@ -471,6 +489,7 @@ mod device {
         let template = resident.declaration.template;
         let model = resident.artifact.display().to_string();
         let weights_hash = resident.weights_hash.0.clone();
+        let theta_kind = theta_shape(resident);
         let (client, server) = decode_pair();
         let client = std::thread::spawn(move || {
             let channel = decode_from_owned(client);
@@ -507,11 +526,25 @@ mod device {
             assert_eq!(opened.generation_limit, facts.generation_limit);
             assert_eq!(opened.terminal_tokens, 1);
             let request: serde_json::Value = serde_json::from_str(opened.request.get()).unwrap();
-            let measurement: serde_json::Value =
+            let mut measurement: serde_json::Value =
                 serde_json::from_str(opened.measurement.get()).unwrap();
             assert_eq!(
                 request,
                 serde_json::json!({"rendered":prefix,"template":template})
+            );
+            // The theta blocks' members are pinned by `decoder::gguf::theta`'s
+            // tests. Here: the Open answer carries both, as its backend renders
+            // them.
+            let theta = measurement.as_object_mut().unwrap();
+            assert!(
+                theta
+                    .remove("engine")
+                    .is_some_and(|block| theta_kind(&block))
+            );
+            assert!(
+                theta
+                    .remove("device")
+                    .is_some_and(|block| theta_kind(&block))
             );
             assert_eq!(
                 measurement,

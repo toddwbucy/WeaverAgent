@@ -1098,20 +1098,28 @@ The `engine` block is one object. Its members are in this order.
 | `mechanism` | known | The sampler mechanism's name (3.1.3). |
 | `flush` | known | The resolved family's flush mechanism, `"truncate-to-position"` or `"reestablish-and-reprefill"` (`family::Declaration::flush`, section 4.4). |
 | `build.ggml_version`, `build.ggml_commit` | read back | `ggml_version()` and `ggml_commit()`, free functions of the engine's library. |
-| `build.libraries` | read back | One entry for each libllama and libggml file this process mapped, in path order: `path`, the path as mapped, and `sha256`, the hex digest of the file's bytes. The SPU reads the mapped paths from its own `/proc/self/maps`. It does not read admin's `library-path` key, which names a directory and not the files the loader chose. The digests are what carry the engine's build options: an option that changes the engine's bytes changes a digest. Two options are known today. The OpenSSL lookup is turned off (section 1.1, #538, merged at `61d99dcea6af3867d3437abecd09c609b5897db5` on 2026-11-11). The build's parallelism reaches the engine's configure line, an input not known to change a byte. |
+| `build.libraries` | read back | One entry for each libllama and libggml file this process mapped, in path order: `path`, the path as mapped, and `sha256`, the hex digest of the file's bytes. The SPU reads the mapped paths from its own `/proc/self/maps`. It does not read admin's `library-path` key, which names a directory and not the files the loader chose. The digests are what carry the engine's build options: an option that changes the engine's bytes changes a digest. Two options are known today. The OpenSSL lookup is turned off (section 1.1, #538, merged at `61d99dcea6af3867d3437abecd09c609b5897db5` on 2026-11-11). The build's parallelism reaches the engine's configure line, an input not known to change a byte. A mapping the kernel marks ` (deleted)` refuses the load, since its path names other bytes than the ones mapped. So does a process that maps no engine library: the crate links the engine dynamically (the wrapper's `dynamic-link` feature). |
 | `read_back.n_ctx` | read back | The context capacity as the engine padded it. |
 | `read_back.n_batch`, `read_back.n_ubatch` | read back | The batch sizes the context holds. |
 | `read_back.n_layer`, `read_back.n_ctx_train` | read back | The model's layer count and training context length. |
 | `read_back.rope_type` | read back | The RoPE type as the wrapper reports it: `"norm"`, `"neox"`, `"mrope"` or `"vision"`. `null` means none or a type the wrapper does not recognise (3.1.4). |
-| `read_back.file_type` | read back | The model's `general.file_type` metadata value, the quantization. The weights hash (section 3) already covers the tensors' bytes. |
+| `read_back.file_type` | read back | The model's `general.file_type` metadata value, the quantization. The weights hash (section 3) already covers the tensors' bytes. A model without the key refuses the load. |
 | `set.n_ubatch` | set | 512, the engine's default before the set. |
 | `set.type_k`, `set.type_v` | set | `"f16"`, the KV element types. |
-| `set.flash_attn` | set | `"enabled"` or `"disabled"`. Never auto. AUTO resolves during graph reserve and reports its choice only in the log. So the crate sets the value AUTO resolved to on the lane, measured from that log line per placement. |
+| `set.flash_attn` | set | `"enabled"` or `"disabled"`. Never auto. AUTO resolves during graph reserve and reports its choice only in the log. So the crate sets the value AUTO resolved to on the lane, measured from that log line per placement. A context whose value is auto renders no blocks, and its session does not open. |
 | `set.offload_kqv`, `set.op_offload`, `set.swa_full`, `set.kv_unified` | set | `true`, `true`, `true`, `false`: the engine's defaults at `e21cdc11`. |
-| `set.n_gpu_layers`, `set.split_mode`, `set.main_gpu`, `set.tensor_split` | set | The placement this crate already sets (`decoder::gguf::placement_params`): every layer offloaded, `"none"` on one device and `"layer"` across several, main device 0, and the division's split values. The engine offloads min(`n_gpu_layers`, `n_layer` + 1) layers. The record carries the set value and `n_layer`, and a reader derives the count. The engine reports the actual count only in its log. |
+| `set.n_gpu_layers`, `set.split_mode`, `set.main_gpu`, `set.tensor_split` | set | The placement this crate already sets (`decoder::gguf::placement_params`): every layer offloaded, `"none"` on one device and `"layer"` across several, main device 0, and the division's split values. `n_gpu_layers` is the value the engine received, 2147483647: the wrapper narrows the crate's `u32::MAX` to `i32::MAX`. The split is the empty list on one device, from `decoder::gguf::handed_split`, the one function that hands the split to the loader. The engine offloads min(`n_gpu_layers`, `n_layer` + 1) layers. The record carries the set value and `n_layer`, and a reader derives the count. The engine reports the actual count only in its log. |
 | `metadata` | known by metadata and digest | One `{key, value}` pair for every key of the model's metadata that names RoPE or its scaling (`<arch>.rope.*`), and for `<arch>.context_length`, in key order. `value` is the string the engine's metadata reader returns. The crate passes no RoPE value and no key override, so these keys are the values in use. It is a list and not an object keyed by name: the model names the keys, so an object keyed by them could not be closed. |
 
 The engine's `defrag_thold` is not recorded: this engine ignores it.
+
+**Each `set` value is read from the parameters the engine was handed**, the context's
+(`theta::ContextSet::of`) and the model's, and not from the constants that built them.
+So the record states what the engine received.
+
+**Nothing is guessed.** A value the load cannot read refuses the load. A block the
+session open cannot render faults the open as an engine fault. No measurement states a
+value the crate did not read or set.
 
 #### 3.1.2 The device block
 
@@ -1222,7 +1230,9 @@ record.
 #### 3.1.5 The native engine
 
 The native (candle) path renders the same two blocks in a later act. Its members differ,
-because the crate owns more of the arithmetic.
+because the crate owns more of the arithmetic. Until that act the native path renders
+neither block. Its Open answer and its generations write `engine` and `device` as
+`null`, as `adapter` states a base-only load, and never omit them.
 
 | Item | Native |
 |---|---|
@@ -2363,10 +2373,12 @@ settles just above: a bound is an input-side fact, what the generation was told,
 them too**, per section 3.1 on the operator's ruling of 2026-11-11. They are the
 measurement's members `engine` and `device`, after `adapter`. This crate renders them, as
 it renders `model` and `weights_hash`. The harness carries them opaque, and the trace
-crate learns no member name. They are measured once per residency, after the context is
-made, so every generation of a residency carries the same two blocks byte for byte. The
-Open answer's measurement carries the same two blocks, per SPU-OPEN
-([amendment][open-facts]), so on the flow path they land once in the boot placement. The
+crate learns no member name. They are rendered once where a session opens, after its
+context is made (`decoder::gguf::render_blocks`), and the session holds the bytes. So
+every generation of a session carries the same two blocks byte for byte, and so does its
+Open answer's measurement, per SPU-OPEN ([amendment][open-facts]). On the flow path they
+land once in the boot placement. A backend that renders no blocks yet writes both as
+`null` (3.1.5), and the harness checks each as an object or `null` (HARNESS-OPEN). The
 legacy path checks the Opened answer and drops its evidence, so there a generation's
 measurement is the only record of them. **The `load` event cannot carry them**, because
 the harness authors `load` before it starts the SPU. Admit stays free of payload, per
