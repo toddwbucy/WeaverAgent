@@ -2755,6 +2755,73 @@ is the blade and the sole-writer rule pulling the same direction, and the cost i
 that a loop wanting an unauthored generation has none, which no chartered loop wants
 and the tool workflow may reopen.
 
+**The turn call sends the sampling set with every generation**, per `weaver-spu-Spec`
+section 8 and the operator's ruling of 2026-11-11 that the turn call carries the values
+and the trace records them per event. Loop 0 reads the six defaults once, at the enter,
+from the instruction's `decoder.tunable_values`: `temperature`, `top-k`, `top-p`,
+`repetition-penalty`, `repetition-window` and `seed`. It takes them out of the map and
+forwards the rest, so no sampling value reaches the SPU at admit
+(`weaver-harness-spu-contract` section 2). The bound it sends is the session's ceiling,
+which the Open answer states as `generation_limit`. Loop 1 supplies no value in this
+act. A value the world sends with a turn through the gate, or one a loop chooses, is a
+later act, and each feeds this carrier.
+
+**Under a serving binding the reader refuses a declaration that every generation would
+refuse.** A missing name, or a value outside its range in `weaver-spu-Spec` section 8,
+refuses the enter as `ConfigInvalid` on `tunable-values.<name>`. The refusal comes
+before the SPU's admit is written, so a mistake in the declaration costs no device work.
+Where the field is elected, a `top-k` above the field's depth, or zero, refuses as
+`ConfigInvalid` on `spu-instruction.decoder.field-election.depth`, the field the SPU's
+admit named before the carrier, with one typed line on standard error naming both
+numbers (`weaver-spu-Spec` section 7.5). The SPU judges every value a generation carries
+again and refuses with `SamplingOutOfRange` or `FieldBelowCutoff`. The reader's refusal
+is the early one, and the SPU's is the one that binds.
+
+**Every generation of a turn carries the same set, the seeding and the tool rounds
+included.** The set is read once per residency and does not change within it, so two
+generations of one turn differ only in the `generation_seed` the SPU derives
+(`weaver-spu-Spec` section 8.5). **Under a diagnostic binding each re-feed carries the
+values its recorded generation ran under**: the six members of the recorded
+`model.request`'s `sampling` block, which input identity has already required whole
+(`Loops/diagnostic-replay-loop.md` section 3). The reader requires none of the six there
+and uses none that it finds. Where the field is elected, input identity judges each
+recorded `top_k` against its depth and refuses the source naming both, before any
+re-feed. **The instruments are perturbation**, each watched to fail under its change: a
+tool round sent with a set that differs from the turn's first generation, a re-feed sent
+with the declaration's defaults in place of the recorded block, an admit that forwards a
+sampling name, and an input identity that passes a recorded `top_k` above the field's
+depth.
+
+```graph
+node: harness-every-generation-carries-the-turn-set
+kind: assertion
+tag: perturbation
+
+edge: asserts
+from: weaver-harness
+to: harness-every-generation-carries-the-turn-set
+```
+
+```graph
+node: harness-refeed-carries-the-recorded-set
+kind: assertion
+tag: perturbation
+
+edge: asserts
+from: weaver-harness
+to: harness-refeed-carries-the-recorded-set
+```
+
+```graph
+node: harness-admit-forwards-no-sampling-name
+kind: assertion
+tag: perturbation
+
+edge: asserts
+from: weaver-harness
+to: harness-admit-forwards-no-sampling-name
+```
+
 **The three model events are authored across the turn, at the submit call where
 conformance is checked.** `model.request` carries the turn's rendered contribution
 the answer's close splices, the delta per the ruling of 2026-08-12, the full
@@ -3502,7 +3569,7 @@ and no HTTP client in the resolved external tree, by the build-time `cargo tree`
 assertion the floor Specs share.
 
 **Which invariant each claim serves, and why most serve none.** Nineteen of the
-sixty-eight carry a `grounds` edge and one of the nineteen carries two, so the edges
+seventy-one carry a `grounds` edge and one of the nineteen carries two, so the edges
 number twenty: ten to `axiom-floor-is-vocabulary-behavior-is-socket`, four to
 `axiom-harness-integrates-by-the-loop`, three to
 `axiom-join-key-travels-with-the-work`, and three to
@@ -3526,11 +3593,11 @@ no reason to bound a receive, to demand that one write arrive as one read, to fl
 descriptor before an exec, to create a pair before a fork, or to keep a loop from
 minting a port, so those ground in it. Remove it and `nix` is still the OS crate,
 descriptors are still owned types, the child's ends still land at 3 and 4, and the
-fork still runs a bounded call list, so those ground in nothing. **Forty-nine claims
+fork still runs a bounded call list, so those ground in nothing. **Fifty-two claims
 grounding in no invariant is the expected result and not a gap**, per Document
 Format section 4: most of what a Spec elects is a format, a name shape, a count, or
 an ordering of its own interior, and representation is what the invariants are not
-about. **Both figures in this paragraph read against the sixty-eight**, the
+about. **Both figures in this paragraph read against the seventy-one**, the
 disclosure below covering the narrative below it and not this one, which is the
 reading two findings of the audit of 2026-09-13 reached opposite answers on. The
 numerator has not moved since it was written and the denominator had, so the
@@ -3580,8 +3647,9 @@ this section sorts by instrument and the arguments are elsewhere, so a block
 here would sit apart from the prose that earns it. One record is the exception
 and sits at the end of this section, the doctest pinning of the three
 path-taking shapes, whose argument is nowhere else and whose general
-prohibition is section 2.3's. Sixty-eight records in all, measured from the records
-and re-measured 2026-09-15 at the same figure, where the narrative below
+prohibition is section 2.3's. Seventy-one records in all, measured from the records,
+re-measured 2026-09-15 at sixty-eight, and joined by section 6.1's three on
+2026-11-12 with the sampling carrier, where the narrative below
 reads forty-eight as of the inversion of 2026-08-05 and did not move with the acts
 since, which is named here rather than restated. **The disclosure reaches the
 narrative below this sentence and never the paragraphs above it**, stated because
@@ -3618,7 +3686,7 @@ refused at identity. This crate is the author and that one the mechanism, per
 crate's suite, so each of the five carries an `asserts` edge from here beside the
 one from the crate whose record it describes. The instruments are the in-file
 suite of `src/replay.rs`, eight tests carrying nine citations across the five, and
-the file's own header cites all five for the module. **The sixty-eight above does
+the file's own header cites all five for the module. **The seventy-one above does
 not move**, no record landing here, and `weaver-diagnostic-Spec` section 7 is the
 authority on the five claims' wording, on their sorting by instrument, and on why
 the edge crosses at all.

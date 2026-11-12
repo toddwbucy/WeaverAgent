@@ -82,7 +82,9 @@ compiler verifies the frozen half at build, an immutable binary needing no load-
 check of what it baked, and admin verifies the tunable remainder at load, at whatever
 size the builder left it. Everything baked but a weights location gives admin one field
 to verify. Everything left open gives admin all of it. The earlier
-worker-validates-at-enter sketch is superseded.
+worker-validates-at-enter sketch is superseded. The sampling values left this division
+on the operator's ruling of 2026-11-11: they ride each generation, and the harness's
+reader judges the declaration's defaults at load (`weaver-spu-Spec` section 8).
 
 **Each organ registers the surface it needs to run, and the registration is declared at
 build.** Admin runs before any organ process exists, so it can never ask one what it
@@ -193,8 +195,8 @@ not merged with it: each diagnostic election stands alone and none is
 bundled under a name for a set, because a named set drifts as members
 join it and every record already carrying the name becomes a record of
 something else. What the depth means to the reader that judges it is the
-SPU's, at admit, where it meets the sampling cutoff it may not fall
-below.
+SPU's, at each generation, where it meets the sampling cutoff it may not
+fall below.
 
 **The surprisal election joins the file 2026-08-21**, on `weaver-spu-PRD`
 section 13.12. It is the operator's election of the per-position surprisal

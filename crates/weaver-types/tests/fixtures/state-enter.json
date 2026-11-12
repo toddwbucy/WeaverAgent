@@ -23,7 +23,14 @@
             "surprisal-election": false,
             "refeed-permission": false,
             "column-permission": false,
-            "tunable-values": {}
+            "tunable-values": {
+              "temperature": 0.7,
+              "top-k": 40.0,
+              "top-p": 0.95,
+              "repetition-penalty": 1.1,
+              "repetition-window": 64.0,
+              "seed": 11.0
+            }
           }
         },
         "binding": {

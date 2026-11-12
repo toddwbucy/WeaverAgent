@@ -333,7 +333,12 @@ fn diagnostic_replay_retains_the_exact_interrupted_terminal_until_recorded_close
             };
             assert!(
                 ports
-                    .refeed(&turn, "rendered".into(), vec![3, 4, 5])
+                    .refeed(
+                        &turn,
+                        "rendered".into(),
+                        vec![3, 4, 5],
+                        crate::engine::test_carried().sampling,
+                    )
                     .unwrap()
                     .is_none()
             );
@@ -445,7 +450,12 @@ fn diagnostic_replay_refusal_crossing_a_sent_cancel_settles_the_stop() {
                 state: None,
                 failed: false,
             };
-            let refused = ports.refeed(&turn, "rendered".into(), vec![3, 4, 5]);
+            let refused = ports.refeed(
+                &turn,
+                "rendered".into(),
+                vec![3, 4, 5],
+                crate::engine::test_carried().sampling,
+            );
             let spu = peer.join().unwrap();
             match refused {
                 Err(TurnError::Refused {
@@ -530,7 +540,12 @@ fn diagnostic_replay_uninterrupted_fault_stands_for_leave() {
                 state: None,
                 failed: false,
             };
-            let faulted = ports.refeed(&turn, "rendered".into(), vec![3, 4, 5]);
+            let faulted = ports.refeed(
+                &turn,
+                "rendered".into(),
+                vec![3, 4, 5],
+                crate::engine::test_carried().sampling,
+            );
             peer.join().unwrap();
             match faulted {
                 Err(TurnError::Faulted {
@@ -611,7 +626,12 @@ fn diagnostic_replay_stop_during_a_fault_record_sends_no_cancel() {
                 state: None,
                 failed: false,
             };
-            let faulted = ports.refeed(&turn, "rendered".into(), vec![3, 4, 5]);
+            let faulted = ports.refeed(
+                &turn,
+                "rendered".into(),
+                vec![3, 4, 5],
+                crate::engine::test_carried().sampling,
+            );
             let (spu, _reader) = peer.join().unwrap();
             assert!(
                 matches!(faulted, Err(TurnError::Faulted { .. })),

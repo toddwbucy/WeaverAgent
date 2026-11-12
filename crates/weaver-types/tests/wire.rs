@@ -187,19 +187,27 @@ fn the_measurement_splices_and_never_quotes() {
     assert_eq!(back, answer, "and the round trip holds through bytes");
 }
 
-/// The directive's ask round-trips, and carries no sampling value.
+/// The directive's ask round-trips, carrying the generation's values.
 ///
-/// **The absence is asserted rather than assumed.** The tunable map left this
-/// directive when the values moved to the declaration, per `weaver-spu-Spec`
-/// section 8, and a serialization that grew one back would be the seam
-/// carrying inbound what the decode contract's conformance list says it does
-/// not.
+/// **Every generation carries the values it samples with**, per
+/// `weaver-spu-Spec` section 8 on the operator's ruling of 2026-11-11: the six
+/// members by name, and no tunable map, which left this seam when the values
+/// became the generation's own.
 #[test]
 fn the_token_directive_round_trips_through_bytes() {
     let directive = weaver_types::TokenDirective::AppendAndGenerate {
         turn: weaver_types::TurnKey("t-7".into()),
         delta: vec![],
         tool_schemas: vec![],
+        sampling: weaver_types::Sampling {
+            temperature: 0.5,
+            top_k: 40,
+            top_p: 0.75,
+            repetition_penalty: 1.25,
+            repetition_window: 64,
+            seed: 11,
+        },
+        max_tokens: 9,
     };
     let bytes = serde_json::to_string(&directive).expect("serializes");
     assert!(
@@ -207,11 +215,122 @@ fn the_token_directive_round_trips_through_bytes() {
         "internally tagged, snake case: {bytes}"
     );
     assert!(
-        !bytes.contains("tunable") && !bytes.contains("temperature"),
-        "no sampling value crosses this seam inbound: {bytes}"
+        bytes.contains(
+            r#""sampling":{"temperature":0.5,"top_k":40,"top_p":0.75,"repetition_penalty":1.25,"repetition_window":64,"seed":11},"max_tokens":9"#
+        ) && !bytes.contains("tunable"),
+        "the six members by name and the bound, no tunable map: {bytes}"
     );
     let back: weaver_types::TokenDirective = serde_json::from_str(&bytes).expect("deserializes");
     assert_eq!(back, directive);
+}
+
+/// **One rule judges every carried set**, per `weaver-spu-Spec` section 8's
+/// table: the first member outside its range is named, in declaration order,
+/// and every edge the table states is read on both sides.
+///
+/// Perturbation: admit a `top_p` of zero, a negative temperature, or a count
+/// at `SAMPLING_COUNT_CEILING`, and the matching case fails.
+#[test]
+fn a_carried_set_outside_its_range_names_the_member() {
+    use weaver_types::{SAMPLING_COUNT_CEILING, Sampling, SamplingMember};
+    let within = Sampling {
+        temperature: 0.0,
+        top_k: 0,
+        top_p: 1.0,
+        repetition_penalty: 1.0,
+        repetition_window: SAMPLING_COUNT_CEILING - 1,
+        seed: u64::MAX,
+    };
+    assert_eq!(within.out_of_range(), None, "every edge inside its range");
+    for (member, outside) in [
+        (
+            SamplingMember::Temperature,
+            Sampling {
+                temperature: -0.1,
+                ..within
+            },
+        ),
+        (
+            SamplingMember::Temperature,
+            Sampling {
+                temperature: f32::NAN,
+                ..within
+            },
+        ),
+        (
+            SamplingMember::Temperature,
+            Sampling {
+                temperature: f32::INFINITY,
+                ..within
+            },
+        ),
+        (
+            SamplingMember::TopK,
+            Sampling {
+                top_k: SAMPLING_COUNT_CEILING,
+                ..within
+            },
+        ),
+        (
+            SamplingMember::TopP,
+            Sampling {
+                top_p: 0.0,
+                ..within
+            },
+        ),
+        (
+            SamplingMember::TopP,
+            Sampling {
+                top_p: 1.01,
+                ..within
+            },
+        ),
+        (
+            SamplingMember::TopP,
+            Sampling {
+                top_p: f32::NAN,
+                ..within
+            },
+        ),
+        (
+            SamplingMember::RepetitionPenalty,
+            Sampling {
+                repetition_penalty: 0.0,
+                ..within
+            },
+        ),
+        (
+            SamplingMember::RepetitionPenalty,
+            Sampling {
+                repetition_penalty: f32::INFINITY,
+                ..within
+            },
+        ),
+        (
+            SamplingMember::RepetitionWindow,
+            Sampling {
+                repetition_window: SAMPLING_COUNT_CEILING,
+                ..within
+            },
+        ),
+    ] {
+        assert_eq!(outside.out_of_range(), Some(member), "{outside:?}");
+    }
+}
+
+/// **A field reports past no cutoff it is below, nor past zero's**, per
+/// `weaver-spu-Spec` section 7.5: a `top_k` above the depth, or zero, whose
+/// cutoff is the whole vocabulary, is below the cutoff, and a depth at or
+/// above a nonzero `top_k` is not.
+///
+/// Perturbation: drop the zero arm from `field_below_cutoff` and the second
+/// case fails. Watched under exactly that removal.
+#[test]
+fn the_field_is_below_a_cutoff_above_its_depth_and_below_zeros() {
+    assert!(weaver_types::field_below_cutoff(8, 9));
+    assert!(weaver_types::field_below_cutoff(64, 0));
+    assert!(!weaver_types::field_below_cutoff(8, 8));
+    assert!(!weaver_types::field_below_cutoff(8, 1));
 }
 
 /// The refusal's overflow carries the session's own account, per the decode

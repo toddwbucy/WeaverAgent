@@ -25,6 +25,7 @@ pub(in crate::flow::context) fn take_context(fx: &mut Fixture) -> RecordingConte
         "replacement-run".into(),
         42,
         config(),
+        crate::flow::context::TEST_SAMPLING,
         AbsoluteBound::after(1, 10).unwrap(),
         &mut FakePumpIo::new(1),
     )

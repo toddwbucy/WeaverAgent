@@ -581,6 +581,8 @@ fn place_prepare_uses_actual_boot_summary_and_material_without_sending_append() 
         turn,
         delta,
         tool_schemas,
+        sampling,
+        max_tokens,
     } = fx.sent_generation()
     else {
         unreachable!()
@@ -588,6 +590,12 @@ fn place_prepare_uses_actual_boot_summary_and_material_without_sending_append() 
     assert_eq!(turn, TurnKey("placement-turn".into()));
     assert_eq!(delta, messages);
     assert_eq!(tool_schemas, fx.schemas());
+    // **The residency's carried set rides the generation**, per
+    // `weaver-harness-Spec` section 6.1: the defaults adopted at the enter
+    // and the ceiling the checked Open stated. Perturbation: send any other
+    // set or bound from `begin_generation` and this fails.
+    assert_eq!(sampling, crate::flow::context::TEST_SAMPLING);
+    assert_eq!(max_tokens, 16, "the boot fixture's Open states 16");
     assert_eq!(
         fx.journal().6,
         0,

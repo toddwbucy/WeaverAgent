@@ -141,16 +141,24 @@ impl CancelPoll for NeverCancels {
 ///
 /// **Grouped because the two fix one reseed together and nothing else.** The
 /// seed is the caller's, derived from the declared one and the generation's
-/// identity, and crosses to [`Backend::reseed`]. The window is the length of
-/// resident tail the penalty knobs describe, and it is spent on this side of
-/// that seam, cutting the slice the reseed is handed rather than crossing as
-/// an argument of its own. A generation and a re-feed build the sampler the
-/// same way, which is why one type serves both.
+/// identity. The sampling values are the ones the generation carried, per
+/// `weaver-spu-Spec` section 8, and both cross to [`Backend::reseed`], which
+/// builds the whole sampler from them. The penalty window's length is the
+/// carried `repetition_window`, spent on this side of that seam, cutting the
+/// slice the reseed is handed. A generation and a re-feed build the sampler
+/// the same way, which is why one type serves both.
 pub struct SamplerBuild {
     /// This generation's derived seed.
     pub seed: u64,
+    /// The values this generation carried.
+    pub sampling: crate::sampling::Sampling,
+}
+
+impl SamplerBuild {
     /// How much of the resident tail the penalty reads, in tokens.
-    pub penalty_window: usize,
+    fn penalty_window(&self) -> usize {
+        self.sampling.repetition_window as usize
+    }
 }
 
 /// Where a retained position's field lands: the position, the ranked
@@ -436,9 +444,12 @@ impl<'a> Session<'a> {
         // generation ever consumed, appendable and quietly wrong, which is
         // the disagreement the poison exists to refuse. This sits after a
         // commit and therefore takes the commit's discipline.
-        let window_start = self.resident.len().saturating_sub(sampler.penalty_window);
+        let window_start = self.resident.len().saturating_sub(sampler.penalty_window());
         let window: Vec<TokenId> = self.resident[window_start..].to_vec();
-        if let Err(fault) = self.backend.reseed(sampler.seed, &window) {
+        if let Err(fault) = self
+            .backend
+            .reseed(sampler.seed, &sampler.sampling, &window)
+        {
             return Err(self.poison(fault));
         }
         let decode_started = std::time::Instant::now();
@@ -640,9 +651,12 @@ impl<'a> Session<'a> {
         // derived seed, the resident tail's window - because the recomputed
         // draw is only evidence if it is the draw the source would have
         // made.
-        let window_start = self.resident.len().saturating_sub(sampler.penalty_window);
+        let window_start = self.resident.len().saturating_sub(sampler.penalty_window());
         let window: Vec<TokenId> = self.resident[window_start..].to_vec();
-        if let Err(fault) = self.backend.reseed(sampler.seed, &window) {
+        if let Err(fault) = self
+            .backend
+            .reseed(sampler.seed, &sampler.sampling, &window)
+        {
             return Err(self.poison(fault));
         }
         let decode_started = std::time::Instant::now();

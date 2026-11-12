@@ -6,7 +6,7 @@ use weaver_spu::decoder::backend::{DecodeFault, TokenId};
 use weaver_spu::decoder::session::Session;
 use weaver_spu::family::{self, Family};
 use weaver_spu::residency::{Resident, StopSet};
-use weaver_spu::sampling::{EffectiveKnobs, EffectiveSessionParameters};
+use weaver_spu::sampling::EffectiveSessionParameters;
 use weaver_traits::Message;
 use weaver_types::{Opened, SessionId, TokenRefusal, TurnKey};
 
@@ -69,7 +69,6 @@ impl<'r> OpenedSession<'r> {
     /// No temporary render, token vector or evidence is retained in the owner.
     pub(super) fn open(
         resident: &'r Resident,
-        knobs: &EffectiveKnobs,
         parameters: EffectiveSessionParameters,
         messages: &[Message],
         column_ask: bool,
@@ -78,7 +77,7 @@ impl<'r> OpenedSession<'r> {
         let renderer = (resident.declaration.renderer)();
         let prepared = prepare_identity(renderer, messages, |text| resident.tokenize(text))?;
         let mut session = resident
-            .open_session(knobs, parameters.context_capacity)
+            .open_session(parameters.context_capacity)
             .map_err(PlacementFailure::Decode)?;
         session
             .open(&prepared.tokens)

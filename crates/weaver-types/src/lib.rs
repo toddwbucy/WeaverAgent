@@ -109,9 +109,9 @@ mod wire;
 pub use config::{
     AdapterBinding, AgentConfig, ArtifactRef, BindingKind, ClassifyInstruction, ConfigError,
     ConfigErrorKind, DecoderInstruction, DeviceOrdinal, ElectedKindConfig, FieldElection,
-    FieldName, GateInstruction, Lifecycle, ModelBinding, REGISTERED_TOOLS, Restore, SHELL_TOOL,
-    ShellGrant, SpuInstruction, StateElection, StateStore, StoreEngine, ToolName, TraceSink,
-    TurnContext,
+    FieldName, GateInstruction, Lifecycle, ModelBinding, REGISTERED_TOOLS, Restore,
+    SAMPLING_DEFAULT_NAMES, SHELL_TOOL, ShellGrant, SpuInstruction, StateElection, StateStore,
+    StoreEngine, ToolName, TraceSink, TurnContext,
 };
 #[cfg(feature = "config")]
 pub use config::{
@@ -129,7 +129,8 @@ pub use wire::{
     LOWER_BOUND_MS, LOWER_SETTLE_MARGIN_MS, LabelAnswer, LabelDirective, LabelRefusal,
     LifecycleAnswer, LifecycleAsk, LifecycleDirective, LifecycleRefusal, Lineage, LoadFacts,
     MAX_ENVELOPE_BYTES, Opened, Opener, OrganEnvelope, Payload, Position, RefusalRecord,
-    RefusingOrgan, Reset, ResetReason, RunId, SavePointLeg, SavePointReport, ScoredLabel,
-    SegmentPreamble, SessionId, TokenAnswer, TokenAsk, TokenDirective, TokenRefusal, ToolExecution,
-    ToolOutcome, TurnFrame, TurnKey, TurnRequest, UnrecoveredCall, UnrecoveredReason, echoed,
+    RefusingOrgan, Reset, ResetReason, RunId, SAMPLING_COUNT_CEILING, Sampling, SamplingMember,
+    SavePointLeg, SavePointReport, ScoredLabel, SegmentPreamble, SessionId, TokenAnswer, TokenAsk,
+    TokenDirective, TokenRefusal, ToolExecution, ToolOutcome, TurnFrame, TurnKey, TurnRequest,
+    UnrecoveredCall, UnrecoveredReason, echoed, field_below_cutoff,
 };

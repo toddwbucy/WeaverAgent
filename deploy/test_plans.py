@@ -384,6 +384,14 @@ elif name == 'ldd':
 else: sys.exit(99)
 '''
 
+# The six sampling defaults the harness reads from every serving declaration
+# (weaver-harness-Spec section 6.1), at the values create-agent.sh writes. A
+# standing agent's fixture declaration carries them, since update-stack.sh's
+# --install refuses while any agent lacks one.
+SAMPLING = ('\n[spu-instruction.decoder.tunable-values]\ntemperature = 0.7\ntop-k = 40\n'
+            'top-p = 0.95\nrepetition-penalty = 1.1\nrepetition-window = 64\nseed = 11\n')
+
+
 class PlanTests(unittest.TestCase):
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory(prefix="weaver-deploy-test-")
@@ -420,7 +428,7 @@ class PlanTests(unittest.TestCase):
         (self.root / "agents").mkdir()
         self.existing_territory = self.root / "agents" / "weaver-existing"
         self.existing_territory.mkdir()
-        (self.existing_territory / "agent.toml").write_text("[state-store]\nengine = \"none\"\n")
+        (self.existing_territory / "agent.toml").write_text("[state-store]\nengine = \"none\"\n" + SAMPLING)
         # Laid to the law admin judges (weaver-admin-Spec section 9), as
         # create-agent.sh lays it: the territory 0710, its save-points/ 0750,
         # the groups the stand-in stat answers by name.
@@ -874,6 +882,17 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         decoder = declaration["spu-instruction"]["decoder"]
         self.assertNotIn("identity", decoder)
         self.assertNotIn("identity-file", decoder)
+        # The six sampling defaults the harness reads at every load
+        # (weaver-harness-Spec section 6.1), the five at the constants of the
+        # build before the carrier and the seed as it always was.
+        # Perturbation: drop one from the written declaration and this names
+        # it, as the made agent's first load would.
+        tunables = decoder["tunable-values"]
+        self.assertEqual({k: tunables.get(k) for k in ("temperature", "top-k", "top-p",
+                                                        "repetition-penalty", "repetition-window")},
+                         {"temperature": 0.7, "top-k": 40, "top-p": 0.95,
+                          "repetition-penalty": 1.1, "repetition-window": 64})
+        self.assertIsInstance(tunables.get("seed"), int)
         # A base-only agent omits the adapter table (ADP-1): absence is an
         # omitted key, never an empty table.
         self.assertNotIn("adapter", decoder["model-binding"])
@@ -2473,6 +2492,63 @@ esac
         control = self.run_script("update-stack.sh")
         self.assertEqual(control.returncode, 0, control.stderr)
 
+    def test_a_declaration_lacking_a_sampling_default_is_named_and_refuses_the_install(self):
+        # The harness this installs reads six sampling names from every
+        # serving declaration and refuses the load naming the first missing
+        # one (weaver-harness-Spec section 6.1). The plan names each agent
+        # whose declaration lacks any, with the keys it lacks and the values
+        # that keep the build before's behaviour, and goes on. An --install
+        # refuses before the build and before anything is replaced, the
+        # declaration untouched. A declaration with no tunable-values table
+        # names all six, and so does one naming serving outright. A
+        # diagnostic declaration is passed, since its reader requires none.
+        # The control: the six present, nothing named and the install not
+        # refused for it. Perturbation: drop the --install refusal and the
+        # install runs on to the build, and drop a name from SAMPLING_NAMES
+        # and the plan stops naming it.
+        decl = self.existing_territory / "agent.toml"
+        full = decl.read_text()
+        self.assertIn("top-p = 0.95\n", full)
+        partial = full.replace("top-p = 0.95\n", "").replace("repetition-window = 64\n", "")
+        bare = '[state-store]\nengine = "none"\n'
+        six = "temperature, top-k, top-p, repetition-penalty, repetition-window, seed"
+
+        def run(*args):
+            # A plan runs the stand-in build, which leaves its target behind.
+            shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+            self.log.unlink(missing_ok=True)
+            return self.run_script("update-stack.sh", *args)
+
+        for label, text, lacking in (("partial", partial, "top-p, repetition-window"),
+                                     ("bare", bare, six),
+                                     ("serving", 'binding-kind = "serving"\n' + bare, six)):
+            with self.subTest(label):
+                decl.write_text(text)
+                plan = run()
+                self.assertEqual(plan.returncode, 0, plan.stderr)
+                self.assertIn("== agents whose declaration lacks a sampling default\n", plan.stdout)
+                self.assertIn(f"  existing: its declaration {decl} lacks tunable-values {lacking}\n",
+                              plan.stdout)
+                self.assertIn("temperature = 0.7, top-k = 40, top-p = 0.95, repetition-penalty = 1.1, "
+                              "repetition-window = 64", plan.stdout)
+                install = run("--install")
+                self.assertEqual(install.returncode, 1, install.stdout)
+                self.assertIn("an --install refuses while an agent's declaration lacks a sampling "
+                              "default, named above", install.stderr)
+                self.assertIn(f"  existing: its declaration {decl} lacks tunable-values {lacking}\n",
+                              install.stdout)
+                self.assertFalse(any(c[0] in ("cargo", "sudo") for c in self.calls()))
+                self.assertEqual(decl.read_text(), text)
+        decl.write_text('binding-kind = "diagnostic"\n' + bare)
+        diagnostic = run()
+        self.assertNotIn("sampling default", diagnostic.stdout + diagnostic.stderr)
+        decl.write_text(full)
+        control = run()
+        self.assertEqual(control.returncode, 0, control.stderr)
+        self.assertNotIn("sampling default", control.stdout + control.stderr)
+        install = run("--install")
+        self.assertNotIn("sampling default", install.stdout + install.stderr)
+
     def test_stack_refuses_a_trace_the_old_admin_recreated(self):
         # Codex on #82: an admin before #62 recreated a lost trace root:root,
         # which the new admin refuses at load and validate never sees, so the
@@ -2486,7 +2562,7 @@ esac
         trace = self.existing_territory / "a trace $(id).ndjson"
         trace.write_text("")
         trace.chmod(0o640)
-        decl.write_text(f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{trace}"\ncreate = true\n')
+        decl.write_text(f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{trace}"\ncreate = true\n' + SAMPLING)
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 1, result.stdout)
         # The facts and no command (the Planner's call on #82): what stands,
@@ -2649,7 +2725,7 @@ esac
         (old_root / "worker-binary").write_text(str(self.root / "installed" / "worker"))
         old_dir = self.operator_home / ".weaveragent" / "old"
         old_dir.mkdir(parents=True)
-        (old_dir / "agent.toml").write_text("[state-store]\nengine = \"none\"\n")
+        (old_dir / "agent.toml").write_text("[state-store]\nengine = \"none\"\n" + SAMPLING)
         (old_root / "declaration-directory").write_text(str(old_dir) + "\n")
         (self.root / "installed").mkdir(exist_ok=True)
         for territory_key in (False, True):
@@ -3158,7 +3234,7 @@ esac
         link.symlink_to(self.root / "agents")
         for sink in (self.root / "elsewhere" / "trace.ndjson", link / "weaver-existing" / "trace.ndjson"):
             with self.subTest(sink=str(sink)):
-                decl.write_text(f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{sink}"\n')
+                decl.write_text(f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{sink}"\n' + SAMPLING)
                 self.log.unlink(missing_ok=True)
                 result = self.run_script("update-stack.sh")
                 self.assertEqual(result.returncode, 1, result.stdout)
@@ -3166,7 +3242,7 @@ esac
                               result.stderr)
                 self.assertIn(f"with sudoedit {decl}", result.stderr)
                 self.assertFalse([c for c in self.calls() if c[:2] == ["cargo", "build"]], self.calls())
-        decl.write_text('[state-store]\nengine = "none"\n')
+        decl.write_text('[state-store]\nengine = "none"\n' + SAMPLING)
         (territory / "save-points").rmdir()
         (territory / "save-points").symlink_to(self.root)
         result = self.run_script("update-stack.sh")
@@ -3191,7 +3267,7 @@ esac
         territory = self.existing_territory.resolve()
         sink = territory / "trace.ndjson"
         (territory / "agent.toml").write_text(
-            f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{sink}"\n')
+            f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "file"\npath = "{sink}"\n' + SAMPLING)
         (self.root / "installed").mkdir(exist_ok=True)
         admin = self.root / "fixture-admin"
         for answer, verified in (('{"kind":"refused","reason":"no_residency"}', False),
@@ -3230,7 +3306,7 @@ esac
         fifo = territory / "trace.pipe"
         os.mkfifo(fifo)
         (territory / "agent.toml").write_text(
-            f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "pipe"\npath = "{fifo}"\n')
+            f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "pipe"\npath = "{fifo}"\n' + SAMPLING)
         (self.root / "installed").mkdir(exist_ok=True)
         admin = self.root / "fixture-admin"
         admin.write_text("#!/bin/sh\n"
@@ -3761,7 +3837,7 @@ esac
         if not fifo.exists():
             os.mkfifo(fifo)
         (territory / "agent.toml").write_text(
-            f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "pipe"\npath = "{fifo}"\n')
+            f'[state-store]\nengine = "none"\n\n[trace-sink]\nkind = "pipe"\npath = "{fifo}"\n' + SAMPLING)
         (self.root / "installed").mkdir(exist_ok=True)
         rule.write_text("weaver-existing-admincon ALL=(root) NOPASSWD: /fixture\n")
         self.admin_calls = self.root / "admin-calls"

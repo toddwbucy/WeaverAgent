@@ -141,6 +141,8 @@ fn place_generation_busy_keeps_original_admission_window_until_staged() {
             turn: TurnKey("held-append".into()),
             delta: vec![],
             tool_schemas: vec![],
+            sampling: crate::flow::context::TEST_SAMPLING,
+            max_tokens: 16,
         })
         .unwrap()
     else {

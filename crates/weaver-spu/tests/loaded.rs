@@ -41,6 +41,34 @@ use weaver_types::{ArtifactRef, DecoderInstruction, DeviceOrdinal, ModelBinding,
 /// out differently.
 const MODEL: &str = "/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf";
 
+/// The values every generation of these tests carries, at the constants the
+/// deploy scripts write, beside the declared seed each test names
+/// (`weaver-spu-Spec` section 8).
+fn carried(seed: u64) -> weaver_types::Sampling {
+    weaver_types::Sampling {
+        temperature: 0.7,
+        top_k: 40,
+        top_p: 0.95,
+        repetition_penalty: 1.1,
+        repetition_window: 64,
+        seed,
+    }
+}
+
+/// A set with every member off the values [`carried`] holds, for the watches
+/// that read the members back out of a request: a request rendering a fixed
+/// value cannot match one of these by accident.
+fn moved(seed: u64) -> weaver_types::Sampling {
+    weaver_types::Sampling {
+        temperature: 0.6,
+        top_k: 33,
+        top_p: 0.9,
+        repetition_penalty: 1.05,
+        repetition_window: 48,
+        seed,
+    }
+}
+
 /// The SPU binary under the PAIR-1 mask for ordinal 0, the binding every
 /// test here names, as the harness's fork composes it.
 fn spu_command() -> std::process::Command {
@@ -361,7 +389,6 @@ mod seam_success {
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 4096.0),
                             ("context-capacity".to_string(), 4096.0),
-                            ("seed".to_string(), 11.0),
                         ]
                         .into_iter()
                         .collect(),
@@ -451,7 +478,6 @@ mod seam_success {
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 4096.0),
                             ("context-capacity".to_string(), 4096.0),
-                            ("seed".to_string(), 11.0),
                         ]
                         .into_iter()
                         .collect(),
@@ -561,7 +587,6 @@ mod seam_success {
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 9.0),
                             ("context-capacity".to_string(), 4096.0),
-                            ("seed".to_string(), 11.0),
                         ]
                         .into_iter()
                         .collect(),
@@ -597,6 +622,8 @@ mod seam_success {
             delta: vec![message(
                 "Count upward from one, comma separated, without stopping.",
             )],
+            sampling: carried(11),
+            max_tokens: 9,
         });
         let mut streamed = 0usize;
         let generation = loop {
@@ -619,6 +646,156 @@ mod seam_success {
                 .len(),
             9,
             "the measurement agrees with the stream"
+        );
+
+        drop(decode);
+        drop(lifecycle);
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&log_path);
+    }
+
+    /// **The binary judges each generation's carried set before the session
+    /// moves**, per `weaver-spu-Spec` sections 7.5 and 8: a member outside
+    /// its range refuses as `sampling_out_of_range` naming it, a bound above
+    /// the session's ceiling refuses naming `max_tokens`, and the session
+    /// stays at rest, so the next generation, carrying a set in range and a
+    /// bound at the ceiling, is served whole.
+    ///
+    /// Perturbation: drop the `judge` call from the binary's
+    /// `AppendAndGenerate` arm and the first ask streams tokens where the
+    /// refusal belongs. Watched under exactly that removal.
+    #[test]
+    fn an_out_of_range_carried_set_refuses_before_the_session_moves() {
+        use weaver_traits::{ContentBlock, Message, Role};
+        use weaver_types::{
+            SamplingMember, SessionId, TokenAnswer, TokenDirective, TokenRefusal, TurnKey,
+        };
+
+        let Some(model) = model_present() else {
+            eprintln!("SKIP an_out_of_range_carried_set: no model at {MODEL}");
+            return;
+        };
+        if let Err(why) = crate::common::lease(&[0]) {
+            eprintln!("SKIP an_out_of_range_carried_set: {why}");
+            return;
+        }
+        let _device = device_lock();
+
+        let (lifecycle, child_lifecycle) = seqpacket_pair();
+        let (decode_parent, child_decode) = seqpacket_pair();
+        let log_path =
+            std::env::temp_dir().join(format!("weaver-spu-judge-child-{}.log", std::process::id()));
+        let log = std::fs::File::create(&log_path).expect("a child log file");
+        let mut command = spu_command();
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(log));
+        place_inherited(
+            &mut command,
+            &[child_lifecycle.as_raw_fd(), child_decode.as_raw_fd()],
+        );
+        let mut child = command.spawn().expect("the binary starts");
+        bound_receives(&lifecycle, 120);
+        bound_receives(&decode_parent, 120);
+        let decode = weaver_spu::channel::decode_from_owned(decode_parent);
+
+        let admitted = ask(
+            &lifecycle,
+            1,
+            LifecycleDirective::Admit {
+                instruction: SpuInstruction {
+                    classify: None,
+                    decoder: DecoderInstruction {
+                        model_binding: ModelBinding {
+                            artifact: ArtifactRef(model.to_string_lossy().into_owned()),
+                            devices: vec![DeviceOrdinal(0)],
+                            adapter: None,
+                        },
+                        residual_readout_election: false,
+                        field_election: None,
+                        surprisal_election: false,
+                        refeed_permission: false,
+                        column_permission: false,
+                        tunable_values: [
+                            ("max-tokens-per-turn".to_string(), 9.0),
+                            ("context-capacity".to_string(), 4096.0),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    },
+                },
+            },
+        );
+        assert_eq!(admitted.payload, Payload::Answer(LifecycleAnswer::Admitted));
+
+        let message = |text: &str| Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text { text: text.into() }],
+        };
+        let send = |directive: &TokenDirective| {
+            let body = serde_json::to_vec(directive).expect("a directive renders");
+            decode.send_octets(&body).expect("the frame sends");
+        };
+        let append =
+            |sampling: weaver_types::Sampling, max_tokens: u64| TokenDirective::AppendAndGenerate {
+                tool_schemas: vec![],
+                turn: TurnKey("t-1".into()),
+                delta: vec![message(
+                    "Count upward from one, comma separated, without stopping.",
+                )],
+                sampling,
+                max_tokens,
+            };
+        let refused = || -> TokenRefusal {
+            let frame = decode.recv_octets().expect("the refusal arrives");
+            serde_json::from_slice(&frame).expect("the refusal parses")
+        };
+
+        send(&TokenDirective::Open {
+            session: SessionId("s-judge".into()),
+            column_ask: false,
+            messages: vec![message("You count plainly.")],
+        });
+        let frame = decode.recv_octets().expect("the open answers");
+        assert_opened(serde_json::from_slice(&frame).expect("the answer parses"));
+
+        send(&append(
+            weaver_types::Sampling {
+                top_p: 1.5,
+                ..carried(11)
+            },
+            9,
+        ));
+        assert_eq!(
+            refused(),
+            TokenRefusal::SamplingOutOfRange {
+                member: SamplingMember::TopP
+            },
+            "a member outside its range refuses by name"
+        );
+        send(&append(carried(11), 10));
+        assert_eq!(
+            refused(),
+            TokenRefusal::SamplingOutOfRange {
+                member: SamplingMember::MaxTokens
+            },
+            "a bound above the ceiling refuses by name"
+        );
+
+        send(&append(carried(11), 9));
+        let mut streamed = 0usize;
+        loop {
+            let frame = decode.recv_octets().expect("an answer arrives");
+            match serde_json::from_slice::<TokenAnswer>(&frame) {
+                Ok(TokenAnswer::Token { .. }) => streamed += 1,
+                Ok(TokenAnswer::Generated(_)) => break,
+                other => panic!("tokens then the close, got {other:?}"),
+            }
+        }
+        assert_eq!(
+            streamed, 9,
+            "the session stayed at rest, and the generation in range is served whole"
         );
 
         drop(decode);
@@ -697,7 +874,6 @@ mod seam_success {
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 9.0),
                             ("context-capacity".to_string(), 4096.0),
-                            ("seed".to_string(), 11.0),
                         ]
                         .into_iter()
                         .collect(),
@@ -733,6 +909,8 @@ mod seam_success {
             delta: vec![message(
                 "Count upward from one, comma separated, without stopping.",
             )],
+            sampling: carried(11),
+            max_tokens: 9,
         });
         let mut streamed = 0usize;
         let generation = loop {
@@ -835,7 +1013,6 @@ mod seam_success {
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 4096.0),
                             ("context-capacity".to_string(), 4096.0),
-                            ("seed".to_string(), 37.0),
                         ]
                         .into_iter()
                         .collect(),
@@ -865,10 +1042,16 @@ mod seam_success {
         });
         assert_opened(recv());
 
+        // **A set no constant here holds, and a bound below the ceiling**, so
+        // a request that renders anything but what this generation carried
+        // fails below.
+        let set = moved(37);
         send(&TokenDirective::AppendAndGenerate {
             tool_schemas: vec![],
             turn: TurnKey("t-1".into()),
             delta: vec![message("Say one word.")],
+            sampling: set,
+            max_tokens: 512,
         });
         // **The stream precedes the close and never disagrees with it**, per
         // the contract's coherence guarantee: token frames arrive as drawn,
@@ -909,24 +1092,26 @@ mod seam_success {
             request["template"].as_str().is_some(),
             "and the template identity"
         );
-        assert!(
-            request["sampling"]["temperature"].is_number(),
-            "and the effective sampling"
-        );
-        // **The declared seed reaches the effective sampling**, which is the
-        // whole of the tunable path added 2026-08-20: the value this fixture
-        // supplies is the value the request reports, so a recorded run names
-        // the draw it was and is re-entered by declaring it again.
-        //
-        // **The value is 37 because it must not be 11.** Eleven was the
-        // compiled seed this knob carried while it was frozen, so a fixture
-        // declaring eleven would pass against a still-frozen knob and prove
-        // nothing about the route. Restore `Disposition::Frozen(11)` and
-        // this fails, which is the perturbation, and it only fails because
-        // the two numbers differ.
+        // **The request states the set and the bound this generation
+        // carried**, per `weaver-spu-Spec` section 8 and
+        // `weaver-harness-spu-decode-contract` section 8: member for member,
+        // under the names the carried set renders, with `generation_seed`
+        // beside them and the bound in `stop`. A recorded run so names the
+        // draw it was and is re-entered by carrying it again. Every value is
+        // one no constant here holds, so a request rendering a fixed member,
+        // or the session's ceiling in place of the carried bound, fails.
+        // Render the request's `top_p` from a constant, or its `max_tokens`
+        // from the ceiling, and this fails, which is the perturbation.
+        let stated = serde_json::to_value(set).expect("the carried set renders");
+        for (member, value) in stated.as_object().expect("the set is an object") {
+            assert_eq!(
+                &request["sampling"][member], value,
+                "the request states the carried {member}"
+            );
+        }
         assert_eq!(
-            request["sampling"]["seed"], 37.0,
-            "the declared seed is the effective one"
+            request["stop"]["max_tokens"], 512,
+            "the request states the carried bound, not the ceiling"
         );
         let measurement: serde_json::Value =
             serde_json::from_str(generation.measurement.get()).expect("the measurement is JSON");
@@ -1074,7 +1259,6 @@ mod seam_success {
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 64.0),
                             ("context-capacity".to_string(), 1024.0),
-                            ("seed".to_string(), 37.0),
                         ]
                         .into_iter()
                         .collect(),
@@ -1109,6 +1293,7 @@ mod seam_success {
             turn: TurnKey("t-1".into()),
             rendered: "anything".into(),
             path: vec![1],
+            sampling: carried(37),
         });
         // A refusal crosses as the trio's own refusal frame, not an answer.
         let frame = decode.recv_octets().expect("the refusal arrives");
@@ -1230,7 +1415,6 @@ mod seam_success {
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 64.0),
                             ("context-capacity".to_string(), 1024.0),
-                            ("seed".to_string(), 37.0),
                         ]
                         .into_iter()
                         .collect(),
@@ -1304,6 +1488,7 @@ mod seam_success {
             turn: TurnKey("baseline".into()),
             rendered: "anything".into(),
             path: vec![1, 2, 3],
+            sampling: carried(37),
         });
         send(&TokenDirective::Cancel {
             turn: TurnKey("foreign".into()),
@@ -1356,6 +1541,7 @@ mod seam_success {
             turn: TurnKey("t-1".into()),
             rendered: "anything".into(),
             path: vec![1, 2, 3],
+            sampling: carried(37),
         });
         send(&TokenDirective::Cancel {
             turn: TurnKey("t-1".into()),
@@ -1455,7 +1641,6 @@ mod seam_success {
                 tunable_values: [
                     ("max-tokens-per-turn".to_string(), 64.0),
                     ("context-capacity".to_string(), 1024.0),
-                    ("seed".to_string(), 37.0),
                 ]
                 .into_iter()
                 .collect(),
@@ -1548,6 +1733,8 @@ mod seam_success {
                         text: "Name any three colors.".into(),
                     }],
                 }],
+                sampling: moved(37),
+                max_tokens: 64,
             },
         );
         let generation = loop {
@@ -1575,7 +1762,7 @@ mod seam_success {
             "the source generated something"
         );
         let recorded_emission = generation.emission.clone();
-        let recorded_seed = request["sampling"]["generation_seed"].clone();
+        let recorded_sampling = request["sampling"].clone();
         close(lifecycle, decode, child, log_path, "source");
 
         // **The replay pass**: a fresh residency, the permission granted,
@@ -1596,6 +1783,7 @@ mod seam_success {
                 turn: TurnKey("t-1".into()),
                 rendered: rendered.clone(),
                 path: vec![],
+                sampling: moved(37),
             },
         );
         let frame = decode.recv_octets().expect("the refusal arrives");
@@ -1611,6 +1799,7 @@ mod seam_success {
                 turn: TurnKey("t-1".into()),
                 rendered,
                 path: recorded_output.clone(),
+                sampling: moved(37),
             },
         );
         // **Under this instruction the re-feed answers in one frame, so the
@@ -1650,9 +1839,16 @@ mod seam_success {
             refed.emission, recorded_emission,
             "the emission is the recorded path's text"
         );
+        // **The re-fed request states the recorded set whole**, per
+        // `weaver-spu-Spec` sections 4.6 and 8.5: the six members the re-feed
+        // carried, which are the source's, and the `generation_seed` derived
+        // from them, so the replay derived the seed the source drew from. The
+        // set stands off every constant here, so a re-feed request rendering
+        // a fixed member fails. Render the re-feed's `top_k` from a constant
+        // and this fails, which is the perturbation.
         assert_eq!(
-            refed_request["sampling"]["generation_seed"], recorded_seed,
-            "the replay derived the seed the source drew from"
+            refed_request["sampling"], recorded_sampling,
+            "the re-fed request states the recorded values, the derived seed among them"
         );
         close(lifecycle, decode, child, log_path, "replay");
     }
@@ -1753,7 +1949,6 @@ mod seam_success {
                         tunable_values: [
                             ("max-tokens-per-turn".to_string(), 24.0),
                             ("context-capacity".to_string(), 1024.0),
-                            ("seed".to_string(), 37.0),
                         ]
                         .into_iter()
                         .collect(),
@@ -1793,6 +1988,8 @@ mod seam_success {
                     text: "Say one word.".into(),
                 }],
             }],
+            sampling: carried(37),
+            max_tokens: 24,
         });
         let mut columns: Vec<(u64, usize, usize)> = Vec::new();
         let mut streamed = 0usize;
@@ -1895,7 +2092,6 @@ mod seam_success {
                 tunable_values: [
                     ("max-tokens-per-turn".to_string(), 16.0),
                     ("context-capacity".to_string(), 1024.0),
-                    ("seed".to_string(), 37.0),
                 ]
                 .into_iter()
                 .collect(),
@@ -1973,6 +2169,8 @@ mod seam_success {
             tool_schemas: vec![],
             turn: TurnKey("t-1".into()),
             delta: identity(),
+            sampling: carried(37),
+            max_tokens: 16,
         });
         loop {
             match recv() {
