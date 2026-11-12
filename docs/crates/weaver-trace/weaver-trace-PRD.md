@@ -308,7 +308,7 @@ its closure.
 | `fault` | a fault the worker survived, reported by an organ and authored by the harness |
 | `model.request` | the decode boundary, request side |
 | `model.output` | the decode boundary, response side, with the session's resident count and capacity as the generation closed |
-| `model.measurement` | input and output token identifiers, entropies, the generation's perplexity, the decode timings, model identity with its weights hash, the prompt-block partition, and where their elections stand the surprisals and the residual reductions with the two counts that describe their shape |
+| `model.measurement` | input and output token identifiers, entropies, the generation's perplexity, the decode timings, model identity with its weights hash, the resident adapter's identity, the engine and device blocks (the adapter and the two blocks are SPU content the trace does not interpret), the prompt-block partition, and where their elections stand the surprisals and the residual reductions with the two counts that describe their shape |
 | `classify.request` | the label seam, request side: the content the loop sent for classification |
 | `classify.output` | the label seam, response side: every label of the artifact's head scored |
 | `model.field` | one decode position's ranked candidates with their probabilities and the rank the draw landed on, when the field election stands |
@@ -723,12 +723,15 @@ any seam of this program reaches the record here: which ask was refused,
 which seam answered, and the seam's own case with the values it carries.
 
 **The ask is named rather than reproduced, and a value rides it only where
-no other event holds that value.** A refused flush's cut and a refused
-elision's span reach no other kind, so they ride. An open's messages, an
-append's delta, and a cancel's turn each reach the record under kinds of
-their own before the exchange, so the refusal names the ask and stops.
-**This charter's own refusal of derived quantities is the reason**, one fact
-in two places being the defect rather than the redundancy being a safety.
+no other event holds that value.** A refused flush's cut, a refused
+elision's span, and a refused append's sampling set and bound
+(`weaver-spu-Spec` section 8) reach no other kind, so they ride. An open's
+messages, an append's delta, and a cancel's turn each reach the record
+under kinds of their own before the exchange, so the refusal names them
+and reproduces none. A refused re-feed's inputs are its recorded
+generation's, inside the span the replay's `recall` names. **This
+charter's own refusal of derived quantities is the reason**, one fact in
+two places being the defect rather than the redundancy being a safety.
 
 **It is not the `fault` kind and the distinction is the contracts' own.** A
 refusal is an answerable ask that was wrong, and the party that refused is
@@ -773,22 +776,22 @@ envelope's field and is not repeated in the payload. A fault the worker does
 not survive is not this kind, per the contracts, because the party that would
 report it is the one that died.
 
-**`model.request` also carries the bound the generation ran under**, per
-the ruling of 2026-08-21 on issue #258: the resolved per-turn token ceiling
-and the stop condition in force, effective values whichever side set them,
-on the same disposition rule the sampling values ride. **A `finish` of
-`length` is otherwise unreproducible from the record**, because the bound
-that produced it lives in the worker's composition root or in an operator's
-file and nowhere a consumer can read, and a re-feed that does not know where
-the cut fell observes a generation the run never had. The stop token set
-travels for the same reason and closes the same kind of gap: a generation
-ending on a stop token is explained by a set the record did not hold.
+**`model.request` also carries the bound the generation ran under**, per the
+ruling of 2026-08-21 on issue #258: the token bound the generation carried
+and the stop condition in force, recorded as the sampling values are
+(`weaver-spu-Spec` section 8, on the operator's ruling of 2026-11-11). **A
+`finish` of `length` is otherwise unreproducible from the record**, because
+the bound that produced it is sent by the loop and held nowhere else a
+consumer can read, and a re-feed that does not know where the cut fell
+observes a generation the run never had. The stop token set travels for the
+same reason and closes the same kind of gap: a generation ending on a stop
+token is explained by a set the record did not hold.
 
 **`model.request` carries what the model was asked this turn, the turn's rendered
 contribution, per the operator's ruling of 2026-08-12.** The turn's delta as the family
 library rendered it, the identity of the template that produced it, and the sampling
-values in effect for the turn, effective values whichever side set them, per the
-disposition rule of `weaver-spu-PRD` section 13.8. The seam is append-only, so what the
+values the generation carried, per `weaver-spu-PRD` section 13.8 and the operator's
+ruling of 2026-11-11 that each event records them. The seam is append-only, so what the
 model received grows each turn while only the delta crosses, and the full effective
 context is what the record determines rather than what any one event stores: the
 accumulation of the recorded contributions under their recorded template identities,

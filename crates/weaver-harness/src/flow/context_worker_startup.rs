@@ -71,10 +71,13 @@ impl FoundationRun {
         else {
             return Err("worker startup requires Serving Enter".into());
         };
+        // The admit carries the instruction less the six sampling names
+        // (`weaver-harness-spu-contract` section 2), each generation carrying
+        // its own.
         let residency = ResidencyRequest {
             binary: program.organs.spu,
             arguments: program.parameters.spu_arguments(),
-            instruction: payload.spu_instruction.clone(),
+            instruction: crate::lifecycle::admitted_instruction(&payload.spu_instruction),
         };
         let gate = GateStartupRequest {
             binary: program.organs.gate,

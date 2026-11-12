@@ -456,6 +456,33 @@ pub(crate) struct RecordingContext {
     failed_wait: Option<WaitAtHalt>,
     halt_report: Option<halt_driver::HaltReport>,
     halt_gate: Option<halt_gate_driver::HaltGate>,
+    /// The declaration's six sampling defaults, judged at adoption, which
+    /// every generation of the residency carries (`weaver-harness-Spec`
+    /// section 6.1).
+    sampling: weaver_types::Sampling,
+}
+
+/// The six defaults the flow's tests adopt, at the deploy scripts'
+/// constants.
+#[cfg(test)]
+pub(in crate::flow) const TEST_SAMPLING: weaver_types::Sampling = weaver_types::Sampling {
+    temperature: 0.7,
+    top_k: 40,
+    top_p: 0.95,
+    repetition_penalty: 1.1,
+    repetition_window: 64,
+    seed: 11,
+};
+
+/// [`TEST_SAMPLING`] as a recorded `model.request` holds it: the six members
+/// a replay requires whole (`diagnostic-replay-loop` section 2), so a fixture
+/// record re-feeds under the set its re-feed assertions expect. It goes
+/// through the record's text, as a real record does, so an `f32` member
+/// reads as its shortest spelling (`0.7`) and not as its widened `f64`.
+#[cfg(test)]
+pub(in crate::flow) fn test_sampling_record() -> serde_json::Value {
+    let text = serde_json::to_string(&TEST_SAMPLING).expect("the six members serialize");
+    serde_json::from_str(&text).expect("the record's text parses")
 }
 
 impl RecordingContext {
@@ -469,6 +496,7 @@ impl RecordingContext {
         run: String,
         operator: u32,
         declaration: FlowConfig,
+        sampling: weaver_types::Sampling,
         enter: AbsoluteBound,
         io: &mut impl PumpIo,
     ) -> Result<Self, ContextAdmissionError> {
@@ -516,6 +544,7 @@ impl RecordingContext {
         .map_err(|error| ContextAdmissionError::Invalid(format!("pair identity: {error:?}")))?;
         Ok(Self {
             phase: RecordingPhase::Preflight,
+            sampling,
             origin,
             last_ns: origin.raw(),
             author,

@@ -142,7 +142,7 @@ fn diagnostic_spu_child() {
     packet!(decode.as_raw_fd(), &TokenAnswer::Opened(weaver_types::Opened {
         session, prefix_tokens: 3, capacity: 16384, generation_limit: 16, terminal_tokens: 1,
         request: serde_json::value::to_raw_value(&serde_json::json!({"rendered":rendered,"template":"fixture"})).unwrap(),
-        measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"art","weights_hash":"h","adapter":null,"prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap(),
+        measurement: serde_json::value::to_raw_value(&serde_json::json!({"model":"art","weights_hash":"h","adapter":null,"engine":null,"device":null,"prefix_token_ids":[41,7,89],"blocks":[{"label":"identity-prefix","start":0,"end":rendered.len()}]})).unwrap(),
     }));
     if mode.ends_with("invalid-open") {
         finish_refused_enter(&root, &lifecycle, &decode);
@@ -156,6 +156,7 @@ fn diagnostic_spu_child() {
         turn,
         rendered,
         path,
+        ..
     } = take!(decode.as_raw_fd())
     else {
         panic!("replay must re-feed")
@@ -175,7 +176,7 @@ fn diagnostic_spu_child() {
     let answer: TokenAnswer = serde_json::from_value(serde_json::json!({
         "kind":"re_fed", "body":{
             "emission":"hi","finish":"completed","content":[{"type":"text","text":"hi"}],
-            "request":{"rendered":"hi","template":"tmpl","sampling":{"seed":37}},
+            "request":{"rendered":"hi","template":"tmpl","sampling":crate::flow::context::test_sampling_record()},
             "measurement":{"input_tokens":[1,2],"output_tokens":[3],"model":"art","weights_hash":"h"},
             "resident":6,"capacity":64
         }
@@ -437,7 +438,7 @@ pub(super) fn control(
             let replay = lines.next().unwrap().unwrap();
             assert_eq!(serde_json::from_str::<serde_json::Value>(&replay).unwrap(), serde_json::json!({"ask":{"replay":{}}}));
             writeln!(state_writer, "{}", serde_json::json!({"answer":{"replay":{"events":[
-                {"envelope":{"kind":"model.request","run":"r-1","turn":"t-1","sequence":"4"},"pairs":{"rendered":"hi","template":"tmpl","sampling":{"seed":37}}},
+                {"envelope":{"kind":"model.request","run":"r-1","turn":"t-1","sequence":"4"},"pairs":{"rendered":"hi","template":"tmpl","sampling":crate::flow::context::test_sampling_record()}},
                 {"envelope":{"kind":"model.measurement","run":"r-1","turn":"t-1","sequence":"6"},"pairs":{"input_tokens":[1,2],"output_tokens":[3],"model":"art","weights_hash":"h"}}
             ]}}})).unwrap();
             assert!(lines.next().is_none(), "Diagnostic must neither tee content nor request a save");

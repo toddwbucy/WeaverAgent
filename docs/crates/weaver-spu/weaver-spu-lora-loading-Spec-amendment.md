@@ -294,8 +294,8 @@ the measurements and label agreement unruled. Do not invent a tolerance or
 report a parity pass because the strings happen to look similar.
 
 No production model.measurement or Open evidence shape changes in this pass.
-The current Open measurement has a closed four-member shape. Replay identity
-and its comparisons also assume the existing base identity. Item 3 must amend
+The Open measurement's closed shape carries no adapter member in this pass. Replay
+identity and its comparisons also assume the existing base identity. Item 3 must amend
 these consumers together before a production adapter binding is admitted.
 This separation leaves the trace-floor question open while retaining the
 fixture evidence needed to judge the mechanic.

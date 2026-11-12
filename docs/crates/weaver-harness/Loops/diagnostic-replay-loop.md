@@ -162,6 +162,14 @@ the recomputed draws in the measurement. An earlier form of this paragraph
 named the drive as the one act standing between these papers and a running
 null replay, and that act is the one that cleared it.
 
+**Each re-feed carries the sampling values its recorded generation ran
+under**, on the operator's ruling of 2026-11-11 (`weaver-spu-Spec` section
+8): the six members of the recorded `model.request`'s `sampling` block, and
+never the declaration's defaults. The draws a re-feed computes are a
+generation's, so they are computed under the values that generation
+carried. Input identity has already required the block whole (section 3,
+step 1).
+
 ## 3. Certification, walked
 
 Management during the walk follows DIAGNOSTIC-INTERRUPT in weaver-harness-Spec
@@ -191,7 +199,10 @@ The charter's section 4 procedure, as this loop performs it:
    rendered contributions, their template identities, the sampling parameters, the model
    identity and weights hash against the binding the load declared, and the prompt-block
    partition. A record missing what its claim requires fails here, before any forward
-   pass, which is the completeness-is-claim-relative rule doing its work. **A claim
+   pass, which is the completeness-is-claim-relative rule doing its work. Where the
+   field is elected, a recorded `top_k` above its depth, or zero, fails here too, naming
+   both numbers, because every re-feed of that generation would refuse
+   (`weaver-spu-Spec` section 7.5). **A claim
    about the state rests on one fact beyond that list, and it is claim-relative the same
    way**, per the charter's section 4 and `weaver-agent-PRD` section 8: the tee's
    election. It is the rule that decided what the original agent's state held, so a

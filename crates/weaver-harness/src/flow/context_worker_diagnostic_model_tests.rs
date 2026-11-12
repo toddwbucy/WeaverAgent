@@ -94,7 +94,6 @@ pub(super) fn source(
     instruction.decoder.tunable_values = [
         ("max-tokens-per-turn".into(), 16.0),
         ("context-capacity".into(), 1024.0),
-        ("seed".into(), 37.0),
     ]
     .into_iter()
     .collect();
@@ -192,6 +191,8 @@ pub(super) fn source(
                     }],
                 }],
                 tool_schemas: vec![],
+                sampling: crate::flow::context::TEST_SAMPLING,
+                max_tokens: 16,
             },
             &mut wait,
         )

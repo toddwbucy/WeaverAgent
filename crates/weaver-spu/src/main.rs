@@ -35,8 +35,7 @@ use weaver_spu::family;
 use weaver_spu::readout::ReadoutElection;
 use weaver_spu::residency::{Headroom, Residency, Resident, StopSet};
 use weaver_spu::sampling::{
-    Disposition, EffectiveKnobs, EffectiveSessionParameters, KnobRefusal, Knobs, SessionParameters,
-    TunableValues,
+    Disposition, EffectiveSessionParameters, KnobRefusal, SessionParameters, TunableValues,
 };
 #[cfg(test)]
 use weaver_traits::Message;
@@ -163,34 +162,13 @@ fn judge_decode(
     }
 }
 
-/// **This binary's elections, per charter section 13.8 and `weaver-spu-Spec`
-/// section 8.** Each parameter is `Frozen` with its value compiled in, or
-/// `OperatorTunable` and read from `decoder.tunable_values` at admit. The
-/// election is the builder's and the composition root states it rather than
-/// hiding it, so changing one is this line and a recompile.
-///
-/// This deployment freezes every one. A deployment iterating on an agent flips
-/// the parameters it is moving to `OperatorTunable` and sets them in the
-/// agent's declaration, which is the loop the disposition mechanism exists for, and a
-/// production build freezes them back so no declaration can move them.
-const KNOBS: Knobs = Knobs {
-    temperature: Disposition::Frozen(0.7),
-    top_k: Disposition::Frozen(40),
-    top_p: Disposition::Frozen(0.95),
-    repetition_penalty: Disposition::Frozen(1.1),
-    repetition_window: Disposition::Frozen(64),
-    // **The seed is the run's own as of 2026-08-20**, per `weaver-spu-Spec`
-    // section 8. Frozen, one binary drew one trajectory per task however
-    // many times it ran, so a distribution over a task had no draws to
-    // gather. The rest of the surface stays frozen beside it: a
-    // distribution gathered while temperature or the filters varied would
-    // report the sampler rather than the task.
-    seed: Disposition::OperatorTunable,
-};
-
-/// The context capacity and the per-turn generation ceiling, elected the same
-/// way. The ceiling is the stop condition's backstop for a model that never
-/// emits a stop token.
+/// **This binary's session-parameter elections, per charter section 13.8 and
+/// `weaver-spu-Spec` sections 4.2 and 8**: the context capacity and the
+/// generation ceiling. Each is `Frozen` with its value compiled in, or
+/// `OperatorTunable` and read from `decoder.tunable_values` at admit, so
+/// changing one is this line and a recompile. The ceiling is the session's
+/// room: each generation carries its own bound under it. The sampling values
+/// carry no disposition: every generation carries them (section 8).
 ///
 /// **The ceiling is operator-tunable as of 2026-08-19, per issue #218**:
 /// the frozen 512 was the first outside consumer's first wall, a code
@@ -213,12 +191,10 @@ const SESSION_PARAMETERS: SessionParameters = SessionParameters {
 /// What this load runs with, resolved once from the declaration.
 #[derive(Debug, Clone, Copy)]
 struct Effective {
-    knobs: EffectiveKnobs,
     session: EffectiveSessionParameters,
     /// The probability field's declared depth where its election stood,
-    /// per `weaver-spu-Spec` section 7.5. Resolved at admit beside the
-    /// knobs, because it is judged against the sampling cutoff that
-    /// resolve produces and it stands for the residency the same way.
+    /// per `weaver-spu-Spec` section 7.5. Resolved at admit and judged at
+    /// each generation against the `top_k` that generation carries.
     field_depth: Option<u32>,
     /// The re-feed drive's permission, per `weaver-spu-PRD` section 13.14:
     /// admin's member, resolved at admit beside the elections because it is
@@ -235,7 +211,7 @@ struct Effective {
     readout_elected: bool,
 }
 
-/// Resolve both sets against what the declaration supplied.
+/// Resolve the session parameters against what the declaration supplied.
 ///
 /// **Called before the admit takes a device.** A parameter this binary left
 /// tunable with nothing supplied for it, or a count supplied as a fraction or
@@ -248,7 +224,6 @@ fn resolve_effective(supplied: &TunableValues) -> Result<Effective, KnobRefusal>
         refeed_permission: false,
         column_permission: false,
         readout_elected: false,
-        knobs: KNOBS.resolve(supplied)?,
         session: SESSION_PARAMETERS.resolve(supplied)?,
     })
 }
@@ -398,6 +373,7 @@ fn finish_refeed(
 /// section 6, the turn's delta being the one span this measurement covers.
 fn render_measurement(
     resident: &Resident,
+    blocks: Option<&weaver_spu::decoder::backend::Blocks>,
     input_tokens: &[TokenId],
     generated: &weaver_spu::decoder::session::Generated,
     delta_text_len: usize,
@@ -459,7 +435,7 @@ fn render_measurement(
     let members = measurement
         .as_object()
         .expect("the measurement is built as an object literal");
-    lead_with_adapter(resident.adapter(), members)
+    lead_with_adapter(resident.adapter(), blocks, members)
 }
 
 /// **The adapter identity leads every generation's measurement, written
@@ -469,17 +445,26 @@ fn render_measurement(
 /// the f32 scale to f64. The members follow in the map's order, each written
 /// by serde_json into the one buffer, so an empty map still closes a valid
 /// object. The generic members never carry `adapter`.
+///
+/// **The `engine` and `device` blocks follow the adapter**, per Spec section
+/// 6, spliced as the bytes the session rendered once, so a generation's
+/// blocks are its Open answer's byte for byte and their `f32` members are
+/// never widened through a generic value.
 fn lead_with_adapter(
     adapter: Option<&weaver_spu::lora::RecordedAdapter>,
+    blocks: Option<&weaver_spu::decoder::backend::Blocks>,
     members: &serde_json::Map<String, serde_json::Value>,
 ) -> String {
     debug_assert!(
-        !members.contains_key("adapter"),
-        "the typed adapter is the measurement's only adapter member"
+        !members.contains_key("adapter")
+            && !members.contains_key("engine")
+            && !members.contains_key("device"),
+        "the typed adapter and the rendered blocks are the measurement's only such members"
     );
     let mut rendered = b"{\"adapter\":".to_vec();
     let written =
         weaver_spu::lora::RecordedAdapter::write_member(adapter, &mut rendered).and_then(|()| {
+            weaver_spu::decoder::backend::Blocks::write_members(blocks, &mut rendered);
             members.iter().try_for_each(|(key, value)| {
                 rendered.push(b',');
                 serde_json::to_writer(&mut rendered, key)?;
@@ -572,7 +557,6 @@ fn serve_decode(
                 }
                 let outcome = OpenedSession::open(
                     resident,
-                    &effective.knobs,
                     effective.session,
                     &messages,
                     column_ask,
@@ -650,10 +634,24 @@ fn serve_decode(
                 turn,
                 delta,
                 tool_schemas,
+                sampling,
+                max_tokens,
             } => {
-                // The directive carries no sampling value to refuse: the
-                // values reached this crate in the declaration and the engine
-                // took them when the session opened.
+                // **The carried values are judged before the generation
+                // touches the session**, per `weaver-spu-Spec` sections 7.5
+                // and 8: a value outside its range, a bound above the
+                // session's ceiling, or a field the carried `top_k` hides
+                // refuses by name, and the session stays as it was.
+                if let Err(refusal) = weaver_spu::sampling::judge(
+                    &sampling,
+                    Some((max_tokens, effective.session.max_tokens_per_turn as u64)),
+                    effective.field_depth,
+                ) {
+                    if send_refusal(decode, &refusal).is_err() {
+                        return Err(());
+                    }
+                    continue;
+                }
                 let standing = opened.as_mut().expect("at rest implies an open session");
                 // The delta's rendering closes with the assistant turn opened
                 // and unfinished, so the generation completes that turn and
@@ -678,10 +676,12 @@ fn serve_decode(
                         return Err(());
                     }
                 };
+                // The bound is the generation's own, judged above against
+                // the session's ceiling, so it fits the ceiling's `usize`.
                 let stop = StopCondition {
                     stop_tokens: standing.stop.tokens.clone(),
                     terminator: standing.stop.terminator,
-                    max_tokens: effective.session.max_tokens_per_turn,
+                    max_tokens: max_tokens as usize,
                 };
                 let piece_halt = std::cell::Cell::new(false);
                 let mut cancel = SeamCancel {
@@ -772,11 +772,8 @@ fn serve_decode(
                         0
                     }
                 };
-                let generation_seed = weaver_spu::sampling::derived_seed(
-                    effective.knobs.seed,
-                    &turn,
-                    generation_in_turn,
-                );
+                let generation_seed =
+                    weaver_spu::sampling::derived_seed(sampling.seed, &turn, generation_in_turn);
                 // **The column message, one per sampled position where the
                 // ask stood**, per the decode contract's third intermediate:
                 // it carries its position like the field's and closes
@@ -805,7 +802,7 @@ fn serve_decode(
                     },
                     SamplerBuild {
                         seed: generation_seed,
-                        penalty_window: effective.knobs.repetition_window as usize,
+                        sampling,
                     },
                 ) {
                     Ok(generated) => generated,
@@ -859,8 +856,13 @@ fn serve_decode(
                     Stopped::Cancelled | Stopped::CapacityReached => Finish::Stopped,
                     Stopped::LimitReached => Finish::Length,
                 };
-                let measurement =
-                    render_measurement(resident, &delta_tokens, &generated, delta_text.len());
+                let measurement = render_measurement(
+                    resident,
+                    standing.session.blocks(),
+                    &delta_tokens,
+                    &generated,
+                    delta_text.len(),
+                );
                 let measurement = match serde_json::value::RawValue::from_string(measurement) {
                     Ok(raw) => raw,
                     Err(_) => {
@@ -873,23 +875,21 @@ fn serve_decode(
                 };
                 // **The request is the model.request content whole**, per the
                 // custody act: the rendered prompt with its template and the
-                // turn's effective sampling, this crate rendering it because
-                // the template and the knobs are this crate's, and the harness
-                // splices it into the request box without reading it. The
-                // values are the effective ones, whichever side set them, per
-                // charter section 13.8: a frozen knob is as visible in the
-                // record as a supplied one.
-                let knobs = effective.knobs;
+                // values this generation carried, this crate rendering it
+                // because the template and the sampler are this crate's, and
+                // the harness splices it into the request box without reading
+                // it. The values are the ones the generation sampled with,
+                // per charter section 13.8 and `weaver-spu-Spec` section 8.
                 let request = match serde_json::value::RawValue::from_string(
                     serde_json::json!({
                         "rendered": delta_text,
                         "template": standing.template,
                         "sampling": {
-                            "temperature": knobs.temperature,
-                            "top_k": knobs.top_k,
-                            "top_p": knobs.top_p,
-                            "repetition_penalty": knobs.repetition_penalty,
-                            "repetition_window": knobs.repetition_window,
+                            "temperature": sampling.temperature,
+                            "top_k": sampling.top_k,
+                            "top_p": sampling.top_p,
+                            "repetition_penalty": sampling.repetition_penalty,
+                            "repetition_window": sampling.repetition_window,
                             // **Both seeds**, per `weaver-spu-Spec` section
                             // 8.5. `seed` keeps the meaning it always had,
                             // the declared run seed, so every record
@@ -897,20 +897,15 @@ fn serve_decode(
                             // correctly. `generation_seed` is what this
                             // generation drew from, recorded so a re-entry
                             // can be checked rather than supplied.
-                            "seed": knobs.seed,
+                            "seed": sampling.seed,
                             "generation_seed": generation_seed,
                         },
                         // **The bound the generation ran under**, per
                         // `weaver-spu-Spec` section 8 and charter section
-                        // 13.6. A `finish` of `length` is otherwise
-                        // explained by a number living in this binary's
-                        // composition root or in an operator's file and
-                        // readable from no record, so a re-feed cannot
-                        // reproduce where the cut fell. These are the
-                        // resolved values this crate holds at the
-                        // generation rather than the declared ones an
-                        // instruction carried, on the same disposition
-                        // rule the sampling block follows. It rides the
+                        // 13.6: the `max_tokens` it carried. A `finish` of
+                        // `length` is otherwise explained by a number the
+                        // loop sent and no record holds, so a re-feed
+                        // cannot reproduce where the cut fell. It rides the
                         // request rather than the measurement because a
                         // bound is an input-side fact, which is the
                         // template identity's own ground.
@@ -973,6 +968,7 @@ fn serve_decode(
                 turn,
                 rendered,
                 path,
+                sampling,
             } => {
                 // **The re-feed drive**, per `weaver-spu-PRD` section 13.14
                 // and `weaver-spu-Spec` section 4.6: the recorded rendered
@@ -993,6 +989,18 @@ fn serve_decode(
                 // registry's second arm.
                 if path.is_empty() {
                     if send_refusal(decode, &TokenRefusal::RefeedPathEmpty).is_err() {
+                        return Err(());
+                    }
+                    continue;
+                }
+                // **The recorded generation's values are judged as a
+                // generation's are**, per `weaver-spu-Spec` sections 7.5 and
+                // 8, before anything is appended. A re-feed carries no bound:
+                // it runs the length of its recorded path.
+                if let Err(refusal) =
+                    weaver_spu::sampling::judge(&sampling, None, effective.field_depth)
+                {
+                    if send_refusal(decode, &refusal).is_err() {
                         return Err(());
                     }
                     continue;
@@ -1058,11 +1066,8 @@ fn serve_decode(
                         0
                     }
                 };
-                let generation_seed = weaver_spu::sampling::derived_seed(
-                    effective.knobs.seed,
-                    &turn,
-                    generation_in_turn,
-                );
+                let generation_seed =
+                    weaver_spu::sampling::derived_seed(sampling.seed, &turn, generation_in_turn);
                 // **The column message, one per sampled position where the
                 // ask stood**, per the decode contract's third intermediate:
                 // it carries its position like the field's and closes
@@ -1091,7 +1096,7 @@ fn serve_decode(
                     },
                     SamplerBuild {
                         seed: generation_seed,
-                        penalty_window: effective.knobs.repetition_window as usize,
+                        sampling,
                     },
                 ) {
                     Ok(generated) => generated,
@@ -1140,8 +1145,13 @@ fn serve_decode(
                     Stopped::Cancelled | Stopped::CapacityReached => Finish::Stopped,
                     Stopped::LimitReached => Finish::Length,
                 };
-                let measurement =
-                    render_measurement(resident, &delta_tokens, &generated, rendered.len());
+                let measurement = render_measurement(
+                    resident,
+                    standing.session.blocks(),
+                    &delta_tokens,
+                    &generated,
+                    rendered.len(),
+                );
                 let measurement = match serde_json::value::RawValue::from_string(measurement) {
                     Ok(raw) => raw,
                     Err(_) => {
@@ -1156,18 +1166,17 @@ fn serve_decode(
                 // the effective values this crate holds, so the re-fed
                 // record is checkable against the source record field for
                 // field, `generation_seed` included.
-                let knobs = effective.knobs;
                 let request = match serde_json::value::RawValue::from_string(
                     serde_json::json!({
                         "rendered": rendered,
                         "template": standing.template,
                         "sampling": {
-                            "temperature": knobs.temperature,
-                            "top_k": knobs.top_k,
-                            "top_p": knobs.top_p,
-                            "repetition_penalty": knobs.repetition_penalty,
-                            "repetition_window": knobs.repetition_window,
-                            "seed": knobs.seed,
+                            "temperature": sampling.temperature,
+                            "top_k": sampling.top_k,
+                            "top_p": sampling.top_p,
+                            "repetition_penalty": sampling.repetition_penalty,
+                            "repetition_window": sampling.repetition_window,
+                            "seed": sampling.seed,
                             "generation_seed": generation_seed,
                         },
                         "stop": {
@@ -1734,29 +1743,19 @@ fn dispatch(
                     });
                 }
             };
-            // **The field's depth is judged here, against the cutoff the
-            // resolve just produced**, per `weaver-spu-Spec` section 7.5.
-            // The sampler truncates before it draws, so top-k puts a real
-            // wall in the field while the reported depth is an artifact of
-            // the reporting, and telling them apart requires reporting past
-            // the wall. Two integers answer it, so it is answered before any
-            // device work rather than at the first turn.
-            if let Some(election) = &decoder.field_election
-                && election.depth < resolved.knobs.top_k
+            // **No sampling value reaches this crate at admit**, per
+            // `weaver-spu-Spec` section 8 and `weaver-harness-spu-contract`
+            // section 2: the harness takes the six names out of the map
+            // before it forwards the instruction, so a name standing here
+            // would be a value arriving by two routes. The field's depth is
+            // judged at each generation against the `top_k` it carries.
+            if let Some(name) = weaver_types::SAMPLING_DEFAULT_NAMES
+                .iter()
+                .find(|name| decoder.tunable_values.contains_key(**name))
             {
                 *position = SeamPosition::AdmitRefused;
-                eprintln!(
-                    "{}",
-                    serde_json::json!({
-                        "refusal": "field_depth_below_cutoff",
-                        "depth": election.depth,
-                        "cutoff": resolved.knobs.top_k,
-                    })
-                );
                 return Payload::Refusal(LifecycleRefusal::ConfigInvalid {
-                    field: Some(weaver_types::FieldName(
-                        "spu-instruction.decoder.field-election.depth".to_string(),
-                    )),
+                    field: Some(weaver_types::FieldName(format!("tunable-values.{name}"))),
                 });
             }
             match residency.admit(

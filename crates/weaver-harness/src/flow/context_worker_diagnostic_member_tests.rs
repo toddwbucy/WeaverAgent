@@ -126,7 +126,7 @@ pub(super) fn control(
         .unwrap();
     let mut source = [
         serde_json::json!({"session":"session","run":"source","sequence":"1","kind":"message.system","payload":{"role":"system","content":[{"type":"text","text":"Read caf\u{e9}."}]}}),
-        serde_json::json!({"session":"session","run":"source","turn":"t-1","sequence":"2","kind":"model.request","payload":{"rendered":"hi","template":"tmpl","sampling":{"seed":37}}}),
+        serde_json::json!({"session":"session","run":"source","turn":"t-1","sequence":"2","kind":"model.request","payload":{"rendered":"hi","template":"tmpl","sampling":crate::flow::context::test_sampling_record()}}),
         serde_json::json!({"session":"session","run":"source","turn":"t-1","sequence":"3","kind":"model.measurement","payload":{"input_tokens":[1,2],"output_tokens":[3],"model":"art","weights_hash":"h"}}),
     ];
     source[1]["turn"] = serde_json::json!(turn);

@@ -113,7 +113,10 @@ impl<'a> ResidencyComposition<'a> {
             || resources.spu_child().is_some()
             || startup.original_enter.as_ref().is_some_and(|original| {
                 !original.adopted_by(context)
-                    || request.instruction != original.envelope().enter().spu_instruction
+                    || request.instruction
+                        != crate::lifecycle::admitted_instruction(
+                            &original.envelope().enter().spu_instruction,
+                        )
             });
         let enter = context.deadlines.get(PumpDeadline::Enter);
         Self {

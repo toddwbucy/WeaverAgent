@@ -156,13 +156,16 @@ section 13.8's derivation, so a tool round's result re-feeds as its own
 append - carrying the turn's context per apex section 5.2 and that
 generation's delta as canonical messages under the same framing ruling.
 An earlier wording said one per turn, which 13.8 already contradicted and
-the column gloss below made sharp. **It carries no sampling values.**
-The operator-tunable remainder reaches the SPU in the declaration at
-admit, per `weaver-spu-Spec` section 8, because the engine builds its
-sampler once at session open and a value arriving with a token directive
-has no engine to reach. An earlier wording carried them here, which is
-the route this act closes. The SPU appends the delta at the
-resident end and generates, **and the exchange streams as it does**, per
+the column gloss below made sharp. **It carries the generation's sampling
+values**, per `weaver-spu-Spec` section 8 on the operator's ruling of
+2026-11-11: the six values `Sampling` holds (`weaver-types-Spec` section
+4.4) and the generation's bound, each required and none defaulted by the
+SPU. The harness sends the same set with every generation of a turn, the
+declaration's defaults in this act. The SPU refuses, typed, a value outside
+its range before any append, and a bound above the session's ceiling. An
+earlier wording sent the values in the declaration at admit, because the
+engine built its sampler once at session open, and both engines build it
+per generation. The SPU appends the delta at the resident end and generates, **and the exchange streams as it does**, per
 the operator's ruling of 2026-08-11: each token crosses as it is drawn,
 an intermediate message carrying the token's identifier and its rendered
 piece, any number of them and possibly none, ordered, and none closing
@@ -181,7 +184,15 @@ ruling of 2026-08-12, the SPU
 rendering it whole per the custody act of 2026-08-11, its measurement:
 the token identifiers, the per-token signals, the timings, the block
 partition, and, where the residency was admitted with readout elected, the
-residual reductions. Beside the two boxes, as the generation's own typed
+residual reductions. **The measurement also carries the residency's
+`engine` and `device` blocks**, per `weaver-spu-Spec` sections 3.1 and 6
+on the operator's ruling of 2026-11-11: the engine settings whose change
+would invalidate the KV cache, and the device settings, the same bytes in
+every generation of a session. On a backend that renders none yet, both
+members stand and state no block, never omitted (`weaver-spu-Spec` section
+3.1.5). The harness carries them opaque. At the foundation cutover the opened answer carries the same two blocks, per the
+SPU-OPEN amendment (`state-management/weaver-spu-Spec-amendment.md`).
+Beside the two boxes, as the generation's own typed
 members and never inside the measurement, the session's fullness as the
 generation closed: the resident token count and the capacity, added
 2026-08-19 so the loop that elects a flush sees the pressure before the
@@ -265,10 +276,14 @@ section 5.
 permission this exchange cites rather than fixes. It carries the turn's
 context, the recorded generation's rendered contribution - the string
 `model.request` recorded, per the ruling of 2026-08-12, tokenized and
-appended with no family rendering on the way - and the
-recorded token path. The SPU appends the rendered form, runs the forward passes
+appended with no family rendering on the way - the
+recorded token path, and **the recorded generation's `sampling`**, the six
+members its `model.request` recorded and never the declaration's of the day
+(`weaver-spu-Spec` section 8). It carries no bound, since it runs the length
+of its path. The SPU appends the rendered form, runs the forward passes
 along the recorded path, computes each position's draw exactly as
-append-and-generate would - the derived seed, the effective knobs, the
+append-and-generate would - the seed derived from the carried seed, the
+carried values, the
 sampler consuming the distribution - **and appends the recorded token
 whatever the draw said**, so a divergent position stays comparable instead
 of cascading. **It draws no token of its own**: no token intermediate
@@ -437,17 +452,16 @@ list.
 **The harness supplies** the session's identity material at open, the
 column ask where and only where its binding is diagnostic, each
 turn's context and delta, the re-feed's rendered contribution and path
-where and only where its binding is diagnostic, the cancel, the flush, and the
-elision's span.
-The sampling values are not among them and reach the SPU in the
-declaration instead.
+where and only where its binding is diagnostic, each generation's sampling
+values and bound, each re-feed's recorded sampling values, the cancel, the
+flush, and the elision's span.
 
 **The harness guarantees** that it opens no session before residency
 confirms and no second session ever. That one generation is in flight at
-a time. That every ask carries the turn's context and that it supplies no
-sampling value on this seam at all, the operator-tunable remainder having
-crossed once in the declaration and the frozen knobs being the binary's
-and crossing nowhere. That it never touches the
+a time. That every ask carries the turn's context. That every generation
+carries the whole sampling set and its bound, the same set for every
+generation of a turn, and that a re-feed carries its recorded generation's
+values (`weaver-spu-Spec` section 8). That it never touches the
 cache, holds no handle to it, and derives nothing from the session but
 what answers carry. That what it receives it authors faithfully, the
 verbatim emission and the canonical parse both reaching the record, per
@@ -483,7 +497,10 @@ what it observed being worthless in a way no consumer could detect. That
 the measurement is produced
 at production time, positionally paired, absent rather than zeroed, and
 that nothing is retained after the answer: produced, reported, gone. That
-an overflow refuses, typed, and sheds nothing silently. That a refusal
+an overflow refuses, typed, and sheds nothing silently. That it samples
+each generation and re-feed with the values that exchange carried, renders
+those values in its request, and refuses a value outside its range rather
+than clamping it. That a refusal
 leaves the session as the directive found it. That it answers a refusal
 rather than exiting on one. That every token it streamed appears in the
 close's account, so the stream and the answer never disagree about what
@@ -499,6 +516,11 @@ Refusals are typed and enumerable. The cases:
 - the session cannot take the next delta, the overflow named with the
   session's account of itself
 - the delta is malformed for the family, under the framing candidate
+- a carried sampling value or bound is outside its range, the member named
+  (`SamplingOutOfRange`, `weaver-spu-Spec` section 8), before any append
+- where a field is elected, the carried top-k is above its depth or is zero,
+  both numbers named (`FieldBelowCutoff`, `weaver-spu-Spec` section 7.5), before
+  any append
 - the elision's span describes no removable region: it overlaps the
   identity prefix, runs past the resident count, ends before it starts, or
   is empty with its end equal to its start
@@ -516,11 +538,13 @@ Refusals are typed and enumerable. The cases:
 clerks it.** Per the operator's ruling of 2026-08-22. The SPU answers the
 refusal and the harness authors the record's `refusal` event from it, naming
 the ask it sent beside the case the SPU returned, per `weaver-trace-PRD`
-section 3.1's twenty-first kind. **A flush's `keep` and an elision's span
-ride the record because no other event holds them**, and the open's
+section 3.1's twenty-first kind. **A flush's `keep`, an elision's span and
+an append's sampling set and bound ride the record because no other event
+holds them**: a refused generation writes no request. The open's
 messages, the append's delta, and the cancel's turn are named without being
 reproduced, each reaching the record under its own kind before the exchange
-this seam refused. **The SPU authors
+this seam refused. A re-feed's values are named too, because the recorded
+generation's request holds them. **The SPU authors
 nothing**, which is unchanged: this seam has one SPU-originated message and
 it is the fault report.
 
@@ -702,15 +726,14 @@ How each check is implemented is Spec work. What must be checkable:
 - One generation in flight, enforced by refusal rather than queueing.
 - A report is never emitted while an exchange is outstanding, a fault
   arising then being that exchange's typed answer.
-- No sampling value crosses **inbound** on this seam, watched by a capture
-  that fails when one reaches the SPU here. The check was written against the
-  frozen knobs alone, when the tunable remainder travelled here, and it
-  widens to the whole set with the remainder's move to the declaration.
-  **The answer is excluded and the exclusion is the point.** `Generation`
-  carries the request the SPU rendered whole, its template and its effective
-  sampling among it, because the record holds what a turn ran with whichever
-  side set it, per charter section 13.8. A capture reading both directions
-  would fail on that and call the record a leak.
+- Every generation samples with what it carried, watched by a capture of
+  this seam that holds the sampling values and the bound each append and
+  generate carried beside the request the `Generation` answered, and fails
+  where one differs. The seed the generation derives is the request's and
+  never the carrier's (`weaver-spu-Spec` section 8.5). Two generations of
+  one turn carry the same set, and a re-feed carries its recorded
+  generation's, each watched under the perturbation `weaver-spu-Spec`
+  section 10 names.
 
 ## 9. What this document changes elsewhere
 

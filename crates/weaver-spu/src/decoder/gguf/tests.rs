@@ -2,26 +2,26 @@ use super::*;
 use crate::decoder::session::{
     NeverCancels, PositionedSinks, SamplerBuild, Session, StopCondition,
 };
-use crate::sampling::{Disposition, Knobs, TunableValues};
+use crate::sampling::Sampling;
 
 /// A small instruct model that loads on the host in about a second.
 const MODEL: &str = "/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf";
 
-fn frozen() -> EffectiveKnobs {
-    Knobs {
-        temperature: Disposition::Frozen(0.7),
-        top_k: Disposition::Frozen(40),
-        top_p: Disposition::Frozen(0.95),
-        repetition_penalty: Disposition::Frozen(1.1),
-        repetition_window: Disposition::Frozen(64),
-        seed: Disposition::Frozen(11),
+/// The values a generation carries in these tests: the constants the
+/// deploy scripts write into a new declaration.
+fn frozen() -> Sampling {
+    Sampling {
+        temperature: 0.7,
+        top_k: 40,
+        top_p: 0.95,
+        repetition_penalty: 1.1,
+        repetition_window: 64,
+        seed: 11,
     }
-    .resolve(&TunableValues::new())
-    .expect("nothing is tunable")
 }
 
 fn engine(model: &ResidentModel) -> GgufEngine<'_> {
-    GgufEngine::open(model, &frozen(), 512, false).expect("the context opens")
+    GgufEngine::open(model, 512, false).expect("the context opens")
 }
 
 /// The fixture these tests decode against.
@@ -103,7 +103,7 @@ fn the_elected_tap_folds_one_figure_per_layer() {
     let Some(model) = model_or_skip() else { return };
     let layers = model.model().n_layer() as usize;
     assert!(layers > 1, "the fixture must have layers to count");
-    let mut engine = GgufEngine::open(&model, &frozen(), 512, true).expect("the context opens");
+    let mut engine = GgufEngine::open(&model, 512, true).expect("the context opens");
 
     engine
         .decode_at(&[TokenId(9707), TokenId(11), TokenId(1879)], 0)
@@ -176,8 +176,7 @@ fn a_split_prefill_folds_one_set_and_not_one_per_ubatch() {
     let Some(model) = model_or_skip() else { return };
     let layers = model.model().n_layer() as usize;
     let capacity = 2048;
-    let mut engine =
-        GgufEngine::open(&model, &frozen(), capacity, true).expect("the context opens");
+    let mut engine = GgufEngine::open(&model, capacity, true).expect("the context opens");
 
     // Past the 512 micro-batch and inside the capacity above.
     let prompt: Vec<TokenId> = (0..600).map(|_| TokenId(1879)).collect();
@@ -213,7 +212,7 @@ fn the_figures_belong_to_the_last_position_however_it_was_batched() {
     let Some(model) = model_or_skip() else { return };
     let prompt = [TokenId(9707), TokenId(11), TokenId(1879), TokenId(0)];
 
-    let mut batched = GgufEngine::open(&model, &frozen(), 512, true).expect("the context opens");
+    let mut batched = GgufEngine::open(&model, 512, true).expect("the context opens");
     batched.decode_at(&prompt, 0).expect("the prompt decodes");
     let batched = batched
         .take_reduction()
@@ -223,7 +222,7 @@ fn the_figures_belong_to_the_last_position_however_it_was_batched() {
 
     // The same last position, reached one token at a time, so the tap has
     // one column to take and cannot have taken the wrong one.
-    let mut singly = GgufEngine::open(&model, &frozen(), 512, true).expect("the context opens");
+    let mut singly = GgufEngine::open(&model, 512, true).expect("the context opens");
     for (position, token) in prompt.iter().enumerate() {
         singly
             .decode_at(&[*token], position)
@@ -281,9 +280,9 @@ fn the_tap_changes_no_token_on_this_backend() {
     let prompt = [TokenId(9707), TokenId(11), TokenId(1879)];
 
     let draw = |readout: bool| {
-        let mut engine =
-            GgufEngine::open(&model, &frozen(), 512, readout).expect("the context opens");
+        let mut engine = GgufEngine::open(&model, 512, readout).expect("the context opens");
         engine.decode_at(&prompt, 0).expect("the prompt decodes");
+        engine.reseed(11, &frozen(), &[]).expect("the reseed");
         let mut drawn = Vec::new();
         for step in 0..16 {
             let token = engine.sample().expect("a token is drawn");
@@ -302,7 +301,7 @@ fn the_tap_changes_no_token_on_this_backend() {
         "the elected run drew a different sequence, so the tap is not observational"
     );
     // The comparison is only worth something if the elected run tapped.
-    let mut elected = GgufEngine::open(&model, &frozen(), 512, true).expect("the context opens");
+    let mut elected = GgufEngine::open(&model, 512, true).expect("the context opens");
     elected.decode_at(&prompt, 0).expect("the prompt decodes");
     assert!(
         elected.take_reduction().is_some_and(|r| r.layers() > 0),
@@ -345,6 +344,7 @@ fn the_engine_decodes_and_draws() {
     assert!(varies, "the distribution varies rather than being zeroed");
     assert!(finite, "no logit is NaN");
 
+    engine.reseed(11, &frozen(), &[]).expect("the reseed");
     let token = engine.sample().expect("a token is drawn");
     assert!(
         (token.0 as usize) < width,
@@ -397,7 +397,7 @@ fn a_session_over_the_engine_generates() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: frozen(),
             },
         )
         .expect("the generation runs");
@@ -449,6 +449,29 @@ fn a_read_before_any_decode_refuses() {
     assert!(engine.sample().is_err(), "and nothing may be drawn");
 }
 
+/// **Nothing may be drawn before a generation has built the sampler**, per
+/// `weaver-spu-Spec` section 8: the engine opens with no sampler, since no
+/// sampling value reaches it at open, and the first reseed builds the whole
+/// chain from the values the generation carried.
+///
+/// Perturbation: build a chain at open from any fixed values and this
+/// fails, the draw succeeding with values no generation carried.
+#[test]
+fn a_draw_before_any_reseed_refuses() {
+    let Some(model) = model_or_skip() else { return };
+    let mut engine = engine(&model);
+    engine
+        .decode_at(&[TokenId(9707), TokenId(11)], 0)
+        .expect("decode");
+    assert!(engine.distribution().is_ok(), "a distribution stands");
+    assert!(
+        engine.sample().is_err(),
+        "no generation has carried the values to draw with"
+    );
+    engine.reseed(11, &frozen(), &[]).expect("the reseed");
+    assert!(engine.sample().is_ok(), "the carried values build the draw");
+}
+
 /// **A truncation takes the standing distribution with the positions it
 /// removed**, so a draw afterwards cannot come from state that is gone.
 ///
@@ -485,11 +508,11 @@ fn a_truncation_drops_the_standing_distribution() {
 fn a_zero_capacity_refuses() {
     let Some(model) = model_or_skip() else { return };
     assert!(
-        GgufEngine::open(&model, &frozen(), 0, false).is_err(),
+        GgufEngine::open(&model, 0, false).is_err(),
         "a session that can hold nothing is refused at the open"
     );
     assert!(
-        GgufEngine::open(&model, &frozen(), 1, false).is_ok(),
+        GgufEngine::open(&model, 1, false).is_ok(),
         "a positive capacity still opens"
     );
 }
@@ -575,7 +598,9 @@ fn a_reseed_restores_the_window_it_is_handed() {
     let window = [TokenId(9707), TokenId(11)];
 
     engine.decode_at(&prefix, 0).expect("the prefix decodes");
-    engine.reseed(4242, &window).expect("the first reseed");
+    engine
+        .reseed(4242, &frozen(), &window)
+        .expect("the first reseed");
     let first = engine.sample().expect("a token is drawn");
 
     // Rewrite the cache and come back to the same resident state.
@@ -583,7 +608,9 @@ fn a_reseed_restores_the_window_it_is_handed() {
     engine
         .decode_at(&prefix, 0)
         .expect("the prefix decodes again");
-    engine.reseed(4242, &window).expect("the second reseed");
+    engine
+        .reseed(4242, &frozen(), &window)
+        .expect("the second reseed");
     let after = engine.sample().expect("a token is drawn");
 
     assert_eq!(
@@ -593,11 +620,11 @@ fn a_reseed_restores_the_window_it_is_handed() {
     );
 }
 
-/// Knobs that make the penalty window decide the draw: a two-slot window,
+/// Values that make the penalty window decide the draw: a two-slot window,
 /// a penalty that sinks any token in it, and a top-k of one, so each draw
 /// is the best token the window leaves standing and no luck enters.
-fn window_decides() -> EffectiveKnobs {
-    EffectiveKnobs {
+fn window_decides() -> Sampling {
+    Sampling {
         temperature: 0.7,
         top_k: 1,
         top_p: 0.95,
@@ -618,8 +645,7 @@ fn window_decides() -> EffectiveKnobs {
 /// `best / 1e4`, and the window rather than the logits then decides which
 /// of the three a draw takes.
 fn window_fixture(model: &ResidentModel) -> (GgufEngine<'_>, [TokenId; 3]) {
-    let mut engine =
-        GgufEngine::open(model, &window_decides(), 512, false).expect("the context opens");
+    let mut engine = GgufEngine::open(model, 512, false).expect("the context opens");
     engine
         .decode_at(&[TokenId(9707), TokenId(11), TokenId(1879)], 0)
         .expect("the prompt decodes");
@@ -643,52 +669,201 @@ fn window_fixture(model: &ResidentModel) -> (GgufEngine<'_>, [TokenId; 3]) {
     (engine, best)
 }
 
-/// **Each draw of a generation enters the penalty window once**, per
-/// `weaver-spu-Spec` section 8.5: in a generation the window is the last
-/// `repetition_window` resident positions, and on GGUF the engine's own
-/// sample accepts the token it draws.
+impl GgufEngine<'_> {
+    /// Which of three tokens the chain draws from logits that rank them
+    /// first, second and third, every other token at zero, which is a
+    /// reading of the penalty window the model's distribution cannot
+    /// decide.
+    ///
+    /// Under [`window_decides`] a token in the window falls from its logit
+    /// to a ten-thousandth of it, still above every zero, and the top-k of
+    /// one takes the best that stands. So the answer is the first of the
+    /// three outside the window, or the first of them where all three are
+    /// in it. The probe goes through the draw `sample` itself makes, and
+    /// accepts nothing, so it does not move the window it reads.
+    fn probe(&mut self, ranked: [TokenId; 3]) -> TokenId {
+        let width = self.distribution().expect("a distribution stands").len();
+        let mut logits = vec![0.0_f32; width];
+        for (token, logit) in ranked.iter().zip([3.0, 2.0, 1.0]) {
+            logits[token.0 as usize] = logit;
+        }
+        let sampler = self.sampler.as_ref().expect("a reseed built the sampler");
+        GgufEngine::draw(sampler, &mut self.candidates, &logits).expect("the probe draws")
+    }
+}
+
+/// **Each decoded token enters the penalty window once**, per
+/// `weaver-spu-Spec` section 8.5: the window is the last
+/// `repetition_window` resident positions, and on GGUF the decode is
+/// what accepts a token into the chain.
 ///
-/// Read at the seam with two draws from one distribution. The window holds
-/// the best token, so the first draw takes the second best. Counted once,
-/// the two-slot window then holds the best and the second best, and the
-/// second draw takes the third. Counted twice, the first draw fills both
-/// slots and pushes the best out of the window, and the second draw takes
-/// the best again.
+/// The reseed puts the best token in the window, so the draw takes the
+/// second best, and the draw is decoded as a generation decodes it. The
+/// probe then ranks the best, the second and the third. Counted once, the
+/// two-slot window holds the best and the second, and the probe answers
+/// the third. Counted twice, the draw fills both slots and pushes the best
+/// out, and the probe answers the best. Not counted, only the best stands
+/// in the window, and the probe answers the second.
 ///
-/// Perturbation: put `self.sampler.accept(token)` back after the sample in
-/// `GgufEngine::sample` and the second draw answers the best token.
+/// Perturbation: draw through the engine's own sample in
+/// `GgufEngine::sample` (`self.sampler.sample(&self.context, at)`, which
+/// accepts the draw before the decode accepts it again) and the probe
+/// answers the best. Drop the accept from `GgufEngine::decode_at` and it
+/// answers the second.
 #[test]
-fn each_draw_enters_the_penalty_window_once() {
+fn each_decoded_token_enters_the_penalty_window_once() {
     let Some(model) = model_or_skip() else { return };
     let (mut engine, [best, second, third]) = window_fixture(&model);
 
     engine
-        .reseed(4242, &[best])
+        .reseed(4242, &window_decides(), &[best])
         .expect("the window holds the best");
-    let first = engine.sample().expect("the first draw");
+    let draw = engine.sample().expect("a token is drawn");
     assert_eq!(
-        first, second,
+        draw, second,
         "the window sinks the best, so the second is drawn"
     );
-    let next = engine
-        .sample()
-        .expect("the second draw, from the same distribution");
+    engine.decode_at(&[draw], 3).expect("the draw decodes");
     assert_eq!(
-        next, third,
-        "counted once, the window holds the best and the second, so the third \
-         is drawn; the best ({best:?}) means the first draw was counted twice"
+        engine.probe([best, second, third]),
+        third,
+        "counted once, the window holds the best and the draw, so the probe \
+         answers the third. The best ({best:?}) means the draw was counted \
+         twice, and the second ({second:?}) that it was not counted"
     );
 }
 
+/// **A re-feed's window holds the recorded token and not the draw**, per
+/// `weaver-spu-Spec` sections 4.6 and 8.5: the drive draws at each
+/// position and then decodes the recorded token, and what is decoded is
+/// what becomes resident and what enters the window. The native path
+/// reads its window from the resident tail, so this is also where the two
+/// engines meet on a re-fed path.
+///
+/// The reseed leaves the window empty, so the draw takes the best token.
+/// The record departs from it: the third best is decoded in its place.
+/// The probe then ranks the recorded token, the draw and the second.
+/// Holding the recorded token alone, the window sinks it, and the probe
+/// answers the draw. Holding the draw alone, or nothing, the probe answers
+/// the recorded token. Holding both, it answers the second.
+///
+/// Perturbation: draw through the engine's own sample in
+/// `GgufEngine::sample` and drop the accept from `GgufEngine::decode_at`,
+/// which is the engine before this ruling, and the probe answers the
+/// recorded token.
+#[test]
+fn a_refeed_window_holds_the_recorded_token_and_not_the_draw() {
+    let Some(model) = model_or_skip() else { return };
+    let (mut engine, [best, second, third]) = window_fixture(&model);
+
+    engine
+        .reseed(4242, &window_decides(), &[])
+        .expect("the window is empty");
+    let draw = engine.sample().expect("a token is drawn");
+    assert_eq!(
+        draw, best,
+        "nothing stands in the window, so the best is drawn"
+    );
+    let recorded = third;
+    engine
+        .decode_at(&[recorded], 3)
+        .expect("the recorded token decodes");
+    assert_eq!(
+        engine.probe([recorded, draw, second]),
+        draw,
+        "the window holds the recorded token, so the probe answers the draw. \
+         The recorded token ({recorded:?}) means the window holds the draw or \
+         nothing, and the second ({second:?}) that it holds both"
+    );
+}
+
+/// **The crate's draw is the engine's own draw** wherever the decoded
+/// token is the draw, which is every generation. `sample` builds the
+/// candidate array that `llama_sampler_sample` builds and leaves out only
+/// its accept, and `decode_at` accepts the same token one call later, so
+/// a generation draws what it drew before the re-feed ruling of
+/// 2026-11-11. This is the watch that holds the two together if a later
+/// engine changes how its sample builds the array.
+///
+/// One seed and one prompt drive two contexts of one model. The first
+/// runs a generation's own calls: reseed with the tail, then draw and
+/// decode. The twin draws through `llama_sampler_sample` on a chain built
+/// from the same values and seed and restored from the same tail, decoding
+/// the same token. The two answer the same token at every position, and
+/// the same distribution bit for bit, which carries every signal the
+/// session measures from it. The run is longer than the window.
+///
+/// **Two declarations, the frozen penalty on and the penalty off.** A
+/// penalty that acts marks the array unsorted after it, so with the penalty
+/// on the array's own sorted flag never reaches top-k. With the penalty at
+/// 1.0 the penalty sampler returns at once and the flag the crate built
+/// reaches top-k as built, so the second declaration is what reads it.
+///
+/// Perturbation: drop the accept from `GgufEngine::decode_at` and the
+/// first declaration's draws part. Mark the candidate array sorted in
+/// `GgufEngine::draw` and the second's do.
+#[test]
+fn the_crates_draw_is_the_engines_own_draw() {
+    let Some(model) = model_or_skip() else { return };
+    let on = frozen();
+    let off = Sampling {
+        repetition_penalty: 1.0,
+        ..on
+    };
+    for (sampling, declaration) in [(on, "the penalty on"), (off, "the penalty off")] {
+        lockstep_with_the_engine(&model, &sampling, declaration);
+    }
+}
+
+/// One declaration of [`the_crates_draw_is_the_engines_own_draw`].
+fn lockstep_with_the_engine(model: &ResidentModel, sampling: &Sampling, declaration: &str) {
+    let steps = sampling.repetition_window as usize + 32;
+    let prompt = [TokenId(9707), TokenId(11), TokenId(1879)];
+    let seed = 4242;
+
+    let mut ours = GgufEngine::open(model, 512, false).expect("the context opens");
+    ours.decode_at(&prompt, 0).expect("the prompt decodes");
+    ours.reseed(seed, sampling, &prompt).expect("the reseed");
+
+    let mut twin = GgufEngine::open(model, 512, false).expect("the twin opens");
+    twin.decode_at(&prompt, 0)
+        .expect("the twin's prompt decodes");
+    let mut theirs = GgufEngine::chain(sampling, seed);
+    theirs.accept_many(prompt.iter().map(|token| LlamaToken(token.0 as i32)));
+
+    for step in 0..steps {
+        let same = {
+            let a = ours.distribution().expect("a distribution stands");
+            let b = twin.distribution().expect("the twin's distribution stands");
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+        };
+        assert!(
+            same,
+            "with {declaration}, the two distributions differ at step {step}"
+        );
+        let at = twin.logits_at.expect("the twin's logits stand");
+        let engines = theirs.sample(&twin.context, at);
+        let crates = ours.sample().expect("a token is drawn");
+        assert_eq!(
+            crates.0 as i32, engines.0,
+            "with {declaration}, the crate's draw departs from the engine's own at step {step}"
+        );
+        ours.decode_at(&[crates], prompt.len() + step)
+            .expect("the draw decodes");
+        twin.decode_at(&[crates], prompt.len() + step)
+            .expect("the twin decodes the same token");
+    }
+}
+
 /// **A reseed's tail enters the window once per position**, the same
-/// count as a draw, so a window restored from the tail and a window built
-/// by drawing hold the same positions.
+/// count as a decode, so a window restored from the tail and a window built
+/// by decoding hold the same positions.
 ///
 /// The reseed hands a two-token tail to a two-slot window. Counted once,
 /// both stay and the draw takes the third best. Counted twice, the second
 /// token fills both slots and pushes the first out.
 ///
-/// Perturbation: feed each token of the window to `accept_many` twice in
+/// Perturbation: enter each token of the window twice in
 /// `GgufEngine::reseed` and the draw answers the best token.
 #[test]
 fn a_reseed_tail_enters_the_window_once_per_position() {
@@ -696,13 +871,118 @@ fn a_reseed_tail_enters_the_window_once_per_position() {
     let (mut engine, [best, second, third]) = window_fixture(&model);
 
     engine
-        .reseed(4242, &[best, second])
+        .reseed(4242, &window_decides(), &[best, second])
         .expect("the window holds the best two");
     assert_eq!(
         engine.sample().expect("a token is drawn"),
         third,
         "both tail positions stand in the window, so the third is drawn"
     );
+}
+
+/// **Every value this crate sets but flash attention is the engine's own
+/// default**, per `weaver-spu-Spec` sections 3.1.1 and 3.1.2, so setting it
+/// leaves the parameters the engine is handed as they were, whatever a
+/// fixture can observe of it. Flash attention is the one set that changes
+/// them, from AUTO to enabled, and
+/// [`the_engine_settings_move_no_draw`] reads that one in lockstep.
+///
+/// The defaults are read from the engine's own constructors at the pinned
+/// engine, so an engine whose default moves fails here, and the act that
+/// moves the pin measures the new value before it sets it.
+///
+/// Perturbation: set `n_ubatch` 256 in `engine_settings`, or `use_mmap` off
+/// in `placement_params`, and this test fails.
+#[test]
+fn every_set_value_but_flash_attention_is_the_engines_default() {
+    let engines = LlamaContextParams::default();
+    let ours = engine_settings(LlamaContextParams::default());
+    assert_eq!(ours.n_ubatch(), engines.n_ubatch(), "n_ubatch");
+    assert_eq!(ours.type_k(), engines.type_k(), "type_k");
+    assert_eq!(ours.type_v(), engines.type_v(), "type_v");
+    assert_eq!(ours.offload_kqv(), engines.offload_kqv(), "offload_kqv");
+    assert_eq!(ours.op_offload(), engines.op_offload(), "op_offload");
+    assert_eq!(ours.swa_full(), engines.swa_full(), "swa_full");
+    assert_eq!(ours.kv_unified(), engines.kv_unified(), "kv_unified");
+    assert_eq!(ours.n_threads(), engines.n_threads(), "n_threads");
+    assert_eq!(
+        ours.n_threads_batch(),
+        engines.n_threads_batch(),
+        "n_threads_batch"
+    );
+    assert_eq!(
+        engines.flash_attention_policy(),
+        llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_AUTO,
+        "the engine's default is AUTO, which the record cannot state"
+    );
+    assert_eq!(
+        ours.flash_attention_policy(),
+        llama_cpp_sys_2::LLAMA_FLASH_ATTN_TYPE_ENABLED,
+        "flash attention is set enabled, never auto"
+    );
+
+    let models = LlamaModelParams::default();
+    for devices in [1, 2] {
+        let placed = placement_params(&Division::even(64, devices).expect("a division"))
+            .expect("parameters");
+        assert_eq!(placed.use_mmap(), models.use_mmap(), "use_mmap");
+        assert_eq!(placed.use_mlock(), models.use_mlock(), "use_mlock");
+    }
+}
+
+/// **The settings this crate sets move no draw**, per `weaver-spu-Spec`
+/// section 3.1. Flash attention is the one set that hands the engine a
+/// different value, enabled where its default is AUTO, so this reads that
+/// set where it can bear on the logits. The others are the engine's defaults
+/// ([`every_set_value_but_flash_attention_is_the_engines_default`]).
+///
+/// Read on the host lane, in lockstep: two contexts of one model, one opened
+/// as every serving open is and one with the engine's defaults left in
+/// place, each reseeded with one seed and the prompt as its tail, each draw
+/// decoded into both. At every position the two distributions agree bit for
+/// bit, which carries every signal the session measures from them, and the
+/// two draws agree. The run is longer than the window, under the frozen
+/// penalty. A device load goes through the admission, which opens with this
+/// crate's settings only, so the device lanes are read by the instrument
+/// `tests/engine_settings_identity.rs`, run on the tree before the act and
+/// the tree after it.
+///
+/// Perturbation: set flash attention disabled in `engine_settings`, or the K
+/// cache to q8_0, and the two distributions part at the first position.
+#[test]
+fn the_engine_settings_move_no_draw() {
+    let Some(model) = model_or_skip() else { return };
+    let sampling = frozen();
+    let steps = sampling.repetition_window as usize + 32;
+    let prompt = [TokenId(9707), TokenId(11), TokenId(1879)];
+
+    let mut set = GgufEngine::open(&model, 512, false).expect("the context opens");
+    let mut defaults = GgufEngine::open_with(&model, 512, false, |params| params)
+        .expect("the context opens with the engine's defaults");
+    for engine in [&mut set, &mut defaults] {
+        engine.decode_at(&prompt, 0).expect("the prompt decodes");
+        engine.reseed(4242, &sampling, &prompt).expect("the reseed");
+    }
+
+    for step in 0..steps {
+        let same = {
+            let a = set.distribution().expect("a distribution stands");
+            let b = defaults.distribution().expect("a distribution stands");
+            a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+        };
+        assert!(same, "the two distributions differ at step {step}");
+        let drawn = set.sample().expect("a token is drawn");
+        assert_eq!(
+            drawn,
+            defaults.sample().expect("a token is drawn"),
+            "the two draws differ at step {step}"
+        );
+        for engine in [&mut set, &mut defaults] {
+            engine
+                .decode_at(&[drawn], prompt.len() + step)
+                .expect("the draw decodes");
+        }
+    }
 }
 
 /// **A closed engine answers every ask with a refusal**, rather than a
@@ -712,6 +992,7 @@ fn a_closed_engine_serves_nothing() {
     let Some(model) = model_or_skip() else { return };
     let mut engine = engine(&model);
     engine.decode_at(&[TokenId(9707)], 0).expect("decode");
+    engine.reseed(11, &frozen(), &[]).expect("the reseed");
     engine.close();
 
     assert!(engine.distribution().is_err());
@@ -743,4 +1024,284 @@ fn the_parameters_for_a_pair_carry_the_division() {
     assert_eq!(single.split_mode().ok(), Some(LlamaSplitMode::None));
     assert!(single.tensor_split().is_empty());
     assert_eq!(single.main_gpu(), 0);
+}
+
+/// **The record's split is the split the loader was handed**, per
+/// `weaver-spu-Spec` section 3.1.1's `set.tensor_split`: the wrapper reads
+/// no split back, so `gather` is handed [`handed_split`], the one function
+/// [`placement_params`] hands the loader. It is the division's values across
+/// several devices and the empty list on one.
+///
+/// Perturbation: hand the record the division's values on one device too,
+/// and this fails.
+#[test]
+fn the_record_states_the_split_the_loader_was_handed() {
+    for devices in [1, 2, 3] {
+        let division = Division::even(64, devices).expect("a division");
+        let handed = handed_split(&division);
+        let params = placement_params(&division).expect("parameters");
+        assert_eq!(&params.tensor_split()[..handed.len()], handed.as_slice());
+        assert!(
+            params.tensor_split()[handed.len()..]
+                .iter()
+                .all(|v| *v == 0.0)
+        );
+        assert_eq!(handed.is_empty(), devices == 1, "{devices} devices");
+    }
+}
+
+/// **The host residency renders both theta blocks, closed, from what the
+/// engine resolved**, per `weaver-spu-Spec` sections 3.1.1 and 3.1.2. The
+/// order and the writing are pinned by `theta`'s own tests. This reads the
+/// values on a real context: the set values are `engine_settings`', the
+/// read-backs the context's and the model's own, the metadata the model's
+/// RoPE keys in key order, and each mapped engine library digested.
+///
+/// Perturbation: render `rope_type` as `null`, or gather the metadata of
+/// every key, and this fails.
+#[test]
+fn the_host_residency_renders_both_theta_blocks_from_the_engine() {
+    let Some(model) = model_or_skip() else { return };
+    let engine = engine(&model);
+    let blocks = render_blocks(&model, &engine, FlushMechanism::TruncateToPosition)
+        .expect("the blocks render");
+    let block: serde_json::Value = serde_json::from_str(blocks.engine.get()).expect("JSON");
+    let device: serde_json::Value = serde_json::from_str(blocks.device.get()).expect("JSON");
+    let closed = |value: &serde_json::Value, keys: &[&str], what: &str| {
+        let mut have: Vec<&str> = value
+            .as_object()
+            .unwrap_or_else(|| panic!("{what} is an object"))
+            .keys()
+            .map(String::as_str)
+            .collect();
+        let mut want = keys.to_vec();
+        have.sort_unstable();
+        want.sort_unstable();
+        assert_eq!(have, want, "{what}");
+    };
+    closed(
+        &block,
+        &[
+            "backend",
+            "mechanism",
+            "flush",
+            "build",
+            "read_back",
+            "set",
+            "metadata",
+        ],
+        "engine",
+    );
+    closed(
+        &block["build"],
+        &["ggml_version", "ggml_commit", "libraries"],
+        "build",
+    );
+    closed(
+        &block["read_back"],
+        &[
+            "n_ctx",
+            "n_batch",
+            "n_ubatch",
+            "n_layer",
+            "n_ctx_train",
+            "rope_type",
+            "file_type",
+        ],
+        "read_back",
+    );
+    closed(
+        &block["set"],
+        &[
+            "n_ubatch",
+            "type_k",
+            "type_v",
+            "flash_attn",
+            "offload_kqv",
+            "op_offload",
+            "swa_full",
+            "kv_unified",
+            "n_gpu_layers",
+            "split_mode",
+            "main_gpu",
+            "tensor_split",
+        ],
+        "set",
+    );
+    closed(
+        &device,
+        &[
+            "n_threads",
+            "n_threads_batch",
+            "use_mmap",
+            "use_mlock",
+            "mmap_supported",
+            "mlock_supported",
+            "headroom",
+            "cuda_device_order",
+            "devices",
+        ],
+        "device",
+    );
+
+    assert_eq!(block["backend"], "gguf");
+    assert_eq!(block["mechanism"], "gguf-sampler-2");
+    assert_eq!(block["flush"], "truncate-to-position");
+    assert!(
+        block["build"]["ggml_version"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty())
+    );
+    assert!(
+        block["build"]["ggml_commit"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty())
+    );
+    let libraries = block["build"]["libraries"].as_array().expect("a list");
+    assert!(!libraries.is_empty(), "the engine is linked dynamically");
+    let mut previous = String::new();
+    for library in libraries {
+        closed(library, &["path", "sha256"], "a library");
+        let path = library["path"].as_str().expect("a path");
+        let name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("a file name");
+        assert!(
+            name.starts_with("libllama") || name.starts_with("libggml"),
+            "{path}"
+        );
+        assert!(path > previous.as_str(), "path order: {path}");
+        previous = path.to_owned();
+        let digest = library["sha256"].as_str().expect("a digest");
+        assert_eq!(digest.len(), 64);
+        assert!(
+            digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        );
+    }
+
+    let read_back = &block["read_back"];
+    assert_eq!(read_back["n_ctx"], u64::from(engine.context.n_ctx()));
+    assert_eq!(read_back["n_batch"], u64::from(engine.context.n_batch()));
+    assert_eq!(read_back["n_ubatch"], 512);
+    assert_eq!(read_back["n_layer"], u64::from(model.model.n_layer()));
+    assert_eq!(
+        read_back["n_ctx_train"],
+        u64::from(model.model.n_ctx_train())
+    );
+    assert_eq!(read_back["rope_type"], "neox", "qwen2 rotates NeoX-style");
+    assert_eq!(
+        read_back["file_type"],
+        model
+            .model
+            .meta_val_str("general.file_type")
+            .expect("the key")
+    );
+
+    let set = &block["set"];
+    assert_eq!(set["n_ubatch"], 512);
+    assert_eq!(set["type_k"], "f16");
+    assert_eq!(set["type_v"], "f16");
+    assert_eq!(set["flash_attn"], "enabled");
+    assert_eq!(set["offload_kqv"], true);
+    assert_eq!(set["op_offload"], true);
+    assert_eq!(set["swa_full"], true);
+    assert_eq!(set["kv_unified"], false);
+    // The host load offloads nothing and leaves the engine's split mode.
+    assert_eq!(set["n_gpu_layers"], 0);
+    assert_eq!(set["split_mode"], "layer");
+    assert_eq!(set["main_gpu"], 0);
+    assert_eq!(set["tensor_split"], serde_json::json!([]));
+
+    let metadata = block["metadata"].as_array().expect("a list");
+    let keys: Vec<&str> = metadata
+        .iter()
+        .map(|meta| {
+            closed(meta, &["key", "value"], "a metadata pair");
+            meta["key"].as_str().expect("a key")
+        })
+        .collect();
+    let mut sorted = keys.clone();
+    sorted.sort_unstable();
+    assert_eq!(keys, sorted, "key order");
+    assert!(
+        keys.iter()
+            .all(|key| key.starts_with("qwen2.rope.") || *key == "qwen2.context_length"),
+        "{keys:?}"
+    );
+    assert!(keys.contains(&"qwen2.rope.freq_base"), "{keys:?}");
+    let context_length = metadata
+        .iter()
+        .find(|meta| meta["key"] == "qwen2.context_length")
+        .expect("the context length");
+    assert_eq!(
+        context_length["value"],
+        model.model.n_ctx_train().to_string()
+    );
+
+    assert_eq!(device["n_threads"], 4);
+    assert_eq!(device["n_threads_batch"], 4);
+    assert_eq!(device["use_mmap"], true);
+    assert_eq!(device["use_mlock"], false);
+    assert_eq!(device["mmap_supported"], llama_cpp_2::mmap_supported());
+    assert_eq!(device["mlock_supported"], llama_cpp_2::mlock_supported());
+    assert_eq!(device["headroom"], 0);
+    assert_eq!(
+        device["cuda_device_order"],
+        std::env::var("CUDA_DEVICE_ORDER").map_or(serde_json::Value::Null, Into::into)
+    );
+    let devices = device["devices"].as_array().expect("a list");
+    assert_eq!(
+        devices.len(),
+        llama_cpp_2::list_llama_ggml_backend_devices().len()
+    );
+    for listed in devices {
+        closed(listed, &["name", "description", "memory_total"], "a device");
+    }
+}
+
+/// **A context left at AUTO flash attention renders no blocks**, per
+/// `weaver-spu-Spec` section 3.1.1: `set.flash_attn` is `"enabled"` or
+/// `"disabled"`, never auto, because AUTO's choice reaches only the log. A
+/// context opened with the engine's defaults is that context, and the
+/// render refuses it as an engine fault rather than stating a value it does
+/// not know.
+///
+/// Perturbation: render AUTO as `"enabled"`, and this fails.
+#[test]
+fn a_context_left_at_auto_flash_attention_renders_no_blocks() {
+    let Some(model) = model_or_skip() else { return };
+    let defaults = GgufEngine::open_with(&model, 512, false, |params| params)
+        .expect("the context opens with the engine's defaults");
+    let refused = render_blocks(&model, &defaults, FlushMechanism::TruncateToPosition);
+    assert!(
+        matches!(&refused, Err(DecodeFault::Engine { detail }) if detail.contains("never auto")),
+        "{:?}",
+        refused.map(|_| ())
+    );
+}
+
+/// **The `set` members state what the context was handed**, per
+/// `weaver-spu-Spec` section 3.1.1: they are read from the parameters the
+/// context was made with (`theta::ContextSet::of`), not from the constants
+/// that built them. A context handed a q8_0 K cache states q8_0, and the
+/// members it was not handed differently stay as `engine_settings` set them.
+///
+/// Perturbation: read `type_k` in `ContextSet::of` as a constant f16, and
+/// this fails.
+#[test]
+fn the_set_members_state_what_the_context_was_handed() {
+    let Some(model) = model_or_skip() else { return };
+    let handed = GgufEngine::open_with(&model, 512, false, |params| {
+        engine_settings(params).with_type_k(KvCacheType::Q8_0)
+    })
+    .expect("the context opens with a q8_0 K cache");
+    let blocks = render_blocks(&model, &handed, FlushMechanism::TruncateToPosition)
+        .expect("the blocks render");
+    let block: serde_json::Value = serde_json::from_str(blocks.engine.get()).expect("JSON");
+    assert_eq!(block["set"]["type_k"], "q8_0");
+    assert_eq!(block["set"]["type_v"], "f16");
+    assert_eq!(block["set"]["flash_attn"], "enabled");
 }

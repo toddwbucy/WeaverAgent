@@ -849,6 +849,14 @@ before it reads unchanged. On the Native container the tokenizer replaces
 before the SPU sees bytes and no mark is made, per that section, so there an
 unmarked U+FFFD may be the tokenizer's.
 
+**The engine and device blocks join the measurement 2026-11-11 and change nothing
+here**, per `weaver-spu-Spec` sections 3.1 and 6 on the operator's ruling of that
+date. They are the SPU's content inside the spliced measurement, so this crate learns
+no member name, shapes nothing and adds no kind. The `load` event does not carry them,
+because the harness authors it before the SPU starts. A line written before them lacks
+the two members, which reads as those settings being unrecorded and never as a
+default.
+
 ```graph
 node: trace-splice-or-shape
 kind: assertion

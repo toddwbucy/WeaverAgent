@@ -205,6 +205,8 @@ fn place_append_review_private_cancel_rejects_an_actual_unsent_reservation_befor
         turn: TurnKey(grant.turn.0.clone()),
         delta: grant.delta.clone(),
         tool_schemas: grant.schemas.clone(),
+        sampling: crate::flow::context::TEST_SAMPLING,
+        max_tokens: 16,
     };
     // Defensive port-boundary call with a real measured grant and real reserved
     // request. The normal context owner withdraws unsent work before this call;

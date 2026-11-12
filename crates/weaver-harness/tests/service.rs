@@ -355,7 +355,7 @@ fn refused_enter_leaves_the_state_at_before_enter() {
                         surprisal_election: false,
                         refeed_permission: false,
                         column_permission: false,
-                        tunable_values: Default::default(),
+                        tunable_values: sampling_defaults(),
                     },
                 },
                 binding: weaver_types::EnterBinding::Serving {
@@ -629,7 +629,7 @@ fn serving_enter(session: &str, bounds: (Option<u64>, Option<u64>)) -> Lifecycle
                     surprisal_election: false,
                     refeed_permission: false,
                     column_permission: false,
-                    tunable_values: Default::default(),
+                    tunable_values: sampling_defaults(),
                 },
             },
             binding: weaver_types::EnterBinding::Serving {
@@ -912,4 +912,20 @@ fn the_service_suite_is_watched_inside_a_user_namespace() {
         !stderr.contains("the harness accepts root alone"),
         "a test skipped for want of root inside the namespace\nstderr:\n{stderr}"
     );
+}
+
+/// The six sampling defaults a serving declaration carries, which the
+/// harness reads at the enter (`weaver-harness-Spec` section 6.1).
+fn sampling_defaults() -> std::collections::BTreeMap<String, f64> {
+    [
+        ("temperature", 0.7),
+        ("top-k", 40.0),
+        ("top-p", 0.95),
+        ("repetition-penalty", 1.1),
+        ("repetition-window", 64.0),
+        ("seed", 11.0),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_string(), value))
+    .collect()
 }

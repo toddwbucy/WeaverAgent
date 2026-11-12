@@ -380,23 +380,32 @@ before this election existed omits the member, and serde fills the default,
 so the two states a reader must keep apart are kept apart in the record
 this crate feeds rather than in this struct.
 
-
-**`tunable_values` is the route `Disposition::OperatorTunable` names.** The SPU
-elects per parameter at its composition root whether a value is compiled in or
-supplied, and this map is where a supplied one arrives. It is keyed by the
-parameter's name and carries a number, which is the shape the SPU's resolve
-already takes, and it covers the sampling knobs and the session parameters
-alike because the election is the same election in both cases.
+**`tunable_values` holds the values of two readers.** It is keyed by the
+parameter's name and carries a number. The session parameters,
+`context-capacity` and `max-tokens-per-turn`, are the SPU's. The SPU elects per
+parameter at its composition root whether a value is compiled in or supplied,
+and this map is where a supplied one arrives, the route
+`Disposition::OperatorTunable` names. The six sampling defaults, `temperature`,
+`top-k`, `top-p`, `repetition-penalty`, `repetition-window` and `seed`, are the
+harness loop's. The loop sends them with every generation, beside a default
+bound that is the session's ceiling as Open states it (`weaver-spu-Spec` section
+8, on the operator's ruling of 2026-11-11). The harness takes the six out of the
+map before it forwards the instruction to the SPU. The grammar did not move with
+the readers: the keys, the map and this section's checks are as they were.
 
 **It is a map rather than a field per parameter, and the reason is which side
-owns the list.** Which parameters a binary leaves tunable is that binary's
-election and changes with a recompile, so a floor type enumerating them would
-have to move whenever a deployment changed its mind, and a declaration naming a
-parameter this binary froze is a fact with no effect rather than an error. The
-map is present always and may be empty, the no-defaulting rule reaching the
-field and not its contents: an empty map is a declaration that supplies
-nothing, and a binary with a tunable parameter and nothing supplied for it
-refuses the load naming the parameter.
+owns the list.** Which session parameters a binary leaves tunable is that
+binary's election and changes with a recompile, so a floor type enumerating them
+would have to move whenever a deployment changed its mind, and a declaration
+naming a session parameter this binary froze is a fact with no effect rather
+than an error. The map is present always and may be empty, the no-defaulting
+rule reaching the field and not its contents: an empty map is a declaration that
+supplies nothing, and a binary with a tunable parameter and nothing supplied for
+it refuses the load naming the parameter. **A serving declaration names all six
+sampling defaults**, or the harness's reader refuses the load naming the one it
+lacks (`weaver-harness-Spec` section 6.1). A diagnostic declaration needs none
+of the six, because its replay carries each recorded generation's values, and
+the harness takes out any it names and uses none of them.
 
 **A value is judged against what the parameter is before the session opens.**
 The map carries `f64` because a configuration's numbers are, and most of what it
@@ -404,7 +413,10 @@ feeds is not a real: `top-k`, the repetition window, the context capacity and
 the per-turn ceiling are counts. So a value bound for a count must be integral,
 non-negative, and inside the range its type can hold, and a value bound for a
 real must be finite. A `NaN` reaching a sampler is a temperature that compares
-false against every bound and an infinity is one no filter clamps.
+false against every bound and an infinity is one no filter clamps. The SPU
+judges the session parameters at resolve. The harness's reader judges the
+sampling defaults at load, by the same rules and against the ranges of
+`weaver-spu-Spec` section 8.
 
 **A bad count is worse than either, and the reason is that the conversion never
 fails.** A float cast to an integer in Rust answers for every input: it
@@ -423,17 +435,19 @@ its field, refused where the declaration is read and before any device work,
 which is the same shape every other malformed field in this section takes. The
 earlier home for this check was the token seam, where the map used to travel and
 where the refusal was `MalformedDelta`, and it moved here with the map rather
-than being invented.
+than being invented. A value a generation carries is judged again by the SPU,
+against its range, as `SamplingOutOfRange` (section 4.4).
 
-**A value here never overrides a frozen parameter.** Frozen means compiled in
-and not carried on the wire, so a name the binary froze is ignored where it
-appears, and the record still reports the effective value whichever side set
-it. That is what keeps a deployment's lock a lock rather than a default.
+**A value here never overrides a frozen session parameter.** Frozen means
+compiled in and not carried on the wire, so a name the binary froze is ignored
+where it appears, and the record still reports the effective value whichever
+side set it. That is what keeps a deployment's lock a lock rather than a default.
 
 **The SPU's fields arrive as one section, and the gate's already did.** Charter
 section 2.1 rules that an organ's fields are named together and cross together,
 and `spu-instruction` is that rule's first application: one declaration admin
-validates, the harness carries uninterpreted, and the SPU consumes.
+validates, the harness carries uninterpreted but for the six sampling defaults
+its loop takes, and the SPU consumes.
 **`decoder` names a role rather than a slot, and `classify` is the second
 role, arriving 2026-08-19 with the act that builds it.** The organ's
 chartered domain is
@@ -2141,15 +2155,30 @@ pub enum TokenDirective {
     AppendAndGenerate {
         turn: TurnKey,
         delta: Vec<Message>,
+        sampling: Sampling,
+        max_tokens: u64,
     },
     ReFeed {
         turn: TurnKey,
         rendered: String,
         path: Vec<u32>,
+        sampling: Sampling,
     },
     Cancel { turn: TurnKey },
     Flush { keep: u64 },
     Elide { from: u64, to: u64 },
+}
+
+/// The values a generation samples with, per `weaver-spu-Spec` section 8.
+/// Every member is required (`deny_unknown_fields`, no `default`). The names
+/// and types are the ones the request's `sampling` block renders.
+pub struct Sampling {
+    pub temperature: f32,
+    pub top_k: u32,
+    pub top_p: f32,
+    pub repetition_penalty: f32,
+    pub repetition_window: u32,
+    pub seed: u64,
 }
 
 pub enum TokenAnswer {
@@ -2193,7 +2222,7 @@ pub enum RefusalRecord {
 #[serde(tag = "ask", rename_all = "snake_case")]
 pub enum TokenAsk {
     Open,
-    AppendAndGenerate,
+    AppendAndGenerate { sampling: Sampling, max_tokens: u64 },
     ReFeed,
     Cancel,
     Flush { keep: u64 },
@@ -2224,6 +2253,23 @@ pub enum TokenRefusal {
     ColumnPermissionAbsent,
     ColumnReadoutUnelected,
     ColumnUndeclared,
+    SamplingOutOfRange { member: SamplingMember },
+    /// An elected field's depth below the generation's `top_k`, or a `top_k`
+    /// of zero, whose cutoff is the whole vocabulary (`weaver-spu-Spec`
+    /// section 7.5). Both numbers ride, because the charter's floor names both.
+    FieldBelowCutoff { depth: u32, top_k: u32 },
+}
+
+/// The carried member a `SamplingOutOfRange` names. `seed` has no arm,
+/// because no seed is out of range.
+#[serde(rename_all = "snake_case")]
+pub enum SamplingMember {
+    Temperature,
+    TopK,
+    TopP,
+    RepetitionPenalty,
+    RepetitionWindow,
+    MaxTokens,
 }
 ```
 
@@ -2242,7 +2288,12 @@ Open                  the messages are the identity prefix, and
                       message.system carries them since the prefix act
 AppendAndGenerate     the delta is authored as the turn's message kinds
                       before the exchange, so a refused append still has
-                      its content in the record
+                      its content in the record. The sampling set and the
+                      bound are carried: a refused generation writes no
+                      request, so no event holds them
+ReFeed                the rendered form, the path and the sampling values
+                      are the recorded generation's, which its request
+                      holds inside the span the replay's recall names
 Cancel                the turn is the envelope's field on every event
 Flush { keep }        carried: no event holds the cut a flush asked for
 Elide { from, to }    carried: no event holds a span that was refused,
@@ -2250,7 +2301,7 @@ Elide { from, to }    carried: no event holds a span that was refused,
                       happened
 ```
 
-**Completing the three would be duplication rather than fidelity**, one fact
+**Completing the named values would be duplication rather than fidelity**, one fact
 in two places with no authority named, which this corpus files as a defect.
 The record is not lossless about the ask and does not claim to be: it is
 complete about the ask's identity and about the values that would otherwise
@@ -2300,11 +2351,16 @@ variant where a reader would otherwise infer which operation ran.
 holds, never the trace, and no directive on this seam removes anything from
 a record.
 
-**The tunable map left this directive in the act that routed it to the
-declaration**, per `weaver-spu-Spec` section 8, so nothing sampling-related
-arrives with a turn and the value discipline that guarded it moved with it to
-section 2. What remains here is a turn's delta, and a delta this seam cannot
-serve is `MalformedDelta` as before.
+**A generation's sampling values ride its directive**, per `weaver-spu-Spec`
+section 8 on the operator's ruling of 2026-11-11: `sampling` and `max_tokens` on
+`AppendAndGenerate`, and the recorded generation's `sampling` on `ReFeed`. They
+arrive typed, so the declaration's `f64` is converted once, in the harness's
+reader at load, under section 2's checks. A value outside its range is
+`SamplingOutOfRange` naming the member, a `top_k` an elected field cannot report
+past is `FieldBelowCutoff` with both numbers, and a delta this seam cannot serve is
+`MalformedDelta` as before. An earlier act moved an untyped tunable map off this
+directive to the declaration, because the engine built its sampler once at
+session open. Both engines build it per generation now.
 
 **`Message` is `weaver-traits`' and is drawn rather than restated.** The decode
 contract's canonical messages are that type, shaped at `weaver-traits-Spec`
@@ -2449,11 +2505,10 @@ section 3.
 The custody act of 2026-08-11 makes `model.request` a spliced payload the SPU
 renders, so this member carries what that event carries, the turn's delta as
 rendered with its template identity and the turn's effective sampling values,
-per the ruling of 2026-08-12, rendered by
-the SPU because the template and the knobs are the SPU's and assembling them in
-the harness would be the transform the splice refuses. It was named `rendered`
-for one act, when only the prompt crossed, and the name narrows to the truth the
-custody act settled.
+per the ruling of 2026-08-12, rendered by the SPU because the template and the
+sampler are the SPU's and assembling them in the harness would be the transform
+the splice refuses. It was named `rendered` for one act, when only the prompt
+crossed, and the name narrows to the truth the custody act settled.
 
 **Spliced JSON and not octets, which is a distinction this crate enforced once
 already.** `RawValue` carries pre-serialized JSON written in place, so the
@@ -2488,17 +2543,18 @@ carried here so the asking loop sees the pressure before it. Plain counts
 with no judgment: when a flush is worth its cost is the loop's business,
 per `weaver-state-PRD` section 2.
 
-**Three cases, each one fact.** `Completed` is the family's stop condition
-reached, the model's own end. `Stopped` is the generation ended from
-outside the model's own signal: the operator's stop directive, or the
-session's context capacity reached mid-generation, the resident-length
-limit named here explicitly as the non-turn limit so the two ceilings
-cannot be read as one. `Length` is the turn's token limit and that limit
-alone, `max-tokens-per-turn` reached, added 2026-08-19 by
-issue #218's evidence: the cap had exited as `Completed`, so a reader of
-the record could not distinguish a finished answer from a cut one, which
-is an ambiguity in the one artifact whose reason for existing is that it
-never lies.
+**Three cases, each one fact.** `Completed` is the family's stop
+condition reached, the model's own end. `Stopped` is the generation
+ended from outside the model's own signal: the operator's stop
+directive, or the session's context capacity reached mid-generation, the
+resident-length limit named here explicitly as the non-turn limit so the
+two ceilings cannot be read as one. `Length` is the generation's token
+bound and that bound alone, the `max_tokens` the generation carried and
+its request records, whose default is the session's ceiling
+(`max-tokens-per-turn`), added 2026-08-19 by issue #218's evidence: the
+cap had exited as `Completed`, so a reader of the record could not
+distinguish a finished answer from a cut one, which is an ambiguity in
+the one artifact whose reason for existing is that it never lies.
 
 **`Finish` is shaped here and `weaver-trace` shapes its own, with the harness
 converting.** That is the arrangement `SessionId` and `SessionRef` already take,

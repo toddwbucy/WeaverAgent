@@ -37,6 +37,7 @@ fn every_registered_family_reports_one_whole_identity_render_and_its_actual_toke
             "model",
             "hash",
             None,
+            None,
             &prepared,
         )
         .unwrap();
@@ -57,6 +58,7 @@ fn every_registered_family_reports_one_whole_identity_render_and_its_actual_toke
             measurement,
             serde_json::json!({
                 "model":"model","weights_hash":"hash","adapter":null,
+                "engine":null,"device":null,
                 "prefix_token_ids":[7,u32::MAX,3],
                 "blocks":[{"label":"identity-prefix","start":0,"end":expected.len()}]
             })
@@ -64,7 +66,7 @@ fn every_registered_family_reports_one_whole_identity_render_and_its_actual_toke
         assert!(opened.request.get().starts_with("{\"rendered\":"));
         assert!(opened.measurement.get().starts_with(
             "{\"model\":\"model\",\"weights_hash\":\"hash\",\"adapter\":null,\
-                 \"prefix_token_ids\":"
+                 \"engine\":null,\"device\":null,\"prefix_token_ids\":"
         ));
         assert!(expected.len() > expected.chars().count());
     }
@@ -110,6 +112,7 @@ fn evidence_rejects_a_count_that_does_not_describe_the_prefill_vector() {
         "m",
         "h",
         None,
+        None,
         &prepared,
     );
     assert!(matches!(result, Err(DecodeFault::Engine { .. })));
@@ -133,6 +136,7 @@ fn open_evidence_escapes_all_identities_and_keeps_an_empty_numeric_token_array()
         "model\"\\\n",
         "hash\"\\\n",
         None,
+        None,
         &prepared,
     )
     .unwrap();
@@ -142,7 +146,7 @@ fn open_evidence_escapes_all_identities_and_keeps_an_empty_numeric_token_array()
     );
     assert_eq!(
         opened.measurement.get(),
-        r#"{"model":"model\"\\\n","weights_hash":"hash\"\\\n","adapter":null,"prefix_token_ids":[],"blocks":[{"label":"identity-prefix","start":0,"end":0}]}"#
+        r#"{"model":"model\"\\\n","weights_hash":"hash\"\\\n","adapter":null,"engine":null,"device":null,"prefix_token_ids":[],"blocks":[{"label":"identity-prefix","start":0,"end":0}]}"#
     );
 }
 
@@ -179,13 +183,14 @@ fn the_open_measurement_carries_the_adapter_identity_beside_the_base() {
         "m",
         "h",
         Some(&adapter),
+        None,
         &prepared,
     )
     .unwrap();
     assert_eq!(
         adapted.measurement.get(),
         format!(
-            r#"{{"model":"m","weights_hash":"h","adapter":{{"artifact":"/models/adapter.gguf","sha256":"{}","scale":0.7}},"prefix_token_ids":[],"blocks":[{{"label":"identity-prefix","start":0,"end":0}}]}}"#,
+            r#"{{"model":"m","weights_hash":"h","adapter":{{"artifact":"/models/adapter.gguf","sha256":"{}","scale":0.7}},"engine":null,"device":null,"prefix_token_ids":[],"blocks":[{{"label":"identity-prefix","start":0,"end":0}}]}}"#,
             "a".repeat(64)
         )
     );
@@ -196,13 +201,68 @@ fn the_open_measurement_carries_the_adapter_identity_beside_the_base() {
         "m",
         "h",
         None,
+        None,
         &prepared,
     )
     .unwrap();
     assert!(
         base.measurement
             .get()
-            .starts_with(r#"{"model":"m","weights_hash":"h","adapter":null,"prefix_token_ids":"#)
+            .starts_with(r#"{"model":"m","weights_hash":"h","adapter":null,"engine":null,"device":null,"prefix_token_ids":"#)
+    );
+}
+
+/// **The Open answer and every generation carry the same theta bytes**, per
+/// Spec section 6: both writers splice the session's rendered blocks after
+/// the adapter, so a generation's `engine` and `device` are its Open
+/// answer's byte for byte, and an `f32` among them is never widened through
+/// a generic value. Without blocks both write `null` (section 3.1.5).
+///
+/// Perturbation: re-encode the blocks through `serde_json::Value` in either
+/// writer, or write them after the prefix in the Open answer, and this fails.
+#[test]
+fn the_open_answer_and_each_generation_carry_the_same_theta_bytes() {
+    use weaver_spu::decoder::backend::Blocks;
+    let raw = |text: &str| serde_json::value::RawValue::from_string(text.into()).unwrap();
+    let blocks = Blocks {
+        engine: raw(r#"{"backend":"gguf","set":{"tensor_split":[0.1,0.9]}}"#),
+        device: raw(r#"{"n_threads":4,"headroom":1073741824}"#),
+    };
+    let prepared = super::placement::PreparedIdentity {
+        rendered: String::new(),
+        tokens: vec![],
+    };
+    let opened = open_evidence(
+        SessionId("s".into()),
+        OpenFacts {
+            prefix_tokens: 0,
+            capacity: 0,
+            generation_limit: 0,
+            terminal_tokens: 1,
+        },
+        "t",
+        "m",
+        "h",
+        None,
+        Some(&blocks),
+        &prepared,
+    )
+    .unwrap();
+    let rest = serde_json::json!({"model": "m"});
+    let generation = super::lead_with_adapter(None, Some(&blocks), rest.as_object().unwrap());
+    let theta = concat!(
+        r#","engine":{"backend":"gguf","set":{"tensor_split":[0.1,0.9]}},"#,
+        r#""device":{"n_threads":4,"headroom":1073741824},"#
+    );
+    assert_eq!(
+        opened.measurement.get(),
+        format!(
+            r#"{{"model":"m","weights_hash":"h","adapter":null{theta}"prefix_token_ids":[],"blocks":[{{"label":"identity-prefix","start":0,"end":0}}]}}"#
+        )
+    );
+    assert_eq!(
+        generation,
+        format!(r#"{{"adapter":null{theta}"model":"m"}}"#)
     );
 }
 
@@ -269,6 +329,7 @@ fn opened_with_encoded_size(wanted: usize) -> weaver_types::TokenAnswer {
                 "family",
                 "model",
                 "hash",
+                None,
                 None,
                 &prepared,
             )
