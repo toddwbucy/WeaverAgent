@@ -54,6 +54,7 @@ pub(crate) trait ReplaySeat {
         turn: &TurnKey,
         rendered: String,
         path: Vec<u32>,
+        sampling: weaver_types::Sampling,
     ) -> Result<Option<weaver_types::Generation>, TurnError>;
     fn flush(&mut self, keep: u64) -> Result<Option<(u64, u64)>, TurnError>;
     fn elide(&mut self, from: u64, to: u64) -> Result<Option<(u64, u64)>, TurnError>;
@@ -91,8 +92,9 @@ impl ReplaySeat for crate::engine::Ports<'_> {
         turn: &TurnKey,
         rendered: String,
         path: Vec<u32>,
+        sampling: weaver_types::Sampling,
     ) -> Result<Option<weaver_types::Generation>, TurnError> {
-        self.refeed(turn, rendered, path).map(Some)
+        self.refeed(turn, rendered, path, sampling).map(Some)
     }
     fn flush(&mut self, keep: u64) -> Result<Option<(u64, u64)>, TurnError> {
         Ok(self.flush(keep))
@@ -114,6 +116,8 @@ struct SourceGeneration {
     rendered: String,
     template: String,
     sampling: serde_json::Value,
+    /// The six members of `sampling` the re-feed carries.
+    carried: weaver_types::Sampling,
     input_tokens: Vec<u32>,
     output_tokens: Vec<u32>,
     model: String,
@@ -182,10 +186,14 @@ fn reproduce(seat: &mut impl ReplaySeat, edit: Edit) -> Result<bool, TurnError> 
 /// The walk, whole: ask, group, establish identity, re-feed, compare,
 /// close. Returns only on a channel-level failure the service cannot
 /// survive: every outcome of the replay itself is the record's.
+///
+/// `field_depth` is the load's elected field depth, where the field stands,
+/// judged against every recorded `top_k` at input identity.
 pub(crate) fn drive(
     seat: &mut impl ReplaySeat,
     reader_elected: bool,
     declared_artifact: &str,
+    field_depth: Option<u32>,
 ) -> Result<(), TurnError> {
     // **The bracket opens first**, per `weaver-diagnostic-Spec` section 4:
     // a diagnostic-trace opens every bracket with `replay.opened`, which is
@@ -247,6 +255,26 @@ pub(crate) fn drive(
             ),
         );
     }
+    // **Every recorded `top_k` is judged against the elected depth here**,
+    // per `diagnostic-replay-loop` section 3, step 1: a generation whose
+    // re-feed the SPU would refuse as `FieldBelowCutoff` fails input identity
+    // before any forward pass, naming both numbers.
+    if let Some(depth) = field_depth {
+        for (turn_key, generations) in &turns {
+            for source in generations {
+                let top_k = source.carried.top_k;
+                if weaver_types::field_below_cutoff(depth, top_k) {
+                    return refuse_identity(
+                        seat,
+                        format!(
+                            "turn {turn_key} records top_k {top_k}, and the elected field \
+                             depth {depth} cannot report past it"
+                        ),
+                    );
+                }
+            }
+        }
+    }
     let identity = ReplayIdentity {
         replayed_session: seat.session_name(),
         model: ModelId(first.model.clone()),
@@ -279,40 +307,47 @@ pub(crate) fn drive(
             return Ok(());
         }
         for source in generations {
-            let refed =
-                match seat.refeed(&turn, source.rendered.clone(), source.output_tokens.clone()) {
-                    Ok(Some(generation)) => generation,
-                    Ok(None) => {
-                        seat.replay_turn_stopped(&turn, weaver_trace::StopReason::Directive)?;
-                        return Ok(());
-                    }
-                    // Every exit past the open closes the bracket, the serving
-                    // close's own rule: the record channel is the sink and may
-                    // still hold what the decode channel lost.
-                    Err(TurnError::ChannelLost) => {
-                        // Best-effort: service is ending on the loss below,
-                        // and a close that does not land changes nothing.
-                        let _ = seat.replay_turn_stopped(&turn, weaver_trace::StopReason::Fault);
-                        return Err(TurnError::ChannelLost);
-                    }
-                    // A seam refusal or fault mid-replay ends the pass where it
-                    // stopped: the refusal is already authored inside the
-                    // bracket, the bracket closes stopped, and no
-                    // `replay.closed` follows - the not-ended outcome is the
-                    // absence of one, per `weaver-diagnostic-Spec` section 3.
-                    Err(error) => {
-                        let reason = match error {
-                            TurnError::Refused { .. } => weaver_trace::StopReason::Refused,
-                            _ => weaver_trace::StopReason::Fault,
-                        };
-                        // **The close holds or service ends** (#116): the
-                        // run stands for the operator's leave only over a
-                        // record that took the close.
-                        seat.replay_turn_stopped(&turn, reason)
-                            .map_err(|_| TurnError::ChannelLost)?;
-                        return Ok(());
-                    }
-                };
+            // **The re-feed carries what its recorded generation ran under**,
+            // per `diagnostic-replay-loop` section 2, never the declaration's
+            // defaults.
+            let refed = match seat.refeed(
+                &turn,
+                source.rendered.clone(),
+                source.output_tokens.clone(),
+                source.carried,
+            ) {
+                Ok(Some(generation)) => generation,
+                Ok(None) => {
+                    seat.replay_turn_stopped(&turn, weaver_trace::StopReason::Directive)?;
+                    return Ok(());
+                }
+                // Every exit past the open closes the bracket, the serving
+                // close's own rule: the record channel is the sink and may
+                // still hold what the decode channel lost.
+                Err(TurnError::ChannelLost) => {
+                    // Best-effort: service is ending on the loss below,
+                    // and a close that does not land changes nothing.
+                    let _ = seat.replay_turn_stopped(&turn, weaver_trace::StopReason::Fault);
+                    return Err(TurnError::ChannelLost);
+                }
+                // A seam refusal or fault mid-replay ends the pass where it
+                // stopped: the refusal is already authored inside the
+                // bracket, the bracket closes stopped, and no
+                // `replay.closed` follows - the not-ended outcome is the
+                // absence of one, per `weaver-diagnostic-Spec` section 3.
+                Err(error) => {
+                    let reason = match error {
+                        TurnError::Refused { .. } => weaver_trace::StopReason::Refused,
+                        _ => weaver_trace::StopReason::Fault,
+                    };
+                    // **The close holds or service ends** (#116): the
+                    // run stands for the operator's leave only over a
+                    // record that took the close.
+                    seat.replay_turn_stopped(&turn, reason)
+                        .map_err(|_| TurnError::ChannelLost)?;
+                    return Ok(());
+                }
+            };
             match compare(source, &refed) {
                 Comparison::Matches => {}
                 Comparison::Diverged(divergence) => {
@@ -533,6 +568,7 @@ struct PendingRequest {
     rendered: String,
     template: String,
     sampling: serde_json::Value,
+    carried: weaver_types::Sampling,
 }
 
 fn pair<'a>(event: &'a Recalled, key: &str) -> Option<&'a str> {
@@ -554,11 +590,45 @@ fn request_members(event: &Recalled, turn: &str) -> Result<PendingRequest, Strin
     let sampling = pair(event, "sampling").ok_or_else(|| missing("sampling"))?;
     let sampling: serde_json::Value = serde_json::from_str(sampling)
         .map_err(|_| format!("the sampling of turn {turn} does not parse"))?;
+    let carried =
+        carried_members(&sampling).map_err(|why| format!("the sampling of turn {turn} {why}"))?;
     Ok(PendingRequest {
         rendered,
         template,
         sampling,
+        carried,
     })
+}
+
+/// The six members of a recorded `sampling` block that a re-feed carries,
+/// per `diagnostic-replay-loop` section 2: the block is required whole, and
+/// the members it holds beyond the six, `generation_seed` among them, are the
+/// SPU's own record of the draw and are left to the comparison.
+///
+/// **A member missing or outside its type refuses at input identity**,
+/// before any forward pass, where a default in its place would re-feed under
+/// values the source never ran with.
+fn carried_members(sampling: &serde_json::Value) -> Result<weaver_types::Sampling, String> {
+    const MEMBERS: [&str; 6] = [
+        "temperature",
+        "top_k",
+        "top_p",
+        "repetition_penalty",
+        "repetition_window",
+        "seed",
+    ];
+    let block = sampling
+        .as_object()
+        .ok_or_else(|| "is not an object".to_string())?;
+    let mut six = serde_json::Map::new();
+    for member in MEMBERS {
+        let value = block
+            .get(member)
+            .ok_or_else(|| format!("holds no {member}"))?;
+        six.insert(member.to_string(), value.clone());
+    }
+    serde_json::from_value(serde_json::Value::Object(six))
+        .map_err(|error| format!("does not read as the six members: {error}"))
 }
 
 fn measurement_members(
@@ -586,6 +656,7 @@ fn measurement_members(
         rendered: request.rendered,
         template: request.template,
         sampling: request.sampling,
+        carried: request.carried,
         input_tokens: parse_tokens(input, "input_tokens")?,
         output_tokens,
         model,

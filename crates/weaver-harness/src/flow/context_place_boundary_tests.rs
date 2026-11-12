@@ -843,6 +843,8 @@ fn place_installed_journal_blocks_unreserved_mutations_but_allows_private_grant_
                 turn,
                 delta: vec![],
                 tool_schemas: fx.schemas(),
+                sampling: crate::flow::context::TEST_SAMPLING,
+                max_tokens: 16,
             }),
             "flush" => Some(TokenDirective::Flush { keep: before.0 }),
             "elide" => Some(TokenDirective::Elide {
@@ -858,6 +860,7 @@ fn place_installed_journal_blocks_unreserved_mutations_but_allows_private_grant_
                 turn,
                 rendered: "retained contribution".into(),
                 path: vec![31],
+                sampling: crate::flow::context::TEST_SAMPLING,
             }),
             "cancel" => Some(TokenDirective::Cancel { turn }),
             "private" => None,
@@ -1115,6 +1118,8 @@ fn place_join_defers_raw_append_until_actual_summary_recorded_then_rechecks_owne
         turn: TurnKey("unreserved-summary-wait".into()),
         delta: vec![],
         tool_schemas: fx.schemas(),
+        sampling: crate::flow::context::TEST_SAMPLING,
+        max_tokens: 16,
     };
     assert!(matches!(fx.decode.stage(request).unwrap(), Stage::Queued));
     let raw = summary_bytes(Some(snapshot));
@@ -1249,6 +1254,7 @@ fn place_join_pending_summary_still_checks_other_mutations_and_sends_cancel() {
                 turn,
                 rendered: "retained contribution".into(),
                 path: vec![31],
+                sampling: crate::flow::context::TEST_SAMPLING,
             },
             "cancel" => TokenDirective::Cancel { turn },
             _ => unreachable!(),
@@ -1320,6 +1326,8 @@ fn place_join_pending_and_revoked_summary_keep_decoder_peer_failure_visible() {
                     turn: TurnKey("summary-peer-closed".into()),
                     delta: vec![],
                     tool_schemas: fx.schemas(),
+                    sampling: crate::flow::context::TEST_SAMPLING,
+                    max_tokens: 16,
                 })
                 .unwrap(),
             Stage::Queued
@@ -1389,6 +1397,8 @@ fn place_join_pending_and_revoked_summary_report_the_original_standing_decode_fa
                     turn: TurnKey("summary-standing-failure".into()),
                     delta: vec![],
                     tool_schemas: fx.schemas(),
+                    sampling: crate::flow::context::TEST_SAMPLING,
+                    max_tokens: 16,
                 })
                 .unwrap(),
             Stage::Queued

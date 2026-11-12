@@ -430,6 +430,8 @@ fn decode_send_pressure_preserves_the_series_while_lifecycle_can_answer() {
     let request = TokenDirective::AppendAndGenerate {
         turn: TurnKey("fixture-turn".into()),
         tool_schemas: Vec::new(),
+        sampling: crate::flow::context::TEST_SAMPLING,
+        max_tokens: 16,
         delta: vec![weaver_traits::Message {
             role: weaver_traits::Role::User,
             content: vec![weaver_traits::ContentBlock::Text {

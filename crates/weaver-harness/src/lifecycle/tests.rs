@@ -9,7 +9,7 @@ fn diagnostic_open_retains_each_evidence_cause_and_the_original_refusal() {
     fn drive(
         opened: weaver_types::Opened,
         diagnostic: &mut impl std::io::Write,
-    ) -> Result<(), LifecycleRefusal> {
+    ) -> Result<u64, LifecycleRefusal> {
         use nix::sys::socket::{
             AddressFamily, MsgFlags, SockFlag, SockType, recv, send, socketpair,
         };
@@ -64,7 +64,10 @@ fn diagnostic_open_retains_each_evidence_cause_and_the_original_refusal() {
         measurement: raw(measurement.clone()),
     };
     let mut diagnostic = Vec::new();
-    assert_eq!(drive(valid.clone(), &mut diagnostic), Ok(()));
+    // **The answer's ceiling is what the open returns**, the bound every
+    // generation of the residency then carries (`weaver-harness-Spec`
+    // section 6.1).
+    assert_eq!(drive(valid.clone(), &mut diagnostic), Ok(7));
     assert!(
         diagnostic.is_empty(),
         "a valid Open writes no refusal diagnostic"
@@ -364,6 +367,7 @@ fn entered_run(turn: Option<&str>) -> (Run, OrganChannel, crate::scratch::Scratc
             drain_bound: None,
             wind_down_bound: None,
             leave: None,
+            carried: Some(crate::engine::test_carried()),
             turn_context: weaver_types::TurnContext::Continuous,
         },
         near,
@@ -530,7 +534,7 @@ fn the_declared_election_reaches_the_tee() {
                 surprisal_election: false,
                 refeed_permission: false,
                 column_permission: false,
-                tunable_values: Default::default(),
+                tunable_values: crate::lifecycle::test_tunable_values(),
             },
         },
         binding: weaver_types::EnterBinding::Serving {
@@ -656,7 +660,7 @@ fn a_refused_enter_leaves_its_reason_in_the_record() {
                 surprisal_election: false,
                 refeed_permission: false,
                 column_permission: false,
-                tunable_values: Default::default(),
+                tunable_values: crate::lifecycle::test_tunable_values(),
             },
         },
         binding: weaver_types::EnterBinding::Serving {
@@ -824,7 +828,7 @@ fn the_load_names_the_member_it_was_handed_and_the_composer_serve_set() {
                     surprisal_election: false,
                     refeed_permission: false,
                     column_permission: false,
-                    tunable_values: Default::default(),
+                    tunable_values: crate::lifecycle::test_tunable_values(),
                 },
             },
             binding: weaver_types::EnterBinding::Serving {
@@ -954,7 +958,7 @@ fn an_enter_naming_a_lineage_with_no_member_refuses_before_the_load() {
                 surprisal_election: false,
                 refeed_permission: false,
                 column_permission: false,
-                tunable_values: Default::default(),
+                tunable_values: crate::lifecycle::test_tunable_values(),
             },
         },
         binding: weaver_types::EnterBinding::Serving {
@@ -995,6 +999,226 @@ fn an_enter_naming_a_lineage_with_no_member_refuses_before_the_load() {
     assert!(
         matches!(refusal, LifecycleRefusal::DescriptorsUnusable),
         "{refusal:?}"
+    );
+    let held = std::fs::read_to_string(&sink_path).expect("the sink reads back");
+    assert!(held.is_empty(), "the stream stays clean: {held}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A decoder instruction for the sampling judgment's cases: the fixture
+/// binding, the field elected at `depth` where one is given.
+fn sampling_decoder(
+    tunable_values: std::collections::BTreeMap<String, f64>,
+    depth: Option<u32>,
+) -> weaver_types::DecoderInstruction {
+    weaver_types::DecoderInstruction {
+        model_binding: weaver_types::ModelBinding {
+            artifact: weaver_types::ArtifactRef("unreachable".into()),
+            devices: vec![weaver_types::DeviceOrdinal(0)],
+            adapter: None,
+        },
+        residual_readout_election: false,
+        field_election: depth.map(|depth| weaver_types::FieldElection { depth }),
+        surprisal_election: false,
+        refeed_permission: false,
+        column_permission: false,
+        tunable_values,
+    }
+}
+
+/// **The reader judges the six sampling defaults whole before anything is
+/// authored**, per `weaver-harness-Spec` section 6.1: a whole set reads as
+/// the values every generation carries, and a missing name or a value
+/// outside its range refuses as `ConfigInvalid` naming
+/// `tunable-values.<name>`. Where the field is elected, a `top-k` past its
+/// depth, or zero, refuses on the field's depth with one typed line naming
+/// both numbers (`weaver-spu-Spec` section 7.5), and a `top-k` at the depth
+/// reads with nothing written.
+///
+/// Perturbation: drop the field arm from `judge_sampling_defaults` and the
+/// two depth refusals read. Watched under exactly that removal.
+#[test]
+fn the_sampling_defaults_are_judged_whole_before_the_load() {
+    let mut quiet = Vec::new();
+    assert_eq!(
+        judge_sampling_defaults(&sampling_decoder(test_tunable_values(), None), &mut quiet),
+        Ok(crate::engine::test_carried().sampling),
+        "a whole set reads as the carried values"
+    );
+    assert!(quiet.is_empty(), "a set that reads writes nothing");
+    let named = |name: &str| LifecycleRefusal::ConfigInvalid {
+        field: Some(weaver_types::FieldName(format!("tunable-values.{name}"))),
+    };
+    for name in [
+        "temperature",
+        "top-k",
+        "top-p",
+        "repetition-penalty",
+        "repetition-window",
+        "seed",
+    ] {
+        let mut values = test_tunable_values();
+        values.remove(name);
+        assert_eq!(
+            judge_sampling_defaults(&sampling_decoder(values, None), &mut Vec::new()),
+            Err(named(name)),
+            "a missing {name} refuses by name"
+        );
+    }
+    for (name, value) in [("top-k", 2.5), ("top-p", 1.5), ("repetition-penalty", 0.0)] {
+        let mut values = test_tunable_values();
+        values.insert(name.to_string(), value);
+        assert_eq!(
+            judge_sampling_defaults(&sampling_decoder(values, None), &mut Vec::new()),
+            Err(named(name)),
+            "{name} = {value} refuses by name"
+        );
+    }
+
+    let depth_refusal = Err(LifecycleRefusal::ConfigInvalid {
+        field: Some(weaver_types::FieldName(
+            "spu-instruction.decoder.field-election.depth".to_string(),
+        )),
+    });
+    for (top_k, depth) in [(40.0, 20), (0.0, 40)] {
+        let mut values = test_tunable_values();
+        values.insert("top-k".to_string(), top_k);
+        let mut line = Vec::new();
+        assert_eq!(
+            judge_sampling_defaults(&sampling_decoder(values, Some(depth)), &mut line),
+            depth_refusal,
+            "top-k {top_k} under a field of depth {depth} refuses on the depth"
+        );
+        let line: serde_json::Value =
+            serde_json::from_slice(&line).expect("one typed line on diagnostic");
+        assert_eq!(
+            line,
+            serde_json::json!({
+                "organ": "harness",
+                "refusal": "field_depth_below_cutoff",
+                "depth": depth,
+                "top_k": top_k as u32,
+            })
+        );
+    }
+    let mut at_depth = Vec::new();
+    assert!(
+        judge_sampling_defaults(
+            &sampling_decoder(test_tunable_values(), Some(40)),
+            &mut at_depth
+        )
+        .is_ok(),
+        "a top-k at the field's depth reads"
+    );
+    assert!(at_depth.is_empty());
+}
+
+/// **The admit carries the instruction less the six sampling names and
+/// nothing else changed** (`weaver-harness-spu-contract` section 2): the
+/// session parameters still ride the admit and the classify instruction is
+/// untouched, so the values reach the SPU by one route, the generation.
+///
+/// Perturbation: return the instruction unchanged from
+/// `admitted_instruction` and the six names stand in the admit.
+#[test]
+fn the_admit_carries_no_sampling_name() {
+    let mut values = test_tunable_values();
+    values.insert("context-capacity".to_string(), 4096.0);
+    values.insert("max-tokens-per-turn".to_string(), 128.0);
+    let instruction = weaver_types::SpuInstruction {
+        decoder: sampling_decoder(values, Some(40)),
+        classify: None,
+    };
+    let admitted = admitted_instruction(&instruction);
+    assert_eq!(
+        admitted.decoder.tunable_values.keys().collect::<Vec<_>>(),
+        ["context-capacity", "max-tokens-per-turn"],
+        "only the session parameters ride the admit"
+    );
+    let mut expected = instruction.clone();
+    expected
+        .decoder
+        .tunable_values
+        .retain(|name, _| name == "context-capacity" || name == "max-tokens-per-turn");
+    assert_eq!(admitted, expected, "nothing else in the instruction moves");
+}
+
+/// **A serving enter whose declaration lacks a sampling default refuses
+/// before the load, naming it, with the stream clean** (`weaver-harness-Spec`
+/// section 6.1): every generation of the run would refuse, so the enter does,
+/// before any organ is forked or any record authored.
+///
+/// Perturbation: let `enter` pass a set that does not read and the enter
+/// runs on past the load to the fork of an SPU that does not exist,
+/// refusing `BindFailed`. Watched under exactly that change.
+#[test]
+fn a_serving_enter_lacking_a_sampling_default_refuses_before_the_load() {
+    let dir = crate::scratch::dir(format!(
+        "weaver-harness-sampling-default-{}",
+        std::process::id()
+    ));
+    let socket = dir.join("c.sock");
+    std::fs::remove_file(&socket).ok();
+    let listener = crate::channel::bind_coordination(&socket).expect("bind");
+    let sink_path = dir.join("trace.ndjson");
+    let sink = OwnedFd::from(File::create(&sink_path).expect("sink"));
+    let mut harness = Harness {
+        coordination: listener,
+        organs: OrganBinaries {
+            classify: None,
+            spu: "/nonexistent/weaver-spu".into(),
+            gate: "/nonexistent/weaver-gate".into(),
+        },
+        parameters: OrganParameters::default(),
+        state: ChannelState::BeforeEnter,
+        composer: Some(weaver_trace::LoopIdentity::compiled("test")),
+    };
+    let mut values = test_tunable_values();
+    values.remove("top-p");
+    let payload = weaver_types::EnterPayload {
+        session: SessionId("s-sampling".into()),
+        run: weaver_types::RunId("r-1".into()),
+        spu_instruction: weaver_types::SpuInstruction {
+            classify: None,
+            decoder: sampling_decoder(values, None),
+        },
+        binding: weaver_types::EnterBinding::Serving {
+            gate_instruction: weaver_types::GateInstruction {
+                access_rule: weaver_types::AccessRule {
+                    allowed_uids: Default::default(),
+                    allowed_gids: Default::default(),
+                    denied_uids: Default::default(),
+                },
+            },
+            shell: None,
+        },
+        state_store: weaver_types::StateStore::default(),
+        declaration: String::new(),
+        restore: None,
+        reset: None,
+        stack: Default::default(),
+        boundary: String::new(),
+        cause: weaver_types::Cause { uid: 0 },
+        operator: 1000,
+        library_path: None,
+        drain_bound: None,
+        wind_down_bound: None,
+        state_election: weaver_types::StateElection::default(),
+        turn_context: weaver_types::TurnContext::Continuous,
+    };
+    let refusal = match harness.enter(payload, Some(sink), None) {
+        Err(EnterFailure::BeforeLoad(refusal)) => refusal,
+        Err(EnterFailure::AfterLoad(mut run, refusal)) => {
+            let _ = leave(&mut run, None, false);
+            panic!("a declaration lacking a default reached the load: {refusal:?}");
+        }
+        Ok(_) => panic!("the enter cannot stand with no SPU"),
+    };
+    assert_eq!(
+        refusal,
+        LifecycleRefusal::ConfigInvalid {
+            field: Some(weaver_types::FieldName("tunable-values.top-p".into())),
+        }
     );
     let held = std::fs::read_to_string(&sink_path).expect("the sink reads back");
     assert!(held.is_empty(), "the stream stays clean: {held}");
@@ -1156,7 +1380,7 @@ fn enter_against_a_member_leaving(
                 surprisal_election: false,
                 refeed_permission: false,
                 column_permission: false,
-                tunable_values: Default::default(),
+                tunable_values: crate::lifecycle::test_tunable_values(),
             },
         },
         binding: if diagnostic {
@@ -1437,6 +1661,9 @@ fn enter_against_a_member_leaving(
                         pid: nix::unistd::Pid::from_raw(i32::MAX),
                         last_word: crate::spawn::LastWord::quiet(),
                     });
+                    // No Open stated a ceiling for the SPU that never
+                    // admitted, so the stand-in's run carries the test set.
+                    run.carried = Some(crate::engine::test_carried());
                     let spu_far = spu_far.into_channel();
                     // The SPU answers the wind-down's one generation,
                     // marking it in the order.
@@ -2352,7 +2579,7 @@ fn an_enter_with_no_member_seats_no_prefix() {
                 surprisal_election: false,
                 refeed_permission: false,
                 column_permission: false,
-                tunable_values: Default::default(),
+                tunable_values: crate::lifecycle::test_tunable_values(),
             },
         },
         binding: weaver_types::EnterBinding::Serving {
@@ -2457,7 +2684,7 @@ fn the_declared_elections_reach_the_load_record() {
                     surprisal_election: elected,
                     refeed_permission: false,
                     column_permission: false,
-                    tunable_values: Default::default(),
+                    tunable_values: crate::lifecycle::test_tunable_values(),
                 },
             },
             binding: weaver_types::EnterBinding::Serving {
@@ -2674,6 +2901,15 @@ fn the_diagnostic_enter_forks_no_gate() {
 /// Skips loudly without the fixture and both built binaries. Build the
 /// SPU with the device features first:
 /// `cargo build -p weaver-spu --features cuda,gguf`.
+///
+/// **It needs the worker's cgroup layout too, and fails without it rather
+/// than skipping.** The serving enter opens `tools/` beside the worker's own
+/// `run/` leaf (`weaver-harness-Spec` section 2.2), so a run from a login
+/// session refuses the gate's arm `BoundaryUnverified` before the turn. An
+/// unprivileged run stands the layout in a delegated user scope
+/// (`systemd-run --user --scope -p Delegate=yes`): make `worker/run` and
+/// `worker/tools` under the scope's cgroup, move the shell into `worker/run`,
+/// and run the test from there.
 #[test]
 fn the_turn_rehearses_on_the_device() {
     let fixture = std::path::Path::new("/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf");
@@ -2738,17 +2974,15 @@ fn the_turn_rehearses_on_the_device() {
                 surprisal_election: false,
                 refeed_permission: false,
                 column_permission: false,
-                // The deployed root's three operator-tunables, required
-                // at admit since the seed act of 2026-08-19. The empty
-                // map this carried predates that election and refused
-                // every rehearsal since, invisibly behind the env gate.
-                tunable_values: [
-                    ("max-tokens-per-turn".to_string(), 4096.0),
-                    ("context-capacity".to_string(), 4096.0),
-                    ("seed".to_string(), 11.0),
-                ]
-                .into_iter()
-                .collect(),
+                // The deployed root's two session parameters, beside the six
+                // sampling defaults the reader takes out before the admit
+                // (`weaver-harness-Spec` section 6.1).
+                tunable_values: {
+                    let mut values = crate::lifecycle::test_tunable_values();
+                    values.insert("max-tokens-per-turn".to_string(), 4096.0);
+                    values.insert("context-capacity".to_string(), 4096.0);
+                    values
+                },
             },
         },
         binding: weaver_types::EnterBinding::Serving {
@@ -9408,7 +9642,7 @@ fn containment_an_undelivered_unwind_sweep_is_its_own_fault() {
 fn opening_requires_the_complete_paired_answer_and_not_a_measurement() {
     let opened = r#"{"kind":"opened","body":{"session":"paired-open","prefix_tokens":1,"capacity":4096,"generation_limit":128,"terminal_tokens":1,"request":{"rendered":"x","template":"t"},"measurement":{"model":"m","weights_hash":"h","adapter":null,"engine":null,"device":null,"prefix_token_ids":[7],"blocks":[{"label":"identity-prefix","start":0,"end":1}]}}}"#;
     let cases = [
-        (opened, Ok(())),
+        (opened, Ok(128)),
         (r#"{"kind":"opened"}"#, Err(LifecycleRefusal::NoResidency)),
         (
             r#"{"kind":"opened","body":{"prefix_tokens":20,"capacity":4096,"generation_limit":128}}"#,
@@ -9475,7 +9709,7 @@ fn diagnostic_open_uses_the_same_evidence_corpus_and_rejects_wrong_echo() {
             Err(LifecycleRefusal::NoResidency)
         };
         assert_eq!(
-            open_session(&decode, SessionId("s".into()), vec![], false),
+            open_session(&decode, SessionId("s".into()), vec![], false).map(|_| ()),
             expected,
             "{}",
             case["name"]

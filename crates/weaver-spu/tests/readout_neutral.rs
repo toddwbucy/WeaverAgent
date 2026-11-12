@@ -42,7 +42,7 @@ use weaver_spu::decoder::backend::TokenId;
 use weaver_spu::decoder::session::{NeverCancels, PositionedSinks, SamplerBuild, StopCondition};
 use weaver_spu::readout::ReadoutElection;
 use weaver_spu::residency::{Headroom, Residency};
-use weaver_spu::sampling::EffectiveKnobs;
+use weaver_spu::sampling::Sampling;
 use weaver_types::{ArtifactRef, DeviceOrdinal, ModelBinding};
 
 /// The device tests across this crate bind a card and read device-global
@@ -123,7 +123,7 @@ fn artifact() -> Option<PathBuf> {
 /// One generation under a declaration, answering what was drawn and what the
 /// tap folded.
 ///
-/// **The knobs are a real declaration rather than greedy.** A greedy draw
+/// **The values are a real declaration rather than greedy.** A greedy draw
 /// takes an argmax, which a small perturbation has to overturn to be seen,
 /// and the charter's clause is about the declaration an operator writes.
 /// Sampling at a fixed seed reads the distribution's values and not only
@@ -132,7 +132,7 @@ fn draw(resident: &weaver_spu::residency::Resident, seed: u64) -> (Vec<TokenId>,
     let prefix = resident
         .tokenize("Explain, in a short paragraph, why the sky looks blue.")
         .expect("the prompt tokenizes");
-    let knobs = EffectiveKnobs {
+    let sampling = Sampling {
         temperature: 0.7,
         top_k: 40,
         top_p: 0.95,
@@ -140,9 +140,7 @@ fn draw(resident: &weaver_spu::residency::Resident, seed: u64) -> (Vec<TokenId>,
         repetition_window: 64,
         seed,
     };
-    let mut session = resident
-        .open_session(&knobs, 4096)
-        .expect("the session opens");
+    let mut session = resident.open_session(4096).expect("the session opens");
     session.open(&prefix).expect("the prefix decodes");
     let eos = resident
         .declared_eos()
@@ -161,10 +159,7 @@ fn draw(resident: &weaver_spu::residency::Resident, seed: u64) -> (Vec<TokenId>,
                 field: None,
                 on_column: &mut |_, _| {},
             },
-            SamplerBuild {
-                seed,
-                penalty_window: 64,
-            },
+            SamplerBuild { seed, sampling },
         )
         .expect("the generation runs");
     (

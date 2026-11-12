@@ -13,6 +13,7 @@ pub(super) fn receive(root: &std::path::Path, mode: &str, decode: &OwnedFd) -> T
         turn: weaver_types::TurnKey("t-1".into()),
         rendered: rendered(),
         path: vec![3],
+        sampling: crate::flow::context::TEST_SAMPLING,
     };
     let original = serde_json::to_vec(&expected).unwrap();
     assert_eq!(preamble.bytes, original.len() as u64);

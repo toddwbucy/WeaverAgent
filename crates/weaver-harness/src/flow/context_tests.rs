@@ -119,6 +119,7 @@ fn admission_constructor_preserves_failure_origin_and_closes_unadmitted_handles(
             "run".into(),
             42,
             config(),
+            crate::flow::context::TEST_SAMPLING,
             AbsoluteBound::after(100, 5).unwrap(),
             &mut clock,
         );
@@ -173,6 +174,7 @@ impl Fixture {
             "run".into(),
             42,
             declaration,
+            crate::flow::context::TEST_SAMPLING,
             AbsoluteBound::after(100, remaining_enter_ns).unwrap(),
             &mut clock,
         )

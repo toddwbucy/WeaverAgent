@@ -1,82 +1,88 @@
 //! conforms: spu-disposition-compels-election
 //! conforms: spu-knob-set-includes-the-seed
-//! conforms: spu-frozen-values-never-cross
 //! conforms: spu-effective-values-recorded
 //! conforms: spu-seed-derives-per-generation
 //!
-//! Sampling and the dispositions, per `weaver-spu-Spec` section 8.
+//! Sampling, the carrier and the session parameters' dispositions, per
+//! `weaver-spu-Spec` section 8.
 //!
-//! **Every knob carries a [`Disposition`], elected at the worker's composition
-//! root.** A knob is `Frozen` with its value compiled into the binary, or
-//! `OperatorTunable` and routed from the agent's configuration at load. The
-//! machinery beneath takes a plain value and never learns which side supplied
-//! it, which is what makes the two dispositions cost the same and a change
-//! between them one line and a recompile.
+//! **Every generation carries the values it samples with**, per the
+//! operator's ruling of 2026-11-11. `AppendAndGenerate` carries a
+//! [`Sampling`] and a token bound, and `ReFeed` carries the recorded
+//! generation's [`Sampling`]. [`judge`] refuses a value outside its range
+//! before the generation touches the session, and both engines build the
+//! whole sampler from the carried values at each generation. No sampling
+//! value reaches this crate at admit.
 //!
-//! **A knob left without an election does not compile.** The type carries no
-//! third case and no default, so a bare value where a disposition belongs is a
-//! type error rather than a silent choice:
+//! **The session parameters keep a [`Disposition`], elected at the worker's
+//! composition root.** A parameter is `Frozen` with its value compiled into
+//! the binary, or `OperatorTunable` and routed from the agent's configuration
+//! at load. The machinery beneath takes a plain value and never learns which
+//! side supplied it, which is what makes the two dispositions cost the same
+//! and a change between them one line and a recompile.
+//!
+//! **A parameter left without an election does not compile.** The type
+//! carries no third case and no default, so a bare value where a disposition
+//! belongs is a type error rather than a silent choice:
 //!
 //! Perturbation for the first pin: change a field to its bare type, as in
-//! `pub temperature: f32`, and this stops failing, because a value with no
-//! election then means something. Watched under exactly that change. A `From`
-//! impl does not defeat it, since a struct field takes no implicit conversion,
-//! which is why the field's own type is what carries the compulsion.
+//! `pub context_capacity: u32`, and this stops failing, because a value with
+//! no election then means something. Watched under exactly that change. A
+//! `From` impl does not defeat it, since a struct field takes no implicit
+//! conversion, which is why the field's own type is what carries the
+//! compulsion.
 //!
 //! ```compile_fail
-//! use weaver_spu::sampling::{Disposition, Knobs};
-//! // A value with no election. There is no `From<f32>` and no `Default`, so
+//! use weaver_spu::sampling::{Disposition, SessionParameters};
+//! // A value with no election. There is no `From<u32>` and no `Default`, so
 //! // this cannot mean anything and does not compile.
-//! let knobs = Knobs {
-//!     temperature: 0.7,
-//!     top_k: Disposition::OperatorTunable,
-//!     top_p: Disposition::OperatorTunable,
-//!     repetition_penalty: Disposition::OperatorTunable,
-//!     repetition_window: Disposition::OperatorTunable,
-//!     seed: Disposition::OperatorTunable,
+//! let parameters = SessionParameters {
+//!     context_capacity: 4096,
+//!     max_tokens_per_turn: Disposition::OperatorTunable,
 //! };
 //! ```
 //!
 //! ```compile_fail
-//! use weaver_spu::sampling::Knobs;
+//! use weaver_spu::sampling::SessionParameters;
 //! // Nor is there a default to fall back on.
-//! let knobs = Knobs::default();
+//! let parameters = SessionParameters::default();
 //! ```
 //!
-//! Perturbation for the second pin: derive `Default` on [`Knobs`] and on
-//! [`Disposition`], which needs a third case to default to, and this stops
-//! failing. Watched under exactly that change, and the third case it forces is
-//! the point: a default knob set cannot be built without inventing the
-//! unelected state the type refuses to carry.
+//! Perturbation for the second pin: derive `Default` on [`SessionParameters`]
+//! and on [`Disposition`], which needs a third case to default to, and this
+//! stops failing. Watched under exactly that change, and the third case it
+//! forces is the point: a default parameter set cannot be built without
+//! inventing the unelected state the type refuses to carry.
 //!
-//! **The knob set is a struct literal a doctest reads, and the seed is among
-//! it.** Every member rides its own disposition, so a knob added or dropped
-//! stops the build rather than being noticed later. Perturbation: drop the
-//! `seed` field and this doctest fails on the missing initializer, which is the
-//! membership check working. Watched under exactly that removal. The seed is a
-//! knob for the
-//! first time in this code's lineage: the archived tree carried it as a
-//! hardcoded default and a determinism test and never made it configurable, and
-//! a frozen seed beside a frozen sampling surface is what makes a binary's
-//! declared starting field re-enterable, per apex section 8.
+//! **The carried set is a struct literal a doctest reads, and the seed is
+//! among it.** Every member is named, so a member added to or dropped from
+//! `weaver-types`' [`Sampling`] stops the build rather than being noticed
+//! later. Perturbation: drop the `seed` initializer and this doctest fails on
+//! the missing field, which is the membership check working. Watched under
+//! exactly that removal. The seed is a member for the first time in this
+//! code's lineage: the archived tree carried it as a hardcoded default and a
+//! determinism test and never made it configurable.
 //!
 //! ```
-//! use weaver_spu::sampling::{Disposition, Knobs};
-//! let knobs = Knobs {
-//!     temperature: Disposition::Frozen(0.7),
-//!     top_k: Disposition::Frozen(40),
-//!     top_p: Disposition::Frozen(0.95),
-//!     repetition_penalty: Disposition::Frozen(1.1),
-//!     repetition_window: Disposition::Frozen(64),
-//!     seed: Disposition::Frozen(11),
+//! use weaver_spu::sampling::Sampling;
+//! let carried = Sampling {
+//!     temperature: 0.7,
+//!     top_k: 40,
+//!     top_p: 0.95,
+//!     repetition_penalty: 1.1,
+//!     repetition_window: 64,
+//!     seed: 11,
 //! };
-//! assert_eq!(knobs.tunable_names(), Vec::<&str>::new());
+//! assert_eq!(carried.out_of_range(), None);
 //! ```
-//! conforms: spu-tunables-arrive-in-the-declaration
 
 use std::collections::BTreeMap;
 
-/// How a knob's value is supplied, elected at the composition root.
+pub use weaver_types::Sampling;
+use weaver_types::{SamplingMember, TokenRefusal};
+
+/// How a session parameter's value is supplied, elected at the composition
+/// root.
 ///
 /// Two cases and no third. There is no `Default` and no conversion from a bare
 /// value, which is what makes the election compulsory rather than encouraged.
@@ -95,41 +101,48 @@ impl<T> Disposition<T> {
     }
 }
 
-/// The knob set: temperature, top-k, top-p, the repetition penalty and its
-/// window, and the seed.
-///
-/// **Membership is what the build checks.** The doctest at the module head
-/// reads this literal with every member named, so adding a knob or dropping one
-/// stops that test compiling.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Knobs {
-    pub temperature: Disposition<f32>,
-    pub top_k: Disposition<u32>,
-    pub top_p: Disposition<f32>,
-    pub repetition_penalty: Disposition<f32>,
-    pub repetition_window: Disposition<u32>,
-    pub seed: Disposition<u64>,
-}
-
-/// What a caller must supply for the knobs this binary left tunable, keyed by
-/// name. A tunable knob with no value supplied is a refused decode rather than
-/// a default applied, since a default here would be an election this crate made
-/// on the operator's behalf.
+/// What a caller must supply for the session parameters this binary left
+/// tunable, keyed by name. A tunable parameter with no value supplied is a
+/// refused load rather than a default applied, since a default here would be
+/// an election this crate made on the operator's behalf.
 pub type TunableValues = BTreeMap<String, f64>;
 
-/// The values sampling ran with, whichever side set them.
+/// Judge one generation's carried values before it touches the session, per
+/// `weaver-spu-Spec` sections 7.5 and 8.
 ///
-/// **This is what the record holds.** Reported into `model.request`'s payload,
-/// so a frozen knob is as visible in the record as a tunable one and a replay
-/// reads one list rather than joining two.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct EffectiveKnobs {
-    pub temperature: f32,
-    pub top_k: u32,
-    pub top_p: f32,
-    pub repetition_penalty: f32,
-    pub repetition_window: u32,
-    pub seed: u64,
+/// `bound` is the generation's `max_tokens` beside the session's ceiling, and
+/// is `None` for a re-feed, which carries no bound. `field_depth` is the
+/// elected field's depth, where the field stands.
+///
+/// **The ranges are the floor's [`Sampling::out_of_range`]**, the rule the
+/// harness judges the declaration's defaults by at load, so the early refusal
+/// and this one cannot drift apart. A zero bound is not refused: the grammar
+/// refuses no zero ceiling, and the generation it bounds reaches its limit
+/// before its first draw.
+pub fn judge(
+    sampling: &Sampling,
+    bound: Option<(u64, u64)>,
+    field_depth: Option<u32>,
+) -> Result<(), TokenRefusal> {
+    if let Some(member) = sampling.out_of_range() {
+        return Err(TokenRefusal::SamplingOutOfRange { member });
+    }
+    if let Some((max_tokens, ceiling)) = bound
+        && max_tokens > ceiling
+    {
+        return Err(TokenRefusal::SamplingOutOfRange {
+            member: SamplingMember::MaxTokens,
+        });
+    }
+    if let Some(depth) = field_depth
+        && weaver_types::field_below_cutoff(depth, sampling.top_k)
+    {
+        return Err(TokenRefusal::FieldBelowCutoff {
+            depth,
+            top_k: sampling.top_k,
+        });
+    }
+    Ok(())
 }
 
 /// Resolve one count-valued parameter, judging the value before the cast.
@@ -170,13 +183,8 @@ fn resolve_count<T: Copy>(
     }
 }
 
-/// The session parameters, elected the same way the knobs are.
-///
-/// **A sibling of [`Knobs`] rather than a member of it**, because [`Knobs`] is
-/// the sampling set and its doctest pins that membership: a capacity is not a
-/// sampling knob and adding it there would make the pinned list mean something
-/// else. What the two share is [`Disposition`], which is the mechanism rather
-/// than the set, so both resolve against one supplied map.
+/// The session parameters: the context capacity and the generation ceiling,
+/// each elected by a [`Disposition`] (`weaver-spu-Spec` section 4.2).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SessionParameters {
     pub context_capacity: Disposition<u32>,
@@ -192,7 +200,7 @@ pub struct EffectiveSessionParameters {
 
 impl SessionParameters {
     /// The names of the parameters this binary left tunable, derived from the
-    /// dispositions for the reason [`Knobs::tunable_names`] gives.
+    /// dispositions rather than written beside them, so the two cannot drift.
     pub fn tunable_names(&self) -> Vec<&'static str> {
         let mut names = Vec::new();
         if !self.context_capacity.is_frozen() {
@@ -232,8 +240,8 @@ impl SessionParameters {
 /// Why a resolve refused.
 #[derive(Debug, Clone, PartialEq)]
 pub enum KnobRefusal {
-    /// A knob this binary left tunable was not supplied. Named, because an
-    /// operator meeting it needs to know which one.
+    /// A parameter this binary left tunable was not supplied. Named, because
+    /// an operator meeting it needs to know which one.
     Unsupplied { knob: &'static str },
     /// A value supplied for a count is not one: fractional, negative, or past
     /// what the count's type holds.
@@ -247,80 +255,6 @@ pub enum KnobRefusal {
     /// finiteness at parse, per `weaver-types-Spec` section 2, and which names
     /// are counts is this crate's election so this is where it is judged.
     NotACount { knob: &'static str, supplied: f64 },
-}
-
-impl Knobs {
-    /// The names of the knobs this binary left tunable.
-    ///
-    /// **This is the whole of what crosses the token seam**, per Spec section 8
-    /// and the decode contract's conformance list. A frozen knob's value is
-    /// compiled in and has no reason to travel, and the list being derived from
-    /// the dispositions rather than written beside them is what keeps the two
-    /// from drifting.
-    pub fn tunable_names(&self) -> Vec<&'static str> {
-        let mut names = Vec::new();
-        if !self.temperature.is_frozen() {
-            names.push("temperature");
-        }
-        if !self.top_k.is_frozen() {
-            names.push("top-k");
-        }
-        if !self.top_p.is_frozen() {
-            names.push("top-p");
-        }
-        if !self.repetition_penalty.is_frozen() {
-            names.push("repetition-penalty");
-        }
-        if !self.repetition_window.is_frozen() {
-            names.push("repetition-window");
-        }
-        if !self.seed.is_frozen() {
-            names.push("seed");
-        }
-        names
-    }
-
-    /// Resolve the elections against what the operator supplied.
-    ///
-    /// A frozen knob takes its compiled value and ignores anything supplied
-    /// under its name, which is what frozen means: a supplied value for a
-    /// frozen knob is not an error to report but a fact with no effect, because
-    /// the wire never carried it in the first place.
-    pub fn resolve(&self, supplied: &TunableValues) -> Result<EffectiveKnobs, KnobRefusal> {
-        fn take<T: Copy>(
-            disposition: &Disposition<T>,
-            name: &'static str,
-            supplied: &TunableValues,
-            convert: impl Fn(f64) -> T,
-        ) -> Result<T, KnobRefusal> {
-            match disposition {
-                Disposition::Frozen(value) => Ok(*value),
-                Disposition::OperatorTunable => supplied
-                    .get(name)
-                    .map(|value| convert(*value))
-                    .ok_or(KnobRefusal::Unsupplied { knob: name }),
-            }
-        }
-        Ok(EffectiveKnobs {
-            temperature: take(&self.temperature, "temperature", supplied, |v| v as f32)?,
-            top_k: resolve_count(&self.top_k, "top-k", supplied, 2f64.powi(32), |v| v as u32)?,
-            top_p: take(&self.top_p, "top-p", supplied, |v| v as f32)?,
-            repetition_penalty: take(
-                &self.repetition_penalty,
-                "repetition-penalty",
-                supplied,
-                |v| v as f32,
-            )?,
-            repetition_window: resolve_count(
-                &self.repetition_window,
-                "repetition-window",
-                supplied,
-                2f64.powi(32),
-                |v| v as u32,
-            )?,
-            seed: resolve_count(&self.seed, "seed", supplied, 2f64.powi(64), |v| v as u64)?,
-        })
-    }
 }
 
 /// The seed one generation draws from, per `weaver-spu-Spec` section 8.5.

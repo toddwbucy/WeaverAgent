@@ -52,7 +52,7 @@ use std::process::Command;
 use weaver_spu::decoder::session::{NeverCancels, PositionedSinks, SamplerBuild, StopCondition};
 use weaver_spu::readout::ReadoutElection;
 use weaver_spu::residency::{Headroom, Residency};
-use weaver_spu::sampling::EffectiveKnobs;
+use weaver_spu::sampling::Sampling;
 use weaver_types::{ArtifactRef, DeviceOrdinal, ModelBinding};
 
 /// Longer than the penalty window, so the window wraps inside the run.
@@ -124,7 +124,7 @@ fn record_one_generation_on_the_lane() {
         .expect("the prompt tokenizes");
     // The frozen declaration the host watches use: a real declaration, so
     // the draw reads the distribution's values and not only their order.
-    let knobs = EffectiveKnobs {
+    let sampling = Sampling {
         temperature: 0.7,
         top_k: 40,
         top_p: 0.95,
@@ -132,9 +132,7 @@ fn record_one_generation_on_the_lane() {
         repetition_window: 64,
         seed: SEED,
     };
-    let mut session = resident
-        .open_session(&knobs, 4096)
-        .expect("the session opens");
+    let mut session = resident.open_session(4096).expect("the session opens");
     session.open(&prefix).expect("the prefix decodes");
     let terminator = resident
         .declared_eos()
@@ -157,7 +155,7 @@ fn record_one_generation_on_the_lane() {
             },
             SamplerBuild {
                 seed: SEED,
-                penalty_window: 64,
+                sampling,
             },
         )
         .expect("the generation runs");

@@ -58,7 +58,7 @@ use llama_cpp_2::token::data_array::LlamaTokenDataArray;
 
 use crate::decoder::backend::{Backend, Blocks, DecodeFault, FlushMechanism, TokenId};
 use crate::decoder::gguf_tap;
-use crate::sampling::EffectiveKnobs;
+use crate::sampling::Sampling;
 use llama_cpp_2::model::params::{LlamaModelParams, LlamaSplitMode};
 
 use crate::division::Division;
@@ -376,7 +376,11 @@ fn engine_settings(params: LlamaContextParams) -> LlamaContextParams {
 /// than by this file remembering them.
 pub struct GgufEngine<'a> {
     context: LlamaContext<'a>,
-    sampler: LlamaSampler,
+    /// The chain, built at each generation's reseed from the values it
+    /// carried (`weaver-spu-Spec` section 8). `None` until the first
+    /// generation builds one, so a draw before any reseed faults rather than
+    /// drawing under values nobody sent.
+    sampler: Option<LlamaSampler>,
     /// The draw's candidate array, one entry per vocabulary token, refilled
     /// at each draw. Held so a draw after the first allocates nothing: the
     /// chain's filters shorten the array and leave its capacity standing.
@@ -387,10 +391,6 @@ pub struct GgufEngine<'a> {
     /// a buffer nothing filled.
     logits_at: Option<i32>,
     closed: bool,
-    /// The knobs the chain is rebuilt from at each generation, per
-    /// `weaver-spu-Spec` section 8.5. Held because the chain holds nothing
-    /// between generations and is therefore built rather than reset.
-    knobs: EffectiveKnobs,
     /// The residual tap's state where the load elected readout, per Spec
     /// section 7, and `None` where it did not.
     ///
@@ -421,24 +421,21 @@ impl Drop for GgufEngine<'_> {
 }
 
 impl<'a> GgufEngine<'a> {
-    /// Open a context over a resident model and build its sampler from the
-    /// binary's resolved knobs.
+    /// Open a context over a resident model.
     ///
-    /// **The knobs are taken once, as the effective values**, resolved at the
-    /// composition root per Spec section 8, so nothing here re-reads a
-    /// disposition or learns which side supplied a value. The chain is
-    /// rebuilt from them at every generation's reseed, per section 8.5.
+    /// **No sampling value is taken here.** Each generation carries its own,
+    /// per Spec section 8, and the chain is built from them at that
+    /// generation's reseed, per section 8.5.
     /// **The readout election arrives here and nowhere later.** `cb_eval`
     /// is a context parameter, so a tap can only be installed as the context
     /// is created, which is why the election travels from admit rather than
     /// from the turn that would like it.
     pub fn open(
         model: &'a ResidentModel,
-        knobs: &EffectiveKnobs,
         capacity: u32,
         readout: bool,
     ) -> Result<GgufEngine<'a>, DecodeFault> {
-        Self::open_with(model, knobs, capacity, readout, engine_settings)
+        Self::open_with(model, capacity, readout, engine_settings)
     }
 
     /// [`GgufEngine::open`] with the context settings a parameter, so the
@@ -447,7 +444,6 @@ impl<'a> GgufEngine<'a> {
     /// [`engine_settings`].
     fn open_with(
         model: &'a ResidentModel,
-        knobs: &EffectiveKnobs,
         capacity: u32,
         readout: bool,
         settings: impl FnOnce(LlamaContextParams) -> LlamaContextParams,
@@ -531,41 +527,40 @@ impl<'a> GgufEngine<'a> {
             }
         };
 
-        let sampler = Self::chain(knobs, knobs.seed);
-
         Ok(GgufEngine {
             context,
-            sampler,
+            sampler: None,
             candidates: LlamaTokenDataArray::new(Vec::new(), false),
             logits_at: None,
             closed: false,
-            knobs: *knobs,
             tap,
             set,
         })
     }
 
-    /// The sampler chain, built from the knobs and one seed.
+    /// The sampler chain, built from one generation's carried values and its
+    /// derived seed.
     ///
     /// **The chain order is the one llama.cpp's own samplers assume**:
     /// penalties, then the truncating filters, then temperature, then the
     /// draw. A distribution sampler last is what makes the seed mean
     /// something.
     ///
-    /// One function so the open and the per-generation rebuild cannot
-    /// drift: a chain built two ways in two places is two samplers that
-    /// agree until someone edits one of them.
-    fn chain(knobs: &EffectiveKnobs, seed: u64) -> LlamaSampler {
+    /// One function so every generation's build is the same build. The two
+    /// counts convert without loss because the carried set's range keeps
+    /// them below 2^31 (`weaver-types`' `Sampling::out_of_range`), judged
+    /// before any generation reaches this.
+    fn chain(sampling: &Sampling, seed: u64) -> LlamaSampler {
         LlamaSampler::chain_simple([
             LlamaSampler::penalties(
-                knobs.repetition_window as i32,
-                knobs.repetition_penalty,
+                sampling.repetition_window as i32,
+                sampling.repetition_penalty,
                 0.0,
                 0.0,
             ),
-            LlamaSampler::top_k(knobs.top_k as i32),
-            LlamaSampler::top_p(knobs.top_p, 1),
-            LlamaSampler::temp(knobs.temperature),
+            LlamaSampler::top_k(sampling.top_k as i32),
+            LlamaSampler::top_p(sampling.top_p, 1),
+            LlamaSampler::temp(sampling.temperature),
             // **Both halves fold in**, per `weaver-spu-Spec` section 8.5's
             // derivation. This sampler takes a `u32` where the derivation
             // answers a `u64` and the native path consumes the whole of
@@ -668,7 +663,7 @@ impl Backend for GgufEngine<'_> {
     /// The chain accumulates its penalty window from the tokens it
     /// accepts, so a chain built new has an empty one and would leave a
     /// generation's opening tokens unpenalised against what preceded them.
-    /// The caller supplies the resident tail the knobs describe and it is
+    /// The caller supplies the resident tail the carried penalty describes and it is
     /// fed straight in, which is the same window read from the state
     /// rather than carried in the sampler. The native path already read
     /// the tail directly, so one source makes the two engines agree by
@@ -678,14 +673,19 @@ impl Backend for GgufEngine<'_> {
     /// in the chain, which reseeded the draw while clearing the window and
     /// is the coupling this retires. A chain that is built rather than
     /// reset has nothing to clear.
-    fn reseed(&mut self, seed: u64, window: &[TokenId]) -> Result<(), DecodeFault> {
+    fn reseed(
+        &mut self,
+        seed: u64,
+        sampling: &Sampling,
+        window: &[TokenId],
+    ) -> Result<(), DecodeFault> {
         if self.closed {
             return Err(Self::engine_fault("the engine is closed"));
         }
         let ids = Self::engine_ids(window)?;
-        let mut sampler = Self::chain(&self.knobs, seed);
+        let mut sampler = Self::chain(sampling, seed);
         Self::enter_window(&mut sampler, &ids)?;
-        self.sampler = sampler;
+        self.sampler = Some(sampler);
         Ok(())
     }
 
@@ -730,13 +730,16 @@ impl Backend for GgufEngine<'_> {
         // sample built. In a re-feed it is the recorded token, which is what
         // the native path's window reads from its resident tail. A decode
         // outside a generation's loop (the prefill, the terminator, a
-        // flush's re-prefill) enters a chain the next reseed replaces.
+        // flush's re-prefill) enters a chain the next reseed replaces, or
+        // none where no generation has built one yet.
         //
         // **A fault from here on follows a decode that ran**: a refused
         // accept, or the tap's commit below. The tokens stand in the cache,
         // and the window holds what it accepted. The fault poisons the
         // session, which closes this engine, so nothing draws from either.
-        Self::enter_window(&mut self.sampler, &ids)?;
+        if let Some(sampler) = self.sampler.as_mut() {
+            Self::enter_window(sampler, &ids)?;
+        }
         self.logits_at = Some(last as i32);
         // **The tap's fault is raised by the decode it happened in.** The
         // callback cannot fail the graph without abandoning the rest of it,
@@ -775,7 +778,11 @@ impl Backend for GgufEngine<'_> {
         // a re-feed it is the recorded token, which the draw may disagree
         // with.
         let logits = self.context.get_logits_ith(at);
-        Self::draw(&self.sampler, &mut self.candidates, logits)
+        let sampler = self
+            .sampler
+            .as_ref()
+            .ok_or_else(|| Self::engine_fault("no generation has built a sampler to draw from"))?;
+        Self::draw(sampler, &mut self.candidates, logits)
     }
 
     fn truncate_to(&mut self, position: usize) -> Result<(), DecodeFault> {

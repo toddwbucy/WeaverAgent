@@ -156,6 +156,7 @@ fn diagnostic_spu_child() {
         turn,
         rendered,
         path,
+        ..
     } = take!(decode.as_raw_fd())
     else {
         panic!("replay must re-feed")

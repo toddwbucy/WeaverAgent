@@ -542,7 +542,7 @@ impl<'a> Setup<'a> {
         session: SessionId,
         identity: Vec<weaver_traits::Message>,
         column_ask: bool,
-    ) -> Result<(), LifecycleRefusal> {
+    ) -> Result<u64, LifecycleRefusal> {
         decode
             .send_managed(
                 &TokenDirective::Open {

@@ -285,6 +285,23 @@ pub struct Ports<'a> {
     /// The run's turn-context election, from the enter, lent at the grant
     /// ([`Ports::turn_context`]).
     turn_context: weaver_types::TurnContext,
+    /// What every generation this seat runs carries, the run's own lent at
+    /// the grant. `None` where the run opened no serving session.
+    carried: Option<Carried>,
+}
+
+/// What every generation of a serving residency carries, per
+/// `weaver-harness-Spec` section 6.1: the declaration's six sampling
+/// defaults, read once at the enter, and the session's ceiling as the Open
+/// answer stated it in `generation_limit`.
+///
+/// **One value for the residency.** The seeding turn, every loop turn and
+/// every tool round of a turn send this same set, so two generations of one
+/// turn differ only in the seed the SPU derives for each.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Carried {
+    pub(crate) sampling: weaver_types::Sampling,
+    pub(crate) max_tokens: u64,
 }
 
 /// Why a turn did not complete. A refusal the seam typed is the session
@@ -363,7 +380,8 @@ impl<'a> Ports<'a> {
     /// fact for [`Ports::seated`] (ADP-4), an argument rather than a default
     /// so that no grant can leave it out, and `turn_context` the run's
     /// election for [`Ports::turn_context`] (#423), an argument for the same
-    /// reason.
+    /// reason. `carried` is the run's carried set, an argument for the same
+    /// reason again.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn grant(
         decode: &'a DecodeChannel,
@@ -382,6 +400,7 @@ impl<'a> Ports<'a> {
         pressure_reported: &'a mut bool,
         seated: bool,
         turn_context: weaver_types::TurnContext,
+        carried: Option<Carried>,
     ) -> Self {
         Ports {
             decode,
@@ -410,6 +429,7 @@ impl<'a> Ports<'a> {
             interrupted_at: std::cell::Cell::new(None),
             seated,
             turn_context,
+            carried,
         }
     }
 
@@ -1933,6 +1953,12 @@ impl<'a> Ports<'a> {
         delta: Vec<Message>,
         stop: &mut StopSlot,
     ) -> Result<weaver_types::Generation, TurnError> {
+        // **The run's carried set rides every generation**, per
+        // `weaver-harness-Spec` section 6.1. A seat holds one wherever a
+        // serving session opened, which is every seat that reaches here, so
+        // its absence is the run's own state broken and ends service the way
+        // an absent seam does.
+        let carried = self.carried.ok_or(TurnError::ChannelLost)?;
         // Append and generate. The delta crosses, the SPU appends it at the
         // resident end, and the stream returns each token before the close.
         self.decode
@@ -1943,6 +1969,8 @@ impl<'a> Ports<'a> {
                 // those rendered bytes until the foundation's placement
                 // owner supplies its exact measured proposal and schemas.
                 tool_schemas: Vec::new(),
+                sampling: carried.sampling,
+                max_tokens: carried.max_tokens,
             })
             .map_err(|_| TurnError::ChannelLost)?;
 
@@ -2019,7 +2047,10 @@ impl<'a> Ports<'a> {
                         // without its delta, which the turn's message kinds
                         // carried into the record before this exchange.
                         self.author_refusal(
-                            weaver_types::TokenAsk::AppendAndGenerate,
+                            weaver_types::TokenAsk::AppendAndGenerate {
+                                sampling: carried.sampling,
+                                max_tokens: carried.max_tokens,
+                            },
                             refusal.clone(),
                             Some(turn),
                         );
@@ -2201,12 +2232,14 @@ impl<'a> Ports<'a> {
         turn: &TurnKey,
         rendered: String,
         path: Vec<u32>,
+        sampling: weaver_types::Sampling,
     ) -> Result<weaver_types::Generation, TurnError> {
         self.decode
             .send_directive(&TokenDirective::ReFeed {
                 turn: turn.clone(),
                 rendered,
                 path,
+                sampling,
             })
             .map_err(|_| TurnError::ChannelLost)?;
 
@@ -2702,6 +2735,25 @@ enum ExchangeWake {
     /// The lower's bound passed from the interrupt of the call out, the
     /// gate not having answered it.
     InterruptBound,
+}
+
+/// The carried set a test lends the seat, where no enter read the defaults
+/// and no Open stated the ceiling: the deploy scripts' constants and a bound
+/// of 64.
+// Test-only hook kept here (#118): the engine and replay suites reach it as `crate::engine`.
+#[cfg(test)]
+pub(crate) fn test_carried() -> Carried {
+    Carried {
+        sampling: weaver_types::Sampling {
+            temperature: 0.7,
+            top_k: 40,
+            top_p: 0.95,
+            repetition_penalty: 1.1,
+            repetition_window: 64,
+            seed: 11,
+        },
+        max_tokens: 64,
+    }
 }
 
 /// The load facts a test lends the seat, where no enter built them.

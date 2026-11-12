@@ -106,7 +106,7 @@ mod device {
     use weaver_spu::readout::ReadoutElection;
     use weaver_spu::residency::{Headroom, Residency, Resident};
     use weaver_spu::sampling::{
-        Disposition, EffectiveKnobs, EffectiveSessionParameters, SessionParameters, TunableValues,
+        Disposition, EffectiveSessionParameters, Sampling, SessionParameters, TunableValues,
     };
     use weaver_types::{ArtifactRef, DeviceOrdinal, ModelBinding, TurnKey};
 
@@ -222,8 +222,9 @@ mod device {
         }
     }
 
-    fn knobs() -> EffectiveKnobs {
-        EffectiveKnobs {
+    /// The set every generation of these tests carries.
+    fn carried() -> Sampling {
+        Sampling {
             temperature: 0.7,
             top_k: 40,
             top_p: 0.95,
@@ -239,9 +240,7 @@ mod device {
             .render_identity(&[text(Role::System, "Answer briefly.")])
             .unwrap();
         let tokens = resident.tokenize(&prefix).unwrap();
-        let mut session = resident
-            .open_session(&knobs(), parameters.context_capacity)
-            .unwrap();
+        let mut session = resident.open_session(parameters.context_capacity).unwrap();
         session.open(&tokens).unwrap();
         OpenedSession::from_open(
             session,
@@ -273,7 +272,7 @@ mod device {
             },
             SamplerBuild {
                 seed,
-                penalty_window: 32,
+                sampling: carried(),
             },
         )
     }
@@ -585,6 +584,8 @@ mod device {
                 turn: TurnKey("placement seam turn".into()),
                 delta: delta.clone(),
                 tool_schemas: schemas.clone(),
+                sampling: carried(),
+                max_tokens: parameters.max_tokens_per_turn as u64,
             });
             let generated = loop {
                 match receive() {
@@ -640,6 +641,8 @@ mod device {
                 turn: TurnKey("placement seam turn".into()),
                 delta: delta.clone(),
                 tool_schemas: schemas.clone(),
+                sampling: carried(),
+                max_tokens: parameters.max_tokens_per_turn as u64,
             });
             let second = loop {
                 match receive() {
@@ -656,7 +659,7 @@ mod device {
             assert_eq!(
                 second_request["sampling"]["generation_seed"],
                 serde_json::json!(weaver_spu::sampling::derived_seed(
-                    knobs().seed,
+                    carried().seed,
                     &TurnKey("placement seam turn".into()),
                     1,
                 ))
@@ -725,7 +728,6 @@ mod device {
 
     fn wire_effective(parameters: EffectiveSessionParameters, refeed: bool) -> crate::Effective {
         crate::Effective {
-            knobs: knobs(),
             session: parameters,
             field_depth: None,
             refeed_permission: refeed,
@@ -752,12 +754,15 @@ mod device {
                 turn: TurnKey("active measure".into()),
                 rendered: prepared.rendered,
                 path: vec![resident.tokenize("one").unwrap()[0].0; 8],
+                sampling: carried(),
             }
         } else {
             TokenDirective::AppendAndGenerate {
                 turn: TurnKey("active measure".into()),
                 delta,
                 tool_schemas: vec![],
+                sampling: carried(),
+                max_tokens: parameters.max_tokens_per_turn as u64,
             }
         };
         let (client, server) = decode_pair();

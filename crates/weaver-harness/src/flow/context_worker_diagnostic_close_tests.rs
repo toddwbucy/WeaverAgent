@@ -38,6 +38,7 @@ pub(super) fn finish_source(decode: &OwnedFd) {
             turn: weaver_types::TurnKey("t-2".into()),
             rendered: "hi".into(),
             path: vec![4],
+            sampling: crate::flow::context::TEST_SAMPLING,
         }
     );
     let mut answer = serde_json::to_value(completed()).unwrap();

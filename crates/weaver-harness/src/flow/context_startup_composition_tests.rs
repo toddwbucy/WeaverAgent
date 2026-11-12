@@ -621,13 +621,16 @@ fn circuit(case: Case) {
                     Err(owner) => panic!("startup finish refused {:?}", owner.stopped()),
                 };
                 if matches!(case, Case::Entered("wrong-spu")) {
-                    let mut instruction = prepared
-                        .original_enter()
-                        .unwrap()
-                        .envelope()
-                        .enter()
-                        .spu_instruction
-                        .clone();
+                    // Stripped as the admit carries it, so the substituted
+                    // artifact is the one difference the check meets.
+                    let mut instruction = crate::lifecycle::admitted_instruction(
+                        &prepared
+                            .original_enter()
+                            .unwrap()
+                            .envelope()
+                            .enter()
+                            .spu_instruction,
+                    );
                     instruction
                         .decoder
                         .model_binding

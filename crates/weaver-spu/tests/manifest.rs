@@ -141,6 +141,20 @@ const TABLE: &[(&str, &[&str], &[&str])] = &[
         &["cuda", "gguf"],
         &["WEAVER_IDENTITY_ARTIFACT", "WEAVER_IDENTITY_OUT"],
     ),
+    // The sampling carrier's record identity, run by name: one turn through
+    // the binary under a lane's mask in the wire shape the variable names,
+    // and the comparison of two records, whose paths are inputs too.
+    (
+        "request_identity.rs",
+        &["cuda", "gguf"],
+        &[
+            "WEAVER_IDENTITY_AFTER",
+            "WEAVER_IDENTITY_ARTIFACT",
+            "WEAVER_IDENTITY_BEFORE",
+            "WEAVER_IDENTITY_OUT",
+            "WEAVER_IDENTITY_SHAPE",
+        ],
+    ),
 ];
 
 /// The prefix `markers.rs` builds its per-family names from.

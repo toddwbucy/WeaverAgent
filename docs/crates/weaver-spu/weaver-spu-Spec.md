@@ -489,6 +489,7 @@ Process section 6 names the two invocations that reach them.
 | `readout_neutral.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_READOUT`, `WEAVER_ARTIFACT_READOUT_LAYERS` |
 | `observed_division.rs` | `cuda` and `gguf` | `WEAVER_ARTIFACT_DIVISION` |
 | `engine_settings_identity.rs` | `cuda` and `gguf` | `WEAVER_IDENTITY_ARTIFACT`, `WEAVER_IDENTITY_OUT` |
+| `request_identity.rs` | `cuda` and `gguf` | `WEAVER_IDENTITY_AFTER`, `WEAVER_IDENTITY_ARTIFACT`, `WEAVER_IDENTITY_BEFORE`, `WEAVER_IDENTITY_OUT`, `WEAVER_IDENTITY_SHAPE` |
 | `lora_proof.rs` | `cuda` and `gguf` | `WEAVER_LORA_BASE`, `WEAVER_LORA_BASE_BLAKE3`, `WEAVER_LORA_ADAPTER`, `WEAVER_LORA_ADAPTER_SHA256`, `WEAVER_LORA_SCALE`, `WEAVER_LORA_DEVICES`, `WEAVER_LORA_ENTRIES`, `WEAVER_LORA_REPORT`, `WEAVER_LORA_PINNED_ID` |
 | `lora_heldout.rs` | `cuda` and `gguf` | `WEAVER_LORA_BASE`, `WEAVER_LORA_BASE_BLAKE3`, `WEAVER_LORA_ADAPTER`, `WEAVER_LORA_ADAPTER_SHA256`, `WEAVER_LORA_SCALE`, `WEAVER_LORA_DEVICES`, `WEAVER_LORA_ENTRIES`, `WEAVER_LORA_REPORT` |
 
@@ -500,9 +501,10 @@ process of its own binary under that binding's
 SPU binary it spawns, as the harness's fork does. The targets run under the lease line
 `CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0,1`, or with no mask. A run with the
 cards hidden (`CUDA_VISIBLE_DEVICES=`) skips every device test, except
-`observed_division.rs`, `lora_proof.rs`, `lora_heldout.rs` and
-`engine_settings_identity.rs`: each is an explicit accelerator instrument run with
-`--ignored`, and each fails by name without its artifacts or its devices.
+`observed_division.rs`, `lora_proof.rs`, `lora_heldout.rs`,
+`engine_settings_identity.rs` and `request_identity.rs`: each is an explicit
+accelerator instrument run with `--ignored`, and each fails by name without its
+artifacts or its devices.
 
 **Two targets name a fixture they do not read, and the first form of this
 table recorded the mention as a read.** `seam.rs` cites `WEAVER_TEST_GGUF` in a
@@ -3048,10 +3050,16 @@ record is then byte-identical to the record before the carrier, with two excepti
 
 The request's `sampling` block and `stop` object keep their members, their order and
 their value types. The `load` event carries no sampling value, and the Open answer does
-not move. The code act reads the identity with the engine-settings device instrument
-(`tests/engine_settings_identity.rs`) on one card and on the pair. It compares the
-tokens, the entropy and surprisal `f32` bits, and the request box byte for byte, which
-the instrument is extended to write.
+not move. The code act reads the identity with the request-identity device instrument
+(`tests/request_identity.rs`) on one card and on the pair. The request box is rendered
+in the binary, so the instrument drives the binary through one admit, one open and one
+generation, and it speaks the wire as raw JSON so that one file runs in the tree before
+the carrier and in the tree after it. It compares, byte for byte, every token frame and
+the closing answer's request box, emission, finish and content, and the measurement
+less its `timings`, which holds the tokens and the entropy and surprisal values.
+Both runs load one build of the engine libraries, because two builds of one engine
+source can differ in their library digests, which the measurement's engine block
+records.
 
 ## 8.5 The seed's derivation
 

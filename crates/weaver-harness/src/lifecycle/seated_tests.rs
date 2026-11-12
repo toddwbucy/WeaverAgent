@@ -289,7 +289,7 @@ fn enter_seated(identity: Option<&'static str>) -> Entered {
                 surprisal_election: false,
                 refeed_permission: false,
                 column_permission: false,
-                tunable_values: Default::default(),
+                tunable_values: crate::lifecycle::test_tunable_values(),
             },
         },
         binding: weaver_types::EnterBinding::Serving {
