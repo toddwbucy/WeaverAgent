@@ -193,12 +193,12 @@ carried, so this exchange gains no power to move what a deployment locked.
 **The sampling values do not cross here.** They ride each generation on the
 decode seam (`weaver-harness-spu-decode-contract` section 2), on the operator's
 ruling of 2026-11-11, and the declaration's map holds the loop's defaults for
-them. The harness takes the six sampling names (`temperature`, `top-k`, `top-p`,
-`repetition-penalty`, `repetition-window`, `seed`) out of the map before it
-forwards the instruction. An instruction that names one refuses at admit, naming
-it, so no value reaches the SPU by two routes. `max-tokens-per-turn` stays in
-the instruction as the session's ceiling. The loop's default bound is that
-ceiling as the Open answer states it (`generation_limit`).
+them. The harness takes the six sampling names `weaver-types-Spec` section 2
+lists out of the map before it forwards the instruction. An instruction that
+names one refuses at admit, naming it, so no value reaches the SPU by two
+routes. The session's ceiling, which the same section names, stays in the
+instruction. The loop's default bound is that ceiling as the Open answer
+states it (`weaver-spu-Spec` section 4.2).
 
 **No exchange carries a path.** The harness sends the instruction it was handed,
 less the sampling defaults its loop holds, and
@@ -311,9 +311,9 @@ this deployment can honor, per `weaver-spu-PRD` sections 13.7, 13.11, and 13.12.
 The readout refuses where the family's engine cannot tap it. The field's depth
 is judged against the sampling cutoff, per `weaver-spu-Spec`'s rule that a depth
 reporting no further than the sampler already cuts cannot distinguish the
-sampler's wall from the reporting's edge. The cutoff is `top_k`, which rides
-each generation (`weaver-spu-Spec` section 8), so the SPU judges it at each
-generation on the decode seam (`FieldBelowCutoff`, zero included). The harness
+sampler's wall from the reporting's edge. The cutoff is the carried top-k,
+which rides each generation (`weaver-spu-Spec` section 8), so the SPU judges
+it at each generation on the decode seam (`FieldBelowCutoff`, zero included). The harness
 judges the declaration's default at load, and a replay's input identity judges
 the recorded ones. It is no longer an admit case. The surprisal is judged
 against nothing and refuses on no ground: it sizes nothing and asks the engine

@@ -158,16 +158,14 @@ generation's delta as canonical messages under the same framing ruling.
 An earlier wording said one per turn, which 13.8 already contradicted and
 the column gloss below made sharp. **It carries the generation's sampling
 values**, per `weaver-spu-Spec` section 8 on the operator's ruling of
-2026-11-11: `sampling` (temperature, top_k, top_p, repetition_penalty,
-repetition_window and seed) and `max_tokens`, the generation's bound, each
-required and none defaulted by the SPU. The harness sends the same set
-with every generation of a turn, the declaration's defaults in this act.
-The SPU refuses, typed, a value outside its range before any append, and
-a `max_tokens` above the session's ceiling. An earlier wording sent the
-values in the declaration at admit, because the engine built its sampler
-once at session open, and both engines build it per generation. The SPU
-appends the delta at the
-resident end and generates, **and the exchange streams as it does**, per
+2026-11-11: the six values `Sampling` holds (`weaver-types-Spec` section
+4.4) and the generation's bound, each required and none defaulted by the
+SPU. The harness sends the same set with every generation of a turn, the
+declaration's defaults in this act. The SPU refuses, typed, a value outside
+its range before any append, and a bound above the session's ceiling. An
+earlier wording sent the values in the declaration at admit, because the
+engine built its sampler once at session open, and both engines build it
+per generation. The SPU appends the delta at the resident end and generates, **and the exchange streams as it does**, per
 the operator's ruling of 2026-08-11: each token crosses as it is drawn,
 an intermediate message carrying the token's identifier and its rendered
 piece, any number of them and possibly none, ordered, and none closing
@@ -190,9 +188,9 @@ residual reductions. **The measurement also carries the residency's
 `engine` and `device` blocks**, per `weaver-spu-Spec` sections 3.1 and 6
 on the operator's ruling of 2026-11-11: the engine settings whose change
 would invalidate the KV cache, and the device settings, the same bytes in
-every generation of a session, or `null` on a backend that renders none yet
-(`weaver-spu-Spec` section 3.1.5). The harness carries them opaque. At the
-foundation cutover the opened answer carries the same two blocks, per the
+every generation of a session. On a backend that renders none yet, both
+members stand and state no block, never omitted (`weaver-spu-Spec` section
+3.1.5). The harness carries them opaque. At the foundation cutover the opened answer carries the same two blocks, per the
 SPU-OPEN amendment (`state-management/weaver-spu-Spec-amendment.md`).
 Beside the two boxes, as the generation's own typed
 members and never inside the measurement, the session's fullness as the
@@ -520,7 +518,7 @@ Refusals are typed and enumerable. The cases:
 - the delta is malformed for the family, under the framing candidate
 - a carried sampling value or bound is outside its range, the member named
   (`SamplingOutOfRange`, `weaver-spu-Spec` section 8), before any append
-- where a field is elected, the carried `top_k` is above its depth or is zero,
+- where a field is elected, the carried top-k is above its depth or is zero,
   both numbers named (`FieldBelowCutoff`, `weaver-spu-Spec` section 7.5), before
   any append
 - the elision's span describes no removable region: it overlaps the
@@ -729,12 +727,13 @@ How each check is implemented is Spec work. What must be checkable:
 - A report is never emitted while an exchange is outstanding, a fault
   arising then being that exchange's typed answer.
 - Every generation samples with what it carried, watched by a capture of
-  this seam that holds each `AppendAndGenerate`'s `sampling` and `max_tokens`
-  beside the request the `Generation` answered, and fails where a member
-  differs. `generation_seed` is the request's and never the carrier's
-  (`weaver-spu-Spec` section 8.5). Two generations of one turn carry the same
-  set, and a re-feed carries its recorded generation's, each watched under the
-  perturbation `weaver-spu-Spec` section 10 names.
+  this seam that holds the sampling values and the bound each append and
+  generate carried beside the request the `Generation` answered, and fails
+  where one differs. The seed the generation derives is the request's and
+  never the carrier's (`weaver-spu-Spec` section 8.5). Two generations of
+  one turn carry the same set, and a re-feed carries its recorded
+  generation's, each watched under the perturbation `weaver-spu-Spec`
+  section 10 names.
 
 ## 9. What this document changes elsewhere
 
