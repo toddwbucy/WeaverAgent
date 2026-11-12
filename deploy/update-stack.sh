@@ -994,6 +994,9 @@ SYS_OUT=$(engine_out "$ENGINE_CRATE" "$BUILD_MESSAGES" "$BUILT/build" || true)
 rm -f -- "$BUILD_MESSAGES"
 trap - EXIT
 [ -n "$SYS_OUT" ] || die "the build reported no single output directory under $BUILT/build for $ENGINE_CRATE, the lock's one package of that name, so which engine libraries it built is unknown"
+# The engine was configured with its OpenSSL lookup off, not by a build
+# before that rule (deploy/engine-libraries.sh).
+engine_without_https "$SYS_OUT"
 SYS_OUT="$SYS_OUT/lib"
 [ -d "$SYS_OUT" ] || die "the engine's output directory names no lib/ at $SYS_OUT, so the build installed no engine libraries"
 # **The agent's shell, built from its pinned source and configuration** (#29,

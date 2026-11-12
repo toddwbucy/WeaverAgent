@@ -1,0 +1,13 @@
+# The agent's engine is built without HTTPS (weaver-spu-Spec section 1.1).
+# Nothing in the agent downloads a model. On 2026-11-11 the box's OpenSSL
+# moved to 4.1.0, and the cpp-httplib 0.40.0 bundled with the vendored
+# llama.cpp at e21cdc11 (llama-cpp-sys-2 from the fork at
+# bebe55d6a90069e13bc6c38eefc707a700014550) stopped compiling against it.
+# The fork's build script passes every CMAKE_* variable to cmake, so this
+# turns llama.cpp's one OpenSSL lookup off for every cargo run started inside
+# this tree, and `force` keeps a shell that sets it otherwise from winning.
+# The build script does not rerun when the variable changes, so an engine a
+# target configured before it keeps HTTPS on. The stack scripts export it as
+# well and refuse such an engine (deploy/engine-libraries.sh).
+[env]
+CMAKE_DISABLE_FIND_PACKAGE_OpenSSL = { value = "ON", force = true }
