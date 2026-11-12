@@ -230,6 +230,13 @@ fn a_drain_between_turns_lets_the_next_crossing_report() {
 /// Perturbation: close at the failing arm as well as here, which is what
 /// the first draft of this act did, and the count below reads two with
 /// the second naming a fault. Watched under exactly that.
+///
+/// The peer also reads the run's carried set off the append, per
+/// `weaver-harness-Spec` section 6.1, and the refusal's ask records it.
+/// Perturbation: send `max_tokens` plus one or the seed less one from
+/// `generate_once` and the peer fails on it. Watched under exactly those
+/// changes. Record a zero seed in the refusal's ask and the ask's check
+/// fails, watched under exactly that change.
 #[test]
 fn a_refused_turn_closes_once_and_names_the_refusal() {
     let (near, far) = socketpair(
@@ -246,13 +253,24 @@ fn a_refused_turn_closes_once_and_names_the_refusal() {
         let n = recv(far.as_raw_fd(), &mut buf, MsgFlags::empty()).expect("recv append");
         let directive: weaver_types::TokenDirective =
             serde_json::from_slice(&buf[..n]).expect("the append parses");
-        let weaver_types::TokenDirective::AppendAndGenerate { tool_schemas, .. } = directive else {
+        let weaver_types::TokenDirective::AppendAndGenerate {
+            tool_schemas,
+            sampling,
+            max_tokens,
+            ..
+        } = directive
+        else {
             panic!("the turn sends append-and-generate");
         };
         assert!(
             tool_schemas.is_empty(),
             "the retiring engine preserves its rendering"
         );
+        // The run's carried set rides the generation whole, the bound
+        // beside it (`weaver-harness-Spec` section 6.1).
+        let carried = crate::engine::test_carried();
+        assert_eq!(sampling, carried.sampling, "the carried values ride");
+        assert_eq!(max_tokens, carried.max_tokens, "the bound rides");
         let refusal = weaver_types::TokenRefusal::Overflow {
             resident: 4091,
             requested: 137,
@@ -318,6 +336,7 @@ fn a_refused_turn_closes_once_and_names_the_refusal() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         ports.turn(vec![Message {
             role: Role::User,
@@ -347,13 +366,37 @@ fn a_refused_turn_closes_once_and_names_the_refusal() {
         "and the reason names what ended the turn"
     );
 
-    let refusals = recorder
+    let refusals: Vec<&weaver_trace::Record> = recorder
         .structure()
         .expect("the serving record")
         .iter()
         .filter(|r| r.kind == Kind::Refusal)
-        .count();
-    assert_eq!(refusals, 1, "the refusal itself reached the record too");
+        .collect();
+    assert_eq!(
+        refusals.len(),
+        1,
+        "the refusal itself reached the record too"
+    );
+    // A refused generation writes no request, so its ask is the one place
+    // the carried set and the bound are recorded (`weaver-trace-PRD`
+    // section 3.2).
+    let refusal: serde_json::Value =
+        serde_json::from_str(refusals[0].line.as_ref()).expect("the refusal parses");
+    let asked = &refusal["payload"]["asked"];
+    assert_eq!(asked["ask"], "append_and_generate", "{refusal}");
+    assert_eq!(
+        asked["sampling"],
+        serde_json::json!({
+            "temperature": 0.7,
+            "top_k": 40,
+            "top_p": 0.95,
+            "repetition_penalty": 1.1,
+            "repetition_window": 64,
+            "seed": 11,
+        }),
+        "the refused ask records the carried set"
+    );
+    assert_eq!(asked["max_tokens"], 64, "and the bound beside it");
 }
 
 /// **A refused ask reaches the record, and the values that ride are the
@@ -455,6 +498,7 @@ fn a_refused_ask_reaches_the_record() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         ports.elide(41, 57)
     };
@@ -587,6 +631,7 @@ fn the_elision_event_carries_the_span_the_loop_named() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         let counts = ports.elide(41, 57).expect("the elision holds");
         assert_eq!(
@@ -754,6 +799,7 @@ fn a_turn_authors_the_whole_bracket() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         let delta = vec![Message {
             role: Role::User,
@@ -972,6 +1018,7 @@ fn a_fault_emission_lands_inside_the_bracket_before_the_close() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1201,6 +1248,7 @@ fn a_turn_executes_its_calls_and_the_grant_authors_the_result() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1445,6 +1493,7 @@ fn an_ungranted_call(name: &str, shell_granted: bool) {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1639,6 +1688,7 @@ fn each_field_intermediate_authors_its_event() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         let delta = vec![Message {
             role: Role::User,
@@ -1731,6 +1781,7 @@ fn a_supplied_tool_result_refuses_at_the_door() {
         &mut pressure_reported,
         false,
         weaver_types::TurnContext::Continuous,
+        Some(crate::engine::test_carried()),
     );
     let delta = vec![Message {
         role: Role::ToolResult,
@@ -1954,6 +2005,7 @@ fn dial_mid_stream(
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         let delta = vec![Message {
             role: Role::User,
@@ -2310,6 +2362,7 @@ fn leave_during_turn(
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         ports.hold_leave(&mut held, None);
         ports.turn(vec![Message {
@@ -2441,6 +2494,7 @@ fn a_directive_mid_turn_with_a_leave_held(
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         ports.hold_leave(&mut held, None);
         ports.turn(vec![Message {
@@ -2611,6 +2665,7 @@ fn a_join_during_the_wind_down_cancels_it_and_turns_the_leave_forced() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         ports.hold_leave(&mut held, None);
         ports.wind_down(None, weaver_types::Cause { uid: 7 })
@@ -2752,6 +2807,7 @@ fn a_leave_dialed_while_the_spu_streams_is_heard() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         ports.hold_leave(&mut held, None);
         ports.turn(vec![Message {
@@ -2883,6 +2939,7 @@ fn a_bound_passing_while_the_spu_streams_cancels_the_turn() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         ports.hold_leave(&mut held, Some(1));
         ports.turn(vec![Message {
@@ -3002,6 +3059,7 @@ fn a_drain_bound_passing_mid_turn_cancels_the_turn_and_turns_the_leave_forced() 
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         ports.hold_leave(&mut held, Some(1));
         ports.turn(vec![Message {
@@ -3177,6 +3235,7 @@ fn a_call_asked_in_the_wind_down_is_never_sent() {
         &mut pressure_reported,
         false,
         weaver_types::TurnContext::Continuous,
+        Some(crate::engine::test_carried()),
     )
     .wind_down(None, weaver_types::Cause { uid: 7 })
     .0;
@@ -3292,6 +3351,7 @@ fn loop_zeros_own_turns_flush_first_under_independent() {
                 &mut pressure_reported,
                 false,
                 context,
+                Some(crate::engine::test_carried()),
             );
             let ran = if winding {
                 ports.wind_down(None, weaver_types::Cause { uid: 7 }).0
@@ -3409,6 +3469,7 @@ fn loop_zeros_own_turns_refuse_where_the_independent_flush_answers_nothing() {
                 &mut pressure_reported,
                 false,
                 weaver_types::TurnContext::Independent,
+                Some(crate::engine::test_carried()),
             );
             let ran = if winding {
                 ports.wind_down(None, weaver_types::Cause { uid: 7 }).0
@@ -3779,6 +3840,7 @@ fn stopped_invocation(crossing: bool, call_count: usize) {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         ports.turn(vec![Message {
             role: Role::User,
@@ -4033,6 +4095,7 @@ fn stop_dialed_mid_stream(latched: bool) {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         let delta = vec![Message {
             role: Role::User,
@@ -4168,6 +4231,7 @@ fn a_stop_is_not_answered_after_a_close_over_a_latched_record() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         let generation = Generation {
             invalid_utf8: Vec::new(),
@@ -4289,6 +4353,7 @@ fn a_column_on_the_generate_stream_authors_rather_than_kills() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         ports.turn(vec![Message {
             role: Role::User,
@@ -4356,6 +4421,7 @@ fn with_seat<R>(
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         ask(&mut ports)
     };
@@ -4573,6 +4639,7 @@ fn the_recall_after_a_flush_is_recorded_before_the_loop_holds_it() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         assert_eq!(ports.flush(0), Some((27196, 712)), "the flush holds");
         let answered = ports.recall(Some(4)).expect("custody answered");
@@ -4704,6 +4771,7 @@ fn a_replay_answer_is_recorded_by_its_bounds_and_count() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         ports.replay(2_000).expect("custody answered")
     };
@@ -4775,6 +4843,7 @@ fn a_recall_the_member_did_not_answer_records_no_recall() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         assert!(
             ports.recall(Some(4)).is_none(),
@@ -4961,6 +5030,7 @@ fn an_unrecovered_call_is_authored_at_the_answer_and_handed_to_the_loop() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         let delta = vec![Message {
             role: Role::User,
@@ -5231,6 +5301,7 @@ fn an_unrecovered_call_opens_no_execution_exchange() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         let delta = vec![Message {
             role: Role::User,
@@ -5451,10 +5522,16 @@ fn a_re_fed_unrecovered_call_is_authored_at_the_answer() {
             &mut pressure_reported,
             false,
             weaver_types::TurnContext::Continuous,
+            Some(crate::engine::test_carried()),
         );
         let turn = weaver_types::TurnKey("t-1".into());
         ports
-            .refeed(&turn, "rendered".into(), vec![9707, 1879])
+            .refeed(
+                &turn,
+                "rendered".into(),
+                vec![9707, 1879],
+                crate::engine::test_carried().sampling,
+            )
             .expect("the re-feed answers")
     };
     peer.join().expect("the decode peer finishes");

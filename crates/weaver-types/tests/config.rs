@@ -958,3 +958,112 @@ fn an_adapter_on_the_classify_binding_refuses() {
     );
     parse(&control).expect("a classify binding without an adapter parses");
 }
+
+/// A declaration whose decoder carries `values` as its tunable values.
+fn with_tunables(values: &str) -> weaver_types::DecoderInstruction {
+    let text = full_config().replace(
+        "tunable-values = {}\n",
+        &format!("tunable-values = {{ {values} }}\n"),
+    );
+    parse(&text).expect("parses").spu_instruction.decoder
+}
+
+const SIX: &str = "temperature = 0.7, top-k = 40, top-p = 0.95, repetition-penalty = 1.1, \
+                   repetition-window = 64, seed = 451234785645";
+
+/// **The six defaults read whole, and each refuses by name**, per
+/// `weaver-harness-Spec` section 6.1: a missing name, a count that is not
+/// one, or a value outside its range in `weaver-spu-Spec` section 8 refuses
+/// naming `tunable-values.<name>`, and nothing is defaulted. The parser itself
+/// requires none of them, the harness being the reader that judges them.
+///
+/// Perturbation: default a missing name in `sampling_defaults`, or cast a
+/// count before judging it, and the matching case fails.
+#[test]
+fn the_sampling_defaults_read_whole_and_refuse_by_name() {
+    let read = with_tunables(SIX)
+        .sampling_defaults()
+        .expect("the six read");
+    assert_eq!(
+        read,
+        weaver_types::Sampling {
+            temperature: 0.7,
+            top_k: 40,
+            top_p: 0.95,
+            repetition_penalty: 1.1,
+            repetition_window: 64,
+            seed: 451_234_785_645,
+        }
+    );
+    assert!(
+        with_tunables("").sampling_defaults().is_err(),
+        "the parser requires none, the reader all"
+    );
+    for name in weaver_types::SAMPLING_DEFAULT_NAMES {
+        let without: Vec<&str> = SIX
+            .split(", ")
+            .filter(|pair| !pair.starts_with(&format!("{name} ")))
+            .collect();
+        assert_eq!(
+            with_tunables(&without.join(", ")).sampling_defaults(),
+            Err(FieldName(format!("tunable-values.{name}"))),
+            "{name} missing"
+        );
+    }
+    for (name, value) in [
+        ("top-k", "40.5"),
+        ("top-k", "-1"),
+        ("top-k", "4294967296"),
+        ("repetition-window", "2147483648"),
+        ("seed", "0.5"),
+        ("temperature", "-0.1"),
+        ("top-p", "0"),
+        ("top-p", "1.5"),
+        ("repetition-penalty", "0"),
+    ] {
+        let replaced: Vec<String> = SIX
+            .split(", ")
+            .map(|pair| {
+                if pair.starts_with(&format!("{name} ")) {
+                    format!("{name} = {value}")
+                } else {
+                    pair.to_string()
+                }
+            })
+            .collect();
+        assert_eq!(
+            with_tunables(&replaced.join(", ")).sampling_defaults(),
+            Err(FieldName(format!("tunable-values.{name}"))),
+            "{name} = {value}"
+        );
+    }
+}
+
+/// **The admit forwards the session parameters and none of the six**, per
+/// `weaver-harness-spu-contract` section 2.
+///
+/// Perturbation: retain every name in `without_sampling_defaults` and this
+/// fails on the first sampling name.
+#[test]
+fn the_forwarded_instruction_holds_no_sampling_name() {
+    let decoder = with_tunables(&format!(
+        "{SIX}, context-capacity = 4096, max-tokens-per-turn = 512"
+    ));
+    let forwarded = decoder.without_sampling_defaults();
+    assert_eq!(
+        forwarded
+            .tunable_values
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["context-capacity", "max-tokens-per-turn"]
+    );
+    assert_eq!(
+        weaver_types::DecoderInstruction {
+            tunable_values: decoder.tunable_values.clone(),
+            ..forwarded.clone()
+        },
+        decoder,
+        "nothing else moves"
+    );
+}

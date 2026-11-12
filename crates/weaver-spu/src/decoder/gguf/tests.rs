@@ -2,26 +2,26 @@ use super::*;
 use crate::decoder::session::{
     NeverCancels, PositionedSinks, SamplerBuild, Session, StopCondition,
 };
-use crate::sampling::{Disposition, Knobs, TunableValues};
+use crate::sampling::Sampling;
 
 /// A small instruct model that loads on the host in about a second.
 const MODEL: &str = "/opt/weaver/models/qwen2.5-0.5b-instruct-q6_k.gguf";
 
-fn frozen() -> EffectiveKnobs {
-    Knobs {
-        temperature: Disposition::Frozen(0.7),
-        top_k: Disposition::Frozen(40),
-        top_p: Disposition::Frozen(0.95),
-        repetition_penalty: Disposition::Frozen(1.1),
-        repetition_window: Disposition::Frozen(64),
-        seed: Disposition::Frozen(11),
+/// The values a generation carries in these tests: the constants the
+/// deploy scripts write into a new declaration.
+fn frozen() -> Sampling {
+    Sampling {
+        temperature: 0.7,
+        top_k: 40,
+        top_p: 0.95,
+        repetition_penalty: 1.1,
+        repetition_window: 64,
+        seed: 11,
     }
-    .resolve(&TunableValues::new())
-    .expect("nothing is tunable")
 }
 
 fn engine(model: &ResidentModel) -> GgufEngine<'_> {
-    GgufEngine::open(model, &frozen(), 512, false).expect("the context opens")
+    GgufEngine::open(model, 512, false).expect("the context opens")
 }
 
 /// The fixture these tests decode against.
@@ -103,7 +103,7 @@ fn the_elected_tap_folds_one_figure_per_layer() {
     let Some(model) = model_or_skip() else { return };
     let layers = model.model().n_layer() as usize;
     assert!(layers > 1, "the fixture must have layers to count");
-    let mut engine = GgufEngine::open(&model, &frozen(), 512, true).expect("the context opens");
+    let mut engine = GgufEngine::open(&model, 512, true).expect("the context opens");
 
     engine
         .decode_at(&[TokenId(9707), TokenId(11), TokenId(1879)], 0)
@@ -176,8 +176,7 @@ fn a_split_prefill_folds_one_set_and_not_one_per_ubatch() {
     let Some(model) = model_or_skip() else { return };
     let layers = model.model().n_layer() as usize;
     let capacity = 2048;
-    let mut engine =
-        GgufEngine::open(&model, &frozen(), capacity, true).expect("the context opens");
+    let mut engine = GgufEngine::open(&model, capacity, true).expect("the context opens");
 
     // Past the 512 micro-batch and inside the capacity above.
     let prompt: Vec<TokenId> = (0..600).map(|_| TokenId(1879)).collect();
@@ -213,7 +212,7 @@ fn the_figures_belong_to_the_last_position_however_it_was_batched() {
     let Some(model) = model_or_skip() else { return };
     let prompt = [TokenId(9707), TokenId(11), TokenId(1879), TokenId(0)];
 
-    let mut batched = GgufEngine::open(&model, &frozen(), 512, true).expect("the context opens");
+    let mut batched = GgufEngine::open(&model, 512, true).expect("the context opens");
     batched.decode_at(&prompt, 0).expect("the prompt decodes");
     let batched = batched
         .take_reduction()
@@ -223,7 +222,7 @@ fn the_figures_belong_to_the_last_position_however_it_was_batched() {
 
     // The same last position, reached one token at a time, so the tap has
     // one column to take and cannot have taken the wrong one.
-    let mut singly = GgufEngine::open(&model, &frozen(), 512, true).expect("the context opens");
+    let mut singly = GgufEngine::open(&model, 512, true).expect("the context opens");
     for (position, token) in prompt.iter().enumerate() {
         singly
             .decode_at(&[*token], position)
@@ -281,9 +280,9 @@ fn the_tap_changes_no_token_on_this_backend() {
     let prompt = [TokenId(9707), TokenId(11), TokenId(1879)];
 
     let draw = |readout: bool| {
-        let mut engine =
-            GgufEngine::open(&model, &frozen(), 512, readout).expect("the context opens");
+        let mut engine = GgufEngine::open(&model, 512, readout).expect("the context opens");
         engine.decode_at(&prompt, 0).expect("the prompt decodes");
+        engine.reseed(11, &frozen(), &[]).expect("the reseed");
         let mut drawn = Vec::new();
         for step in 0..16 {
             let token = engine.sample().expect("a token is drawn");
@@ -302,7 +301,7 @@ fn the_tap_changes_no_token_on_this_backend() {
         "the elected run drew a different sequence, so the tap is not observational"
     );
     // The comparison is only worth something if the elected run tapped.
-    let mut elected = GgufEngine::open(&model, &frozen(), 512, true).expect("the context opens");
+    let mut elected = GgufEngine::open(&model, 512, true).expect("the context opens");
     elected.decode_at(&prompt, 0).expect("the prompt decodes");
     assert!(
         elected.take_reduction().is_some_and(|r| r.layers() > 0),
@@ -345,6 +344,7 @@ fn the_engine_decodes_and_draws() {
     assert!(varies, "the distribution varies rather than being zeroed");
     assert!(finite, "no logit is NaN");
 
+    engine.reseed(11, &frozen(), &[]).expect("the reseed");
     let token = engine.sample().expect("a token is drawn");
     assert!(
         (token.0 as usize) < width,
@@ -397,7 +397,7 @@ fn a_session_over_the_engine_generates() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: frozen(),
             },
         )
         .expect("the generation runs");
@@ -449,6 +449,29 @@ fn a_read_before_any_decode_refuses() {
     assert!(engine.sample().is_err(), "and nothing may be drawn");
 }
 
+/// **Nothing may be drawn before a generation has built the sampler**, per
+/// `weaver-spu-Spec` section 8: the engine opens with no sampler, since no
+/// sampling value reaches it at open, and the first reseed builds the whole
+/// chain from the values the generation carried.
+///
+/// Perturbation: build a chain at open from any fixed values and this
+/// fails, the draw succeeding with values no generation carried.
+#[test]
+fn a_draw_before_any_reseed_refuses() {
+    let Some(model) = model_or_skip() else { return };
+    let mut engine = engine(&model);
+    engine
+        .decode_at(&[TokenId(9707), TokenId(11)], 0)
+        .expect("decode");
+    assert!(engine.distribution().is_ok(), "a distribution stands");
+    assert!(
+        engine.sample().is_err(),
+        "no generation has carried the values to draw with"
+    );
+    engine.reseed(11, &frozen(), &[]).expect("the reseed");
+    assert!(engine.sample().is_ok(), "the carried values build the draw");
+}
+
 /// **A truncation takes the standing distribution with the positions it
 /// removed**, so a draw afterwards cannot come from state that is gone.
 ///
@@ -485,11 +508,11 @@ fn a_truncation_drops_the_standing_distribution() {
 fn a_zero_capacity_refuses() {
     let Some(model) = model_or_skip() else { return };
     assert!(
-        GgufEngine::open(&model, &frozen(), 0, false).is_err(),
+        GgufEngine::open(&model, 0, false).is_err(),
         "a session that can hold nothing is refused at the open"
     );
     assert!(
-        GgufEngine::open(&model, &frozen(), 1, false).is_ok(),
+        GgufEngine::open(&model, 1, false).is_ok(),
         "a positive capacity still opens"
     );
 }
@@ -575,7 +598,9 @@ fn a_reseed_restores_the_window_it_is_handed() {
     let window = [TokenId(9707), TokenId(11)];
 
     engine.decode_at(&prefix, 0).expect("the prefix decodes");
-    engine.reseed(4242, &window).expect("the first reseed");
+    engine
+        .reseed(4242, &frozen(), &window)
+        .expect("the first reseed");
     let first = engine.sample().expect("a token is drawn");
 
     // Rewrite the cache and come back to the same resident state.
@@ -583,7 +608,9 @@ fn a_reseed_restores_the_window_it_is_handed() {
     engine
         .decode_at(&prefix, 0)
         .expect("the prefix decodes again");
-    engine.reseed(4242, &window).expect("the second reseed");
+    engine
+        .reseed(4242, &frozen(), &window)
+        .expect("the second reseed");
     let after = engine.sample().expect("a token is drawn");
 
     assert_eq!(
@@ -593,11 +620,11 @@ fn a_reseed_restores_the_window_it_is_handed() {
     );
 }
 
-/// Knobs that make the penalty window decide the draw: a two-slot window,
+/// Values that make the penalty window decide the draw: a two-slot window,
 /// a penalty that sinks any token in it, and a top-k of one, so each draw
 /// is the best token the window leaves standing and no luck enters.
-fn window_decides() -> EffectiveKnobs {
-    EffectiveKnobs {
+fn window_decides() -> Sampling {
+    Sampling {
         temperature: 0.7,
         top_k: 1,
         top_p: 0.95,
@@ -618,8 +645,7 @@ fn window_decides() -> EffectiveKnobs {
 /// `best / 1e4`, and the window rather than the logits then decides which
 /// of the three a draw takes.
 fn window_fixture(model: &ResidentModel) -> (GgufEngine<'_>, [TokenId; 3]) {
-    let mut engine =
-        GgufEngine::open(model, &window_decides(), 512, false).expect("the context opens");
+    let mut engine = GgufEngine::open(model, 512, false).expect("the context opens");
     engine
         .decode_at(&[TokenId(9707), TokenId(11), TokenId(1879)], 0)
         .expect("the prompt decodes");
@@ -661,7 +687,8 @@ impl GgufEngine<'_> {
         for (token, logit) in ranked.iter().zip([3.0, 2.0, 1.0]) {
             logits[token.0 as usize] = logit;
         }
-        GgufEngine::draw(&self.sampler, &mut self.candidates, &logits).expect("the probe draws")
+        let sampler = self.sampler.as_ref().expect("a reseed built the sampler");
+        GgufEngine::draw(sampler, &mut self.candidates, &logits).expect("the probe draws")
     }
 }
 
@@ -689,7 +716,7 @@ fn each_decoded_token_enters_the_penalty_window_once() {
     let (mut engine, [best, second, third]) = window_fixture(&model);
 
     engine
-        .reseed(4242, &[best])
+        .reseed(4242, &window_decides(), &[best])
         .expect("the window holds the best");
     let draw = engine.sample().expect("a token is drawn");
     assert_eq!(
@@ -729,7 +756,9 @@ fn a_refeed_window_holds_the_recorded_token_and_not_the_draw() {
     let Some(model) = model_or_skip() else { return };
     let (mut engine, [best, second, third]) = window_fixture(&model);
 
-    engine.reseed(4242, &[]).expect("the window is empty");
+    engine
+        .reseed(4242, &window_decides(), &[])
+        .expect("the window is empty");
     let draw = engine.sample().expect("a token is drawn");
     assert_eq!(
         draw, best,
@@ -759,7 +788,7 @@ fn a_refeed_window_holds_the_recorded_token_and_not_the_draw() {
 /// One seed and one prompt drive two contexts of one model. The first
 /// runs a generation's own calls: reseed with the tail, then draw and
 /// decode. The twin draws through `llama_sampler_sample` on a chain built
-/// from the same knobs and seed and restored from the same tail, decoding
+/// from the same values and seed and restored from the same tail, decoding
 /// the same token. The two answer the same token at every position, and
 /// the same distribution bit for bit, which carries every signal the
 /// session measures from it. The run is longer than the window.
@@ -777,29 +806,29 @@ fn a_refeed_window_holds_the_recorded_token_and_not_the_draw() {
 fn the_crates_draw_is_the_engines_own_draw() {
     let Some(model) = model_or_skip() else { return };
     let on = frozen();
-    let off = EffectiveKnobs {
+    let off = Sampling {
         repetition_penalty: 1.0,
         ..on
     };
-    for (knobs, declaration) in [(on, "the penalty on"), (off, "the penalty off")] {
-        lockstep_with_the_engine(&model, &knobs, declaration);
+    for (sampling, declaration) in [(on, "the penalty on"), (off, "the penalty off")] {
+        lockstep_with_the_engine(&model, &sampling, declaration);
     }
 }
 
 /// One declaration of [`the_crates_draw_is_the_engines_own_draw`].
-fn lockstep_with_the_engine(model: &ResidentModel, knobs: &EffectiveKnobs, declaration: &str) {
-    let steps = knobs.repetition_window as usize + 32;
+fn lockstep_with_the_engine(model: &ResidentModel, sampling: &Sampling, declaration: &str) {
+    let steps = sampling.repetition_window as usize + 32;
     let prompt = [TokenId(9707), TokenId(11), TokenId(1879)];
     let seed = 4242;
 
-    let mut ours = GgufEngine::open(model, knobs, 512, false).expect("the context opens");
+    let mut ours = GgufEngine::open(model, 512, false).expect("the context opens");
     ours.decode_at(&prompt, 0).expect("the prompt decodes");
-    ours.reseed(seed, &prompt).expect("the reseed");
+    ours.reseed(seed, sampling, &prompt).expect("the reseed");
 
-    let mut twin = GgufEngine::open(model, knobs, 512, false).expect("the twin opens");
+    let mut twin = GgufEngine::open(model, 512, false).expect("the twin opens");
     twin.decode_at(&prompt, 0)
         .expect("the twin's prompt decodes");
-    let mut theirs = GgufEngine::chain(knobs, seed);
+    let mut theirs = GgufEngine::chain(sampling, seed);
     theirs.accept_many(prompt.iter().map(|token| LlamaToken(token.0 as i32)));
 
     for step in 0..steps {
@@ -842,7 +871,7 @@ fn a_reseed_tail_enters_the_window_once_per_position() {
     let (mut engine, [best, second, third]) = window_fixture(&model);
 
     engine
-        .reseed(4242, &[best, second])
+        .reseed(4242, &window_decides(), &[best, second])
         .expect("the window holds the best two");
     assert_eq!(
         engine.sample().expect("a token is drawn"),
@@ -923,16 +952,16 @@ fn every_set_value_but_flash_attention_is_the_engines_default() {
 #[test]
 fn the_engine_settings_move_no_draw() {
     let Some(model) = model_or_skip() else { return };
-    let knobs = frozen();
-    let steps = knobs.repetition_window as usize + 32;
+    let sampling = frozen();
+    let steps = sampling.repetition_window as usize + 32;
     let prompt = [TokenId(9707), TokenId(11), TokenId(1879)];
 
-    let mut set = GgufEngine::open(&model, &knobs, 512, false).expect("the context opens");
-    let mut defaults = GgufEngine::open_with(&model, &knobs, 512, false, |params| params)
+    let mut set = GgufEngine::open(&model, 512, false).expect("the context opens");
+    let mut defaults = GgufEngine::open_with(&model, 512, false, |params| params)
         .expect("the context opens with the engine's defaults");
     for engine in [&mut set, &mut defaults] {
         engine.decode_at(&prompt, 0).expect("the prompt decodes");
-        engine.reseed(4242, &prompt).expect("the reseed");
+        engine.reseed(4242, &sampling, &prompt).expect("the reseed");
     }
 
     for step in 0..steps {
@@ -963,6 +992,7 @@ fn a_closed_engine_serves_nothing() {
     let Some(model) = model_or_skip() else { return };
     let mut engine = engine(&model);
     engine.decode_at(&[TokenId(9707)], 0).expect("decode");
+    engine.reseed(11, &frozen(), &[]).expect("the reseed");
     engine.close();
 
     assert!(engine.distribution().is_err());
@@ -1243,7 +1273,7 @@ fn the_host_residency_renders_both_theta_blocks_from_the_engine() {
 #[test]
 fn a_context_left_at_auto_flash_attention_renders_no_blocks() {
     let Some(model) = model_or_skip() else { return };
-    let defaults = GgufEngine::open_with(&model, &frozen(), 512, false, |params| params)
+    let defaults = GgufEngine::open_with(&model, 512, false, |params| params)
         .expect("the context opens with the engine's defaults");
     let refused = render_blocks(&model, &defaults, FlushMechanism::TruncateToPosition);
     assert!(
@@ -1264,7 +1294,7 @@ fn a_context_left_at_auto_flash_attention_renders_no_blocks() {
 #[test]
 fn the_set_members_state_what_the_context_was_handed() {
     let Some(model) = model_or_skip() else { return };
-    let handed = GgufEngine::open_with(&model, &frozen(), 512, false, |params| {
+    let handed = GgufEngine::open_with(&model, 512, false, |params| {
         engine_settings(params).with_type_k(KvCacheType::Q8_0)
     })
     .expect("the context opens with a q8_0 K cache");

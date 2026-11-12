@@ -192,6 +192,8 @@ pub(super) fn source(
                     }],
                 }],
                 tool_schemas: vec![],
+                sampling: crate::flow::context::TEST_SAMPLING,
+                max_tokens: 16,
             },
             &mut wait,
         )

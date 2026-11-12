@@ -35,7 +35,12 @@ impl Backend for RecordingBackend {
     fn sample(&mut self) -> Result<TokenId, DecodeFault> {
         Ok(TokenId(12))
     }
-    fn reseed(&mut self, _: u64, _: &[TokenId]) -> Result<(), DecodeFault> {
+    fn reseed(
+        &mut self,
+        _: u64,
+        _: &weaver_spu::sampling::Sampling,
+        _: &[TokenId],
+    ) -> Result<(), DecodeFault> {
         Ok(())
     }
     fn truncate_to(&mut self, _: usize) -> Result<(), DecodeFault> {
@@ -234,7 +239,7 @@ fn interrupted_prefix(
         },
         SamplerBuild {
             seed: 11,
-            penalty_window: 64,
+            sampling: carried_with_window(64),
         },
     );
     if fail_terminator {
@@ -355,7 +360,7 @@ fn refeed_malformed_cancel_poll_remains_a_fault_without_terminal_answers() {
             },
             SamplerBuild {
                 seed: 1,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .unwrap();
@@ -415,7 +420,7 @@ fn a_piece_fault_halts_the_generation_at_the_next_poll() {
             },
             SamplerBuild {
                 seed: 11,
-                penalty_window: 64,
+                sampling: carried_with_window(64),
             },
         )
         .unwrap();
@@ -426,4 +431,17 @@ fn a_piece_fault_halts_the_generation_at_the_next_poll() {
         generated.tokens.len()
     );
     assert!(!cancel.cancelled && !cancel.fatal);
+}
+
+/// A carried set with the given penalty window, the rest at the constants the
+/// composition root froze before the carrier (`weaver-spu-Spec` section 8).
+fn carried_with_window(window: u32) -> weaver_spu::sampling::Sampling {
+    weaver_spu::sampling::Sampling {
+        temperature: 0.7,
+        top_k: 40,
+        top_p: 0.95,
+        repetition_penalty: 1.1,
+        repetition_window: window,
+        seed: 0,
+    }
 }

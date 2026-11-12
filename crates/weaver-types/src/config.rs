@@ -340,6 +340,75 @@ pub struct DecoderInstruction {
     pub tunable_values: std::collections::BTreeMap<String, f64>,
 }
 
+/// The six sampling defaults' names in `tunable_values`, per
+/// `weaver-types-Spec` section 2: the harness loop's, never the SPU's.
+pub const SAMPLING_DEFAULT_NAMES: [&str; 6] = [
+    "temperature",
+    "top-k",
+    "top-p",
+    "repetition-penalty",
+    "repetition-window",
+    "seed",
+];
+
+impl DecoderInstruction {
+    /// The harness loop's sampling defaults, read from `tunable_values` and
+    /// judged, per `weaver-harness-Spec` section 6.1.
+    ///
+    /// **A missing name, a count that is not one, or a value outside its range
+    /// refuses naming `tunable-values.<name>`.** Nothing is defaulted. A count
+    /// is judged before its cast, because a float cast to an integer answers
+    /// for every input. The ranges are [`crate::Sampling::out_of_range`]'s, the
+    /// rule the SPU judges every carried set by.
+    pub fn sampling_defaults(&self) -> Result<crate::Sampling, FieldName> {
+        let named = |name: &str| FieldName(format!("tunable-values.{name}"));
+        let value = |name: &str| {
+            self.tunable_values
+                .get(name)
+                .copied()
+                .ok_or_else(|| named(name))
+        };
+        let count = |name: &str, ceiling: f64| -> Result<f64, FieldName> {
+            let v = value(name)?;
+            if v.fract() != 0.0 || v < 0.0 || v >= ceiling {
+                return Err(named(name));
+            }
+            Ok(v)
+        };
+        let sampling = crate::Sampling {
+            temperature: value("temperature")? as f32,
+            top_k: count("top-k", 2f64.powi(32))? as u32,
+            top_p: value("top-p")? as f32,
+            repetition_penalty: value("repetition-penalty")? as f32,
+            repetition_window: count("repetition-window", 2f64.powi(32))? as u32,
+            seed: count("seed", 2f64.powi(64))? as u64,
+        };
+        if let Some(member) = sampling.out_of_range() {
+            let name = match member {
+                crate::SamplingMember::Temperature => "temperature",
+                crate::SamplingMember::TopK => "top-k",
+                crate::SamplingMember::TopP => "top-p",
+                crate::SamplingMember::RepetitionPenalty => "repetition-penalty",
+                crate::SamplingMember::RepetitionWindow => "repetition-window",
+                crate::SamplingMember::MaxTokens => "max-tokens-per-turn",
+            };
+            return Err(named(name));
+        }
+        Ok(sampling)
+    }
+
+    /// Take the six sampling defaults out of `tunable_values`, so no sampling
+    /// value reaches the SPU at admit (`weaver-harness-spu-contract` section
+    /// 2). The session parameters stay.
+    pub fn without_sampling_defaults(&self) -> DecoderInstruction {
+        let mut forwarded = self.clone();
+        forwarded
+            .tunable_values
+            .retain(|name, _| !SAMPLING_DEFAULT_NAMES.contains(&name.as_str()));
+        forwarded
+    }
+}
+
 crate::state_flow::codec::closed_object! {
     /// The model artifact and the devices it is assigned to.
     ///

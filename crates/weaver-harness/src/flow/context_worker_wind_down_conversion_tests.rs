@@ -136,6 +136,7 @@ pub(in crate::flow::context::worker_startup) fn spu(mode: &str, fd: i32) {
                 turn,
                 delta,
                 tool_schemas,
+                ..
             } => {
                 assert_eq!(delta, measured.take().unwrap());
                 assert!(tool_schemas.is_empty() && pending.is_none());

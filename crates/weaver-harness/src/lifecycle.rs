@@ -251,6 +251,12 @@ fn refusal_reason(refusal: &weaver_types::TokenRefusal) -> &'static str {
             "the column ask stood without the readout election"
         }
         weaver_types::TokenRefusal::ColumnUndeclared => "the family's declaration holds no column",
+        weaver_types::TokenRefusal::SamplingOutOfRange { .. } => {
+            "the generation carried a sampling value outside its range"
+        }
+        weaver_types::TokenRefusal::FieldBelowCutoff { .. } => {
+            "the elected field cannot report past the generation's top-k"
+        }
     }
 }
 
@@ -441,6 +447,10 @@ struct Run {
     /// A leave heard mid-turn and held for this loop to carry out after the
     /// turn (3.0, S3 x unload), lent to the frame's seat.
     leave: Option<crate::engine::PendingLeave>,
+    /// What every generation of this run carries, set where the serving
+    /// session opened, per `weaver-harness-Spec` section 6.1. `None` under a
+    /// diagnostic binding, whose re-feeds carry their recorded values.
+    carried: Option<crate::engine::Carried>,
 }
 
 impl Run {
@@ -1115,6 +1125,7 @@ impl Harness {
                     &mut run.pressure_reported,
                     run.seated,
                     run.turn_context,
+                    run.carried,
                 );
                 ports.hold_leave(&mut run.leave, run.drain_bound);
                 // The seeding turn is loop 0's own and crosses the dev
@@ -1483,6 +1494,7 @@ impl Harness {
             &mut run.pressure_reported,
             run.seated,
             run.turn_context,
+            run.carried,
         );
         ports.hold_leave(held, None);
         let (ran, _) = ports.wind_down(deadline_after(wind_down_bound), cause);
@@ -2053,6 +2065,21 @@ impl Harness {
             )
         };
 
+        // **The reader judges the sampling defaults before anything is
+        // authored**, per `weaver-harness-Spec` section 6.1: under a serving
+        // binding a declaration that every generation would refuse refuses
+        // the enter here, the stream still clean and no device work spent.
+        // Under a diagnostic binding the reader requires none of the six.
+        let serving_defaults = if diagnostic {
+            None
+        } else {
+            match judge_sampling_defaults(&payload.spu_instruction.decoder, &mut std::io::stderr())
+            {
+                Ok(sampling) => Some(sampling),
+                Err(refusal) => return Err(EnterFailure::BeforeLoad(refusal)),
+            }
+        };
+
         // The state seam, per `weaver-harness-state-contract` as ruled
         // 2026-08-26: a nameless pair whose harness end arrived on this
         // enter when admin stood the member, and its absence is the leg not
@@ -2380,6 +2407,7 @@ impl Harness {
             drain_bound: payload.drain_bound,
             wind_down_bound: payload.wind_down_bound,
             leave: None,
+            carried: None,
             diagnostic: diagnostic.then(|| DiagnosticSeat {
                 reader_elected: payload.spu_instruction.decoder.residual_readout_election,
                 artifact: payload
@@ -2539,12 +2567,16 @@ impl Harness {
             last_word: spu_word,
         });
 
-        // Admit carries the SPU instruction uninterpreted.
+        // Admit carries the SPU instruction uninterpreted, less the six
+        // sampling names, under both bindings: no sampling value reaches the
+        // SPU at admit (`weaver-harness-spu-contract` section 2), each
+        // generation carrying its own.
         run.spu_ordinal += 1;
         let ordinal = run.spu_ordinal;
         let spu = run.spu.as_ref().expect("the arm just stood up");
+        let admitted = admitted_instruction(&payload.spu_instruction);
         let admit = if let Some(setup) = setup.as_deref_mut() {
-            setup.admit(&spu.lifecycle, ordinal, payload.spu_instruction.clone())
+            setup.admit(&spu.lifecycle, ordinal, admitted)
         } else {
             exchange(
                 &spu.lifecycle,
@@ -2552,7 +2584,7 @@ impl Harness {
                 ordinal,
                 weaver_types::RefusingOrgan::Spu,
                 LifecycleDirective::Admit {
-                    instruction: payload.spu_instruction.clone(),
+                    instruction: admitted,
                 },
             )
             .map(|_| ())
@@ -2615,9 +2647,18 @@ impl Harness {
                 column_ask,
             )
         };
-        if let Err(refusal) = opened {
-            after_load!(run, refusal);
-        }
+        let generation_limit = match opened {
+            Ok(limit) => limit,
+            Err(refusal) => after_load!(run, refusal),
+        };
+        // **The carried set stands once the session does**: the defaults read
+        // at the enter and the ceiling the Open answer stated, one value for
+        // every generation of the residency (`weaver-harness-Spec` section
+        // 6.1).
+        run.carried = serving_defaults.map(|sampling| crate::engine::Carried {
+            sampling,
+            max_tokens: generation_limit,
+        });
 
         if let Some(setup) = setup.as_deref_mut()
             && setup.checkpoint().is_err()
@@ -2867,6 +2908,7 @@ impl Harness {
                     &mut run.pressure_reported,
                     run.seated,
                     run.turn_context,
+                    run.carried,
                 ))
             }
             // Before enter and after leave there is no standing interior to
@@ -3408,6 +3450,72 @@ fn release_spu(
 /// nothing else". The exit status carries the same fact without adding one,
 /// and it is read here - after the exchange observed closure - where the child
 /// is already dead and there is no race to lose.
+/// The six sampling defaults a test's declaration carries, at the deploy
+/// scripts' constants, so a serving enter's reader reads them whole.
+#[cfg(test)]
+pub(crate) fn test_tunable_values() -> std::collections::BTreeMap<String, f64> {
+    [
+        ("temperature", 0.7),
+        ("top-k", 40.0),
+        ("top-p", 0.95),
+        ("repetition-penalty", 1.1),
+        ("repetition-window", 64.0),
+        ("seed", 11.0),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_string(), value))
+    .collect()
+}
+
+/// The declaration's six sampling defaults, judged as every generation would
+/// judge them, per `weaver-harness-Spec` section 6.1.
+///
+/// A missing name, a value that is not a count where a count belongs, or a
+/// value outside its range in `weaver-spu-Spec` section 8 refuses as
+/// `ConfigInvalid` on `tunable-values.<name>`. Where the field is elected, a
+/// `top-k` above the field's depth, or zero, refuses as `ConfigInvalid` on the
+/// field's depth, with one typed line on `diagnostic` naming both numbers
+/// (`weaver-spu-Spec` section 7.5).
+pub(crate) fn judge_sampling_defaults(
+    decoder: &weaver_types::DecoderInstruction,
+    diagnostic: &mut impl std::io::Write,
+) -> Result<weaver_types::Sampling, LifecycleRefusal> {
+    let sampling = decoder
+        .sampling_defaults()
+        .map_err(|field| LifecycleRefusal::ConfigInvalid { field: Some(field) })?;
+    if let Some(election) = decoder.field_election.as_ref()
+        && weaver_types::field_below_cutoff(election.depth, sampling.top_k)
+    {
+        let _ = writeln!(
+            diagnostic,
+            "{}",
+            serde_json::json!({
+                "organ": "harness",
+                "refusal": "field_depth_below_cutoff",
+                "depth": election.depth,
+                "top_k": sampling.top_k,
+            })
+        );
+        return Err(LifecycleRefusal::ConfigInvalid {
+            field: Some(weaver_types::FieldName(
+                "spu-instruction.decoder.field-election.depth".to_string(),
+            )),
+        });
+    }
+    Ok(sampling)
+}
+
+/// The instruction the SPU's admit carries: the enter's, less the six
+/// sampling names (`weaver-harness-spu-contract` section 2).
+pub(crate) fn admitted_instruction(
+    instruction: &weaver_types::SpuInstruction,
+) -> weaver_types::SpuInstruction {
+    weaver_types::SpuInstruction {
+        decoder: instruction.decoder.without_sampling_defaults(),
+        classify: instruction.classify.clone(),
+    }
+}
+
 /// Open the decode session once residency confirms, per
 /// `weaver-harness-Spec` section 6.1. The identity messages are the open's
 /// messages and the run's session its session, and a refusal or a fault below
@@ -3417,7 +3525,7 @@ fn open_session(
     session: SessionId,
     identity: Vec<weaver_traits::Message>,
     column_ask: bool,
-) -> Result<(), LifecycleRefusal> {
+) -> Result<u64, LifecycleRefusal> {
     open_session_with_diagnostic(
         decode,
         session,
@@ -3433,7 +3541,7 @@ fn open_session_with_diagnostic(
     identity: Vec<weaver_traits::Message>,
     column_ask: bool,
     diagnostic: &mut impl std::io::Write,
-) -> Result<(), LifecycleRefusal> {
+) -> Result<u64, LifecycleRefusal> {
     decode
         .send_directive(&TokenDirective::Open {
             session: session.clone(),
@@ -3448,13 +3556,14 @@ fn judge_open_reply(
     reply: Result<crate::channel::DecodeReply, ChannelFault>,
     session: &SessionId,
     diagnostic: &mut impl std::io::Write,
-) -> Result<(), LifecycleRefusal> {
+) -> Result<u64, LifecycleRefusal> {
     match reply {
         // Diagnostic and retiring serving callers consume the paired wire too.
         // They validate its exact echo and evidence without authoring a new
         // diagnostic event or manufacturing foundation boot/place readiness.
         Ok(crate::channel::DecodeReply::Answer(TokenAnswer::Opened(opened))) => {
             crate::open_evidence::validate(&opened, session)
+                .map(|()| opened.generation_limit)
                 .map_err(|cause| open_evidence_refusal(cause, diagnostic))
         }
         // The emission, matched by name: a fault at open is the residency

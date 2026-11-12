@@ -26,7 +26,7 @@ use weaver_spu::decoder::session::{NeverCancels, PositionedSinks, SamplerBuild, 
 use weaver_spu::family::FamilyName;
 use weaver_spu::readout::ReadoutElection;
 use weaver_spu::residency::{Headroom, Residency};
-use weaver_spu::sampling::EffectiveKnobs;
+use weaver_spu::sampling::Sampling;
 use weaver_types::{ArtifactRef, DeviceOrdinal, ModelBinding};
 
 /// The single card and the pair, by the ordinals a test leases.
@@ -153,7 +153,7 @@ fn a_safetensors_artifact_generates_through_the_native_engine_child() {
     let prefix = resident.tokenize(prompt).expect("the prompt tokenizes");
     assert!(!prefix.is_empty(), "a rendered prompt yields tokens");
 
-    let knobs = EffectiveKnobs {
+    let sampling = Sampling {
         temperature: 0.0,
         top_k: 1,
         top_p: 1.0,
@@ -162,7 +162,7 @@ fn a_safetensors_artifact_generates_through_the_native_engine_child() {
         seed: 11,
     };
     let mut session = resident
-        .open_session(&knobs, 512)
+        .open_session(512)
         .expect("a session opens over the native residency");
     session.open(&prefix).expect("the prefix decodes");
 
@@ -190,10 +190,7 @@ fn a_safetensors_artifact_generates_through_the_native_engine_child() {
                 field: None,
                 on_column: &mut |_, _| {},
             },
-            SamplerBuild {
-                seed: 11,
-                penalty_window: 64,
-            },
+            SamplerBuild { seed: 11, sampling },
         )
         .expect("the generation completes");
 
@@ -279,7 +276,7 @@ fn the_surprisal_election_governs_the_native_session_child() {
         };
         // Greedy, so the two arms decode the same tokens and a difference
         // between them is the election's doing rather than the sampler's.
-        let knobs = EffectiveKnobs {
+        let sampling = Sampling {
             temperature: 0.0,
             top_k: 1,
             top_p: 1.0,
@@ -287,9 +284,7 @@ fn the_surprisal_election_governs_the_native_session_child() {
             repetition_window: 0,
             seed: 11,
         };
-        let mut session = resident
-            .open_session(&knobs, 512)
-            .expect("the session opens");
+        let mut session = resident.open_session(512).expect("the session opens");
         session.open(&prefix).expect("the prefix decodes");
         let generated = session
             .append_and_generate(
@@ -305,10 +300,7 @@ fn the_surprisal_election_governs_the_native_session_child() {
                     field: None,
                     on_column: &mut |_, _| {},
                 },
-                SamplerBuild {
-                    seed: 11,
-                    penalty_window: 64,
-                },
+                SamplerBuild { seed: 11, sampling },
             )
             .expect("the generation completes");
 
@@ -415,7 +407,7 @@ fn the_pair_agrees_with_the_single_card_child() {
         return;
     };
     let dir = artifact_dir().expect("the parent found the artifact");
-    let knobs = EffectiveKnobs {
+    let sampling = Sampling {
         temperature: 0.0,
         top_k: 1,
         top_p: 1.0,
@@ -443,7 +435,7 @@ fn the_pair_agrees_with_the_single_card_child() {
         )
         .unwrap_or_else(|refusal| panic!("the admit at width {width}: {refusal:?}"));
     let prefix = resident.tokenize(prompt).expect("tokenizes");
-    let mut session = resident.open_session(&knobs, 512).expect("session opens");
+    let mut session = resident.open_session(512).expect("session opens");
     session.open(&prefix).expect("prefix decodes");
     let close = resident.tokenize("<|im_end|>").expect("close tokenizes");
     let [terminator] = close.as_slice() else {
@@ -463,10 +455,7 @@ fn the_pair_agrees_with_the_single_card_child() {
                 field: None,
                 on_column: &mut |_, _| {},
             },
-            SamplerBuild {
-                seed: 11,
-                penalty_window: 64,
-            },
+            SamplerBuild { seed: 11, sampling },
         )
         .expect("generates");
     let text = resident.detokenize(&generated.tokens).expect("detokenizes");
@@ -540,7 +529,7 @@ fn the_single_card_keeps_its_rotary_angle_past_position_256_child() {
         return;
     };
     let dir = artifact_dir().expect("the parent found the artifact");
-    let knobs = EffectiveKnobs {
+    let sampling = Sampling {
         temperature: 0.0,
         top_k: 1,
         top_p: 1.0,
@@ -580,7 +569,7 @@ fn the_single_card_keeps_its_rotary_angle_past_position_256_child() {
          position, and it holds {} tokens",
         prefix.len()
     );
-    let mut session = resident.open_session(&knobs, 1024).expect("session opens");
+    let mut session = resident.open_session(1024).expect("session opens");
     session.open(&prefix).expect("prefix decodes");
     let close = resident.tokenize("<|im_end|>").expect("close tokenizes");
     let [terminator] = close.as_slice() else {
@@ -600,10 +589,7 @@ fn the_single_card_keeps_its_rotary_angle_past_position_256_child() {
                 field: None,
                 on_column: &mut |_, _| {},
             },
-            SamplerBuild {
-                seed: 11,
-                penalty_window: 64,
-            },
+            SamplerBuild { seed: 11, sampling },
         )
         .expect("generates");
     let text = resident.detokenize(&generated.tokens).expect("detokenizes");
@@ -654,7 +640,7 @@ fn an_elected_readout_travels_with_the_generation_child() {
         return;
     };
     let dir = artifact_dir().expect("the parent found the artifact");
-    let knobs = EffectiveKnobs {
+    let sampling = Sampling {
         temperature: 0.0,
         top_k: 1,
         top_p: 1.0,
@@ -682,7 +668,7 @@ fn an_elected_readout_travels_with_the_generation_child() {
             )
             .unwrap_or_else(|refusal| panic!("admit width {width}: {refusal:?}"));
         let prefix = resident.tokenize(prompt).expect("tokenizes");
-        let mut session = resident.open_session(&knobs, 512).expect("session opens");
+        let mut session = resident.open_session(512).expect("session opens");
         session.open(&prefix).expect("prefix decodes");
         let close = resident.tokenize("<|im_end|>").expect("close tokenizes");
         let [terminator] = close.as_slice() else {
@@ -702,10 +688,7 @@ fn an_elected_readout_travels_with_the_generation_child() {
                     field: None,
                     on_column: &mut |_, _| {},
                 },
-                SamplerBuild {
-                    seed: 11,
-                    penalty_window: 64,
-                },
+                SamplerBuild { seed: 11, sampling },
             )
             .expect("generates");
         match (elected, &generated.residual) {
@@ -877,7 +860,7 @@ fn an_elected_readout_is_admitted_by_a_gguf_family_that_declares_a_tap_child() {
         )
         .expect("a family declaring a tap admits an elected readout");
 
-    let knobs = EffectiveKnobs {
+    let sampling = Sampling {
         temperature: 0.0,
         top_k: 1,
         top_p: 1.0,
@@ -888,7 +871,7 @@ fn an_elected_readout_is_admitted_by_a_gguf_family_that_declares_a_tap_child() {
     let prompt =
         "<|im_start|>user\nReply with exactly one word: hello<|im_end|>\n<|im_start|>assistant\n";
     let prefix = resident.tokenize(prompt).expect("tokenizes");
-    let mut session = resident.open_session(&knobs, 512).expect("session opens");
+    let mut session = resident.open_session(512).expect("session opens");
     session.open(&prefix).expect("prefix decodes");
     let close = resident.tokenize("<|im_end|>").expect("close tokenizes");
     let [terminator] = close.as_slice() else {
@@ -908,10 +891,7 @@ fn an_elected_readout_is_admitted_by_a_gguf_family_that_declares_a_tap_child() {
                 field: None,
                 on_column: &mut |_, _| {},
             },
-            SamplerBuild {
-                seed: 11,
-                penalty_window: 64,
-            },
+            SamplerBuild { seed: 11, sampling },
         )
         .expect("generates");
 
@@ -973,7 +953,7 @@ fn the_pair_reports_its_pace_child() {
         return;
     };
     let dir = artifact_dir().expect("the parent found the artifact");
-    let knobs = EffectiveKnobs {
+    let sampling = Sampling {
         temperature: 0.0,
         top_k: 1,
         top_p: 1.0,
@@ -1001,7 +981,7 @@ fn the_pair_reports_its_pace_child() {
             )
             .unwrap_or_else(|refusal| panic!("the admit at width {width}: {refusal:?}"));
         let prefix = resident.tokenize(prompt).expect("tokenizes");
-        let mut session = resident.open_session(&knobs, 2048).expect("session opens");
+        let mut session = resident.open_session(2048).expect("session opens");
         session.open(&prefix).expect("prefix decodes");
         let close = resident.tokenize("<|im_end|>").expect("close tokenizes");
         let [terminator] = close.as_slice() else {
@@ -1022,10 +1002,7 @@ fn the_pair_reports_its_pace_child() {
                     field: None,
                     on_column: &mut |_, _| {},
                 },
-                SamplerBuild {
-                    seed: 11,
-                    penalty_window: 64,
-                },
+                SamplerBuild { seed: 11, sampling },
             )
             .expect("generates");
         let elapsed = started.elapsed().as_secs_f64();
@@ -1152,7 +1129,7 @@ fn a_large_sharded_safetensors_serves_across_the_pair_child() {
     let prompt =
         "<|im_start|>user\nReply with exactly one word: hello<|im_end|>\n<|im_start|>assistant\n";
     let prefix = resident.tokenize(prompt).expect("tokenizes");
-    let knobs = EffectiveKnobs {
+    let sampling = Sampling {
         temperature: 0.0,
         top_k: 1,
         top_p: 1.0,
@@ -1160,7 +1137,7 @@ fn a_large_sharded_safetensors_serves_across_the_pair_child() {
         repetition_window: 0,
         seed: 11,
     };
-    let mut session = resident.open_session(&knobs, 1024).expect("session opens");
+    let mut session = resident.open_session(1024).expect("session opens");
     let opened = std::time::Instant::now();
     session.open(&prefix).expect("the prefix decodes");
     let close = resident.tokenize("<|im_end|>").expect("close tokenizes");
@@ -1181,10 +1158,7 @@ fn a_large_sharded_safetensors_serves_across_the_pair_child() {
                 field: None,
                 on_column: &mut |_, _| {},
             },
-            SamplerBuild {
-                seed: 11,
-                penalty_window: 64,
-            },
+            SamplerBuild { seed: 11, sampling },
         )
         .expect("the 32B generates");
     let secs = opened.elapsed().as_secs_f64();

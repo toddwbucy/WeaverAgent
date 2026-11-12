@@ -1140,11 +1140,12 @@ fn decode_base64(text: &str) -> Option<Vec<u8>> {
 /// Messages are `weaver-traits`' [`weaver_traits::Message`], drawn rather
 /// than restated.
 ///
-/// **No sampling value crosses this seam inbound.** The tunable map left this
-/// directive when the values moved to the declaration, per `weaver-spu-Spec`
-/// section 8: the engine builds its sampler once at session open, so a value
-/// arriving with a turn had no engine to reach. The value discipline that
-/// guarded the map moved with it to [`crate::config::DecoderInstruction`].
+/// **Every generation carries the values it samples with**, per
+/// `weaver-spu-Spec` section 8 and the operator's ruling of 2026-11-11:
+/// `AppendAndGenerate` carries [`Sampling`] and its token bound, and `ReFeed`
+/// carries the recorded generation's [`Sampling`]. Both engines build the
+/// whole sampler from them at each generation. The declaration supplies the
+/// harness loop's defaults, and no sampling value reaches the SPU at admit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TokenDirective {
@@ -1166,6 +1167,12 @@ pub enum TokenDirective {
         /// Exact granted schemas in assembly order. An empty grant is an
         /// explicit empty list, never an absent member or a legacy default.
         tool_schemas: Vec<String>,
+        /// The values this generation samples with, every member required.
+        sampling: Sampling,
+        /// This generation's token bound, at most the session's ceiling
+        /// (`Opened.generation_limit`), refused above it rather than served
+        /// short, per `weaver-spu-Spec` section 8.
+        max_tokens: u64,
     },
     /// Read-only sizing through the same whole rendering and tokenizer as
     /// append, under TYPES-DECODE and SPU-MEASURE. The returned keep is
@@ -1186,6 +1193,10 @@ pub enum TokenDirective {
         turn: TurnKey,
         rendered: String,
         path: Vec<u32>,
+        /// The six members the recorded `model.request`'s `sampling` block
+        /// holds, never the declaration's defaults of the day. A re-feed
+        /// carries no bound: it runs the length of its recorded path.
+        sampling: Sampling,
     },
     Cancel {
         turn: TurnKey,
@@ -1214,6 +1225,63 @@ pub enum TokenDirective {
         from: u64,
         to: u64,
     },
+}
+
+/// The values a generation samples with, per `weaver-spu-Spec` section 8.
+///
+/// **Every member is required and none defaults.** The names and the types
+/// are the ones the request's `sampling` block renders, so what a generation
+/// carried and what its request records compare member for member. `seed` is
+/// the declared seed, from which each generation's stream is derived
+/// (`weaver-spu-Spec` section 8.5).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sampling {
+    pub temperature: f32,
+    pub top_k: u32,
+    pub top_p: f32,
+    pub repetition_penalty: f32,
+    pub repetition_window: u32,
+    pub seed: u64,
+}
+
+/// The exclusive bound on the two counts the GGUF engine takes as a signed
+/// 32-bit integer, `top_k` and `repetition_window`.
+pub const SAMPLING_COUNT_CEILING: u32 = 1 << 31;
+
+impl Sampling {
+    /// The first member outside its range, in declaration order, per
+    /// `weaver-spu-Spec` section 8's table. The seed has no range, and the
+    /// bound is judged against the session's ceiling by the caller.
+    ///
+    /// **One rule for both readers.** The harness judges the declaration's
+    /// defaults with it at load and the SPU judges every carried set with it,
+    /// so the early refusal and the binding one cannot drift apart.
+    pub fn out_of_range(&self) -> Option<SamplingMember> {
+        if !self.temperature.is_finite() || self.temperature < 0.0 {
+            return Some(SamplingMember::Temperature);
+        }
+        if self.top_k >= SAMPLING_COUNT_CEILING {
+            return Some(SamplingMember::TopK);
+        }
+        if !self.top_p.is_finite() || self.top_p <= 0.0 || self.top_p > 1.0 {
+            return Some(SamplingMember::TopP);
+        }
+        if !self.repetition_penalty.is_finite() || self.repetition_penalty <= 0.0 {
+            return Some(SamplingMember::RepetitionPenalty);
+        }
+        if self.repetition_window >= SAMPLING_COUNT_CEILING {
+            return Some(SamplingMember::RepetitionWindow);
+        }
+        None
+    }
+}
+
+/// Whether an elected field of `depth` cannot report past a `top_k` cutoff,
+/// per `weaver-spu-Spec` section 7.5. A `top_k` of zero keeps every candidate,
+/// so its cutoff is the whole vocabulary and no depth reports past it.
+pub fn field_below_cutoff(depth: u32, top_k: u32) -> bool {
+    top_k == 0 || depth < top_k
 }
 
 /// The decode seam's answers and intermediates, per `weaver-types-Spec`
@@ -1602,12 +1670,18 @@ pub enum RefusalRecord {
 /// turn's message kinds before the exchange, and the cancel's turn is the
 /// envelope's field on every event. A refused flush's cut and a refused
 /// elision's span reach no event at all, the `elision` kind recording only
-/// removals that happened, so those two carry.
+/// removals that happened, so those two carry. A refused append's sampling set
+/// and bound carry too: a refused generation writes no request. A re-feed's
+/// inputs are its recorded generation's, inside the span the replay's recall
+/// names.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "ask", rename_all = "snake_case")]
 pub enum TokenAsk {
     Open,
-    AppendAndGenerate,
+    AppendAndGenerate {
+        sampling: Sampling,
+        max_tokens: u64,
+    },
     /// A refused measurement names its requested keep, not a token guess
     /// derived from the proposal's message bytes.
     MeasureDelta {
@@ -1648,8 +1722,8 @@ pub enum LifecycleAsk {
     WorldRequest,
 }
 
-/// The decode seam's refusal, per `weaver-types-Spec` section 4.4: the four
-/// cases are the decode contract's section 5 and this type adds none.
+/// The decode seam's refusal, per `weaver-types-Spec` section 4.4 and the
+/// decode contract's section 5.
 /// `OutOfOrder` is the same word loop 0's refusal carries and is not the same
 /// case, the states it is judged against being the decode seam's, which is why
 /// this trio carries its own rather than drawing loop 0's.
@@ -1699,6 +1773,32 @@ pub enum TokenRefusal {
         prefix: u64,
         resident: u64,
     },
+    /// A carried sampling value or bound outside its range, per
+    /// `weaver-spu-Spec` section 8, refused before any append. The ask the
+    /// harness records carries the whole set, so the value is in the record.
+    SamplingOutOfRange {
+        member: SamplingMember,
+    },
+    /// An elected field's depth below the generation's `top_k`, or a `top_k`
+    /// of zero, whose cutoff is the whole vocabulary, per `weaver-spu-Spec`
+    /// section 7.5. Both numbers ride, because the charter's floor names both.
+    FieldBelowCutoff {
+        depth: u32,
+        top_k: u32,
+    },
+}
+
+/// The carried member a `SamplingOutOfRange` names. `seed` has no arm,
+/// because no seed is out of range.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SamplingMember {
+    Temperature,
+    TopK,
+    TopP,
+    RepetitionPenalty,
+    RepetitionWindow,
+    MaxTokens,
 }
 
 /// The label seam's ask, per `weaver-types-Spec` section 4.5: the content to

@@ -398,6 +398,9 @@ pub(super) struct PlaceTransaction {
 #[derive(Debug)]
 pub(super) struct GenerationTransaction {
     grant: Option<PlacementGrant>,
+    /// The append as it was staged, its carried set and bound among it, so a
+    /// refusal names the ask that crossed. `None` where nothing was staged.
+    asked: Option<TokenAsk>,
     native_admission: Option<NativeScopes>,
     reservation: Option<DecodeReservation>,
     terminal: Option<ReceivedDecode>,

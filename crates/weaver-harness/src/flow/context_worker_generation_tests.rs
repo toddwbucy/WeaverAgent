@@ -128,6 +128,7 @@ pub(in crate::flow::context) fn spu_after_open(mode: &str, fd: i32) {
                         turn,
                         delta,
                         tool_schemas,
+                        ..
                     } => {
                         assert!(!appended);
                         assert_eq!(turn.0, "generation-turn");
