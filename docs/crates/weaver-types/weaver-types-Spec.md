@@ -637,9 +637,9 @@ published name of a save point in the territory's `save-points/`,
 `/`, not `.` or `..`, not empty and with no control character, refusing `BadValue`
 naming `restore.save-point` otherwise. Admin resolves it through its manifest and opens
 it under its own custody, per `weaver-admin-Spec` section 4, and the harness never sees
-it; the record-and-cut form of before A3.2 retired with the record restore. A save point the
-operator built offline from a record names that record and cut inside itself, not here,
-so a branch from a record is the builder's act and this member keeps one meaning.
+it. The record-and-cut form of before A3.2 retired with the record restore. A save point
+the operator built offline from a record names that record and cut inside itself, not
+here, so a branch from a record is the builder's act and this member keeps one meaning.
 **`lifecycle` bounds the graceful unload, and its absence leaves it unbounded**, on the
 operator's ruling of 2026-10-09 recorded on #1. The drain and the wind-down of
 `weaver-admin-Spec` section 3's graceful unload (S4 and S5) are unbounded by default,
@@ -1971,11 +1971,11 @@ declared drain and wind-down bounds the run holds**, in seconds, as the enter ca
 silent and then absent from the wire, so a run that declared none answers byte-identical to
 before (the Planner's ruling of 2026-10-12, B3): admin reads them at the observation before
 every leave, and its deadline follows them (`weaver-admin-Spec` 3.0, the bounds). It lacks the
-event's stack, lineage, reset and prompt digest, the last for the reason the enter
-payload's clause above gives, so a consumer storing both stores two shapes, and the
-rework of `show` (#52 and the load confirmation) is where a shared core is weighed.
-`Composer` is this crate's spelling of the loop's identity because the record's own is
-`weaver-trace`'s and the floor links downward only.
+event's stack, lineage and reset, and neither carries a prompt digest, for the reason
+the enter payload's clause above gives, so a consumer storing both stores two shapes,
+and the rework of `show` (#52 and the load confirmation) is where a shared core is
+weighed. `Composer` is this crate's spelling of the loop's identity because the record's
+own is `weaver-trace`'s and the floor links downward only.
 
 ### 4.3 The encoding
 

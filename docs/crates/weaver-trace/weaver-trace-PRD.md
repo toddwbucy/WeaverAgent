@@ -315,7 +315,7 @@ its closure.
 | `elision` | an interior span of the decode context made absent, the loop's election, the span it named beside the resident counts either side |
 | `refusal` | a typed refusal clerked to the record, one kind for every seam, the organ's case carried opaque as `fault` does |
 | `recall` | an answered ask on the state seam, what was asked and the identities of the events custody answered with, never their contents |
-| `message.restored` | one message of a restored conversation, the message whole, as records written before 2026-10-02 carry it; no load authors it now |
+| `message.restored` | one message of a restored conversation, the message whole, as records written before 2026-10-02 carry it, and no load authors it now |
 | `score` | a task's verdict on its run at the run's close, the predicate answered and whether it held, and the ratio over the task's denominator as its two terms where one exists |
 | `save_point` | a save point taken, by digest, with the trace position it covers, the name the member wrote it under and the cause that asked for it, authored after the holdings it names were taken |
 | `model.unrecovered_call` | a call the emission attempted that the family parse could not recover: the fragment as written, the parse's reason, and the family grammar that judged it, beside the verbatim `model.output` keeps |
@@ -384,21 +384,22 @@ any load's save point is, and the `load` event's lineage marks it as named at a
 restore. A live restore, and the KV flush it would record, are A5's with the
 decode seam's `Reopen`. Each
 of these kinds is named and shaped by the act that lands its emitter, on the rule
-above, and added here then: the take landed as `save_point` on 2026-10-05; a restore at a load is a load and rides
-the `load` event's lineage with its named-at-restore mark, and a forced unload is an
-unload and rides the `unload` event's `forced`, both as of A3.2 (2026-10-06), a force
-that joined another account's still-graceful leave, the first to turn it forced, naming its caller in the optional
-`forced_by` beside the leave's own `cause`, a load's rollback writing `forced` as the
-exemption `weaver-admin-Spec` section 3's I2 names, as of the lifecycle act (2026-10-09, on the lifecycle
+above, and added here then. The take landed as `save_point` on 2026-10-05. A restore at
+a load is a load and rides the `load` event's lineage with its named-at-restore mark,
+and a forced unload is an unload and rides the `unload` event's `forced`, both as of
+A3.2 (2026-10-06), a force that joined another account's still-graceful leave, the first
+to turn it forced, naming its caller in the optional `forced_by` beside the leave's own
+`cause`, a load's rollback writing `forced` as the exemption `weaver-admin-Spec` section
+3's I2 names, as of the lifecycle act (2026-10-09, on the lifecycle
 state table approved by the operator that day, recorded on #1, which `weaver-admin-Spec`
-section 3 holds), no kind being named ahead of its emitter, so the live restore's own event, a reload within a
-residency, is the loop act's (A5) to name with its `Reopen`; the reset
-riding the `load` event per `weaver-trace-Spec` section 3. **The `save_point` kind never crosses the tee into
-state**, whatever the election: it is provenance about the holdings, authored after
-the holdings it names were taken, so a save point could never hold its own event and a
-rebuild that landed it would hold what no restore holds. The lineage and the reset ride
-the `load` event, which crosses as the election says; a rebuild reads the reset to
-decide what to land.
+section 3 holds), no kind being named ahead of its emitter, so the live restore's own
+event, a reload within a residency, is the loop act's (A5) to name with its `Reopen`.
+The reset rides the `load` event per `weaver-trace-Spec` section 3. **The `save_point`
+kind never crosses the tee into state**, whatever the election: it is provenance about
+the holdings, authored after the holdings it names were taken, so a save point could
+never hold its own event and a rebuild that landed it would hold what no restore holds.
+The lineage and the reset ride the `load` event, which crosses as the election says, and
+a rebuild reads the reset to decide what to land.
 
 **The record declares the posture it was written in.** Section 3.1's `load`
 event carries every diagnostic election of the load by name, because
@@ -626,12 +627,14 @@ boundary activity that changes nothing in the agent stays in admin's operations 
 was given. The system prompt enters state management through the gate as the agent's
 first turn and is held by the member, so the record of which prompt was in force is the
 turnless `message.system` event the harness authors at the seeding turn, where the
-prompt entered, and a save point carries it; a load authors no prefix, on the operator's ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are not tied together once the agent is unloaded, and records its seating as the `recall` of the identity ask beside the
-lineage the `load` event names, so a reader of one run reaches the prefix through the
-save point the run started from. The `load` event names the declaration by digest and
-no prompt. Absence means a record older than the act and is
-read as the digest being unrecoverable, never as a default. `weaver-trace-Spec` section
-3 carries the member.
+prompt entered, and a save point carries it. A load authors no prefix, on the operator's
+ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are
+not tied together once the agent is unloaded, and records its seating as the `recall` of
+the identity ask beside the lineage the `load` event names, so a reader of one run
+reaches the prefix through the save point the run started from. The `load` event names
+the declaration by digest and no prompt. Absence means a record older than the act and
+is read as the digest being unrecoverable, never as a default. `weaver-trace-Spec`
+section 3 carries the member.
 
 **A replay under the wrong projection does not fail.** It lands, the loop asks,
 an answer comes back, and what the run produces is a plausible replay of a
@@ -1159,7 +1162,7 @@ on the operator's ruling of 2026-10-06 (later, #1) that a session's trace and th
 session started from, the `recall` of the identity ask names the events the
 member handed back, and the text stands in that save point and at its seeding
 turn. This retires the rule of 2026-09-04 that each run's record carries its
-own prefix text; the accumulation for a run that seated a prefix starts from
+own prefix text. The accumulation for a run that seated a prefix starts from
 what the lineage and the recall name, reached through the save point. The
 event belongs to no turn, on the precedent the classify pair set, because a
 prefix precedes every turn of the residency it seeds, and the assembled

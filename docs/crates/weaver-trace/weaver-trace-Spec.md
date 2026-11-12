@@ -714,24 +714,26 @@ says what state the operator's choice kept. **`forced_by` names the account that
 a leave another account asked for** (`weaver-admin-Spec` section 3, the forced unload,
 joining, and I2): where a `force-unload` joined a graceful unload's pending leave,
 `cause` stays the leave's own, the graceful caller's, and `forced_by` carries the cause
-of the first force that turned the still-graceful leave forced, so the record keeps both accounts rather than attributing the
-force to the caller who asked for a graceful unload; a later join receives the same
-answer and is named nowhere, as is a join into a leave a declared bound already turned
-forced, the bound having been first. It is absent where no force joined, a sole forced unload
-included, whose `cause` already names it, and a leave turned forced by a declared
-bound, whose `cause` stays the graceful caller's, and is never written null; absent at the
-read in a record written before the lifecycle act, which no force could join, so the
-absence reads the same, per section 3's rule for an added member; an optional member on a standing kind's payload, it names no new kind. **`release` says how the run's organs let go**, on the lifecycle act's I9 (`weaver-admin-Spec`
-section 3): the SPU and the member are released before `unload` is authored, so
-`unload` is the run's terminal event and carries the outcome. The SPU's is `Confirmed`
-or `Unconfirmed`, its `Release` answered `Released` or not, per
+of the first force that turned the still-graceful leave forced, so the record keeps both
+accounts rather than attributing the force to the caller who asked for a graceful
+unload. A later join receives the same answer and is named nowhere, as is a join into a
+leave a declared bound already turned forced, the bound having been first. It is absent
+where no force joined, a sole forced unload included, whose `cause` already names it,
+and a leave turned forced by a declared bound, whose `cause` stays the graceful
+caller's, and is never written null. It is absent at the read in a record written before
+the lifecycle act, which no force could join, so the absence reads the same, per section
+3's rule for an added member. An optional member on a standing kind's payload, it names
+no new kind. **`release` says how the run's organs let go**, on the lifecycle act's I9
+(`weaver-admin-Spec` section 3): the SPU and the member are released before `unload` is
+authored, so `unload` is the run's terminal event and carries the outcome. The SPU's is
+`Confirmed` or `Unconfirmed`, its `Release` answered `Released` or not, per
 `weaver-harness-spu-contract` section 5, and an SPU that dies in its release is a
 `fault` authored before `unload`, its outcome `Unconfirmed`. The member's is
 `Closed` or `Unconfirmed`, absent where the run stands no member: the member has no
 release exchange, so this crate closes its ask end of the state seam, the tee's end
 closing with the writer after `unload` crosses it, and the member retires on its own
 (`weaver-admin-Spec` section 6), and `Closed` says only that the ask end was closed, never
-that the member was seen to exit; `Unconfirmed` says the seam was already dead or the
+that the member was seen to exit. `Unconfirmed` says the seam was already dead or the
 close failed. **`release` is optional
 at the read**, per section 3's rule for an added member: this crate always writes it,
 so a current record always carries it, and its absence means only that the record was
@@ -972,9 +974,11 @@ no prompt**, on the operator's ruling of 2026-10-06 (#1): the system prompt is s
 not a file the load was given, so the record of which prompt was in force is the
 turnless `message.system` event the harness authors at the seeding turn from the gate's
 line, per `weaver-harness-Spec` section 6.1, the `recall` of the identity ask at each
-load, and the save point the load's `lineage` names, which carries the prefix; a load
-authors no prefix, on the operator's ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are not tied together once the agent is unloaded. The `identity_file`
-digest of #57 (2026-10-02) never reached a merged build and is not a member.
+load, and the save point the load's `lineage` names, which carries the prefix. A load
+authors no prefix, on the operator's ruling of 2026-10-06 (later, #1) that a session's
+trace and the state it loaded from are not tied together once the agent is unloaded. The
+`identity_file` digest of #57 (2026-10-02) never reached a merged build and is not a
+member.
 
 **`elision` carries its coordinates and `flush` does not need to.** An
 earlier draft of this section gave the elision `FlushCounts` on the reading
@@ -1081,24 +1085,27 @@ version what it does not own.
 **`StopReason` gains `Unload`, and the tool outcome's `by` gains `unload` and `fault`**,
 with the lifecycle act (2026-10-09), `fault` closing a call the gate's death left
 unanswered, which the harness synthesizes and which reads outcome indeterminate, never
-re-run automatically, unlike an unload's (`weaver-admin-Spec` section 3, the organ-death table; Codex on #109, round 38), so the record names an unload's interruption and not only
-that something stopped the turn. **A turn that finished closes `Clean`** during a
-graceful unload as at any other time (`weaver-admin-Spec` section 3, S4 x turn closes),
-and **only a turn the unload ended closes `Stopped { reason: unload, cause }`** with the
-leave's cause: a forced leave's cancelled turn (the forced unload), and a graceful
-leave's turn that closed without a tool return the drain blocked (S4 x tool return).
-That call completes interrupted, `by: unload` in the `tool.call.completed` outcome per
-`weaver-types-Spec` section 4.1, the gate's answer to the harness's `ToolInterrupt`, as
-does a call the wind-down asked for, which is never sent and which the harness completes
-in its own word (S5 x tool return), so the call reads as never finished and re-runnable after the reload. A result that crossed the interrupt stands as the call's outcome, completed and never re-runnable: the first outcome wins, and only a call the interrupt actually ended reads `by: unload`. Two
-values on members that stand, `reason` on the close and `by` on the outcome, rather
-than a new member, because each already says what ended its thing; and `unload` rather
-than the stop's `directive`, because a re-run after the reload is owed to an unload's
-interruption and not to an operator's stop. **`StopReason` gains `Refused`**, per the
-charter's same-act edit. It is a
-satellite by section 12 and its variants are not enumerated here, but the
-addition is the charter's rather than a naming choice: a close that cannot
-say a refusal ended the turn says something else instead.
+re-run automatically, unlike an unload's (`weaver-admin-Spec` section 3, the
+organ-death table, and Codex on #109, round 38), so the record names an unload's
+interruption and not only that something stopped the turn. **A turn that finished closes
+`Clean`** during a graceful unload as at any other time (`weaver-admin-Spec` section 3,
+S4 x turn closes), and **only a turn the unload ended closes `Stopped { reason: unload,
+cause }`** with the leave's cause: a forced leave's cancelled turn (the forced unload),
+and a graceful leave's turn that closed without a tool return the drain blocked (S4 x
+tool return). That call completes interrupted, `by: unload` in the `tool.call.completed`
+outcome per `weaver-types-Spec` section 4.1, the gate's answer to the harness's
+`ToolInterrupt`, as does a call the wind-down asked for, which is never sent and which
+the harness completes in its own word (S5 x tool return), so the call reads as never
+finished and re-runnable after the reload. A result that crossed the interrupt stands as
+the call's outcome, completed and never re-runnable: the first outcome wins, and only a
+call the interrupt actually ended reads `by: unload`. Two values on members that stand,
+`reason` on the close and `by` on the outcome, rather than a new member, because each
+already says what ended its thing. The value is `unload` rather than the stop's
+`directive`, because a re-run after the reload is owed to an unload's interruption and
+not to an operator's stop. **`StopReason` gains `Refused`**, per the charter's same-act
+edit. It is a satellite by section 12 and its variants are not enumerated here, but the
+addition is the charter's rather than a naming choice: a close that cannot say a refusal
+ended the turn says something else instead.
 
 **The identity prefix's events carry no turn, and `message.system`
 becomes turn-optional to admit them.** A prefix is seated at open and
@@ -1201,13 +1208,13 @@ authors it from the state seam's `finished` answer, the fourth leg of the `snaps
 exchange, so the record names only a file that has its finished name, at every serving
 leave before `unload` and on the operator's demand through admin's `save-point` verb,
 as of A3.2 on the operator's rulings of 2026-10-06 on #1, per `weaver-harness-Spec`
-section 6. **The payload is `SavePointTaken`**: `save_point`,
-the digest of the save point's bytes, which is its identity in the territory's
-`save-points/` and the `save_point` a later load's lineage names; `run` and `sequence`, the trace
-position of the last distillate it holds; `turn`, the last turn that run holds in it,
-zero where it holds none; `name`, the file name the member wrote it under in its
-own room, so the operator can find the file the digest names, never its path; and
-`cause`, the uid admin's directive carried, the leave's cause at a leave and the
+section 6. **The payload is `SavePointTaken`**, with six members. `save_point` is the
+digest of the save point's bytes, which is its identity in the territory's
+`save-points/` and the `save_point` a later load's lineage names. `run` and `sequence`
+are the trace position of the last distillate it holds. `turn` is the last turn that run
+holds in it, zero where it holds none. `name` is the file name the member wrote it under
+in its own room, so the operator can find the file the digest names, never its path.
+`cause` is the uid admin's directive carried, the leave's cause at a leave and the
 `save-point` verb's on demand, as `unload` carries its own, so a save point is
 attributed to the account that asked for it, absent only where no directive asked. **The
 kind forbids a turn**, the save point being taken at the leave or between turns, for
@@ -1216,10 +1223,11 @@ the charter's section 3: it is provenance about the holdings, authored after the
 holdings it names were taken, so a save point could never hold its own event and a
 rebuild that landed it would hold what no restore holds, and `distill` refuses the kind
 before the election is consulted. The diagnostic record carries no save point, a
-diagnostic binding taking none. A restore at a load rides the `load` event's lineage, marked `named_at_restore`, and a
-forced unload rides the `unload` event's `forced` and, where a force joined, its
-`forced_by`, no kind being named ahead of its emitter; the live restore's own event is
-the loop act's (A5), and the reset rides the `load` event's `reset` member above.
+diagnostic binding taking none. A restore at a load rides the `load` event's lineage,
+marked `named_at_restore`, and a forced unload rides the `unload` event's `forced` and,
+where a force joined, its `forced_by`, no kind being named ahead of its emitter. The
+live restore's own event is the loop act's (A5), and the reset rides the `load` event's
+`reset` member above.
 
 **`model.unrecovered_call` records a call the emission attempted and the family parse
 could not recover, the twenty-sixth kind**, on the operator's ruling of 2026-10-13 on
@@ -1262,36 +1270,37 @@ to: trace-unrecovered-call-is-its-own-fact
 ```
 
 **The run's record order is `weaver-admin-Spec` section 3, I9**, the lifecycle state
-table's, and this crate's kinds carry it without a kind of their own: within a run,
-`load` first; the seeding turn's `message.system`, where the agent is seeded in this
-run, before any user turn; `save_point` before `unload`; a `fault` met in the SPU's
-release, and a recorder-pressure `fault`, before `unload`, the release coming first; and
-`unload` last, the terminal event, carrying the release outcome, nothing authored after
-it, the harness reading the queue depth before `unload` and not after. **An unload's
-own account rides standing kinds** (`weaver-admin-Spec` section 3, the graceful unload
-and the forced unload): a request the drain refuses through the gate is a `refusal` of
-the leave, one per request, carrying the lifecycle refusal `unloading` that answered it,
-per `weaver-types-Spec` section 4.2 (S4 and S5 x dialer request, and I5), as is a frame a forced leave's lower meets (S6 x dialer
-request); a turn the unload ended closes `Stopped { reason: unload }` and its
-interrupted call completes `by: unload`, per the clause on `StopReason` above; the
-wind-down turn is a turn of the run, its bracket and its request and summary under the
-message kinds `weaver-harness-Spec` section 6 names, before `save_point`, its own calls
-completing `by: unload` (S5); and a forced leave whose save point could not be taken
-records the miss as a `refusal` of the leave carrying `save_point_not_taken` and its leg
-before `unload`. **A run with no `unload` event never answered `Left`** (I2), the
-harness answering `Left` only after the writer's queue has drained `unload` to the
-sink, per `weaver-admin-harness-contract` section 4, so a reader keys a run's close on
-`unload` and its `forced` and never infers one from the record's end. **A record that
-ends with a turn started and never closed, and no `unload`, is a worker's death**: the
-worker is the trace's author and cannot record its own death, so the unclosed final
-turn is the account that its request was not completed, and the next load records the
-reset (`weaver-admin-Spec` section 3, S8b and I5). The converse does
-not hold: a worker that dies in S7 after `unload` and before `Left` leaves an
-`unload` with no answer, which admin meets as S8b with the marker `Open` (S7 x the worker
-dies). A member that dies while the worker lives ends nothing on the record: in S4 to S6
-the leave's save point misses `MemberDead`, recorded as a `refusal` of the leave where
-the leave is forced, and in S7 a seam found dead at the release reads `Unconfirmed` in
-`release.member`, no `fault` authored (S4 to S10 x the member dies, the worker alive).
+table's, and this crate's kinds carry it without a kind of their own. Within a run,
+`load` is first. The seeding turn's `message.system`, where the agent is seeded in this
+run, comes before any user turn. `save_point` comes before `unload`. A `fault` met in
+the SPU's release, and a recorder-pressure `fault`, come before `unload`, the release
+coming first. `unload` is last, the terminal event, carrying the release outcome,
+nothing authored after it, the harness reading the queue depth before `unload` and not
+after. **An unload's own account rides standing kinds** (`weaver-admin-Spec` section 3,
+the graceful unload and the forced unload): a request the drain refuses through the gate
+is a `refusal` of the leave, one per request, carrying the lifecycle refusal `unloading`
+that answered it, per `weaver-types-Spec` section 4.2 (S4 and S5 x dialer request, and
+I5), as is a frame a forced leave's lower meets (S6 x dialer request). A turn the unload
+ended closes `Stopped { reason: unload }` and its interrupted call completes `by:
+unload`, per the clause on `StopReason` above. The wind-down turn is a turn of the run,
+its bracket and its request and summary under the message kinds `weaver-harness-Spec`
+section 6 names, before `save_point`, its own calls completing `by: unload` (S5). A
+forced leave whose save point could not be taken records the miss as a `refusal` of the
+leave carrying `save_point_not_taken` and its leg before `unload`. **A run with no
+`unload` event never answered `Left`** (I2), the harness answering `Left` only after the
+writer's queue has drained `unload` to the sink, per `weaver-admin-harness-contract`
+section 4, so a reader keys a run's close on `unload` and its `forced` and never infers
+one from the record's end. **A record that ends with a turn started and never closed,
+and no `unload`, is a worker's death**: the worker is the trace's author and cannot
+record its own death, so the unclosed final turn is the account that its request was not
+completed, and the next load records the reset (`weaver-admin-Spec` section 3, S8b and
+I5). The converse does not hold: a worker that dies in S7 after `unload` and before
+`Left` leaves an `unload` with no answer, which admin meets as S8b with the marker
+`Open` (S7 x the worker dies). A member that dies while the worker lives ends nothing on
+the record: in S4 to S6 the leave's save point misses `MemberDead`, recorded as a
+`refusal` of the leave where the leave is forced, and in S7 a seam found dead at the
+release reads `Unconfirmed` in `release.member`, no `fault` authored (S4 to S10 x the
+member dies, the worker alive).
 
 **`score` and the classify pair are the precedents for every loop judgment**, per the
 charter's section 3.1 on the operator's ruling of 2026-10-02: a judgment the loop makes,
@@ -1809,7 +1818,7 @@ coordination contract's ordering. At process death nothing drains and the tail i
 forfeited, which this crate cannot report because the process reporting it is the
 one that died. **`drain_by` bounds the wait**: it answers as `drain` does where the
 queue empties by the deadline, and otherwise `Expired` naming how many records were
-still queued, the wait given up on them while the writer goes on; the harness's leave
+still queued, the wait given up on them while the writer goes on. The harness's leave
 drains so under its shared deadline (`weaver-harness-Spec` section 6) and names the
 forfeit itself. **The queue's last slot is the run's `unload`'s** (`UNLOAD_RESERVE`, one): every
 other record's submit waits once the queue holds the depth less the reserve, so "the
@@ -1818,7 +1827,7 @@ admitted however the sink stalls. Only `unload` takes the reserve, and a run aut
 one. **`abandon` gives the writer up** after the caller's last bounded drain expired: the
 records still queued are forfeited, as at process death (`weaver-trace-PRD` section
 4.2), the writer begins no further record, and dropping the recorder detaches its thread
-rather than wait on a sink that stopped taking writes, so the process can exit; a record
+rather than wait on a sink that stopped taking writes, so the process can exit. A record
 already in its write lands whole if the sink unblocks before the exit. The harness
 abandons after its leave's final drain expires (`weaver-harness-Spec` section 6, the
 shared deadline), answering no `Left`.
@@ -2122,7 +2131,7 @@ the fact exists.
   act's code: `forced_by` is absent from a payload no force joined, watched to fail when
   its `skip_serializing_if` is removed, and a joined leave's `unload` carries the
   leave's own `cause` and the force's `forced_by`, watched to fail when the harness
-  writes the joining cause into `cause`; and where a declared bound turns the leave
+  writes the joining cause into `cause`. Where a declared bound turns the leave
   forced and a force joins after it, `forced_by` is absent, the bound having been first,
   watched to fail when the harness records the join.
 - A score is recorded turnless with the verdict and the ratio's two terms, per section

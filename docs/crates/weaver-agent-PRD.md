@@ -949,15 +949,17 @@ rather than a seed, a recorded scenario is replayed by feeding the recorded
 token sequence back through the forward pass. Nothing is re-sampled. The
 residuals are deterministic given the same weights, within GPU float
 tolerance. And stochastic re-entry from the same starting field is available
-when the binary declares one, the setup surface frozen at the worker's
-composition root, seed and sampling parameters baked immutable. A frozen seed
+when a loop builds it. Every generation carries the sampling values it draws
+with, seed included, and the record states them per event, on the operator's
+ruling of 2026-11-11 (`weaver-spu-Spec` section 8), so a re-entry sends the
+recorded values from the recorded starting field and draws again. A held seed
 narrows variance and buys audit rather than determinism, which is why the
 run-again claim stays unmade there too. The conditions are stated for the
 requirement's shape, and on the corpus this lands into the first two
 arrangements are always available, every record holding the token path since
-the levels retired, so the third alone waits on a binary's declared
-disposition and the claim-relative rule governs arrangements not yet built
-rather than forking the present.
+the levels retired. The third alone waits, on the loop that re-enters, and the
+claim-relative rule governs arrangements not yet built rather than forking the
+present.
 
 This makes residual readout a **production troubleshooting and interpretability
 instrument** rather than a research aside. When visibility is needed it is

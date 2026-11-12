@@ -80,12 +80,20 @@ pub struct AgentConfig {
     /// engine.
     #[serde(default)]
     pub state_store: Option<StateStore>,
-    /// The record the session stands from and the cut, per
-    /// `weaver-types-Spec` section 2 as of 2026-09-04 and issue #432: absent
-    /// means the load stands from nothing, which is what every load did
-    /// before the ruling. Present, it names a record admin reads under its
-    /// own custody and the harness never sees, and the session name decides
-    /// whether the restore is a resume or a branch, judged at the inventory.
+    /// The save point the next load restores, per `weaver-types-Spec` section
+    /// 2 on the operator's ruling of 2026-10-02 on #58, which retired the
+    /// record restore and its cut. Present, it names a save point by its
+    /// published name or its digest, which admin judges against its manifest
+    /// and honours only while it is the manifest's latest, on the operator's
+    /// ruling of 2026-10-08 on #99, opening it under its own custody, and the
+    /// harness never sees it. Absent, the load restores the latest save point
+    /// admin has published, on the operator's ruling of 2026-10-06 on #1, and
+    /// a latest that does not stand refuses the load rather than restore an
+    /// older one. With none published the load restores nothing, and a
+    /// rebuild of state from the trace is the offline builder's act, per
+    /// `weaver-state-PRD` section 4. `weaver-admin-Spec` section 4 holds the
+    /// selection. Beside the store engine `none` no save point is selected,
+    /// and the key refuses at admin, since no member would restore it.
     #[serde(default)]
     pub restore: Option<Restore>,
     /// **The graceful unload's bounds**, per `weaver-types-Spec` section 2 as

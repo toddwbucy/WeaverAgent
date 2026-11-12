@@ -124,10 +124,11 @@ escalation's pinned signal (section 3) and the run end's fallback (section 6.1),
 signalling nor extended attributes. Each descriptor a raw call opens is wrapped at once
 as an owned one. That crate asserts the election where it argues it, so this
 one cites it and adds no second record for one decision. `sha2` joins on 2026-09-04 for
-one purpose, the digests of the declaration file and, since 2026-10-02, of the prompt
-file it names, which this crate reads at the inventory and supplies on the enter, per
-`weaver-admin-harness-contract` section 5, so the run and the record name what they were
-built from without a second reader of either file.
+the declaration file's digest and is the crate's one digest since, sha256 throughout.
+The enter supplies the digests of the declaration, the organ binaries and the boundary
+file, per `weaver-admin-harness-contract` section 5, so the run and the record name what
+they were built from without a second reader of any of them. Every other digest this
+crate computes, the save points' among them, uses the same dependency.
 
 ```graph
 node: admin-one-floor-link-types-config
@@ -740,8 +741,8 @@ harness's own word: `Unloaded` before any enter or after a leave, `Idle` or `Act
 with the load's facts beside it where a run stands, read from the run and never from the
 record, and `InTransition` while a leave is pending (3.0, `show` in S4 to S7 and S10). **Those facts are `LoadFacts`, which overlaps the `load` event and is not its
 shape**, per `weaver-types-Spec` section 4.2: it carries the session, run and artifact
-the event carries in its envelope or not at all, and lacks the event's stack, lineage,
-reset and prompt digest, so a consumer that stores both stores two shapes. Where the run
+the event carries in its envelope or not at all, and lacks the event's stack, lineage
+and reset, so a consumer that stores both stores two shapes. Where the run
 lock is free there is no worker and no exchange to open, and this crate answers from
 that absence without dialing, by the ladder's rung (iv): `Unloaded` where the agent's
 cgroup holds nothing, `InTransition` naming what it holds otherwise (section 6.1). That

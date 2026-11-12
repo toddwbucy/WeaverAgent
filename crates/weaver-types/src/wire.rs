@@ -487,7 +487,7 @@ pub enum LifecycleAnswer {
 /// 4.2, answered to the observation exchange from the run and never read from
 /// the record. It overlaps what the `load` event names without being its shape:
 /// it carries the session, run and artifact, and lacks the event's stack,
-/// lineage, reset and prompt digest.
+/// lineage and reset, and neither carries a prompt.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoadFacts {
     pub session: SessionId,
