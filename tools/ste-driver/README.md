@@ -16,6 +16,7 @@ The authority is `docs/crates/weaver-harness/Loops/ste-conversion-loop.md`:
 - 4.01, 4.05 and 4.06: send one user block and retain the gate's exact reply.
 - 6.03, 6.04 and 6.07: share the request allowance across both retry kinds.
 - 7.01 and 7.07: persist attempts, losses and a void evaluation's record.
+- 7.08: end a gate call at the operator's deadline as a transport stop.
 
 The tool compiles the pure request owner from the harness's development-driver
 directory as source. It links no harness or other agent library.

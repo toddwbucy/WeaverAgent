@@ -1,4 +1,5 @@
-//! Workflow 4.01, 4.05, 4.06 and 6.03. Call the existing operator gate client.
+//! Workflow 4.01, 4.05, 4.06, 6.03 and 7.08. Call the existing operator gate client
+//! within the operator's gate-call deadline.
 
 use serde_json::{Value, json};
 use std::io::{ErrorKind, Read};

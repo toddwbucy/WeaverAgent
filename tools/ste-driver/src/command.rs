@@ -1,4 +1,4 @@
-//! Workflow 4.01, 4.05-4.07, 4.11, 6.01, 6.07 and 7.07, external entry.
+//! Workflow 4.01, 4.05-4.07, 4.11, 6.01, 6.07, 7.07 and 7.08, external entry.
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
