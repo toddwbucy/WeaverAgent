@@ -2858,12 +2858,14 @@ agent's emptied scope removes the agent's cgroup with it (the scope's end), so t
 of a removed cgroup fails, `ENOENT` or `ENODEV`, and a run end's wait or fallback that
 then meets the path absent, or another directory there, reads the cgroup as emptied and
 goes on to the removal, which reads `ENOENT` as removed. A path that does not open for
-any other reason is not gone. **Each
-waiter waits it from its own first kill** (Codex on #161): the gate from its kill, and
-the worker, on the gate's death, from its own, since it cannot know whether the gate's
-kill was delivered. An execution's kill fires at the caller's number, and **its exchange
-completes within that number plus this bound, or plus twice it where the gate dies
-during its own wait** (`weaver-harness-gate-contract` section 2):
+any other reason is not gone. **At the start step a failed read is read as neither
+empty nor populated** (#521), the scope step's shape: the cgroup table's start rows for
+no populated reading say what follows, and a failed read never refuses `AgentRunning`.
+**Each waiter waits the bound from its own first kill** (Codex on #161): the gate from its
+kill, and the worker, on the gate's death, from its own, since it cannot know whether
+the gate's kill was delivered. An execution's kill fires at the caller's number, and
+**its exchange completes within that number plus this bound, or plus twice it where the
+gate dies during its own wait** (`weaver-harness-gate-contract` section 2):
 
 | Path | Who waits | The exchange completes within |
 |---|---|---|
@@ -2969,6 +2971,8 @@ scope.
 | admin's start step | A0 | A1, then A2 | makes the cgroups and the record, sets the three files' owner, places the member, the relay and the worker |
 | admin's start step | A1 | A0, then as above | removes it and its record and makes it afresh |
 | admin's start step | A3 | A3 | refuses `AgentRunning`, naming the processes, and kills nothing (I8) |
+| admin's start step, the agent's cgroup at its path or the recorded one giving no populated reading, and its path reading absent by then | A0 | as from A0 | reads it absent, removed since its open, and goes on as from A0, a record naming it stale and removed before the `mkdir` |
+| admin's start step, the agent's cgroup at its path or the recorded one giving no populated reading, and its path not reading absent by then: the opened cgroup or another directory there, or the path not opening | not known (A1 to A4, or a path that does not open) | unchanged | refuses `BoundaryUnverified`, naming the read and the cgroup, before leftovers are judged, as a cgroup not root's does, and kills nothing (#521) |
 | admin's start step | A2 or A4 | unchanged | refuses `AgentRunning` at the run lock, before the cgroup is looked at (section 3). A4 with the lock free refuses `AgentRunning` as A3 does |
 | the gate, an execution opened | T0 | T1 | the shell's child moves itself into `tools/` before its exec, and the spawn returns once it has exec'd |
 | the gate, the execution's end (exit, clock, cancel, interrupt, closure) | T1 | T2, then T0 | `tools/cgroup.kill`, the wait, then `SIGKILL` to the shell's leader by its pid and its reap within the bound, then the answer. The leader alone is signalled directly, since it may have moved itself out of `tools/` (C1's first exception) where the kill does not reach it; a leader not reaped within the bound is an execution not contained. Its own escapers stay C1's exception, held by C2 |
@@ -3056,7 +3060,14 @@ The instruments:
 - **C2:** an `unload` over a run with a stray in `run/` answers `Unloaded` only with the
   agent's cgroup gone. Watched to fail when the run end's kill is dropped.
 - **C2, the start:** a load over a populated cgroup with the run lock free refuses
-  `AgentRunning` and kills nothing.
+  `AgentRunning` and kills nothing. A cgroup the start step meets, at its path or
+  through the record, whose `cgroup.events` gives no populated reading and whose path
+  does not read absent since refuses `BoundaryUnverified`, naming the read, and kills
+  nothing. Watched to refuse `AgentRunning` when an unread cgroup is read as populated.
+  One removed between its open and its read reads absent, and one replaced by another
+  directory reads unread, as does one whose path does not open after its read. Watched
+  to read unread when a failed read is unread whatever stands, absent when a replaced
+  cgroup is read as gone, and absent when a path that does not open is read as absent.
 - **C3, the modes:** a start step run under a umask of `077` still leaves every
   directory `0755`, and the worker opens `tools/` and writes its three files. Watched to
   fail when the `fchmod` is dropped and the directories come out `0700`.
