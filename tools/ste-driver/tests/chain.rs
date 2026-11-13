@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use weaver_ste_driver::chain::{self, Manifest};
@@ -406,9 +407,10 @@ fn evaluate_checks_a_batch_against_its_chain_before_a_run_exists() {
     assert!(evaluated(&directory, &changed, &path).contains("an input path is empty"));
 }
 
-/// The files are operator-provided pinned data, never silently substituted. No gate
-/// listens, so the first call is a transport stop and the evaluation is void, after
-/// run.json has recorded the batch's place in its chain.
+/// The files are operator-provided pinned data, never silently substituted. A gate
+/// listener reads run.json when the first call reaches it, before any answer, and
+/// closes the call unanswered, so the first call is a transport stop and the
+/// evaluation is void.
 #[test]
 #[ignore = "requires STE_TEST_TRAIN_ROOT, STE_TEST_APPROVED_WORDS and STE_TEST_PROMPT_BUNDLE"]
 fn a_batch_evaluation_records_its_place_in_the_chain_before_its_first_call() {
@@ -427,12 +429,36 @@ fn a_batch_evaluation_records_its_place_in_the_chain_before_its_first_call() {
     std::fs::create_dir_all(&admin).unwrap();
     std::fs::write(admin.join("coordination-root"), coord.to_str().unwrap()).unwrap();
     std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let listener = UnixListener::bind(coord.join("weaver-ste-fixture/gate.sock")).unwrap();
+    listener.set_nonblocking(true).unwrap();
     let output = directory.0.join("batch-1");
+    let run = output.clone();
+    let server = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let (peer, _) = loop {
+            match listener.accept() {
+                Ok(peer) => break peer,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(std::time::Instant::now() < deadline, "no gate request");
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(error) => panic!("{error}"),
+            }
+        };
+        // Read at the first call, before any answer: the batch's place is already
+        // recorded. The call then closes unanswered.
+        let record: Value =
+            serde_json::from_slice(&std::fs::read(run.join("run.json")).unwrap()).unwrap();
+        drop(peer);
+        record
+    });
     let result = driver(&["evaluate"], &path, &output);
     assert_eq!(result.status.code(), Some(2), "{result:?}");
+    let at_first_call = server.join().unwrap();
     let record: Value =
         serde_json::from_slice(&std::fs::read(output.join("run.json")).unwrap()).unwrap();
-    let provenance = &record["provenance"];
+    assert_eq!(at_first_call["provenance"], record["provenance"]);
+    let provenance = &at_first_call["provenance"];
     let manifest = directory.0.join("chain/chain.json");
     assert_eq!(provenance["config"]["chain"]["manifest"], json!(manifest));
     assert_eq!(provenance["config"]["chain"]["index"], 1);
