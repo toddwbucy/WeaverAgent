@@ -1,0 +1,2866 @@
+{
+  "revision": "9881da6cfbc92b08b31264883aea63b73aa7b694",
+  "checker_sha256": "185a186f4d637616f5e506bda55ff19f909aa3f8f7022e2a35d3b88d409d1b2c",
+  "lexicons": [
+    {
+      "unapproved": {
+        "should": [
+          "v"
+        ],
+        "fix": [
+          "v"
+        ],
+        "run": [
+          "v"
+        ],
+        "test": [
+          "v"
+        ],
+        "now": [
+          "adv"
+        ],
+        "drop": [
+          "v"
+        ]
+      },
+      "unapproved_verbs": {
+        "fix": [
+          "REPAIR (v)"
+        ],
+        "run": [
+          "OPERATE (v)"
+        ],
+        "test": [
+          "TEST (n)"
+        ],
+        "should": [],
+        "drop": [
+          "RELEASE (v)"
+        ]
+      },
+      "technical_verbs": [
+        "commit",
+        "roll back",
+        "drag and drop"
+      ],
+      "technical_nouns": [
+        "repository",
+        "issue"
+      ],
+      "approved_verbs": [
+        "do",
+        "make",
+        "find",
+        "examine",
+        "show"
+      ],
+      "caps_names": [],
+      "approved": {
+        "the": [
+          "x"
+        ],
+        "a": [
+          "x"
+        ],
+        "an": [
+          "x"
+        ],
+        "i": [
+          "x"
+        ],
+        "will": [
+          "x"
+        ],
+        "is": [
+          "x"
+        ],
+        "are": [
+          "x"
+        ],
+        "it": [
+          "x"
+        ],
+        "this": [
+          "x"
+        ],
+        "that": [
+          "x"
+        ],
+        "when": [
+          "x"
+        ],
+        "if": [
+          "x"
+        ],
+        "not": [
+          "x"
+        ],
+        "do": [
+          "x"
+        ],
+        "does": [
+          "x"
+        ],
+        "make": [
+          "x"
+        ],
+        "makes": [
+          "x"
+        ],
+        "made": [
+          "x"
+        ],
+        "find": [
+          "x"
+        ],
+        "examine": [
+          "x"
+        ],
+        "error": [
+          "x"
+        ],
+        "test": [
+          "x"
+        ],
+        "function": [
+          "x"
+        ],
+        "in": [
+          "x"
+        ],
+        "of": [
+          "x"
+        ],
+        "to": [
+          "x"
+        ],
+        "and": [
+          "x"
+        ],
+        "then": [
+          "x"
+        ],
+        "first": [
+          "x"
+        ],
+        "only": [
+          "x"
+        ],
+        "one": [
+          "x"
+        ],
+        "problem": [
+          "x"
+        ],
+        "shows": [
+          "x"
+        ],
+        "show": [
+          "x"
+        ],
+        "result": [
+          "x"
+        ]
+      },
+      "fixed": {}
+    },
+    {
+      "unapproved": {
+        "should": [
+          "v"
+        ]
+      },
+      "unapproved_verbs": {
+        "should": []
+      },
+      "technical_verbs": [],
+      "technical_nouns": [],
+      "approved_verbs": [
+        "do",
+        "make",
+        "show"
+      ],
+      "caps_names": [
+        "AND",
+        "SELECT"
+      ],
+      "approved": {
+        "the": [
+          "x"
+        ],
+        "a": [
+          "x"
+        ],
+        "an": [
+          "x"
+        ],
+        "i": [
+          "x"
+        ],
+        "will": [
+          "x"
+        ],
+        "is": [
+          "x"
+        ],
+        "are": [
+          "x"
+        ],
+        "it": [
+          "x"
+        ],
+        "this": [
+          "x"
+        ],
+        "that": [
+          "x"
+        ],
+        "when": [
+          "x"
+        ],
+        "if": [
+          "x"
+        ],
+        "not": [
+          "x"
+        ],
+        "do": [
+          "x"
+        ],
+        "does": [
+          "x"
+        ],
+        "make": [
+          "x"
+        ],
+        "makes": [
+          "x"
+        ],
+        "made": [
+          "x"
+        ],
+        "find": [
+          "x"
+        ],
+        "examine": [
+          "x"
+        ],
+        "error": [
+          "x"
+        ],
+        "test": [
+          "x"
+        ],
+        "function": [
+          "x"
+        ],
+        "in": [
+          "x"
+        ],
+        "of": [
+          "x"
+        ],
+        "to": [
+          "x"
+        ],
+        "and": [
+          "x"
+        ],
+        "then": [
+          "x"
+        ],
+        "first": [
+          "x"
+        ],
+        "only": [
+          "x"
+        ],
+        "one": [
+          "x"
+        ],
+        "problem": [
+          "x"
+        ],
+        "shows": [
+          "x"
+        ],
+        "show": [
+          "x"
+        ],
+        "result": [
+          "x"
+        ]
+      },
+      "fixed": {}
+    },
+    {
+      "unapproved": {
+        "fix": [
+          "v"
+        ],
+        "order": [
+          "n",
+          "v"
+        ],
+        "design": [
+          "v"
+        ],
+        "progress": [
+          "n",
+          "v"
+        ],
+        "fail": [
+          "v"
+        ],
+        "block": [
+          "v"
+        ]
+      },
+      "unapproved_verbs": {
+        "fix": [
+          "REPAIR (v)"
+        ],
+        "order": [
+          "TELL (v)"
+        ],
+        "design": [
+          "HAVE (v)"
+        ],
+        "progress": [
+          "CONTINUE (v)"
+        ],
+        "fail": [],
+        "block": []
+      },
+      "technical_verbs": [],
+      "technical_nouns": [],
+      "approved_verbs": [
+        "do",
+        "make",
+        "find",
+        "examine",
+        "use",
+        "set"
+      ],
+      "caps_names": [],
+      "approved": {
+        "the": [
+          "x"
+        ],
+        "a": [
+          "x"
+        ],
+        "an": [
+          "x"
+        ],
+        "i": [
+          "x"
+        ],
+        "will": [
+          "x"
+        ],
+        "is": [
+          "x"
+        ],
+        "are": [
+          "x"
+        ],
+        "it": [
+          "x"
+        ],
+        "this": [
+          "x"
+        ],
+        "that": [
+          "x"
+        ],
+        "when": [
+          "x"
+        ],
+        "if": [
+          "x"
+        ],
+        "not": [
+          "x"
+        ],
+        "do": [
+          "x"
+        ],
+        "does": [
+          "x"
+        ],
+        "make": [
+          "x"
+        ],
+        "makes": [
+          "x"
+        ],
+        "made": [
+          "x"
+        ],
+        "find": [
+          "x"
+        ],
+        "examine": [
+          "x"
+        ],
+        "error": [
+          "x"
+        ],
+        "value": [
+          "x"
+        ],
+        "choice": [
+          "x"
+        ],
+        "code": [
+          "x"
+        ],
+        "use": [
+          "x"
+        ],
+        "set": [
+          "x"
+        ],
+        "to": [
+          "x"
+        ],
+        "and": [
+          "x"
+        ],
+        "then": [
+          "x"
+        ],
+        "result": [
+          "x"
+        ]
+      },
+      "fixed": {}
+    },
+    {
+      "unapproved": {
+        "call": [
+          "v"
+        ]
+      },
+      "unapproved_verbs": {
+        "call": [
+          "TELL (v)"
+        ]
+      },
+      "technical_verbs": [],
+      "technical_nouns": [],
+      "approved_verbs": [],
+      "caps_names": [],
+      "approved": {
+        "the": [
+          "x"
+        ]
+      },
+      "fixed": {
+        "call": "use"
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "test_clean_text_passes_0",
+      "output": "I will examine the function [[C1]]. Then I will make the test.",
+      "source": "a [[C1]] b",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {},
+        "sentences": 2,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "I will examine the function [[C1]].",
+        "Then I will make the test."
+      ],
+      "count_words": 12,
+      "lexicon": 0
+    },
+    {
+      "name": "test_each_hard_rule_fails_alone_1",
+      "output": "I will fix the error.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fix"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fix\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "I will fix the error."
+      ],
+      "count_words": 5,
+      "lexicon": 0
+    },
+    {
+      "name": "test_each_hard_rule_fails_alone_2",
+      "output": "The test is running.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "running"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"running\" is not an approved verb. Alternatives the standard gives: OPERATE (v).",
+      "sentences": [
+        "The test is running."
+      ],
+      "count_words": 4,
+      "lexicon": 0
+    },
+    {
+      "name": "test_each_hard_rule_fails_alone_3",
+      "output": "I tested the function.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "tested"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"tested\" is not an approved verb. Alternatives the standard gives: TEST (n).",
+      "sentences": [
+        "I tested the function."
+      ],
+      "count_words": 4,
+      "lexicon": 0
+    },
+    {
+      "name": "test_each_hard_rule_fails_alone_4",
+      "output": "It is the problem\u003b I will examine it.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "semicolon": [
+            "\u003b"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- Do not use the semicolon (\u003b).",
+      "sentences": [
+        "It is the problem\u003b I will examine it."
+      ],
+      "count_words": 8,
+      "lexicon": 0
+    },
+    {
+      "name": "test_each_hard_rule_fails_alone_5",
+      "output": "I'll examine the error.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "contractions": [
+            "I'll"
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "i'll"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- Do not use contractions: I'll",
+      "sentences": [
+        "I'll examine the error."
+      ],
+      "count_words": 4,
+      "lexicon": 0
+    },
+    {
+      "name": "test_each_hard_rule_fails_alone_6",
+      "output": "It doesn't show the error.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "contractions": [
+            "doesn't"
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "doesn't"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- Do not use contractions: doesn't",
+      "sentences": [
+        "It doesn't show the error."
+      ],
+      "count_words": 5,
+      "lexicon": 0
+    },
+    {
+      "name": "test_each_hard_rule_fails_alone_7",
+      "output": "I should examine it.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "should"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"should\" is not an approved verb. Alternatives the standard gives: none\u003b write the sentence in a different way.",
+      "sentences": [
+        "I should examine it."
+      ],
+      "count_words": 4,
+      "lexicon": 0
+    },
+    {
+      "name": "test_nouns_and_technical_words_are_not_verbs_8",
+      "output": "Do the tests. I will commit the changes to the repository.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unknown_words": [
+            "changes"
+          ]
+        },
+        "sentences": 2,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "Do the tests.",
+        "I will commit the changes to the repository."
+      ],
+      "count_words": 11,
+      "lexicon": 0
+    },
+    {
+      "name": "test_nouns_and_technical_words_are_not_verbs_9",
+      "output": "Examine snake_case_name and DataFrame and GIF.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unknown_words": [
+            "case",
+            "name",
+            "snake"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "Examine snake_case_name and DataFrame and GIF."
+      ],
+      "count_words": 6,
+      "lexicon": 0
+    },
+    {
+      "name": "test_placeholders_must_appear_exactly_once_10",
+      "output": "Examine [[C1]] and [[C1]].",
+      "source": "[[C1]] [[C2]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "placeholders": [
+            {
+              "missing": [
+                "[[C2]]"
+              ],
+              "extra_or_repeated": [
+                "[[C1]]"
+              ]
+            }
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- These placeholders are missing. Put each one back exactly once: [[C2]]\n- These placeholders occur too many times or are not in the text. Use each one only once: [[C1]]",
+      "sentences": [
+        "Examine [[C1]] and [[C1]]."
+      ],
+      "count_words": 4,
+      "lexicon": 0
+    },
+    {
+      "name": "test_sentence_limits_split_instruction_and_description_11",
+      "output": "Examine the error the error the error the error the error the error the error the error the error the error.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "length": [
+            {
+              "sentence": "Examine the error the error the error the error the error the error the error the error the error the error.",
+              "words": 21,
+              "limit": 20
+            }
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 1
+      },
+      "note": "- This sentence has 21 words\u003b the maximum is 20. Divide it: \"Examine the error the error the error the error the error the error the error the error the error the error.\"",
+      "sentences": [
+        "Examine the error the error the error the error the error the error the error the error the error the error."
+      ],
+      "count_words": 21,
+      "lexicon": 0
+    },
+    {
+      "name": "test_sentence_limits_split_instruction_and_description_12",
+      "output": "The error is the problem is the problem is the problem is the problem is the problem is the problem is the problem.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 1
+      },
+      "note": "",
+      "sentences": [
+        "The error is the problem is the problem is the problem is the problem is the problem is the problem is the problem."
+      ],
+      "count_words": 23,
+      "lexicon": 0
+    },
+    {
+      "name": "test_sentence_limits_split_instruction_and_description_13",
+      "output": "The error is the problem is the problem is the problem is the problem is the problem is the problem is the problem.",
+      "source": "text",
+      "limits": [
+        20,
+        20
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "length": [
+            {
+              "sentence": "The error is the problem is the problem is the problem is the problem is the problem is the problem is the problem.",
+              "words": 23,
+              "limit": 20
+            }
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 1
+      },
+      "note": "- This sentence has 23 words\u003b the maximum is 20. Divide it: \"The error is the problem is the problem is the problem is the problem is the problem is the problem is the problem.\"",
+      "sentences": [
+        "The error is the problem is the problem is the problem is the problem is the problem is the problem is the problem."
+      ],
+      "count_words": 23,
+      "lexicon": 0
+    },
+    {
+      "name": "test_unknown_and_unapproved_words_are_reported_not_failed_14",
+      "output": "Now I will examine the zebra.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unapproved_words": [
+            "now"
+          ],
+          "unknown_words": [
+            "zebra"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "Now I will examine the zebra."
+      ],
+      "count_words": 6,
+      "lexicon": 0
+    },
+    {
+      "name": "test_repair_note_names_alternatives_15",
+      "output": "I will fix it\u003b it's broken.",
+      "source": "x [[C1]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "placeholders": [
+            {
+              "missing": [
+                "[[C1]]"
+              ],
+              "extra_or_repeated": []
+            }
+          ],
+          "semicolon": [
+            "\u003b"
+          ],
+          "contractions": [
+            "it's"
+          ],
+          "verbs": [
+            "fix"
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "broken",
+            "it's"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- These placeholders are missing. Put each one back exactly once: [[C1]]\n- \"fix\" is not an approved verb. Alternatives the standard gives: REPAIR (v).\n- Do not use contractions: it's\n- Do not use the semicolon (\u003b).",
+      "sentences": [
+        "I will fix it\u003b it's broken."
+      ],
+      "count_words": 6,
+      "lexicon": 0
+    },
+    {
+      "name": "test_apostrophe_s_contractions_fail_16",
+      "output": "It's the error.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "contractions": [
+            "It's"
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "it's"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- Do not use contractions: It's",
+      "sentences": [
+        "It's the error."
+      ],
+      "count_words": 3,
+      "lexicon": 0
+    },
+    {
+      "name": "test_apostrophe_s_contractions_fail_17",
+      "output": "That\u2019s the result.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "contractions": [
+            "That\u2019s"
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "that\u2019s"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- Do not use contractions: That\u2019s",
+      "sentences": [
+        "That\u2019s the result."
+      ],
+      "count_words": 3,
+      "lexicon": 0
+    },
+    {
+      "name": "test_apostrophe_s_contractions_fail_18",
+      "output": "There's one problem.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "contractions": [
+            "There's"
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "there's"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- Do not use contractions: There's",
+      "sentences": [
+        "There's one problem."
+      ],
+      "count_words": 3,
+      "lexicon": 0
+    },
+    {
+      "name": "test_apostrophe_s_contractions_fail_19",
+      "output": "Let's examine it.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "contractions": [
+            "Let's"
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "let's"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- Do not use contractions: Let's",
+      "sentences": [
+        "Let's examine it."
+      ],
+      "count_words": 3,
+      "lexicon": 0
+    },
+    {
+      "name": "test_apostrophe_s_contractions_fail_20",
+      "output": "The function's result is the error.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unknown_words": [
+            "function's"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "The function's result is the error."
+      ],
+      "count_words": 6,
+      "lexicon": 0
+    },
+    {
+      "name": "test_multi_word_technical_verb_admits_the_phrase_not_its_parts_21",
+      "output": "I will drag and drop the function. I rolled back the commit.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {},
+        "sentences": 2,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "I will drag and drop the function.",
+        "I rolled back the commit."
+      ],
+      "count_words": 12,
+      "lexicon": 0
+    },
+    {
+      "name": "test_multi_word_technical_verb_admits_the_phrase_not_its_parts_22",
+      "output": "I will drop the function.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "drop"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"drop\" is not an approved verb. Alternatives the standard gives: RELEASE (v).",
+      "sentences": [
+        "I will drop the function."
+      ],
+      "count_words": 5,
+      "lexicon": 0
+    },
+    {
+      "name": "test_wrapped_sentence_is_counted_whole_23",
+      "output": "Examine the error the error the error the error the error the error the error the error the error the error.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "length": [
+            {
+              "sentence": "Examine the error the error the error the error the error the error the error the error the error the error.",
+              "words": 21,
+              "limit": 20
+            }
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 1
+      },
+      "note": "- This sentence has 21 words\u003b the maximum is 20. Divide it: \"Examine the error the error the error the error the error the error the error the error the error the error.\"",
+      "sentences": [
+        "Examine the error the error the error the error the error the error the error the error the error the error."
+      ],
+      "count_words": 21,
+      "lexicon": 0
+    },
+    {
+      "name": "test_wrapped_sentence_is_counted_whole_24",
+      "output": "Examine\nthe\nerror\nthe\nerror\nthe\nerror\nthe\nerror\nthe\nerror\nthe\nerror\nthe\nerror\nthe\nerror\nthe\nerror\nthe\nerror.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "length": [
+            {
+              "sentence": "Examine the error the error the error the error the error the error the error the error the error the error.",
+              "words": 21,
+              "limit": 20
+            }
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 1
+      },
+      "note": "- This sentence has 21 words\u003b the maximum is 20. Divide it: \"Examine the error the error the error the error the error the error the error the error the error the error.\"",
+      "sentences": [
+        "Examine the error the error the error the error the error the error the error the error the error the error."
+      ],
+      "count_words": 21,
+      "lexicon": 0
+    },
+    {
+      "name": "test_capitals_are_technical_names_only_when_listed_or_not_words_25",
+      "output": "The test uses AND. Use SELECT.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unknown_words": [
+            "use",
+            "uses"
+          ]
+        },
+        "sentences": 2,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "The test uses AND.",
+        "Use SELECT."
+      ],
+      "count_words": 6,
+      "lexicon": 1
+    },
+    {
+      "name": "test_capitals_are_technical_names_only_when_listed_or_not_words_26",
+      "output": "The PPM file shows the error.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unknown_words": [
+            "file"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "The PPM file shows the error."
+      ],
+      "count_words": 6,
+      "lexicon": 1
+    },
+    {
+      "name": "test_capitals_are_technical_names_only_when_listed_or_not_words_27",
+      "output": "The test is THE result.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "capitals": [
+            "THE"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"THE\" is a normal word written in capitals. Write it in lowercase, or write the sentence in a different way.",
+      "sentences": [
+        "The test is THE result."
+      ],
+      "count_words": 5,
+      "lexicon": 1
+    },
+    {
+      "name": "test_capitals_are_technical_names_only_when_listed_or_not_words_28",
+      "output": "The RESULT shows the error.",
+      "source": "The RESULT",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "The RESULT shows the error."
+      ],
+      "count_words": 5,
+      "lexicon": 1
+    },
+    {
+      "name": "test_capitals_are_technical_names_only_when_listed_or_not_words_29",
+      "output": "The FIND shows the error.",
+      "source": "The RESULT",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "The FIND shows the error."
+      ],
+      "count_words": 5,
+      "lexicon": 1
+    },
+    {
+      "name": "test_capitals_are_technical_names_only_when_listed_or_not_words_30",
+      "output": "The RESULT shows the error.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "capitals": [
+            "RESULT"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"RESULT\" is a normal word written in capitals. Write it in lowercase, or write the sentence in a different way.",
+      "sentences": [
+        "The RESULT shows the error."
+      ],
+      "count_words": 5,
+      "lexicon": 1
+    },
+    {
+      "name": "test_capitals_are_technical_names_only_when_listed_or_not_words_31",
+      "output": "I SHOULD do it.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "capitals": [
+            "SHOULD"
+          ],
+          "verbs": [
+            "should"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"should\" is not an approved verb. Alternatives the standard gives: none\u003b write the sentence in a different way.\n- \"SHOULD\" is a normal word written in capitals. Write it in lowercase, or write the sentence in a different way.",
+      "sentences": [
+        "I SHOULD do it."
+      ],
+      "count_words": 4,
+      "lexicon": 1
+    },
+    {
+      "name": "test_capitals_are_technical_names_only_when_listed_or_not_words_32",
+      "output": "I SHOULD do it.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "capitals": [
+            "SHOULD"
+          ],
+          "verbs": [
+            "should"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"should\" is not an approved verb. Alternatives the standard gives: none\u003b write the sentence in a different way.\n- \"SHOULD\" is a normal word written in capitals. Write it in lowercase, or write the sentence in a different way.",
+      "sentences": [
+        "I SHOULD do it."
+      ],
+      "count_words": 4,
+      "lexicon": 1
+    },
+    {
+      "name": "test_capitals_are_technical_names_only_when_listed_or_not_words_33",
+      "output": "The result and the error.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "The result and the error."
+      ],
+      "count_words": 5,
+      "lexicon": 1
+    },
+    {
+      "name": "test_adjective_and_noun_uses_are_not_verbs_34",
+      "output": "Use a fixed value.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "Use a fixed value."
+      ],
+      "count_words": 4,
+      "lexicon": 2
+    },
+    {
+      "name": "test_adjective_and_noun_uses_are_not_verbs_35",
+      "output": "This is a design choice.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "This is a design choice."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "test_adjective_and_noun_uses_are_not_verbs_36",
+      "output": "Examine the block.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "Examine the block."
+      ],
+      "count_words": 3,
+      "lexicon": 2
+    },
+    {
+      "name": "test_adjective_and_noun_uses_are_not_verbs_37",
+      "output": "Examine the if block.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "block"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"block\" is not an approved verb. Alternatives the standard gives: none\u003b write the sentence in a different way.",
+      "sentences": [
+        "Examine the if block."
+      ],
+      "count_words": 4,
+      "lexicon": 2
+    },
+    {
+      "name": "test_unapproved_noun_is_reported_as_a_word_not_as_a_verb_38",
+      "output": "Do the steps in order.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unapproved_words": [
+            "order"
+          ],
+          "unknown_words": [
+            "in",
+            "steps"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "Do the steps in order."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "test_unapproved_noun_is_reported_as_a_word_not_as_a_verb_39",
+      "output": "I will examine the progress.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unapproved_words": [
+            "progress"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "I will examine the progress."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "test_verb_uses_still_fail_40",
+      "output": "I will fix the error.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fix"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fix\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "I will fix the error."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "test_verb_uses_still_fail_41",
+      "output": "This fails.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fails"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fails\" is not an approved verb. Alternatives the standard gives: none\u003b write the sentence in a different way.",
+      "sentences": [
+        "This fails."
+      ],
+      "count_words": 2,
+      "lexicon": 2
+    },
+    {
+      "name": "test_verb_uses_still_fail_42",
+      "output": "Then order the values.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "order"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"order\" is not an approved verb. Alternatives the standard gives: TELL (v).",
+      "sentences": [
+        "Then order the values."
+      ],
+      "count_words": 4,
+      "lexicon": 2
+    },
+    {
+      "name": "test_verb_uses_still_fail_43",
+      "output": "The code fixed the error.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fixed"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fixed\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "The code fixed the error."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "test_verb_uses_still_fail_44",
+      "output": "I will design a test, then fix it.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "design",
+            "fix"
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "test"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"design\" is not an approved verb. Alternatives the standard gives: HAVE (v).\n- \"fix\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "I will design a test, then fix it."
+      ],
+      "count_words": 8,
+      "lexicon": 2
+    },
+    {
+      "name": "test_punctuation_between_breaks_the_context_45",
+      "output": "Use the code. Fix the error.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fix"
+          ]
+        },
+        "soft": {},
+        "sentences": 2,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fix\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "Use the code.",
+        "Fix the error."
+      ],
+      "count_words": 6,
+      "lexicon": 2
+    },
+    {
+      "name": "test_fixed_mapping_replaces_the_standards_alternatives_46",
+      "output": "I call the parser.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "call"
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "parser"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"call\" is not an approved verb. Write \"use\" for it (a fixed rule).",
+      "sentences": [
+        "I call the parser."
+      ],
+      "count_words": 4,
+      "lexicon": 3
+    },
+    {
+      "name": "test_inflected_noun_takes_the_part_of_speech_of_its_lemma_47",
+      "output": "Do the orders.",
+      "source": "x",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unapproved_words": [
+            "orders"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "Do the orders."
+      ],
+      "count_words": 3,
+      "lexicon": 2
+    },
+    {
+      "name": "test_placeholder_after_an_article_is_a_boundary_48",
+      "output": "The [[C1]] orders the values.",
+      "source": "[[C1]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "orders"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"orders\" is not an approved verb. Alternatives the standard gives: TELL (v).",
+      "sentences": [
+        "The [[C1]] orders the values."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "test_placeholder_after_an_article_is_a_boundary_49",
+      "output": "The [[C1]] orders [[C2]].",
+      "source": "[[C1]] [[C2]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unapproved_words": [
+            "orders"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "The [[C1]] orders [[C2]]."
+      ],
+      "count_words": 4,
+      "lexicon": 2
+    },
+    {
+      "name": "test_placeholder_after_an_article_is_a_boundary_50",
+      "output": "Remove the [[C1]] block that catches it.",
+      "source": "[[C1]] [[C2]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "placeholders": [
+            {
+              "missing": [
+                "[[C2]]"
+              ],
+              "extra_or_repeated": []
+            }
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "catches",
+            "remove"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- These placeholders are missing. Put each one back exactly once: [[C2]]",
+      "sentences": [
+        "Remove the [[C1]] block that catches it."
+      ],
+      "count_words": 7,
+      "lexicon": 2
+    },
+    {
+      "name": "test_placeholder_after_an_article_is_a_boundary_51",
+      "output": "It uses the [[C1]] order.",
+      "source": "[[C1]] [[C2]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "placeholders": [
+            {
+              "missing": [
+                "[[C2]]"
+              ],
+              "extra_or_repeated": []
+            }
+          ]
+        },
+        "soft": {
+          "unapproved_words": [
+            "order"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- These placeholders are missing. Put each one back exactly once: [[C2]]",
+      "sentences": [
+        "It uses the [[C1]] order."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "test_placeholder_after_an_article_is_a_boundary_52",
+      "output": "In the [[C1]] block [[C2]], it stops.",
+      "source": "[[C1]] [[C2]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unknown_words": [
+            "in",
+            "stops"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "In the [[C1]] block [[C2]], it stops."
+      ],
+      "count_words": 7,
+      "lexicon": 2
+    },
+    {
+      "name": "unicode_and_boundaries_53",
+      "output": "Examine the error.\u001cThen I will fix it.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fix"
+          ]
+        },
+        "soft": {},
+        "sentences": 2,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fix\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "Examine the error.",
+        "Then I will fix it."
+      ],
+      "count_words": 8,
+      "lexicon": 0
+    },
+    {
+      "name": "unicode_and_boundaries_54",
+      "output": "Examine the error.\u001dThen I will fix it.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fix"
+          ]
+        },
+        "soft": {},
+        "sentences": 2,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fix\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "Examine the error.",
+        "Then I will fix it."
+      ],
+      "count_words": 8,
+      "lexicon": 0
+    },
+    {
+      "name": "unicode_and_boundaries_55",
+      "output": "Examine the error.\u001eThen I will fix it.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fix"
+          ]
+        },
+        "soft": {},
+        "sentences": 2,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fix\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "Examine the error.",
+        "Then I will fix it."
+      ],
+      "count_words": 8,
+      "lexicon": 0
+    },
+    {
+      "name": "unicode_and_boundaries_56",
+      "output": "Examine the error.\u001fThen I will fix it.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fix"
+          ]
+        },
+        "soft": {},
+        "sentences": 2,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fix\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "Examine the error.",
+        "Then I will fix it."
+      ],
+      "count_words": 8,
+      "lexicon": 0
+    },
+    {
+      "name": "unicode_and_boundaries_57",
+      "output": "Examine the error.\u0085Then I will fix it.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fix"
+          ]
+        },
+        "soft": {},
+        "sentences": 2,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fix\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "Examine the error.",
+        "Then I will fix it."
+      ],
+      "count_words": 8,
+      "lexicon": 0
+    },
+    {
+      "name": "unicode_and_boundaries_58",
+      "output": "Examine the error.\u2028Then I will fix it.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fix"
+          ]
+        },
+        "soft": {},
+        "sentences": 2,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fix\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "Examine the error.",
+        "Then I will fix it."
+      ],
+      "count_words": 8,
+      "lexicon": 0
+    },
+    {
+      "name": "unicode_and_boundaries_59",
+      "output": "Examine the error.\u2029Then I will fix it.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fix"
+          ]
+        },
+        "soft": {},
+        "sentences": 2,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fix\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "Examine the error.",
+        "Then I will fix it."
+      ],
+      "count_words": 8,
+      "lexicon": 0
+    },
+    {
+      "name": "unicode_and_boundaries_60",
+      "output": "Examine the error.\r\nThen I will fix it.",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fix"
+          ]
+        },
+        "soft": {},
+        "sentences": 2,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fix\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "Examine the error.",
+        "Then I will fix it."
+      ],
+      "count_words": 8,
+      "lexicon": 0
+    },
+    {
+      "name": "unicode_and_boundaries_61",
+      "output": "The [[C1]] running the values.",
+      "source": "[[C1]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "ing": [
+            "running"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"running\" is an -ing form. Write the sentence in a different way.",
+      "sentences": [
+        "The [[C1]] running the values."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "unicode_and_boundaries_62",
+      "output": "The [[C1]] tested the values.",
+      "source": "[[C1]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unknown_words": [
+            "tested"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "The [[C1]] tested the values."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "unicode_and_boundaries_63",
+      "output": "The [[C1]] fixing the values.",
+      "source": "[[C1]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fixing"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fixing\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "The [[C1]] fixing the values."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "unicode_and_boundaries_64",
+      "output": "The [[C1]] fixes the values.",
+      "source": "[[C1]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "fixes"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"fixes\" is not an approved verb. Alternatives the standard gives: REPAIR (v).",
+      "sentences": [
+        "The [[C1]] fixes the values."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "unicode_and_boundaries_65",
+      "output": "The [[C1]] orders the values.",
+      "source": "[[C1]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "orders"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"orders\" is not an approved verb. Alternatives the standard gives: TELL (v).",
+      "sentences": [
+        "The [[C1]] orders the values."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "unicode_and_boundaries_66",
+      "output": "The [[C1]] ordered the values.",
+      "source": "[[C1]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "ordered"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"ordered\" is not an approved verb. Alternatives the standard gives: TELL (v).",
+      "sentences": [
+        "The [[C1]] ordered the values."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "unicode_and_boundaries_67",
+      "output": "The [[C1]] ordering the values.",
+      "source": "[[C1]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "verbs": [
+            "ordering"
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "- \"ordering\" is not an approved verb. Alternatives the standard gives: TELL (v).",
+      "sentences": [
+        "The [[C1]] ordering the values."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "unicode_and_boundaries_68",
+      "output": "The [[C1]] tests the values.",
+      "source": "[[C1]]",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unknown_words": [
+            "tests"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "The [[C1]] tests the values."
+      ],
+      "count_words": 5,
+      "lexicon": 2
+    },
+    {
+      "name": "unicode_and_boundaries_69",
+      "output": "Examine error error error error error error error error error error error error error error error error error error error",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0
+      },
+      "note": "",
+      "sentences": [
+        "Examine error error error error error error error error error error error error error error error error error error error"
+      ],
+      "count_words": 20,
+      "lexicon": 0
+    },
+    {
+      "name": "unicode_and_boundaries_70",
+      "output": "Examine error error error error error error error error error error error error error error error error error error error error",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "length": [
+            {
+              "sentence": "Examine error error error error error error error error error error error error error error error error error error error error",
+              "words": 21,
+              "limit": 20
+            }
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 1
+      },
+      "note": "- This sentence has 21 words\u003b the maximum is 20. Divide it: \"Examine error error error error error error error error error error error error error error error error error error error error\"",
+      "sentences": [
+        "Examine error error error error error error error error error error error error error error error error error error error error"
+      ],
+      "count_words": 21,
+      "lexicon": 0
+    },
+    {
+      "name": "unicode_and_boundaries_71",
+      "output": "Examine error error error error error error error error error error error error error error error error error error error error error",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "length": [
+            {
+              "sentence": "Examine error error error error error error error error error error error error error error error error error error error error error",
+              "words": 22,
+              "limit": 20
+            }
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 1
+      },
+      "note": "- This sentence has 22 words\u003b the maximum is 20. Divide it: \"Examine error error error error error error error error error error error error error error error error error error error error error\"",
+      "sentences": [
+        "Examine error error error error error error error error error error error error error error error error error error error error error"
+      ],
+      "count_words": 22,
+      "lexicon": 0
+    },
+    {
+      "name": "unicode_and_boundaries_72",
+      "output": "Examine error error error error error error error error error error error error error error error error error error error error error error error error",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "length": [
+            {
+              "sentence": "Examine error error error error error error error error error error error error error error error error error error error error error error error error",
+              "words": 25,
+              "limit": 20
+            }
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 1
+      },
+      "note": "- This sentence has 25 words\u003b the maximum is 20. Divide it: \"Examine error error error error error error error error error error error error error error error error error error error error error error error error\"",
+      "sentences": [
+        "Examine error error error error error error error error error error error error error error error error error error error error error error error error"
+      ],
+      "count_words": 25,
+      "lexicon": 0
+    },
+    {
+      "name": "unicode_and_boundaries_73",
+      "output": "Examine error error error error error error error error error error error error error error error error error error error error error error error error error",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "length": [
+            {
+              "sentence": "Examine error error error error error error error error error error error error error error error error error error error error error error error error error",
+              "words": 26,
+              "limit": 20
+            }
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 1
+      },
+      "note": "- This sentence has 26 words\u003b the maximum is 20. Divide it: \"Examine error error error error error error error error error error error error error error error error error error error error error error error error error\"",
+      "sentences": [
+        "Examine error error error error error error error error error error error error error error error error error error error error error error error error error"
+      ],
+      "count_words": 26,
+      "lexicon": 0
+    },
+    {
+      "name": "unicode_and_boundaries_74",
+      "output": "Examine error error error error error error error error error error error error error error error error error error error error error error error error error error",
+      "source": "text",
+      "limits": [
+        20,
+        25
+      ],
+      "names": [],
+      "result": {
+        "ok": false,
+        "hard": {
+          "length": [
+            {
+              "sentence": "Examine error error error error error error error error error error error error error error error error error error error error error error error error error error",
+              "words": 27,
+              "limit": 20
+            }
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 1
+      },
+      "note": "- This sentence has 27 words\u003b the maximum is 20. Divide it: \"Examine error error error error error error error error error error error error error error error error error error error error error error error error error error\"",
+      "sentences": [
+        "Examine error error error error error error error error error error error error error error error error error error error error error error error error error error"
+      ],
+      "count_words": 27,
+      "lexicon": 0
+    }
+  ],
+  "guards": [
+    {
+      "output": "I will examine the function.",
+      "source": "I will make one test.",
+      "examples": [
+        "I will examine the function.\nThe result shows the error.",
+        "  Too short.  "
+      ],
+      "result": {
+        "ok": false,
+        "hard": {
+          "copied_example": [
+            "I will examine the function."
+          ]
+        },
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0,
+        "word_ratio": 1.0
+      },
+      "notes": "- You copied text from an example. Rewrite only the text between <<<TEXT and TEXT>>>.",
+      "lexicon": 0
+    },
+    {
+      "output": "I will examine the function.",
+      "source": "I will examine the function.",
+      "examples": [
+        "I will examine the function.\nThe result shows the error.",
+        "  Too short.  "
+      ],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {},
+        "sentences": 1,
+        "sentences_over_20": 0,
+        "word_ratio": 1.0
+      },
+      "notes": "- Obey the rules.",
+      "lexicon": 0
+    },
+    {
+      "output": "Read [[C1]] <h4>.",
+      "source": "Read [[C1]].",
+      "examples": [
+        "I will examine the function.\nThe result shows the error.",
+        "  Too short.  "
+      ],
+      "result": {
+        "ok": false,
+        "hard": {
+          "invented_markup": [
+            "<h4>"
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "h",
+            "read"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0,
+        "word_ratio": 1.5
+      },
+      "notes": "- Your rewrite has markup that is not in the text: <h4>. Remove it.",
+      "lexicon": 0
+    },
+    {
+      "output": "Read <h4>.",
+      "source": "Read <h4>.",
+      "examples": [
+        "I will examine the function.\nThe result shows the error.",
+        "  Too short.  "
+      ],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unknown_words": [
+            "h",
+            "read"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0,
+        "word_ratio": 1.0
+      },
+      "notes": "- Obey the rules.",
+      "lexicon": 0
+    },
+    {
+      "output": "Read the file.",
+      "source": "Read the file and examine the error with the test.",
+      "examples": [
+        "I will examine the function.\nThe result shows the error.",
+        "  Too short.  "
+      ],
+      "result": {
+        "ok": false,
+        "hard": {
+          "word_ratio": [
+            0.3
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "file",
+            "read"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0,
+        "word_ratio": 0.3
+      },
+      "notes": "- Your rewrite is much longer or much shorter than the text. Keep all of the information and add nothing.",
+      "lexicon": 0
+    },
+    {
+      "output": "",
+      "source": "Read the file and examine the error with the test.",
+      "examples": [
+        "I will examine the function.\nThe result shows the error.",
+        "  Too short.  "
+      ],
+      "result": {
+        "ok": false,
+        "hard": {
+          "word_ratio": [
+            0.0
+          ]
+        },
+        "soft": {},
+        "sentences": 0,
+        "sentences_over_20": 0,
+        "word_ratio": 0.0
+      },
+      "notes": "- Your rewrite is much longer or much shorter than the text. Keep all of the information and add nothing.",
+      "lexicon": 0
+    },
+    {
+      "output": "One two three four five six seven eight nine.",
+      "source": "",
+      "examples": [
+        "I will examine the function.\nThe result shows the error.",
+        "  Too short.  "
+      ],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unknown_words": [
+            "eight",
+            "five",
+            "four",
+            "nine",
+            "seven",
+            "six",
+            "three",
+            "two"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0,
+        "word_ratio": 9.0
+      },
+      "notes": "- Obey the rules.",
+      "lexicon": 0
+    },
+    {
+      "output": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word",
+      "source": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word",
+      "examples": [
+        "I will examine the function.\nThe result shows the error.",
+        "  Too short.  "
+      ],
+      "result": {
+        "ok": false,
+        "hard": {
+          "length": [
+            {
+              "sentence": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+              "words": 107,
+              "limit": 25
+            }
+          ],
+          "word_ratio": [
+            2.67
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "word"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 1,
+        "word_ratio": 2.67
+      },
+      "notes": "- This sentence has 107 words\u003b the maximum is 25. Divide it: \"word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word \"\n- Your rewrite is much longer or much shorter than the text. Keep all of the information and add nothing.",
+      "lexicon": 0
+    },
+    {
+      "output": "word word word word word word word",
+      "source": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word",
+      "examples": [
+        "I will examine the function.\nThe result shows the error.",
+        "  Too short.  "
+      ],
+      "result": {
+        "ok": false,
+        "hard": {
+          "word_ratio": [
+            0.17
+          ]
+        },
+        "soft": {
+          "unknown_words": [
+            "word"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0,
+        "word_ratio": 0.17
+      },
+      "notes": "- Your rewrite is much longer or much shorter than the text. Keep all of the information and add nothing.",
+      "lexicon": 0
+    },
+    {
+      "output": "word word word word word",
+      "source": "word word word word word word word word",
+      "examples": [
+        "I will examine the function.\nThe result shows the error.",
+        "  Too short.  "
+      ],
+      "result": {
+        "ok": true,
+        "hard": {},
+        "soft": {
+          "unknown_words": [
+            "word"
+          ]
+        },
+        "sentences": 1,
+        "sentences_over_20": 0,
+        "word_ratio": 0.62
+      },
+      "notes": "- Obey the rules.",
+      "lexicon": 0
+    },
+    {
+      "output": null,
+      "source": "Read the file.",
+      "examples": [
+        "I will examine the function.\nThe result shows the error.",
+        "  Too short.  "
+      ],
+      "result": {
+        "ok": false,
+        "hard": {
+          "missing": [
+            true
+          ]
+        },
+        "soft": {}
+      },
+      "notes": "- Obey the rules.",
+      "lexicon": 0
+    }
+  ]
+}
