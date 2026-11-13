@@ -1,8 +1,66 @@
-use serde_json::json;
+use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
-use std::path::Path;
-use weaver_ste_driver::gate::{Capture, Transport, TurnClient};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+use weaver_ste_driver::{
+    check::Checker,
+    conversion::check_answer,
+    gate::{Capture, Transport, TurnClient, gate_call_deadline},
+    guard::Judge,
+    lexicon::Lexicon,
+    policy::AttemptResult,
+    run::{Kit, R0Parameters, evaluate},
+};
+
+const DEADLINE: Duration = Duration::from_secs(30);
+
+/// A temporary directory holding a stand-in checkout whose deploy/turn.py is the
+/// given Python, and an admin root the stand-in reads as WEAVER_ADMIN_CONFIG.
+struct FakeClient(PathBuf);
+impl FakeClient {
+    fn new(name: &str, script: &str) -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("ste-{name}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(root.join("repo/deploy")).unwrap();
+        std::fs::create_dir_all(root.join("admin")).unwrap();
+        std::fs::write(root.join("repo/deploy/turn.py"), script).unwrap();
+        Self(root)
+    }
+    fn client(&self, deadline: Duration) -> TurnClient {
+        TurnClient::new(
+            &self.0.join("repo"),
+            "ste-fixture",
+            &self.0.join("admin"),
+            deadline,
+        )
+        .unwrap()
+    }
+}
+impl Drop for FakeClient {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).unwrap();
+    }
+}
+
+fn judge() -> Judge {
+    let cases: Value = serde_json::from_str(include_str!("language-reference.json")).unwrap();
+    let lex =
+        Lexicon::build(serde_json::from_value(cases["lexicons"][0].clone()).unwrap()).unwrap();
+    Judge::new(Checker::new(lex, 20, 25).unwrap(), &[]).unwrap()
+}
+
+const SLEEPER: &str = r#"import os, sys, time
+open(os.path.join(os.environ["WEAVER_ADMIN_CONFIG"], "pid"), "w").write(str(os.getpid()))
+sys.stdout.write("partial")
+sys.stdout.flush()
+sys.stderr.write("waiting for the gate\n")
+sys.stderr.flush()
+time.sleep(30)
+"#;
 
 fn capture(value: serde_json::Value) -> Capture {
     Capture {
@@ -113,7 +171,7 @@ fn the_real_turn_client_sends_one_user_block_and_keeps_raw_evidence() {
         .ancestors()
         .nth(2)
         .unwrap();
-    let mut client = TurnClient::new(repo, agent, &admin).unwrap();
+    let mut client = TurnClient::new(repo, agent, &admin, DEADLINE).unwrap();
     let result = client.send(request);
     server.join().unwrap();
     assert_eq!(result.stdout, response);
@@ -132,10 +190,244 @@ fn the_real_client_retains_its_preconnection_failure() {
         .unwrap();
     let missing = std::env::temp_dir().join(format!("ste-no-config-{}", std::process::id()));
     assert!(!missing.exists());
-    let mut client = TurnClient::new(repo, "ste-fixture", &missing).unwrap();
+    let mut client = TurnClient::new(repo, "ste-fixture", &missing, DEADLINE).unwrap();
     let result = client.send("<<<TEXT\nRead the file.\nTEXT>>>");
     assert_eq!(result.exit_code, Some(1));
     assert!(result.stdout.is_empty());
     assert!(String::from_utf8_lossy(&result.stderr).contains("cannot read"));
     assert!(result.answer().is_err());
+}
+
+#[test]
+fn a_client_past_its_deadline_is_killed_reaped_and_recorded_as_a_transport_stop() {
+    let fake = FakeClient::new("sleeper", SLEEPER);
+    let started = Instant::now();
+    let capture = fake
+        .client(Duration::from_secs(1))
+        .send("<<<TEXT\nRead the file.\nTEXT>>>");
+    let elapsed = started.elapsed();
+    assert!(elapsed >= Duration::from_secs(1), "{elapsed:?}");
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "the client was not ended: {elapsed:?}"
+    );
+    assert_eq!(
+        capture.error.as_deref(),
+        Some("gate client passed the gate-call deadline of 1 s and was killed")
+    );
+    assert_eq!(capture.exit_code, None);
+    assert_eq!(capture.stdout, b"partial");
+    assert_eq!(capture.stderr, b"waiting for the gate\n");
+    let pid = std::fs::read_to_string(fake.0.join("admin/pid")).unwrap();
+    assert!(
+        !Path::new("/proc").join(&pid).exists(),
+        "the client {pid} is still a process"
+    );
+    assert_eq!(capture.to_json()["error"], json!(capture.error));
+    match check_answer(capture, &judge(), "Read the file.").unwrap() {
+        AttemptResult::TransportStopped { detail, .. } => assert!(detail.contains("deadline")),
+        other => panic!("not a transport stop: {other:?}"),
+    }
+
+    // Through the evaluation: the request is journaled first, the stop voids the
+    // round at R0's zero bound, and no scorer output is published.
+    let kit_path = fake.0.join("kit.jsonl");
+    std::fs::write(
+        &kit_path,
+        "{\"id\":\"a\",\"kind\":\"narration\",\"text\":\"Read the file.\"}\n\
+         {\"id\":\"b\",\"kind\":\"narration\",\"text\":\"Read the file.\"}\n",
+    )
+    .unwrap();
+    let run = fake.0.join("run");
+    let report = evaluate(
+        &Kit::read(&kit_path).unwrap(),
+        &R0Parameters::new(2, 1, 0).unwrap(),
+        &judge(),
+        &mut fake.client(Duration::from_secs(1)),
+        &run,
+    )
+    .unwrap();
+    assert!(report.void);
+    assert_eq!(report.transport_stopped_count, 1);
+    assert_eq!(report.never_attempted, vec!["b"]);
+    assert!(!run.join("output.jsonl").exists());
+    let journal = std::fs::read_to_string(run.join("journal.jsonl")).unwrap();
+    let kinds: Vec<Value> = journal
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap()["kind"].clone())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            json!("request"),
+            json!("response"),
+            json!("checked_attempt")
+        ]
+    );
+    let response: Value = serde_json::from_str(journal.lines().nth(1).unwrap()).unwrap();
+    assert!(
+        response["transport"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("gate-call deadline of 1 s")
+    );
+}
+
+#[test]
+fn a_client_that_writes_past_a_pipe_buffer_on_both_streams_is_not_blocked() {
+    let fake = FakeClient::new(
+        "flood",
+        r#"import json, sys
+sys.stderr.write("e" * 262144)
+sys.stderr.flush()
+sys.stdout.write(json.dumps({"kind": "answered", "run": "r", "turn": "t", "text": "a" * 131072}))
+"#,
+    );
+    let started = Instant::now();
+    let capture = fake
+        .client(Duration::from_secs(5))
+        .send("<<<TEXT\nRead the file.\nTEXT>>>");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(capture.error, None);
+    assert_eq!(capture.exit_code, Some(0));
+    assert_eq!(capture.stderr.len(), 262144);
+    assert_eq!(capture.answer().unwrap().text.unwrap().len(), 131072);
+}
+
+#[test]
+fn a_client_that_ends_at_once_is_recorded_as_before() {
+    let fake = FakeClient::new(
+        "prompt",
+        r#"import sys
+print('{"kind":"answered","run":"r","turn":"t","text":"Read the file."}', end="")
+sys.stderr.write("diagnostic")
+"#,
+    );
+    let started = Instant::now();
+    let capture = fake
+        .client(DEADLINE)
+        .send("<<<TEXT\nRead the file.\nTEXT>>>");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(
+        capture.stdout,
+        b"{\"kind\":\"answered\",\"run\":\"r\",\"turn\":\"t\",\"text\":\"Read the file.\"}"
+    );
+    assert_eq!(capture.stderr, b"diagnostic");
+    assert_eq!(capture.exit_code, Some(0));
+    assert_eq!(capture.error, None);
+    assert_eq!(
+        capture.answer().unwrap().text.as_deref(),
+        Some("Read the file.")
+    );
+
+    // The client's own failure is its exit status, not a deadline.
+    let failing = FakeClient::new("failing", "import sys\nsys.exit(3)\n");
+    let capture = failing
+        .client(DEADLINE)
+        .send("<<<TEXT\nRead the file.\nTEXT>>>");
+    assert_eq!(capture.exit_code, Some(3));
+    assert_eq!(capture.error, None);
+    assert!(capture.stdout.is_empty());
+    assert!(capture.answer().is_err());
+}
+
+#[test]
+fn the_client_refuses_a_zero_or_unmeasurable_deadline() {
+    let fake = FakeClient::new("refusal", "raise RuntimeError('must not run')\n");
+    let repo = fake.0.join("repo");
+    let admin = fake.0.join("admin");
+    for (deadline, reason) in [
+        (
+            Duration::ZERO,
+            "the gate-call deadline must be at least one second",
+        ),
+        (
+            Duration::from_millis(999),
+            "the gate-call deadline must be at least one second",
+        ),
+        (
+            Duration::MAX,
+            "the gate-call deadline is too large to measure",
+        ),
+    ] {
+        match TurnClient::new(&repo, "ste-fixture", &admin, deadline) {
+            Err(error) => assert_eq!(error, reason),
+            Ok(_) => panic!("{deadline:?} was accepted"),
+        }
+    }
+    assert!(TurnClient::new(&repo, "ste-fixture", &admin, Duration::from_secs(1)).is_ok());
+    assert_eq!(gate_call_deadline(1), Ok(Duration::from_secs(1)));
+    assert_eq!(
+        gate_call_deadline(0),
+        Err("the gate-call deadline must be at least one second".into())
+    );
+    assert_eq!(
+        gate_call_deadline(u64::MAX),
+        Err("the gate-call deadline is too large to measure".into())
+    );
+}
+
+/// A client that starts a process of its own, which keeps the client's pipes open
+/// for 6 s after the client ends. The call does not wait for that process.
+fn forking_client(name: &str, then: &str) -> FakeClient {
+    FakeClient::new(
+        name,
+        &format!(
+            r#"import os, sys, time
+if os.fork() == 0:
+    time.sleep(6)
+    os._exit(0)
+{then}
+"#
+        ),
+    )
+}
+
+#[test]
+fn a_process_the_client_started_cannot_hold_the_call_open() {
+    // The client answers and ends at once, and its process holds the pipes.
+    let fake = forking_client(
+        "fork-answer",
+        r#"sys.stdout.write('{"kind":"answered","run":"r","turn":"t","text":"x"}')
+sys.stdout.flush()"#,
+    );
+    let started = Instant::now();
+    let capture = fake
+        .client(DEADLINE)
+        .send("<<<TEXT\nRead the file.\nTEXT>>>");
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        capture.error.as_deref(),
+        Some("gate client ended, and a process it started still holds its output")
+    );
+    assert_eq!(capture.exit_code, None);
+    assert_eq!(
+        capture.stdout,
+        br#"{"kind":"answered","run":"r","turn":"t","text":"x"}"#
+    );
+    assert!(capture.answer().is_err());
+
+    // The client stalls past its deadline, and its process holds the pipes.
+    let fake = forking_client(
+        "fork-stall",
+        "sys.stdout.write('partial')\nsys.stdout.flush()\ntime.sleep(30)",
+    );
+    let started = Instant::now();
+    let capture = fake
+        .client(Duration::from_secs(1))
+        .send("<<<TEXT\nRead the file.\nTEXT>>>");
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        capture.error.as_deref(),
+        Some("gate client passed the gate-call deadline of 1 s and was killed")
+    );
+    assert_eq!(capture.stdout, b"partial");
 }

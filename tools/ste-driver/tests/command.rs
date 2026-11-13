@@ -48,7 +48,8 @@ fn fixture(directory: &Directory) -> (Value, PathBuf) {
         "approved_words":directory.0.join("words.json"),
         "prompt_bundle":directory.0.join("bundle.json"),
         "kit":kit, "kit_sha256":format!("{:x}",Sha256::digest(bytes)),
-        "driver_repair_pass_cap":2, "offer_pass_cap":1, "transport_stop_bound":0
+        "driver_repair_pass_cap":2, "offer_pass_cap":1, "transport_stop_bound":0,
+        "gate_call_deadline_seconds":600
     });
     (config, directory.0.join("config.json"))
 }
@@ -173,6 +174,36 @@ fn command_requires_every_field_and_the_exact_r0_elections() {
         changed[key] = json!("");
         refused(&directory, &changed, &path, "an input path is empty");
     }
+    for (value, reason) in [
+        (
+            json!(0),
+            "the gate-call deadline must be at least one second",
+        ),
+        (
+            json!(u64::MAX),
+            "the gate-call deadline is too large to measure",
+        ),
+        (json!(-1), "invalid value"),
+        (json!(1.5), "invalid type"),
+        (
+            json!("REPLACE_WITH_THE_ELECTED_WHOLE_SECONDS"),
+            "invalid type",
+        ),
+    ] {
+        let mut changed = base.clone();
+        changed["gate_call_deadline_seconds"] = value;
+        refused(&directory, &changed, &path, reason);
+    }
+    // The deadline is refused with the other elections, before any path is read.
+    let mut changed = base.clone();
+    changed["gate_call_deadline_seconds"] = json!(0);
+    changed["repo"] = json!("");
+    refused(
+        &directory,
+        &changed,
+        &path,
+        "the gate-call deadline must be at least one second",
+    );
     let mut changed = base.clone();
     changed["extra"] = json!(true);
     refused(&directory, &changed, &path, "unknown field");
