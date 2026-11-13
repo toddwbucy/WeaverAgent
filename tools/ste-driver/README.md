@@ -17,6 +17,7 @@ The authority is `docs/crates/weaver-harness/Loops/ste-conversion-loop.md`:
 - 6.03, 6.04 and 6.07: share the request allowance across both retry kinds.
 - 7.01 and 7.07: persist attempts, losses and a void evaluation's record.
 - 7.08: end a gate call at the operator's deadline as a transport stop.
+- 7.09: split a long kit between trajectories, and record each batch's place in its chain.
 
 The tool compiles the pure request owner from the harness's development-driver
 directory as source. It links no harness or other agent library.
@@ -190,6 +191,68 @@ The command consumes a prepared kit. It does not select the roster or attest its
 qualification. Retain the preparation deposit and selection evidence with the
 100-item R0 roster.
 
+A long job runs as a chain of batches. The `split-kit` command cuts a frozen kit
+only between trajectories. A trajectory is the run of consecutive segments that
+share one `uuid`. Each batch holds `batch_trajectories` whole trajectories, and the
+last batch can hold fewer. Each batch file is a consecutive run of the kit's lines,
+so the batch files joined in index order are the kit's exact bytes. A blank line
+stays with the batch of the line before it.
+
+Its config requires `kit`, `kit_sha256` and `batch_trajectories`, which is at least 1.
+Unknown, null or missing fields refuse the command. The operator elects the batch
+size, so the example names none, and the command refuses the example's string. The
+kit path resolves from the config directory. The output path resolves from the
+current directory and must be new. A trajectory that is not one consecutive run of
+the kit, or a segment with no `uuid`, refuses the split before the directory exists.
+
+```json
+{
+  "kit": "/path/to/frozen-kit.jsonl",
+  "kit_sha256": "REPLACE_WITH_THE_FROZEN_KIT_SHA256",
+  "batch_trajectories": "REPLACE_WITH_THE_ELECTED_COUNT"
+}
+```
+
+```sh
+"$CARGO_TARGET_DIR/debug/weaver-ste-driver" split-kit \
+  --config /path/to/split.json --output /path/to/chain
+```
+
+The directory holds `batch-0000.jsonl` onward and `chain.json`. The manifest is
+written last, through a pending file and a rename, so a directory that holds
+`chain.json` holds every batch it names. The manifest records the kit's digest, the
+segment and trajectory counts and the batch size. For each batch it records the
+index, file, digest, segment count, first and last segment IDs and trajectory UUIDs.
+The command prints the manifest's digest. Exit 0 means the chain was written. Exit 1
+means the command failed.
+
+Evaluate each batch as its own kit. `kit` names the batch file, and `kit_sha256` is
+its digest from the manifest. An optional `chain` object in the evaluation config
+names the batch's place:
+
+```json
+"chain": {
+  "manifest": "/path/to/chain/chain.json",
+  "manifest_sha256": "REPLACE_WITH_THE_MANIFEST_SHA256",
+  "index": 0
+}
+```
+
+The command checks the manifest's digest. It refuses a manifest that is not a chain
+of whole trajectories: indexes out of order, a trajectory or file in two batches, or
+counts that do not add up. It refuses a kit that is not the manifest's batch at that
+index. Every check comes before the run directory exists. `run.json` records the
+`chain` object with the config, and the manifest's entry for the batch as
+`chain_batch`. A kit evaluated alone has no `chain`, and its `run.json` is unchanged.
+
+Load the agent once for each batch evaluation, and unload it after. Then each batch's
+turn keys depend on that batch alone. A void batch evaluated again from its first
+item on a new load draws the turn keys that its void evaluation drew. Under one load
+across batches, every turn after a void or an abandoned turn has a different key from
+an unbroken chain. Evaluate a void batch again in a new output directory. Assembly
+over a chain joins one complete evaluation per batch, and it waits on the operator's
+assembly rule. This tool does not assemble a chain.
+
 `evaluate` runs `deploy/turn.py` from this checkout as the uid that runs the driver,
 with no `sudo`, and the gate admits that uid only if the agent's `allowed-uids` names
 it. An agent `deploy/create-agent.sh` lays names the box's gate-con account alone
@@ -289,15 +352,16 @@ The generators need no approved-words artifact, model, gate or network. They cha
 only this tool's fixture and character-class files. They do not modify WeaverTrain.
 The fixture cases are tests, not the R0 evaluation kit or an R0 result.
 
-The command's pinned-input test uses the real binary and gate client with a synthetic
-Unix socket. It needs operator-supplied reference artifacts and is explicitly ignored
-without them. Run it separately with those paths set. It starts no agent or model.
-It covers a completed evaluation, output-directory reuse and a separate void evaluation.
+Two pinned-input tests use the real binary and gate client. They need
+operator-supplied reference artifacts and are explicitly ignored without them. Run
+them separately with those paths set. They start no agent or model. The command's
+test uses a synthetic Unix socket. It covers a completed evaluation, output-directory
+reuse and a separate void evaluation. The chain's test has no listener, so its
+evaluation is void at the first call. It covers a batch's record in `run.json`.
 
 ```sh
 export STE_TEST_TRAIN_ROOT=/path/to/pinned/WeaverTrain
 export STE_TEST_APPROVED_WORDS=/path/to/approved-words.json
 export STE_TEST_PROMPT_BUNDLE=/path/to/source-prompt-bundle.json
-cargo test --manifest-path tools/ste-driver/Cargo.toml --locked --test command \
-  command_runs_the_pinned_checker_through_a_synthetic_gate -- --ignored --exact
+cargo test --manifest-path tools/ste-driver/Cargo.toml --locked -- --ignored
 ```
