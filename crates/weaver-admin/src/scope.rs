@@ -18,7 +18,7 @@
 //! [`request_judgment`], the scope's state table's events admin causes, for
 //! the inputs a [`Step`] carries.
 
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::containment::{self, Cgroup};
@@ -333,22 +333,60 @@ pub fn busctl(call: &Call) -> Result<String, String> {
 /// process it started, refuses whatever it answered. Answers its standard
 /// output where it succeeded, and its status and what it said where it
 /// failed.
+///
+/// **Its start is inside the wait**: a spawn returns only once the helper
+/// has exec'd, so an exec that blocks on its filesystem would hold the call
+/// before the wait began. The helper is started on a thread of its own and
+/// its start waited for only to the wait's end, a start not returned by then
+/// refusing as a hang does. A start that fails answers at once. A start that
+/// returns after the call stopped waiting is killed and reaped by the
+/// starting thread, its handover refused, so no helper is left behind.
 pub fn helper(
     program: &str,
     arguments: &[String],
     deadline: Instant,
     bound: Duration,
 ) -> Result<String, String> {
-    use std::os::unix::process::ExitStatusExt;
-
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(arguments)
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("{program} does not run: {error}"))?;
+        .stderr(Stdio::piped());
+    helper_from(program, move || command.spawn(), deadline, bound)
+}
+
+/// [`helper`], its start a seam the suite holds.
+fn helper_from(
+    program: &str,
+    start: impl FnOnce() -> std::io::Result<Child> + Send + 'static,
+    deadline: Instant,
+    bound: Duration,
+) -> Result<String, String> {
+    use std::os::unix::process::ExitStatusExt;
+
+    // A rendezvous: a handover the call no longer waits for is refused and
+    // comes back to the starting thread, never left in a buffer.
+    let (hand, taken) = std::sync::mpsc::sync_channel::<std::io::Result<Child>>(0);
+    std::thread::spawn(move || {
+        if let Err(std::sync::mpsc::SendError(Ok(mut late))) = hand.send(start()) {
+            let _ = late.kill();
+            let _ = late.wait();
+        }
+    });
+    let mut child = match taken
+        .recv_timeout((deadline + HELPER_GRACE).saturating_duration_since(Instant::now()))
+    {
+        Ok(Ok(child)) => child,
+        Ok(Err(error)) => return Err(format!("{program} does not run: {error}")),
+        Err(_) => {
+            return Err(format!(
+                "{program} did not start within the scope bound ({} ms) and its grace: its exec had not returned",
+                bound.as_millis()
+            ));
+        }
+    };
     let stdout = drain(child.stdout.take());
     let stderr = drain(child.stderr.take());
     let mut waited = None;

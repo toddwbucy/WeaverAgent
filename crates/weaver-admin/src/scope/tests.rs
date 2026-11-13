@@ -285,9 +285,13 @@ fn a_helper_that_fails_names_its_status_and_what_it_said() {
     assert!(why.contains("Access denied"), "{why}");
 }
 
-/// **A helper that does not run is named** (6.1, the request refused).
+/// **A helper that does not run is named at once** (6.1, the request
+/// refused): a start that fails answers as it fails, not at the wait's end.
+/// Perturbation: wait out the deadline before reading a failed start, and
+/// the call takes the 5 s.
 #[test]
 fn a_helper_that_does_not_run_is_named() {
+    let started = Instant::now();
     let refused = helper(
         "/weaver-test-no-such-helper",
         &[],
@@ -299,6 +303,79 @@ fn a_helper_that_does_not_run_is_named() {
         why.contains("/weaver-test-no-such-helper does not run"),
         "{why}"
     );
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "at once, not at the wait's end, {:?}",
+        started.elapsed()
+    );
+}
+
+/// **A helper whose start blocks is held to the wait** (6.1, the scope
+/// bound, #522): a spawn returns only once the helper has exec'd, so an exec
+/// blocked on its filesystem would hold the call before the wait began. The
+/// start runs on a thread of its own, the call refuses at the wait's end,
+/// and the start that returns later is killed and reaped by its thread. Here
+/// the start is held 1 s past a 300 ms deadline, then starts a long helper
+/// and records its pid.
+/// Perturbations: start inline, and the call takes the held second; drop the
+/// late start's kill, and its pid stands.
+#[test]
+fn a_helper_whose_start_blocks_is_held_to_the_wait() {
+    let (record, _) = pid_record("late");
+    let written = record.clone();
+    let deadline = Duration::from_millis(300);
+    let started = Instant::now();
+    let refused = helper_from(
+        "/bin/sh",
+        move || {
+            std::thread::sleep(Duration::from_secs(1));
+            let child = std::process::Command::new("/bin/sh")
+                .args(shell("exec sleep 5"))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()?;
+            std::fs::write(&written, child.id().to_string())?;
+            Ok(child)
+        },
+        Instant::now() + deadline,
+        deadline,
+    );
+    let elapsed = started.elapsed();
+    let why = refused.expect_err("a blocked start refuses");
+    assert!(
+        why.contains("did not start within the scope bound (300 ms)"),
+        "{why}"
+    );
+    assert!(
+        elapsed >= deadline + HELPER_GRACE,
+        "held to the wait's end, {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(900),
+        "not to the start's return, {elapsed:?}"
+    );
+    let pid = (0..300)
+        .find_map(|_| {
+            let pid = std::fs::read_to_string(&record)
+                .ok()
+                .filter(|pid| !pid.trim().is_empty());
+            if pid.is_none() {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            pid
+        })
+        .expect("the late start recorded its pid");
+    let _ = std::fs::remove_file(&record);
+    let pid = pid.trim().to_string();
+    let reaped = (0..200).any(|_| {
+        let gone = !std::path::Path::new(&format!("/proc/{pid}")).exists();
+        if !gone {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        gone
+    });
+    assert!(reaped, "the late helper {pid} is killed and reaped");
 }
 
 /// **A helper still running past the deadline is killed and reaped** (6.1,
