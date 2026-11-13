@@ -1,0 +1,41 @@
+{
+  "system": "Read the file.\n",
+  "examples": [
+    {
+      "role": "user",
+      "content": "0"
+    },
+    {
+      "role": "assistant",
+      "content": "one\n"
+    },
+    {
+      "role": "user",
+      "content": "1"
+    },
+    {
+      "role": "assistant",
+      "content": "two"
+    },
+    {
+      "role": "user",
+      "content": "2"
+    },
+    {
+      "role": "assistant",
+      "content": "three"
+    },
+    {
+      "role": "user",
+      "content": "3"
+    },
+    {
+      "role": "assistant",
+      "content": "four"
+    }
+  ],
+  "meta": {
+    "limit_instruction": 20,
+    "limit_description": 25
+  }
+}
