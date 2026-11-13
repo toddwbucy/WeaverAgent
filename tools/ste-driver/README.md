@@ -108,8 +108,9 @@ as the evaluator's kit after the roster and rows qualify.
 It writes and syncs the parameters before the first request. Each request is
 recorded before `TurnClient` calls the gate script. The complete stdout, stderr,
 exit status, answer identity, checks and notes stay with the attempt. A stopped
-or invalid gate close stops the text and voids this R0 evaluation. A completed
-answer with no text or a lost placeholder occurrence uses the shape retry path.
+or invalid gate close, or a gate client past its deadline, stops the text and voids
+this R0 evaluation. A completed answer with no text or a lost placeholder
+occurrence uses the shape retry path.
 Extra or repeated placeholders use language repair with the checker's notes.
 Truncation and other hard language findings use the repair path. There is no
 automatic restart of a stopped pass and no earlier-output fallback.
@@ -143,9 +144,25 @@ The config names the operator's agent and admin config root explicitly.
   "kit_sha256": "REPLACE_WITH_THE_FROZEN_KIT_SHA256",
   "driver_repair_pass_cap": 2,
   "offer_pass_cap": 1,
-  "transport_stop_bound": 0
+  "transport_stop_bound": 0,
+  "gate_call_deadline_seconds": REPLACE_WITH_THE_ELECTED_SECONDS
 }
 ```
+
+`gate_call_deadline_seconds` bounds each gate call. It has no default, and the
+command refuses zero. The operator elects the value for the agent and model, so the
+example names none. A gate client still running at the deadline is killed and
+reaped. Its response record keeps the bytes it wrote and an error that names the
+deadline. That is a transport stop, so R0's zero bound voids the evaluation with
+exit 2.
+
+The deadline ends the client, not the turn. If the gate admitted the request before
+the client was killed, the turn runs to its close inside the agent, because a turn
+whose dialer leaves is not ended. The trace keeps that turn, and no checked attempt
+joins it, so `trace-report` marks its request incomplete. The turn also takes the
+load's next turn key, so each later turn in that load has a different key from an
+unbroken run. Unload the agent before it is used again, and start the next
+evaluation on a new load.
 
 Exit 0 means the complete evaluation was recorded. It can contain shape drops and
 language failures. Exit 2 means the evaluation is void. Exit 1 means the command failed.

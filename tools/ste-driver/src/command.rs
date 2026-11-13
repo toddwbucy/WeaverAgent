@@ -5,6 +5,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use weaver_ste_driver::{
     check::Checker,
     gate::TurnClient,
@@ -46,6 +47,7 @@ struct Config {
     driver_repair_pass_cap: u32,
     offer_pass_cap: u32,
     transport_stop_bound: u64,
+    gate_call_deadline_seconds: u64,
 }
 
 impl Config {
@@ -189,7 +191,12 @@ fn evaluate(config: PathBuf, output: PathBuf) -> Result<u8> {
         config.transport_stop_bound,
     )?;
     config.resolve(config_path.parent().ok_or("config path has no parent")?)?;
-    let mut transport = TurnClient::new(&config.repo, &config.agent, &config.config_root)?;
+    let mut transport = TurnClient::new(
+        &config.repo,
+        &config.agent,
+        &config.config_root,
+        Duration::from_secs(config.gate_call_deadline_seconds),
+    )?;
     let kit = Kit::read(&config.kit)?;
     if config.kit_sha256 != kit.sha256() {
         return Err("frozen kit hash mismatch".into());

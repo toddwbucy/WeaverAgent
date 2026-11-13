@@ -1,8 +1,11 @@
 //! Workflow 4.01, 4.05, 4.06 and 6.03. Call the existing operator gate client.
 
 use serde_json::{Value, json};
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 /// Keep the subprocess evidence even when it cannot supply an answered close.
 #[derive(Debug)]
@@ -71,11 +74,24 @@ pub struct TurnClient {
     script: PathBuf,
     agent: String,
     config_root: PathBuf,
+    deadline: Duration,
 }
 
 impl TurnClient {
-    /// The caller supplies this checkout and the operator's admin config root.
-    pub fn new(repo: &Path, agent: &str, config_root: &Path) -> Result<Self, String> {
+    /// The caller supplies this checkout, the operator's admin config root and the
+    /// gate-call deadline. The deadline has no default, and zero is refused.
+    pub fn new(
+        repo: &Path,
+        agent: &str,
+        config_root: &Path,
+        deadline: Duration,
+    ) -> Result<Self, String> {
+        if deadline.is_zero() {
+            return Err("the gate-call deadline must be at least one second".into());
+        }
+        if Instant::now().checked_add(deadline).is_none() {
+            return Err("the gate-call deadline is too large to measure".into());
+        }
         if agent.is_empty()
             || !agent
                 .bytes()
@@ -91,33 +107,94 @@ impl TurnClient {
             script,
             agent: agent.to_owned(),
             config_root: config_root.to_owned(),
+            deadline,
         })
     }
 }
 
+/// Read one pipe to its end on its own thread, so that neither pipe can fill and
+/// stop the client while the caller waits on the other.
+fn drain(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        bytes
+    })
+}
+
 impl Transport for TurnClient {
+    /// A client still running at the deadline is killed and reaped. Its capture keeps
+    /// the bytes it wrote and an error naming the deadline, so the caller records a
+    /// transport stop. A turn the gate already admitted still runs in the agent.
     fn send(&mut self, text: &str) -> Capture {
         // One argument carries the complete user block. No shell parses it.
         // No system flag is supplied. Prompt seeding is the operator's action.
-        match Command::new("python3")
+        let started = Command::new("python3")
             .arg(&self.script)
             .arg(&self.agent)
             .arg(text)
             .arg("--raw")
             .env("WEAVER_ADMIN_CONFIG", &self.config_root)
-            .output()
-        {
-            Ok(output) => Capture {
-                stdout: output.stdout,
-                stderr: output.stderr,
-                exit_code: output.status.code(),
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+        let mut child = match started {
+            Ok(child) => child,
+            Err(error) => {
+                return Capture {
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                    exit_code: None,
+                    error: Some(format!("gate client could not start: {error}")),
+                };
+            }
+        };
+        let stdout = drain(child.stdout.take());
+        let stderr = drain(child.stderr.take());
+        // An end past what an instant can hold never comes.
+        let end = Instant::now().checked_add(self.deadline);
+        let ended = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status.code()),
+                Ok(None) if end.is_some_and(|end| Instant::now() >= end) => {
+                    let _ = child.kill();
+                    // A client that exited by itself before the kill keeps its own status.
+                    if let Ok(status) = child.wait()
+                        && status.code().is_some()
+                    {
+                        break Ok(status.code());
+                    }
+                    break Err(format!(
+                        "gate client passed the gate-call deadline of {} s and was killed",
+                        self.deadline.as_secs_f64()
+                    ));
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    break Err(format!("gate client could not be waited on: {error}"));
+                }
+            }
+        };
+        // turn.py starts no process of its own, so both pipes close when it ends.
+        let stdout = stdout.join().unwrap_or_default();
+        let stderr = stderr.join().unwrap_or_default();
+        match ended {
+            Ok(exit_code) => Capture {
+                stdout,
+                stderr,
+                exit_code,
                 error: None,
             },
             Err(error) => Capture {
-                stdout: Vec::new(),
-                stderr: Vec::new(),
+                stdout,
+                stderr,
                 exit_code: None,
-                error: Some(format!("gate client could not start: {error}")),
+                error: Some(error),
             },
         }
     }
