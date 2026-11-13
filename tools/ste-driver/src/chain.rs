@@ -7,7 +7,7 @@
 //! last, through a pending file and a rename, so a directory that holds
 //! `chain.json` holds every batch it names.
 
-use crate::run::Kit;
+use crate::run::{Kit, Segment};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -60,42 +60,39 @@ struct Cut {
 }
 
 /// The trajectory a kit segment belongs to: its `uuid` locator, a nonempty string.
-fn trajectory(line: &str) -> Result<(String, String)> {
-    let segment: Value = serde_json::from_str(line)?;
-    let id = segment
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or("kit segment has no id")?;
-    let uuid = segment
+fn trajectory(segment: &Segment) -> Result<String> {
+    segment
+        .locators
         .get("uuid")
         .and_then(Value::as_str)
         .filter(|uuid| !uuid.is_empty())
-        .ok_or("kit segment has no trajectory uuid")?;
-    Ok((id.to_owned(), uuid.to_owned()))
+        .map(str::to_owned)
+        .ok_or_else(|| "kit segment has no trajectory uuid".into())
 }
 
 /// Cut the kit's bytes between trajectories, `batch_trajectories` to a batch.
-/// A blank line stays with the batch of the line before it, so no byte is lost.
-fn cuts(bytes: &[u8], batch_trajectories: usize) -> Result<(Vec<Cut>, usize, usize)> {
+/// The lines are the ones `Kit::read` parsed, met in its order and under its blank
+/// rule, so each nonblank line is the kit's next segment. A blank line stays with
+/// the batch of the line before it, so no byte is lost.
+fn cuts(kit: &Kit, batch_trajectories: usize) -> Result<(Vec<Cut>, usize)> {
     let mut cuts: Vec<Cut> = Vec::new();
     let mut seen = BTreeSet::new();
     let mut current: Option<String> = None;
-    let mut segments = 0;
+    let mut segments = kit.segments().iter();
     let mut offset = 0;
-    for raw in bytes.split_inclusive(|byte| *byte == b'\n') {
+    for raw in kit.bytes().split_inclusive(|byte| *byte == b'\n') {
         let start = offset;
         offset += raw.len();
-        let line = std::str::from_utf8(raw)?;
-        if line.trim().is_empty() {
-            match cuts.last_mut() {
-                Some(cut) => cut.end = offset,
-                None => continue,
+        if std::str::from_utf8(raw)?.trim().is_empty() {
+            if let Some(cut) = cuts.last_mut() {
+                cut.end = offset;
             }
             continue;
         }
-        let text = line.trim_end_matches(['\n', '\r']);
-        let (id, uuid) = trajectory(text)?;
-        segments += 1;
+        let segment = segments
+            .next()
+            .ok_or("the kit has more lines than segments")?;
+        let (id, uuid) = (segment.id.clone(), trajectory(segment)?);
         if current.as_deref() != Some(uuid.as_str()) {
             if !seen.insert(uuid.clone()) {
                 return Err(
@@ -126,7 +123,10 @@ fn cuts(bytes: &[u8], batch_trajectories: usize) -> Result<(Vec<Cut>, usize, usi
         cut.segments += 1;
         cut.last_segment = id;
     }
-    Ok((cuts, segments, seen.len()))
+    if segments.next().is_some() {
+        return Err("the kit has more segments than lines".into());
+    }
+    Ok((cuts, seen.len()))
 }
 
 fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -137,14 +137,16 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 
 /// Workflow 7.09. Split the frozen kit at `kit` into batches of whole trajectories in
-/// a new directory `output`, and write the manifest last.
-/// Every check of the kit finishes before the directory is created.
+/// a new directory `output`, and write the manifest last. Returns the manifest and
+/// the digest of the bytes written as `chain.json`.
+/// Every check of the kit finishes before the directory is created. A failure after
+/// that leaves the directory without `chain.json`, which marks it incomplete.
 pub fn split(
     kit: &Path,
     expected_sha256: &str,
     batch_trajectories: usize,
     output: &Path,
-) -> Result<Manifest> {
+) -> Result<(Manifest, String)> {
     if batch_trajectories == 0 {
         return Err("a batch must hold at least one trajectory".into());
     }
@@ -152,15 +154,11 @@ pub fn split(
     if parent.sha256() != expected_sha256 {
         return Err("frozen kit hash mismatch".into());
     }
-    let bytes = std::fs::read(kit)?;
-    if hash(&bytes) != parent.sha256() {
-        return Err("the kit changed while it was read".into());
-    }
-    let (cuts, segments, trajectories) = cuts(&bytes, batch_trajectories)?;
+    let bytes = parent.bytes();
+    let (cuts, trajectories) = cuts(&parent, batch_trajectories)?;
     if cuts.first().map(|cut| cut.start) != Some(0)
         || cuts.last().map(|cut| cut.end) != Some(bytes.len())
         || cuts.windows(2).any(|pair| pair[0].end != pair[1].start)
-        || segments != parent.segments().len()
     {
         return Err("the batches do not cover the kit's bytes exactly".into());
     }
@@ -180,7 +178,7 @@ pub fn split(
         .collect();
     let manifest = Manifest {
         kit_sha256: parent.sha256().to_owned(),
-        segments,
+        segments: parent.segments().len(),
         trajectories,
         batch_trajectories,
         batches,
@@ -200,7 +198,7 @@ pub fn split(
     write_new(&pending, &text)?;
     std::fs::rename(&pending, output.join(MANIFEST))?;
     File::open(output)?.sync_all()?;
-    Ok(manifest)
+    Ok((manifest, hash(&text)))
 }
 
 /// Workflow 7.09. Check a batch evaluation's place in its chain before it starts:
@@ -241,7 +239,12 @@ pub fn check(
         .sum::<usize>()
         == chain.segments
         && seen.len() == chain.trajectories;
-    if chain.batches.is_empty() || !indexed || !shaped || !counted {
+    let full = chain.batches.split_last().is_some_and(|(_, earlier)| {
+        earlier
+            .iter()
+            .all(|batch| batch.trajectories.len() == chain.batch_trajectories)
+    });
+    if chain.batches.is_empty() || !indexed || !shaped || !counted || !full {
         return Err("chain manifest is not a chain of whole trajectories".into());
     }
     let batch = chain

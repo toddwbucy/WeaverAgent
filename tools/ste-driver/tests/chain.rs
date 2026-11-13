@@ -75,7 +75,11 @@ fn a_kit_splits_between_trajectories_and_its_batches_join_to_its_bytes() {
     let bytes = kit_bytes();
     let (kit, sha256) = write_kit(&directory, &bytes);
     let output = directory.0.join("chain");
-    let manifest = chain::split(&kit, &sha256, 2, &output).unwrap();
+    let (manifest, manifest_sha256) = chain::split(&kit, &sha256, 2, &output).unwrap();
+    assert_eq!(
+        manifest_sha256,
+        hash(&std::fs::read(output.join(chain::MANIFEST)).unwrap())
+    );
     assert_eq!(manifest.kit_sha256, sha256);
     assert_eq!((manifest.segments, manifest.trajectories), (9, 5));
     assert_eq!(manifest.batch_trajectories, 2);
@@ -120,7 +124,7 @@ fn every_batch_size_keeps_each_trajectory_in_one_batch() {
     let (kit, sha256) = write_kit(&directory, &bytes);
     for size in 1..=6 {
         let output = directory.0.join(format!("chain-{size}"));
-        let manifest = chain::split(&kit, &sha256, size, &output).unwrap();
+        let (manifest, _) = chain::split(&kit, &sha256, size, &output).unwrap();
         assert_eq!(
             manifest.batches.len(),
             5_usize.div_ceil(size),
@@ -189,9 +193,8 @@ fn manifest_at(directory: &Directory) -> (PathBuf, String, Manifest) {
     let bytes = kit_bytes();
     let (kit, sha256) = write_kit(directory, &bytes);
     let output = directory.0.join("chain");
-    let manifest = chain::split(&kit, &sha256, 2, &output).unwrap();
+    let (manifest, manifest_sha256) = chain::split(&kit, &sha256, 2, &output).unwrap();
     let path = output.join(chain::MANIFEST);
-    let manifest_sha256 = hash(&std::fs::read(&path).unwrap());
     (path, manifest_sha256, manifest)
 }
 
@@ -242,6 +245,8 @@ fn a_batch_is_checked_against_its_pinned_manifest_and_index() {
             as &dyn Fn(&mut Value),
         // A trajectory in two batches, with every count still matching.
         &|value: &mut Value| value["batches"][2]["trajectories"] = json!(["A", "E"]),
+        // A batch before the last that is not full.
+        &|value: &mut Value| value["batch_trajectories"] = json!(3),
         &|value: &mut Value| value["batches"][1]["index"] = json!(2),
         &|value: &mut Value| value["batches"][1]["trajectories"] = json!(["C", "D", "X"]),
         &|value: &mut Value| value["segments"] = json!(8),

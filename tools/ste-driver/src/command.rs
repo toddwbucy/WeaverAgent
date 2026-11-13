@@ -213,18 +213,17 @@ pub(crate) fn execute(args: impl Iterator<Item = OsString>) -> Result<u8> {
                     .ok_or("config path has no parent")?
                     .join(config.kit);
             }
-            let manifest = chain::split(
+            let (manifest, manifest_sha256) = chain::split(
                 &config.kit,
                 &config.kit_sha256,
                 config.batch_trajectories,
                 &output,
             )?;
-            let manifest_bytes = std::fs::read(output.join(chain::MANIFEST))?;
             println!(
                 "{}",
                 json!({
                     "output":output, "manifest":chain::MANIFEST,
-                    "manifest_sha256":format!("{:x}",Sha256::digest(&manifest_bytes)),
+                    "manifest_sha256":manifest_sha256,
                     "kit_sha256":manifest.kit_sha256, "batches":manifest.batches.len(),
                     "segments":manifest.segments, "trajectories":manifest.trajectories
                 })

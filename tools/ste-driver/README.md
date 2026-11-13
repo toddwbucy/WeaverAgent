@@ -220,7 +220,9 @@ the kit, or a segment with no `uuid`, refuses the split before the directory exi
 
 The directory holds `batch-0000.jsonl` onward and `chain.json`. The manifest is
 written last, through a pending file and a rename, so a directory that holds
-`chain.json` holds every batch it names. The manifest records the kit's digest, the
+`chain.json` holds every batch it names. A failure after the directory is created
+leaves it without `chain.json`, which marks it incomplete. Remove it before the
+next split into that path. The manifest records the kit's digest, the
 segment and trajectory counts and the batch size. For each batch it records the
 index, file, digest, segment count, first and last segment IDs and trajectory UUIDs.
 The command prints the manifest's digest. Exit 0 means the chain was written. Exit 1
@@ -239,8 +241,8 @@ names the batch's place:
 ```
 
 The command checks the manifest's digest. It refuses a manifest that is not a chain
-of whole trajectories: indexes out of order, a trajectory or file in two batches, or
-counts that do not add up. It refuses a kit that is not the manifest's batch at that
+of whole trajectories: indexes out of order, a trajectory or file in two batches, a
+batch before the last that does not hold the batch size, or counts that do not add up. It refuses a kit that is not the manifest's batch at that
 index. Every check comes before the run directory exists. `run.json` records the
 `chain` object with the config, and the manifest's entry for the batch as
 `chain_batch`. A kit evaluated alone has no `chain`, and its `run.json` is unchanged.
@@ -363,5 +365,7 @@ evaluation is void at the first call. It covers a batch's record in `run.json`.
 export STE_TEST_TRAIN_ROOT=/path/to/pinned/WeaverTrain
 export STE_TEST_APPROVED_WORDS=/path/to/approved-words.json
 export STE_TEST_PROMPT_BUNDLE=/path/to/source-prompt-bundle.json
-cargo test --manifest-path tools/ste-driver/Cargo.toml --locked -- --ignored
+cargo test --manifest-path tools/ste-driver/Cargo.toml --locked -- --ignored --exact \
+  command_runs_the_pinned_checker_through_a_synthetic_gate \
+  a_batch_evaluation_records_its_place_in_the_chain_before_its_first_call
 ```
