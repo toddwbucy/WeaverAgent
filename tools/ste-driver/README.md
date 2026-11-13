@@ -72,6 +72,9 @@ directory. The output path resolves from the current directory and must be new.
 ```
 
 ```sh
+export CARGO_TARGET_DIR=/path/to/a/target/owned/by/this/checkout
+export TMPDIR=/path/to/a/short/temporary/directory
+cargo build --manifest-path tools/ste-driver/Cargo.toml --bin weaver-ste-driver --locked
 "$CARGO_TARGET_DIR/debug/weaver-ste-driver" prepare-kit \
   --config /path/to/prepare.json --output /path/to/prepared-kit
 ```
@@ -166,6 +169,13 @@ cargo build --manifest-path tools/ste-driver/Cargo.toml --bin weaver-ste-driver 
 The command consumes a prepared kit. It does not select the roster or attest its
 qualification. Retain the preparation deposit and selection evidence with the
 100-item R0 roster.
+
+`evaluate` runs `deploy/turn.py` from this checkout as the uid that runs the driver,
+with no `sudo`, and the gate admits that uid only if the agent's `allowed-uids` names
+it. An agent `deploy/create-agent.sh` lays names the box's gate-con account alone
+(`weaver-gate-world-contract` section 1), so the driver reaches only an agent whose
+rule names the running uid. Against any other agent, the refused connect stops the
+transport and voids the evaluation.
 
 This library does not seed or load an agent. Before a live run, the composition
 owner must verify the loaded prompt, model, caps, boot cut and frozen kit.
