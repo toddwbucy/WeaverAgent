@@ -1,4 +1,4 @@
-//! Workflow 4.01, 4.05-4.07, 4.11, 6.01, 6.07 and 7.07, external entry.
+//! Workflow 4.01, 4.05-4.07, 4.11, 6.01, 6.07, 7.07 and 7.08, external entry.
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -7,7 +7,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use weaver_ste_driver::{
     check::Checker,
-    gate::TurnClient,
+    gate::{TurnClient, gate_call_deadline},
     guard::Judge,
     lexicon::Lexicon,
     prompt::{BUNDLE_SHA256, SYSTEM_SHA256, source_examples},
@@ -46,6 +46,7 @@ struct Config {
     driver_repair_pass_cap: u32,
     offer_pass_cap: u32,
     transport_stop_bound: u64,
+    gate_call_deadline_seconds: u64,
 }
 
 impl Config {
@@ -188,8 +189,10 @@ fn evaluate(config: PathBuf, output: PathBuf) -> Result<u8> {
         config.offer_pass_cap,
         config.transport_stop_bound,
     )?;
+    let deadline = gate_call_deadline(config.gate_call_deadline_seconds)?;
     config.resolve(config_path.parent().ok_or("config path has no parent")?)?;
-    let mut transport = TurnClient::new(&config.repo, &config.agent, &config.config_root)?;
+    let mut transport =
+        TurnClient::new(&config.repo, &config.agent, &config.config_root, deadline)?;
     let kit = Kit::read(&config.kit)?;
     if config.kit_sha256 != kit.sha256() {
         return Err("frozen kit hash mismatch".into());

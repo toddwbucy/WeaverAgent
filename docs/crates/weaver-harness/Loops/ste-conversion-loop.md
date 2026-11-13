@@ -685,6 +685,20 @@ Do not use that score as the conversion-loss numerator.
 The [#447 decision][transport-ruling] sets this bound.
 Use clause 10.22 for its later measurement.
 
+**7.08. Gate-call deadline.** Read `gate_call_deadline_seconds` from the operator's round
+parameters before conversion starts.
+This value is the maximum time for one gate call, in whole seconds.
+The operator sets it for the agent and model, and it is at least 1.
+Use no default value.
+Record this deadline before each complete kit evaluation starts.
+If a gate call does not end before its deadline, stop the gate client at the deadline.
+Record that call as a transport stop, and count its text as `transport_stopped` under
+clause 7.07.
+Keep the output that the gate client wrote before the stop.
+A stopped gate client does not stop the turn that the gate admitted.
+That turn continues to its close in the agent and uses the next turn key of that load.
+Unload the agent before you use it again.
+
 ## 8. Training sequence
 
 **8.01. First adapter.** Make rewriter pairs from the two rewritten batches, 387
