@@ -1,11 +1,33 @@
 //! Workflow 4.01, 4.05, 4.06 and 6.03. Call the existing operator gate client.
 
 use serde_json::{Value, json};
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::thread::JoinHandle;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
+
+/// How long both pipes may stay open after the client ends. Only a process the
+/// client started can hold them, and its output is not waited for past this.
+const PIPE_CLOSE_GRACE: Duration = Duration::from_secs(1);
+
+/// The elected gate-call deadline in whole seconds. There is no default. A deadline
+/// under one second, or one an instant cannot hold, is refused.
+pub fn gate_call_deadline(seconds: u64) -> Result<Duration, String> {
+    let deadline = Duration::from_secs(seconds);
+    check_deadline(deadline)?;
+    Ok(deadline)
+}
+
+fn check_deadline(deadline: Duration) -> Result<(), String> {
+    if deadline < Duration::from_secs(1) {
+        return Err("the gate-call deadline must be at least one second".into());
+    }
+    if Instant::now().checked_add(deadline).is_none() {
+        return Err("the gate-call deadline is too large to measure".into());
+    }
+    Ok(())
+}
 
 /// Keep the subprocess evidence even when it cannot supply an answered close.
 #[derive(Debug)]
@@ -79,19 +101,14 @@ pub struct TurnClient {
 
 impl TurnClient {
     /// The caller supplies this checkout, the operator's admin config root and the
-    /// gate-call deadline. The deadline has no default, and zero is refused.
+    /// gate-call deadline, which [`gate_call_deadline`]'s rules bound.
     pub fn new(
         repo: &Path,
         agent: &str,
         config_root: &Path,
         deadline: Duration,
     ) -> Result<Self, String> {
-        if deadline.is_zero() {
-            return Err("the gate-call deadline must be at least one second".into());
-        }
-        if Instant::now().checked_add(deadline).is_none() {
-            return Err("the gate-call deadline is too large to measure".into());
-        }
+        check_deadline(deadline)?;
         if agent.is_empty()
             || !agent
                 .bytes()
@@ -112,23 +129,69 @@ impl TurnClient {
     }
 }
 
-/// Read one pipe to its end on its own thread, so that neither pipe can fill and
-/// stop the client while the caller waits on the other.
-fn drain(pipe: Option<impl Read + Send + 'static>) -> JoinHandle<Vec<u8>> {
-    std::thread::spawn(move || {
-        let mut bytes = Vec::new();
-        if let Some(mut pipe) = pipe {
-            let _ = pipe.read_to_end(&mut bytes);
-        }
-        bytes
-    })
+/// One pipe read on its own thread, so that neither pipe can fill and stop the
+/// client while the caller waits on the other. The bytes read so far stay readable.
+struct Drain {
+    bytes: Arc<Mutex<Vec<u8>>>,
+    closed: mpsc::Receiver<()>,
+}
+
+impl Drain {
+    fn start(pipe: Option<impl Read + Send + 'static>) -> Self {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let (tell, closed) = mpsc::channel();
+        let sink = Arc::clone(&bytes);
+        std::thread::spawn(move || {
+            if let Some(mut pipe) = pipe {
+                let mut chunk = [0u8; 8192];
+                loop {
+                    match pipe.read(&mut chunk) {
+                        Ok(0) => break,
+                        Ok(n) => sink
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .extend_from_slice(&chunk[..n]),
+                        Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                        Err(_) => break,
+                    }
+                }
+            }
+            let _ = tell.send(());
+        });
+        Self { bytes, closed }
+    }
+
+    /// The bytes read, and whether the pipe closed by `until`.
+    fn finish(self, until: Instant) -> (Vec<u8>, bool) {
+        let closed = self
+            .closed
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+            .is_ok();
+        let bytes = std::mem::take(&mut *self.bytes.lock().unwrap_or_else(|e| e.into_inner()));
+        (bytes, closed)
+    }
 }
 
 impl Transport for TurnClient {
     /// A client still running at the deadline is killed and reaped. Its capture keeps
     /// the bytes it wrote and an error naming the deadline, so the caller records a
-    /// transport stop. A turn the gate already admitted still runs in the agent.
+    /// transport stop. A turn the gate already admitted still runs in the agent. The
+    /// call returns within [`PIPE_CLOSE_GRACE`] of the client's end, even when a
+    /// process the client started still holds its pipes.
     fn send(&mut self, text: &str) -> Capture {
+        let stopped = |stdout, stderr, error| Capture {
+            stdout,
+            stderr,
+            exit_code: None,
+            error: Some(error),
+        };
+        let Some(end) = Instant::now().checked_add(self.deadline) else {
+            return stopped(
+                Vec::new(),
+                Vec::new(),
+                "the gate-call deadline cannot be measured from now".into(),
+            );
+        };
         // One argument carries the complete user block. No shell parses it.
         // No system flag is supplied. Prompt seeding is the operator's action.
         let started = Command::new("python3")
@@ -144,22 +207,19 @@ impl Transport for TurnClient {
         let mut child = match started {
             Ok(child) => child,
             Err(error) => {
-                return Capture {
-                    stdout: Vec::new(),
-                    stderr: Vec::new(),
-                    exit_code: None,
-                    error: Some(format!("gate client could not start: {error}")),
-                };
+                return stopped(
+                    Vec::new(),
+                    Vec::new(),
+                    format!("gate client could not start: {error}"),
+                );
             }
         };
-        let stdout = drain(child.stdout.take());
-        let stderr = drain(child.stderr.take());
-        // An end past what an instant can hold never comes.
-        let end = Instant::now().checked_add(self.deadline);
+        let stdout = Drain::start(child.stdout.take());
+        let stderr = Drain::start(child.stderr.take());
         let ended = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status.code()),
-                Ok(None) if end.is_some_and(|end| Instant::now() >= end) => {
+                Ok(None) if Instant::now() >= end => {
                     let _ = child.kill();
                     // A client that exited by itself before the kill keeps its own status.
                     if let Ok(status) = child.wait()
@@ -180,22 +240,24 @@ impl Transport for TurnClient {
                 }
             }
         };
-        // turn.py starts no process of its own, so both pipes close when it ends.
-        let stdout = stdout.join().unwrap_or_default();
-        let stderr = stderr.join().unwrap_or_default();
+        // turn.py starts no process, so both pipes close when it ends. A process a
+        // client started can hold them open, and its output is not waited for.
+        let grace = Instant::now() + PIPE_CLOSE_GRACE;
+        let (stdout, out_closed) = stdout.finish(grace);
+        let (stderr, err_closed) = stderr.finish(grace);
         match ended {
+            Ok(_) if !(out_closed && err_closed) => stopped(
+                stdout,
+                stderr,
+                "gate client ended, and a process it started still holds its output".into(),
+            ),
             Ok(exit_code) => Capture {
                 stdout,
                 stderr,
                 exit_code,
                 error: None,
             },
-            Err(error) => Capture {
-                stdout,
-                stderr,
-                exit_code: None,
-                error: Some(error),
-            },
+            Err(error) => stopped(stdout, stderr, error),
         }
     }
 }

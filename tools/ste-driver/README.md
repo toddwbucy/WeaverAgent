@@ -145,16 +145,18 @@ The config names the operator's agent and admin config root explicitly.
   "driver_repair_pass_cap": 2,
   "offer_pass_cap": 1,
   "transport_stop_bound": 0,
-  "gate_call_deadline_seconds": REPLACE_WITH_THE_ELECTED_SECONDS
+  "gate_call_deadline_seconds": "REPLACE_WITH_THE_ELECTED_WHOLE_SECONDS"
 }
 ```
 
 `gate_call_deadline_seconds` bounds each gate call. It has no default, and the
 command refuses zero. The operator elects the value for the agent and model, so the
-example names none. A gate client still running at the deadline is killed and
-reaped. Its response record keeps the bytes it wrote and an error that names the
-deadline. That is a transport stop, so R0's zero bound voids the evaluation with
-exit 2.
+example names none, and the command refuses the example's string. A gate client
+still running at the deadline is killed and reaped. Its response record keeps the
+bytes it wrote and an error that names the deadline. That is a transport stop, so
+R0's zero bound voids the evaluation with exit 2. `deploy/turn.py` starts no
+process. A process that a client in its place starts is not killed, and the call
+waits at most one second more for its output.
 
 The deadline ends the client, not the turn. If the gate admitted the request before
 the client was killed, the turn runs to its close inside the agent, because a turn

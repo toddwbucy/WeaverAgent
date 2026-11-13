@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use weaver_ste_driver::{
     check::Checker,
     conversion::check_answer,
-    gate::{Capture, Transport, TurnClient},
+    gate::{Capture, Transport, TurnClient, gate_call_deadline},
     guard::Judge,
     lexicon::Lexicon,
     policy::AttemptResult,
@@ -342,6 +342,10 @@ fn the_client_refuses_a_zero_or_unmeasurable_deadline() {
             "the gate-call deadline must be at least one second",
         ),
         (
+            Duration::from_millis(999),
+            "the gate-call deadline must be at least one second",
+        ),
+        (
             Duration::MAX,
             "the gate-call deadline is too large to measure",
         ),
@@ -352,4 +356,78 @@ fn the_client_refuses_a_zero_or_unmeasurable_deadline() {
         }
     }
     assert!(TurnClient::new(&repo, "ste-fixture", &admin, Duration::from_secs(1)).is_ok());
+    assert_eq!(gate_call_deadline(1), Ok(Duration::from_secs(1)));
+    assert_eq!(
+        gate_call_deadline(0),
+        Err("the gate-call deadline must be at least one second".into())
+    );
+    assert_eq!(
+        gate_call_deadline(u64::MAX),
+        Err("the gate-call deadline is too large to measure".into())
+    );
+}
+
+/// A client that starts a process of its own, which keeps the client's pipes open
+/// for 6 s after the client ends. The call does not wait for that process.
+fn forking_client(name: &str, then: &str) -> FakeClient {
+    FakeClient::new(
+        name,
+        &format!(
+            r#"import os, sys, time
+if os.fork() == 0:
+    time.sleep(6)
+    os._exit(0)
+{then}
+"#
+        ),
+    )
+}
+
+#[test]
+fn a_process_the_client_started_cannot_hold_the_call_open() {
+    // The client answers and ends at once, and its process holds the pipes.
+    let fake = forking_client(
+        "fork-answer",
+        r#"sys.stdout.write('{"kind":"answered","run":"r","turn":"t","text":"x"}')
+sys.stdout.flush()"#,
+    );
+    let started = Instant::now();
+    let capture = fake
+        .client(DEADLINE)
+        .send("<<<TEXT\nRead the file.\nTEXT>>>");
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        capture.error.as_deref(),
+        Some("gate client ended, and a process it started still holds its output")
+    );
+    assert_eq!(capture.exit_code, None);
+    assert_eq!(
+        capture.stdout,
+        br#"{"kind":"answered","run":"r","turn":"t","text":"x"}"#
+    );
+    assert!(capture.answer().is_err());
+
+    // The client stalls past its deadline, and its process holds the pipes.
+    let fake = forking_client(
+        "fork-stall",
+        "sys.stdout.write('partial')\nsys.stdout.flush()\ntime.sleep(30)",
+    );
+    let started = Instant::now();
+    let capture = fake
+        .client(Duration::from_secs(1))
+        .send("<<<TEXT\nRead the file.\nTEXT>>>");
+    assert!(
+        started.elapsed() < Duration::from_secs(4),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        capture.error.as_deref(),
+        Some("gate client passed the gate-call deadline of 1 s and was killed")
+    );
+    assert_eq!(capture.stdout, b"partial");
 }

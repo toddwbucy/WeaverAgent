@@ -5,10 +5,9 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use weaver_ste_driver::{
     check::Checker,
-    gate::TurnClient,
+    gate::{TurnClient, gate_call_deadline},
     guard::Judge,
     lexicon::Lexicon,
     prompt::{BUNDLE_SHA256, SYSTEM_SHA256, source_examples},
@@ -190,13 +189,10 @@ fn evaluate(config: PathBuf, output: PathBuf) -> Result<u8> {
         config.offer_pass_cap,
         config.transport_stop_bound,
     )?;
+    let deadline = gate_call_deadline(config.gate_call_deadline_seconds)?;
     config.resolve(config_path.parent().ok_or("config path has no parent")?)?;
-    let mut transport = TurnClient::new(
-        &config.repo,
-        &config.agent,
-        &config.config_root,
-        Duration::from_secs(config.gate_call_deadline_seconds),
-    )?;
+    let mut transport =
+        TurnClient::new(&config.repo, &config.agent, &config.config_root, deadline)?;
     let kit = Kit::read(&config.kit)?;
     if config.kit_sha256 != kit.sha256() {
         return Err("frozen kit hash mismatch".into());
