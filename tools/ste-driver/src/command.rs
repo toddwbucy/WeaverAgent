@@ -1,4 +1,4 @@
-//! Workflow 4.01, 4.05-4.07, 4.11, 6.01, 6.07, 7.07 and 7.08, external entry.
+//! Workflow 4.01, 4.05-4.07, 4.11, 6.01, 6.07 and 7.07 to 7.09, external entry.
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use weaver_ste_driver::{
+    chain,
     check::Checker,
     gate::{TurnClient, gate_call_deadline},
     guard::Judge,
@@ -24,12 +25,33 @@ const TRACE_USAGE: &str = "weaver-ste-driver trace-report --trace FILE --journal
 Offline trace evidence in a new directory. Exit 0: complete, 2: incomplete, 1: command failure.";
 const PREPARE_USAGE: &str = "weaver-ste-driver prepare-kit --config FILE --output DIRECTORY\n\
 Retain source and mask tables. Exit 0: prepared, 1: command failure. No row qualification.";
+const SPLIT_USAGE: &str = "weaver-ste-driver split-kit --config FILE --output DIRECTORY\n\
+Split a frozen kit between trajectories into a chain of batches in a new directory.\n\
+Exit 0: split, 1: command failure.";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PrepareConfig {
     source: PathBuf,
     source_sha256: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SplitConfig {
+    kit: PathBuf,
+    kit_sha256: String,
+    batch_trajectories: usize,
+}
+
+/// Workflow 7.09. A batch evaluation's place in its chain: the manifest, pinned by
+/// its hash, and the batch's index in it.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ChainConfig {
+    manifest: PathBuf,
+    manifest_sha256: String,
+    index: usize,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -47,6 +69,9 @@ struct Config {
     offer_pass_cap: u32,
     transport_stop_bound: u64,
     gate_call_deadline_seconds: u64,
+    /// Present only for a batch of a chain. A kit evaluated alone has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chain: Option<ChainConfig>,
 }
 
 impl Config {
@@ -58,7 +83,10 @@ impl Config {
             &mut self.approved_words,
             &mut self.prompt_bundle,
             &mut self.kit,
-        ] {
+        ]
+        .into_iter()
+        .chain(self.chain.as_mut().map(|chain| &mut chain.manifest))
+        {
             if path.as_os_str().is_empty() {
                 return Err("an input path is empty".into());
             }
@@ -80,6 +108,10 @@ enum Arguments {
         config: PathBuf,
         output: PathBuf,
     },
+    SplitKit {
+        config: PathBuf,
+        output: PathBuf,
+    },
     TraceReport {
         trace: PathBuf,
         journal: PathBuf,
@@ -93,7 +125,11 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Arguments> {
     if first == "--help" && args.next().is_none() {
         return Ok(Arguments::Help);
     }
-    if first != "evaluate" && first != "trace-report" && first != "prepare-kit" {
+    if first != "evaluate"
+        && first != "trace-report"
+        && first != "prepare-kit"
+        && first != "split-kit"
+    {
         return Err(USAGE.into());
     }
     let mut config = None;
@@ -101,7 +137,9 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Arguments> {
     let mut trace = None;
     let mut journal = None;
     while let Some(flag) = args.next() {
-        let slot = if flag == "--config" && (first == "evaluate" || first == "prepare-kit") {
+        let slot = if flag == "--config"
+            && (first == "evaluate" || first == "prepare-kit" || first == "split-kit")
+        {
             &mut config
         } else if flag == "--trace" && first == "trace-report" {
             &mut trace
@@ -134,6 +172,12 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Arguments> {
             output: output.ok_or("missing --output")?,
         });
     }
+    if first == "split-kit" {
+        return Ok(Arguments::SplitKit {
+            config: config.ok_or("missing --config")?,
+            output: output.ok_or("missing --output")?,
+        });
+    }
     Ok(Arguments::Evaluate {
         config: config.ok_or("missing --config")?,
         output: output.ok_or("missing --output")?,
@@ -144,7 +188,7 @@ fn arguments(args: impl Iterator<Item = OsString>) -> Result<Arguments> {
 pub(crate) fn execute(args: impl Iterator<Item = OsString>) -> Result<u8> {
     match arguments(args)? {
         Arguments::Help => {
-            println!("{USAGE}\n\n{TRACE_USAGE}\n\n{PREPARE_USAGE}");
+            println!("{USAGE}\n\n{TRACE_USAGE}\n\n{PREPARE_USAGE}\n\n{SPLIT_USAGE}");
             Ok(0)
         }
         Arguments::TraceReport {
@@ -157,6 +201,35 @@ pub(crate) fn execute(args: impl Iterator<Item = OsString>) -> Result<u8> {
             Ok(if complete { 0 } else { 2 })
         }
         Arguments::Evaluate { config, output } => evaluate(config, output),
+        Arguments::SplitKit { config, output } => {
+            let config_path = std::fs::canonicalize(config)?;
+            let mut config: SplitConfig = serde_json::from_slice(&std::fs::read(&config_path)?)?;
+            if config.kit.as_os_str().is_empty() {
+                return Err("an input path is empty".into());
+            }
+            if config.kit.is_relative() {
+                config.kit = config_path
+                    .parent()
+                    .ok_or("config path has no parent")?
+                    .join(config.kit);
+            }
+            let (manifest, manifest_sha256) = chain::split(
+                &config.kit,
+                &config.kit_sha256,
+                config.batch_trajectories,
+                &output,
+            )?;
+            println!(
+                "{}",
+                json!({
+                    "output":output, "manifest":chain::MANIFEST,
+                    "manifest_sha256":manifest_sha256,
+                    "kit_sha256":manifest.kit_sha256, "batches":manifest.batches.len(),
+                    "segments":manifest.segments, "trajectories":manifest.trajectories
+                })
+            );
+            Ok(0)
+        }
         Arguments::PrepareKit { config, output } => {
             let config_path = std::fs::canonicalize(config)?;
             let mut config: PrepareConfig = serde_json::from_slice(&std::fs::read(&config_path)?)?;
@@ -197,6 +270,15 @@ fn evaluate(config: PathBuf, output: PathBuf) -> Result<u8> {
     if config.kit_sha256 != kit.sha256() {
         return Err("frozen kit hash mismatch".into());
     }
+    let chain_batch = match &config.chain {
+        Some(chain) => Some(chain::check(
+            &chain.manifest,
+            &chain.manifest_sha256,
+            chain.index,
+            kit.sha256(),
+        )?),
+        None => None,
+    };
     verify_folded_prompt(
         &config
             .repo
@@ -205,7 +287,7 @@ fn evaluate(config: PathBuf, output: PathBuf) -> Result<u8> {
     let examples = source_examples(&config.prompt_bundle)?;
     let lexicon = Lexicon::load_pinned(&config.train_root, &config.approved_words)?;
     let judge = Judge::new(Checker::new(lexicon, 20, 25)?, &examples)?;
-    let provenance = json!({
+    let mut provenance = json!({
         "command":"evaluate", "config":config, "config_path":config_path,
         "config_sha256":format!("{:x}",Sha256::digest(&bytes)),
         "source_revision":"9881da6cfbc92b08b31264883aea63b73aa7b694",
@@ -213,6 +295,9 @@ fn evaluate(config: PathBuf, output: PathBuf) -> Result<u8> {
         "approved_words_sha256":APPROVED_WORDS_SHA256,
         "live_agent_identity":"requires operator and trace verification"
     });
+    if let Some(batch) = chain_batch {
+        provenance["chain_batch"] = serde_json::to_value(batch)?;
+    }
     let report = evaluate_with_provenance(
         &kit,
         &parameters,

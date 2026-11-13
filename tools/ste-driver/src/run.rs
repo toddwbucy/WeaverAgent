@@ -52,6 +52,11 @@ impl Kit {
         &self.sha256
     }
 
+    /// The exact file bytes the segments were read from.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     /// Read an already-masked, frozen kit. Selection and masking are separate.
     pub fn read(path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path)?;
