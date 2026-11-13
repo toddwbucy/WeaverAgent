@@ -699,6 +699,26 @@ A stopped gate client does not stop the turn that the gate admitted.
 That turn continues to its close in the agent and uses the next turn key of that load.
 Unload the agent before you use it again.
 
+**7.09. Batch chain.** A long job can run as a chain of batches from one frozen kit.
+Split the kit only between trajectories, so that each trajectory is in one batch.
+The operator sets the batch size as a count of whole trajectories.
+Make each batch a consecutive run of the kit's lines.
+Joined in index order, the batch files are the exact bytes of the kit.
+Write a chain manifest with the kit hash, the segment and trajectory counts and the
+batch size.
+For each batch, the manifest records its index, hash, segment count, first and last
+segment and trajectories.
+Evaluate each batch as one complete kit evaluation under clauses 7.07 and 7.08.
+Give that evaluation the manifest hash and the batch index.
+Before the evaluation starts, refuse a batch whose hash is not the manifest's hash at
+that index.
+Record the manifest hash, the batch index and the batch's manifest entry before the
+first gate call.
+Load the agent once for each batch evaluation, and unload it after that evaluation.
+Then the turn keys of a batch depend on that batch alone.
+Evaluate a void batch again from its first item, on a new load and in a new directory.
+Assembly over a chain waits on the operator's decision on the assembly rule.
+
 ## 8. Training sequence
 
 **8.01. First adapter.** Make rewriter pairs from the two rewritten batches, 387
