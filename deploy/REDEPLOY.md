@@ -358,12 +358,20 @@ What it does, so the log can say which step a failure was at:
    nvcc = <release>, V<version>
    member.<name> = <64 hex>              (one per installed member, the shell's two files among them)
    library.<versioned file> = <64 hex>   (one per engine library)
-   driver = <driver version>
-   cudart = <resolved file>              (and cublas, cublaslt)
+   runtime.cudart = <64 hex> <file>      (and cublas, cublaslt, curand)
    cccl = <package version>
-   gpus = <count>
-   gpu.<n> = <pci bus id>, <name>, <memory>   (in PCI bus order)
    ```
+
+   Each `runtime.` line is the file the installed SPU's library name leads to, as
+   admin's start step resolves it, and that file's sha256. **Build facts only** (the
+   operator's rulings of 2026-11-14): nothing in the record reads the hardware, so one
+   image built with no card serves any host's cards. The driver, `libcuda` and the
+   cards are read at each load by `verify-load.sh` and never stored
+   (`HowToDeployANewAgent.md` section 4), which also binds each runtime file to the
+   file the loader resolves then. A record of the earlier form, which carries
+   `driver`, `gpus`, `gpu.<n>` and runtime paths with no digest, is read with those
+   lines left unread and binds no runtime file until `update-stack.sh --install`
+   rewrites it.
 
 The SPU is the Rust implementation. `create-agent.sh --spu /absolute/path/to/custom-spu`
 can still select a separately installed Rust binary for one agent. The Python zipapp
@@ -444,7 +452,9 @@ The box facts of step 0. The archive path and its `SHA256SUMS` line count. What
 `--purge` printed under "what remains". The revision `bootstrap-stack.sh` named, its
 test count and the install tuple it printed. Per agent: the declaration's sha256, the artifact's sha256, the load
 event's `composer` and device, the constituents and their cgroup, and how long the load
-took. Anything the scripts refused and what was done about it, since a refusal is the
+took, and the deployment tuple `verify-load.sh` printed: its live rows (the driver and
+`libcuda`) and row 7 (the cards) are the hardware half, which the install tuple does not
+hold and nothing else records. Anything the scripts refused and what was done about it, since a refusal is the
 thing the next box will hit first.
 
 ## 6. Olympus, where it differs

@@ -391,7 +391,7 @@ are in `<territory>/worker.log`, the state member's in `<territory>/state/state.
 
 **Then it prints the agent's deployment tuple**, through `deploy/agent_tuple.py` beside
 it, before the constituents are read. The rows are those of the tuple survey of
-2026-11-08 (1, 2, 3, 6, 7, 8 and 9), with the state engine and the restore rows.
+2026-11-08 (1, 2, 3, 6, 7, 8 and 9), with the live rows, the state engine and the restore rows.
 Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
 - **Row 1, the artifact and its weights hash.** The hash is admission's BLAKE3, which no
   tool on the box computes. For an adapted agent it is the declared `base-blake3`, since
@@ -404,12 +404,20 @@ Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
   as, and never as root. A declared directory is first resolved to its one container by
   admission's rule (a single `.gguf` or `.safetensors` file, or one split's first
   shard), and row 1 names that container.
-- **Row 7, the devices.** Each declared ordinal names its card in the install tuple's
-  PCI-order list. That order is the one the SPU sees, under PAIR-1's
-  `CUDA_DEVICE_ORDER=PCI_BUS_ID` mask. The live cards are read with
-  `nvidia-smi --query-gpu=pci.bus_id,name,memory.total --format=csv,noheader`, put in
-  bus order. A difference from the install tuple's list in name, memory, count or order
-  is a `FAULT`: the install tuple is stale.
+- **Row 7, the devices.** Each declared ordinal names its card in the box's PCI-order
+  list, read at this load with
+  `nvidia-smi --query-gpu=pci.bus_id,name,memory.total --format=csv,noheader` and put in
+  bus order. That order is the one the SPU sees, under PAIR-1's
+  `CUDA_DEVICE_ORDER=PCI_BUS_ID` mask. The cards are read at each load and never stored
+  (the operator's rulings of 2026-11-14: one image serves any host's cards), so they are
+  judged against what the declaration elected and nothing else. An ordinal past the
+  list is a `FAULT`. No list, as on a box where nvidia-smi reaches no card, reads
+  `absent`, and nvidia-smi's failure sentence is never taken for a card.
+- **The live rows, the driver and its library.** The driver's version, read with
+  `nvidia-smi --query-gpu=driver_version --format=csv,noheader`, and `libcuda` as the
+  loader resolves it for the agent's SPU, by the file its name leads to and that file's
+  sha256. Both are the box's, read at each load and never stored. Two driver versions on
+  one box are a `FAULT`, and so is a `libcuda` the loader cannot find.
 - **Rows 8 and 9, the placement and the offload**, for a GGUF container: PAIR-3's even
   split of the header's layer count over the declared devices, and every layer
   offloaded. A container without the GGUF magic is served by the native path, and both
@@ -427,9 +435,24 @@ Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
     a name only one side carries printed as not bound.
   - Each engine library in the load event's library path against the install tuple's
     digest, hashed on the spot.
+  - Each CUDA runtime file the install recorded (`runtime.cudart`, `runtime.cublas`,
+    `runtime.cublaslt`, `runtime.curand`) against the file the loader resolves for the
+    agent's SPU now, by path and sha256. The loader is read as root, with the config
+    root's `library-path` resolved once and none of the operator's loader variables,
+    and only on an SPU and a library directory admin's rule holds closed. Where it
+    cannot be read, each runtime file the install recorded is a `FAULT` naming why,
+    never passed unbound. A file that changed, moved or no longer resolves is a
+    `FAULT`: the box has drifted from its install. A sealed image never shows one, and
+    a box updated since its install rewrites its record with
+    `update-stack.sh --install`. An agent made with `create-agent.sh --spu`, or whose
+    config root names a library path other than the stack record's, runs something
+    the install did not read, so its runtime rows are absent and say which.
 
-  A digest the install tuple reads `unknown` (the install could not hash that file) is
-  printed as not bound, never as a `FAULT`.
+  A digest the install tuple reads `unknown` (the install could not resolve or hash that
+  file) is printed as not bound, never as a `FAULT`. An install tuple of the earlier
+  form, which carries `driver`, `gpus` and `gpu.<n>` lines and runtime paths with no
+  digest, is read with those lines left unread: a `tuple form` row names it, no runtime
+  file is bound, and `update-stack.sh --install` rewrites it.
 
 A `FAULT` line unloads the run and fails the script, `--keep` included, like every other
 failed check.
