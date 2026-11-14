@@ -793,7 +793,11 @@ fn a_reset_ahead_of_queued_packets_is_read_past_to_them() {
     }
     let window = || LoadWindow::begin(Duration::from_secs(2)).unwrap();
 
-    // The control: the kernel's own order, the reset first.
+    // The control: the kernel's own order, the reset first. Without it the
+    // readers below would pass on a kernel that never reports the reset
+    // ahead of the queue, having tested nothing. Should it fail, the reader
+    // still reads correctly (see `recv_packet`), and this test needs a new
+    // way to put the reset first.
     let control = reset_end(1);
     let mut buffer = vec![0u8; MAX_ENVELOPE_BYTES];
     let mut slices = [std::io::IoSliceMut::new(&mut buffer)];
@@ -807,7 +811,8 @@ fn a_reset_ahead_of_queued_packets_is_read_past_to_them() {
     assert_eq!(
         first,
         Err(nix::errno::Errno::ECONNRESET),
-        "Linux reports the reset ahead of the queued packet"
+        "the kernel no longer reports the reset ahead of the queued packet, \
+         so the reads below would test nothing"
     );
 
     // The blocking reader behind `recv_within`: the stop, leave, load and

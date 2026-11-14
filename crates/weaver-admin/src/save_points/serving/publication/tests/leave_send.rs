@@ -32,15 +32,31 @@ fn terminal(owner: &mut Capture<'_>) -> LeaveProgress {
 
 /// A fork that holds every descriptor of this process and pauses until it is
 /// killed. It never execs, so its close-on-exec descriptors stay open.
-fn hold_until_killed() -> nix::unistd::Pid {
-    // SAFETY: the child calls only pause, which is async-signal-safe, until
-    // the parent's SIGKILL ends it.
-    match unsafe { nix::unistd::fork() }.unwrap() {
-        nix::unistd::ForkResult::Child => loop {
-            // SAFETY: pause takes no arguments and touches no memory.
-            unsafe { nix::libc::pause() };
-        },
-        nix::unistd::ForkResult::Parent { child } => child,
+/// Dropping it kills and reaps it, so a panic between the fork and the kill
+/// cannot leave it holding the isolated process's output pipes open, which
+/// would hold the parent's read of them.
+struct Holder(nix::unistd::Pid);
+
+impl Holder {
+    fn fork() -> Self {
+        // SAFETY: the child calls only pause, which is async-signal-safe,
+        // until the parent's SIGKILL ends it.
+        match unsafe { nix::unistd::fork() }.unwrap() {
+            nix::unistd::ForkResult::Child => loop {
+                // SAFETY: pause takes no arguments and touches no memory.
+                unsafe { nix::libc::pause() };
+            },
+            nix::unistd::ForkResult::Parent { child } => Holder(child),
+        }
+    }
+}
+
+impl Drop for Holder {
+    fn drop(&mut self) {
+        // SAFETY: the pid is this process's own unreaped child.
+        if unsafe { nix::libc::kill(self.0.as_raw(), nix::libc::SIGKILL) } == 0 {
+            let _ = nix::sys::wait::waitpid(self.0, None);
+        }
     }
 }
 
@@ -74,10 +90,12 @@ fn precommit_send_peer_closure_drains_exact_refusal_under_original_leave_windows
 /// packet unread, and the fork makes that order certain: it holds the peer
 /// across the drop, so admin's send succeeds and its packet stays unread. The
 /// fork is then killed and reaped, which closes the peer with that packet
-/// unread and leaves the reset ahead of the queued refusal and final answer.
-/// A parallel test's fork gave the same order to the fixture above. Run in
-/// its own process, since its fork holds
-/// every descriptor this process has. Perturbation: read the reset as the
+/// unread. Where admin reads before the window expires, the reset is read
+/// ahead of both the queued refusal and the final answer. Where the window
+/// has expired first, no read meets it. A
+/// parallel test's fork gave the same order to the fixture above. Run in its
+/// own process, since its fork holds every descriptor this process has.
+/// Perturbation: read the reset as the
 /// end in `channel::recv_packet`, and the forced leave reads `Stopped`
 /// where `LeftReceived` is due, the graceful one `Channel(Closed)` where
 /// the worker's outcome is due.
@@ -133,21 +151,16 @@ fn drains_exact_refusal_under_original_leave_windows(held: bool) {
                             },
                         );
                         if held {
-                            holding.set(Some(hold_until_killed()));
+                            holding.set(Some(Holder::fork()));
                         }
                         drop(peer);
                         witnessed.set(true);
                     },
                     || pending(&mut owner),
                 );
-                if let Some(holder) = holder.take() {
-                    // After admin's send, before its read: the peer closes
-                    // with admin's packet unread.
-                    // SAFETY: the pid is this test's own unreaped child.
-                    let killed = unsafe { nix::libc::kill(holder.as_raw(), nix::libc::SIGKILL) };
-                    assert_eq!(killed, 0, "the holder is killed");
-                    nix::sys::wait::waitpid(holder, None).unwrap();
-                }
+                // After admin's send, before its read: killing and reaping the
+                // holder closes the peer with admin's packet unread.
+                drop(holder.take());
                 assert!(
                     called.get(),
                     "{site}: must reach the actual send after all probes"

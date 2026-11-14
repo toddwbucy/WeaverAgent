@@ -661,11 +661,17 @@ struct Received {
 /// it**, per `weaver-organ-channel` section 1: delivery is loss-free until
 /// closure, so what the worker wrote before it closed is read before the
 /// closure is. A worker that closes with a packet of admin's still unread
-/// leaves a reset (`ECONNRESET`) on this end, and Linux reports it once,
-/// ahead of the packets the worker wrote before it closed (#523). The reset
-/// is read past once, without waiting: the read behind it returns the next
-/// queued packet, or the end (0 bytes) where none is queued. A read behind it
-/// that would wait answers the reset itself, so no reader waits on it.
+/// leaves a reset (`ECONNRESET`) on this end. Linux reports it once, ahead
+/// of the packets the worker wrote before it closed: af_unix sets the error
+/// when a socket closes with its receive queue unread, and a packet socket's
+/// receive takes a pending error before the queue (#523; the reader's test
+/// carries a control read of that order). The reset is read past once,
+/// without waiting: the read behind it returns the next queued packet, or the
+/// end (0 bytes) where none is queued. A read behind it that would wait
+/// answers the reset itself, so no reader waits on it. **Nothing here relies
+/// on the order beyond that**: a kernel that reported the reset after the
+/// queue would have each packet read first, and the reset, read past, would
+/// then read the end, the same outcome.
 fn recv_packet(
     fd: std::os::fd::RawFd,
     buffer: &mut [u8],
