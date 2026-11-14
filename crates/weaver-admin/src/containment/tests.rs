@@ -124,6 +124,53 @@ fn the_start_step_judges_by_its_rows_in_order() {
     );
 }
 
+/// **The start reads a failed read as neither** (6.1, the start's rows for
+/// no populated reading, #521): an unread cgroup at either refuses
+/// `BoundaryUnverified`, after a cgroup not root's and before leftovers, and
+/// a recorded cgroup read absent since the record's open leaves the record
+/// stale, removed before the `mkdir`. Perturbations: judge leftovers before
+/// an unread cgroup, and a populated reading beside an unread one refuses
+/// `AgentRunning`; read a recorded cgroup absent as a live record, and the
+/// stale record is not removed.
+#[test]
+fn the_start_reads_a_failed_read_as_neither() {
+    for (at_path, recorded) in [
+        (Standing::Unread, RecordAtStart::None),
+        (Standing::Absent, RecordAtStart::Same(Standing::Unread)),
+        (Standing::Populated, RecordAtStart::Same(Standing::Unread)),
+        (Standing::Unread, RecordAtStart::Same(Standing::Populated)),
+        (Standing::Unread, RecordAtStart::Same(Standing::Empty)),
+    ] {
+        assert_eq!(
+            start_judgment(facts(at_path, recorded)),
+            StartAction::Refuse(StartRefusal::Unread),
+            "{at_path:?}, {recorded:?}"
+        );
+    }
+    assert_eq!(
+        start_judgment(facts(
+            Standing::Unread,
+            RecordAtStart::Same(Standing::NotRoots)
+        )),
+        StartAction::Refuse(StartRefusal::NotRoots),
+        "a cgroup not root's first"
+    );
+    assert_eq!(
+        start_judgment(facts(
+            Standing::Absent,
+            RecordAtStart::Same(Standing::Absent)
+        )),
+        StartAction::RemoveRecordThenMake
+    );
+    assert_eq!(
+        start_judgment(facts(
+            Standing::Empty,
+            RecordAtStart::Same(Standing::Absent)
+        )),
+        StartAction::RemoveThenMake
+    );
+}
+
 /// **The scope's ownership reads every delegated file** (6.1, the floor;
 /// #166's guard): a directory of the owner is admitted only where its
 /// `cgroup.procs`, `cgroup.threads` and `cgroup.subtree_control` are the

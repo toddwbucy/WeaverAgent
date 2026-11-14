@@ -86,6 +86,11 @@ pub enum Standing {
     Populated,
     /// Not root's.
     NotRoots,
+    /// Root's, its `cgroup.events` giving no populated reading while its
+    /// path does not read absent: the opened cgroup, another directory there,
+    /// or the path not opening (6.1, the start's rows for no populated
+    /// reading, #521). Never read as populated, empty or absent.
+    Unread,
 }
 
 // ------------------------------------------------------------- the start step
@@ -149,6 +154,9 @@ pub enum StartRefusal {
     ScopeNotRoots,
     /// `BoundaryUnverified`: a cgroup standing that is not root's.
     NotRoots,
+    /// `BoundaryUnverified`: a cgroup standing whose `cgroup.events` gives
+    /// no populated reading (#521), before leftovers are judged.
+    Unread,
     /// `BoundaryUnverified`: a record that does not read, or a cgroup at the
     /// recorded path with another device and inode, acting on nothing.
     RecordUnverified,
@@ -188,11 +196,21 @@ pub fn start_judgment(facts: StartFacts) -> StartAction {
         (Standing::NotRoots, _) | (_, Standing::NotRoots) => {
             StartAction::Refuse(StartRefusal::NotRoots)
         }
+        // A failed read is neither leftovers nor emptiness (#521): unverified,
+        // as a cgroup not root's is, before leftovers are judged.
+        (Standing::Unread, _) | (_, Standing::Unread) => StartAction::Refuse(StartRefusal::Unread),
         (Standing::Populated, _) | (_, Standing::Populated) => {
             StartAction::Refuse(StartRefusal::Leftovers)
         }
         (Standing::Empty, _) | (_, Standing::Empty) => StartAction::RemoveThenMake,
-        (Standing::Absent, Standing::Absent) if facts.recorded == RecordAtStart::Absent => {
+        // A recorded cgroup read absent, at the record's open or since it
+        // (#521), leaves the record stale.
+        (Standing::Absent, Standing::Absent)
+            if matches!(
+                facts.recorded,
+                RecordAtStart::Absent | RecordAtStart::Same(Standing::Absent)
+            ) =>
+        {
             StartAction::RemoveRecordThenMake
         }
         (Standing::Absent, Standing::Absent) => StartAction::Make,
