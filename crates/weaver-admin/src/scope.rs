@@ -330,7 +330,8 @@ pub fn busctl(call: &Call) -> Result<String, String> {
 /// until its pipes close, no later than the wait's end or [`HELPER_GRACE`]
 /// past its own, whichever is later, so a helper that answers early leaves
 /// its pipes the whole wait to close, and a pipe still open then, held by a
-/// process it started, refuses whatever it answered. Answers its standard
+/// process it started, refuses whatever it answered, naming what it had
+/// said by then. Answers its standard
 /// output where it succeeded, and its status and what it said where it
 /// failed.
 ///
@@ -339,8 +340,15 @@ pub fn busctl(call: &Call) -> Result<String, String> {
 /// before the wait began. The helper is started on a thread of its own and
 /// its start waited for only to the wait's end, a start not returned by then
 /// refusing as a hang does. A start that fails answers at once. A start that
-/// returns after the call stopped waiting is killed and reaped by the
-/// starting thread, its handover refused, so no helper is left behind.
+/// returns after the call stopped waiting, while admin runs, is killed and
+/// reaped by the starting thread, its handover refused. That thread ends
+/// with admin: a helper still blocked in its exec at admin's exit outlives
+/// it, and where its exec returns it runs once, its request naming a pid
+/// that no longer lives (6.1, the invoker's containment stopped or killed).
+///
+/// **The ceiling holds for a helper the kill ends**: its reap waits for its
+/// end, so one in an uninterruptible wait holds the call until that wait
+/// ends (6.1).
 pub fn helper(
     program: &str,
     arguments: &[String],
@@ -423,39 +431,72 @@ fn helper_from(
         }
     };
     let until = (deadline + HELPER_GRACE).max(Instant::now() + HELPER_GRACE);
-    let collect = |pipe: std::sync::mpsc::Receiver<Vec<u8>>| {
-        pipe.recv_timeout(until.saturating_duration_since(Instant::now()))
-            .ok()
-    };
-    let (out, err) = (collect(stdout), collect(stderr));
+    let (out, out_closed) = stdout.collect(until);
+    let (err, err_closed) = stderr.collect(until);
     let said = |bytes: &[u8]| String::from_utf8_lossy(bytes).trim().to_string();
-    let err_said = err.as_deref().map(said).unwrap_or_default();
-    match (ended, out, err) {
-        (None, _, _) => Err(format!(
+    let err_said = said(&err);
+    match (ended, out_closed && err_closed) {
+        (None, _) => Err(format!(
             "{program} was still running past the scope bound ({} ms) and was killed and reaped: {err_said}",
             bound.as_millis()
         )),
-        (Some(status), None, _) | (Some(status), _, None) => Err(format!(
+        (Some(status), false) => Err(format!(
             "{program} {status}, and a process it started still holds its output: {err_said}"
         )),
-        (Some(status), Some(out), Some(_)) if status.success() => Ok(said(&out)),
-        (Some(status), Some(_), Some(_)) => Err(format!("{program} {status}: {err_said}")),
+        (Some(status), true) if status.success() => Ok(said(&out)),
+        (Some(status), true) => Err(format!("{program} {status}: {err_said}")),
     }
 }
 
 /// One pipe of a helper's, read to its end on a thread of its own, so a full
-/// pipe never holds the helper. The bytes arrive once the pipe closes, and
-/// never while a process the helper started still holds it.
-fn drain(pipe: Option<impl std::io::Read + Send + 'static>) -> std::sync::mpsc::Receiver<Vec<u8>> {
-    let (tell, read) = std::sync::mpsc::channel();
+/// pipe never holds the helper. What it reads is kept as it arrives, so a
+/// pipe still held by a process the helper started yields what was said
+/// before (6.1, the scope bound: the refusal names what the helper had
+/// said), and its close is told apart.
+struct Drained {
+    bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    closed: std::sync::mpsc::Receiver<()>,
+}
+
+impl Drained {
+    /// What the pipe had given by its close or `until`, whichever is first,
+    /// and whether it closed.
+    fn collect(self, until: Instant) -> (Vec<u8>, bool) {
+        let closed = self
+            .closed
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+            .is_ok();
+        let bytes = self
+            .bytes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        (bytes, closed)
+    }
+}
+
+fn drain(pipe: Option<impl std::io::Read + Send + 'static>) -> Drained {
+    let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = std::sync::Arc::clone(&bytes);
+    let (tell, closed) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut bytes = Vec::new();
         if let Some(mut pipe) = pipe {
-            let _ = pipe.read_to_end(&mut bytes);
+            let mut read = [0u8; 4096];
+            loop {
+                match pipe.read(&mut read) {
+                    Ok(0) => break,
+                    Ok(count) => kept
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .extend_from_slice(&read[..count]),
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => break,
+                }
+            }
         }
-        let _ = tell.send(bytes);
+        let _ = tell.send(());
     });
-    read
+    Drained { bytes, closed }
 }
 
 /// **The call's arguments** (6.1, Where): `StartTransientUnit` on

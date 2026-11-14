@@ -430,7 +430,8 @@ fn a_helper_still_running_at_the_deadline_is_killed_and_reaped() {
 /// started process records its pid and is killed after.
 /// Perturbations: wait for the pipes with no bound, and the call takes the
 /// started process's 5 s; drop the status, and the refusal no longer names
-/// it.
+/// it; keep the bytes only to the pipe's close, and the refusal no longer
+/// names what the helper said before the hold (CodeRabbit on #553).
 #[test]
 fn a_process_the_helper_started_cannot_hold_the_call() {
     let (record, quoted) = pid_record("started");
@@ -438,7 +439,9 @@ fn a_process_the_helper_started_cannot_hold_the_call() {
     let started = Instant::now();
     let refused = helper(
         "/bin/sh",
-        &shell(&format!("sleep 5 & echo $! > {quoted}; echo reply")),
+        &shell(&format!(
+            "echo diagnostic >&2; sleep 5 & echo $! > {quoted}; echo reply"
+        )),
         Instant::now() + deadline,
         deadline,
     );
@@ -457,6 +460,10 @@ fn a_process_the_helper_started_cannot_hold_the_call() {
         "{why}"
     );
     assert!(why.contains("exit status: 0"), "{why}");
+    assert!(
+        why.contains("diagnostic"),
+        "what it said before the hold: {why}"
+    );
     assert!(
         elapsed >= deadline + HELPER_GRACE,
         "its pipes left the whole wait, {elapsed:?}"
