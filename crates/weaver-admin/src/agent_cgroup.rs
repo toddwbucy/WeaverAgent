@@ -52,15 +52,36 @@ pub fn pids(cgroup: &Cgroup) -> Vec<i32> {
     pids
 }
 
-/// What stands in a cgroup the start step met: not root's, empty, or
-/// populated, a failed read of `cgroup.events` read as populated.
+/// What stands in a cgroup the start step met: not root's, empty or
+/// populated by `cgroup.events`, and where that read fails, the scope step's
+/// shape (6.1, the start's rows for no populated reading, #521): absent
+/// where nothing stands at its path any more, removed since its open, and
+/// otherwise unread, the opened cgroup or another directory standing there
+/// or the path not opening. Never populated: a failed read never refuses
+/// `AgentRunning`. As [`scope::read_standing`], narrower than
+/// [`Cgroup::gone`], since the start asks what stands at the path now.
 fn standing_of(cgroup: &Cgroup) -> Standing {
     match fstat(cgroup.fd()) {
         Ok(stat) if stat.st_uid == nix::unistd::geteuid().as_raw() => match cgroup.populated() {
             Some(false) => Standing::Empty,
-            _ => Standing::Populated,
+            Some(true) => Standing::Populated,
+            None if matches!(Cgroup::open_if_present(cgroup.relative()), Ok(None)) => {
+                Standing::Absent
+            }
+            None => Standing::Unread,
         },
         _ => Standing::NotRoots,
+    }
+}
+
+/// What stands in the recorded cgroup, opened at its recorded path, as the
+/// record's reading at the start: read absent since its open, it is held by
+/// no handle, so nothing is removed through it and the record is stale
+/// (6.1, the start's rows for no populated reading, #521).
+fn recorded_standing(cgroup: Cgroup) -> (RecordAtStart, Option<Cgroup>) {
+    match standing_of(&cgroup) {
+        Standing::Absent => (RecordAtStart::Same(Standing::Absent), None),
+        standing => (RecordAtStart::Same(standing), Some(cgroup)),
     }
 }
 
@@ -226,7 +247,7 @@ pub fn make_beneath(
             RecordedAt::Other => (RecordAtStart::Other, None),
             RecordedAt::Unreadable => (RecordAtStart::Unreadable, None),
             RecordedAt::Same => match Cgroup::open(&record.path) {
-                Ok(cgroup) => (RecordAtStart::Same(standing_of(&cgroup)), Some(cgroup)),
+                Ok(cgroup) => recorded_standing(cgroup),
                 Err(_) => (RecordAtStart::Unreadable, None),
             },
         },
@@ -266,6 +287,41 @@ pub fn make_beneath(
                 )),
                 StartRefusal::NotRoots => {
                     StartRefused::Unverified(format!("a cgroup {name} stands that is not root's"))
+                }
+                StartRefusal::Unread => {
+                    // Each unread cgroup named once: the recorded one is
+                    // named apart only where it is not the one at the path.
+                    let mut unread = Vec::new();
+                    if at_path == Standing::Unread {
+                        unread.push(format!("the cgroup {name} beneath {scope_path}"));
+                    }
+                    if recorded == RecordAtStart::Same(Standing::Unread)
+                        && let Some(cgroup) = &recorded_cgroup
+                    {
+                        let identity = cgroup.identity().ok();
+                        let same = at_path == Standing::Unread
+                            && identity.is_some()
+                            && at_path_cgroup
+                                .as_ref()
+                                .and_then(|held| held.identity().ok())
+                                == identity;
+                        if !same {
+                            unread.push(format!("the recorded cgroup {}", cgroup.relative()));
+                        }
+                    }
+                    let each: Vec<String> = unread
+                        .iter()
+                        .map(|cgroup| {
+                            format!(
+                                "{cgroup} gave no populated reading from its cgroup.events, and \
+                                 its path does not read absent since"
+                            )
+                        })
+                        .collect();
+                    StartRefused::Unverified(format!(
+                        "{}: the cgroup unread, replaced since its open, or not opening",
+                        each.join("; ")
+                    ))
                 }
                 StartRefusal::RecordUnverified => StartRefused::Unverified(
                     "the cgroup record does not read, or names another cgroup at its path"
