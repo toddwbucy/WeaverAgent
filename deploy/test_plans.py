@@ -173,12 +173,21 @@ elif name == 'git':
     elif args[0] == 'ls-tree': print('160000 commit e21cdc11fixturevendoredcommit\tllama.cpp')
 elif name == 'hostname': print('fixture-box')
 elif name == 'nvidia-smi':
-    if os.environ.get('NO_NVIDIA'): sys.exit(9)
+    # A box with no card: nvidia-smi's failure sentence on stdout, as it
+    # prints it, and a failing status.
+    if os.environ.get('NO_NVIDIA'):
+        print("NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. "
+              "Make sure that the latest NVIDIA driver is installed and running.")
+        sys.exit(9)
     # Listed out of PCI bus order, so a reader that trusts the query's order
     # is caught.
     if '--query-gpu=pci.bus_id,name,memory.total' in args:
         print('00000000:41:00.0, Fixture GPU B, 2048 MiB')
         print('00000000:01:00.0, Fixture GPU A, 1024 MiB')
+    # The driver's version, one line per card, as nvidia-smi answers it;
+    # FIXTURE_DRIVERS names other lines.
+    elif '--query-gpu=driver_version' in args:
+        print(os.environ.get('FIXTURE_DRIVERS', '999.1.2\n999.1.2'))
     else: print('fixture-driver')
 elif name == 'nvcc': print('nvcc: fixture\nCuda compilation tools, release 99.9, V99.9.1\nBuild fixture')
 elif name == 'pacman': print('cccl 3.3.4-1')
@@ -376,9 +385,14 @@ elif name == 'ldd':
         sys.exit(1)
     with open(os.environ['CALLS'], 'a') as seen:
         seen.write(json.dumps(['ldd-env', os.environ.get('LD_LIBRARY_PATH', ''), os.environ.get('LD_PRELOAD', '')]) + '\n')
+    # The CUDA runtime and the driver's library resolve into the fixture's
+    # CUDA directory, where setUp leaves each name a link to a versioned
+    # file, or into LDD_RUNTIME.
     engine_dir = os.environ.get('LDD_ELSEWHERE') or os.environ.get('LD_LIBRARY_PATH', '/fixture/lib').split(':')[0]
-    for soname in ('libllama.so.0', 'libggml.so.0', 'libcudart.so.99', 'libcublas.so.99', 'libcublasLt.so.99', 'libc.so.6'):
-        at = engine_dir if soname.startswith(('libllama', 'libggml')) else '/fixture/lib'
+    runtime_dir = os.environ.get('LDD_RUNTIME') or str(root / 'cuda' / 'lib64')
+    for soname in ('libllama.so.0', 'libggml.so.0', 'libcudart.so.99', 'libcublas.so.99', 'libcublasLt.so.99',
+                   'libcurand.so.99', 'libcuda.so.1', 'libc.so.6'):
+        at = engine_dir if soname.startswith(('libllama', 'libggml')) else runtime_dir
         if soname == os.environ.get('LDD_MISSING'): print(f'\t{soname} => not found')
         else: print(f'\t{soname} => {at}/{soname} (0x0000)')
 else: sys.exit(99)
@@ -470,6 +484,14 @@ class PlanTests(unittest.TestCase):
         # double answers for the fixture.
         self.cuda_lib = self.root / "cuda" / "lib64"
         self.cuda_lib.mkdir(parents=True)
+        # The runtime files the ldd double resolves there, each name a link
+        # to its versioned file, as a CUDA install lays them out.
+        for name, version in (("libcudart.so.99", "99.1.2"), ("libcublas.so.99", "99.3.4"),
+                              ("libcublasLt.so.99", "99.3.4"), ("libcurand.so.99", "99.5.6"),
+                              ("libcuda.so.1", "999.1.2")):
+            stem = name.rsplit(".so.", 1)[0]
+            (self.cuda_lib / f"{stem}.so.{version}").write_text(f"fixture {stem}\n")
+            (self.cuda_lib / name).symlink_to(f"{stem}.so.{version}")
         self.ldso_conf.write_text(f"{self.lib_dir}\n{self.cuda_lib}\n")
         # The engine's checkout, where the install tuple reads the vendored
         # engine's commit from the fork's tree.
@@ -502,7 +524,7 @@ class PlanTests(unittest.TestCase):
                      "CMAKE_DISABLE_FIND_PACKAGE_OpenSSL", "STALE_ENGINE",
                      "BOX_PASSWD", "BOX_GROUP", "EXTRA_PASSWD", "GATECON_GROUPS", "ADMINCON_GROUPS",
                      "GATECON_JOINED", "ADMINCON_JOINED",
-                     "LD_LIBRARY_PATH", "LD_PRELOAD", "NO_NVIDIA"):
+                     "LD_LIBRARY_PATH", "LD_PRELOAD", "NO_NVIDIA", "LDD_RUNTIME", "FIXTURE_DRIVERS"):
             self.env.pop(name, None)
         self.env["CUDA_LIB_DIR"] = str(self.cuda_lib)
         # Redirect even shell builtin /home probes, and the cgroup mount's
@@ -1771,28 +1793,49 @@ esac
         self.assertIn("the deployment tuple carries a FAULT line, so the run is unloaded", result.stderr)
         self.assertFalse((state / "pid").exists(), "no run is left")
 
-    def test_verify_load_binds_the_record_to_the_install_tuple(self):
-        """**The box side and the record binding print from the stack record's
-        install tuple**: its digest as the box's identity, the declaration's
-        sha256 against the load event's, the stack against its members.
-        Perturbation: drop the install tuple's argument in verify-load and
-        the box line reads absent."""
+    def tuple_load(self, lines, spu=True):
+        """A verify fixture whose stack record holds the install tuple
+        `lines` (INSTALL_TUPLE_LINES or EARLIER_TUPLE_LINES, filled from the
+        fixture's own files), whose load event binds the declaration and the
+        worker, and whose agent root names an installed SPU and the library
+        path, as create-agent.sh copies them, unless `spu` is False."""
         state = self.verify_fixture()
         decl = (self.decl / "agent.toml").read_bytes()
-        # The devices as the harness's nvidia-smi lists them, sorted into PCI
-        # order as install-tuple.sh writes them, so row 7 reads the same box.
-        stub_gpus = {"gpu.0": "00000000:01:00.0, Fixture GPU A, 1024 MiB",
-                     "gpu.1": "00000000:41:00.0, Fixture GPU B, 2048 MiB"}
-        lines = [line.format(llama="1" * 64, ggml="2" * 64) for line in INSTALL_TUPLE_LINES]
-        lines = [f"{l.split(' = ')[0]} = {stub_gpus[l.split(' = ')[0]]}"
-                 if l.split(" = ")[0] in stub_gpus else l for l in lines]
-        (self.stack / "install-tuple").write_text("".join(l + "\n" for l in lines))
-        tuple_sha = hashlib.sha256((self.stack / "install-tuple").read_bytes()).hexdigest()
+        runtime = {}
+        for key, name in (("cudart", "libcudart.so.99"), ("cublas", "libcublas.so.99"),
+                          ("cublaslt", "libcublasLt.so.99"), ("curand", "libcurand.so.99")):
+            real = (self.cuda_lib / name).resolve()
+            runtime[key] = f"{hashlib.sha256(real.read_bytes()).hexdigest()} {real}"
+        filled = [line.format(llama="1" * 64, ggml="2" * 64, **runtime) for line in lines]
+        (self.stack / "install-tuple").write_text("".join(l + "\n" for l in filled))
+        if spu:
+            (self.root / "installed" / "weaver-spu").write_text("fixture spu\n")
+            root = self.config / "m1"
+            (root / "spu-binary").write_text(self.stack_keys["spu-binary"] + "\n")
+            (root / "library-path").write_text(self.stack_keys["library-path"] + "\n")
         payload = json.dumps({"declaration": hashlib.sha256(decl).hexdigest(),
                               "stack": {"worker": "1" * 64}})
         stub = self.root / "installed" / "bin" / "weaver-admin"
         stub.write_text(stub.read_text().replace(
             "echo '{\"kind\":\"load\"}'", "echo '{\"kind\":\"load\",\"payload\":" + payload + "}'"))
+        return state
+
+    def test_verify_load_binds_the_record_to_the_install_tuple(self):
+        """**The box side and the record binding print from the stack record's
+        install tuple**: its digest as the box's identity, the declaration's
+        sha256 against the load event's, the stack against its members, and
+        each runtime file the install recorded against the file the loader
+        resolves for the agent's SPU now, with the agent's library path and
+        none of the operator's loader variables. The driver and libcuda are
+        read at this load. Perturbations: drop the install tuple's argument
+        in verify-load and the box line reads absent; drop `--live-ldd` and
+        every runtime row reads absent; drop the library path from ldd's
+        environment and the double resolves the engine from elsewhere."""
+        state = self.tuple_load(INSTALL_TUPLE_LINES)
+        tuple_sha = hashlib.sha256((self.stack / "install-tuple").read_bytes()).hexdigest()
+        # The operator's shell carries its own library path, which the
+        # loader's read for the agent's SPU never takes.
+        self.env["LD_LIBRARY_PATH"] = "/operator/out/lib"
         try:
             result = self.run_script("verify-load.sh", "m1")
         finally:
@@ -1801,8 +1844,172 @@ esac
         self.assertRegex(result.stdout, r"box +install tuple +sha256 " + tuple_sha + r" +\[recorded:")
         self.assertRegex(result.stdout, r"bind +declaration +sha256 [0-9a-f]{64} +\[recorded: equal")
         self.assertRegex(result.stdout, r"bind +member worker +1{64} +\[recorded:")
-        self.assertNotIn("FAULT", result.stdout, "the live devices equal the install tuple's")
+        for key in ("cudart", "cublas", "cublaslt", "curand"):
+            self.assertRegex(result.stdout, r"bind +runtime " + key + r" +[0-9a-f]{64} /\S+ +\[recorded:")
+        self.assertRegex(result.stdout, r"live +driver +999\.1\.2 +\[derivable:")
+        self.assertRegex(result.stdout, r"live +libcuda +[0-9a-f]{64} \S+libcuda\.so\.999\.1\.2 +\[derivable:")
+        self.assertNotIn("tuple form", result.stdout)
+        self.assertNotIn("FAULT", result.stdout)
         self.assertIn("m1 verified", result.stdout)
+        self.assertIn(["ldd-env", self.stack_keys["library-path"], ""],
+                      [c for c in self.calls() if c[0] == "ldd-env"])
+
+    def test_verify_load_reads_an_earlier_tuple_and_binds_no_runtime_file(self):
+        """**A record of the earlier form verifies**, so the host's pinned
+        stack keeps verifying until an install rewrites it: the form is
+        named with the way to rewrite it, its card lines are never judged
+        (the fixture's cards differ from them), and no runtime file is
+        bound. Perturbation: refuse the earlier form in the helper and the
+        load is unloaded."""
+        state = self.tuple_load(EARLIER_TUPLE_LINES)
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertRegex(result.stdout, r"box +tuple form +earlier: cublas, cublaslt, cudart, driver, gpu\.0, "
+                                        r"gpu\.1, gpus +\[absent:")
+        for key in ("cudart", "cublas", "cublaslt", "curand"):
+            self.assertRegex(result.stdout, r"bind +runtime " + key + r" .*\[absent: not bound: the install "
+                                            r"tuple is of the earlier form")
+        self.assertNotIn("FAULT", result.stdout)
+        self.assertIn("m1 verified", result.stdout)
+
+    def test_verify_load_unloads_a_box_whose_runtime_drifted_from_its_install(self):
+        """**A runtime file that changed since the install is a FAULT and the
+        run is unloaded**: the install recorded one file and the loader now
+        resolves another, which a sealed image never shows. Perturbation:
+        bind by path alone and the patched file passes."""
+        state = self.tuple_load(INSTALL_TUPLE_LINES)
+        (self.cuda_lib / "libcurand.so.99.5.6").write_text("patched since the install\n")
+        try:
+            result = self.run_script("verify-load.sh", "m1", "--keep")
+        finally:
+            self.end_stand_in(state)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertRegex(result.stdout, r"bind +runtime curand .*\[FAULT: drift from the install")
+        self.assertRegex(result.stdout, r"bind +runtime cudart .*\[recorded:")
+        self.assertIn("the deployment tuple carries a FAULT line, so the run is unloaded", result.stderr)
+        self.assertFalse((state / "pid").exists(), "no run is left")
+
+    def untrusted_loader(self, setup, said):
+        """**Root runs ldd only on an SPU, and with a library directory, that
+        admin's rule holds closed, and it fails closed**: where it cannot,
+        each runtime file the install recorded is a FAULT naming why, and the
+        run is unloaded. Admin refuses such an SPU at load, so a loaded agent
+        showing one is not what was installed. `setup` breaks one premise
+        after the fixture stands."""
+        state = self.tuple_load(INSTALL_TUPLE_LINES)
+        setup()
+        try:
+            result = self.run_script("verify-load.sh", "m1", "--keep")
+        finally:
+            self.end_stand_in(state)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertRegex(result.stdout, r"live +libcuda .*\[absent: not read: .*" + re.escape(said))
+        self.assertRegex(result.stdout, r"bind +runtime cudart .*\[FAULT: the install tuple records [0-9a-f]{64} "
+                                        r"\S+, and the loader's read cannot be bound to it: .*" + re.escape(said))
+        self.assertIn("the deployment tuple carries a FAULT line, so the run is unloaded", result.stderr)
+        self.assertFalse([c for c in self.calls() if c[0] == "ldd-env"], "ldd never ran")
+
+    def test_verify_load_faults_a_root_naming_no_spu(self):
+        self.untrusted_loader(lambda: (self.config / "m1" / "spu-binary").unlink(),
+                              "the agent's config root names no spu-binary")
+
+    def test_verify_load_faults_an_spu_that_is_not_there(self):
+        self.untrusted_loader(lambda: (self.root / "installed" / "weaver-spu").unlink(), "no SPU at")
+
+    def test_verify_load_runs_no_loader_on_an_spu_another_principal_could_write(self):
+        """Perturbation: drop the held_closed check on the SPU and ldd runs."""
+        self.untrusted_loader(lambda: (self.root / "installed" / "weaver-spu").chmod(0o666),
+                              "is not held closed by root at")
+
+    def test_verify_load_runs_no_loader_with_a_library_path_another_principal_could_write(self):
+        """Perturbation: drop the held_closed check on the library path and
+        ldd runs with it."""
+        self.untrusted_loader(lambda: (self.root / "installed" / "lib").chmod(0o777),
+                              "the agent's library path")
+
+    def test_verify_load_resolves_the_library_path_once_and_hands_ldd_the_resolved_path(self):
+        """**The library path judged is the library path used**: the root
+        names a link, the link's target is what is held closed, and ldd gets
+        the target, so the link cannot be moved between the two.
+        Perturbation: hand ldd the root's value as written and it gets the
+        link."""
+        state = self.tuple_load(INSTALL_TUPLE_LINES)
+        link = self.root / "installed" / "lib-link"
+        link.symlink_to("lib")
+        for where in (self.config / "m1", self.stack):
+            (where / "library-path").write_text(f"{link}\n")
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        seen = [c[1] for c in self.calls() if c[0] == "ldd-env"]
+        self.assertEqual(seen, [str(self.root / "installed" / "lib")])
+        self.assertRegex(result.stdout, r"bind +runtime cudart .*\[recorded:")
+
+    def test_verify_load_binds_no_runtime_for_an_agent_that_runs_another_spu(self):
+        """**Like for like** (the self-check of 2026-11-14): an agent made with
+        `create-agent.sh --spu` runs an SPU the install never read, so its
+        runtime files are not bound, the rows say which SPU, the live
+        libcuda is still read from it, and nothing faults. Perturbation:
+        drop the comparison with the stack record's SPU and the custom SPU's
+        runtime is judged against the installed one's."""
+        state = self.tuple_load(INSTALL_TUPLE_LINES)
+        custom = self.root / "installed" / "custom-spu"
+        custom.write_text("another spu\n")
+        (self.config / "m1" / "spu-binary").write_text(f"{custom}\n")
+        # The custom SPU resolves its runtime elsewhere, as a build against
+        # another CUDA would.
+        elsewhere = self.root / "other-cuda"
+        shutil.copytree(self.cuda_lib, elsewhere, symlinks=True)
+        (elsewhere / "libcublas.so.99.3.4").write_text("another cublas\n")
+        self.env["LDD_RUNTIME"] = str(elsewhere)
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertRegex(result.stdout, r"bind +runtime cublas .*\[absent: not bound: this agent's SPU is "
+                                        + re.escape(str(custom)) + r", not the installed ")
+        self.assertRegex(result.stdout, r"live +libcuda +[0-9a-f]{64} .*\[derivable:")
+        self.assertNotIn("FAULT", result.stdout)
+
+    def test_verify_load_binds_no_runtime_for_a_root_naming_another_library_path(self):
+        """**Like for like**: a root whose library path differs from the one the
+        install read with resolves through another directory, so the rows
+        are absent and say which. Perturbation: drop the comparison and the
+        resolution through the root's directory is judged as drift."""
+        state = self.tuple_load(INSTALL_TUPLE_LINES)
+        other = self.root / "installed" / "other-lib"
+        other.mkdir()
+        (self.config / "m1" / "library-path").write_text(f"{other}\n")
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.end_stand_in(state)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertRegex(result.stdout, r"bind +runtime cudart .*\[absent: not bound: this agent's library path is "
+                                        + re.escape(str(other)))
+
+    def test_verify_load_faults_a_stack_record_key_it_cannot_trust(self):
+        """**The record's SPU key decides whether a read is bound, so it is
+        trusted only where admin's rule holds it closed**; an open key would
+        let another principal turn every binding off. Perturbation: drop
+        the held_closed check on the record's spu-binary and the runtime
+        rows read recorded."""
+        state = self.tuple_load(INSTALL_TUPLE_LINES)
+        (self.stack / "spu-binary").chmod(0o666)
+        try:
+            result = self.run_script("verify-load.sh", "m1", "--keep")
+        finally:
+            self.end_stand_in(state)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertRegex(result.stdout, r"bind +runtime cudart .*\[FAULT: .*the stack record's spu-binary is not "
+                                        r"held closed by root")
+        self.assertRegex(result.stdout, r"live +libcuda +[0-9a-f]{64} .*\[derivable:")
 
     def test_verify_load_prints_the_load_event_through_its_stack_map(self):
         """**The load event's line ends at a member boundary, after the stack
@@ -3703,7 +3910,7 @@ esac
                   "member.worker", "member.weaver-admin", "member.weaver-trace-relay", "member.weaver-gate",
                   "member.weaver-spu", "member.weaver-state", "member.busybox", "member.busybox.applets",
                   "library.libggml.so.0.9.1", "library.libllama.so.0.0.1",
-                  "driver", "cudart", "cublas", "cublaslt", "cccl", "gpus", "gpu.0", "gpu.1"]
+                  "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand", "cccl"]
 
     def test_a_verified_install_prints_and_records_the_install_tuple(self):
         """**A verified install ends with the install tuple** (the Planner's
@@ -3711,14 +3918,17 @@ esac
         line and written whole to the stack record's install-tuple, one
         `key = value` line per fact in a fixed order: the members and the
         libraries by their installed sha256 in full, the engine as the lock
-        pins it, the runtime files the installed SPU resolves, and the GPUs
-        in PCI bus order. A plan writes none. Perturbations: drop the sort
-        and gpu.0 is the bus-41 card; drop the write and the record holds
-        nothing; collect no library names and the keys differ; print the
-        tuple after the closing line and the order fails; read the runtime
-        in the operator's environment and its library path reaches ldd;
-        read the lock unfiltered and the metadata call carries no
-        platform."""
+        pins it, and the runtime files the installed SPU resolves, each by
+        its sha256 and the versioned file its name leads to. **Build facts
+        only** (the operator's rulings of 2026-11-14): no driver, card count
+        or card, though the box's nvidia-smi answers all three. A plan writes
+        none. Perturbations: drop the write and the record holds nothing;
+        collect no library names and the keys differ; print the tuple after
+        the closing line and the order fails; read the runtime in the
+        operator's environment and its library path reaches ldd; read the
+        lock unfiltered and the metadata call carries no platform; record
+        the name ldd prints rather than the file it leads to and the path is
+        the link's; put back the driver or card lines and the keys differ."""
         # The operator's shell carries its own library path, which neither
         # the install's check nor the tuple's runtime read may take.
         result = self.library_install(LD_LIBRARY_PATH="/operator/out/lib")
@@ -3744,13 +3954,17 @@ esac
         self.assertEqual(facts["engine-source"], "git+https://fixture.invalid/llama-cpp-rs?rev=f00d#f00dfixtureforkcommit")
         self.assertEqual(facts["engine-vendored"], "e21cdc11fixturevendoredcommit")
         self.assertEqual(facts["nvcc"], "99.9, V99.9.1")
-        self.assertEqual(facts["driver"], "fixture-driver")
-        self.assertEqual(facts["cudart"], "/fixture/lib/libcudart.so.99")
-        self.assertEqual(facts["cublaslt"], "/fixture/lib/libcublasLt.so.99")
+        for key, file in (("cudart", "libcudart.so.99.1.2"), ("cublas", "libcublas.so.99.3.4"),
+                          ("cublaslt", "libcublasLt.so.99.3.4"), ("curand", "libcurand.so.99.5.6")):
+            path = (self.cuda_lib / file).resolve()
+            self.assertEqual(facts[f"runtime.{key}"], f"{hashlib.sha256(path.read_bytes()).hexdigest()} {path}")
         self.assertEqual(facts["cccl"], "3.3.4-1")
-        self.assertEqual(facts["gpus"], "2")
-        self.assertEqual(facts["gpu.0"], "00000000:01:00.0, Fixture GPU A, 1024 MiB")
-        self.assertEqual(facts["gpu.1"], "00000000:41:00.0, Fixture GPU B, 2048 MiB")
+        self.assertFalse([key for key in facts if key in ("driver", "gpus") or key.startswith(("gpu.", "runtime.libcuda"))],
+                         "the hardware half is read at each load, never stored")
+        # The record reads as the helper takes it, a tuple of this form.
+        install = _agent_tuple().read_install_tuple(str(self.stack / "install-tuple"))
+        self.assertEqual(install["earlier"], [])
+        self.assertEqual(sorted(install["runtime"]), ["cublas", "cublaslt", "cudart", "curand"])
         # The lock read filtered to the host, so an offline cache a build
         # filled answers it.
         metadata = [c for c in self.calls() if c[:2] == ["cargo", "metadata"] and "--no-deps" not in c]
@@ -3770,9 +3984,11 @@ esac
 
     def test_the_install_tuple_reads_unknown_where_the_box_cannot_answer(self):
         """**A fact the box cannot answer reads `unknown`, and no key is left
-        out**: no driver to ask, no SPU to resolve, no lock to read and no
-        toolchain file. Perturbation: print nothing for an unanswered fact
-        and the keys differ."""
+        out**: no SPU to resolve, no lock to read and no toolchain file, on a
+        box with no card, where nvidia-smi answers its failure sentence. The
+        sentence is never a fact, since the tuple reads no hardware.
+        Perturbation: print nothing for an unanswered fact and the keys
+        differ."""
         self.env["NO_NVIDIA"] = "1"
         empty = self.root / "empty-repo"
         empty.mkdir()
@@ -3787,14 +4003,14 @@ esac
         self.assertEqual(ran.returncode, 0, ran.stderr)
         facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
         self.assertEqual(list(facts), ["commit", "toolchain", "features", "engine", "engine-source", "engine-vendored",
-                                       "nvcc", "member.worker", "library.libllama.so.0.0.1", "driver", "cudart",
-                                       "cublas", "cublaslt", "cccl", "gpus"])
+                                       "nvcc", "member.worker", "library.libllama.so.0.0.1", "runtime.cudart",
+                                       "runtime.cublas", "runtime.cublaslt", "runtime.curand", "cccl"])
         for key in ("toolchain", "engine-source", "engine-vendored", "member.worker", "library.libllama.so.0.0.1",
-                    "driver", "cudart", "cublas", "cublaslt"):
+                    "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand"):
             self.assertEqual(facts[key], "unknown", key)
         self.assertEqual(facts["engine"], "llama-cpp-sys-2 unknown")
         self.assertEqual(facts["commit"], "fixture-commit", "the commit is the caller's, never read again")
-        self.assertEqual(facts["gpus"], "0")
+        self.assertNotIn("NVIDIA-SMI", ran.stdout)
 
     def test_bootstrap_records_the_same_install_tuple_after_its_install(self):
         """**The two scripts write one record from one function**: bootstrap
@@ -4303,12 +4519,18 @@ esac
         self.assertNotIn("step 8's staged key", result.stdout)
 
     def test_the_driver_line_prints_no_stray_none(self):
-        """**The driver's fallback is applied after the pipeline** (#39): a
-        `head` that closes the pipe on a card list fails the pipeline under
+        """**The driver's fallback is applied after the read** (#39): a `head`
+        that closed the pipe on a card list failed the pipeline under
         `pipefail`, and the old `|| echo none` inside the substitution
         printed the card and then `none`. Each script's line is run with a
-        stand-in nvidia-smi that writes after `head` has gone, and with none.
-        Perturbation: put `|| echo none` back inside any of the three."""
+        stand-in nvidia-smi that writes its later cards after a pause; with
+        one that answers nothing; with one that prints its failure sentence
+        and fails, as on a box with no card, where an image is built; and
+        with one where a card in error prints its own line before a healthy
+        card's answer and the whole fails. Perturbations: put `|| echo none`
+        back inside any of the three; keep the first line whatever it is and
+        the sentence or the error is the driver; drop a failing nvidia-smi's
+        answer whole and the healthy card's driver is lost."""
         lines = {}
         for name, var in (("bootstrap-stack.sh", "DRIVER"), ("update-stack.sh", "DRIVER"),
                           ("decommission.sh", "driver")):
@@ -4318,8 +4540,12 @@ esac
             lines[name] = (line, var)
         with tempfile.TemporaryDirectory() as scratch:
             bin_dir = Path(scratch)
+            # Each stand-in answers the query it is asked: `<name>, <version>`
+            # per card for name,driver_version, the version alone otherwise.
+            answer = ('case "$*" in *name,driver_version*) p="Card %s, 620.70.06\\n";; '
+                      '*) p="620.70.06\\n";; esac\n')
             smi = bin_dir / "nvidia-smi"
-            smi.write_text("#!/bin/sh\necho 'card0, 1'\nsleep 0.3\necho 'card1, 1'\necho 'card2, 1'\n")
+            smi.write_text("#!/bin/sh\n" + answer + 'printf "$p" 0\nsleep 0.3\nprintf "$p" 1\nprintf "$p" 2\n')
             smi.chmod(0o755)
             # The box's own nvidia-smi is never run: the second case puts one
             # first on the path that answers nothing, as a box without a card.
@@ -4327,9 +4553,24 @@ esac
             silent.mkdir()
             (silent / "nvidia-smi").write_text("#!/bin/sh\nexit 9\n")
             (silent / "nvidia-smi").chmod(0o755)
+            cardless = bin_dir / "cardless"
+            cardless.mkdir()
+            (cardless / "nvidia-smi").write_text(
+                "#!/bin/sh\necho \"NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA "
+                "driver. Make sure that the latest NVIDIA driver is installed and running.\"\nexit 9\n")
+            (cardless / "nvidia-smi").chmod(0o755)
+            errored = bin_dir / "errored"
+            errored.mkdir()
+            (errored / "nvidia-smi").write_text(
+                "#!/bin/sh\n" + answer + "echo 'Unable to determine the device handle for GPU0000:41:00.0: "
+                "Unknown Error'\nprintf \"$p\" 1\nexit 15\n")
+            (errored / "nvidia-smi").chmod(0o755)
             for name, (line, var) in lines.items():
-                for path, want in ((f"{bin_dir}{os.pathsep}/usr/bin:/bin", "card0, 1"),
-                                   (f"{silent}{os.pathsep}/usr/bin:/bin", "none")):
+                card = "Card {}, 620.70.06" if "name,driver_version" in line else "620.70.06"
+                for path, want in ((f"{bin_dir}{os.pathsep}/usr/bin:/bin", card.format(0)),
+                                   (f"{silent}{os.pathsep}/usr/bin:/bin", "none"),
+                                   (f"{cardless}{os.pathsep}/usr/bin:/bin", "none"),
+                                   (f"{errored}{os.pathsep}/usr/bin:/bin", card.format(1))):
                     with self.subTest(script=name, want=want):
                         run = subprocess.run(["bash", "-c", f'set -euo pipefail\n{line}\nprintf "%s\\n" "${{{var}:-none}}"'],
                                              env={"PATH": path}, text=True, capture_output=True, timeout=20)
@@ -7121,9 +7362,16 @@ class EngineLibrariesTests(unittest.TestCase):
                             LDD_REPORT=tuple_report)
         self.assertEqual(ran.returncode, 0, ran.stderr)
         facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
-        self.assertEqual(facts["cudart"], str((cuda / "libcudart.so.13.0.48").resolve()))
-        self.assertEqual(facts["cublas"], "unknown")
-        self.assertEqual(facts["cublaslt"], "unknown")
+        cudart = (cuda / "libcudart.so.13.0.48").resolve()
+        self.assertEqual(facts["runtime.cudart"], f"{hashlib.sha256(b'x').hexdigest()} {cudart}")
+        self.assertEqual(facts["runtime.cublas"], "unknown")
+        self.assertEqual(facts["runtime.cublaslt"], "unknown")
+        self.assertEqual(facts["runtime.curand"], "unknown")
+        # The helper reads the spaced path back whole.
+        tuple_file = self.dir / "install-tuple"
+        tuple_file.write_text(ran.stdout)
+        install = _agent_tuple().read_install_tuple(str(tuple_file))
+        self.assertEqual(install["runtime"]["cudart"], (hashlib.sha256(b"x").hexdigest(), str(cudart)))
 
     def test_spu_ldd_runs_ldd_with_the_library_directory_and_no_operator_loader_variables(self):
         ldd = self.bin / "ldd"
@@ -8015,8 +8263,12 @@ class AgentTupleRowTests(unittest.TestCase):
         decl = self.declaration()
         lines = (self.tuple.artifact_rows(decl, self.header, None, None)
                  + self.tuple.adapter_rows(decl)
-                 + self.tuple.device_rows(decl, self.header, ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"], ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"])
-                 + self.tuple.state_rows(decl, {"state_store": {"engine": "sqlite"}}))
+                 + self.tuple.device_rows(decl, self.header, ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"])
+                 + self.tuple.live_rows("999.1.2\n", {}, None)
+                 + self.tuple.live_rows("", None, "not asked")
+                 + self.tuple.state_rows(decl, {"state_store": {"engine": "sqlite"}})
+                 + self.tuple.runtime_rows(None, {}, None)
+                 + self.tuple.runtime_rows(None, None, "not asked"))
         for status in self.statuses(lines):
             self.assertIn(status, ("recorded", "derivable", "absent", "FAULT"))
 
@@ -8056,19 +8308,40 @@ class AgentTupleRowTests(unittest.TestCase):
 
     def test_row_seven_maps_ordinals_into_the_pci_order_list_and_states_its_premise(self):
         gpus = ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:C1:00.0, NVIDIA RTX 2000 Ada Generation, 16380 MiB"]
-        lines = self.tuple.device_rows(self.declaration(devices=(2,)), self.header, gpus, gpus)
+        lines = self.tuple.device_rows(self.declaration(devices=(2,)), self.header, gpus)
         device = next(line for line in lines if "device 2 " in line)
         self.assertIn("RTX 2000 Ada", device)
         self.assertIn("CUDA_DEVICE_ORDER=PCI_BUS_ID", device)
+        self.assertIn("read at this load, never stored", device)
 
-    def test_a_live_list_that_differs_from_the_install_tuple_is_a_fault(self):
-        """Perturbation: compare counts only and a swapped card passes."""
-        box = ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:C1:00.0, NVIDIA RTX 2000 Ada Generation, 16380 MiB"]
-        live = ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:C1:00.0, NVIDIA RTX A4000, 16376 MiB"]
-        lines = self.tuple.device_rows(self.declaration(), self.header, box, live)
-        self.assertIn("FAULT", self.statuses(lines))
-        lines = self.tuple.device_rows(self.declaration(devices=(5,)), self.header, box, box)
-        self.assertIn("FAULT", self.statuses(lines))
+    def test_row_seven_judges_the_election_against_the_cards_this_box_has(self):
+        """**The cards are read at each load and judged against what the load
+        elected** (the operator's rulings of 2026-11-14: one image serves any
+        host's cards), never against a list an install stored. Any cards
+        that hold the elected ordinals pass, whatever they are; an ordinal
+        past the list is a FAULT; no list, and nvidia-smi's failure sentence
+        on a box with no card, are absent, and the sentence is never a card.
+        Perturbations: drop the range check and the ordinal past the list
+        raises rather than faults; take any line as a card and the sentence
+        is one."""
+        here = ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB", "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"]
+        there = ["00000000:03:00.0, NVIDIA L40S, 46068 MiB", "00000000:04:00.0, NVIDIA L40S, 46068 MiB",
+                 "00000000:05:00.0, NVIDIA L40S, 46068 MiB"]
+        for cards in (here, there):
+            with self.subTest(cards[0]):
+                lines = self.tuple.device_rows(self.declaration(), self.header, cards)
+                self.assertNotIn("FAULT", self.statuses(lines))
+        lines = self.tuple.device_rows(self.declaration(devices=(0, 5)), self.header, here)
+        past = next(line for line in lines if "device 5 " in line)
+        self.assertIn("[FAULT: the load elected it and nvidia-smi lists 2 cards]", past)
+        sentence = ("NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. "
+                    "Make sure that the latest NVIDIA driver is installed and running.\n")
+        for live in (None, self.tuple.live_gpus(sentence)):
+            with self.subTest(live):
+                lines = self.tuple.device_rows(self.declaration(), self.header, live)
+                device = [line for line in lines if " device 0 " in line]
+                self.assertEqual(len(device), 1, lines)
+                self.assertIn("[absent: nvidia-smi listed no card at this load]", device[0])
 
     def test_header_and_declared_text_cannot_reach_the_terminal_raw(self):
         """**No value is printed with a character a terminal acts on**, and an
@@ -8279,22 +8552,41 @@ class AgentTupleRecordReadTests(unittest.TestCase):
         smi = ("00000000:C1:00.0,  NVIDIA RTX 2000 Ada Generation, 16380 MiB\n"
                "00000000:01:00.0, NVIDIA RTX A6000 ,49140 MiB\n")
         self.assertIsNone(self.tuple.live_gpus("fixture-driver\n"))
-        # The install tuple's `gpu.<n>` shape, sorted in the C locale.
+        self.assertIsNone(self.tuple.live_gpus(
+            "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. "
+            "Make sure that the latest NVIDIA driver is installed and running.\n"))
+        # `<bus id>, <name>, <memory>`, sorted in the C locale.
         self.assertEqual(self.tuple.live_gpus(smi),
                          ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB",
                           "00000000:C1:00.0, NVIDIA RTX 2000 Ada Generation, 16380 MiB"])
 
 
 class TupleQueryMirrorTests(unittest.TestCase):
-    """**The runbook names the nvidia-smi query verify-load runs**, so the
-    box's operator reads the exact line from section 4. Perturbation: change
-    either side's query fields and this fails."""
+    """**The runbook names each nvidia-smi query verify-load runs**, the cards
+    and the driver, so the box's operator reads the exact line from section
+    4. Perturbation: change either side's query fields and this fails."""
 
     def test_the_runbook_names_the_scripts_query(self):
         script = (DEPLOY / "verify-load.sh").read_text()
         runbook = " ".join((DEPLOY / "HowToDeployANewAgent.md").read_text().split())
-        query = re.search(r"nvidia-smi (--query-gpu=\S+ --format=\S+)", script).group(1)
-        self.assertIn(f"`nvidia-smi {query}`", runbook)
+        queries = re.findall(r"nvidia-smi (--query-gpu=\S+ --format=\S+)", script)
+        self.assertEqual(len(queries), 2, queries)
+        for query in queries:
+            self.assertIn(f"`nvidia-smi {query}`", runbook)
+
+
+class RuntimeMirrorTests(unittest.TestCase):
+    """**The writer and the reader name the same runtime files**:
+    install-tuple.sh's TUPLE_RUNTIME, lowered for the key, is agent_tuple.py's
+    RUNTIME_LIBRARIES, so every key the writer records is one the reader
+    binds and none it requires goes unwritten. Perturbation: add or drop a
+    name on either side and this fails."""
+
+    def test_the_writer_and_the_reader_name_one_set(self):
+        script = (DEPLOY / "install-tuple.sh").read_text()
+        names = re.search(r'^TUPLE_RUNTIME="([^"]*)"$', script, re.M).group(1).split()
+        self.assertEqual([(name.lower(), "lib" + name) for name in names],
+                         list(_agent_tuple().RUNTIME_LIBRARIES))
 
 
 INSTALL_TUPLE_LINES = [
@@ -8315,6 +8607,18 @@ INSTALL_TUPLE_LINES = [
     "member.busybox.applets = " + "8" * 64,
     "library.libllama.so.0.0.8783 = {llama}",
     "library.libggml-base.so.0.9.11 = {ggml}",
+    "runtime.cudart = {cudart}",
+    "runtime.cublas = {cublas}",
+    "runtime.cublaslt = {cublaslt}",
+    "runtime.curand = {curand}",
+    "cccl = 3.0",
+]
+
+# **A tuple of the earlier form**, as install-tuple.sh wrote it before the
+# install tuple held build facts alone: the driver, the card count and each
+# card, and the runtime files by path with no digest. The host's pinned stack
+# carries one.
+EARLIER_TUPLE_LINES = [line for line in INSTALL_TUPLE_LINES if not line.startswith(("runtime.", "cccl "))] + [
     "driver = 580.1",
     "cudart = /opt/cuda/lib/libcudart.so.13.0.1",
     "cublas = /opt/cuda/lib/libcublas.so.13.0.1",
@@ -8324,6 +8628,28 @@ INSTALL_TUPLE_LINES = [
     "gpu.0 = 00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB",
     "gpu.1 = 00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB",
 ]
+
+# The CUDA runtime files the fixtures lay out, each name a link to its
+# versioned file: (tuple key, linked name, versioned file).
+RUNTIME_FILES = (("cudart", "libcudart.so.13", "libcudart.so.13.0.1"),
+                 ("cublas", "libcublas.so.13", "libcublas.so.13.0.1"),
+                 ("cublaslt", "libcublasLt.so.13", "libcublasLt.so.13.0.1"),
+                 ("curand", "libcurand.so.10", "libcurand.so.10.4.1"))
+
+
+def runtime_fixture(directory):
+    """Lay out the runtime files and libcuda in `directory`; answer the
+    install tuple's runtime values by key and ldd's report naming them."""
+    directory.mkdir(parents=True, exist_ok=True)
+    values, report = {}, ["\tlinux-vdso.so.1 (0x00007ffd00000000)"]
+    for key, name, versioned in RUNTIME_FILES + (("libcuda", "libcuda.so.1", "libcuda.so.999.1.2"),):
+        (directory / versioned).write_bytes(f"fixture {key}".encode())
+        (directory / name).symlink_to(versioned)
+        real = (directory / versioned).resolve()
+        values[key] = f"{hashlib.sha256(real.read_bytes()).hexdigest()} {real}"
+        report.append(f"\t{name} => {directory / name} (0x00007f0000000000)")
+    report.append("\tlibc.so.6 => /usr/lib/libc.so.6 (0x00007f0200000000)")
+    return values, "\n".join(report) + "\n"
 
 
 class AgentTupleInstallTests(unittest.TestCase):
@@ -8339,8 +8665,10 @@ class AgentTupleInstallTests(unittest.TestCase):
         (self.lib / "libllama.so.0.0.8783").write_bytes(b"llama")
         (self.lib / "libggml-base.so.0.9.11").write_bytes(b"ggml")
         (self.lib / "libllama.so.0").symlink_to("libllama.so.0.0.8783")
+        self.cuda = self.dir / "cuda"
+        self.runtime, self.ldd = runtime_fixture(self.cuda)
         self.digests = {"llama": hashlib.sha256(b"llama").hexdigest(),
-                        "ggml": hashlib.sha256(b"ggml").hexdigest()}
+                        "ggml": hashlib.sha256(b"ggml").hexdigest(), **self.runtime}
         self.path = self.write(INSTALL_TUPLE_LINES)
 
     def write(self, lines):
@@ -8353,19 +8681,57 @@ class AgentTupleInstallTests(unittest.TestCase):
         self.assertEqual(install["sha256"], hashlib.sha256(self.path.read_bytes()).hexdigest())
         self.assertEqual(install["facts"]["engine-vendored"], "c" * 40)
         self.assertEqual(install["members"]["busybox.applets"], "8" * 64)
-        self.assertEqual(install["gpus"], ["00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB",
-                                           "00000000:41:00.0, NVIDIA RTX A6000, 49140 MiB"])
+        self.assertEqual(install["earlier"], [])
+        cudart = (self.cuda / "libcudart.so.13.0.1").resolve()
+        self.assertEqual(install["runtime"]["cudart"],
+                         (hashlib.sha256(cudart.read_bytes()).hexdigest(), str(cudart)))
+        self.assertEqual(sorted(install["runtime"]), ["cublas", "cublaslt", "cudart", "curand"])
+        self.assertNotIn("gpus", install)
+
+    def test_an_earlier_tuple_is_read_with_its_hardware_lines_unread(self):
+        """**A tuple of the earlier form is read, not refused**, so a box
+        installed before this rule verifies until its record is rewritten:
+        its driver, card and runtime path lines are left unread, it binds no
+        runtime file, and the box rows name the form and the way to rewrite
+        it. Its cards are never judged, so a box that has since gained or
+        lost a card is no FAULT. Perturbations: refuse the earlier keys and
+        the host's own record is refused; bind its runtime paths and the
+        rows compare a path with no digest."""
+        path = self.write(EARLIER_TUPLE_LINES)
+        install = self.tuple.read_install_tuple(path)
+        self.assertIsNone(install["runtime"])
+        self.assertEqual(install["earlier"], ["cublas", "cublaslt", "cudart", "driver", "gpu.0", "gpu.1", "gpus"])
+        self.assertEqual(set(install["facts"]), set(self.tuple.INSTALL_SCALARS))
+        box = self.tuple.box_rows(str(path), install, None)
+        form, = [line for line in box if "tuple form" in line]
+        self.assertIn("[absent: written before the install tuple held build facts alone", form)
+        self.assertIn("update-stack.sh --install", form)
+        rows = self.tuple.runtime_rows(install, self.tuple.loader_resolved(self.ldd), None)
+        self.assertEqual(self.statuses(rows, "runtime "), {"absent"})
+        self.assertTrue(all("the earlier form" in row for row in rows), rows)
+        fresh = self.write(INSTALL_TUPLE_LINES)
+        self.assertNotIn("tuple form", " ".join(self.tuple.box_rows(str(fresh),
+                                                                    self.tuple.read_install_tuple(fresh), None)))
 
     def test_a_malformed_tuple_is_refused(self):
         """Perturbation: drop any one check in `read_install_tuple` and its
         case reads on."""
+        new, earlier = INSTALL_TUPLE_LINES, EARLIER_TUPLE_LINES
         cases = {
-            "not `key = value`": INSTALL_TUPLE_LINES + ["driver=1"],
-            "empty or repeated": INSTALL_TUPLE_LINES + ["driver = 2"],
-            "no cccl": [l for l in INSTALL_TUPLE_LINES if not l.startswith("cccl")],
-            "not 64 hex digits": INSTALL_TUPLE_LINES[:7] + ["member.worker = zz"] + INSTALL_TUPLE_LINES[8:],
-            "numbered 0 to n-1": [l for l in INSTALL_TUPLE_LINES if not l.startswith("gpu.0")] + ["gpu.2 = x, y, z"],
-            "gpus says 2": INSTALL_TUPLE_LINES + ["gpu.2 = 00000000:81:00.0, X, 1 MiB"],
+            "not `key = value`": new + ["cccl=1"],
+            "empty or repeated": new + ["cccl = 2"],
+            "no cccl": [l for l in new if not l.startswith("cccl")],
+            "not 64 hex digits": new[:7] + ["member.worker = zz"] + new[8:],
+            "neither form": new + ["driver = 580.1"],
+            "so it is neither form": new + ["gpu.0 = 00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB"],
+            "it carries both": earlier + ["runtime.cudart = {cudart}"],
+            "runtime.libcuda is not a runtime file this reader knows": new + ["runtime.libcuda = {cudart}"],
+            "no runtime.curand": [l for l in new if not l.startswith("runtime.curand")],
+            "runtime.cudart is not `<sha256> <absolute path>` or unknown":
+                [l if not l.startswith("runtime.cudart") else "runtime.cudart = " + "a" * 64 + " lib/x.so"
+                 for l in new],
+            "runtime.cublas is not": [l if not l.startswith("runtime.cublas ") else "runtime.cublas = /usr/lib/x.so"
+                                      for l in new],
         }
         for said, lines in cases.items():
             with self.subTest(said):
@@ -8375,6 +8741,149 @@ class AgentTupleInstallTests(unittest.TestCase):
         link.symlink_to(self.write(INSTALL_TUPLE_LINES))
         with self.assertRaises(OSError):
             self.tuple.read_install_tuple(link)
+
+    def test_the_runtime_files_bind_to_what_the_loader_resolves_now(self):
+        """**Each runtime file the install recorded is bound to the file the
+        loader resolves for the SPU now**, by path and sha256: equal is
+        recorded. A file changed in place, a name that now leads to another
+        file, a name the loader no longer finds and a library the SPU no
+        longer links are each a FAULT naming the drift, since a sealed image
+        never shows one. Perturbations: compare the path alone and the
+        changed file passes; compare the digest alone and the moved file
+        passes; follow no link and every row compares the link's path."""
+        install = self.tuple.read_install_tuple(self.path)
+        resolved = self.tuple.loader_resolved(self.ldd)
+        rows = self.tuple.runtime_rows(install, resolved, None)
+        self.assertEqual(len(rows), 4, rows)
+        self.assertEqual(self.statuses(rows, "runtime "), {"recorded"})
+        # Changed in place: the same path, another digest.
+        cudart = self.cuda / "libcudart.so.13.0.1"
+        kept = cudart.read_bytes()
+        cudart.write_bytes(b"patched")
+        try:
+            rows = self.tuple.runtime_rows(install, resolved, None)
+        finally:
+            cudart.write_bytes(kept)
+        mine, = [row for row in rows if "runtime cudart " in row]
+        self.assertIn("[FAULT: drift from the install", mine)
+        self.assertEqual(self.statuses([row for row in rows if row is not mine], "runtime "), {"recorded"})
+        cases = {}
+        moved = self.dir / "moved"
+        shutil.copytree(self.cuda, moved, symlinks=True)
+        cases["cublas"] = self.ldd.replace(f"{self.cuda}/libcublas.so.13 ", f"{moved}/libcublas.so.13 ")
+        cases["cublaslt"] = self.ldd.replace(f"{self.cuda}/libcublasLt.so.13 (0x00007f0000000000)", "not found")
+        cases["curand"] = "\n".join(l for l in self.ldd.splitlines() if "libcurand" not in l) + "\n"
+        for key, report in cases.items():
+            with self.subTest(key):
+                rows = self.tuple.runtime_rows(install, self.tuple.loader_resolved(report), None)
+                mine, = [row for row in rows if f"runtime {key} " in row]
+                self.assertIn("[FAULT:", mine)
+                self.assertEqual(self.statuses([row for row in rows if row is not mine], "runtime "),
+                                 {"recorded"})
+        self.assertIn("drift from the install", next(
+            row for row in self.tuple.runtime_rows(install, self.tuple.loader_resolved(cases["cublas"]), None)
+            if "runtime cublas " in row))
+
+    def test_a_runtime_file_with_nothing_to_compare_is_absent(self):
+        """**Absent, never FAULT, where nothing can be compared**: no install
+        tuple, an `unknown` the install wrote, no loader report given, an
+        agent running an SPU the install did not read, or a failed read with
+        nothing recorded to bind, and the row says which. Perturbation:
+        fault an `unknown` and a box whose install could not resolve its SPU
+        fails every verify."""
+        resolved = self.tuple.loader_resolved(self.ldd)
+        # One path is rewritten per form, so each is read as it is written.
+        unknown_install = self.tuple.read_install_tuple(self.write(
+            [l.split(" = ")[0] + " = unknown" if l.startswith("runtime.") else l for l in INSTALL_TUPLE_LINES]))
+        earlier_install = self.tuple.read_install_tuple(self.write(EARLIER_TUPLE_LINES))
+        install = self.tuple.read_install_tuple(self.write(INSTALL_TUPLE_LINES))
+        for label, args, said in (
+                ("no tuple", (None, resolved, None), "no install tuple was read"),
+                ("unknown", (unknown_install, resolved, None), "the install tuple could not resolve or hash it"),
+                ("no loader report", (install, None, "no loader report was given"),
+                 "the loader was not read: no loader report was given"),
+                ("another SPU", (install, resolved, None, None, "this agent's SPU is /x"), "this agent's SPU is /x"),
+                ("failed, nothing recorded", (earlier_install, None, "no SPU at /x", "no SPU at /x"),
+                 "the earlier form")):
+            with self.subTest(label):
+                rows = self.tuple.runtime_rows(*args)
+                self.assertEqual(self.statuses(rows, "runtime "), {"absent"})
+                self.assertTrue(all(said in row for row in rows), rows)
+
+    def test_a_runtime_file_recorded_but_unbindable_is_a_fault(self):
+        """**Fail closed**: where the install recorded a runtime file and the
+        loader's read cannot be trusted or bound, the row is a FAULT naming
+        why, never absent. Perturbation: read a failed read as absent and an
+        SPU another principal could write passes verify."""
+        install = self.tuple.read_install_tuple(self.path)
+        rows = self.tuple.runtime_rows(install, None, "x", "the SPU at /x is not held closed by root at /x")
+        self.assertEqual(self.statuses(rows, "runtime "), {"FAULT"})
+        self.assertTrue(all("cannot be bound to it: the SPU at /x is not held closed" in row for row in rows), rows)
+
+    def test_the_driver_is_read_at_this_load_and_never_judged_against_an_install(self):
+        """**The driver and its library are the box's**, read at each load:
+        one version is derivable whatever it is, two on one box is a FAULT,
+        and nvidia-smi's failure sentence names no version. libcuda prints
+        by the file its name leads to and that file's digest, and a libcuda
+        the loader cannot find is a FAULT. Perturbations: take any line as a
+        version and the sentence is one; drop the one-version check and two
+        drivers pass."""
+        resolved = self.tuple.loader_resolved(self.ldd)
+        rows = self.tuple.live_rows("999.1.2\n999.1.2\n", resolved, None)
+        self.assertEqual(len(rows), 2, rows)
+        self.assertEqual(self.statuses(rows[:1], "driver"), {"derivable"})
+        self.assertIn(" 999.1.2 ", rows[0])
+        libcuda = (self.cuda / "libcuda.so.999.1.2").resolve()
+        self.assertIn(f"{hashlib.sha256(libcuda.read_bytes()).hexdigest()} {libcuda}", rows[1])
+        self.assertEqual(self.statuses(rows[1:], "libcuda"), {"derivable"})
+        rows = self.tuple.live_rows("999.1.2\n580.1\n", resolved, None)
+        self.assertEqual(self.statuses(rows[:1], "driver"), {"FAULT"})
+        sentence = ("NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver. "
+                    "Make sure that the latest NVIDIA driver is installed and running.\n")
+        rows = self.tuple.live_rows(sentence, None, "not asked")
+        self.assertIn("[absent: nvidia-smi named no driver version at this load]", rows[0])
+        self.assertNotIn("NVIDIA-SMI", " ".join(rows))
+        self.assertIn("[absent: not read: not asked]", rows[1])
+        missing = self.ldd.replace(f"{self.cuda}/libcuda.so.1 (0x00007f0000000000)", "not found")
+        rows = self.tuple.live_rows("999.1.2\n", self.tuple.loader_resolved(missing), None)
+        self.assertEqual(self.statuses(rows[1:], "libcuda"), {"FAULT"})
+
+    def test_a_name_is_never_taken_for_a_longer_one(self):
+        """**`libcublas` is never `libcublasLt`**, in the helper or in the
+        writer. Perturbation: match by prefix alone and cublas binds to
+        cublasLt's file."""
+        only_lt = "\n".join(l for l in self.ldd.splitlines() if "libcublas.so" not in l) + "\n"
+        self.assertIsNone(self.tuple.resolved_as(self.tuple.loader_resolved(only_lt), "libcublas"))
+        self.assertEqual(self.tuple.resolved_as(self.tuple.loader_resolved(only_lt), "libcublasLt")[0],
+                         "libcublasLt.so.13")
+
+    def test_two_majors_of_one_library_read_the_first_in_ldd_order(self):
+        """**The writer and the reader take one file** where a report names
+        two majors of one library: the first in ldd's order, as the writer's
+        awk takes it (the self-check of 2026-11-14). Perturbation: iterate
+        the map sorted and the reader takes .12 where the writer took .13."""
+        report = ("\tlibcudart.so.13 => /x/libcudart.so.13 (0x0001)\n"
+                  "\tlibcudart.so.12 => /x/libcudart.so.12 (0x0002)\n")
+        self.assertEqual(self.tuple.resolved_as(self.tuple.loader_resolved(report), "libcudart"),
+                         ("libcudart.so.13", "/x/libcudart.so.13"))
+        stubs = self.dir / "stubs"
+        stubs.mkdir()
+        (stubs / "ldd").write_text("#!/bin/sh\nprintf '%s' \"$REPORT\"\n")
+        (stubs / "ldd").chmod(0o755)
+        for name in ("cargo", "git", "nvidia-smi", "nvcc", "pacman", "rustc"):
+            (stubs / name).write_text("#!/bin/sh\nexit 1\n")
+            (stubs / name).chmod(0o755)
+        repo = Path(__file__).resolve().parent.parent
+        script = (f"source {shlex.quote(str(repo / 'deploy' / 'engine-libraries.sh'))}; "
+                  f"source {shlex.quote(str(repo / 'deploy' / 'install-tuple.sh'))}; "
+                  f"install_tuple {shlex.quote(str(self.dir))} {'0' * 40} {shlex.quote(str(self.dir))} "
+                  f"{shlex.quote(str(self.dir))} fixture '' ''")
+        ran = subprocess.run(["bash", "-c", script], text=True, capture_output=True, timeout=20,
+                             env={"PATH": str(stubs) + os.pathsep + "/usr/bin:/bin", "LC_ALL": "C",
+                                  "REPORT": report.replace("/x/", f"{self.cuda}/")})
+        facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
+        self.assertTrue(facts["runtime.cudart"].endswith(str((self.cuda / "libcudart.so.13.0.1").resolve())),
+                        facts)
 
     def test_the_tuple_install_tuple_sh_writes_is_read(self):
         """**The reader takes what the writer writes**: the tuple comes from
@@ -8404,7 +8913,8 @@ class AgentTupleInstallTests(unittest.TestCase):
         self.assertEqual(install["members"], {"worker": "unknown", "weaver-spu": "unknown",
                                               "busybox.applets": "unknown"})
         self.assertEqual(install["libraries"], {"libllama.so.0.0.8783": "unknown"})
-        self.assertEqual(install["gpus"], [])
+        self.assertEqual(install["runtime"], {"cudart": None, "cublas": None, "cublaslt": None, "curand": None})
+        self.assertEqual(install["earlier"], [])
 
     def test_an_unknown_digest_binds_nothing_and_faults_nothing(self):
         """**An `unknown` digest is the box side unstated**, so the row is

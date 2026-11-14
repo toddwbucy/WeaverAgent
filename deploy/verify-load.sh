@@ -253,6 +253,67 @@ TUPLE_ARGS=(--declaration "$DECL" --header-json "$TUPLE_HEADER"
 if [ "$SINK_KIND" = file ] && [ -f "$SINK" ] && [ ! -L "$SINK" ]; then
   TUPLE_ARGS+=(--sink "$SINK" --from-line "$((BEFORE + 1))")
 fi
+# **The hardware half, read at this load and never stored** (the operator's
+# rulings of 2026-11-14: one image serves any host's cards). The cards are
+# the query above. The driver is nvidia-smi's version, and its library and
+# the CUDA runtime files are what the loader resolves for this agent's SPU
+# now, with the library path admin hands the worker: the config root's
+# `spu-binary` and `library-path` keys, which admin's `validate` above
+# judged, and none of the operator's loader variables, as spu_ldd reads
+# them at an install (deploy/engine-libraries.sh). Each path is resolved
+# once, and the resolved path is both judged and used. Root runs the loader
+# only on an SPU, and with a library directory, that admin's rule holds
+# closed. Where it cannot, the reason goes to the helper as
+# `--live-ldd-unread`, and a runtime file the install recorded is then a
+# FAULT, never passed unbound: admin refuses such an SPU at load, so a
+# loaded agent showing one is not what was installed.
+TUPLE_ARGS+=("--live-driver=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null || true)")
+trimmed() { local v; v=$(< "$1") || return 1; v=${v#"${v%%[![:space:]]*}"}; printf '%s' "${v%"${v##*[![:space:]]}"}"; }
+LDD_ENV=(env -u LD_LIBRARY_PATH -u LD_PRELOAD -u LD_AUDIT -u GLIBC_TUNABLES)
+LIVE_UNREAD=""
+AGENT_LIBRARY_REAL=""
+if ! SPU_PATH=$(trimmed "$ROOT/spu-binary" 2>/dev/null) || [ -z "$SPU_PATH" ]; then
+  LIVE_UNREAD="the agent's config root names no spu-binary"
+elif ! SPU_REAL=$(realpath -e -- "$SPU_PATH" 2>/dev/null); then
+  LIVE_UNREAD="no SPU at $SPU_PATH"
+elif ! bad=$(held_closed "$SPU_REAL"); then
+  LIVE_UNREAD="the SPU at $SPU_REAL is not held closed by root at $bad"
+elif [ -e "$ROOT/library-path" ] || [ -L "$ROOT/library-path" ]; then
+  if ! AGENT_LIBRARY=$(trimmed "$ROOT/library-path" 2>/dev/null) || [ -z "$AGENT_LIBRARY" ]; then
+    LIVE_UNREAD="the agent's library-path does not read"
+  elif ! AGENT_LIBRARY_REAL=$(realpath -e -- "$AGENT_LIBRARY" 2>/dev/null); then
+    LIVE_UNREAD="no library directory at $AGENT_LIBRARY"
+  elif ! bad=$(held_closed "$AGENT_LIBRARY_REAL"); then
+    LIVE_UNREAD="the agent's library path $AGENT_LIBRARY_REAL is not held closed by root at $bad"
+  else
+    LDD_ENV+=(LD_LIBRARY_PATH="$AGENT_LIBRARY_REAL")
+  fi
+fi
+if [ -z "$LIVE_UNREAD" ]; then
+  LIVE_LDD=$("${LDD_ENV[@]}" ldd "$SPU_REAL" 2>&1) || LIVE_UNREAD="ldd could not read $SPU_REAL: $(tail -n 1 <<<"$LIVE_LDD")"
+fi
+if [ -n "$LIVE_UNREAD" ]; then
+  TUPLE_ARGS+=("--live-ldd-unread=$LIVE_UNREAD")
+else
+  TUPLE_ARGS+=("--live-ldd=$LIVE_LDD")
+  # **Like for like**: the install read the stack record's SPU with the
+  # record's library path. An agent made with `create-agent.sh --spu`, or
+  # whose root names another library path, runs something the install did
+  # not read, so its runtime files are not bound and the rows say which.
+  # The record's keys are trusted only where admin's rule holds them closed,
+  # and an untrusted one is a reason the loader's read cannot be bound.
+  STACK_SPU_REAL="" STACK_LIBRARY_REAL=""
+  if ! bad=$(held_closed "$STACK/spu-binary") || ! STACK_SPU_REAL=$(realpath -e -- "$(trimmed "$STACK/spu-binary")" 2>/dev/null); then
+    TUPLE_ARGS+=("--live-ldd-unread=the stack record's spu-binary is not held closed by root or names no file")
+  elif { [ -e "$STACK/library-path" ] || [ -L "$STACK/library-path" ]; } \
+    && { ! bad=$(held_closed "$STACK/library-path") || ! STACK_LIBRARY_REAL=$(realpath -e -- "$(trimmed "$STACK/library-path")" 2>/dev/null); }; then
+    TUPLE_ARGS+=("--live-ldd-unread=the stack record's library-path is not held closed by root or names no directory")
+  elif [ "$SPU_REAL" != "$STACK_SPU_REAL" ]; then
+    TUPLE_ARGS+=("--runtime-unbound=this agent's SPU is $SPU_REAL, not the installed $STACK_SPU_REAL whose runtime the install tuple recorded")
+  elif [ "$AGENT_LIBRARY_REAL" != "$STACK_LIBRARY_REAL" ]; then
+    TUPLE_ARGS+=("--runtime-unbound=this agent's library path is ${AGENT_LIBRARY_REAL:-none}, not ${STACK_LIBRARY_REAL:-none}, which the install read with")
+  fi
+fi
 # **The box side is the stack record's install tuple**, written by
 # install-tuple.sh at each install. It is trusted only where admin's rule
 # holds it closed, as the record's `prefix` is above; an entry another
@@ -266,8 +327,7 @@ if [ -e "$STACK/install-tuple" ] || [ -L "$STACK/install-tuple" ]; then
   fi
 fi
 if [ -f "$STACK/library-path" ] && held_closed "$STACK/library-path" >/dev/null; then
-  STACK_LIBRARY=$(< "$STACK/library-path")
-  STACK_LIBRARY=${STACK_LIBRARY#"${STACK_LIBRARY%%[![:space:]]*}"}; STACK_LIBRARY=${STACK_LIBRARY%"${STACK_LIBRARY##*[![:space:]]}"}
+  STACK_LIBRARY=$(trimmed "$STACK/library-path")
   TUPLE_ARGS+=(--stack-library-path "$STACK_LIBRARY")
 fi
 say "$AGENT deployment tuple"

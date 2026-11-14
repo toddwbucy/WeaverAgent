@@ -43,7 +43,7 @@
 # install tuple** (deploy/install-tuple.sh): the box-side half of the
 # deployment tuple, printed under `== tuple` and written to the stack record
 # as `install-tuple`, so a run's report cites one record of what the box was
-# built from and runs on.
+# built from. It holds build facts only; the hardware is read at each load.
 set -euo pipefail
 
 ORIGINAL_ARGS=("$@")
@@ -780,11 +780,15 @@ printf '  will install  %s, the shell (%s), and the engine libraries (%s) built 
 # **One line, because the query answers once per device.** Three cards gave
 # three lines into one `%s`, so two of them printed with no label and no
 # indent. The driver is the box's, not the card's, so the first answer is the
-# answer and a disagreement between cards is not a thing this can report.
-# **The fallback is applied after the pipeline** (#39): under `pipefail`, a
-# `head` that closes the pipe on a box with more than one card fails it, and an
-# `|| echo none` inside the substitution then printed a stray `none`.
-DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 || true)
+# answer; a disagreement between cards is not a thing this plan line reports,
+# and verify-load.sh's live driver row faults it at each load.
+# **The whole answer is read, then the first line that is a version kept**
+# (#39): under `pipefail`, a `head` that closed the pipe on a box with more
+# than one card failed it, and an `|| echo none` inside the substitution
+# printed a stray `none`. On a box with no card nvidia-smi prints a failure
+# sentence, which is no driver, and a card in error prints its own line
+# beside the healthy cards' answers.
+DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null || true); DRIVER=$(grep -E '^[0-9]+(\.[0-9]+)+$' <<<"$DRIVER" || true); DRIVER=${DRIVER%%$'\n'*}
 printf '  driver        %s\n' "${DRIVER:-none}"
 
 # The cccl window of #397. Outside it the engine does not compile, and a
@@ -1710,8 +1714,9 @@ COMPLETED=1
 restore_rules || die "the install stands verified, but a connector rule named above did not come back: put it back by hand"
 # **The install tuple, read from what is installed** (deploy/install-tuple.sh):
 # the members and libraries by their installed digests, the engine as the
-# lock pins it, the runtime the installed SPU resolves and the GPUs in PCI
-# bus order. It replaces the previous run's record whole.
+# lock pins it, and the CUDA runtime files the installed SPU resolves, by
+# digest; no driver and no card. It replaces the previous run's record whole,
+# an earlier form's included.
 say "tuple"
 TUPLE=$(install_tuple "$REPO" "$COMMIT" "$BIN_DIR" "$LIB_DIR" "$FEATURES" "$MEMBERS $SHELL_FILES" "${LIB_NAMES[*]}")
 printf '%s\n' "$TUPLE" | sed 's/^/  /'
