@@ -2628,8 +2628,12 @@ system bus that accepts the connection and does not complete it. **Its start is 
 the wait**, since a spawn returns only once the helper has exec'd: the helper is
 started on a thread of its own, a start not returned by the wait's end below refuses as
 a hang does, naming that the helper did not start, a start that fails answers at once,
-and a start that returns later is killed and reaped by the thread that made it, so no
-helper is left behind. The start step waits for the helper until 50 milliseconds past
+and a start that returns later, while admin runs, is killed and reaped by the thread
+that made it. That thread ends with admin, so a helper still blocked in its exec at
+admin's exit outlives it, and where its exec then returns it runs once, its request
+naming admin's pid, which no longer lives: the row "the invoker's containment stopped or
+killed", P0 or P1, holds for it, and PID1 starts no scope for it. The start step waits
+for the helper until 50 milliseconds past
 the deadline, the helper's grace, so that where PID1 stalls the call's own timeout,
 which counts from the helper's start a little after the deadline was set, answers first
 and names the stall. A helper still running at the grace's end is killed and reaped,
@@ -2641,7 +2645,9 @@ the wait's end or the grace past the helper's own, whichever is later, so a help
 answers early leaves its pipes the whole wait to close. A pipe still open then, held by
 a process the helper started, refuses the load `BoundaryUnverified`, naming it with the
 helper's status and what it had said, whatever the helper answered. So a hung helper
-holds a load no longer than the bound and twice the grace.
+holds a load no longer than the bound and twice the grace. **That ceiling holds for a
+helper the kill ends**: one in an uninterruptible wait holds the reap until that wait
+ends.
 **Measured on 2026-11-09** (`docs/project/admin-root-scope-measurement-2026-11-09.md`),
 from root stand-in units: the call took 2.6 ms and 3.0 ms, and the move read 3.2 ms
 after the call began where it had landed at the return, and at most 9.6 ms after where
