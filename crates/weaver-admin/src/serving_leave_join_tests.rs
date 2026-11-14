@@ -275,8 +275,7 @@ fn scenario(mode: &str, verb: &str) {
         "returned":f.config.root.join("returned"),"wire":f.config.root.join("wire.json")});
     let inputs = f.config.root.join("join-fixture.json");
     fs::write(&inputs, serde_json::to_vec(&data).unwrap()).unwrap();
-    fs::write(&f.config.worker, JOIN_WORKER).unwrap();
-    fs::set_permissions(&f.config.worker, fs::Permissions::from_mode(0o700)).unwrap();
+    crate::test_isolation::write_executable(&f.config.worker, JOIN_WORKER, 0o700);
     let log_path = f.config.root.join("worker.log");
     let log = start::open_log(&log_path, None).unwrap();
     if mode == "unjudged" {

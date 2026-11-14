@@ -253,10 +253,13 @@ fn seed_spawn_lands_only_its_two_gifts_and_restricted_identity() {
     // SAFETY: the successful duplicate is owned once by this scope.
     let _stray = unsafe { OwnedFd::from_raw_fd(stray) };
     let binary = yard.0.join("weaver-state");
-    std::fs::write(&binary, format!(
-        "#!/bin/sh\n[ \"$#\" -eq 2 ] || exit 70\n[ \"$1\" = '--mode=seed' ] || exit 71\n[ ! -e /proc/$$/fd/4 ] || exit 72\n[ ! -e /proc/$$/fd/{stray} ] || exit 73\n[ \"${{SEED_TEST_CALLER_ENV+x}}\" != x ] || exit 74\n/bin/cat /proc/$$/status > \"$2/status\"\n/usr/bin/readlink /proc/$$/fd/3 > \"$2/fd3\"\n/usr/bin/readlink /proc/$$/fd/9 > \"$2/fd9\"\npwd > \"$2/cwd\"\numask > \"$2/umask\"\nprintf 'READY\\n' >&3\n/bin/cat <&3 > /dev/null\nexit 0\n"
-    )).unwrap();
-    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_isolation::write_executable(
+        &binary,
+        format!(
+            "#!/bin/sh\n[ \"$#\" -eq 2 ] || exit 70\n[ \"$1\" = '--mode=seed' ] || exit 71\n[ ! -e /proc/$$/fd/4 ] || exit 72\n[ ! -e /proc/$$/fd/{stray} ] || exit 73\n[ \"${{SEED_TEST_CALLER_ENV+x}}\" != x ] || exit 74\n/bin/cat /proc/$$/status > \"$2/status\"\n/usr/bin/readlink /proc/$$/fd/3 > \"$2/fd3\"\n/usr/bin/readlink /proc/$$/fd/9 > \"$2/fd9\"\npwd > \"$2/cwd\"\numask > \"$2/umask\"\nprintf 'READY\\n' >&3\n/bin/cat <&3 > /dev/null\nexit 0\n"
+        ),
+        0o755,
+    );
     // SAFETY: this ignored test is launched alone in its own process. The
     // invocation's ignored signal and blocked mask are intentionally inherited.
     unsafe {
