@@ -9,7 +9,8 @@
 //! - [`standing`], the read before the request: a scope standing populated
 //!   refuses, one standing empty is waited out, one absent goes on,
 //! - [`busctl`], the request: an exec of systemd's own `busctl` at a fixed
-//!   path, forked before the move and reaped before the confirm (D2),
+//!   path, forked before the move and reaped before the confirm (D2), held
+//!   to the request's deadline by the wall clock through [`helper`] (#522),
 //! - [`confirm`], the start step's own reading of its cgroup until it names
 //!   the scope, within the scope bound, never the call's answer (D1).
 //!
@@ -17,7 +18,7 @@
 //! [`request_judgment`], the scope's state table's events admin causes, for
 //! the inputs a [`Step`] carries.
 
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::containment::{self, Cgroup};
@@ -26,12 +27,23 @@ use crate::containment::{self, Cgroup};
 pub const SLICE: &str = "weaver.slice";
 
 /// **The scope bound**, 6.1's election, a ceiling on each wait: how long a
-/// stalled PID1 holds a load, counted from the request (the call and the read
-/// for the move within it), and how long the start step waits for PID1 to
-/// collect a scope standing empty. Each wait has its own, so a scope standing
-/// empty and then a stalled request hold a load up to twice the bound, a
-/// hang of the helper outside its call aside (#522).
+/// stalled PID1 or a hung helper holds a load, counted from the request (the
+/// call, the helper held to it by the wall clock with [`HELPER_GRACE`] past
+/// it, and the read for the move within it), and how long the start step
+/// waits for PID1 to collect a scope standing empty. Each wait has its own,
+/// so a scope standing empty and then a stalled request hold a load up to
+/// twice the bound, and a hung helper twice its grace beyond.
 pub const SCOPE_BOUND: Duration = Duration::from_secs(10);
+
+/// **A helper's grace** (6.1, the scope bound, #522), twice: how long past
+/// the request's deadline a helper is waited for before it is killed, so
+/// that where PID1 stalls the call's own timeout, which counts from the
+/// helper's start a little after the deadline's, answers first and names the
+/// stall; and how long past a helper's end its output is waited for, where
+/// that is later than the wait's end, long enough to read what a killed
+/// helper had said and short enough that a process it started cannot hold
+/// the call.
+pub const HELPER_GRACE: Duration = Duration::from_millis(50);
 
 /// How often the start step reads for the move or the collection (6.1, the
 /// scope bound): the wait ends at the move, so the ceiling costs nothing
@@ -85,14 +97,16 @@ impl Site {
 }
 
 /// **The one call**, `StartTransientUnit` in mode `fail`, as the request
-/// carries it: the unit, the slice, the pid it holds and how long the client
-/// may wait for PID1's answer.
+/// carries it: the unit, the slice, the pid it holds, how long the client
+/// may wait for PID1's answer, and the request's deadline, which the wall
+/// clock holds a helper that carries the call to (#522).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Call {
     pub unit: String,
     pub slice: String,
     pub pid: u32,
     pub timeout: Duration,
+    pub deadline: Instant,
 }
 
 /// The production request's type, [`busctl`]'s.
@@ -294,31 +308,195 @@ pub fn confirm(pid: u32, path: &str, deadline: Instant) -> bool {
 }
 
 /// **The request, section 11's election**: an exec of systemd's own
-/// `busctl` at [`BUSCTL`], with no environment and no standard input.
-/// `output` waits for it, so the helper, admin's own and root's, is forked
-/// before the move and reaped before the confirm reads (D2). Answers the
-/// reply where it succeeds, and what it said where it fails.
+/// `busctl` at [`BUSCTL`], through [`helper`], held to the call's deadline.
+/// The helper, admin's own and root's, is forked before the move and reaped
+/// before the confirm reads (D2). Answers the reply where it succeeds, and
+/// what it said where it fails or hung.
 #[cfg_attr(
     test,
     expect(dead_code, reason = "in the suite, production's request refuses")
 )]
 pub fn busctl(call: &Call) -> Result<String, String> {
-    let output = Command::new(BUSCTL)
-        .args(busctl_arguments(call))
+    helper(BUSCTL, &busctl_arguments(call), call.deadline, call.timeout)
+}
+
+/// **A helper held to the request's deadline by the wall clock** (6.1, the
+/// scope bound, #522): `program` with `arguments`, no environment and no
+/// standard input, its output read on threads of its own while it runs, so
+/// a full pipe never holds it. Waited for until [`HELPER_GRACE`] past
+/// `deadline`, and one still running there is killed and reaped, refusing
+/// with the scope bound (`bound`, for naming) and what it had said: its call
+/// timeout does not reach a hang outside the call. Its output is collected
+/// until its pipes close, no later than the wait's end or [`HELPER_GRACE`]
+/// past its own, whichever is later, so a helper that answers early leaves
+/// its pipes the whole wait to close, and a pipe still open then, held by a
+/// process it started, refuses whatever it answered, naming what it had
+/// said by then. Answers its standard
+/// output where it succeeded, and its status and what it said where it
+/// failed.
+///
+/// **Its start is inside the wait**: a spawn returns only once the helper
+/// has exec'd, so an exec that blocks on its filesystem would hold the call
+/// before the wait began. The helper is started on a thread of its own and
+/// its start waited for only to the wait's end, a start not returned by then
+/// refusing as a hang does. A start that fails answers at once. A start that
+/// returns after the call stopped waiting, while admin runs, is killed and
+/// reaped by the starting thread, its handover refused. That thread ends
+/// with admin: a helper still blocked in its exec at admin's exit outlives
+/// it, and where its exec returns it runs once, its request naming a pid
+/// that no longer lives (6.1, the invoker's containment stopped or killed).
+///
+/// **The ceiling holds for a helper the kill ends**: its reap waits for its
+/// end, so one in an uninterruptible wait holds the call until that wait
+/// ends (6.1).
+pub fn helper(
+    program: &str,
+    arguments: &[String],
+    deadline: Instant,
+    bound: Duration,
+) -> Result<String, String> {
+    let mut command = Command::new(program);
+    command
+        .args(arguments)
         .env_clear()
         .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("{BUSCTL} does not run: {error}"))?;
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    helper_from(program, move || command.spawn(), deadline, bound)
+}
+
+/// [`helper`], its start a seam the suite holds.
+fn helper_from(
+    program: &str,
+    start: impl FnOnce() -> std::io::Result<Child> + Send + 'static,
+    deadline: Instant,
+    bound: Duration,
+) -> Result<String, String> {
+    use std::os::unix::process::ExitStatusExt;
+
+    // A rendezvous: a handover the call no longer waits for is refused and
+    // comes back to the starting thread, never left in a buffer.
+    let (hand, taken) = std::sync::mpsc::sync_channel::<std::io::Result<Child>>(0);
+    std::thread::spawn(move || {
+        if let Err(std::sync::mpsc::SendError(Ok(mut late))) = hand.send(start()) {
+            let _ = late.kill();
+            let _ = late.wait();
+        }
+    });
+    let mut child = match taken
+        .recv_timeout((deadline + HELPER_GRACE).saturating_duration_since(Instant::now()))
+    {
+        Ok(Ok(child)) => child,
+        Ok(Err(error)) => return Err(format!("{program} does not run: {error}")),
+        Err(_) => {
+            return Err(format!(
+                "{program} did not start within the scope bound ({} ms) and its grace: its exec had not returned",
+                bound.as_millis()
+            ));
+        }
+    };
+    let stdout = drain(child.stdout.take());
+    let stderr = drain(child.stderr.take());
+    let mut waited = None;
+    containment::poll_until(deadline + HELPER_GRACE, SCOPE_POLL, || {
+        match child.try_wait() {
+            Ok(None) => false,
+            answered => {
+                waited = Some(answered);
+                true
+            }
+        }
+    });
+    let ended = match waited {
+        Some(Ok(Some(status))) => Some(status),
+        Some(Err(error)) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("{program} could not be waited on: {error}"));
+        }
+        Some(Ok(None)) | None => {
+            let _ = child.kill();
+            match child.wait() {
+                // The kill's own signal: still running at the grace's end.
+                Ok(status) if status.signal() == Some(nix::libc::SIGKILL) => None,
+                // Ended by itself before the kill, keeping its own status.
+                Ok(status) => Some(status),
+                Err(error) => {
+                    return Err(format!(
+                        "{program} was still running past the scope bound ({} ms) and was killed, and does not reap: {error}",
+                        bound.as_millis()
+                    ));
+                }
+            }
+        }
+    };
+    let until = (deadline + HELPER_GRACE).max(Instant::now() + HELPER_GRACE);
+    let (out, out_closed) = stdout.collect(until);
+    let (err, err_closed) = stderr.collect(until);
     let said = |bytes: &[u8]| String::from_utf8_lossy(bytes).trim().to_string();
-    if output.status.success() {
-        Ok(said(&output.stdout))
-    } else {
-        Err(format!(
-            "{BUSCTL} {}: {}",
-            output.status,
-            said(&output.stderr)
-        ))
+    let err_said = said(&err);
+    match (ended, out_closed && err_closed) {
+        (None, _) => Err(format!(
+            "{program} was still running past the scope bound ({} ms) and was killed and reaped: {err_said}",
+            bound.as_millis()
+        )),
+        (Some(status), false) => Err(format!(
+            "{program} {status}, and a process it started still holds its output: {err_said}"
+        )),
+        (Some(status), true) if status.success() => Ok(said(&out)),
+        (Some(status), true) => Err(format!("{program} {status}: {err_said}")),
     }
+}
+
+/// One pipe of a helper's, read to its end on a thread of its own, so a full
+/// pipe never holds the helper. What it reads is kept as it arrives, so a
+/// pipe still held by a process the helper started yields what was said
+/// before (6.1, the scope bound: the refusal names what the helper had
+/// said), and its close is told apart.
+struct Drained {
+    bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    closed: std::sync::mpsc::Receiver<()>,
+}
+
+impl Drained {
+    /// What the pipe had given by its close or `until`, whichever is first,
+    /// and whether it closed.
+    fn collect(self, until: Instant) -> (Vec<u8>, bool) {
+        let closed = self
+            .closed
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+            .is_ok();
+        let bytes = self
+            .bytes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        (bytes, closed)
+    }
+}
+
+fn drain(pipe: Option<impl std::io::Read + Send + 'static>) -> Drained {
+    let bytes = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = std::sync::Arc::clone(&bytes);
+    let (tell, closed) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        if let Some(mut pipe) = pipe {
+            let mut read = [0u8; 4096];
+            loop {
+                match pipe.read(&mut read) {
+                    Ok(0) => break,
+                    Ok(count) => kept
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .extend_from_slice(&read[..count]),
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => break,
+                }
+            }
+        }
+        let _ = tell.send(());
+    });
+    Drained { bytes, closed }
 }
 
 /// **The call's arguments** (6.1, Where): `StartTransientUnit` on
@@ -413,6 +591,7 @@ where
         slice: SLICE.to_string(),
         pid,
         timeout: bound,
+        deadline,
     };
     let (outcome, said) = match request(&call) {
         Err(said) => (RequestOutcome::Refused, said),

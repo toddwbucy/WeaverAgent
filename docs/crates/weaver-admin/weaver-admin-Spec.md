@@ -2516,7 +2516,8 @@ rulings of 2026-11-07 and 2026-11-09 on #166).
   populated reading comes, it is neither, and the load refuses `BoundaryUnverified`,
   naming the read, sends no request and kills nothing.
 - **The request refused:** where the move does not read within the scope bound (PID1
-  unreachable, the request refused, its job failed), the load refuses
+  unreachable, the request refused, its job failed, or its helper not started or still
+  running past the bound and killed), the load refuses
   `BoundaryUnverified`, naming what the request answered or that no move followed, and
   makes nothing.
 - **What it keeps:** the agent lives until `unload`, `force-unload`, root stopping its
@@ -2617,10 +2618,36 @@ so no client waits on PID1 past it (`busctl`'s own default is 25 seconds), the h
 is reaped before the confirm reads (D2), and the confirm reads until the same deadline.
 The start step reads its own cgroup every millisecond, and the wait ends at the move,
 so the ceiling costs nothing where PID1 answers. It decides only how long a stalled
-PID1 holds a load before it refuses, and a tighter one would refuse a load falsely
-while PID1 is busy, a daemon reload among them. Each wait has its own bound, so a scope
-standing empty and then a stalled request hold a load up to twice the bound. A helper
-that hangs outside its call, where its call timeout does not reach, is #522.
+PID1, or a hung helper, holds a load before it refuses, and a tighter one would refuse
+a load falsely while PID1 is busy, a daemon reload among them. Each wait has its own
+bound, so a scope standing empty and then a stalled request hold a load up to twice the
+bound, and a hung helper twice its grace beyond, below. **A helper that carries the
+request is held to the same deadline by the wall clock** (#522), since its call timeout
+does not reach a hang outside the call: an exec that blocks on its filesystem, or a
+system bus that accepts the connection and does not complete it. **Its start is inside
+the wait**, since a spawn returns only once the helper has exec'd: the helper is
+started on a thread of its own, a start not returned by the wait's end below refuses as
+a hang does, naming that the helper did not start, a start that fails answers at once,
+and a start that returns later, while admin runs, is killed and reaped by the thread
+that made it. That thread ends with admin, so a helper still blocked in its exec at
+admin's exit outlives it, and where its exec then returns it runs once, its request
+naming admin's pid, which no longer lives: the row "the invoker's containment stopped or
+killed", P0 or P1, holds for it, and PID1 starts no scope for it. The start step waits
+for the helper until 50 milliseconds past
+the deadline, the helper's grace, so that where PID1 stalls the call's own timeout,
+which counts from the helper's start a little after the deadline was set, answers first
+and names the stall. A helper still running at the grace's end is killed and reaped,
+and the load refuses `BoundaryUnverified`, naming the bound and what the helper had
+said, as the request refused. The helper is admin's own and root's, forked before the
+move (D2), so the kill reaches nothing of the agent. Its output is read while it runs,
+so a full pipe never holds it, and is collected until its pipes close, no later than
+the wait's end or the grace past the helper's own, whichever is later, so a helper that
+answers early leaves its pipes the whole wait to close. A pipe still open then, held by
+a process the helper started, refuses the load `BoundaryUnverified`, naming it with the
+helper's status and what it had said, whatever the helper answered. So a hung helper
+holds a load no longer than the bound and twice the grace. **That ceiling holds for a
+helper the kill ends**: one in an uninterruptible wait holds the reap until that wait
+ends.
 **Measured on 2026-11-09** (`docs/project/admin-root-scope-measurement-2026-11-09.md`),
 from root stand-in units: the call took 2.6 ms and 3.0 ms, and the move read 3.2 ms
 after the call began where it had landed at the return, and at most 9.6 ms after where
@@ -2913,7 +2940,7 @@ scope.
 | # | Invariant | Held by |
 |---|---|---|
 | D1 | **The start step makes no cgroup until its own reading names the scope it asked for.** The call's answer is never read as the move. | the confirm |
-| D2 | **No process of the agent runs outside `weaver-<agent>/`**, so C4 does not change. The start step forks nothing of the agent before the agent's cgroup exists. A helper that carries the request, where the election of section 11 elects one, is admin's own and root's, forked before the move and so left in the invoker's containment, and the start step reaps it before it reads for the move. The request carries the scope bound as its own call timeout, so one deadline covers the request, the reap and the confirm (the scope bound, and #522 for a helper that hangs outside its call). | the order within a load (section 3), and the scope bound |
+| D2 | **No process of the agent runs outside `weaver-<agent>/`**, so C4 does not change. The start step forks nothing of the agent before the agent's cgroup exists. A helper that carries the request, where the election of section 11 elects one, is admin's own and root's, forked before the move and so left in the invoker's containment, and the start step reaps it before it reads for the move. The request carries the scope bound as its own call timeout, so one deadline covers the request, the reap and the confirm, and the wall clock holds the helper to it, its start inside the same wait, a helper still running the helper's grace past it killed and reaped (the scope bound, #522). | the order within a load (section 3), and the scope bound |
 | D3 | **On every path, the agent's cgroup and every cgroup above it to the mount's root are root's**, and the floor checks it. | PID1's scope, and #166's guard |
 | D4 | **The scope's end is its emptiness.** No verb removes a scope, and no refused or killed start step leaves one standing past its own exit. | PID1's collection (`CollectMode=inactive-or-failed`) |
 | D5 | **One path.** A load from an operator's shell and one from admin-con's unit take the same step to the same deterministic path, and a scope of another name the operator wraps a load in changes nothing. | the scope step |
@@ -4443,12 +4470,13 @@ Each names what settles it, and none is this Spec's to settle alone.
     1's argued set, and it is the shorter abstraction this corpus prefers, a subprocess
     CLI over a library. Its path becomes a host requirement beside the `cgroup2` mount,
     and the helper is D2's, forked before the move and reaped before the confirm, its
-    `--timeout` the scope bound so that its call ends within it (#522 for a hang
-    outside the call).
+    `--timeout` the scope bound so that its call ends within it, and the wall clock
+    holding the helper itself to the same deadline and the helper's grace past it (6.1,
+    the scope bound, #522).
   - **A D-Bus client crate.** A fourth external crate, with an asynchronous runtime
     beneath it, against a dependency set section 1 argues crate by crate.
   - **The D-Bus wire protocol by hand, over a `nix` socket.** No exec and no crate, but
     admin would own a marshalling and authentication codec for one call.
 
-  **Recommended:** the exec of `busctl`. **Settled by:** the operator's election, which
-  the code act waits on.
+  **Settled 2026-11-10** by the operator's election of the exec of `busctl`, which
+  #524 landed.
