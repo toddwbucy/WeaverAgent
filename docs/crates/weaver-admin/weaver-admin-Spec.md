@@ -2516,7 +2516,8 @@ rulings of 2026-11-07 and 2026-11-09 on #166).
   populated reading comes, it is neither, and the load refuses `BoundaryUnverified`,
   naming the read, sends no request and kills nothing.
 - **The request refused:** where the move does not read within the scope bound (PID1
-  unreachable, the request refused, its job failed), the load refuses
+  unreachable, the request refused, its job failed, or its helper not started or still
+  running past the bound and killed), the load refuses
   `BoundaryUnverified`, naming what the request answered or that no move followed, and
   makes nothing.
 - **What it keeps:** the agent lives until `unload`, `force-unload`, root stopping its
@@ -2617,10 +2618,36 @@ so no client waits on PID1 past it (`busctl`'s own default is 25 seconds), the h
 is reaped before the confirm reads (D2), and the confirm reads until the same deadline.
 The start step reads its own cgroup every millisecond, and the wait ends at the move,
 so the ceiling costs nothing where PID1 answers. It decides only how long a stalled
-PID1 holds a load before it refuses, and a tighter one would refuse a load falsely
-while PID1 is busy, a daemon reload among them. Each wait has its own bound, so a scope
-standing empty and then a stalled request hold a load up to twice the bound. A helper
-that hangs outside its call, where its call timeout does not reach, is #522.
+PID1, or a hung helper, holds a load before it refuses, and a tighter one would refuse
+a load falsely while PID1 is busy, a daemon reload among them. Each wait has its own
+bound, so a scope standing empty and then a stalled request hold a load up to twice the
+bound, and a hung helper twice its grace beyond, below. **A helper that carries the
+request is held to the same deadline by the wall clock** (#522), since its call timeout
+does not reach a hang outside the call: an exec that blocks on its filesystem, or a
+system bus that accepts the connection and does not complete it. **Its start is inside
+the wait**, since a spawn returns only once the helper has exec'd: the helper is
+started on a thread of its own, a start not returned by the wait's end below refuses as
+a hang does, naming that the helper did not start, a start that fails answers at once,
+and a start that returns later, while admin runs, is killed and reaped by the thread
+that made it. That thread ends with admin, so a helper still blocked in its exec at
+admin's exit outlives it, and where its exec then returns it runs once, its request
+naming admin's pid, which no longer lives: the row "the invoker's containment stopped or
+killed", P0 or P1, holds for it, and PID1 starts no scope for it. The start step waits
+for the helper until 50 milliseconds past
+the deadline, the helper's grace, so that where PID1 stalls the call's own timeout,
+which counts from the helper's start a little after the deadline was set, answers first
+and names the stall. A helper still running at the grace's end is killed and reaped,
+and the load refuses `BoundaryUnverified`, naming the bound and what the helper had
+said, as the request refused. The helper is admin's own and root's, forked before the
+move (D2), so the kill reaches nothing of the agent. Its output is read while it runs,
+so a full pipe never holds it, and is collected until its pipes close, no later than
+the wait's end or the grace past the helper's own, whichever is later, so a helper that
+answers early leaves its pipes the whole wait to close. A pipe still open then, held by
+a process the helper started, refuses the load `BoundaryUnverified`, naming it with the
+helper's status and what it had said, whatever the helper answered. So a hung helper
+holds a load no longer than the bound and twice the grace. **That ceiling holds for a
+helper the kill ends**: one in an uninterruptible wait holds the reap until that wait
+ends.
 **Measured on 2026-11-09** (`docs/project/admin-root-scope-measurement-2026-11-09.md`),
 from root stand-in units: the call took 2.6 ms and 3.0 ms, and the move read 3.2 ms
 after the call began where it had landed at the return, and at most 9.6 ms after where
@@ -2831,12 +2858,14 @@ agent's emptied scope removes the agent's cgroup with it (the scope's end), so t
 of a removed cgroup fails, `ENOENT` or `ENODEV`, and a run end's wait or fallback that
 then meets the path absent, or another directory there, reads the cgroup as emptied and
 goes on to the removal, which reads `ENOENT` as removed. A path that does not open for
-any other reason is not gone. **Each
-waiter waits it from its own first kill** (Codex on #161): the gate from its kill, and
-the worker, on the gate's death, from its own, since it cannot know whether the gate's
-kill was delivered. An execution's kill fires at the caller's number, and **its exchange
-completes within that number plus this bound, or plus twice it where the gate dies
-during its own wait** (`weaver-harness-gate-contract` section 2):
+any other reason is not gone. **At the start step a failed read is read as neither
+empty nor populated** (#521), the scope step's shape: the cgroup table's start rows for
+no populated reading say what follows, and a failed read never refuses `AgentRunning`.
+**Each waiter waits the bound from its own first kill** (Codex on #161): the gate from its
+kill, and the worker, on the gate's death, from its own, since it cannot know whether
+the gate's kill was delivered. An execution's kill fires at the caller's number, and
+**its exchange completes within that number plus this bound, or plus twice it where the
+gate dies during its own wait** (`weaver-harness-gate-contract` section 2):
 
 | Path | Who waits | The exchange completes within |
 |---|---|---|
@@ -2913,7 +2942,7 @@ scope.
 | # | Invariant | Held by |
 |---|---|---|
 | D1 | **The start step makes no cgroup until its own reading names the scope it asked for.** The call's answer is never read as the move. | the confirm |
-| D2 | **No process of the agent runs outside `weaver-<agent>/`**, so C4 does not change. The start step forks nothing of the agent before the agent's cgroup exists. A helper that carries the request, where the election of section 11 elects one, is admin's own and root's, forked before the move and so left in the invoker's containment, and the start step reaps it before it reads for the move. The request carries the scope bound as its own call timeout, so one deadline covers the request, the reap and the confirm (the scope bound, and #522 for a helper that hangs outside its call). | the order within a load (section 3), and the scope bound |
+| D2 | **No process of the agent runs outside `weaver-<agent>/`**, so C4 does not change. The start step forks nothing of the agent before the agent's cgroup exists. A helper that carries the request, where the election of section 11 elects one, is admin's own and root's, forked before the move and so left in the invoker's containment, and the start step reaps it before it reads for the move. The request carries the scope bound as its own call timeout, so one deadline covers the request, the reap and the confirm, and the wall clock holds the helper to it, its start inside the same wait, a helper still running the helper's grace past it killed and reaped (the scope bound, #522). | the order within a load (section 3), and the scope bound |
 | D3 | **On every path, the agent's cgroup and every cgroup above it to the mount's root are root's**, and the floor checks it. | PID1's scope, and #166's guard |
 | D4 | **The scope's end is its emptiness.** No verb removes a scope, and no refused or killed start step leaves one standing past its own exit. | PID1's collection (`CollectMode=inactive-or-failed`) |
 | D5 | **One path.** A load from an operator's shell and one from admin-con's unit take the same step to the same deterministic path, and a scope of another name the operator wraps a load in changes nothing. | the scope step |
@@ -2942,6 +2971,8 @@ scope.
 | admin's start step | A0 | A1, then A2 | makes the cgroups and the record, sets the three files' owner, places the member, the relay and the worker |
 | admin's start step | A1 | A0, then as above | removes it and its record and makes it afresh |
 | admin's start step | A3 | A3 | refuses `AgentRunning`, naming the processes, and kills nothing (I8) |
+| admin's start step, the agent's cgroup at its path or the recorded one giving no populated reading, and its path reading absent by then | A0 | as from A0 | reads it absent, removed since its open, and goes on as from A0, a record naming it stale and removed before the `mkdir` |
+| admin's start step, the agent's cgroup at its path or the recorded one giving no populated reading, and its path not reading absent by then: the opened cgroup or another directory there, or the path not opening | not known (A1 to A4, or a path that does not open) | unchanged | refuses `BoundaryUnverified`, naming the read and the cgroup, before leftovers are judged, as a cgroup not root's does, and kills nothing (#521) |
 | admin's start step | A2 or A4 | unchanged | refuses `AgentRunning` at the run lock, before the cgroup is looked at (section 3). A4 with the lock free refuses `AgentRunning` as A3 does |
 | the gate, an execution opened | T0 | T1 | the shell's child moves itself into `tools/` before its exec, and the spawn returns once it has exec'd |
 | the gate, the execution's end (exit, clock, cancel, interrupt, closure) | T1 | T2, then T0 | `tools/cgroup.kill`, the wait, then `SIGKILL` to the shell's leader by its pid and its reap within the bound, then the answer. The leader alone is signalled directly, since it may have moved itself out of `tools/` (C1's first exception) where the kill does not reach it; a leader not reaped within the bound is an execution not contained. Its own escapers stay C1's exception, held by C2 |
@@ -3029,7 +3060,14 @@ The instruments:
 - **C2:** an `unload` over a run with a stray in `run/` answers `Unloaded` only with the
   agent's cgroup gone. Watched to fail when the run end's kill is dropped.
 - **C2, the start:** a load over a populated cgroup with the run lock free refuses
-  `AgentRunning` and kills nothing.
+  `AgentRunning` and kills nothing. A cgroup the start step meets, at its path or
+  through the record, whose `cgroup.events` gives no populated reading and whose path
+  does not read absent since refuses `BoundaryUnverified`, naming the read, and kills
+  nothing. Watched to refuse `AgentRunning` when an unread cgroup is read as populated.
+  One removed between its open and its read reads absent, and one replaced by another
+  directory reads unread, as does one whose path does not open after its read. Watched
+  to read unread when a failed read is unread whatever stands, absent when a replaced
+  cgroup is read as gone, and absent when a path that does not open is read as absent.
 - **C3, the modes:** a start step run under a umask of `077` still leaves every
   directory `0755`, and the worker opens `tools/` and writes its three files. Watched to
   fail when the `fchmod` is dropped and the directories come out `0700`.
@@ -4443,12 +4481,13 @@ Each names what settles it, and none is this Spec's to settle alone.
     1's argued set, and it is the shorter abstraction this corpus prefers, a subprocess
     CLI over a library. Its path becomes a host requirement beside the `cgroup2` mount,
     and the helper is D2's, forked before the move and reaped before the confirm, its
-    `--timeout` the scope bound so that its call ends within it (#522 for a hang
-    outside the call).
+    `--timeout` the scope bound so that its call ends within it, and the wall clock
+    holding the helper itself to the same deadline and the helper's grace past it (6.1,
+    the scope bound, #522).
   - **A D-Bus client crate.** A fourth external crate, with an asynchronous runtime
     beneath it, against a dependency set section 1 argues crate by crate.
   - **The D-Bus wire protocol by hand, over a `nix` socket.** No exec and no crate, but
     admin would own a marshalling and authentication codec for one call.
 
-  **Recommended:** the exec of `busctl`. **Settled by:** the operator's election, which
-  the code act waits on.
+  **Settled 2026-11-10** by the operator's election of the exec of `busctl`, which
+  #524 landed.
