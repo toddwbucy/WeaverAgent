@@ -91,7 +91,7 @@ if [ -z "$TARBALL" ]; then
     mv -- "$TARBALL.part" "$TARBALL"
   fi
 fi
-got=$(sha256sum -- "$TARBALL" | cut -d' ' -f1)
+got=$(sha256sum < "$TARBALL" | cut -d' ' -f1)
 [ "$got" = "$SHA256" ] || die "$TARBALL is sha256 $got, not the pinned $SHA256"
 
 TREE=$(mktemp -d "${TMPDIR:-/tmp}/weaver-busybox.XXXXXX")
@@ -152,4 +152,4 @@ install -m 0755 -- "$BIN" "$OUT/busybox"
 printf '%s\n' "$APPLETS" >"$OUT/busybox.applets"
 chmod 0644 -- "$OUT/busybox.applets"
 printf '   busybox %s built static, sha256 %s, applets: %s\n' \
-  "$VERSION" "$(sha256sum -- "$OUT/busybox" | cut -c1-12)" "$(tr '\n' ' ' <"$OUT/busybox.applets")"
+  "$VERSION" "$(sha256sum < "$OUT/busybox" | cut -c1-12)" "$(tr '\n' ' ' <"$OUT/busybox.applets")"

@@ -370,7 +370,7 @@ plan "libraries     $(printf '%s ' "${LIBS[@]##*/}")"
 # ---------------------------------------------------------------- 4. plan
 say "plan"
 plan "install -d $PREFIX/bin $PREFIX/lib  (root, 0755)"
-for b in $MEMBERS; do plan "install $b -> $PREFIX/bin/$b  $(sha256sum "$BUILT/$b" | cut -c1-12)"; done
+for b in $MEMBERS; do plan "install $b -> $PREFIX/bin/$b  $(sha256sum < "$BUILT/$b" | cut -c1-12)"; done
 plan "cp -a ${#LIBS[@]} library files and links -> $PREFIX/lib"
 plan "write $LDSO_CONF = $PREFIX/lib and $CUDA_LIB_DIR, then ldconfig"
 plan "install busybox -> $PREFIX/bin/busybox (root, 0755) and busybox.applets beside it (root, 0644)"

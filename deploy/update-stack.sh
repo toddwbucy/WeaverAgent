@@ -1071,7 +1071,7 @@ CHANGED=()
 for b in $MEMBERS $SHELL_FILES; do
   [ -f "$BUILT/$b" ] \
     || die "the build produced no $b, so the plan cannot speak for it. Check that $b is still a bin target of this workspace."
-  n=$(sha256sum "$BUILT/$b" | cut -d' ' -f1)
+  n=$(sha256sum < "$BUILT/$b" | cut -d' ' -f1)
   # **A member the box has never held is a change, not an absence.** The
   # earlier form walked `$BIN_DIR`, so a member the build made and the box had
   # never installed was invisible: the loop skipped it, `CHANGED` never held
@@ -1083,7 +1083,7 @@ for b in $MEMBERS $SHELL_FILES; do
     CHANGED+=("$b")
     continue
   fi
-  d=$(sha256sum "$BIN_DIR/$b" | cut -d' ' -f1)
+  d=$(sha256sum < "$BIN_DIR/$b" | cut -d' ' -f1)
   if [ "$d" = "$n" ]; then
     printf '  %-22s unchanged\n' "$b"
   else
@@ -1116,9 +1116,9 @@ for g in $LIB_GLOBS; do
     [ -f "$f" ] || continue
     lib_files=$((lib_files + 1))
     LIB_NAMES+=("$name")
-    n=$(sha256sum -- "$f" | cut -d' ' -f1)
+    n=$(sha256sum < "$f" | cut -d' ' -f1)
     if [ -f "$LIB_DIR/$name" ] && [ ! -L "$LIB_DIR/$name" ]; then
-      d=$(sha256sum -- "$LIB_DIR/$name" | cut -d' ' -f1)
+      d=$(sha256sum < "$LIB_DIR/$name" | cut -d' ' -f1)
       if [ "$d" = "$n" ]; then
         printf '  %-22s unchanged\n' "$name"
         continue
@@ -1152,7 +1152,7 @@ for g in $LIB_GLOBS; do
     if [ -L "$f" ]; then
       stale_links=$((stale_links + 1))
     else
-      printf '  %-22s REMOVED  %s\n' "$name" "$(sha256sum -- "$f" | cut -c1-12)"
+      printf '  %-22s REMOVED  %s\n' "$name" "$(sha256sum < "$f" | cut -c1-12)"
     fi
   done
 done

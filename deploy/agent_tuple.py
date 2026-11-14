@@ -930,13 +930,24 @@ def runtime_rows(install, resolved, unread, failed=None, unbound=None):
                                  f"links no {library} now"))
             continue
         name, path = found
+        # A row is a FAULT only against a recorded digest: with none, a file
+        # the loader cannot find or read is said, and not bound.
         if path is None:
-            lines.append(row("bind", field, name, "FAULT", "the loader finds no file for it"))
+            if recorded is None:
+                lines.append(row("bind", field, name, "absent",
+                                 f"not bound: {why}; the loader finds no file for it"))
+            else:
+                lines.append(row("bind", field, name, "FAULT", "the loader finds no file for it"))
             continue
         try:
             digest, real = resolved_file(path)
         except OSError as error:
-            lines.append(row("bind", field, path, "FAULT", f"the loader names it and it does not read: {error}"))
+            if recorded is None:
+                lines.append(row("bind", field, path, "absent",
+                                 f"not bound: {why}; the loader names it and it does not read: {error}"))
+            else:
+                lines.append(row("bind", field, path, "FAULT",
+                                 f"the loader names it and it does not read: {error}"))
             continue
         live = f"{digest} {real}"
         if recorded is None:

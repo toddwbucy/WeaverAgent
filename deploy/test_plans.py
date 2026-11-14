@@ -3636,6 +3636,34 @@ esac
         self.assertIn("every deployed binary and engine library already matches the build", result.stdout)
         self.assertIn("the box is current at", result.stdout)
 
+    def test_a_build_path_holding_a_backslash_plans_by_the_bare_digest(self):
+        """**A digest is the file's, never its name's** (CodeRabbit on #559): GNU
+        sha256sum escapes a file name holding a backslash and marks its
+        digest field with a leading backslash, so a build or installed
+        directory with one planned every equal member and library as
+        CHANGED. Every digest is now taken from standard input.
+        Perturbation: hash any of the four compared files by its path again
+        and the box is not current."""
+        self.install_libraries("a")
+        installed = self.root / "installed"
+        for member in ("worker", "weaver-admin", "weaver-trace-relay", "weaver-gate", "weaver-spu", "weaver-state"):
+            installed.joinpath(member).write_text("fixture artifact " + member)
+        installed.joinpath("busybox").write_text("fixture busybox")
+        installed.joinpath("busybox.applets").write_text("ls\ncat\n")
+        # The installed side as well: the stack record names a prefix whose
+        # directory holds a backslash.
+        odd = self.root / "installed \\ box"
+        installed.rename(odd)
+        for key in ("worker-binary", "spu-binary", "gate-binary", "library-path", "prefix"):
+            (self.stack / key).write_text(self.stack_keys[key].replace(str(installed), str(odd)) + "\n")
+        (self.config / "existing" / "worker-binary").write_text(str(odd / "worker"))
+        self.env.update(ENGINE_BUILD="a", CARGO_TARGET_DIR=str(self.root / "target with \\ backslash"))
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"  {'worker':<22} unchanged\n", result.stdout)
+        self.assertIn(f"  {'libllama.so.0.0.1':<22} unchanged\n", result.stdout)
+        self.assertIn("every deployed binary and engine library already matches the build", result.stdout)
+
     def test_the_plan_refuses_where_the_library_step_cannot_be_named(self):
         """**What cannot be named refuses before anything is planned**: a
         build whose messages report no output directory for the engine's
@@ -8809,6 +8837,77 @@ class AgentTupleInstallTests(unittest.TestCase):
                 rows = self.tuple.runtime_rows(*args)
                 self.assertEqual(self.statuses(rows, "runtime "), {"absent"})
                 self.assertTrue(all(said in row for row in rows), rows)
+
+    def test_a_missing_or_unreadable_file_with_no_recorded_digest_is_absent(self):
+        """**A row is a FAULT only against a recorded digest** (CodeRabbit on
+        #559): where the install recorded `unknown`, or nothing, a runtime
+        file the loader cannot find or cannot read is said in an absent row,
+        as the runbook states for an unknown digest. A recorded digest still
+        faults on both. Perturbation: fault the not-found or unreadable case
+        whatever was recorded and the unknown digest fails verify."""
+        unknown = self.tuple.read_install_tuple(self.write(
+            [l.split(" = ")[0] + " = unknown" if l.startswith("runtime.") else l for l in INSTALL_TUPLE_LINES]))
+        earlier = self.tuple.read_install_tuple(self.write(EARLIER_TUPLE_LINES))
+        recorded = self.tuple.read_install_tuple(self.write(INSTALL_TUPLE_LINES))
+        missing = self.ldd.replace(f"{self.cuda}/libcudart.so.13 (0x00007f0000000000)", "not found")
+        unreadable_dir = self.dir / "a-directory"
+        unreadable_dir.mkdir()
+        unreadable = self.ldd.replace(f"{self.cuda}/libcudart.so.13 ", f"{unreadable_dir} ")
+        for label, report, said in (("not found", missing, "the loader finds no file for it"),
+                                    ("unreadable", unreadable, "the loader names it and it does not read")):
+            for install, why in ((unknown, "the install tuple could not resolve or hash it"),
+                                 (earlier, "the earlier form"), (None, "no install tuple was read")):
+                with self.subTest(label, why=why):
+                    rows = self.tuple.runtime_rows(install, self.tuple.loader_resolved(report), None)
+                    mine, = [row for row in rows if "runtime cudart " in row]
+                    self.assertIn("[absent: not bound: ", mine)
+                    self.assertIn(why, mine)
+                    self.assertIn(said, mine)
+            with self.subTest(label, why="recorded"):
+                rows = self.tuple.runtime_rows(recorded, self.tuple.loader_resolved(report), None)
+                mine, = [row for row in rows if "runtime cudart " in row]
+                self.assertIn("[FAULT: " + said, mine)
+
+    def test_a_path_holding_a_backslash_records_a_bare_digest(self):
+        """**The writer takes each digest from standard input** (CodeRabbit on
+        #559): GNU sha256sum escapes a file name holding a backslash and
+        marks its digest field with one, which the reader refuses as not 64
+        hex digits, so one such directory refused the whole tuple. A member,
+        an engine library and a runtime file each under such a directory
+        record their bare digests, and the reader takes the tuple.
+        Perturbation: hash any of the three by its path again and the reader
+        refuses the tuple."""
+        odd = self.dir / "a\\b"
+        for sub in ("bin", "lib", "cuda"):
+            (odd / sub).mkdir(parents=True)
+        (odd / "bin" / "worker").write_bytes(b"worker")
+        (odd / "bin" / "weaver-spu").write_bytes(b"spu")
+        (odd / "lib" / "libllama.so.0.0.8783").write_bytes(b"llama")
+        (odd / "cuda" / "libcudart.so.13.0.1").write_bytes(b"cudart")
+        (odd / "cuda" / "libcudart.so.13").symlink_to("libcudart.so.13.0.1")
+        stubs = self.dir / "stubs"
+        stubs.mkdir()
+        (stubs / "ldd").write_text("#!/bin/sh\nprintf '%s' \"$REPORT\"\n")
+        (stubs / "ldd").chmod(0o755)
+        for name in ("cargo", "git", "nvidia-smi", "nvcc", "pacman", "rustc"):
+            (stubs / name).write_text("#!/bin/sh\nexit 1\n")
+            (stubs / name).chmod(0o755)
+        repo = Path(__file__).resolve().parent.parent
+        script = (f"source {shlex.quote(str(repo / 'deploy' / 'engine-libraries.sh'))}; "
+                  f"source {shlex.quote(str(repo / 'deploy' / 'install-tuple.sh'))}; "
+                  f"install_tuple {shlex.quote(str(self.dir))} {'0' * 40} {shlex.quote(str(odd / 'bin'))} "
+                  f"{shlex.quote(str(odd / 'lib'))} fixture 'worker' 'libllama.so.0.0.8783'")
+        report = f"\tlibcudart.so.13 => {odd / 'cuda' / 'libcudart.so.13'} (0x00007f0000000000)\n"
+        ran = subprocess.run(["bash", "-c", script], text=True, capture_output=True, timeout=20,
+                             env={"PATH": str(stubs) + os.pathsep + "/usr/bin:/bin", "LC_ALL": "C", "REPORT": report})
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
+        self.assertEqual(facts["member.worker"], hashlib.sha256(b"worker").hexdigest())
+        self.assertEqual(facts["library.libllama.so.0.0.8783"], hashlib.sha256(b"llama").hexdigest())
+        cudart = (odd / "cuda" / "libcudart.so.13.0.1").resolve()
+        self.assertEqual(facts["runtime.cudart"], f"{hashlib.sha256(b'cudart').hexdigest()} {cudart}")
+        install = self.tuple.read_install_tuple(self.write([ran.stdout.rstrip("\n")]))
+        self.assertEqual(install["runtime"]["cudart"], (hashlib.sha256(b"cudart").hexdigest(), str(cudart)))
 
     def test_a_runtime_file_recorded_but_unbindable_is_a_fault(self):
         """**Fail closed**: where the install recorded a runtime file and the

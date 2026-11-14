@@ -39,7 +39,10 @@
 # The agent-side half (the artifact, its template, an adapter, the devices a
 # declaration elects and their split) is not the install's to state.
 # Library lookups are read whole and then searched, never through a consumer
-# that stops early under `pipefail`. The runtime files are read through
+# that stops early under `pipefail`. Every digest is of the file read on
+# standard input: GNU sha256sum escapes a file name holding a backslash or a
+# newline and marks the digest field with a leading backslash, which a
+# reader of 64 hex digits refuses. The runtime files are read through
 # `spu_ldd` (deploy/engine-libraries.sh, which the sourcing script sources
 # first), as admin's start step resolves them. The driver's own library,
 # `libcuda`, is the driver's and not the build's, so it is read at each load
@@ -90,11 +93,11 @@ if len(found) == 1:
   n=$(printf '%s\n' "$n" | sed -n 's/.*release //p' | sed -n 1p)
   printf 'nvcc = %s\n' "${n:-unknown}"
   for m in $members; do
-    n=$(sha256sum -- "$bin_dir/$m" 2>/dev/null | cut -d' ' -f1)
+    n=$(sha256sum 2>/dev/null < "$bin_dir/$m" | cut -d' ' -f1)
     printf 'member.%s = %s\n' "$m" "${n:-unknown}"
   done
   for f in $libraries; do
-    n=$(sha256sum -- "$lib_dir/$f" 2>/dev/null | cut -d' ' -f1)
+    n=$(sha256sum 2>/dev/null < "$lib_dir/$f" | cut -d' ' -f1)
     printf 'library.%s = %s\n' "$f" "${n:-unknown}"
   done
   # What the installed SPU resolves: the first line naming each library in
@@ -118,7 +121,7 @@ if len(found) == 1:
     n=unknown
     [ -z "$path" ] || path=$(readlink -f -- "$path" 2>/dev/null) || path=""
     if [[ "$path" == /* && "$path" != *$'\n'* ]]; then
-      digest=$(sha256sum -- "$path" 2>/dev/null | cut -d' ' -f1)
+      digest=$(sha256sum 2>/dev/null < "$path" | cut -d' ' -f1)
       [ -z "$digest" ] || n="$digest $path"
     fi
     printf 'runtime.%s = %s\n' "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" "$n"
