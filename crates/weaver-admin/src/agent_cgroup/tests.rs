@@ -396,6 +396,116 @@ fn containment_a_listing_that_fails_never_reads_as_empty() {
     let _ = stray.wait();
 }
 
+/// **A cgroup at the start whose `cgroup.events` gives no populated reading
+/// refuses unverified** (6.1, the start's rows for no populated reading,
+/// #521): neither leftovers nor emptiness, so the load refuses
+/// `BoundaryUnverified`, naming the read, and removes nothing. The read is
+/// failed by the file's mode, which binds the suite's own uid under a user
+/// scope and not root, as the unread scope's instrument does. Perturbation:
+/// read an unread cgroup as populated, and the load refuses `AgentRunning`.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_an_unread_cgroup_at_the_start_refuses_unverified() {
+    let (scratch, _dir, fd, made) = made("unread-cgroup", "run-1");
+    drop(made);
+    let events = std::path::PathBuf::from(containment::CGROUP_ROOT)
+        .join(agent(&scratch).unwrap().relative().trim_start_matches('/'))
+        .join("cgroup.events");
+    std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let refused = make_beneath(
+        host(&scratch),
+        fd.as_fd(),
+        "alpha",
+        "run-2",
+        owner(),
+        owner().0,
+    );
+    std::fs::set_permissions(&events, std::fs::Permissions::from_mode(0o444)).unwrap();
+    assert!(
+        matches!(&refused, Err(StartRefused::Unverified(why)) if why.contains("weaver-alpha") && why.matches("gave no populated reading from its cgroup.events").count() == 1),
+        "the cgroup at its path, which the record names, is named once: {refused:?}"
+    );
+    assert!(agent(&scratch).is_ok(), "nothing removed");
+    let record = containment::read_record(fd.as_fd(), "alpha")
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.run, "run-1", "the record kept");
+}
+
+/// An empty cgroup `weaver-alpha` made beneath a scratch cgroup, opened, then
+/// removed, as the start step meets one removed between its open and its read.
+fn opened_then_removed(tag: &str) -> (ScratchCgroup, Cgroup) {
+    let scratch = ScratchCgroup::new(tag);
+    scratch.cgroup.make_child("weaver-alpha").unwrap();
+    let opened = agent(&scratch).expect("the cgroup opens");
+    nix::unistd::unlinkat(
+        scratch.cgroup.fd(),
+        "weaver-alpha",
+        nix::unistd::UnlinkatFlags::RemoveDir,
+    )
+    .expect("the cgroup removed after its open");
+    (scratch, opened)
+}
+
+/// **A cgroup removed between its open and its read is absent** (6.1, the
+/// start's rows for no populated reading, #521): its read fails and its path
+/// reads absent, so the start goes on as from A0. Perturbation: read no
+/// populated value as unread whatever stands, and it reads unread.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_cgroup_removed_after_its_open_reads_absent() {
+    let (_scratch, opened) = opened_then_removed("removed-cgroup");
+    assert_eq!(standing_of(&opened), Standing::Absent);
+}
+
+/// **A recorded cgroup removed after its open is stale, held by no handle**
+/// (6.1, the start's rows for no populated reading, #521): the record's
+/// reading is absent and nothing is removed through it, so a replacement made
+/// at its path since is never removed by the record. Perturbation: keep the
+/// handle of a recorded cgroup read absent, and it holds one.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_recorded_cgroup_removed_after_its_open_holds_no_handle() {
+    let (_scratch, opened) = opened_then_removed("removed-recorded");
+    assert!(matches!(
+        recorded_standing(opened),
+        (RecordAtStart::Same(Standing::Absent), None)
+    ));
+}
+
+/// **A cgroup replaced after its open reads unread** (6.1, the start's rows
+/// for no populated reading, #521): the failed read meets another directory
+/// at the path, which answers nothing about what stands there now.
+/// Perturbation: read a cgroup gone by any measure as absent
+/// (`Cgroup::gone`, the run end's wider reading), and it reads absent.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_cgroup_replaced_after_its_open_reads_unread() {
+    let (scratch, opened) = opened_then_removed("replaced-cgroup");
+    scratch
+        .cgroup
+        .make_child("weaver-alpha")
+        .expect("another directory at the path");
+    assert_eq!(standing_of(&opened), Standing::Unread);
+}
+
+/// **A cgroup whose path does not open after a failed read reads unread**
+/// (6.1, the start's rows for no populated reading, #521): whether anything
+/// stands there is not known. The open is refused by the parent's mode, as
+/// the scope's instrument does. Perturbation: read a path that does not open
+/// as absent, and it reads absent.
+#[test]
+#[ignore = "needs a delegated cgroup scope"]
+fn containment_a_cgroup_not_opening_after_its_open_reads_unread() {
+    let (scratch, opened) = opened_then_removed("unopened-cgroup");
+    let directory = std::path::PathBuf::from(containment::CGROUP_ROOT)
+        .join(scratch.cgroup.relative().trim_start_matches('/'));
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let standing = standing_of(&opened);
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(standing, Standing::Unread);
+}
+
 // ------------------------------------------------------------- the scope step
 
 /// The site the fake PID1 stands the agent's scope at, beneath the scratch
