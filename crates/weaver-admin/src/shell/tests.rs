@@ -75,11 +75,13 @@ fn a_listing_past_its_bound_is_killed_and_refused() {
     let dir = std::env::temp_dir().join(format!("weaver-admin-list-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let blocking = dir.join("blocking");
-    std::fs::write(&blocking, "#!/bin/sh\nexec sleep 30\n").unwrap();
-    std::fs::set_permissions(&blocking, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_isolation::write_executable(&blocking, "#!/bin/sh\nexec sleep 30\n", 0o755);
     let answering = dir.join("answering");
-    std::fs::write(&answering, "#!/bin/sh\nprintf 'sh\\nash\\nls\\n'\n").unwrap();
-    std::fs::set_permissions(&answering, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_isolation::write_executable(
+        &answering,
+        "#!/bin/sh\nprintf 'sh\\nash\\nls\\n'\n",
+        0o755,
+    );
     let bound = std::time::Duration::from_millis(300);
     let started = std::time::Instant::now();
     let refused = compiled_set_within(&blocking, bound).unwrap_err();
@@ -97,15 +99,14 @@ fn a_listing_past_its_bound_is_killed_and_refused() {
     // whole group, the descendant with it, is killed.
     let holding = dir.join("holding");
     let sleeper = dir.join("sleeper.pid");
-    std::fs::write(
+    crate::test_isolation::write_executable(
         &holding,
         format!(
             "#!/bin/sh\n(exec sleep 30) &\necho $! > {}\nprintf 'sh\\nash\\n'\n",
             sleeper.display()
         ),
-    )
-    .unwrap();
-    std::fs::set_permissions(&holding, std::fs::Permissions::from_mode(0o755)).unwrap();
+        0o755,
+    );
     let started = std::time::Instant::now();
     let held = compiled_set_within(&holding, bound).unwrap_err();
     assert!(held.contains("did not answer"), "{held}");
@@ -217,8 +218,7 @@ impl Stack {
             .map(PathBuf::from)
             .expect("WEAVER_BUSYBOX names a static busybox built with the listing");
         let binary = base.join("busybox");
-        std::fs::copy(&busybox, &binary).unwrap();
-        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_isolation::copy_executable(&busybox, &binary, 0o755);
         let list = applets_path(&binary);
         std::fs::write(&list, applets.join("\n") + "\n").unwrap();
         std::fs::set_permissions(&list, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -374,8 +374,7 @@ fn a_listing_that_writes_forever_is_refused() {
     let dir = std::env::temp_dir().join(format!("weaver-admin-flood-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let flood = dir.join("flood");
-    std::fs::write(&flood, "#!/bin/sh\nexec yes sh\n").unwrap();
-    std::fs::set_permissions(&flood, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_isolation::write_executable(&flood, "#!/bin/sh\nexec yes sh\n", 0o755);
     let started = std::time::Instant::now();
     let refused = compiled_set_within(&flood, std::time::Duration::from_secs(2)).unwrap_err();
     assert!(

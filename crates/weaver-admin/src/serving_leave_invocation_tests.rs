@@ -270,8 +270,7 @@ fn root_case(case: &str) {
         "ready":f.config.root.join("worker-ready"),
         "cgroup_record":run_dir.join(crate::containment::RECORD)});
     fs::write(&fixture_path, serde_json::to_vec(&inputs).unwrap()).unwrap();
-    fs::write(&f.config.worker, WORKER).unwrap();
-    fs::set_permissions(&f.config.worker, fs::Permissions::from_mode(0o700)).unwrap();
+    crate::test_isolation::write_executable(&f.config.worker, WORKER, 0o700);
     let log_path = f.config.root.join("worker.log");
     let log = start::open_log(&log_path, None).unwrap();
     let worker = start::spawn_worker(start::WorkerStart {

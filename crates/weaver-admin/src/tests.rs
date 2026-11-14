@@ -4636,7 +4636,7 @@ fn the_member_spawn_lands_the_members_identity_as_root() {
     // The stand-in writes its reading whole and then renames it, so a
     // partial file is never what the poll below reads.
     let stand_in = bin.join("weaver-state");
-    std::fs::write(
+    crate::test_isolation::write_executable(
         &stand_in,
         concat!(
             "#!/bin/sh
@@ -4648,10 +4648,8 @@ fn the_member_spawn_lands_the_members_identity_as_root() {
             "/bin/cat /proc/self/status > \"$t/status.part\" && ",
             "/bin/mv \"$t/status.part\" \"$t/status\"\n",
         ),
-    )
-    .expect("the stand-in is written");
-    std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755))
-        .expect("and made executable");
+        0o755,
+    );
 
     let source = format!(
         concat!(
@@ -4938,8 +4936,7 @@ fn the_relay_spawn_lands_its_identity_and_allowlist_as_root() {
     std::fs::create_dir_all(&base).unwrap();
     std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
     let stand_in = base.join("weaver-trace-relay");
-    std::fs::write(&stand_in, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
-    std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755)).unwrap();
+    crate::test_isolation::write_executable(&stand_in, "#!/bin/sh\nexec /bin/sleep 30\n", 0o755);
     let run_directory = base.join("run");
     std::fs::create_dir_all(&run_directory).unwrap();
     let run_lock = start::take_run_lock(&run_directory).unwrap().unwrap();
@@ -5598,12 +5595,11 @@ fn the_shells_grant_names_the_judged_binary_and_commands() {
     std::fs::create_dir_all(&base).unwrap();
     std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
     let binary = base.join("busybox");
-    std::fs::copy(
+    crate::test_isolation::copy_executable(
         std::env::var_os("WEAVER_BUSYBOX").expect("WEAVER_BUSYBOX names the pinned build"),
         &binary,
-    )
-    .unwrap();
-    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        0o755,
+    );
     let applets = "ls\ncat\nhead\ntail\nwc\ngrep\nsort\nuniq\ncut\ntr\ndate\necho\npwd\nmktemp\n";
     std::fs::write(shell::applets_path(&binary), applets).unwrap();
     std::fs::set_permissions(
