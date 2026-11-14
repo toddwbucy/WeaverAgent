@@ -748,3 +748,113 @@ fn original_enter_window_rechecks_after_actual_receipt_and_delayed_decode() {
     assert!(decoded.get());
     assert_eq!(result, Err(ChannelFault::Unanswered));
 }
+
+/// **A reset ahead of queued packets is read past to them, never read as
+/// the end** (#523), per `weaver-organ-channel` section 1: delivery is
+/// loss-free until closure. A worker that closes with a packet of admin's
+/// unread leaves a reset on admin's end, and the control read shows Linux
+/// reporting it once, ahead of the packets the worker wrote before it
+/// closed. Every reader on the channel reads those packets and then the end,
+/// and a reset with nothing queued behind it reads `Closed` at once, never a
+/// wait. Perturbation: answer the reset in `recv_packet`, and each reader
+/// reads `Closed` before the first packet.
+///
+/// Run in its own process: a fork taken by a parallel test can hold the
+/// worker's end across its drop, and the reset then lands after the reads.
+/// That is #523's race itself, which this test met on its first run.
+#[test]
+fn a_reset_ahead_of_queued_packets_is_read_past_to_them() {
+    if crate::test_isolation::isolated!(a_reset_ahead_of_queued_packets_is_read_past_to_them) {
+        return;
+    }
+    use crate::serving_load::window::LoadWindow;
+    // Admin's end once the worker wrote `queued` packets and closed with one
+    // packet of admin's unread.
+    fn reset_end(queued: u64) -> Coordination {
+        let (end, far) = nix::sys::socket::socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let admin = Coordination::adopt(end);
+        let worker = Coordination::adopt(far);
+        admin
+            .send(&directive(1, "alpha"))
+            .expect("admin's packet, never read");
+        for ordinal in 0..queued {
+            worker
+                .send(&directive(10 + ordinal, "alpha"))
+                .expect("the worker's packet");
+        }
+        drop(worker);
+        admin
+    }
+    let window = || LoadWindow::begin(Duration::from_secs(2)).unwrap();
+
+    // The control: the kernel's own order, the reset first.
+    let control = reset_end(1);
+    let mut buffer = vec![0u8; MAX_ENVELOPE_BYTES];
+    let mut slices = [std::io::IoSliceMut::new(&mut buffer)];
+    let first = nix::sys::socket::recvmsg::<()>(
+        control.fd.as_raw_fd(),
+        &mut slices,
+        None,
+        MsgFlags::MSG_DONTWAIT,
+    )
+    .map(|read| read.bytes);
+    assert_eq!(
+        first,
+        Err(nix::errno::Errno::ECONNRESET),
+        "Linux reports the reset ahead of the queued packet"
+    );
+
+    // The blocking reader behind `recv_within`: the stop, leave, load and
+    // observe answers.
+    let admin = reset_end(2);
+    assert_eq!(admin.recv().expect("the first packet").exchange.ordinal, 10);
+    let second = admin.recv_within(Duration::from_secs(2));
+    assert_eq!(second.expect("the second packet").exchange.ordinal, 11);
+    assert_eq!(admin.recv(), Err(ChannelFault::Closed));
+
+    // The nonblocking reader behind every capture and plan read.
+    let admin = reset_end(2);
+    for ordinal in [10, 11] {
+        let bytes = admin.packet_bytes().expect("a packet").expect("at once");
+        let envelope: OrganEnvelope = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(envelope.exchange.ordinal, ordinal);
+    }
+    assert_eq!(admin.packet_bytes(), Err(ChannelFault::Closed));
+
+    // The enter answer's reader.
+    let admin = reset_end(1);
+    let answer = admin.recv_enter_answer(&window());
+    assert_eq!(answer.expect("the packet").exchange.ordinal, 10);
+    assert_eq!(
+        admin.recv_enter_answer(&window()),
+        Err(ChannelFault::Closed)
+    );
+
+    // The observation's reader reaches the queued packet, which is no
+    // observation, rather than the end.
+    let admin = reset_end(1);
+    let observe = |admin: &Coordination| {
+        admin
+            .recv_observation_within(Duration::from_secs(2))
+            .map(|_| ())
+    };
+    assert_eq!(observe(&admin), Err(ChannelFault::Undecodable));
+    assert_eq!(observe(&admin), Err(ChannelFault::Closed));
+
+    // A reset with nothing queued behind it is the end, at once, for each.
+    let start = Instant::now();
+    assert_eq!(reset_end(0).recv(), Err(ChannelFault::Closed));
+    assert_eq!(reset_end(0).packet_bytes(), Err(ChannelFault::Closed));
+    assert_eq!(
+        reset_end(0).recv_enter_answer(&window()),
+        Err(ChannelFault::Closed)
+    );
+    assert_eq!(observe(&reset_end(0)), Err(ChannelFault::Closed));
+    assert!(start.elapsed() < Duration::from_secs(1), "no reader waits");
+}

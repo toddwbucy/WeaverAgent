@@ -1,4 +1,13 @@
 //! Peer closure after publication's final probe, at the actual packet send.
+//!
+//! **Each fixture that closes the peer before the send runs in its own
+//! process** (#523). Its design is the closure seen at admin's send. A fork
+//! taken by a parallel test inherits the peer and holds it across the drop,
+//! so the send succeeds and the closure comes later, as a reset at the read
+//! ahead of the packets queued behind it. That order has its own cases now:
+//! `precommit_send_to_a_held_peer_drains_exact_refusal_behind_its_reset` here,
+//! and `channel::tests::a_reset_ahead_of_queued_packets_is_read_past_to_them`
+//! for every reader.
 use super::*;
 use crate::channel::{TestCaptureSend, with_before_capture_send};
 use crate::serving_capture_window::with_test_times;
@@ -21,6 +30,20 @@ fn terminal(owner: &mut Capture<'_>) -> LeaveProgress {
     panic!("queued closed-peer outcome did not settle");
 }
 
+/// A fork that holds every descriptor of this process and pauses until it is
+/// killed. It never execs, so its close-on-exec descriptors stay open.
+fn hold_until_killed() -> nix::unistd::Pid {
+    // SAFETY: the child calls only pause, which is async-signal-safe, until
+    // the parent's SIGKILL ends it.
+    match unsafe { nix::unistd::fork() }.unwrap() {
+        nix::unistd::ForkResult::Child => loop {
+            // SAFETY: pause takes no arguments and touches no memory.
+            unsafe { nix::libc::pause() };
+        },
+        nix::unistd::ForkResult::Parent { child } => child,
+    }
+}
+
 fn send_sites() -> [(&'static str, TestCaptureSend, SavePointLeg); 2] {
     [
         (
@@ -38,6 +61,39 @@ fn send_sites() -> [(&'static str, TestCaptureSend, SavePointLeg); 2] {
 
 #[test]
 fn precommit_send_peer_closure_drains_exact_refusal_under_original_leave_windows() {
+    if crate::test_isolation::isolated!(
+        precommit_send_peer_closure_drains_exact_refusal_under_original_leave_windows
+    ) {
+        return;
+    }
+    drains_exact_refusal_under_original_leave_windows(false);
+}
+
+/// **A peer held across its drop is read to its queued refusal behind the
+/// reset** (#523). A worker whose close follows admin's send leaves that
+/// packet unread, and the fork makes that order certain: it holds the peer
+/// across the drop, so admin's send succeeds and its packet stays unread. The
+/// fork is then killed and reaped, which closes the peer with that packet
+/// unread and leaves the reset ahead of the queued refusal and final answer.
+/// A parallel test's fork gave the same order to the fixture above. Run in
+/// its own process, since its fork holds
+/// every descriptor this process has. Perturbation: read the reset as the
+/// end in `channel::recv_packet`, and the forced leave reads `Stopped`
+/// where `LeftReceived` is due, the graceful one `Channel(Closed)` where
+/// the worker's outcome is due.
+#[test]
+fn precommit_send_to_a_held_peer_drains_exact_refusal_behind_its_reset() {
+    if crate::test_isolation::isolated!(
+        precommit_send_to_a_held_peer_drains_exact_refusal_behind_its_reset
+    ) {
+        return;
+    }
+    drains_exact_refusal_under_original_leave_windows(true);
+}
+
+/// The worker sends both original packets and closes before admin's send.
+/// `held`: a fork holds the peer across that close until after the send.
+fn drains_exact_refusal_under_original_leave_windows(held: bool) {
     for mode in ["forced", "graceful"] {
         for (site, send_kind, missed) in send_sites() {
             for expire_before_read in [false, true] {
@@ -47,6 +103,8 @@ fn precommit_send_peer_closure_drains_exact_refusal_under_original_leave_windows
                 let original_index = fixture.index_bytes();
                 let called = Rc::new(Cell::new(false));
                 let witnessed = Rc::clone(&called);
+                let holder = Rc::new(Cell::new(None));
+                let holding = Rc::clone(&holder);
                 let room_file = fixture.room.join(if site == "hashing" {
                     "capture-9.sqlite.part"
                 } else {
@@ -57,7 +115,8 @@ fn precommit_send_peer_closure_drains_exact_refusal_under_original_leave_windows
                     move || {
                         // The publication checkpoints have returned. The peer now
                         // completes its cleanup, sends both original packets and
-                        // closes before the real send syscall observes EPIPE.
+                        // closes before the real send syscall observes EPIPE,
+                        // or, held, after it.
                         fs::remove_file(room_file).unwrap();
                         refused_packet(&peer, &exchange, missed);
                         packet(
@@ -73,11 +132,22 @@ fn precommit_send_peer_closure_drains_exact_refusal_under_original_leave_windows
                                 })
                             },
                         );
+                        if held {
+                            holding.set(Some(hold_until_killed()));
+                        }
                         drop(peer);
                         witnessed.set(true);
                     },
                     || pending(&mut owner),
                 );
+                if let Some(holder) = holder.take() {
+                    // After admin's send, before its read: the peer closes
+                    // with admin's packet unread.
+                    // SAFETY: the pid is this test's own unreaped child.
+                    let killed = unsafe { nix::libc::kill(holder.as_raw(), nix::libc::SIGKILL) };
+                    assert_eq!(killed, 0, "the holder is killed");
+                    nix::sys::wait::waitpid(holder, None).unwrap();
+                }
                 assert!(
                     called.get(),
                     "{site}: must reach the actual send after all probes"
@@ -117,6 +187,11 @@ fn precommit_send_peer_closure_drains_exact_refusal_under_original_leave_windows
 
 #[test]
 fn precommit_send_peer_closure_needs_correlated_cleanup_and_final_refusal() {
+    if crate::test_isolation::isolated!(
+        precommit_send_peer_closure_needs_correlated_cleanup_and_final_refusal
+    ) {
+        return;
+    }
     for (site, send_kind, missed) in send_sites() {
         for case in [
             "missing",
@@ -196,6 +271,11 @@ fn precommit_send_peer_closure_needs_correlated_cleanup_and_final_refusal() {
 
 #[test]
 fn closed_send_does_not_hide_a_later_clock_failure_behind_buffered_refusal() {
+    if crate::test_isolation::isolated!(
+        closed_send_does_not_hide_a_later_clock_failure_behind_buffered_refusal
+    ) {
+        return;
+    }
     for (site, send_kind, missed) in send_sites() {
         let fixture = Fixture::new();
         let mut repo = fixture.repository();
@@ -224,6 +304,11 @@ fn closed_send_does_not_hide_a_later_clock_failure_behind_buffered_refusal() {
 
 #[test]
 fn closed_send_postdecode_clock_failure_cannot_be_recovered_by_refusal() {
+    if crate::test_isolation::isolated!(
+        closed_send_postdecode_clock_failure_cannot_be_recovered_by_refusal
+    ) {
+        return;
+    }
     for (site, send_kind, missed) in send_sites() {
         let fixture = Fixture::new();
         let mut repo = fixture.repository();
@@ -280,6 +365,11 @@ fn publication_checkpoint_postdecode_clock_failure_cannot_be_recovered_by_refusa
 
 #[test]
 fn demand_send_peer_closure_cannot_enter_the_leave_refusal_continuation() {
+    if crate::test_isolation::isolated!(
+        demand_send_peer_closure_cannot_enter_the_leave_refusal_continuation
+    ) {
+        return;
+    }
     for (site, send_kind, missed) in send_sites() {
         let fixture = Fixture::new();
         let mut repo = fixture.repository();
@@ -304,6 +394,11 @@ fn demand_send_peer_closure_cannot_enter_the_leave_refusal_continuation() {
 
 #[test]
 fn published_send_peer_closure_keeps_postcommit_failure_and_guard() {
+    if crate::test_isolation::isolated!(
+        published_send_peer_closure_keeps_postcommit_failure_and_guard
+    ) {
+        return;
+    }
     let fixture = Fixture::new();
     let mut repo = fixture.repository();
     let (mut owner, peer, exchange, prepared) = through_prepared(&fixture, &mut repo, "graceful");

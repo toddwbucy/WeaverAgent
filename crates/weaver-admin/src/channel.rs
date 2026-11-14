@@ -469,13 +469,8 @@ impl Coordination {
         loop {
             self.wait_enter(nix::libc::POLLIN, window)?;
             let mut bytes = vec![0; MAX_ENVELOPE_BYTES];
-            let mut slices = [std::io::IoSliceMut::new(&mut bytes)];
-            let message = match nix::sys::socket::recvmsg::<()>(
-                self.fd.as_raw_fd(),
-                &mut slices,
-                None,
-                MsgFlags::MSG_DONTWAIT,
-            ) {
+            let message = match recv_packet(self.fd.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT)
+            {
                 Ok(message) => message,
                 Err(nix::errno::Errno::EINTR | nix::errno::Errno::EAGAIN) => continue,
                 Err(_) => return Err(ChannelFault::Closed),
@@ -560,17 +555,12 @@ impl Coordination {
     /// read returning `MSG_TRUNC` **is a channel fault and never a message**:
     /// the kernel returns the truncated prefix with the flag set and discards
     /// the remainder, so an unchecked flag turns a long answer into a silently
-    /// shortened one.
+    /// shortened one. A reset is read past to the packets behind it
+    /// (`recv_packet`).
     pub fn recv(&self) -> Result<OrganEnvelope, ChannelFault> {
         let mut buffer = vec![0u8; MAX_ENVELOPE_BYTES];
-        let mut slices = [std::io::IoSliceMut::new(&mut buffer)];
-        let message = nix::sys::socket::recvmsg::<()>(
-            self.fd.as_raw_fd(),
-            &mut slices,
-            None,
-            MsgFlags::empty(),
-        )
-        .map_err(|_| ChannelFault::Closed)?;
+        let message = recv_packet(self.fd.as_raw_fd(), &mut buffer, MsgFlags::empty())
+            .map_err(|_| ChannelFault::Closed)?;
         if message.flags.contains(MsgFlags::MSG_TRUNC) {
             return Err(ChannelFault::Truncated {
                 bound: MAX_ENVELOPE_BYTES,
@@ -599,14 +589,8 @@ impl Coordination {
     ) -> Result<weaver_types::state_flow::enter::ObservationEnvelope, ChannelFault> {
         self.wait_readable(bound)?;
         let mut buffer = vec![0u8; MAX_ENVELOPE_BYTES];
-        let mut slices = [std::io::IoSliceMut::new(&mut buffer)];
-        let message = nix::sys::socket::recvmsg::<()>(
-            self.fd.as_raw_fd(),
-            &mut slices,
-            None,
-            MsgFlags::empty(),
-        )
-        .map_err(|_| ChannelFault::Closed)?;
+        let message = recv_packet(self.fd.as_raw_fd(), &mut buffer, MsgFlags::empty())
+            .map_err(|_| ChannelFault::Closed)?;
         if message.flags.contains(MsgFlags::MSG_TRUNC) {
             return Err(ChannelFault::Truncated {
                 bound: MAX_ENVELOPE_BYTES,
@@ -664,6 +648,48 @@ impl Coordination {
     #[cfg(test)]
     pub fn adopt(fd: OwnedFd) -> Self {
         Coordination { fd, ordinal: 0 }
+    }
+}
+
+/// What one receive took off the channel: its length and its flags.
+struct Received {
+    bytes: usize,
+    flags: MsgFlags,
+}
+
+/// **Receives one packet, reading past a reset to the packets queued behind
+/// it**, per `weaver-organ-channel` section 1: delivery is loss-free until
+/// closure, so what the worker wrote before it closed is read before the
+/// closure is. A worker that closes with a packet of admin's still unread
+/// leaves a reset (`ECONNRESET`) on this end, and Linux reports it once,
+/// ahead of the packets the worker wrote before it closed (#523). The reset
+/// is read past once, without waiting: the read behind it returns the next
+/// queued packet, or the end (0 bytes) where none is queued. A read behind it
+/// that would wait answers the reset itself, so no reader waits on it.
+fn recv_packet(
+    fd: std::os::fd::RawFd,
+    buffer: &mut [u8],
+    flags: MsgFlags,
+) -> nix::Result<Received> {
+    let mut reset = false;
+    loop {
+        let mut slices = [std::io::IoSliceMut::new(&mut *buffer)];
+        let read_flags = if reset {
+            flags | MsgFlags::MSG_DONTWAIT
+        } else {
+            flags
+        };
+        match nix::sys::socket::recvmsg::<()>(fd, &mut slices, None, read_flags) {
+            Ok(message) => {
+                return Ok(Received {
+                    bytes: message.bytes,
+                    flags: message.flags,
+                });
+            }
+            Err(nix::errno::Errno::ECONNRESET) if !reset => reset = true,
+            Err(nix::errno::Errno::EAGAIN) if reset => return Err(nix::errno::Errno::ECONNRESET),
+            Err(error) => return Err(error),
+        }
     }
 }
 
