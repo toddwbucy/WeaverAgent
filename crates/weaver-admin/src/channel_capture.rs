@@ -250,17 +250,14 @@ impl Coordination {
 
     pub(super) fn packet_bytes(&self) -> Result<Option<Vec<u8>>, ChannelFault> {
         let mut bytes = vec![0; MAX_ENVELOPE_BYTES];
-        let mut slices = [std::io::IoSliceMut::new(&mut bytes)];
-        let received = match nix::sys::socket::recvmsg::<()>(
-            self.fd.as_raw_fd(),
-            &mut slices,
-            None,
-            MsgFlags::MSG_DONTWAIT,
-        ) {
-            Ok(received) => received,
-            Err(nix::errno::Errno::EAGAIN | nix::errno::Errno::EINTR) => return Ok(None),
-            Err(_) => return Err(ChannelFault::Closed),
-        };
+        // A reset is read past to the packets the worker queued before it
+        // closed (`recv_packet`, #523).
+        let received =
+            match super::recv_packet(self.fd.as_raw_fd(), &mut bytes, MsgFlags::MSG_DONTWAIT) {
+                Ok(received) => received,
+                Err(nix::errno::Errno::EAGAIN | nix::errno::Errno::EINTR) => return Ok(None),
+                Err(_) => return Err(ChannelFault::Closed),
+            };
         // There is no ancillary buffer: the kernel disposes unaccepted rights.
         if received
             .flags
