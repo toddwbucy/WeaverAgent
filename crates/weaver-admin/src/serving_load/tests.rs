@@ -392,9 +392,9 @@ fn root_case(case: &str) {
         std::os::unix::net::UnixListener::bind(f.config.territory.join("trace.jsonl")).unwrap();
     let binaries = f.config.worker.parent().unwrap();
     fs::set_permissions(binaries, fs::Permissions::from_mode(0o755)).unwrap();
-    write(
+    crate::test_isolation::write_executable(
         &f.config.worker.with_file_name("weaver-state"),
-        MEMBER.as_bytes(),
+        MEMBER,
         0o755,
     );
     let worker = WORKER
@@ -426,9 +426,9 @@ fn root_case(case: &str) {
                 answer(weaver_types::Payload::Refusal(LifecycleRefusal::OutOfOrder))
             ),
         );
-    write(&f.config.worker, worker.as_bytes(), 0o755);
+    crate::test_isolation::write_executable(&f.config.worker, worker, 0o755);
     for binary in [&f.config.spu, &f.config.gate] {
-        write(binary, b"#!/bin/sh\nexit 0\n", 0o755);
+        crate::test_isolation::write_executable(binary, "#!/bin/sh\nexit 0\n", 0o755);
     }
     let _cleanup = Cleanup(&f.config);
     crate::TEST_WORKER_UID.with(|uid| uid.set(Some(65534)));
@@ -466,7 +466,11 @@ fn root_case(case: &str) {
             fs::remove_file(&image_path).unwrap();
             let prepared = prepare(&f, artifact, facts, ordinal)?;
             if case == "worker-exec" {
-                write(&f.config.worker, b"#!/no/such/interpreter\n", 0o755);
+                crate::test_isolation::write_executable(
+                    &f.config.worker,
+                    "#!/no/such/interpreter\n",
+                    0o755,
+                );
             }
             if case == "member-exec" {
                 write(
