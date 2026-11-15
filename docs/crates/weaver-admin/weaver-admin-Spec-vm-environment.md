@@ -23,8 +23,9 @@ Level discipline. The charter carries each requirement and its reason. This docu
 elects how admin represents each, against the ground the charter's section states, and
 cites that section. Where a ruling or a measurement fixes a representation, this
 document states it. Where neither does, the cell stays open and names what settles it.
-This document states no requirement of its own and invents no value. It cites charters
-and the operator's rulings only.
+This document states no requirement of its own and invents no value. Its grounds come
+from charters, contracts and the operator's rulings, and other documents are named only
+for where a representation already stands.
 
 **Only admin's share is here.** The image, its build, its boot rules and its first boot
 are the image's, and the connectors are WeaverWeb's. Each is represented by its owner's
@@ -56,9 +57,10 @@ does not judge the state mount. The check judges the filesystem and not what lie
 and it mounts and repairs nothing. The sizes of the required mounts are reported.
 
 How admin knows it runs on an appliance, how it represents a separate filesystem, the
-refusal's case and what it names, the form of the report with the surface it crosses,
-and the sizes that count as sufficient are cells of section 9. How the state mount meets
-the agent's territory is open in the charter's section 10.
+refusal's case and what it names, and the form of the report with the surface it crosses
+are cells of section 9. The judgment of a size is the console's, per the charter's
+section 7.5. How the state mount meets the agent's territory is open in the charter's
+section 10.
 
 ## 2. State a version cannot read
 
@@ -113,8 +115,9 @@ Per `weaver-admin-PRD` sections 7 and 7.1.
 asks for either through admin-con, per `weaver-admin-operator-contract`.
 
 **Nothing of this framework starts the agent after a reboot.** Admin runs per verb and
-is not resident, and it lays no unit, timer or other start of its own. An operator's own
-packaging that starts the agent is the operator's, per the charter's section 7.
+is not resident, and it lays no persistent unit, timer or other start of its own. An
+operator's own packaging that starts the agent is the operator's, per the charter's
+section 7.
 
 ## 5. The trace's handoff
 
@@ -132,9 +135,10 @@ elects nothing new for the handoff, for two reasons:
 - `weaver-admin-Spec` section 5 opens a file sink beneath the territory's descriptor
   ("The trace's directory is the territory"), so a file sink on the state mount does not
   meet it as written.
-- Where the sink is named, where it stands, and whether a sink that cannot be opened
-  refuses a trace that goes nowhere are open in the charter's section 10, each against
-  `weaver-admin-operator-contract`, for the operator to settle.
+- Where the sink is named, where it stands, what reads a trace that is not a file, and
+  whether a sink that cannot be opened refuses a trace that goes nowhere are open in the
+  charter's section 10, each against `weaver-admin-operator-contract`, for the operator
+  to settle.
 
 `weaver-admin-Spec` section 5 follows the operator's settlement.
 
@@ -151,7 +155,7 @@ Per apex section 11. Each election above is listed with what catches its failure
   (section 3): no instrument exists as of 2026-11-15.
 - The act that adds the check and the act that adds the table each owe walks and
   perturbation tests in the manner of `weaver-admin-Spec` section 10, before any code,
-  per `weaver-admin-PRD` section 11.
+  per `weaver-admin-PRD` section 11's entry for the load additions.
 
 ## 7. Held elsewhere
 
@@ -162,9 +166,14 @@ Per apex section 11. Each election above is listed with what catches its failure
   7.2's and 7.3's.
 - **The console's side**, in `weaver-web-PRD` and its Spec in `toddwbucy/WeaverWeb`:
   enrollment's console half, the connectors' keys and certificates, the one-time secret,
-  the console's refusal of a second live holder of a certificate it issued, the
-  connectors' units and how they come up after a reboot, the model store and the model's
-  pull, the image download, and the display of the storage report.
+  what the console does with a clone, the connectors' units and how they come up after a
+  reboot, the model store and the model's pull, the image download, and the display of
+  the storage report.
+- **The build's two settings and the image's seal**: the compiler's flag and the list
+  of architectures that are the two settings of `weaver-admin-PRD` section 7.2, and the
+  compaction that ends the seal, the published digest being of the compacted file. The
+  image build's Spec in `toddwbucy/WeaverTools` holds them, and so do the deploy scripts
+  (`deploy/bootstrap-stack.sh`, `deploy/update-stack.sh`) as #570 sets them.
 - **The install record and the hardware read at each load**, per `deploy/REDEPLOY.md`
   section 3 and `deploy/verify-load.sh`. The guest's processor joining that read is an
   edit owed, per `weaver-admin-PRD` section 11.
@@ -176,8 +185,11 @@ Per apex section 11. Each election above is listed with what catches its failure
 
 None of this document's own. The operator's open rulings that bear on it are carried in
 `weaver-admin-PRD` section 10: what the run card is, whether the one table is the
-agent's own, where the trace's sink is named, where it stands, a sink that cannot be
-opened, and how the state mount meets the agent's territory.
+agent's own, where the trace's sink is named, where it stands, what reads a trace that
+is not a file, a sink that cannot be opened, how the state mount meets the agent's
+territory, and how the host install and the Spark-class machine relate. A stopped agent
+against a machine that is down is a cell of the charter's section 10, settled by an
+act.
 
 ## 9. Open cells, each with what settles it
 
@@ -188,9 +200,6 @@ opened, and how the state mount meets the agent's territory.
 - **The form of the storage report, and the surface it crosses to the console.** Settled
   by the act that adds the check, with the edit to `weaver-admin-operator-contract` that
   `weaver-admin-PRD` section 11 owes.
-- **The sizes that count as sufficient.** No run has measured what an agent writes to
-  the state mount. Settled by that measurement, which the act that adds the check owes
-  before it states a size.
 - **The table's name, the shape of its rules, how a declaration names a port, the
   table's place in the load and the unload, what the rollback does with a table that a
   refused load opened, and the run card's record of the open ports.** Settled by the
@@ -202,5 +211,3 @@ opened, and how the state mount meets the agent's territory.
 - **The record of an upgrade.** Which record carries an upgrade, and how state made
   under an older version is marked as used under the newer one. Settled by the act that
   writes it, per `weaver-admin-PRD` section 11.
-- **A stopped agent against a machine that is down.** What the operator reads to tell
-  the two apart. Settled when the first stop is run from the console.
