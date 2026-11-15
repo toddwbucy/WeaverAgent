@@ -307,6 +307,19 @@ say "build"
 # which `engine_out` reads for the engine's output directory
 # (deploy/engine-libraries.sh); its rendered diagnostics and progress go to
 # the log.
+# **A commit names every byte the build ships** (the operator's ruling of
+# 2026-11-15). nvcc names its temporaries after each object (`-objtemp`)
+# rather than after its process id, whose digits otherwise land in the
+# objects' symbol tables. An NVCC_APPEND_FLAGS the operator sets is kept
+# after it. ggml compiles cubins only, because cicc's PTX for some of its
+# kernels differs from build to build: CMAKE_CUDA_ARCHITECTURES is ggml's own
+# list for this toolkit with its two PTX entries (75-virtual, 80-virtual)
+# dropped, and llama-cpp-sys-2 hands every CMAKE_* variable to CMake as a
+# define. **A card off that list gets no ggml device code from this build**,
+# so the gguf engine does not run on it. A family is served by adding its
+# -real entry, at the price of build time. Neither setting reaches an engine
+# or kernel build the target directory already holds: the build scripts of
+# llama-cpp-sys-2 and weaver-spu rerun on neither variable.
 run_build() {
   local log="${BUILT%/release}/weaver-deploy-build-$$.log" rc=0
   BUILD_MESSAGES=$(mktemp "${BUILT%/release}/weaver-deploy-messages-XXXXXX") \
@@ -316,6 +329,8 @@ run_build() {
   trap 'rm -f -- "$BUILD_MESSAGES"' EXIT
   printf '   output: %s\n' "$log"
   NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
+  NVCC_APPEND_FLAGS="-objtemp${NVCC_APPEND_FLAGS:+ $NVCC_APPEND_FLAGS}" \
+  CMAKE_CUDA_ARCHITECTURES="86-real;89-real;120a-real;121a-real" \
     cargo build --release --locked --workspace --message-format=json-render-diagnostics \
       --features "$FEATURES" >"$BUILD_MESSAGES" 2>"$log" || rc=$?
   if [ "$rc" -ne 0 ]; then
