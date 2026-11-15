@@ -634,9 +634,10 @@ and judges no filesystem property. The SPU's refusal is the one that names the p
 the identity it was judged under, per that charter's section 7.
 
 Reached as the front half of a load, a clean inventory flows into step 4 and a failure
-refuses before any process exists. Invoked alone, it stops at the result and reports,
-which is the cheap way to test an operator's provisioning before a load depends on it.
-It changes no agent state either way.
+refuses before any process exists, save a failed data-mount check, whose effect is open
+in section 10. Invoked alone, it stops at the result and reports, which is the cheap way
+to test an operator's provisioning before a load depends on it. It changes no agent
+state either way.
 
 **It repairs nothing and concludes nothing.** A check that fails emits what was expected
 against what was found, per section 2, and the remedy is the operator's over artifacts

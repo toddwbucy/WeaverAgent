@@ -242,12 +242,23 @@ firewall is unmeasured.
 
 ## 6. Behaviour
 
-Per `weaver-admin-PRD` sections 7 and 7.2.
+Per `weaver-admin-PRD` sections 7, 7.1 and 7.2.
 
 **Nothing of the image starts the agent.** The build lays no agent configuration and no
 connector unit, and its probes refuse the seal on either (WeaverTools pull request 31).
-The connectors' units are WeaverWeb's. The console asks for a load or an unload through
-admin-con, per `weaver-admin-operator-contract`.
+It installs the two connectors' programs, `gate-con` and `admin-con`, under
+`/opt/weaver-web/bin`, and its probes refuse the seal where either is missing. The
+console asks for a load or an unload through admin-con, per
+`weaver-admin-operator-contract`.
+
+**How the connectors come up after a reboot has no representation as of 2026-11-15.**
+The charter's section 7 has an appliance's connectors come up after a reboot, and its
+section 7.1 installs nothing after the seal. The build lays no unit, and names the image
+half of WeaverWeb's staging WeaverWeb's act (WeaverTools pull request 31). WeaverWeb's
+side (WeaverWeb pull request 118) stages the two programs and their two unit templates
+in an image, enables no instance, since an instance is an agent's name, and leaves the
+image's accounts and locations to the appliance's own specification. Section 10 carries
+the cell.
 
 **The record of an upgrade** is a cell of section 10.
 
@@ -293,10 +304,11 @@ repository reaches a sealed image.
   that Weaver Web never touches a hypervisor, enrollment's console half with the link
   port and its default, the one-time secret's lifetime and form, the console's refusal
   of a second live holder of a certificate it issued with how it notices one and what it
-  does with the appliance that connected second, the enrollment connection as the one
-  unauthenticated surface of the console, the model store with its sources and its
-  access tokens, the model's pull, the image download with its hash check, and the
-  display of the storage report.
+  does with the appliance that connected second, the staging of the connectors' half in
+  an image with its unit templates, the enrollment connection as the one unauthenticated
+  surface of the console, the model store with its sources and its access tokens, the
+  model's pull, the image download with its hash check, and the display of the storage
+  report.
 - **The evidence, and the measurements still owed** before a Spec relies on the claim of
   `weaver-admin-PRD` section 7.1. They stay with the experiments of
   `toddwbucy/WeaverTools` and its issue 28.
@@ -368,6 +380,12 @@ exists.
   documentation says. What that rule grants is unread. The operator mounts the disks and
   runs the pairing line through that account. Settled by a read of the rule on a first
   boot, and by the operator's ruling where it reaches further than those acts need.
+- **How the connectors' units reach the image and start after a reboot, and the accounts
+  and locations they are rendered with.** WeaverWeb pull request 118 leaves the image's
+  accounts and locations to the appliance's own specification, and which instance
+  stands, and when it is enabled, to WeaverWeb. Settled by the act that lays the image
+  half of WeaverWeb's staging in the build (WeaverTools pull request 31), which names
+  the accounts and locations for this specification to state.
 - **What the image lays at the two mount points.** Settled by the build's act that adds
   the data disks' mount points (WeaverTools pull request 31).
 - **How admin knows it runs on an appliance, and which mounts it checks.** Settled by
