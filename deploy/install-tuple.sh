@@ -141,7 +141,9 @@ TUPLE_CCCL_HEADER=cuda/std/__cccl/version.h
 # `--include-path=DIR`, each value a comma-separated list, the whole value
 # split on blanks and newlines. Answers 1, naming nothing, where FLAGS hold
 # what it does not rank: a quote or a backslash, a system, after or quote
-# include, or options handed to the host compiler, which may carry their own.
+# include, an options file (which may hold an include of its own), a
+# pre-included header (which may be another toolkit's CCCL, read first), or
+# options handed to the host compiler, which may carry their own.
 tuple_include_dirs() {
   local -a words
   local w list i=0
@@ -157,6 +159,7 @@ tuple_include_dirs() {
       --include-path=*) list=${w#--include-path=} ;;
       -I*) list=${w#-I} ;;
       -isystem*|--system-include*|-idirafter*|-iquote*|-Xcompiler*|--compiler-options*) return 1 ;;
+      --options-file*|-optf*|--pre-include*|-include*) return 1 ;;
       *) continue ;;
     esac
     printf '%s\n' "${list//,/$'\n'}"
@@ -180,10 +183,13 @@ tuple_first_header() {
 }
 
 # tuple_dpkg_owner PATH: the one package dpkg records as owning PATH, or
-# nothing. A path dpkg-query would read as a pattern is refused. A
-# diversion's lines name the path too and are not owners. Two packages that
-# own one file share one line, `a, b`, which the package-name check refuses
-# as no one owner.
+# nothing. A path dpkg-query would read as a pattern is refused. A path a
+# diversion names, a package's or a local one, answers 2: the file there may
+# be the diverting package's or the administrator's replacement, which no
+# owner line names, while the original package's line still names the path.
+# dpkg-query translates its diversion lines, so it is asked in the C locale.
+# Two packages that own one file share one line, `a, b`, which the
+# package-name check refuses as no one owner.
 tuple_dpkg_owner() {
   local path=$1 said line owner="" lines=0
   case $path in
@@ -193,10 +199,10 @@ tuple_dpkg_owner() {
   case $path in
     *[\*\?\[\\]*|*$'\n'*) return 1 ;;
   esac
-  said=$(dpkg-query -S "$path" 2>/dev/null) || return 1
+  said=$(LC_ALL=C dpkg-query -S "$path" 2>/dev/null) || return 1
   while IFS= read -r line; do
     case $line in
-      "diversion by "*) continue ;;
+      "diversion by "*|"local diversion "*) return 2 ;;
     esac
     [[ "$line" == *": $path" ]] || continue
     lines=$((lines + 1))
@@ -229,8 +235,9 @@ tuple_dpkg_owner() {
 # tuple_include_dirs does not rank, where a relative directory comes before
 # the header, where an appended directory is relative or holds a header,
 # where the toolkit holds other than one target, and where no one package
-# owns the header. dpkg records the path a package unpacks, so the header is
-# asked for as found and then as resolved.
+# owns the header or a diversion names it. dpkg records the path a package
+# unpacks, so the header is asked for as found and then as resolved, and a
+# diversion that names either spelling ends the asking.
 tuple_cccl() {
   local n prepend append header built path top owner="" rc=0
   local -a targets
@@ -263,8 +270,11 @@ tuple_cccl() {
     fi
   fi
   for path in "$header" "$(readlink -f -- "$header" 2>/dev/null)"; do
-    owner=$(tuple_dpkg_owner "$path") && break
+    rc=0
+    owner=$(tuple_dpkg_owner "$path") || rc=$?
+    [ "$rc" -ne 0 ] || break
     owner=""
+    [ "$rc" -ne 2 ] || return 0
   done
   [ -n "$owner" ] || return 0
   n=$(dpkg-query -W -f='${Package}=${Version}\n' "$owner" 2>/dev/null || true)

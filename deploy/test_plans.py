@@ -194,17 +194,30 @@ elif name == 'pacman': print('cccl 3.3.4-1')
 elif name == 'dpkg-query':
     # The package database FIXTURE_DPKG names, as JSON: `owners` maps a path
     # to what dpkg-query -S prints before it (one package, or two that share
-    # the file), `diverted` the paths a diversion names, as dpkg-query prints
-    # its two lines ahead of the owner's, and `versions` each package's
-    # version. A path or a package it does not hold is refused, as
-    # dpkg-query refuses one.
+    # the file), `diverted` and `local_diverted` the paths a package's or a
+    # local diversion names, whose two lines dpkg-query prints ahead of the
+    # owner's, and `versions` each package's version. As dpkg's searchoutput
+    # does, a diverted path counts as found though no package owns it, and
+    # the diversion lines are translated: under a `de` message locale they
+    # take a form the reader does not know (not dpkg's own wording). A path
+    # or a package it does not hold is refused, as dpkg-query refuses one.
     db = json.loads(os.environ.get('FIXTURE_DPKG', '{}'))
     if args[:1] == ['-S'] and len(args) == 2:
         path = args[1]
-        if path in db.get('diverted', []):
-            print(f'diversion by fixture-diverter from: {path}')
-            print(f'diversion by fixture-diverter to: {path}.distrib')
+        messages = (os.environ.get('LC_ALL') or os.environ.get('LC_MESSAGES')
+                    or os.environ.get('LANG') or 'C')
+        diverted = False
+        for by, listed in (('diversion by fixture-diverter', 'diverted'), ('local diversion', 'local_diverted')):
+            if path in db.get(listed, []):
+                diverted = True
+                if messages.startswith('de'):
+                    print(f'Umleitung ({listed}) von {path} nach {path}.distrib')
+                else:
+                    print(f'{by} from: {path}')
+                    print(f'{by} to: {path}.distrib')
         if path not in db.get('owners', {}):
+            if diverted:
+                sys.exit(0)
             print(f'dpkg-query: no path found matching pattern {path}', file=sys.stderr)
             sys.exit(1)
         print(f"{db['owners'][path]}: {path}")
@@ -4213,17 +4226,22 @@ esac
         a compiler's directory this script never sees), an appended include
         directory that holds CCCL (the build's own flags stand between it
         and the toolkit's), an include form the reader does not rank (a
-        system include, options for the host compiler, a quote), an SPU
-        build include that holds a CCCL of its own (the engine's compile
-        does not read it), a toolkit of two targets, a header no package
-        owns (a toolkit from NVIDIA's installer) or two packages own, a
-        header path dpkg-query would read as a pattern, and a box with no
-        dpkg-query. A diversion's lines name the header too, and are not
-        owners. Perturbations: skip relative directories, drop the appended
-        flags' read, rank no other include form, drop the build include's
-        check, take the first target, take the first of two owners, or drop
-        the pattern refusal, and that case reads a package; count a
-        diversion's line as an owner and the diversion case reads unknown."""
+        system include, options for the host compiler, an options file, a
+        pre-included header, a quote), an SPU build include that holds a
+        CCCL of its own (the engine's compile does not read it), a toolkit
+        of two targets, a header no package owns (a toolkit from NVIDIA's
+        installer) or two packages own, a header path dpkg-query would read
+        as a pattern, a header a diversion names, a package's or a local
+        one, by either spelling and in any message locale (the file there
+        may be the replacement, while the original package's line still
+        names the path), and a box with no dpkg-query. Perturbations: skip
+        relative directories, drop the appended flags' read, rank no other
+        include form, rank an options file or a pre-included header as no
+        flag, drop the build include's check, take the first target, take
+        the first of two owners, drop the pattern refusal, pass over a
+        package's or a local diversion's lines, ask the resolved spelling
+        after a diversion of the spelling as found, or ask dpkg-query in
+        the box's locale, and that case reads a package."""
         cccl = self.ubuntu_box()
         database = self.dpkg_database(cccl)
         header = str((cccl["99.3"] / "cuda/std/__cccl/version.h").resolve())
@@ -4236,11 +4254,18 @@ esac
         (twelve / "include" / "cuda" / "std" / "__cccl").mkdir(parents=True)
         (twelve / "include" / "cuda" / "std" / "__cccl" / "version.h").write_text("#define CCCL_VERSION fixture-12\n")
         twelveheader = str((twelve / "include" / "cuda/std/__cccl/version.h").resolve())
+        # An options file naming the older toolkit's CCCL, which nvcc reads.
+        optf = self.root / "cccl.flags"
+        optf.write_text(f"-I{cccl['99.3']}\n")
         for case, env in (
                 ("relative first", {"NVCC_PREPEND_FLAGS": f"-Irelative/cccl -I{cccl['99.3']}"}),
                 ("appended CCCL", {"NVCC_APPEND_FLAGS": f"-I{cccl['99.3']}"}),
                 ("a system include", {"NVCC_PREPEND_FLAGS": f"-isystem {cccl['99.3']}"}),
                 ("host compiler options", {"NVCC_PREPEND_FLAGS": f"-Xcompiler -I{cccl['99.3']}"}),
+                ("an options file", {"NVCC_PREPEND_FLAGS": f"--options-file {optf}"}),
+                ("an options file, short", {"NVCC_PREPEND_FLAGS": f"-optf {optf}"}),
+                ("a pre-included header", {"NVCC_PREPEND_FLAGS": f"--pre-include {header}"}),
+                ("a pre-included header, short", {"NVCC_PREPEND_FLAGS": f"-include {header}"}),
                 ("a quote", {"NVCC_PREPEND_FLAGS": f'-I{cccl["99.3"]} -DFIXTURE="a b"'}),
                 ("the build's own CCCL", {"CUDA_PATH": str(twelve),
                                           "FIXTURE_DPKG": self.dpkg_database(cccl, owners={
@@ -4260,7 +4285,29 @@ esac
         with self.subTest(case="a diversion names the header"):
             facts, _ = self.ubuntu_tuple(NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}",
                                          FIXTURE_DPKG=self.dpkg_database(cccl, diverted=[header]))
-            self.assertEqual(facts["cccl"], "cccl-99-3=99.3.3.4.1-1")
+            self.assertEqual(facts["cccl"], "unknown")
+        with self.subTest(case="a local diversion names the header"):
+            facts, _ = self.ubuntu_tuple(NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}",
+                                         FIXTURE_DPKG=self.dpkg_database(cccl, local_diverted=[header]))
+            self.assertEqual(facts["cccl"], "unknown")
+        # Through a linked ancestor: the diversion names the spelling the
+        # flags give, which no package owns, and the resolved spelling's
+        # owner line still names the package, so the asking stops at the
+        # diversion.
+        (self.root / "usr-divert").symlink_to("usr-local")
+        spelled = self.root / "usr-divert" / "cuda-99.3" / "targets" / "x86_64-linux" / "include" / "cccl"
+        for kind in ("diverted", "local_diverted"):
+            with self.subTest(case=f"{kind} names the spelling as found"):
+                facts, asked = self.ubuntu_tuple(
+                    NVCC_PREPEND_FLAGS=f"-I{spelled}",
+                    FIXTURE_DPKG=self.dpkg_database(cccl, **{kind: [str(spelled / "cuda/std/__cccl/version.h")]}))
+                self.assertEqual(facts["cccl"], "unknown")
+                self.assertNotIn(["dpkg-query", "-S", header], asked)
+        with self.subTest(case="a diversion in a translated locale"):
+            facts, _ = self.ubuntu_tuple(NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}", LC_ALL="", LC_MESSAGES="",
+                                         LANG="de_DE.UTF-8",
+                                         FIXTURE_DPKG=self.dpkg_database(cccl, diverted=[header]))
+            self.assertEqual(facts["cccl"], "unknown")
         with self.subTest(case="two targets"):
             # The other target holds its own CCCL, owned, and sorts first.
             other = self.root / "usr-local" / "cuda-99.4" / "targets" / "sbsa-linux" / "include" / "cccl"
