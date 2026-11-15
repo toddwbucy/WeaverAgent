@@ -480,6 +480,23 @@ fn failed_enter_cleanup_actual_classifier_child_eof_retains_admission_and_reaps_
         resources.classifier.as_ref().unwrap().state(),
         ChildState::Reaped(_)
     ));
+    // The reaped child's copy of the channel is gone, but a concurrent test's
+    // fork may still hold one until its exec, and the single pump below must
+    // meet the hangup, not the fake clock's Enter bound (#413).
+    {
+        use std::os::fd::AsRawFd;
+        let classifier_end = fx
+            .context
+            .flow
+            .starting_classifier()
+            .expect("the classifier is starting")
+            .readiness()
+            .as_raw_fd();
+        crate::flow::fixture_eof::await_release_until(
+            classifier_end,
+            std::time::Instant::now() + Duration::from_secs(5),
+        );
+    }
     let failure = fx
         .context
         .pump_once(&mut PumpPorts {
