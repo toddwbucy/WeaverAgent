@@ -359,7 +359,7 @@ What it does, so the log can say which step a failure was at:
    member.<name> = <64 hex>              (one per installed member, the shell's two files among them)
    library.<versioned file> = <64 hex>   (one per engine library)
    runtime.cudart = <64 hex> <file>      (and cublas, cublaslt, curand)
-   cccl = <package version>
+   cccl = <package version>               (pacman's, or with no pacman <package>=<version> from dpkg)
    ```
 
    Each `runtime.` line is the file the installed SPU's library name leads to, as
