@@ -1040,31 +1040,43 @@ fn stalled_at_the_reserve() -> (Recorder, std::io::PipeReader) {
 /// section 7, the reserve): every other record blocks once the queue holds
 /// `QUEUE_DEPTH - UNLOAD_RESERVE`, so a stalled sink can never leave the
 /// terminal event without room, and `unload` is admitted at once there.
-/// Each case ends by failing the sink, which admits the waiting fault.
+/// Each case ends by failing the sink, which admits the waiting fault, and
+/// `submit` answers `Ok` for it. A fault whose `submit` begins after the sink
+/// failed is refused with that failure, and the test prints it. Each
+/// submitter announces itself just before the fault's `submit` ("submitting",
+/// or "unload admitted"), and the hold starts at that announcement, not at
+/// the thread's start.
 /// Perturbations: admit every kind to the full depth, and the first case's
 /// fault takes the last slot. Hold the unload to the reserve as well, and
 /// the second case's unload is never admitted. Make the stalling record a
 /// small one and hold the writer off until the queue is full, as a loaded
-/// box can, and the writer frees a slot for the first case's fault.
+/// box can, and the writer frees a slot for the first case's fault. Make
+/// `submit` answer the sink's standing failure after it queues its record,
+/// and each case fails on its own.
 #[test]
 fn the_queues_last_slot_is_reserved_for_unload() {
     let wait = std::time::Duration::from_secs(5);
     let held = std::time::Duration::from_millis(300);
+    let outcome = |answer: Result<weaver_trace::Sequence, weaver_trace::Failure>| match answer {
+        Ok(_) => "a fault admitted".to_string(),
+        Err(failure) => format!("a fault refused: {failure:?}"),
+    };
 
     // At the reserve, a record other than unload waits for room.
     let (mut r, reader) = stalled_at_the_reserve();
     let (tx, rx) = std::sync::mpsc::channel();
     let submitter = std::thread::spawn(move || {
-        let _ = r.submit(padded_fault());
-        tx.send("a fault admitted").unwrap();
+        tx.send("submitting".to_string()).unwrap();
+        tx.send(outcome(r.submit(padded_fault()))).unwrap();
     });
+    assert_eq!(rx.recv_timeout(wait).as_deref(), Ok("submitting"));
     assert!(
         rx.recv_timeout(held).is_err(),
         "a record other than unload waits for room"
     );
     drop(reader);
     assert_eq!(
-        rx.recv_timeout(wait),
+        rx.recv_timeout(wait).as_deref(),
         Ok("a fault admitted"),
         "the failed sink admits the waiting fault"
     );
@@ -1087,18 +1099,17 @@ fn the_queues_last_slot_is_reserved_for_unload() {
             })),
         ))
         .unwrap();
-        tx.send("unload admitted").unwrap();
-        let _ = r.submit(padded_fault());
-        tx.send("a fault admitted").unwrap();
+        tx.send("unload admitted".to_string()).unwrap();
+        tx.send(outcome(r.submit(padded_fault()))).unwrap();
     });
-    assert_eq!(rx.recv_timeout(wait), Ok("unload admitted"));
+    assert_eq!(rx.recv_timeout(wait).as_deref(), Ok("unload admitted"));
     assert!(
         rx.recv_timeout(held).is_err(),
         "a record other than unload waits for room"
     );
     drop(reader);
     assert_eq!(
-        rx.recv_timeout(wait),
+        rx.recv_timeout(wait).as_deref(),
         Ok("a fault admitted"),
         "the failed sink admits the waiting fault"
     );
