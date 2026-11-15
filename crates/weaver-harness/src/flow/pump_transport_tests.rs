@@ -87,6 +87,7 @@ fn assert_frozen<T>(port: &mut PacketPort<T>, failure: &Failure) {
 
 #[test]
 fn organ_reset_keeps_both_queued_packets_without_reopening_sends() {
+    use std::os::fd::AsRawFd;
     let (end, peer) = pair();
     let mut port = OrganPort::from_owned(end).unwrap();
     port.stage(envelope()).unwrap();
@@ -102,7 +103,13 @@ fn organ_reset_keeps_both_queued_packets_without_reopening_sends() {
     send_bytes(&peer, &second);
     // The peer exits without reading the sent packet. Linux reports reset
     // before making its two final queued packets available to this owner.
+    // The reset comes only with the peer's release, which a concurrent test's
+    // fork holding a copy of the peer delays until its exec.
     drop(peer);
+    crate::flow::fixture_eof::await_release_until(
+        port.fd().as_raw_fd(),
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+    );
     let failure = port.try_receive().unwrap_err();
     assert_eq!(failure.errno, Some(libc::ECONNRESET));
     assert_eq!(port.stage(envelope()).unwrap_err().failure, failure);
@@ -134,6 +141,7 @@ fn organ_reset_keeps_both_queued_packets_without_reopening_sends() {
 
 #[test]
 fn organ_closed_receive_keeps_malformed_tail_and_first_reset() {
+    use std::os::fd::AsRawFd;
     let (end, peer) = pair();
     let mut port = OrganPort::from_owned(end).unwrap();
     port.stage(envelope()).unwrap();
@@ -141,7 +149,13 @@ fn organ_closed_receive_keeps_malformed_tail_and_first_reset() {
     let original = b"{\"malformed\": [  ";
     send_bytes(&peer, original);
     send_bytes(&peer, &serde_json::to_vec(&envelope()).unwrap());
+    // The first reset comes only with the peer's release, which a concurrent
+    // test's fork holding a copy of the peer delays until its exec.
     drop(peer);
+    crate::flow::fixture_eof::await_release_until(
+        port.fd().as_raw_fd(),
+        std::time::Instant::now() + std::time::Duration::from_secs(5),
+    );
     let first = port.try_receive().unwrap_err();
     assert_eq!(first.errno, Some(libc::ECONNRESET));
     let refusal = port.receive_closed().unwrap_err();
