@@ -514,8 +514,8 @@ fn closed_gate_receive_debt_stays_runnable_before_its_terminal_deadline() {
     gate.try_send().unwrap();
     // Closing with the unread request produces the actual reset ahead of EOF.
     // The reset comes only with the peer's release, which a concurrent test's
-    // fork holding a copy of the peer delays until its exec, so the one
-    // receive below waits for it.
+    // fork holding a copy of the peer delays until its exec, so the test waits
+    // for the release before its one receive.
     drop(peer);
     crate::flow::fixture_eof::await_release_until(
         gate.fd().as_raw_fd(),
