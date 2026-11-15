@@ -3,6 +3,7 @@ use crate::flow::clock::{MonotonicIo, PumpIo, WaitInterest, WaitOutcome};
 use nix::sys::socket::{AddressFamily, ControlMessage, SockFlag, recv, sendmsg, socketpair};
 use std::cell::Cell;
 use std::io::IoSlice;
+use std::time::{Duration, Instant};
 use weaver_types::{
     ExchangeId, LabelAnswer, LabelRefusal, LifecycleAnswer, Opener, Position, TokenAnswer,
     TokenRefusal,
@@ -102,7 +103,13 @@ fn organ_reset_keeps_both_queued_packets_without_reopening_sends() {
     send_bytes(&peer, &second);
     // The peer exits without reading the sent packet. Linux reports reset
     // before making its two final queued packets available to this owner.
+    // The reset comes only with the peer's release, which a concurrent test's
+    // fork holding a copy of the peer delays until its exec.
     drop(peer);
+    crate::flow::fixture_eof::await_release_until(
+        port.fd().as_raw_fd(),
+        Instant::now() + Duration::from_secs(5),
+    );
     let failure = port.try_receive().unwrap_err();
     assert_eq!(failure.errno, Some(libc::ECONNRESET));
     assert_eq!(port.stage(envelope()).unwrap_err().failure, failure);
@@ -141,7 +148,13 @@ fn organ_closed_receive_keeps_malformed_tail_and_first_reset() {
     let original = b"{\"malformed\": [  ";
     send_bytes(&peer, original);
     send_bytes(&peer, &serde_json::to_vec(&envelope()).unwrap());
+    // The first reset comes only with the peer's release, which a concurrent
+    // test's fork holding a copy of the peer delays until its exec.
     drop(peer);
+    crate::flow::fixture_eof::await_release_until(
+        port.fd().as_raw_fd(),
+        Instant::now() + Duration::from_secs(5),
+    );
     let first = port.try_receive().unwrap_err();
     assert_eq!(first.errno, Some(libc::ECONNRESET));
     let refusal = port.receive_closed().unwrap_err();
