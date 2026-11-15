@@ -1287,9 +1287,9 @@ link. Only the rule that the directory is the agent's territory goes. **A trace 
 sink is not a regular file on the machine, `/dev/null` or a sink off the machine, leaves
 the console's Record surface and Train stage (`weaver-web-PRD`) nothing to read**, since
 the trace door serves only a file sink, per `weaver-admin-operator-contract` section 3,
-and that is the operator's choice. `weaver-admin-operator-contract` sections 3 and 5 and
-`weaver-admin-Spec` sections 5 and 9 still hold the sink to the territory, and section
-11 registers the act that changes them.
+and that is the operator's choice. `weaver-admin-operator-contract` sections 3 and 5,
+`weaver-types-Spec` section 2 and `weaver-admin-Spec` sections 5 and 9 still hold the
+sink to the territory, and section 11 registers the act that changes them.
 
 ## 8. The operator interface, and the domain that left
 
@@ -1641,14 +1641,17 @@ trace's destination.
 - **The trace goes where it is declared, one act to come**, on the operator's ruling of
   2026-11-15 (section 7.5). In `weaver-admin-operator-contract`: section 3's "Whatever
   its kind, the sink stands in the agent's territory", and section 5's refusal of a sink
-  that cannot be opened, as each bears on `/dev/null`. In `weaver-admin-Spec`: section
-  5's rule that the trace's directory is the territory, with its judgment that a file
-  sink's descriptor is a regular file laid out as the territory lays out a trace, which
-  `/dev/null` does not meet, and section 9's refusal `ConfigInvalid` naming `trace-sink`
-  for a sink whose directory is not the judged territory. The code that follows them.
-  Each keeps the property section 7.5 keeps. **Settled by:** the act "the trace goes
-  where it is declared". Where the member's room stands when the sink stands outside the
-  territory is the later item of section 7.5.
+  that cannot be opened, as each bears on `/dev/null`. In `weaver-types-Spec`: section
+  2's "The sink's directory is the agent's territory, whatever the kind". In
+  `weaver-admin-Spec`: section 5's rule that the trace's directory is the territory,
+  with its judgment that a file sink's descriptor is a regular file laid out as the
+  territory lays out a trace, which `/dev/null` does not meet, and section 9's refusal
+  `ConfigInvalid` naming `trace-sink` for a sink whose directory is not the judged
+  territory. The code that follows them, and the sentence of
+  `deploy/HowToDeployANewAgent.md` section 3 that describes the refusal. Each keeps the
+  property section 7.5 keeps. **Settled by:** the act "the trace goes where it is
+  declared". Where the member's room stands when the sink stands outside the territory
+  is the later item of section 7.5.
 
 ## 12. Children
 

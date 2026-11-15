@@ -132,10 +132,10 @@ charter's section 7.5. The operator chooses the destination on Weaver Web's decl
 page when the agent is created, and it may be `/dev/null`. A file sink's directory stays
 one that no principal of the agent can write or replace, and the open follows no link.
 
-This document elects nothing new for the handoff. `weaver-admin-Spec` sections 5 and 9
-and `weaver-admin-operator-contract` sections 3 and 5 still hold the sink to the agent's
-territory, and the act that changes them, "the trace goes where it is declared", is
-registered in the charter's section 11.
+This document elects nothing new for the handoff. `weaver-admin-Spec` sections 5 and 9,
+`weaver-types-Spec` section 2 and `weaver-admin-operator-contract` sections 3 and 5
+still hold the sink to the agent's territory, and the act that changes them, "the trace
+goes where it is declared", is registered in the charter's section 11.
 
 ## 6. What is enforced, and by which instrument
 
