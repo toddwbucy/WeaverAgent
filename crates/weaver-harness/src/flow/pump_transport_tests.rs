@@ -3,6 +3,7 @@ use crate::flow::clock::{MonotonicIo, PumpIo, WaitInterest, WaitOutcome};
 use nix::sys::socket::{AddressFamily, ControlMessage, SockFlag, recv, sendmsg, socketpair};
 use std::cell::Cell;
 use std::io::IoSlice;
+use std::time::{Duration, Instant};
 use weaver_types::{
     ExchangeId, LabelAnswer, LabelRefusal, LifecycleAnswer, Opener, Position, TokenAnswer,
     TokenRefusal,
@@ -87,7 +88,6 @@ fn assert_frozen<T>(port: &mut PacketPort<T>, failure: &Failure) {
 
 #[test]
 fn organ_reset_keeps_both_queued_packets_without_reopening_sends() {
-    use std::os::fd::AsRawFd;
     let (end, peer) = pair();
     let mut port = OrganPort::from_owned(end).unwrap();
     port.stage(envelope()).unwrap();
@@ -108,7 +108,7 @@ fn organ_reset_keeps_both_queued_packets_without_reopening_sends() {
     drop(peer);
     crate::flow::fixture_eof::await_release_until(
         port.fd().as_raw_fd(),
-        std::time::Instant::now() + std::time::Duration::from_secs(5),
+        Instant::now() + Duration::from_secs(5),
     );
     let failure = port.try_receive().unwrap_err();
     assert_eq!(failure.errno, Some(libc::ECONNRESET));
@@ -141,7 +141,6 @@ fn organ_reset_keeps_both_queued_packets_without_reopening_sends() {
 
 #[test]
 fn organ_closed_receive_keeps_malformed_tail_and_first_reset() {
-    use std::os::fd::AsRawFd;
     let (end, peer) = pair();
     let mut port = OrganPort::from_owned(end).unwrap();
     port.stage(envelope()).unwrap();
@@ -154,7 +153,7 @@ fn organ_closed_receive_keeps_malformed_tail_and_first_reset() {
     drop(peer);
     crate::flow::fixture_eof::await_release_until(
         port.fd().as_raw_fd(),
-        std::time::Instant::now() + std::time::Duration::from_secs(5),
+        Instant::now() + Duration::from_secs(5),
     );
     let first = port.try_receive().unwrap_err();
     assert_eq!(first.errno, Some(libc::ECONNRESET));
