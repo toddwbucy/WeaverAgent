@@ -1,6 +1,6 @@
 use super::*;
 use crate::flow::clock::{WaitOutcome, testing::FakePumpIo};
-use crate::flow::fixture_eof::await_eof_until;
+use crate::flow::fixture_eof::{await_eof_until, await_release_until};
 use nix::sys::socket::{
     AddressFamily, ControlMessage, MsgFlags, SockFlag, SockType, recv, send, sendmsg, socketpair,
 };
@@ -16,6 +16,10 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 struct Fixture {
     owner: FoundationAdmission,
     peer: OwnedFd,
+    /// The owner's end of the admin connection, recorded at the pair, where
+    /// the test peer's release shows as the hangup wherever the owner holds
+    /// the connection then.
+    admin_end: std::os::fd::RawFd,
     _path: PathGuard,
 }
 
@@ -41,6 +45,7 @@ impl Fixture {
             SockFlag::SOCK_CLOEXEC,
         )
         .unwrap();
+        let admin_end = end.as_raw_fd();
         // Owner tests isolate an already authenticated socketpair. The process
         // fixtures exercise actual accept credentials and process-wide hygiene.
         let receiver = EnterReceiver::from_peer(LifecyclePeer::from_owned(end).unwrap())
@@ -61,6 +66,7 @@ impl Fixture {
                 delivery_loss: None,
             },
             peer,
+            admin_end,
             _path: PathGuard(path),
         }
     }
@@ -253,6 +259,7 @@ fn pending_answer_waits_for_capacity_without_reading_a_second_packet_or_inventin
         Payload::Refusal(LifecycleRefusal::OutOfOrder)
     ));
     drop(fx.peer);
+    await_release_until(fx.admin_end, Instant::now() + Duration::from_secs(5));
     fx.owner.advance_with_io(&mut FakePumpIo::new(10));
     assert!(
         fx.owner.receiver.is_none(),
@@ -943,6 +950,7 @@ fn diagnostic_lost_preload_refusal_returns_listener_after_peer_departure() {
     // The packet is fully received before its authenticated peer disappears.
     // Missing handles refuse before any child or record is created.
     drop(fx.peer);
+    await_release_until(fx.admin_end, Instant::now() + Duration::from_secs(5));
     let FoundationDiagnosticResult::Admission(mut owner) =
         fx.owner.serve_diagnostic(&diagnostic_program())
     else {
@@ -1095,6 +1103,7 @@ fn undeliverable_answer_notice_is_retained_once_before_another_accept() {
     fx.owner.advance_with_io(&mut FakePumpIo::new(10));
     assert!(fx.owner.response.is_some());
     drop(fx.peer);
+    await_release_until(fx.admin_end, Instant::now() + Duration::from_secs(5));
     fx.owner.advance_with_io(&mut FakePumpIo::new(10));
     assert_eq!(fx.owner.progress(), FoundationAdmissionProgress::Pending);
     assert_eq!(fx.owner.process_exit(), None);
