@@ -191,6 +191,44 @@ elif name == 'nvidia-smi':
     else: print('fixture-driver')
 elif name == 'nvcc': print('nvcc: fixture\nCuda compilation tools, release 99.9, V99.9.1\nBuild fixture')
 elif name == 'pacman': print('cccl 3.3.4-1')
+elif name == 'dpkg-query':
+    # The package database FIXTURE_DPKG names, as JSON: `owners` maps a path
+    # to what dpkg-query -S prints before it (one package, or two that share
+    # the file), `diverted` and `local_diverted` the paths a package's or a
+    # local diversion names, whose two lines dpkg-query prints ahead of the
+    # owner's, and `versions` each package's version. As dpkg's searchoutput
+    # does, a diverted path counts as found though no package owns it, and
+    # the diversion lines are translated: under a `de` message locale they
+    # take a form the reader does not know (not dpkg's own wording). A path
+    # or a package it does not hold is refused, as dpkg-query refuses one.
+    db = json.loads(os.environ.get('FIXTURE_DPKG', '{}'))
+    if args[:1] == ['-S'] and len(args) == 2:
+        path = args[1]
+        messages = (os.environ.get('LC_ALL') or os.environ.get('LC_MESSAGES')
+                    or os.environ.get('LANG') or 'C')
+        diverted = False
+        for by, listed in (('diversion by fixture-diverter', 'diverted'), ('local diversion', 'local_diverted')):
+            if path in db.get(listed, []):
+                diverted = True
+                if messages.startswith('de'):
+                    print(f'Umleitung ({listed}) von {path} nach {path}.distrib')
+                else:
+                    print(f'{by} from: {path}')
+                    print(f'{by} to: {path}.distrib')
+        if path not in db.get('owners', {}):
+            if diverted:
+                sys.exit(0)
+            print(f'dpkg-query: no path found matching pattern {path}', file=sys.stderr)
+            sys.exit(1)
+        print(f"{db['owners'][path]}: {path}")
+    elif args[:1] == ['-W'] and len(args) == 3 and args[1].startswith('-f='):
+        package = args[2].split(':', 1)[0]
+        if package not in db.get('versions', {}):
+            print(f'dpkg-query: no packages found matching {args[2]}', file=sys.stderr)
+            sys.exit(1)
+        print(args[1][3:].replace('${Package}', package).replace('${Version}', db['versions'][package])
+              .replace('\\n', '\n'), end='')
+    else: sys.exit(2)
 elif name == 'cargo':
     target = pathlib.Path(os.environ['CARGO_TARGET_DIR'])
     # The engine's package as the lock names it, beside another crate with a
@@ -524,7 +562,8 @@ class PlanTests(unittest.TestCase):
                      "CMAKE_DISABLE_FIND_PACKAGE_OpenSSL", "STALE_ENGINE",
                      "BOX_PASSWD", "BOX_GROUP", "EXTRA_PASSWD", "GATECON_GROUPS", "ADMINCON_GROUPS",
                      "GATECON_JOINED", "ADMINCON_JOINED",
-                     "LD_LIBRARY_PATH", "LD_PRELOAD", "NO_NVIDIA", "LDD_RUNTIME", "FIXTURE_DRIVERS"):
+                     "LD_LIBRARY_PATH", "LD_PRELOAD", "NO_NVIDIA", "LDD_RUNTIME", "FIXTURE_DRIVERS",
+                     "NVCC_PREPEND_FLAGS", "NVCC_APPEND_FLAGS", "FIXTURE_DPKG"):
             self.env.pop(name, None)
         self.env["CUDA_LIB_DIR"] = str(self.cuda_lib)
         # Redirect even shell builtin /home probes, and the cgroup mount's
@@ -4039,6 +4078,245 @@ esac
         self.assertEqual(facts["engine"], "llama-cpp-sys-2 unknown")
         self.assertEqual(facts["commit"], "fixture-commit", "the commit is the caller's, never read again")
         self.assertNotIn("NVIDIA-SMI", ran.stdout)
+
+    def ubuntu_box(self):
+        """Lay out an Ubuntu box's CUDA as NVIDIA's repository installs it:
+        two toolkit releases, each with its CCCL under
+        `targets/x86_64-linux/include/cccl` from its own package, each
+        `include` a link to its target's, and `cuda` a link to the newer,
+        whose nvcc is the one on PATH. Answers the CCCL directory of each
+        release, by release."""
+        local = self.root / "usr-local"
+        cccl = {}
+        for release in ("99.3", "99.4"):
+            top = local / f"cuda-{release}"
+            include = top / "targets" / "x86_64-linux" / "include"
+            (include / "cccl" / "cuda" / "std" / "__cccl").mkdir(parents=True)
+            (include / "cccl" / "cuda" / "std" / "__cccl" / "version.h").write_text(
+                f"#define CCCL_VERSION fixture-{release}\n")
+            (top / "include").symlink_to("targets/x86_64-linux/include")
+            cccl[release] = include / "cccl"
+        (local / "cuda-99.4" / "bin").mkdir()
+        nvcc = local / "cuda-99.4" / "bin" / "nvcc"
+        nvcc.write_text(DOUBLE)
+        nvcc.chmod(0o755)
+        (local / "cuda").symlink_to("cuda-99.4")
+        return cccl
+
+    def ubuntu_tuple(self, pacman=False, dpkg=True, **env):
+        """The install tuple as bootstrap writes it, `TUPLE=$(install_tuple
+        ...)` under `set -euo pipefail`, on a box whose PATH holds no pacman
+        (or, with PACMAN, the double's), the dpkg-query double unless DPKG
+        is false, the fixture toolkit's nvcc and the system's tools the
+        function names. Answers the facts and the dpkg-query calls."""
+        bin_dir = self.root / "ubuntu-bin"
+        if not bin_dir.exists():
+            bin_dir.mkdir()
+            for tool in ("bash", "python3", "sed", "grep", "awk", "cut", "sha256sum", "tr", "readlink",
+                         "dirname", "env"):
+                (bin_dir / tool).symlink_to(shutil.which(tool))
+            for name, body in (("cargo", "#!/bin/sh\nexit 101\n"), ("git", "#!/bin/sh\nexit 128\n"),
+                               ("ldd", "#!/bin/sh\nexit 1\n")):
+                (bin_dir / name).write_text(body)
+                (bin_dir / name).chmod(0o755)
+        # Absent, not merely not executable: bash's `command -v` answers a
+        # file it cannot run when PATH holds no other of the name.
+        for name, keep in (("pacman", pacman), ("dpkg-query", dpkg)):
+            (bin_dir / name).unlink(missing_ok=True)
+            if keep:
+                (bin_dir / name).write_text(DOUBLE)
+                (bin_dir / name).chmod(0o755)
+        empty = self.root / "empty-repo"
+        empty.mkdir(exist_ok=True)
+        script = (f"set -euo pipefail; "
+                  f"source {shlex.quote(str(self.repo / 'deploy' / 'engine-libraries.sh'))}; "
+                  f"source {shlex.quote(str(self.repo / 'deploy' / 'install-tuple.sh'))}; "
+                  f"TUPLE=$(install_tuple {shlex.quote(str(empty))} fixture-commit "
+                  f"{shlex.quote(str(self.root / 'no-bin'))} {shlex.quote(str(self.root / 'no-lib'))} "
+                  f"fixture-features 'worker' 'libllama.so.0.0.1'); printf '%s\\n' \"$TUPLE\"")
+        path = os.pathsep.join([str(bin_dir), str(self.root / "usr-local" / "cuda" / "bin")])
+        self.log.unlink(missing_ok=True)
+        # weaver-spu's build script reads CUDA_PATH, else CUDA_ROOT, as the
+        # build guest sets the first to its toolkit.
+        base = {k: v for k, v in self.env.items() if k not in ("CUDA_PATH", "CUDA_ROOT")}
+        base["CUDA_PATH"] = str(self.root / "usr-local" / "cuda")
+        ran = subprocess.run([str(bin_dir / "bash"), "-c", script], env={**base, "PATH": path, **env},
+                             text=True, capture_output=True, timeout=20)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
+        return facts, [c for c in self.calls() if c[0] == "dpkg-query"]
+
+    def dpkg_database(self, cccl, **changes):
+        """The fixture's package database: each release's CCCL header owned
+        by its own package, by the path dpkg records, the resolved one."""
+        header = "cuda/std/__cccl/version.h"
+        db = {"owners": {str((cccl[r] / header).resolve()): f"cccl-{r.replace('.', '-')}" for r in cccl},
+              "versions": {"cccl-99-3": "99.3.3.4.1-1", "cccl-99-4": "99.3.4.3.1-1"}}
+        db.update(changes)
+        return json.dumps(db)
+
+    def test_without_pacman_the_tuple_records_the_cccl_package_nvcc_reads_first(self):
+        """**Where pacman is absent, the cccl fact is the dpkg package that
+        owns the CCCL header nvcc reads first**, as `<package>=<version>`
+        (the Planner's brief of 2026-11-15): an Ubuntu box holds one CCCL
+        package per toolkit release, as the appliance image holds
+        `cccl-13-3` and `cccl-13-4`, and builds against the one its
+        NVCC_PREPEND_FLAGS names. The first include directory of those flags
+        that holds the header wins, by any spelling nvcc reads and across
+        lines, and the path is asked for as found and then resolved, since
+        dpkg records the path a package unpacks. With none, the header is
+        the toolkit's own CCCL, beside the nvcc on PATH, and the SPU
+        build's own include may hold that same file. Where pacman stands
+        it answers, and dpkg-query is never asked. Perturbations: read no
+        prepended flag and the first case reads cccl-99-4; ask only as
+        found and the linked spelling reads unknown; ask only as resolved
+        and the linked ancestor reads unknown; read one directory per flag
+        and the comma list reads cccl-99-4; read the first line of the
+        flags and the two-line case reads cccl-99-4; compare the build's
+        include as spelled and its link to the toolkit reads unknown; pass
+        over pacman and the last case asks dpkg-query."""
+        cccl = self.ubuntu_box()
+        self.env["FIXTURE_DPKG"] = self.dpkg_database(cccl)
+        bare = self.root / "no-cccl-here"
+        bare.mkdir()
+        linked = self.root / "usr-local" / "cuda-99.3" / "include" / "cccl"
+        header = str((cccl["99.3"] / "cuda/std/__cccl/version.h").resolve())
+        for case, flags in (("separate", f"-O2 -I {bare} -I {cccl['99.3']}"),
+                            ("joined", f"-I{bare} -I{cccl['99.3']}"),
+                            ("long", f"--include-path={bare} --include-path {cccl['99.3']}"),
+                            ("comma list", f"-I{bare},{cccl['99.3']}"),
+                            ("two lines", f"-O2\n-I{cccl['99.3']}"),
+                            ("linked spelling", f"-I{linked}")):
+            with self.subTest(case=case):
+                facts, asked = self.ubuntu_tuple(NVCC_PREPEND_FLAGS=flags)
+                self.assertEqual(facts["cccl"], "cccl-99-3=99.3.3.4.1-1")
+                self.assertIn(["dpkg-query", "-S", header], asked)
+        with self.subTest(case="a linked ancestor"):
+            # The path dpkg records runs through a link above the toolkit, as
+            # where /usr/local is itself a link: asked for as found it is
+            # owned, and resolved it is not.
+            (self.root / "usr-link").symlink_to("usr-local")
+            spelled = self.root / "usr-link" / "cuda-99.3" / "targets" / "x86_64-linux" / "include" / "cccl"
+            owned = str(spelled / "cuda/std/__cccl/version.h")
+            facts, _ = self.ubuntu_tuple(NVCC_PREPEND_FLAGS=f"-I{spelled}",
+                                         FIXTURE_DPKG=self.dpkg_database(cccl, owners={owned: "cccl-99-3"}))
+            self.assertEqual(facts["cccl"], "cccl-99-3=99.3.3.4.1-1")
+        with self.subTest(case="the build's include links to the toolkit's"):
+            same = self.root / "cuda-same"
+            same.mkdir()
+            (same / "include").symlink_to(cccl["99.4"])
+            facts, _ = self.ubuntu_tuple(CUDA_PATH=str(same))
+            self.assertEqual(facts["cccl"], "cccl-99-4=99.3.4.3.1-1")
+        with self.subTest(case="the toolkit's own"):
+            facts, asked = self.ubuntu_tuple()
+            self.assertEqual(facts["cccl"], "cccl-99-4=99.3.4.3.1-1")
+            self.assertEqual(asked[0], ["dpkg-query", "-S",
+                                        str((cccl["99.4"] / "cuda/std/__cccl/version.h").resolve())])
+        with self.subTest(case="an include directory appended that holds no CCCL"):
+            facts, _ = self.ubuntu_tuple(NVCC_APPEND_FLAGS=f"-I{bare}")
+            self.assertEqual(facts["cccl"], "cccl-99-4=99.3.4.3.1-1")
+        with self.subTest(case="pacman stands"):
+            facts, asked = self.ubuntu_tuple(pacman=True, NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}")
+            self.assertEqual(facts["cccl"], "3.3.4-1")
+            self.assertEqual(asked, [])
+
+    def test_without_pacman_a_cccl_the_box_cannot_place_reads_unknown(self):
+        """**A cccl package the box cannot place reads `unknown`**, never a
+        guess: a relative include directory ahead of the rest (relative to
+        a compiler's directory this script never sees), an appended include
+        directory that holds CCCL (the build's own flags stand between it
+        and the toolkit's), an include form the reader does not rank (a
+        system include, options for the host compiler, an options file, a
+        pre-included header, a quote), an SPU build include that holds a
+        CCCL of its own (the engine's compile does not read it), a toolkit
+        of two targets, a header no package owns (a toolkit from NVIDIA's
+        installer) or two packages own, a header path dpkg-query would read
+        as a pattern, a header a diversion names, a package's or a local
+        one, by either spelling and in any message locale (the file there
+        may be the replacement, while the original package's line still
+        names the path), and a box with no dpkg-query. Perturbations: skip
+        relative directories, drop the appended flags' read, rank no other
+        include form, rank an options file or a pre-included header as no
+        flag, drop the build include's check, take the first target, take
+        the first of two owners, drop the pattern refusal, pass over a
+        package's or a local diversion's lines, ask the resolved spelling
+        after a diversion of the spelling as found, or ask dpkg-query in
+        the box's locale, and that case reads a package."""
+        cccl = self.ubuntu_box()
+        database = self.dpkg_database(cccl)
+        header = str((cccl["99.3"] / "cuda/std/__cccl/version.h").resolve())
+        odd = self.root / "odd[dir]"
+        (odd / "cuda" / "std" / "__cccl").mkdir(parents=True)
+        (odd / "cuda" / "std" / "__cccl" / "version.h").write_text("#define CCCL_VERSION fixture-odd\n")
+        oddheader = str((odd / "cuda/std/__cccl/version.h").resolve())
+        # A CUDA 12 layout, its CCCL directly under include, owned.
+        twelve = self.root / "cuda-99.2"
+        (twelve / "include" / "cuda" / "std" / "__cccl").mkdir(parents=True)
+        (twelve / "include" / "cuda" / "std" / "__cccl" / "version.h").write_text("#define CCCL_VERSION fixture-12\n")
+        twelveheader = str((twelve / "include" / "cuda/std/__cccl/version.h").resolve())
+        # An options file naming the older toolkit's CCCL, which nvcc reads.
+        optf = self.root / "cccl.flags"
+        optf.write_text(f"-I{cccl['99.3']}\n")
+        for case, env in (
+                ("relative first", {"NVCC_PREPEND_FLAGS": f"-Irelative/cccl -I{cccl['99.3']}"}),
+                ("appended CCCL", {"NVCC_APPEND_FLAGS": f"-I{cccl['99.3']}"}),
+                ("a system include", {"NVCC_PREPEND_FLAGS": f"-isystem {cccl['99.3']}"}),
+                ("host compiler options", {"NVCC_PREPEND_FLAGS": f"-Xcompiler -I{cccl['99.3']}"}),
+                ("an options file", {"NVCC_PREPEND_FLAGS": f"--options-file {optf}"}),
+                ("an options file, short", {"NVCC_PREPEND_FLAGS": f"-optf {optf}"}),
+                ("a pre-included header", {"NVCC_PREPEND_FLAGS": f"--pre-include {header}"}),
+                ("a pre-included header, short", {"NVCC_PREPEND_FLAGS": f"-include {header}"}),
+                ("a quote", {"NVCC_PREPEND_FLAGS": f'-I{cccl["99.3"]} -DFIXTURE="a b"'}),
+                ("the build's own CCCL", {"CUDA_PATH": str(twelve),
+                                          "FIXTURE_DPKG": self.dpkg_database(cccl, owners={
+                                              **json.loads(database)["owners"], twelveheader: "cccl-99-3"})}),
+                ("unowned", {"NVCC_PREPEND_FLAGS": f"-I{cccl['99.3']}",
+                             "FIXTURE_DPKG": self.dpkg_database(cccl, owners={})}),
+                ("two owners", {"NVCC_PREPEND_FLAGS": f"-I{cccl['99.3']}",
+                                "FIXTURE_DPKG": self.dpkg_database(cccl, owners={header: "cccl-99-3, cccl-99-4"})}),
+                ("a pattern", {"NVCC_PREPEND_FLAGS": f"-I{odd}",
+                               "FIXTURE_DPKG": self.dpkg_database(cccl, owners={oddheader: "cccl-99-3"})})):
+            with self.subTest(case=case):
+                facts, _ = self.ubuntu_tuple(**{"FIXTURE_DPKG": database, **env})
+                self.assertEqual(facts["cccl"], "unknown")
+        with self.subTest(case="no dpkg-query"):
+            facts, _ = self.ubuntu_tuple(dpkg=False, NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}", FIXTURE_DPKG=database)
+            self.assertEqual(facts["cccl"], "unknown")
+        with self.subTest(case="a diversion names the header"):
+            facts, _ = self.ubuntu_tuple(NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}",
+                                         FIXTURE_DPKG=self.dpkg_database(cccl, diverted=[header]))
+            self.assertEqual(facts["cccl"], "unknown")
+        with self.subTest(case="a local diversion names the header"):
+            facts, _ = self.ubuntu_tuple(NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}",
+                                         FIXTURE_DPKG=self.dpkg_database(cccl, local_diverted=[header]))
+            self.assertEqual(facts["cccl"], "unknown")
+        # Through a linked ancestor: the diversion names the spelling the
+        # flags give, which no package owns, and the resolved spelling's
+        # owner line still names the package, so the asking stops at the
+        # diversion.
+        (self.root / "usr-divert").symlink_to("usr-local")
+        spelled = self.root / "usr-divert" / "cuda-99.3" / "targets" / "x86_64-linux" / "include" / "cccl"
+        for kind in ("diverted", "local_diverted"):
+            with self.subTest(case=f"{kind} names the spelling as found"):
+                facts, asked = self.ubuntu_tuple(
+                    NVCC_PREPEND_FLAGS=f"-I{spelled}",
+                    FIXTURE_DPKG=self.dpkg_database(cccl, **{kind: [str(spelled / "cuda/std/__cccl/version.h")]}))
+                self.assertEqual(facts["cccl"], "unknown")
+                self.assertNotIn(["dpkg-query", "-S", header], asked)
+        with self.subTest(case="a diversion in a translated locale"):
+            facts, _ = self.ubuntu_tuple(NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}", LC_ALL="", LC_MESSAGES="",
+                                         LANG="de_DE.UTF-8",
+                                         FIXTURE_DPKG=self.dpkg_database(cccl, diverted=[header]))
+            self.assertEqual(facts["cccl"], "unknown")
+        with self.subTest(case="two targets"):
+            # The other target holds its own CCCL, owned, and sorts first.
+            other = self.root / "usr-local" / "cuda-99.4" / "targets" / "sbsa-linux" / "include" / "cccl"
+            (other / "cuda" / "std" / "__cccl").mkdir(parents=True)
+            (other / "cuda" / "std" / "__cccl" / "version.h").write_text("#define CCCL_VERSION fixture-sbsa\n")
+            owners = json.loads(database)["owners"]
+            owners[str((other / "cuda/std/__cccl/version.h").resolve())] = "cccl-99-4"
+            facts, _ = self.ubuntu_tuple(FIXTURE_DPKG=self.dpkg_database(cccl, owners=owners))
+            self.assertEqual(facts["cccl"], "unknown")
 
     def test_bootstrap_records_the_same_install_tuple_after_its_install(self):
         """**The two scripts write one record from one function**: bootstrap
