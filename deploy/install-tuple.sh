@@ -138,11 +138,17 @@ TUPLE_CCCL_HEADER=cuda/std/__cccl/version.h
 
 # tuple_include_dirs FLAGS: each include directory FLAGS names, one per line
 # and in order, as nvcc reads `-I DIR`, `-IDIR`, `--include-path DIR` and
-# `--include-path=DIR`, each value a comma-separated list.
+# `--include-path=DIR`, each value a comma-separated list, the whole value
+# split on blanks and newlines. Answers 1, naming nothing, where FLAGS hold
+# what it does not rank: a quote or a backslash, a system, after or quote
+# include, or options handed to the host compiler, which may carry their own.
 tuple_include_dirs() {
   local -a words
   local w list i=0
-  read -ra words <<<"$1"
+  case $1 in
+    *[\"\'\\]*) return 1 ;;
+  esac
+  read -r -d '' -a words <<<"$1" || true
   while [ "$i" -lt "${#words[@]}" ]; do
     w=${words[i]}
     i=$((i + 1))
@@ -150,10 +156,55 @@ tuple_include_dirs() {
       -I|--include-path) list=${words[i]:-}; i=$((i + 1)) ;;
       --include-path=*) list=${w#--include-path=} ;;
       -I*) list=${w#-I} ;;
+      -isystem*|--system-include*|-idirafter*|-iquote*|-Xcompiler*|--compiler-options*) return 1 ;;
       *) continue ;;
     esac
     printf '%s\n' "${list//,/$'\n'}"
   done
+}
+
+# tuple_first_header DIRS: the CCCL header in the first of DIRS, one per line,
+# that holds one. Answers 1 where none does, and 2 where a relative directory
+# comes first, since it is relative to a compiler's directory never seen here.
+tuple_first_header() {
+  local dir
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    [[ "$dir" == /* ]] || return 2
+    if [ -f "$dir/$TUPLE_CCCL_HEADER" ]; then
+      printf '%s\n' "$dir/$TUPLE_CCCL_HEADER"
+      return 0
+    fi
+  done <<<"$1"
+  return 1
+}
+
+# tuple_dpkg_owner PATH: the one package dpkg records as owning PATH, or
+# nothing. A path dpkg-query would read as a pattern is refused. A
+# diversion's lines name the path too and are not owners. Two packages that
+# own one file share one line, `a, b`, which the package-name check refuses
+# as no one owner.
+tuple_dpkg_owner() {
+  local path=$1 said line owner="" lines=0
+  case $path in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  case $path in
+    *[\*\?\[\\]*|*$'\n'*) return 1 ;;
+  esac
+  said=$(dpkg-query -S "$path" 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    case $line in
+      "diversion by "*) continue ;;
+    esac
+    [[ "$line" == *": $path" ]] || continue
+    lines=$((lines + 1))
+    owner=${line%": $path"}
+  done <<<"$said"
+  [ "$lines" -eq 1 ] || return 1
+  [[ "$owner" =~ ^[a-z0-9][a-z0-9+.-]*(:[a-z0-9-]+)?$ ]] || return 1
+  printf '%s\n' "$owner"
 }
 
 # tuple_cccl: the cccl package the build compiled against, or nothing where
@@ -163,18 +214,25 @@ tuple_include_dirs() {
 # NVIDIA's repository carries CCCL once per toolkit release (`cccl-13-3`,
 # `cccl-13-4`) and one box may hold several, so the fact is the package that
 # owns the CCCL version header nvcc reads first, as `<package>=<version>`,
-# the form apt installs by. nvcc puts NVCC_PREPEND_FLAGS ahead of the build's
-# own flags and reads its toolkit's CCCL last, as the system include its
-# nvcc.profile names. The header is therefore the first that an absolute
-# include directory of NVCC_PREPEND_FLAGS holds, and else the one in the
-# toolkit of the nvcc on PATH, in `targets/<target>/include` and then its
-# `cccl`, the profile's order. The build's own flags are not read. The
-# answer is nothing where a relative directory comes first, where an include
-# directory of NVCC_APPEND_FLAGS holds the header (the build's own flags
-# stand between it and the toolkit's), where the toolkit holds other than
-# one target, and where no one package owns the header.
+# the form apt installs by.
+#
+# nvcc reads NVCC_PREPEND_FLAGS ahead of a compile's own flags, then
+# NVCC_APPEND_FLAGS, then its toolkit's `targets/<target>/include` and that
+# directory's `cccl`, the second as a system include (its nvcc.profile). So
+# the header is the first an include directory of NVCC_PREPEND_FLAGS holds.
+# Else it is the toolkit's, beside the nvcc on PATH, which bootstrap requires
+# and the build's compilers find. Of the compiles' own flags, weaver-spu's
+# build script adds `$CUDA_PATH/include` (else `$CUDA_ROOT`, else
+# /usr/local/cuda), and a header there that is not the toolkit's file reads
+# nothing, since the engine's compile does not read it. The engine's own
+# flags are not read. The answer is nothing where FLAGS hold what
+# tuple_include_dirs does not rank, where a relative directory comes before
+# the header, where an appended directory is relative or holds a header,
+# where the toolkit holds other than one target, and where no one package
+# owns the header. dpkg records the path a package unpacks, so the header is
+# asked for as found and then as resolved.
 tuple_cccl() {
-  local n dir header="" path top said line owner="" owners=0
+  local n prepend append header built path top owner="" rc=0
   local -a targets
   if command -v pacman >/dev/null 2>&1; then
     n=$(pacman -Q cccl 2>/dev/null || true)
@@ -182,57 +240,33 @@ tuple_cccl() {
     return 0
   fi
   command -v dpkg-query >/dev/null 2>&1 || return 0
-  while IFS= read -r dir; do
-    [ -n "$dir" ] || continue
-    [[ "$dir" == /* ]] || return 0
-    if [ -f "$dir/$TUPLE_CCCL_HEADER" ]; then
-      header=$dir/$TUPLE_CCCL_HEADER
-      break
-    fi
-  done < <(tuple_include_dirs "${NVCC_PREPEND_FLAGS:-}")
-  if [ -z "$header" ]; then
-    while IFS= read -r dir; do
-      [ -n "$dir" ] || continue
-      [[ "$dir" == /* ]] || return 0
-      [ ! -f "$dir/$TUPLE_CCCL_HEADER" ] || return 0
-    done < <(tuple_include_dirs "${NVCC_APPEND_FLAGS:-}")
+  prepend=$(tuple_include_dirs "${NVCC_PREPEND_FLAGS:-}") || return 0
+  append=$(tuple_include_dirs "${NVCC_APPEND_FLAGS:-}") || return 0
+  header=$(tuple_first_header "$prepend") || rc=$?
+  [ "$rc" -ne 2 ] || return 0
+  if [ "$rc" -ne 0 ]; then
+    rc=0
+    tuple_first_header "$append" >/dev/null || rc=$?
+    [ "$rc" -eq 1 ] || return 0
     path=$(command -v nvcc 2>/dev/null) || return 0
     path=$(readlink -f -- "$path" 2>/dev/null) || return 0
     [[ "$path" == /*/bin/nvcc ]] || return 0
     top=${path%/bin/nvcc}
     targets=("$top"/targets/*/include)
     [ "${#targets[@]}" -eq 1 ] && [ -d "${targets[0]}" ] || return 0
-    for dir in "${targets[0]}" "${targets[0]}/cccl"; do
-      if [ -f "$dir/$TUPLE_CCCL_HEADER" ]; then
-        header=$dir/$TUPLE_CCCL_HEADER
-        break
-      fi
-    done
-    [ -n "$header" ] || return 0
+    header=$(tuple_first_header "${targets[0]}"$'\n'"${targets[0]}/cccl") || return 0
+    built=${CUDA_PATH:-${CUDA_ROOT:-/usr/local/cuda}}/include
+    [[ "$built" == /* ]] || return 0
+    if [ -f "$built/$TUPLE_CCCL_HEADER" ] &&
+      [ "$(readlink -f -- "$built/$TUPLE_CCCL_HEADER")" != "$(readlink -f -- "$header")" ]; then
+      return 0
+    fi
   fi
-  # dpkg records the path a package unpacks, so the header is asked for as
-  # resolved, and refused where dpkg-query would read it as a pattern.
-  header=$(readlink -f -- "$header" 2>/dev/null) || return 0
-  case $header in
-    /*) ;;
-    *) return 0 ;;
-  esac
-  case $header in
-    *[\*\?\[\\]*|*$'\n'*) return 0 ;;
-  esac
-  # One owner, on the line that names the header: a diversion's lines name
-  # it too, and two packages that own one file share one line.
-  said=$(dpkg-query -S "$header" 2>/dev/null || true)
-  while IFS= read -r line; do
-    case $line in
-      "diversion by "*) continue ;;
-    esac
-    [[ "$line" == *": $header" ]] || continue
-    owners=$((owners + 1))
-    owner=${line%": $header"}
-  done <<<"$said"
-  [ "$owners" -eq 1 ] || return 0
-  [[ "$owner" =~ ^[a-z0-9][a-z0-9+.-]*(:[a-z0-9-]+)?$ ]] || return 0
+  for path in "$header" "$(readlink -f -- "$header" 2>/dev/null)"; do
+    owner=$(tuple_dpkg_owner "$path") && break
+    owner=""
+  done
+  [ -n "$owner" ] || return 0
   n=$(dpkg-query -W -f='${Package}=${Version}\n' "$owner" 2>/dev/null || true)
   if [[ "$n" =~ ^[a-z0-9][a-z0-9+.-]*=[^[:space:]]+$ ]]; then
     printf '%s\n' "$n"
