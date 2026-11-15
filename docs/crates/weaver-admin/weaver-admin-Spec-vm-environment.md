@@ -94,8 +94,9 @@ closes the ports the load opened, per the charter's section 2.
 **No declaration member names a port as of 2026-11-15**, so no load has a port to open.
 
 **What this document does not elect.** The table's name, the shape of its rules, how a
-declaration names a port, the table's place in the load and the unload, and how the run
-card records the open ports are fixed by no ruling or measurement as of 2026-11-15.
+declaration names a port, the table's place in the load and the unload, what the
+rollback does with a table that a refused load opened, and how the run card records the
+open ports are fixed by no ruling or measurement as of 2026-11-15.
 `weaver-admin-PRD` section 11 names the documents that settle them, and section 9
 carries each. Whether the one table is the agent's own, on a machine that runs several
 agents, is open in the charter's section 10. **How a port that a declaration names gets
@@ -191,9 +192,10 @@ opened, and how the state mount meets the agent's territory.
   the state mount. Settled by that measurement, which the act that adds the check owes
   before it states a size.
 - **The table's name, the shape of its rules, how a declaration names a port, the
-  table's place in the load and the unload, and the run card's record of the open
-  ports.** Settled by the act that adds the table and the act that adds the
-  declaration's port member, per `weaver-admin-PRD` sections 10 and 11.
+  table's place in the load and the unload, what the rollback does with a table that a
+  refused load opened, and the run card's record of the open ports.** Settled by the
+  act that adds the table and the act that adds the declaration's port member, per
+  `weaver-admin-PRD` sections 10 and 11.
 - **How a port that a declaration names gets through the image's boot rules.** Settled
   by the act that adds the declaration's port member, in `weaver-admin-Spec` and the
   Spec of the image's build together, per `weaver-admin-PRD` section 10.

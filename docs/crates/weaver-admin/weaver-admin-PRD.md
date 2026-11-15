@@ -1104,9 +1104,9 @@ measurement. What is measured and what is owed are `toddwbucy/WeaverTools` issue
 and those measurements come before a Spec relies on the claim.
 
 **The run card records the tuple as shipped**, on the operator's ruling of 2026-11-15,
-and the suite makes no guarantee about the tuple as running. The manifest of links stays
-a tool the operator may run, and nothing runs it automatically. No document defines the
-run card, and section 10 carries the term.
+and the suite makes no guarantee about the tuple as running. The image's manifest of its
+files and links stays a tool the operator may run, and nothing runs it automatically. No
+document defines the run card, and section 10 carries the term.
 
 **The agent is bounded by the operating system under a UID.** The image does not give
 the agent an operating system. It gives the WeaverAgent system a machine with nothing
@@ -1147,8 +1147,11 @@ same commits does not yet confirm one.
 
 **The image states the commits it was compiled from and its driver**, where a reader
 finds them without the build log, because the binaries and the driver version are
-members of the deployment tuple. WeaverAgent also records, for each released version of
-the image, the commit that the version was compiled from.
+members of the deployment tuple. **Each version of the image has one annotated tag**,
+named `appliance/<version>`, on the commit the version was compiled from, on the
+operator's ruling of 2026-11-15. The tag's message carries the version, the install
+record's digest and the test count. The operator pushes the tag, and a tag is keyed by
+the version and not by the commit.
 
 **The NVIDIA driver is the distribution's own prebuilt and signed kernel module of the
 615 branch, with the kernel held to match it**, a substrate ruling. No compiler runs
@@ -1164,10 +1167,14 @@ operator's ruling of 2026-11-15. Any accurate source serves.
 dropped. The pairing line and the console's fingerprint do its work without a secret
 that every copy of the image carries.
 
-**One image exists for each version, and a security fix is a new version.** Each version
-is tested and evaluated before its release, which is one reason the appliance model was
-chosen. **Every published version stays published with its hash**, because the
-deployment tuple of an agent names its image version and a replay needs that image.
+**One image exists for each version, and a security fix is a new version.** A version
+is `<release>.<respin>`, on the operator's ruling of 2026-11-15. The release moves when
+the binaries move, and the respin moves when only the operating system layer moves. A
+respin never recompiles, and if the binaries change for any reason, the release moves.
+Each version is tested and evaluated before its release, which is one reason the
+appliance model was chosen. **Every published version stays published with its
+hash**, because the deployment tuple of an agent names its image version and a replay
+needs that image.
 
 **An upgrade of an appliance is a change of the deployment tuple and is recorded as
 one.** State that was made under an older version is recorded as made under it and, from
@@ -1225,8 +1232,8 @@ What crosses at pairing and at a model's pull is WeaverWeb's: the line, the secr
 form and lifetime, the link port, the certificates, the console's answer to a second
 holder, the model store with its sources, and the image download with its hash check.
 They are `weaver-web-PRD`'s, its Spec's and the connectors' contracts', in
-`toddwbucy/WeaverWeb`. The enrollment connection is the one unauthenticated surface of
-the console, and the console's documents name it.
+`toddwbucy/WeaverWeb`. The enrollment connection is the link's one unauthenticated
+surface, and the console's documents name it.
 
 ### 7.5 Storage
 
@@ -1492,8 +1499,9 @@ replace the table before it opens anything and the unload close the ports it ope
 and section 4's order places neither act as of 2026-11-15, nor what the rollback of
 section 5 does with a table that a refused load opened, nor the run card's record of the
 open ports. **Settled by:** the act that adds the table, which places both in
-section 4 and writes their states into the table of `weaver-admin-Spec` section 3.0
-before any code.
+section 4, elects in `weaver-admin-Spec` what the rollback does with that table under
+section 5's rule that a rollback is admin's own reap, and writes their states into the
+table of `weaver-admin-Spec` section 3.0 before any code.
 
 **How a port that a declaration names gets through an appliance image's own rules.** On
 an appliance the image's boot rules carry the base policy, input dropped but SSH
