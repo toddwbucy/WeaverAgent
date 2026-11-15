@@ -7562,7 +7562,8 @@ class CargoStepTests(unittest.TestCase):
     goes on."""
 
     STAND_IN = """#!/bin/sh
-[ -z "$CARGO_SEEN" ] || printf '%s\\n' "${NVCC_CCBIN-unset}" > "$CARGO_SEEN"
+[ -z "$CARGO_SEEN" ] || printf 'NVCC_CCBIN=%s\\nNVCC_APPEND_FLAGS=%s\\nCMAKE_CUDA_ARCHITECTURES=%s\\n' \\
+    "${NVCC_CCBIN-unset}" "${NVCC_APPEND_FLAGS-unset}" "${CMAKE_CUDA_ARCHITECTURES-unset}" > "$CARGO_SEEN"
 printf '%s' "$CARGO_STDOUT"
 printf '%s' "$CARGO_STDERR" >&2
 exit "${CARGO_EXIT:-0}"
@@ -7580,7 +7581,7 @@ exit "${CARGO_EXIT:-0}"
         self.tmp.mkdir()
         self.seen = Path(self.scratch.name) / "seen"
 
-    def step(self, script, name, stdout="", stderr="", status=0):
+    def step(self, script, name, stdout="", stderr="", status=0, extra_env=None):
         # Each step starts from an empty directory, so one subtest's kept
         # log never counts in another's.
         for left in self.tmp.iterdir():
@@ -7600,9 +7601,15 @@ exit "${CARGO_EXIT:-0}"
                    FEATURES="weaver-spu/cuda",
                    CARGO_STDOUT=stdout, CARGO_STDERR=stderr,
                    CARGO_EXIT=str(status), CARGO_SEEN=str(self.seen))
-        env.pop("NVCC_CCBIN", None)
+        for name_ in ("NVCC_CCBIN", "NVCC_APPEND_FLAGS", "CMAKE_CUDA_ARCHITECTURES"):
+            env.pop(name_, None)
+        env.update(extra_env or {})
         return subprocess.run(["bash", "-c", body], env=env,
                               capture_output=True, text=True, timeout=30)
+
+    def seen_env(self):
+        """What the stand-in cargo saw of the build's nvcc and CUDA settings."""
+        return dict(line.split("=", 1) for line in self.seen.read_text().splitlines())
 
     def kept_logs(self):
         return sorted(log for log in self.tmp.iterdir() if log.is_file())
@@ -7784,7 +7791,40 @@ exit "${CARGO_EXIT:-0}"
         self.assertEqual(ran.returncode, 0, ran.stderr)
         update = (DEPLOY / "update-stack.sh").read_text()
         default = re.search(r"NVCC_CCBIN=\$\{NVCC_CCBIN:-([^}]+)\}", update).group(1)
-        self.assertEqual(self.seen.read_text().strip(), default)
+        self.assertEqual(self.seen_env()["NVCC_CCBIN"], default)
+
+    def test_the_build_names_its_bytes_by_its_commit(self):
+        # The operator's ruling of 2026-11-15: nvcc's -objtemp and ggml's
+        # cubin-only list reach the workspace build in both scripts, and an
+        # NVCC_APPEND_FLAGS the operator sets is kept after -objtemp.
+        # Perturbation: drop either setting from bootstrap-stack.sh's build
+        # and the run_build cases fail, from update-stack.sh's and the
+        # comparison fails, and a -virtual entry in the list fails both.
+        ran = self.step("bootstrap-stack.sh", "run_build")
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        seen = self.seen_env()
+        self.assertEqual(seen["NVCC_APPEND_FLAGS"], "-objtemp")
+        # ggml's own list for this toolkit with its PTX entries dropped:
+        # cubins only.
+        self.assertEqual(seen["CMAKE_CUDA_ARCHITECTURES"], "86-real;89-real;120a-real;121a-real")
+        ran = self.step("bootstrap-stack.sh", "run_build",
+                        extra_env={"NVCC_APPEND_FLAGS": "-include cuda/iterator"})
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual(self.seen_env()["NVCC_APPEND_FLAGS"], "-objtemp -include cuda/iterator")
+
+        # update-stack.sh's build is not a function, so its settings are
+        # read from its text: the same assignments, ahead of the same cargo
+        # build, as the bootstrap's.
+        def settings(script):
+            text = re.sub(r"\\\n", " ", (DEPLOY / script).read_text())
+            builds = [line for line in text.splitlines()
+                      if re.search(r"\bcargo build --release --locked --workspace\b", line)]
+            self.assertEqual(len(builds), 1, (script, builds))
+            prefix = builds[0].split("cargo build", 1)[0]
+            return re.findall(r'(\w+)=("[^"]*"|\S+)', prefix)
+        self.assertEqual(settings("update-stack.sh"), settings("bootstrap-stack.sh"))
+        self.assertIn(("CMAKE_CUDA_ARCHITECTURES", '"86-real;89-real;120a-real;121a-real"'),
+                      settings("update-stack.sh"))
 
     def test_a_run_of_no_tests_refuses(self):
         for script in ("update-stack.sh", "bootstrap-stack.sh"):
@@ -7816,9 +7856,15 @@ exit "${CARGO_EXIT:-0}"
                 # A command continued with a backslash is read whole, as the
                 # old pipe sat on the step's last continued line.
                 text = re.sub(r"\\\n", " ", (DEPLOY / script).read_text())
+                steps = set()
                 for line in text.splitlines():
-                    if re.match(r"\s*(NVCC_CCBIN=\S+\s+)?cargo (test|build)\b", line):
+                    step = re.match(r'\s*(\w+=("[^"]*"|\S*)\s+)*cargo (test|build)\b', line)
+                    if step:
+                        steps.add(step.group(3))
                         self.assertNotRegex(line, r"\|\s*(grep|awk|tee|head|tail)", line)
+                # The match reads both steps, so a new assignment ahead of
+                # cargo cannot leave a step unread.
+                self.assertEqual(steps, {"test", "build"})
 
 
 

@@ -1026,6 +1026,13 @@ say "build"
 # out_dir from them, and the file is removed. Progress and rendered
 # diagnostics stay on stderr as before. A failed build exits with cargo's
 # status, its diagnostics above.
+# **A commit names every byte the build ships**, by bootstrap-stack.sh's two
+# settings and for its reasons: nvcc's `-objtemp`, ahead of any
+# NVCC_APPEND_FLAGS the operator sets, and ggml's cubin-only list. A card off
+# that list gets no ggml device code from this build. Neither setting reaches
+# an engine or kernel build the target directory already holds, so an update
+# into a target an earlier build filled ships the engine and kernel objects
+# that build made.
 BUILD_MESSAGES=$(mktemp "${BUILT%/release}/weaver-deploy-messages-XXXXXX") \
   || die "no file for the build's messages could be made beside $BUILT"
 # No exit trap stands yet (the install arms one), so a signal during the
@@ -1033,6 +1040,8 @@ BUILD_MESSAGES=$(mktemp "${BUILT%/release}/weaver-deploy-messages-XXXXXX") \
 trap 'rm -f -- "$BUILD_MESSAGES"' EXIT
 rc=0
 NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
+NVCC_APPEND_FLAGS="-objtemp${NVCC_APPEND_FLAGS:+ $NVCC_APPEND_FLAGS}" \
+CMAKE_CUDA_ARCHITECTURES="86-real;89-real;120a-real;121a-real" \
   cargo build --release --locked --workspace --message-format=json-render-diagnostics \
     --features "$FEATURES" >"$BUILD_MESSAGES" || rc=$?
 if [ "$rc" -ne 0 ]; then
