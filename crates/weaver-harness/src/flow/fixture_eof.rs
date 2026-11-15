@@ -19,6 +19,41 @@ pub(super) fn hang_up(end: impl std::os::fd::AsFd) {
     nix::sys::socket::shutdown(fd, nix::sys::socket::Shutdown::Both).unwrap();
 }
 
+/// Wait, without reading, until `fd` shows that its far end was released:
+/// the hangup, with the reset where the far end still held unread bytes.
+/// For a test that drops its end and needs the release itself, not the
+/// shutdown [`hang_up`] gives. A concurrent test's fork that holds a copy of
+/// the dropped end delays the release until its exec, and this wait spans
+/// that. The caller supplies one absolute fixture deadline.
+pub(super) fn await_release_until(fd: RawFd, deadline: Instant) {
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .expect("fixture peer was not released by its deadline");
+        let mut poll = libc::pollfd {
+            fd,
+            events: libc::POLLRDHUP,
+            revents: 0,
+        };
+        // SAFETY: callers retain fd through this bounded observation, and poll
+        // receives one writable pollfd. No wait renews the caller's deadline.
+        let result =
+            unsafe { libc::poll(&mut poll, 1, remaining.as_millis().clamp(1, 100) as i32) };
+        assert!(
+            result >= 0 || Errno::last() == Errno::EINTR,
+            "fixture release poll failed"
+        );
+        assert_eq!(
+            poll.revents & libc::POLLNVAL,
+            0,
+            "fixture release poll on a descriptor that is not open"
+        );
+        if poll.revents & (libc::POLLHUP | libc::POLLERR) != 0 {
+            return;
+        }
+    }
+}
+
 pub(super) fn await_eof_until(fd: RawFd, deadline: Instant, on_pending: impl FnOnce()) {
     let mut on_pending = Some(on_pending);
     loop {
