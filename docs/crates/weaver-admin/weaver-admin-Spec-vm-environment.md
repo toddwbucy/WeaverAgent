@@ -59,8 +59,8 @@ and it mounts and repairs nothing. The sizes of the required mounts are reported
 How admin knows it runs on an appliance, how it represents a separate filesystem, the
 refusal's case and what it names, and the form of the report with the surface it crosses
 are cells of section 9. The judgment of a size is the console's, per the charter's
-section 7.5. How the state mount meets the agent's territory is open in the charter's
-section 10.
+section 7.5. How the state mount meets the agent's territory is a later item, per the
+charter's section 7.5.
 
 ## 2. State a version cannot read
 
@@ -72,10 +72,10 @@ and refuses `ConfigInvalid` naming the save point. The member answers the enter'
 `restored` ask with a refusal naming a schema mismatch, so the harness refuses the enter
 before it authors `load`, per `weaver-state-Spec` section 3.
 
-**State is transferable, and nothing is claimed across versions**, per the charter's
-section 7.2: an upgrade moves the state and the model to a new version of the harness.
-A version that reads the state loads it. A version that cannot read it refuses it as
-above. The record of an upgrade is a cell of section 9.
+**State is transferable, and reproducibility is not claimed across versions**, per the
+charter's section 7.2: an upgrade moves the state and the model to a new version of the
+harness. A version that reads the state loads it. A version that cannot read it refuses
+it as above. The record of an upgrade is a cell of section 9.
 
 ## 3. The firewall table
 
@@ -83,9 +83,11 @@ Per `weaver-admin-PRD` sections 2 and 7.3.
 
 **The mechanism is nftables**, the operator's substrate ruling of 2026-11-14.
 
-**Admin writes one named table and nothing else of the firewall.** The table never
-carries the machine's whole policy. On an appliance the image's own boot rules carry the
-base policy, input dropped but SSH, per the charter's section 7.3.
+**Admin writes one named table and nothing else of the firewall.** **Each agent's table
+is its own**, one table per agent on the operator's ruling of 2026-11-15, per the
+charter's section 2. The table never carries the machine's whole policy. On an appliance
+the image's own boot rules carry the base policy, input dropped but SSH, per the
+charter's section 7.3.
 
 **Every load replaces the table before it opens anything, and the table is not
 persisted**, on the operator's ruling of 2026-11-15. Admin writes the table to the
@@ -98,14 +100,12 @@ closes the ports the load opened, per the charter's section 2.
 **What this document does not elect.** The table's name, the shape of its rules, how a
 declaration names a port, the table's place in the load and the unload, what the
 rollback does with a table that a refused load opened, and how the run card records the
-open ports are fixed by no ruling or measurement as of 2026-11-15.
-`weaver-admin-PRD` section 11 names the documents that settle them, and section 9
-carries each. Whether the one table is the agent's own, on a machine that runs several
-agents, is open in the charter's section 10. **How a port that a declaration names gets
-through the image's boot rules** is open in the charter's section 10. In nftables each
-base chain gives its own verdict and a drop in any one is final, so an accept in admin's
-table alone does not open a port there. This document does not write that admin's table
-opens a declared port on an appliance.
+open ports are fixed by no ruling or measurement as of 2026-11-15. `weaver-admin-PRD`
+section 11 names the documents that settle them, and section 9 carries each. **How a
+port that a declaration names gets through the image's boot rules** is open in the
+charter's section 10. In nftables each base chain gives its own verdict and a drop in
+any one is final, so an accept in admin's table alone does not open a port there. This
+document does not write that admin's table opens a declared port on an appliance.
 
 ## 4. Start, stop, and a reboot
 
@@ -127,20 +127,15 @@ Per `weaver-admin-PRD` sections 2, 4.1 and 7.5.
 charter's section 2 and load step 4. `weaver-admin-Spec` section 5 represents the open
 for each kind of sink.
 
-**On the operator's ruling of 2026-11-15 the trace's destination is the operator's
-declaration in Weaver Web**: a path on the state mount, a sink off the machine, or
-nowhere. A null sink is legitimate, and the run card records the choice. This document
-elects nothing new for the handoff, for two reasons:
+**The trace goes where it is declared**, on the operator's ruling of 2026-11-15, per the
+charter's section 7.5. The operator chooses the destination on Weaver Web's declaration
+page when the agent is created, and it may be `/dev/null`. A file sink's directory stays
+one that no principal of the agent can write or replace, and the open follows no link.
 
-- `weaver-admin-Spec` section 5 opens a file sink beneath the territory's descriptor
-  ("The trace's directory is the territory"), so a file sink on the state mount does not
-  meet it as written.
-- Where the sink is named, where it stands, what reads a trace that is not a file, and
-  whether a sink that cannot be opened refuses a trace that goes nowhere are open in the
-  charter's section 10, each against `weaver-admin-operator-contract`, for the operator
-  to settle.
-
-`weaver-admin-Spec` section 5 follows the operator's settlement.
+This document elects nothing new for the handoff. `weaver-admin-Spec` sections 5 and 9
+and `weaver-admin-operator-contract` sections 3 and 5 still hold the sink to the agent's
+territory, and the act that changes them, "the trace goes where it is declared", is
+registered in the charter's section 11.
 
 ## 6. What is enforced, and by which instrument
 
@@ -183,13 +178,11 @@ Per apex section 11. Each election above is listed with what catches its failure
 
 ## 8. Open rulings
 
-None of this document's own. The operator's open rulings that bear on it are carried in
-`weaver-admin-PRD` section 10: what the run card is, whether the one table is the
-agent's own, where the trace's sink is named, where it stands, what reads a trace that
-is not a file, a sink that cannot be opened, how the state mount meets the agent's
-territory, and how the host install and the Spark-class machine relate. A stopped agent
-against a machine that is down is a cell of the charter's section 10, settled by an
-act.
+None of this document's own. The operator's one open ruling that bears on it, what the
+run card is, is carried in `weaver-admin-PRD` section 10. A stopped agent against a
+machine that is down is a cell of the charter's section 10, settled by an act. State and
+save points on an appliance, with how the state mount meets the agent's territory, are a
+later item, per the charter's section 7.5.
 
 ## 9. Open cells, each with what settles it
 

@@ -215,26 +215,28 @@ is a different act from coordinating a turn, and the two never run at the same t
 
 **One named firewall table, and never the firewall, on the operator's rulings of
 2026-11-14 and 2026-11-15.** Admin owns one named table of the kernel's nftables
-firewall and writes that table alone. **The table is the mechanism and not the
+firewall and writes that table alone. **The table is the agent's own**, one table per
+agent on the operator's ruling of 2026-11-15, so on a machine that runs several agents
+one agent's load replaces only its own table. **The table is the mechanism and not the
 authority.** A port that a declaration names for a tool or for the gate belongs to the
-operator's arrangement, and the run card records it. No document defines the run card,
-and section 10 carries the term. **Every load replaces the table before it opens
-anything, and the table is not persisted.** So a table that a run left open, by a run
-that died or a machine that stopped, stands only until the next load replaces it or the
-machine restarts, and nothing else recovers it. Until then the table stays as the load
-left it. At the unload admin closes the ports it opened, on the operator's rule that a
-port which does not have to be open is not open. **Admin's table never carries the
-machine's whole policy.** In nftables each base chain gives its own verdict, and a drop
-in any one is final. So an accept in admin's table opens nothing that another table
-drops, and on a machine where the operator runs rules of their own, those rules must
-also allow the port, which is the operator's act. On an appliance the image's own boot
-rules carry the base policy (section 7.3), and how a port that a declaration names gets
-through them is open in section 10. **No declaration member names a port as of
-2026-11-15**, and the amendment of 2026-11-15 adds none, for the reason section 4.3
-gives for the boundary member: a field whose only reader is unbuilt is the reserved slot
-apex section 7 refuses. Where the table opens in a load and closes in an unload is also
-open in section 10. `weaver-admin-Spec-vm-environment` section 3 carries the
-environment's half.
+operator's arrangement, and the run card records it. The run card is the operator's
+term, which no repository defines as of 2026-11-15, and section 10 carries it. **Every
+load replaces the table before it opens anything, and the table is not persisted.** So a
+table that a run left open, by a run that died or a machine that stopped, stands only
+until the next load replaces it or the machine restarts, and nothing else recovers it.
+Until then the table stays as the load left it. At the unload admin closes the ports it
+opened, on the operator's rule that a port which does not have to be open is not open.
+**Admin's table never carries the machine's whole policy.** In nftables each base chain
+gives its own verdict, and a drop in any one is final. So an accept in admin's table
+opens nothing that another table drops, and on a machine where the operator runs rules
+of their own, those rules must also allow the port, which is the operator's act. On an
+appliance the image's own boot rules carry the base policy (section 7.3), and how a port
+that a declaration names gets through them is open in section 10. **No declaration
+member names a port as of 2026-11-15**, and the amendment of 2026-11-15 adds none, for
+the reason section 4.3 gives for the boundary member: a field whose only reader is
+unbuilt is the reserved slot apex section 7 refuses. Where the table opens in a load and
+closes in an unload is also open in section 10. `weaver-admin-Spec-vm-environment`
+section 3 carries the environment's half.
 
 **Custody of the stream's sink, and the agent reaches none of it.** The program
 owns no record, per the ruling of 2026-08-01, restated here as the authority since
@@ -513,18 +515,17 @@ the aggregate, and admin holds no earlier check to catch it, per ruling C.
 **On an appliance the load checks its data mounts between steps 3 and 4, and the check
 takes no step number of its own.** That place is this charter's. **The model mount is
 required, and a model mount point that is not a separate filesystem refuses the load.
-The state mount is required only where the declaration elects state, and then it
-refuses on the same test**, on the operator's rulings of 2026-11-14 and 2026-11-15
-(section 7.5). An agent whose
-declaration elects no state runs on the model mount alone. The sizes are reported. The
-check stands before step 4, so a refusal comes before the load opens or starts anything,
-and it reads the declaration's election of state from step 2. It takes no number because
-it starts nothing and opens nothing, so section 5's rollback has nothing to discriminate
-by it. It judges the filesystem and not what lies on it, whether the model resolves
-staying the SPU's to answer at admission, per section 4.3, and nothing here mounts or
-repairs, the mounts being the operator's act. Where the territory stands against the
-state mount is open in section 10, and the check's place may move with it, since step 2
-reads the declaration from the territory.
+The state mount is required only where the declaration elects state, and then it refuses
+on the same test**, on the operator's rulings of 2026-11-14 and 2026-11-15 (section
+7.5). An agent whose declaration elects no state runs on the model mount alone. The
+sizes are reported. The check stands before step 4, so a refusal comes before the load
+opens or starts anything, and it reads the declaration's election of state from step 2.
+It takes no number because it starts nothing and opens nothing, so section 5's rollback
+has nothing to discriminate by it. It judges the filesystem and not what lies on it,
+whether the model resolves staying the SPU's to answer at admission, per section 4.3,
+and nothing here mounts or repairs, the mounts being the operator's act. Where the
+territory stands against the state mount is a later item, per section 7.5, and the
+check's place may move with it, since step 2 reads the declaration from the territory.
 
 **A load refuses state this version cannot read, and the refusal says why**, on the
 operator's rulings of 2026-11-14. A load never starts fresh silently. State an earlier
@@ -1046,15 +1047,15 @@ a constraint rather than rediscovered.
 
 **The appliance is one deployment profile of a Weaver agent, beside the host install and
 the Spark-class machine**, on the operator's ruling of 2026-11-15. How the host install
-and the Spark-class machine relate is open in section 10. A profile is a
-description in `toddwbucy/WeaverTools`. It decides nothing about any component and binds
-no Spec, and what it asks of a component lands in that component's charter. Sections 7.1
-to 7.5 carry the environment an agent runs in when it runs in a virtual machine made
-from the image of section 7.2. Admin's own share of it is the table of section 2, the
-data-mount check of section 4.1, the refusal of state a version cannot read, the load
-and the unload that start and stop the agent (section 7), and the trace's handoff
-(section 7.5). `weaver-admin-Spec-vm-environment` says how admin represents that
-share. The rest binds
+and the Spark-class machine relate is out of scope as of 2026-11-15, on the operator's
+ruling of that date, and it is carried as a later item. A profile is a description in
+`toddwbucy/WeaverTools`. It decides nothing about any component and binds no Spec, and
+what it asks of a component lands in that component's charter. Sections 7.1 to 7.5 carry
+the environment an agent runs in when it runs in a virtual machine made from the image
+of section 7.2. Admin's own share of it is the table of section 2, the data-mount check
+of section 4.1, the refusal of state a version cannot read, the load and the unload that
+start and stop the agent (section 7), and the trace's handoff (section 7.5).
+`weaver-admin-Spec-vm-environment` says how admin represents that share. The rest binds
 the image's build, which this crate does not perform, and the connectors, which are
 WeaverWeb's. Every requirement of sections 7.1 to 7.5 is the operator's ruling of
 2026-11-14 unless the sentence says otherwise, and the operator's rulings of 2026-11-15
@@ -1106,8 +1107,9 @@ and those measurements come before a Spec relies on the claim.
 
 **The run card records the tuple as shipped**, on the operator's ruling of 2026-11-15,
 and the suite makes no guarantee about the tuple as running. The image's manifest of its
-files and links stays a tool the operator may run, and nothing runs it automatically. No
-document defines the run card, and section 10 carries the term.
+files and links stays a tool the operator may run, and nothing runs it automatically.
+The run card is the operator's term, which no repository defines as of 2026-11-15, and
+section 10 carries it.
 
 **The agent is bounded by the operating system under a UID.** The image does not give
 the agent an operating system. It gives the WeaverAgent system a machine with nothing
@@ -1188,8 +1190,8 @@ version of the harness. Reproducibility is claimed within one version on one set
 hardware, and nothing is claimed across versions.
 
 **The image carries no model and no state.** The model lives on a disk that the operator
-attaches, per section 7.5. Where state lives, against the agent's territory, is open in
-section 10.
+attaches, per section 7.5. Where state lives, against the agent's territory, is a later
+item, per section 7.5.
 
 **One image comes first, for KVM.** Proxmox is the first format named as later, and
 `toddwbucy/WeaverTools` issue 29 records one Proxmox condition to settle then. Other
@@ -1253,8 +1255,14 @@ required. The state mount is required only where the declaration elects state, o
 operator's ruling of 2026-11-15, and an agent whose declaration elects no state runs on
 the model mount alone. The mounts carry what the agent keeps, per section 7.1. **The
 agent's territory stays at `/var/lib/weaver-agent/weaver-<agent>/`**, on the operator's
-rulings of 2026-10-07 and 2026-11-15. How the state mount meets the territory, which
-holds the save points and the state member's room, is open in section 10.
+rulings of 2026-10-07 and 2026-11-15.
+
+**The first production agent declares no state**, on the operator's ruling of
+2026-11-15, and state and save points on an appliance are out of scope until that agent
+runs from the console. How the state mount meets the territory, which holds the save
+points and the state member's room, is a later item on that ruling. So is where the
+member's room stands when the trace's sink stands outside the territory, since
+`weaver-admin-Spec` section 9 derives the room from the sink's directory.
 
 **The operator attaches the disks in the hypervisor and mounts them, and the WeaverAgent
 system checks, refuses and reports.** A required mount point that is not a separate
@@ -1263,12 +1271,25 @@ at every load and not once at enrollment, because a mount can go missing between
 loads. What the console does with the report is WeaverWeb's.
 
 **The trace is not a disk matter of the agent's**, on the operator's ruling of
-2026-11-15. The agent hands its trace off, and where it goes is a field the operator
-declares in Weaver Web: a path on the state mount, a sink off the machine, or nowhere. A
-null sink is legitimate, and the run card records the choice. The suite's duty is to
-make the trace available. Three standing texts meet this ruling, and section 10 carries
-each for the operator: where the sink is named, where it stands, and a sink that cannot
-be opened.
+2026-11-15. The agent hands its trace off. **The trace goes where it is declared**, on
+the operator's ruling of the same date: the operator chooses its destination on Weaver
+Web's declaration page when the agent is created, and the suite sends the trace where it
+is told. The destination may be `/dev/null`, a file on a local store, or a sink off the
+machine, and "nowhere" is the sink `/dev/null`. A null sink is legitimate, and the run
+card records the choice. What stands behind the destination, and whether anything can
+read it, is the operator's. A trace path on the state mount of an agent whose
+declaration elects no state stands on a mount that no check judges, and that too is the
+operator's declaration. The suite's duty is to make the trace available.
+
+**One safety property stays.** Admin opens the sink as root, so a file sink's directory
+must be one that no principal of the agent can write or replace, and the open follows no
+link. Only the rule that the directory is the agent's territory goes. **A trace whose
+sink is not a regular file on the machine, `/dev/null` or a sink off the machine, leaves
+the console's Record surface and Train stage (`weaver-web-PRD`) nothing to read**, since
+the trace door serves only a file sink, per `weaver-admin-operator-contract` section 3,
+and that is the operator's choice. `weaver-admin-operator-contract` sections 3 and 5 and
+`weaver-admin-Spec` sections 5 and 9 still hold the sink to the territory, and section
+11 registers the act that changes them.
 
 ## 8. The operator interface, and the domain that left
 
@@ -1525,74 +1546,18 @@ the packet, and the image's static rule accepts the mark, so admin still writes 
 own table. **Settled by:** the act that adds the declaration's port member, in
 `weaver-admin-Spec` and the Spec of the image's build together.
 
-**Whether the one table is the agent's own.** Admin is one agent's organ, per section
-1, and every load replaces the table. A machine that runs several agents, which section
-7 allows, would see one agent's load replace another's ports if the agents' admins
-wrote one table. The rulings name one table and say nothing of several agents.
-**Settled by:** the operator's ruling.
-
-**How the host install and the Spark-class machine relate.** Section 7.1 names three
-deployment profiles on the operator's ruling of 2026-11-15: the appliance, the host
-install and the Spark-class machine. Section 7 recommends a single-use machine of the
-Spark and GB10 class installed as a dedicated host, on the operator's rulings of
-2026-11-14, which reads as the Spark-class machine being a host install. **Settled by:**
-the operator's ruling.
-
 **A stopped agent against a machine that is down.** On an appliance the console stops
 the agent by its unload, per section 7, and a machine that is down answers nothing.
 What the operator reads to tell the two apart is not stated. **Settled by:** the act
 that adds the console's stop of an appliance's agent, in `weaver-web-PRD` and
 `weaver-admin-operator-contract` together.
 
-**What the run card is.** The rulings of 2026-11-14 and 2026-11-15 record on the run
-card a run's open ports (section 2), the tuple as shipped (section 7.1) and the trace's
-destination (section 7.5). No document of any repository defines the term. **Settled
-by:** the operator's ruling.
-
-**Where the trace's sink is named.** Section 7.5 has the trace's destination declared by
-the operator in Weaver Web, on the operator's ruling of 2026-11-15.
-`weaver-admin-operator-contract` section 3 names the sink in the agent's configuration,
-the declaration in the territory that the operator edits with `sudoedit` and the
-connector never writes, on the operator's ruling of 2026-10-07. Sections 2 and 4.1 step
-4 of this charter open the sink the configuration declares. **Settled by:** the
-operator's ruling. The amendment of 2026-11-15 changes no contract text.
-
-**Where the trace's sink stands.** Section 7.5 allows a path on the state mount, a sink
-off the machine, or none. `weaver-admin-operator-contract` section 3 has the sink stand
-in the agent's territory whatever its kind, and serves only a file sink through the
-trace door. `weaver-admin-Spec` section 5 opens a file sink beneath the territory's
-descriptor ("The trace's directory is the territory"), so a file sink on the state mount
-does not meet it as written, and load step 3 judges the trace directory. Section 4.1's
-check also judges the state mount only where the declaration elects state, so a trace
-path on the state mount of an agent that elects no state stands on a mount that no
-check judges. `weaver-admin-Spec` section 9 derives the trace and the state member's
-room from the sink's directory, and refuses `ConfigInvalid` naming `trace-sink` where
-that directory is not the judged territory. An agent that elects state with a null sink
-or a sink off the machine has no directory to derive the room from. **Settled by:** the
-operator's ruling, and `weaver-admin-Spec` sections 5 and 9 follow it.
-
-**What reads a trace that is not a file.** `weaver-admin-operator-contract` sections 1
-and 3 serve only a file sink through the trace door. Section 7.5 allows a sink off the
-machine, and no text states what reads a trace whose sink is a pipe or a socket.
-**Settled by:** the operator's ruling.
-
-**A sink that cannot be opened.** `weaver-admin-operator-contract` section 5 has a sink
-that cannot be opened refuse the load, per section 4.1 step 4. Section 7.5 allows a
-trace that goes nowhere. Section 7 names `/dev/null` among the sinks an operator may
-name, and `weaver-admin-Spec` section 9 refuses a sink whose directory is not the judged
-territory, which the directory of `/dev/null` is not. Whether "nowhere" is that sink, or
-a declaration that names no sink, which would fall under the refusal, is not stated.
-**Settled by:** the operator's ruling.
-
-**How the state mount meets the agent's territory.** The territory stays at
-`/var/lib/weaver-agent/weaver-<agent>/`, on the operator's rulings of 2026-10-07 and
-2026-11-15, and on an appliance it lies on the image's root disk. It holds the published
-save points and the state member's room, per `weaver-admin-Spec` section 3.0, and admin
-refuses a territory reached through a link above it, per that Spec's section 9. Section
-7.1's stance has the image disposable and the mounts carry what the agent keeps, and
-section 7.2 has an upgrade move the state to a new version. Which of the territory's
-members live on the state mount, and how, is not ruled. **Settled by:** the operator's
-ruling.
+**What the run card is.** The run card is the operator's term, and the paper of the
+operator's that defines it is in no repository as of 2026-11-15. The rulings of
+2026-11-14 and 2026-11-15 record on the run card a run's open ports (section 2), the
+tuple as shipped (section 7.1) and the trace's destination (section 7.5). **Settled
+by:** the act that places the operator's definition in a repository, which closes this
+cell.
 
 ## 11. Edits owed
 
@@ -1641,10 +1606,11 @@ both `open-items` entries as that list shrank. The last entry, the
 the human's ruling, and the register stood empty from that date until the act of
 2026-08-05 filled it.
 
-**What this register holds, as of 2026-11-15.** Six entries, all from the amendment of
+**What this register holds, as of 2026-11-15.** Seven entries, all from the amendment of
 that date, which takes the operator's rulings of 2026-11-14 and 2026-11-15 on the VM
 environment: the firewall table and its declared ports, the data-mount check, the
-refusal of state a version cannot read, and the guest's processor in the tuple.
+refusal of state a version cannot read, the guest's processor in the tuple, and the
+trace's destination.
 
 - **`weaver-admin-Spec`, the load additions.** The firewall table of section 2: its
   name, the shape of its rules, its place in the load and the unload with its rollback,
@@ -1672,6 +1638,17 @@ refusal of state a version cannot read, and the guest's processor in the tuple.
 - **`weaver-admin-operator-contract`, the storage report.** The data mounts' sizes
   crossing to the console, whose surface is open in `weaver-admin-Spec-vm-environment`
   section 9. **Settled by:** the act that adds the check.
+- **The trace goes where it is declared, one act to come**, on the operator's ruling of
+  2026-11-15 (section 7.5). In `weaver-admin-operator-contract`: section 3's "Whatever
+  its kind, the sink stands in the agent's territory", and section 5's refusal of a sink
+  that cannot be opened, as each bears on `/dev/null`. In `weaver-admin-Spec`: section
+  5's rule that the trace's directory is the territory, with its judgment that a file
+  sink's descriptor is a regular file laid out as the territory lays out a trace, which
+  `/dev/null` does not meet, and section 9's refusal `ConfigInvalid` naming `trace-sink`
+  for a sink whose directory is not the judged territory. The code that follows them.
+  Each keeps the property section 7.5 keeps. **Settled by:** the act "the trace goes
+  where it is declared". Where the member's room stands when the sink stands outside the
+  territory is the later item of section 7.5.
 
 ## 12. Children
 
