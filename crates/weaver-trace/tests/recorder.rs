@@ -964,39 +964,131 @@ fn a_recorder_whose_drain_expired_drops_without_waiting_on_its_writer() {
     drop(reader);
 }
 
+/// A fault padded to about a kibibyte, the record that fills the queue.
+fn padded_fault() -> Event {
+    let account = format!("{{\"pad\":\"{}\"}}", "x".repeat(1_024));
+    event(
+        Kind::Fault,
+        None,
+        Some(Payload::Fault(raw_payload(&account).unwrap())),
+    )
+}
+
+/// A recorder whose sink has stalled with its queue held at
+/// `QUEUE_DEPTH - UNLOAD_RESERVE`, and its unread reader. The run's `load`
+/// is written first. Its next record is larger than the pipe can hold, so
+/// the writer can never finish it while the reader is unread, which a short
+/// drain confirms. A record keeps its slot until its write finishes, so no
+/// slot frees while the queue fills, however the threads are scheduled. The
+/// fill runs on its own thread and is bounded, so a reserve that blocks too
+/// early fails here rather than hanging the test.
+fn stalled_at_the_reserve() -> (Recorder, std::io::PipeReader) {
+    use weaver_trace::{Drained, QUEUE_DEPTH, UNLOAD_RESERVE};
+    let (reader, pipe_writer) = std::io::pipe().expect("pipe");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut r = Recorder::receive(
+            OwnedFd::from(pipe_writer),
+            RunRef("r-1".into()),
+            SessionRef("s-1".into()),
+        )
+        .expect("receives");
+        r.submit(event(Kind::Load, None, Some(elections())))
+            .unwrap();
+        let now = std::time::Instant::now;
+        assert!(
+            matches!(
+                r.drain_by(now() + std::time::Duration::from_secs(5)),
+                Ok(Drained::Emptied)
+            ),
+            "the load is written before the sink stalls"
+        );
+        let stall = format!("{{\"pad\":\"{}\"}}", "x".repeat(2 << 20));
+        r.submit(event(
+            Kind::Fault,
+            None,
+            Some(Payload::Fault(raw_payload(&stall).unwrap())),
+        ))
+        .unwrap();
+        assert!(
+            matches!(
+                r.drain_by(now() + std::time::Duration::from_millis(100)),
+                Ok(Drained::Expired { .. })
+            ),
+            "the stalling record does not fit the sink"
+        );
+        for _ in 0..QUEUE_DEPTH {
+            if r.pressure().queued >= QUEUE_DEPTH - UNLOAD_RESERVE {
+                break;
+            }
+            r.submit(padded_fault()).unwrap();
+        }
+        assert_eq!(
+            r.pressure().queued,
+            QUEUE_DEPTH - UNLOAD_RESERVE,
+            "the queue fills to the reserve"
+        );
+        let _ = tx.send(r);
+    });
+    let r = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the queue fills to the reserve within its bound");
+    (r, reader)
+}
+
 /// **The queue's last slot is the run's `unload`'s** (`weaver-trace-Spec`
 /// section 7, the reserve): every other record blocks once the queue holds
 /// `QUEUE_DEPTH - UNLOAD_RESERVE`, so a stalled sink can never leave the
 /// terminal event without room, and `unload` is admitted at once there.
-/// Perturbation: admit every kind to the full depth, and a fault takes the
-/// last slot.
+/// Each case ends by failing the sink, which admits the waiting fault, and
+/// `submit` answers `Ok` for it. A fault whose `submit` began after the sink
+/// failed would be refused with that failure. So before it fails the sink,
+/// each case waits until the fault's submitter has read as asleep in its
+/// `/proc` stat on every sample through the whole hold. A sleep on a short
+/// lock before the reserve does not last the hold, so the fault is waiting at
+/// the reserve when the sink fails.
+/// Perturbations: admit every kind to the full depth, and the first case's
+/// fault takes the last slot. Hold the unload to the reserve as well, and
+/// the second case's unload is never admitted. Make the stalling record a
+/// small one and hold the writer off until the queue is full, as a loaded
+/// box can, and the writer frees a slot for the first case's fault. Make
+/// `submit` answer the sink's standing failure after it queues its record,
+/// and each case fails on its own.
 #[test]
+#[cfg(target_os = "linux")]
 fn the_queues_last_slot_is_reserved_for_unload() {
-    use weaver_trace::{QUEUE_DEPTH, UNLOAD_RESERVE};
-    let (reader, pipe_writer) = std::io::pipe().expect("pipe");
-    let mut r = Recorder::receive(
-        OwnedFd::from(pipe_writer),
-        RunRef("r-1".into()),
-        SessionRef("s-1".into()),
-    )
-    .expect("receives");
-    r.submit(event(Kind::Load, None, Some(elections())))
-        .unwrap();
-    let account = format!("{{\"pad\":\"{}\"}}", "x".repeat(1_024));
-    let fault = move || {
-        event(
-            Kind::Fault,
-            None,
-            Some(Payload::Fault(raw_payload(&account).unwrap())),
-        )
+    let wait = std::time::Duration::from_secs(5);
+    let held = std::time::Duration::from_millis(300);
+    let outcome = |answer: Result<weaver_trace::Sequence, weaver_trace::Failure>| match answer {
+        Ok(_) => "a fault admitted".to_string(),
+        Err(failure) => format!("a fault refused: {failure:?}"),
     };
+
+    // At the reserve, a record other than unload waits for room.
+    let (mut r, reader) = stalled_at_the_reserve();
     let (tx, rx) = std::sync::mpsc::channel();
+    let (task_tx, task_rx) = std::sync::mpsc::channel();
     let submitter = std::thread::spawn(move || {
-        while r.pressure().queued < QUEUE_DEPTH - UNLOAD_RESERVE {
-            r.submit(fault()).unwrap();
-        }
-        tx.send("filled").unwrap();
-        // The unload is admitted into its reserved slot at once.
+        task_tx.send(this_thread_in_proc()).unwrap();
+        tx.send(outcome(r.submit(padded_fault()))).unwrap();
+    });
+    let task = submitter_task(&task_rx, wait);
+    waits_at_the_reserve(&task, &rx, held, wait);
+    drop(reader);
+    assert_eq!(
+        rx.recv_timeout(wait).as_deref(),
+        Ok("a fault admitted"),
+        "the failed sink admits the waiting fault"
+    );
+    submitter.join().expect("the submitter ends");
+
+    // The unload is admitted into its reserved slot at once, and any other
+    // record still waits on the stalled sink.
+    let (mut r, reader) = stalled_at_the_reserve();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (task_tx, task_rx) = std::sync::mpsc::channel();
+    let submitter = std::thread::spawn(move || {
+        task_tx.send(this_thread_in_proc()).unwrap();
         r.submit(event(
             Kind::Unload,
             None,
@@ -1009,23 +1101,89 @@ fn the_queues_last_slot_is_reserved_for_unload() {
             })),
         ))
         .unwrap();
-        tx.send("unload admitted").unwrap();
-        // Any other record waits on the stalled sink.
-        let _ = r.submit(fault());
-        tx.send("a fault admitted").unwrap();
+        tx.send("unload admitted".to_string()).unwrap();
+        tx.send(outcome(r.submit(padded_fault()))).unwrap();
     });
-    let wait = std::time::Duration::from_secs(5);
-    assert_eq!(rx.recv_timeout(wait), Ok("filled"));
-    assert_eq!(rx.recv_timeout(wait), Ok("unload admitted"));
-    assert!(
-        rx.recv_timeout(std::time::Duration::from_millis(300))
-            .is_err(),
-        "a record other than unload waits for room"
-    );
+    let task = submitter_task(&task_rx, wait);
+    assert_eq!(rx.recv_timeout(wait).as_deref(), Ok("unload admitted"));
+    waits_at_the_reserve(&task, &rx, held, wait);
     drop(reader);
-    submitter
-        .join()
-        .expect("the submitter ends once the sink fails");
+    assert_eq!(
+        rx.recv_timeout(wait).as_deref(),
+        Ok("a fault admitted"),
+        "the failed sink admits the waiting fault"
+    );
+    submitter.join().expect("the submitter ends");
+}
+
+/// The calling thread's directory under `/proc`, where another thread of
+/// the process reads whether it sleeps, or why it cannot be named.
+#[cfg(target_os = "linux")]
+fn this_thread_in_proc() -> Result<std::path::PathBuf, String> {
+    std::fs::read_link("/proc/thread-self")
+        .map(|task| std::path::Path::new("/proc").join(task))
+        .map_err(|error| format!("/proc/thread-self: {error}"))
+}
+
+/// The submitter's `/proc` directory, as its thread sent it.
+#[cfg(target_os = "linux")]
+fn submitter_task(
+    task_rx: &std::sync::mpsc::Receiver<Result<std::path::PathBuf, String>>,
+    wait: std::time::Duration,
+) -> std::path::PathBuf {
+    match task_rx.recv_timeout(wait) {
+        Ok(Ok(task)) => task,
+        Ok(Err(error)) => panic!("the submitter cannot be watched: {error}"),
+        Err(error) => panic!("the submitter did not start: {error}"),
+    }
+}
+
+/// Returns once the thread at `task` has read as asleep (`S` in its `/proc`
+/// stat) on every 10 ms sample through `held`, with no answer on `rx`, as a
+/// submitter waiting at the reserve does. Any other state starts the hold
+/// again. An answer means the submission did not wait, and fails the test,
+/// as does `bound`, which names the last state read.
+#[cfg(target_os = "linux")]
+fn waits_at_the_reserve(
+    task: &std::path::Path,
+    rx: &std::sync::mpsc::Receiver<String>,
+    held: std::time::Duration,
+    bound: std::time::Duration,
+) {
+    let deadline = std::time::Instant::now() + bound;
+    let mut asleep_since: Option<std::time::Instant> = None;
+    loop {
+        if let Ok(answer) = rx.try_recv() {
+            panic!("a record other than unload waits for room, and the fault got: {answer}");
+        }
+        let state = match std::fs::read_to_string(task.join("stat")) {
+            // The state follows the closing parenthesis of the command name.
+            Ok(stat) => stat
+                .rfind(')')
+                .and_then(|end| stat[end + 1..].split_whitespace().next())
+                .unwrap_or("unparsed")
+                .to_string(),
+            Err(error) => format!("unreadable ({error})"),
+        };
+        if state == "S" {
+            let since = *asleep_since.get_or_insert_with(std::time::Instant::now);
+            if since.elapsed() >= held {
+                if let Ok(answer) = rx.try_recv() {
+                    panic!(
+                        "a record other than unload waits for room, and the fault got: {answer}"
+                    );
+                }
+                return;
+            }
+        } else {
+            asleep_since = None;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the submitter did not stay asleep through {held:?} within {bound:?}, last read {state}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 /// **The subsystem's wire spellings are pinned, every case, and the organ and

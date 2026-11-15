@@ -874,17 +874,10 @@ impl Drop for Member {
 }
 
 fn compare(cut: &str, live: &mut Member, rebuilt: &mut Member, expected: &[Event]) {
-    let wanted_shape = shape(expected);
-    let live_shape = answer_shape(&live.ask("shape", None));
-    let rebuilt_shape = answer_shape(&rebuilt.ask("shape", None));
-    println!(
-        "W5B {cut} shape expected={wanted_shape:?} live={live_shape:?} reconstructed={rebuilt_shape:?}"
-    );
-    assert_eq!(
-        (&live_shape, &rebuilt_shape),
-        (&wanted_shape, &wanted_shape),
-        "three-way shape disagreement at {cut}"
-    );
+    // The preload and the asks cross on two sockets with no shared write
+    // order. Per weaver-state-Spec section 4, a replay ask parks until the
+    // preload seal while a shape ask answers at once, so the replay is asked
+    // first and the shape, asked after, reads the sealed holdings.
     for (ask, last) in [
         ("replay", None),
         ("identity", None),
@@ -908,6 +901,17 @@ fn compare(cut: &str, live: &mut Member, rebuilt: &mut Member, expected: &[Event
             "three-way {ask} disagreement at {cut}, last={last:?}"
         );
     }
+    let wanted_shape = shape(expected);
+    let live_shape = answer_shape(&live.ask("shape", None));
+    let rebuilt_shape = answer_shape(&rebuilt.ask("shape", None));
+    println!(
+        "W5B {cut} shape expected={wanted_shape:?} live={live_shape:?} reconstructed={rebuilt_shape:?}"
+    );
+    assert_eq!(
+        (&live_shape, &rebuilt_shape),
+        (&wanted_shape, &wanted_shape),
+        "three-way shape disagreement at {cut}"
+    );
 }
 
 // Each cell has its own live and reconstructed process/database pair. Whole
