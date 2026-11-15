@@ -67,10 +67,10 @@ charter's section 7.5.
 Per `weaver-admin-PRD` sections 4.1 and 7.2.
 
 **The refusal of state this version cannot read stands for save points.** The inventory
-of `weaver-admin-Spec` section 4 judges a save point's stamp, its check and its digest
-and refuses `ConfigInvalid` naming the save point. The member answers the enter's
-`restored` ask with a refusal naming a schema mismatch, so the harness refuses the enter
-before it authors `load`, per `weaver-state-Spec` section 3.
+of `weaver-admin-Spec` section 4 judges a save point's stamp, its check and its digest,
+and a save point that fails refuses the load. The member answers the enter's `restored`
+ask with a refusal naming a schema mismatch, so the harness refuses the enter before it
+authors `load`, per `weaver-state-Spec` section 3.
 
 **State is transferable, and reproducibility is not claimed across versions**, per the
 charter's section 7.2: an upgrade moves the state and the model to a new version of the
