@@ -565,6 +565,13 @@ fn halt_gate_real_child_exit_and_malformed_packet_require_separate_cleanup() {
                 .wait()
                 .unwrap();
             assert!(status.success());
+            // The child's exit and the command's drop close this test's
+            // copies of the peer. A concurrent test's fork may hold one until
+            // its exec, and the four advances below must meet the hangup.
+            crate::flow::fixture_eof::await_release_until(
+                port.fd().as_raw_fd(),
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+            );
         }
         let mut progress = Progress::Pending;
         for _ in 0..4 {
