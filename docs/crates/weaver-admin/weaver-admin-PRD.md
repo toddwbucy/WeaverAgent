@@ -1,9 +1,6 @@
 # weaver-admin - PRD (crate charter)
 
-**Status:** MERGED. In `main` and the source of truth. The rulings that
-reshaped this charter are recorded in it rather than pending against it, and section
-10 now carries a shorter list than it did. The header moved on the human's ruling of
-2026-07-31 with no other edit.
+**Status:** MERGED. In `main` and the source of truth.
 
 **Date filed:** 2026-07-29
 
@@ -215,6 +212,27 @@ harness and the harness has returned the aggregate to admin. Apex section 6 give
 harness the word coordinator and the act of sequencing the organs with it, and nothing
 here contests it. What admin owns is the directive and the aggregate it gets back, which
 is a different act from coordinating a turn, and the two never run at the same time.
+
+**One named firewall table, and never the firewall, on the operator's rulings of
+2026-11-14.** Admin owns one named table of the kernel's nftables firewall and writes
+that table alone. At a load it opens there the ports the declaration names for a tool or
+for the gate, and at the unload it closes them, so a declared port stands open while the
+run that declared it stands and at no other time. The ground is the operator's rule that
+a port which does not have to be open is not open. The table is this crate's because
+this crate is the one party that holds root at both ends of a run, and the one that
+reads the declaration at its start. The rest of the firewall stays the operator's, for a
+reason the mechanism gives: in nftables an accept in one table does not override a drop
+in another, so admin's table opens a port only where nothing else on the machine drops
+it, and on a machine where the operator runs rules of their own, those rules must also
+allow the port, which is the operator's act. A load that fails after the table opened
+closes it in its own reap, per section 5, the opening being admin's own act. The open
+ports and the table's rules are recorded with the run, as a condition of the
+arrangement. **No declaration member names a port yet**, for the reason section 4.3
+gives for the boundary member: a field whose only reader is unbuilt is the reserved slot
+apex section 7 refuses. The member arrives with the first act that charters a tool or a
+gate reachable at a port, and until then the table opens nothing at a load. Which table
+holds the default policy on an appliance is open in section 10, and
+`weaver-admin-Spec-vm-environment` section 7 carries the environment's half.
 
 **Custody of the stream's sink, and the agent reaches none of it.** The program
 owns no record, per the ruling of 2026-08-01, restated here as the authority since
@@ -489,6 +507,29 @@ Step 6 is the one ask in the sequence, and a refusal at any point inside it ente
 the rollback of section 5 carrying the name of the step that refused. A device
 conflict discovered at model admission is such a refusal, named by the SPU inside
 the aggregate, and admin holds no earlier check to catch it, per ruling C.
+
+**Where the install fixes data mounts, every load checks them**, on the operator's
+rulings of 2026-11-14. An appliance fixes two, the model's and the state's, and the
+state's holds the trace, the state store and the save points, per
+`weaver-admin-Spec-vm-environment` section 6. Each load checks that each mount point is
+a separate filesystem and reports the sizes, and where storage is not sufficient the
+console says so and asks the operator for more. The check runs at every load and not
+once at enrollment, because a state mount that went missing between two loads would
+otherwise put the trace into the image's sealed root. So a mount point that is not a
+separate filesystem refuses the load, as step 3 refuses every boundary it cannot
+confirm, and nothing here mounts or repairs, the mounts being the operator's act.
+Whether the model resolves stays the SPU's to answer at admission, per section 4.3, so
+the check judges the filesystem and not what lies on it.
+
+**A load refuses state this version cannot read, and the refusal says why**, on the
+operator's rulings of 2026-11-14. A load never starts fresh silently. State that an
+earlier version wrote and this version cannot read is refused by name and never passed
+over, because a load that started empty beside it would lose the agent's state while
+nothing on the record said so. The save points hold to this already: the inventory of
+`weaver-admin-Spec` section 4 judges a save point's stamp before any process exists and
+refuses `ConfigInvalid` naming it, and the state member refuses the enter where the
+schema a save point stands under is not the one it runs. The rule binds every form of
+state a load reads.
 
 **The worker never holds a principal above the agent's, which removes a window rather
 than narrowing one.** The start step drops to `weaver-<n>` in its own child before the
@@ -869,7 +910,12 @@ on the operator's rulings of 2026-10-03 on #50 and of 2026-11-07 on #166: the wo
 takes its own session and outlives the invocation that started it and its invoker's
 containment, living as long as the root-owned delegated scope the start step asks PID1
 for, and restarting it on a crash or a reboot is for whoever packages and deploys the
-agent, with systemd, a container or anything else, and not this framework's.
+agent, with systemd, a container or anything else, and not this framework's. **Nothing
+of this framework starts the agent after a reboot, and the appliance image adds nothing
+that does**, on the operator's rulings of 2026-11-14: starting and stopping the agent
+are its load and unload through admin, so after a reboot an appliance's connectors come
+up and its agent stays unloaded until a load is asked for, at a root shell or by the
+console through admin-con.
 
 **The agent's uid is statically provisioned, and a dynamic identity is excluded for two
 reasons that are independent and are recorded as independent.** The first is durability:
@@ -886,9 +932,20 @@ operator's ruling of 2026-10-03 on #50. What the start step delivers is the agen
 uid and group from the exec, no new privileges across it, and a runtime directory only
 the agent and the operator reach. A sandbox beyond that, no reach into another
 principal's home, a bound on what the agent may consume, is the operator's to wrap
-around a packaged agent, the way a firewall configuration is, and section 11's refusal
-to freeze a list stands, because a list frozen in a document is a posture that cannot
-track its host.
+around a packaged agent, the way a firewall configuration is beyond admin's one table of
+section 2, and section 11's refusal to freeze a list stands, because a list frozen in a
+document is a posture that cannot track its host.
+
+**A machine given to one agent is the recommendation, and it is not a rule**, on the
+operator's rulings of 2026-11-14. The suite recommends a single-use machine of the Spark
+and GB10 class, installed as a dedicated host, or a virtual machine made from the agent
+image, per `weaver-admin-Spec-vm-environment`. The first reason is section 1's: the
+agent is bounded by the operating system under a UID, so the machine's operating system
+is the whole of the agent's boundary, and that machine is best one that nothing else
+depends on. The second is section 2's table, which opens a declared port only where no
+other table on the machine drops it. The shape of a deployment stays the operator's
+choice, and this program refuses none of them: a machine that serves other work is the
+operator's to elect. In the operator's words, "we just bring the board and the wires".
 
 **One property is a question rather than a requirement, and it has a real cost.**
 Restricting the address families the agent may open to `AF_UNIX` is **not** a
@@ -1205,6 +1262,22 @@ under G5, both charters carry their own validation obligations, and no third doc
 exists. **Settled by:** the human's ruling. Either way the Document Format's sentence
 citing that contract is an owed edit, per section 11.
 
+**Which table holds the default policy on an appliance.** Section 2's table opens a port
+only where nothing else on the machine drops it, so an appliance's image has to place
+its default policy where admin's table can open a declared port, per
+`weaver-admin-Spec-vm-environment` section 7. Two shapes stand. In the first, the image
+ships no table that drops input, and admin's table carries the drop policy and the SSH
+accept at all times. In the second, the image ships a base table that hands the declared
+ports to admin, for example as a set that admin fills. The first matches admin owning
+one table. The second gives admin part of a table it does not own. **Settled by:** the
+operator's ruling, with one test of each shape on a sealed image.
+
+**Where the table opens in a load and closes in an unload.** Section 2 has the table
+open at load and close at unload, and section 4's order places neither act yet, nor the
+record of the open ports. **Settled by:** the act that adds the table, which places both
+in section 4 and writes their states into the table of `weaver-admin-Spec` section 3.0
+before any code.
+
 ## 11. Edits owed
 
 Apex section 10 requires that a change touching a contract names every party, and
@@ -1252,37 +1325,27 @@ both `open-items` entries as that list shrank. The last entry, the
 the human's ruling, and the register stood empty from that date until the act of
 2026-08-05 filled it.
 
-**What this register holds, as of 2026-08-06.** Two entries, both from the act
-of 2026-08-05 and neither landed by it.
+**What this register holds, as of 2026-11-15.** Four entries, all from the amendment of
+that date, which adds the firewall table, the data-mount check and the refusal of state
+a version cannot read.
 
-- **`weaver-types-Spec` section 4.2, the `AgentState` gap, partly discharged
-  2026-08-06 and discharged 2026-09-04.** The `weaver-admin` code act found the gap
-  load-bearing rather
-  than theoretical: `show` and `list` had no writable implementation, since the
-  answer must be one of the floor's two enums and the only fitting cases carry an
-  `AgentState`. The floor gained `StateNotObservable` and those verbs refuse with
-  it, so the gap has an honest surface. **What stays owed is the gap itself**, not
-  its marker: the enumeration is still unable to say what a running unit is doing,
-  and the marker is what a reviewer greps for to find the hole.
-  The residency answer of `weaver-admin-Spec` section 3 carries the init
-  system's three values, and they do not map onto `AgentState`'s four cases: a
-  running unit covers both `Idle` and `Active`, and a failed one has no case.
-  The enumeration is still not grown to fit what a service manager happens to
-  report, which would settle a vocabulary from a representation. **Settled by:**
-  the observation exchange `weaver-admin-Spec` section 11 names, which fixes
-  what can be observed before the floor is asked to enumerate it, and which
-  retires `StateNotObservable` in the same act. It landed 2026-09-04, per issue
-  #435, and the marker left the floor with it.
-- **The merged code of `weaver-admin` and `weaver-harness`.** Four things
-  contradict what `main` builds: the coordination channel's direction, the
-  operator surface's retirement, the fleet map's removal, and the harness
-  constructor's move from `Harness::adopt` to `Harness::listen` with the bound
-  listener it now takes. Thirteen conformance headers in that code cite
-  assertions this act retired, which is the divergence stated as a number a
-  check can read. This
-  is the expected shape of a phase one re-entry, per Working Process section 2,
-  and it is named as owed rather than left for a reader to discover by compiling.
-  **Settled by:** the code acts, which follow this act rather than riding it.
+- **`weaver-admin-Spec`, the load additions.** The firewall table of section 2: its
+  name, the shape of its rules, its place in the load and the unload with its rollback,
+  and what the run records of it. The data-mount check of section 4.1 with its report.
+  The refusal of state this version cannot read, which that Spec's section 4 already
+  holds for save points. **Settled by:** the act that adds them, once this amendment
+  merges.
+- **`weaver-types-Spec` section 2, the declaration's ports.** How a declaration names
+  the ports of a tool or of the gate. **Settled by:** the first act that charters a tool
+  or a gate reachable at a port, per this charter's section 2.
+- **The run record.** The member that carries the open ports and the table's rules, and
+  the record of an appliance's upgrade, per `weaver-admin-Spec-vm-environment` section
+  3.6. Which documents move is the settling act's to name. **Settled by:** the act that
+  adds the table, for the first, and the act that records the first upgrade, for the
+  second.
+- **`weaver-admin-operator-contract`, the storage report.** The data mounts' sizes
+  crossing to the console, whose surface is open in `weaver-admin-Spec-vm-environment`
+  section 11. **Settled by:** the act that adds the check.
 
 **Why the landed entries are gone rather than kept as a changelog.** The rule
 above is that an entry leaves when its edit lands, and it has a second half worth
@@ -1293,14 +1356,14 @@ documents themselves, and this section is for what is still owed.
 
 ## 12. Children
 
-Specs to be written against this charter once the PRD set is ratified. Named so the
-set is bounded, not drafted here.
+The Specs written against this charter.
 
-- Boundary verification, covering identity, home, and the trace directory.
-- Lifecycle sequencing and the rollback of section 5.
-- The coordination channel, covering the start step, the dial, and the descriptor
-  handoff.
-- The operator interface of section 8.
+- `weaver-admin-Spec`, the crate's build instructions. It covers boundary verification,
+  lifecycle sequencing with the rollback of section 5, the coordination channel with the
+  start step, the dial and the descriptor handoff, and the operator interface of section
+  8.
+- `weaver-admin-Spec-vm-environment`, the environment of an agent that runs in a virtual
+  machine made from the agent image, on the operator's ruling of 2026-11-15.
 
 Contracts this crate is party to are written with the PRDs of their other parties,
 one per seam in section 6, and are not children of this document.
