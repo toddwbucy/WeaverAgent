@@ -24,7 +24,10 @@
 #   runtime.<name>        each CUDA runtime file the installed SPU resolves, as
 #                         `<sha256> <path>`, the path the file the loader's name
 #                         leads to: cudart, cublas, cublaslt and curand
-#   cccl                  the cccl package version
+#   cccl                  the cccl package the build compiled against: pacman's
+#                         `cccl` version, or where pacman is absent, the dpkg
+#                         package that owns the CCCL header nvcc reads first, as
+#                         `<package>=<version>` (tuple_cccl below)
 #
 # **Build facts only** (the operator's rulings of 2026-11-14: one appliance
 # image serves any host's cards). Nothing here reads the hardware: no driver,
@@ -126,7 +129,113 @@ if len(found) == 1:
     fi
     printf 'runtime.%s = %s\n' "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" "$n"
   done
-  n=$(pacman -Q cccl 2>/dev/null || true)
-  n=$(printf '%s\n' "$n" | awk 'NR == 1 {print $2}')
+  n=$(tuple_cccl)
   printf 'cccl = %s\n' "${n:-unknown}"
+}
+
+# CCCL's version header, under an include directory.
+TUPLE_CCCL_HEADER=cuda/std/__cccl/version.h
+
+# tuple_include_dirs FLAGS: each include directory FLAGS names, one per line
+# and in order, as nvcc reads `-I DIR`, `-IDIR`, `--include-path DIR` and
+# `--include-path=DIR`, each value a comma-separated list.
+tuple_include_dirs() {
+  local -a words
+  local w list i=0
+  read -ra words <<<"$1"
+  while [ "$i" -lt "${#words[@]}" ]; do
+    w=${words[i]}
+    i=$((i + 1))
+    case $w in
+      -I|--include-path) list=${words[i]:-}; i=$((i + 1)) ;;
+      --include-path=*) list=${w#--include-path=} ;;
+      -I*) list=${w#-I} ;;
+      *) continue ;;
+    esac
+    printf '%s\n' "${list//,/$'\n'}"
+  done
+}
+
+# tuple_cccl: the cccl package the build compiled against, or nothing where
+# the box cannot say. Where pacman stands, as on the boxes #397 measured, it
+# is the version of pacman's one `cccl` package. Where pacman is absent and
+# dpkg-query stands, as on the Ubuntu box an appliance image is built on,
+# NVIDIA's repository carries CCCL once per toolkit release (`cccl-13-3`,
+# `cccl-13-4`) and one box may hold several, so the fact is the package that
+# owns the CCCL version header nvcc reads first, as `<package>=<version>`,
+# the form apt installs by. nvcc puts NVCC_PREPEND_FLAGS ahead of the build's
+# own flags and reads its toolkit's CCCL last, as the system include its
+# nvcc.profile names. The header is therefore the first that an absolute
+# include directory of NVCC_PREPEND_FLAGS holds, and else the one in the
+# toolkit of the nvcc on PATH, in `targets/<target>/include` and then its
+# `cccl`, the profile's order. The build's own flags are not read. The
+# answer is nothing where a relative directory comes first, where an include
+# directory of NVCC_APPEND_FLAGS holds the header (the build's own flags
+# stand between it and the toolkit's), where the toolkit holds other than
+# one target, and where no one package owns the header.
+tuple_cccl() {
+  local n dir header="" path top said line owner="" owners=0
+  local -a targets
+  if command -v pacman >/dev/null 2>&1; then
+    n=$(pacman -Q cccl 2>/dev/null || true)
+    printf '%s\n' "$n" | awk 'NR == 1 {print $2}'
+    return 0
+  fi
+  command -v dpkg-query >/dev/null 2>&1 || return 0
+  while IFS= read -r dir; do
+    [ -n "$dir" ] || continue
+    [[ "$dir" == /* ]] || return 0
+    if [ -f "$dir/$TUPLE_CCCL_HEADER" ]; then
+      header=$dir/$TUPLE_CCCL_HEADER
+      break
+    fi
+  done < <(tuple_include_dirs "${NVCC_PREPEND_FLAGS:-}")
+  if [ -z "$header" ]; then
+    while IFS= read -r dir; do
+      [ -n "$dir" ] || continue
+      [[ "$dir" == /* ]] || return 0
+      [ ! -f "$dir/$TUPLE_CCCL_HEADER" ] || return 0
+    done < <(tuple_include_dirs "${NVCC_APPEND_FLAGS:-}")
+    path=$(command -v nvcc 2>/dev/null) || return 0
+    path=$(readlink -f -- "$path" 2>/dev/null) || return 0
+    [[ "$path" == /*/bin/nvcc ]] || return 0
+    top=${path%/bin/nvcc}
+    targets=("$top"/targets/*/include)
+    [ "${#targets[@]}" -eq 1 ] && [ -d "${targets[0]}" ] || return 0
+    for dir in "${targets[0]}" "${targets[0]}/cccl"; do
+      if [ -f "$dir/$TUPLE_CCCL_HEADER" ]; then
+        header=$dir/$TUPLE_CCCL_HEADER
+        break
+      fi
+    done
+    [ -n "$header" ] || return 0
+  fi
+  # dpkg records the path a package unpacks, so the header is asked for as
+  # resolved, and refused where dpkg-query would read it as a pattern.
+  header=$(readlink -f -- "$header" 2>/dev/null) || return 0
+  case $header in
+    /*) ;;
+    *) return 0 ;;
+  esac
+  case $header in
+    *[\*\?\[\\]*|*$'\n'*) return 0 ;;
+  esac
+  # One owner, on the line that names the header: a diversion's lines name
+  # it too, and two packages that own one file share one line.
+  said=$(dpkg-query -S "$header" 2>/dev/null || true)
+  while IFS= read -r line; do
+    case $line in
+      "diversion by "*) continue ;;
+    esac
+    [[ "$line" == *": $header" ]] || continue
+    owners=$((owners + 1))
+    owner=${line%": $header"}
+  done <<<"$said"
+  [ "$owners" -eq 1 ] || return 0
+  [[ "$owner" =~ ^[a-z0-9][a-z0-9+.-]*(:[a-z0-9-]+)?$ ]] || return 0
+  n=$(dpkg-query -W -f='${Package}=${Version}\n' "$owner" 2>/dev/null || true)
+  if [[ "$n" =~ ^[a-z0-9][a-z0-9+.-]*=[^[:space:]]+$ ]]; then
+    printf '%s\n' "$n"
+  fi
+  return 0
 }
