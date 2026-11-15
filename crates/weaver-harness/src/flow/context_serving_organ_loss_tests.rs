@@ -497,6 +497,7 @@ fn organ_loss_halt_records_in_observation_order_when_spu_precedes_gate() {
 
 #[test]
 fn closed_gate_receive_debt_stays_runnable_before_its_terminal_deadline() {
+    use std::os::fd::AsRawFd;
     let mut fx = InputFixture::new();
     let now = fx.run.clock.now().unwrap();
     let (channel, peer) = crate::channel::OrganChannel::pair().unwrap();
@@ -512,7 +513,14 @@ fn closed_gate_receive_debt_stays_runnable_before_its_terminal_deadline() {
     .unwrap();
     gate.try_send().unwrap();
     // Closing with the unread request produces the actual reset ahead of EOF.
+    // The reset comes only with the peer's release, which a concurrent test's
+    // fork holding a copy of the peer delays until its exec, so the test waits
+    // for the release before its one receive.
     drop(peer);
+    crate::flow::fixture_eof::await_release_until(
+        gate.fd().as_raw_fd(),
+        Instant::now() + Duration::from_secs(5),
+    );
     let failure = gate.try_receive().unwrap_err();
     assert_eq!(failure.fault, crate::ChannelFault::Closed);
     assert!(gate.closed_receive_pending());
@@ -660,7 +668,14 @@ fn closed_gate_malformed_tail_returns_its_refusal_without_an_input_driver() {
         nix::sys::socket::MsgFlags::MSG_NOSIGNAL,
     )
     .unwrap();
+    // The peer closes with the request unread, and the reset that comes ahead
+    // of the malformed tail comes only with its release, which a concurrent
+    // test's fork holding a copy of the peer delays until its exec.
     drop(peer);
+    crate::flow::fixture_eof::await_release_until(
+        gate.fd().as_raw_fd(),
+        Instant::now() + Duration::from_secs(5),
+    );
     let first = gate.try_receive().unwrap_err();
     assert_eq!(first.fault, crate::ChannelFault::Closed);
     fx.run.context.serving_organs.gate = Some(ObservedGate {
