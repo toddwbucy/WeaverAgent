@@ -96,10 +96,14 @@ plan "admin base    $ADMIN_BASE"
 plan "stack record  $STACK"
 plan "agent dir     $AGENT_DIR"
 plan "toolchain     $(rustup show active-toolchain 2>/dev/null | cut -d' ' -f1)"
-# **The fallback is applied after the pipeline** (#39): under `pipefail`, a
-# `head` that closes the pipe on a box with more than one card fails it, and an
-# `|| echo none` inside the substitution then printed a stray `none` line.
-DRIVER=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1 || true)
+# **The whole answer is read, then the first line that is an answer kept**
+# (#39): under `pipefail`, a `head` that closed the pipe on a box with more
+# than one card failed it, and an `|| echo none` inside the substitution
+# printed a stray `none` line. Only a `<name>, <version>` line counts: on a
+# box with no card, as an image is built, nvidia-smi prints a failure
+# sentence, which is no driver, and a card in error prints its own line
+# beside the healthy cards' answers.
+DRIVER=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || true); DRIVER=$(grep -E ', [0-9]+(\.[0-9]+)+$' <<<"$DRIVER" || true); DRIVER=${DRIVER%%$'\n'*}
 plan "driver        ${DRIVER:-none}"
 plan "nvcc          $(nvcc --version 2>/dev/null | tail -1 | sed 's/^Build //' || echo none)"
 CCCL=$(pacman -Q cccl 2>/dev/null | awk '{print $2}' || true)
@@ -366,7 +370,7 @@ plan "libraries     $(printf '%s ' "${LIBS[@]##*/}")"
 # ---------------------------------------------------------------- 4. plan
 say "plan"
 plan "install -d $PREFIX/bin $PREFIX/lib  (root, 0755)"
-for b in $MEMBERS; do plan "install $b -> $PREFIX/bin/$b  $(sha256sum "$BUILT/$b" | cut -c1-12)"; done
+for b in $MEMBERS; do plan "install $b -> $PREFIX/bin/$b  $(sha256sum < "$BUILT/$b" | cut -c1-12)"; done
 plan "cp -a ${#LIBS[@]} library files and links -> $PREFIX/lib"
 plan "write $LDSO_CONF = $PREFIX/lib and $CUDA_LIB_DIR, then ldconfig"
 plan "install busybox -> $PREFIX/bin/busybox (root, 0755) and busybox.applets beside it (root, 0644)"

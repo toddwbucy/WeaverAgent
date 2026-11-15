@@ -455,9 +455,9 @@ def load_payload(path, from_line=1):
 
 def live_gpus(text):
     """nvidia-smi's `pci.bus_id, name, memory.total` CSV lines, each rendered
-    `<bus id>, <name>, <memory>` as the install tuple's `gpu.<n>` values are,
-    and sorted in the C locale (code point order) as install-tuple.sh sorts
-    them, which is PCI bus order. None for no such line."""
+    `<bus id>, <name>, <memory>` and sorted in the C locale (code point
+    order), which is PCI bus order. None for no such line, so the failure
+    sentence nvidia-smi prints where it reaches no card is never a card."""
     rows = []
     for line in text.splitlines():
         parts = [part.strip() for part in line.split(",")]
@@ -466,13 +466,74 @@ def live_gpus(text):
     return sorted(rows) or None
 
 
+# A driver version as nvidia-smi's `driver_version` query answers it.
+DRIVER_VERSION = re.compile(r"[0-9]+(\.[0-9]+)+")
+
+
+def live_driver(text):
+    """The distinct driver versions nvidia-smi's `driver_version` query names,
+    one line per card, sorted. Only a line that is a version counts, so the
+    failure sentence it prints with no card names none."""
+    return sorted({line.strip() for line in (text or "").splitlines()
+                   if DRIVER_VERSION.fullmatch(line.strip())})
+
+
+# A line of ldd's report: `<name> => <path> (<load address>)`, the path read
+# whole, from the arrow to the last load address, as engine_resolved reads it
+# (deploy/engine-libraries.sh), since a directory may hold a space; and
+# `<name> => not found`.
+LDD_RESOLVED = re.compile(r"\s*(\S+)\s+=>\s+(.+)\s+\(0x[0-9a-fA-F]+\)\s*")
+LDD_NOT_FOUND = re.compile(r"\s*(\S+)\s+=>\s*not found\s*")
+
+
+def loader_resolved(text):
+    """ldd's report as a map from each library name to the path it resolves
+    to, or None where the loader finds none."""
+    resolved = {}
+    for line in text.splitlines():
+        found = LDD_RESOLVED.fullmatch(line)
+        if found:
+            resolved.setdefault(found.group(1), found.group(2))
+            continue
+        missing = LDD_NOT_FOUND.fullmatch(line)
+        if missing:
+            resolved.setdefault(missing.group(1), None)
+    return resolved
+
+
+def resolved_as(resolved, library):
+    """The (name, path) ldd resolved for `library` (`libcudart`, say), by the
+    name `<library>.so` or `<library>.so.<version>`, so `libcublas` is never
+    `libcublasLt`; the path is None where the loader finds none. None where
+    the report names the library not at all. The first such name in ldd's
+    order, as install-tuple.sh takes it, so the two read one file."""
+    for name, path in resolved.items():
+        if name == library + ".so" or name.startswith(library + ".so."):
+            return name, path
+    return None
+
+
 # --- The install tuple (deploy/install-tuple.sh) ---------------------------
 
 INSTALL_TUPLE_CAP = 64 * 1024
 INSTALL_SCALARS = ("commit", "toolchain", "features", "engine", "engine-source",
-                   "engine-vendored", "nvcc", "driver", "cudart", "cublas", "cublaslt",
-                   "cccl", "gpus")
+                   "engine-vendored", "nvcc", "cccl")
 
+# **The CUDA runtime files the install records**, as `runtime.<key> =
+# <sha256> <path>`: each key, and the library name the SPU links. These are
+# install-tuple.sh's TUPLE_RUNTIME, lowered for the key, and
+# RuntimeMirrorTests pins the two equal. The driver's own `libcuda` is not
+# among them: it is the driver's, read at each load with the driver.
+RUNTIME_LIBRARIES = (("cudart", "libcudart"), ("cublas", "libcublas"),
+                     ("cublaslt", "libcublasLt"), ("curand", "libcurand"))
+RUNTIME_VALUE = re.compile(r"([0-9a-f]{64}) (/.*)")
+
+# **The earlier form's keys.** A tuple written before the install tuple held
+# build facts alone carries the driver, the card count and each card, and the
+# runtime files by path with no digest. Such a tuple is read, these lines are
+# left unread by name, and it binds no runtime file.
+EARLIER_KEYS = ("driver", "gpus", "cudart", "cublas", "cublaslt")
+EARLIER_CARD = re.compile(r"gpu\.[0-9]+")
 
 # What install-tuple.sh writes for a fact the box cannot answer.
 UNKNOWN = "unknown"
@@ -484,15 +545,24 @@ class InstallTupleRefused(Exception):
 
 def read_install_tuple(path):
     """The box's install tuple: its own sha256 (the box side's identity), the
-    scalar facts, the member and library digests by name, and the devices in
-    `gpu.<n>` order.
+    scalar facts, the member and library digests by name, the runtime files
+    by key, each `(sha256, path)` or None for `unknown`, and the earlier
+    form's lines it left unread.
 
     One fact per line, `key = value`, split on the first " = ", no value
     empty, every scalar key present, no key twice, each member and library
     digest 64 hex digits or `unknown` (install-tuple.sh writes `unknown` for
-    any fact the box cannot answer, a file it could not hash among them),
-    `gpu.<n>` numbered from 0 without a gap and as many as `gpus` says.
-    Anything else is refused.
+    any fact the box cannot answer, a file it could not hash among them), and
+    each runtime file of RUNTIME_LIBRARIES present, as `<sha256> <absolute
+    path>` or `unknown`, and no other.
+
+    **A tuple of the earlier form is read, not refused**: one carrying any of
+    EARLIER_KEYS or a `gpu.<n>` line is that form. Those lines are left
+    unread, `runtime` is None, and nothing binds a runtime file to it.
+    Refusing it would fail every verify on a box installed before this rule
+    until its stack were rebuilt, the host's own pinned stack among them. A
+    tuple carrying both those lines and a `runtime.` line is neither form,
+    and is refused. Anything else is refused.
     """
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     with os.fdopen(fd, "rb") as handle:
@@ -505,17 +575,21 @@ def read_install_tuple(path):
         text = raw.decode("ascii")
     except UnicodeDecodeError:
         raise InstallTupleRefused("not ASCII") from None
-    facts, members, libraries, gpus = {}, {}, {}, {}
+    facts, members, libraries, runtime, earlier = {}, {}, {}, {}, {}
     for number, line in enumerate(text.splitlines(), start=1):
         key, sep, value = line.partition(" = ")
         if not sep or not key or not value or not line.isprintable():
             raise InstallTupleRefused(f"line {number} is not `key = value`")
-        for prefix, into in (("member.", members), ("library.", libraries), ("gpu.", gpus)):
-            if key.startswith(prefix):
-                name = key[len(prefix):]
-                break
+        if key in EARLIER_KEYS or EARLIER_CARD.fullmatch(key):
+            into, name = earlier, key
         else:
-            into, name = facts, key
+            for prefix, into in (("member.", members), ("library.", libraries),
+                                 ("runtime.", runtime)):
+                if key.startswith(prefix):
+                    name = key[len(prefix):]
+                    break
+            else:
+                into, name = facts, key
         if not name or name in into:
             raise InstallTupleRefused(f"line {number}: {key} is empty or repeated")
         into[name] = value
@@ -525,13 +599,32 @@ def read_install_tuple(path):
     for name, digest in list(members.items()) + list(libraries.items()):
         if digest != UNKNOWN and not HEX64.fullmatch(digest):
             raise InstallTupleRefused(f"{name}'s digest is not 64 hex digits or unknown")
-    order = sorted(gpus, key=lambda n: int(n) if n.isdigit() else -1)
-    if order != [str(n) for n in range(len(gpus))]:
-        raise InstallTupleRefused("gpu.<n> is not numbered 0 to n-1")
-    if facts["gpus"] != str(len(gpus)):
-        raise InstallTupleRefused(f"gpus says {facts['gpus']} and {len(gpus)} gpu lines stand")
-    return {"sha256": hashlib.sha256(raw).hexdigest(), "facts": facts, "members": members,
-            "libraries": libraries, "gpus": [gpus[n] for n in order]}
+    install = {"sha256": hashlib.sha256(raw).hexdigest(), "facts": facts, "members": members,
+               "libraries": libraries, "runtime": None, "earlier": sorted(earlier)}
+    if earlier:
+        if runtime:
+            raise InstallTupleRefused(
+                "it carries both the earlier form's hardware lines "
+                f"({', '.join(sorted(earlier))}) and runtime digests, so it is neither form")
+        return install
+    keys = [key for key, _ in RUNTIME_LIBRARIES]
+    stranger = sorted(set(runtime) - set(keys))
+    if stranger:
+        raise InstallTupleRefused(f"runtime.{stranger[0]} is not a runtime file this reader knows")
+    absent = [key for key in keys if key not in runtime]
+    if absent:
+        raise InstallTupleRefused(f"no runtime.{absent[0]}")
+    parsed = {}
+    for key in keys:
+        if runtime[key] == UNKNOWN:
+            parsed[key] = None
+            continue
+        found = RUNTIME_VALUE.fullmatch(runtime[key])
+        if not found:
+            raise InstallTupleRefused(f"runtime.{key} is not `<sha256> <absolute path>` or unknown")
+        parsed[key] = (found.group(1), found.group(2))
+    install["runtime"] = parsed
+    return install
 
 
 def file_sha256(path):
@@ -666,35 +759,31 @@ NATIVE_PATH = ("the native path, decoder/native.rs and native_pair.rs; PAIR-3's 
                "and placement_params are the GGUF path's")
 
 
-def device_rows(declaration, header, box_gpus, live_gpus, engine=None, container=None):
+def device_rows(declaration, header, live_gpus, engine=None, container=None):
     """Rows 7, 8 and 9: the devices, the placement and the offload. Row 7
     holds for every backend (PAIR-1's mask is the harness's). Rows 8 and 9
-    state the GGUF path's rule and are stated for a GGUF container only."""
+    state the GGUF path's rule and are stated for a GGUF container only.
+
+    **The cards are read at this load and never stored** (the operator's
+    rulings of 2026-11-14): each elected ordinal names its card in the box's
+    PCI-order list as nvidia-smi gives it now. An ordinal past that list is
+    a FAULT; no list at all is absent. The install tuple holds no card, so
+    one image serves whatever cards a box hands it."""
     devices = binding_of(declaration).get("devices", [])
     lines = [row(7, "devices", json.dumps(devices), "absent",
                  "in the record only inside the declaration's sha256")]
     premise = ("binding ordinal into the PCI-order list, under PAIR-1's "
-               "CUDA_DEVICE_ORDER=PCI_BUS_ID mask")
+               "CUDA_DEVICE_ORDER=PCI_BUS_ID mask; read at this load, never stored")
     for ordinal in devices:
-        if box_gpus is None:
-            lines.append(row(7, f"device {ordinal}", "-", "absent", "no install tuple was read"))
-        elif not 0 <= ordinal < len(box_gpus):
+        if live_gpus is None:
+            lines.append(row(7, f"device {ordinal}", "-", "absent",
+                             "nvidia-smi listed no card at this load"))
+        elif not 0 <= ordinal < len(live_gpus):
             lines.append(row(7, f"device {ordinal}", "-", "FAULT",
-                             f"the install tuple lists {len(box_gpus)} devices"))
+                             f"the load elected it and nvidia-smi lists {len(live_gpus)} cards"))
         else:
-            lines.append(row(7, f"device {ordinal}", box_gpus[ordinal], "derivable",
-                             f"the install tuple's {premise}"))
-    if live_gpus is None:
-        lines.append(row(7, "live", "-", "absent", "nvidia-smi answered nothing"))
-    elif box_gpus is not None and live_gpus != box_gpus:
-        lines.append(row(7, "live", "; ".join(live_gpus), "FAULT",
-                         "nvidia-smi's PCI-order list differs from the install tuple's, "
-                         "so the install tuple is stale"))
-    else:
-        for ordinal in devices:
-            if 0 <= ordinal < len(live_gpus):
-                lines.append(row(7, f"live {ordinal}", live_gpus[ordinal], "derivable",
-                                 f"nvidia-smi now, {premise}"))
+            lines.append(row(7, f"device {ordinal}", live_gpus[ordinal], "derivable",
+                             f"nvidia-smi now, {premise}"))
     kind = (header or {}).get("container") or container
     if kind != "gguf":
         why = NATIVE_PATH if kind == "safetensors" else "no container kind is known: " + (
@@ -734,12 +823,144 @@ def box_rows(install_path, install, refusal):
                     refusal or f"no install tuple {where}; the box side is unstated")]
     facts = install["facts"]
     fork = facts["engine-source"].rpartition("#")[2]
-    return [
+    lines = [
         row("box", "install tuple", f"sha256 {install['sha256']}", "recorded",
             f"{install_path}, the box tuple's identity; commit {facts['commit']}"),
         row("box", "engine", f"fork {fork}, llama.cpp {facts['engine-vendored']}", "recorded",
             "the install tuple's engine-source and engine-vendored"),
     ]
+    if install["earlier"]:
+        lines.append(row("box", "tuple form", "earlier: " + ", ".join(install["earlier"]), "absent",
+                         "written before the install tuple held build facts alone: these "
+                         "hardware and runtime path lines are left unread, and it records "
+                         "no runtime digest to bind; update-stack.sh --install from this "
+                         "rule's checkout rewrites it"))
+    return lines
+
+
+def resolved_file(path):
+    """`(sha256, real path)` of the file a loader path leads to, the shape
+    the install tuple records a runtime file in. Raises OSError."""
+    real = os.path.realpath(path)
+    return file_sha256(real), real
+
+
+def live_rows(driver_text, resolved, unread):
+    """**The driver, read at this load and never stored**: its version as
+    nvidia-smi names it, and its own library as the loader resolves it for
+    the SPU. Both are the box's, so one image serves any host's driver.
+    `resolved` is `loader_resolved`'s map, or None with `unread` saying why
+    the loader was not asked. Two versions on one box is a FAULT, and so is a
+    `libcuda` the loader cannot find for an SPU that links it."""
+    versions = live_driver(driver_text)
+    if driver_text is None:
+        lines = [row("live", "driver", "-", "absent", "not read: no driver query was given")]
+    elif not versions:
+        lines = [row("live", "driver", "-", "absent", "nvidia-smi named no driver version at this load")]
+    elif len(versions) > 1:
+        lines = [row("live", "driver", ", ".join(versions), "FAULT",
+                     "nvidia-smi names more than one driver version on one box")]
+    else:
+        lines = [row("live", "driver", versions[0], "derivable",
+                     "nvidia-smi now; the driver is the box's, read at each load, never stored")]
+    if resolved is None:
+        return lines + [row("live", "libcuda", "-", "absent", f"not read: {unread}")]
+    found = resolved_as(resolved, "libcuda")
+    if found is None:
+        return lines + [row("live", "libcuda", "-", "absent", "the SPU links no libcuda")]
+    name, path = found
+    if path is None:
+        return lines + [row("live", "libcuda", name, "FAULT", "the loader finds no file for it")]
+    try:
+        digest, real = resolved_file(path)
+    except OSError as error:
+        return lines + [row("live", "libcuda", path, "FAULT", f"the loader names it and it does not read: {error}")]
+    return lines + [row("live", "libcuda", f"{digest} {real}", "derivable",
+                        f"{name} as the loader resolves it for the SPU now; the driver's, never stored")]
+
+
+def runtime_rows(install, resolved, unread, failed=None, unbound=None):
+    """**Each CUDA runtime file the install recorded, bound to the file the
+    loader resolves now**, by path and sha256. Equal is recorded. A file
+    that moved, changed or no longer resolves is a FAULT: the box has
+    drifted from its install, which a sealed image must never show, and
+    which a box updated since its install clears by rewriting its record
+    (update-stack.sh --install).
+
+    **Fail closed**: `failed` is why the loader's read cannot be trusted or
+    bound (an SPU or library path another principal could write, an SPU or
+    record key that names nothing, an ldd that failed), and a file the
+    install recorded is then a FAULT, never passed unbound. `unbound` is why
+    the read is of something the install did not read (this agent's own SPU
+    or library path), and the rows are absent and say so. Where nothing can
+    be compared (no install tuple, one of the earlier form, an `unknown` the
+    install wrote, or no loader report given), the row is absent and says
+    why."""
+    lines = []
+    for key, library in RUNTIME_LIBRARIES:
+        field = f"runtime {key}"
+        if install is None:
+            recorded, why = None, "no install tuple was read"
+        elif install["runtime"] is None:
+            recorded, why = None, "the install tuple is of the earlier form, which records no runtime digest"
+        else:
+            recorded = install["runtime"][key]
+            why = "the install tuple could not resolve or hash it" if recorded is None else None
+        if failed is not None:
+            if recorded is None:
+                lines.append(row("bind", field, "-", "absent", f"not bound: {why}"))
+            else:
+                lines.append(row("bind", field, "-", "FAULT",
+                                 f"the install tuple records {recorded[0]} {recorded[1]}, and the "
+                                 f"loader's read cannot be bound to it: {failed}"))
+            continue
+        if unbound is not None:
+            lines.append(row("bind", field, "-", "absent", f"not bound: {unbound}"))
+            continue
+        if resolved is None:
+            lines.append(row("bind", field, "-", "absent", f"not bound: the loader was not read: {unread}"))
+            continue
+        found = resolved_as(resolved, library)
+        if found is None:
+            if recorded is None:
+                lines.append(row("bind", field, "-", "absent", f"the SPU links no {library}"))
+            else:
+                lines.append(row("bind", field, "-", "FAULT",
+                                 f"the install tuple records {recorded[0]} {recorded[1]} and the SPU "
+                                 f"links no {library} now"))
+            continue
+        name, path = found
+        # A row is a FAULT only against a recorded digest: with none, a file
+        # the loader cannot find or read is said, and not bound.
+        if path is None:
+            if recorded is None:
+                lines.append(row("bind", field, name, "absent",
+                                 f"not bound: {why}; the loader finds no file for it"))
+            else:
+                lines.append(row("bind", field, name, "FAULT", "the loader finds no file for it"))
+            continue
+        try:
+            digest, real = resolved_file(path)
+        except OSError as error:
+            if recorded is None:
+                lines.append(row("bind", field, path, "absent",
+                                 f"not bound: {why}; the loader names it and it does not read: {error}"))
+            else:
+                lines.append(row("bind", field, path, "FAULT",
+                                 f"the loader names it and it does not read: {error}"))
+            continue
+        live = f"{digest} {real}"
+        if recorded is None:
+            lines.append(row("bind", field, live, "absent", f"not bound: {why}"))
+        elif (digest, real) == recorded:
+            lines.append(row("bind", field, live, "recorded",
+                             f"{name} as the loader resolves it now equals the install tuple's"))
+        else:
+            lines.append(row("bind", field, live, "FAULT",
+                             f"drift from the install: the install tuple records {recorded[0]} "
+                             f"{recorded[1]}. A sealed image never shows this; a box updated "
+                             "since its install rewrites the record with update-stack.sh --install"))
+    return lines
 
 
 def binding_rows(declaration_sha256, load_event, install, stack_library_path):
@@ -890,6 +1111,11 @@ def main(argv):
     rows.add_argument("--install-tuple")
     rows.add_argument("--install-tuple-unheld")
     rows.add_argument("--stack-library-path")
+    # The hardware half, read by verify-load at this load and never stored.
+    rows.add_argument("--live-driver")
+    rows.add_argument("--live-ldd")
+    rows.add_argument("--live-ldd-unread")
+    rows.add_argument("--runtime-unbound")
     args = parser.parse_args(argv)
     if args.door == "header":
         try:
@@ -942,6 +1168,12 @@ def main(argv):
         with open_sink(args.sink) as handle:
             load_event, measurement = scan_sink(handle, args.from_line, matched)
     live = live_gpus(args.live_gpus_csv) if args.live_gpus_csv else None
+    # The loader's report for the agent's SPU, as verify-load read it, or
+    # None. `--live-ldd-unread` is why the read cannot be trusted or bound,
+    # which faults a runtime file the install recorded; `--runtime-unbound`
+    # is why it is of something the install did not read.
+    loader = loader_resolved(args.live_ldd) if args.live_ldd is not None else None
+    unread = args.live_ldd_unread or "no loader report was given"
     engine = None
     if install is not None:
         engine = (f"fork {install['facts']['engine-source'].rpartition('#')[2]}, "
@@ -949,10 +1181,11 @@ def main(argv):
     lines = (box_rows(args.install_tuple, install, install_refusal)
              + artifact_rows(declaration, facts, refusal, measurement, resolved, matched)
              + adapter_rows(declaration)
-             + device_rows(declaration, facts, install["gpus"] if install else None, live, engine,
-                           container)
+             + device_rows(declaration, facts, live, engine, container)
+             + live_rows(args.live_driver, loader, unread)
              + state_rows(declaration, load_event)
-             + binding_rows(declaration_sha256, load_event, install, args.stack_library_path))
+             + binding_rows(declaration_sha256, load_event, install, args.stack_library_path)
+             + runtime_rows(install, loader, unread, args.live_ldd_unread, args.runtime_unbound))
     print("\n".join(lines))
     return 3 if any(line.fault for line in lines) else 0
 

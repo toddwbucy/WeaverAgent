@@ -575,7 +575,10 @@ if [ "$MODE" = archive ]; then
     echo "operator  $OPERATOR"
     echo "date      $(date -Iseconds)"
     echo "kernel    $(uname -r)"
-    driver=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1 || true)
+    # The whole answer, then its first `<name>, <version>` line (#39): the
+    # failure sentence on a box with no card, and a card in error's own line,
+    # are no driver.
+    driver=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || true); driver=$(grep -E ', [0-9]+(\.[0-9]+)+$' <<<"$driver" || true); driver=${driver%%$'\n'*}
     echo "driver    ${driver:-none}"
     echo "nvcc      $([ -n "$NVCC" ] && "$NVCC" --version | tail -1 || echo none)"
     echo "cccl      $(pacman -Q cccl 2>/dev/null || echo unknown)"
