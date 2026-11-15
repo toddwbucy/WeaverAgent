@@ -419,7 +419,23 @@ fn circuit(case: Case) {
         StartupComposition::new(&mut run.context, &mut resources, request)
     };
     if matches!(case, Case::Entered("eof")) {
+        // The owner must meet the admin hangup on its next advance. A
+        // concurrent test's fork may hold a copy of the dropped end until its
+        // exec, and the owner would then read a quiet connection and go on
+        // toward Complete, so the wait is for the release itself.
+        use std::os::fd::AsRawFd;
+        let admin_end = owner
+            .original_enter
+            .as_ref()
+            .expect("the Enter join retains the original Enter")
+            .peer()
+            .fd()
+            .as_raw_fd();
         drop(original_peer.take());
+        crate::flow::fixture_eof::await_release_until(
+            admin_end,
+            std::time::Instant::now() + Duration::from_secs(5),
+        );
     }
     if matches!(case, Case::Entered("stop")) {
         let stop = weaver_types::OrganEnvelope {
@@ -571,6 +587,10 @@ fn circuit(case: Case) {
             break;
         }
         if stage == StartupStage::Complete {
+            assert!(
+                !matches!(case, Case::Entered("eof")),
+                "the original peer's hangup must stop the startup, never complete it"
+            );
             if let Some(original) = owner.original_enter.as_ref() {
                 entered_tests::assert_record(owner.context, original, &mut run._reader);
                 let weaver_types::state_flow::enter::EnterBinding::Serving {
