@@ -150,8 +150,9 @@ on this image as built, and section 11 carries it.
 
 **The NVIDIA driver is the distribution's own prebuilt and signed kernel module of the
 615 branch**, with the kernel held to match it. No compiler runs near the driver, and
-the module loads under Secure Boot. The driver version is a member of the deployment
-tuple, and the image states it, per section 3.3.
+the module loads under Secure Boot. No build has measured that load yet, and section 11
+carries the cell. The driver version is a member of the deployment tuple, and the image
+states it, per section 3.3.
 
 The build's one route, `ubuntu-prebuilt` in `template-clone-Spec` section 10, takes
 Ubuntu's own branch: its module is prebuilt and signed by the distribution for the
@@ -456,4 +457,7 @@ exists.
 - **A stopped service against a machine that is down.** What the appliance exposes so
   that the operator can tell the two apart. Settled when the first stop is run from the
   console.
+- **The driver module under Secure Boot.** Section 3.4 requires the module to load under
+  Secure Boot, and no build has measured it: the builds of 2026-11-14 ran with no card.
+  Settled by a boot of the sealed image under Secure Boot with the module loaded.
 - **Hypervisor formats after KVM.** Later, and named as later.

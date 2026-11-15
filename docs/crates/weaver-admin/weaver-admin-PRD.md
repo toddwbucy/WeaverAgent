@@ -515,9 +515,10 @@ state's holds the trace, the state store and the save points, per
 a separate filesystem and reports the sizes, and where storage is not sufficient the
 console says so and asks the operator for more. The check runs at every load and not
 once at enrollment, because a state mount that went missing between two loads would
-otherwise put the trace into the image's sealed root. So a mount point that is not a
-separate filesystem refuses the load, as step 3 refuses every boundary it cannot
-confirm, and nothing here mounts or repairs, the mounts being the operator's act.
+otherwise put the trace into the image's sealed root. Proposed, as a reading of that
+reason and not yet ruled: a mount point that is not a separate filesystem refuses the
+load, as step 3 refuses every boundary it cannot confirm. Nothing here mounts or
+repairs, the mounts being the operator's act.
 Whether the model resolves stays the SPU's to answer at admission, per section 4.3, so
 the check judges the filesystem and not what lies on it.
 
