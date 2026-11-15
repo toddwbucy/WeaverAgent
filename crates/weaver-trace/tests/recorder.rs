@@ -964,39 +964,117 @@ fn a_recorder_whose_drain_expired_drops_without_waiting_on_its_writer() {
     drop(reader);
 }
 
+/// A fault padded to about a kibibyte, the record that fills the queue.
+fn padded_fault() -> Event {
+    let account = format!("{{\"pad\":\"{}\"}}", "x".repeat(1_024));
+    event(
+        Kind::Fault,
+        None,
+        Some(Payload::Fault(raw_payload(&account).unwrap())),
+    )
+}
+
+/// A recorder whose sink has stalled with its queue held at
+/// `QUEUE_DEPTH - UNLOAD_RESERVE`, and its unread reader. The run's `load`
+/// is written first. Its next record is larger than the pipe can hold, so
+/// the writer can never finish it while the reader is unread, which a short
+/// drain confirms. A record keeps its slot until its write finishes, so no
+/// slot frees while the queue fills, however the threads are scheduled. The
+/// fill runs on its own thread and is bounded, so a reserve that blocks too
+/// early fails here rather than hanging the test.
+fn stalled_at_the_reserve() -> (Recorder, std::io::PipeReader) {
+    use weaver_trace::{Drained, QUEUE_DEPTH, UNLOAD_RESERVE};
+    let (reader, pipe_writer) = std::io::pipe().expect("pipe");
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut r = Recorder::receive(
+            OwnedFd::from(pipe_writer),
+            RunRef("r-1".into()),
+            SessionRef("s-1".into()),
+        )
+        .expect("receives");
+        r.submit(event(Kind::Load, None, Some(elections())))
+            .unwrap();
+        let now = std::time::Instant::now;
+        assert!(
+            matches!(
+                r.drain_by(now() + std::time::Duration::from_secs(5)),
+                Ok(Drained::Emptied)
+            ),
+            "the load is written before the sink stalls"
+        );
+        let stall = format!("{{\"pad\":\"{}\"}}", "x".repeat(2 << 20));
+        r.submit(event(
+            Kind::Fault,
+            None,
+            Some(Payload::Fault(raw_payload(&stall).unwrap())),
+        ))
+        .unwrap();
+        assert!(
+            matches!(
+                r.drain_by(now() + std::time::Duration::from_millis(100)),
+                Ok(Drained::Expired { .. })
+            ),
+            "the stalling record does not fit the sink"
+        );
+        for _ in 0..QUEUE_DEPTH {
+            if r.pressure().queued >= QUEUE_DEPTH - UNLOAD_RESERVE {
+                break;
+            }
+            r.submit(padded_fault()).unwrap();
+        }
+        assert_eq!(
+            r.pressure().queued,
+            QUEUE_DEPTH - UNLOAD_RESERVE,
+            "the queue fills to the reserve"
+        );
+        let _ = tx.send(r);
+    });
+    let r = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the queue fills to the reserve within its bound");
+    (r, reader)
+}
+
 /// **The queue's last slot is the run's `unload`'s** (`weaver-trace-Spec`
 /// section 7, the reserve): every other record blocks once the queue holds
 /// `QUEUE_DEPTH - UNLOAD_RESERVE`, so a stalled sink can never leave the
 /// terminal event without room, and `unload` is admitted at once there.
-/// Perturbation: admit every kind to the full depth, and a fault takes the
-/// last slot.
+/// Each case ends by failing the sink, which admits the waiting fault.
+/// Perturbations: admit every kind to the full depth, and the first case's
+/// fault takes the last slot. Hold the unload to the reserve as well, and
+/// the second case's unload is never admitted. Make the stalling record a
+/// small one and hold the writer off until the queue is full, as a loaded
+/// box can, and the writer frees a slot for the first case's fault.
 #[test]
 fn the_queues_last_slot_is_reserved_for_unload() {
-    use weaver_trace::{QUEUE_DEPTH, UNLOAD_RESERVE};
-    let (reader, pipe_writer) = std::io::pipe().expect("pipe");
-    let mut r = Recorder::receive(
-        OwnedFd::from(pipe_writer),
-        RunRef("r-1".into()),
-        SessionRef("s-1".into()),
-    )
-    .expect("receives");
-    r.submit(event(Kind::Load, None, Some(elections())))
-        .unwrap();
-    let account = format!("{{\"pad\":\"{}\"}}", "x".repeat(1_024));
-    let fault = move || {
-        event(
-            Kind::Fault,
-            None,
-            Some(Payload::Fault(raw_payload(&account).unwrap())),
-        )
-    };
+    let wait = std::time::Duration::from_secs(5);
+    let held = std::time::Duration::from_millis(300);
+
+    // At the reserve, a record other than unload waits for room.
+    let (mut r, reader) = stalled_at_the_reserve();
     let (tx, rx) = std::sync::mpsc::channel();
     let submitter = std::thread::spawn(move || {
-        while r.pressure().queued < QUEUE_DEPTH - UNLOAD_RESERVE {
-            r.submit(fault()).unwrap();
-        }
-        tx.send("filled").unwrap();
-        // The unload is admitted into its reserved slot at once.
+        let _ = r.submit(padded_fault());
+        tx.send("a fault admitted").unwrap();
+    });
+    assert!(
+        rx.recv_timeout(held).is_err(),
+        "a record other than unload waits for room"
+    );
+    drop(reader);
+    assert_eq!(
+        rx.recv_timeout(wait),
+        Ok("a fault admitted"),
+        "the failed sink admits the waiting fault"
+    );
+    submitter.join().expect("the submitter ends");
+
+    // The unload is admitted into its reserved slot at once, and any other
+    // record still waits on the stalled sink.
+    let (mut r, reader) = stalled_at_the_reserve();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let submitter = std::thread::spawn(move || {
         r.submit(event(
             Kind::Unload,
             None,
@@ -1010,22 +1088,21 @@ fn the_queues_last_slot_is_reserved_for_unload() {
         ))
         .unwrap();
         tx.send("unload admitted").unwrap();
-        // Any other record waits on the stalled sink.
-        let _ = r.submit(fault());
+        let _ = r.submit(padded_fault());
         tx.send("a fault admitted").unwrap();
     });
-    let wait = std::time::Duration::from_secs(5);
-    assert_eq!(rx.recv_timeout(wait), Ok("filled"));
     assert_eq!(rx.recv_timeout(wait), Ok("unload admitted"));
     assert!(
-        rx.recv_timeout(std::time::Duration::from_millis(300))
-            .is_err(),
+        rx.recv_timeout(held).is_err(),
         "a record other than unload waits for room"
     );
     drop(reader);
-    submitter
-        .join()
-        .expect("the submitter ends once the sink fails");
+    assert_eq!(
+        rx.recv_timeout(wait),
+        Ok("a fault admitted"),
+        "the failed sink admits the waiting fault"
+    );
+    submitter.join().expect("the submitter ends");
 }
 
 /// **The subsystem's wire spellings are pinned, every case, and the organ and
