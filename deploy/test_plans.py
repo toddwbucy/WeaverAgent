@@ -23,6 +23,11 @@ import unittest
 
 
 DEPLOY = Path(__file__).resolve().parent
+# The text create-agent.sh's `allows` hands `sh -c` for a look as an account
+# (#577), and the call it makes.
+ACCESS_LOOK = 'if [ "$1" "$2" ]; then printf yes; else printf no; fi'
+def look_as(account, flag, path):
+    return ["sudo", "-n", "-u", account, "sh", "-c", ACCESS_LOOK, "sh", flag, path]
 DOUBLE = r'''#!/usr/bin/env python3
 import json, os, pathlib, shutil, subprocess, sys, time
 name = pathlib.Path(sys.argv[0]).name
@@ -88,6 +93,20 @@ def privileged(paths, run):
         for d, mode in reversed(opened):
             try: os.chmod(d, mode)
             except OSError: pass
+
+# **A look made as an account** (#577): create-agent.sh's `allows` hands
+# exactly this text to `sh -c`, so the shell's builtin `[` answers it.
+ACCESS_LOOK = 'if [ "$1" "$2" ]; then printf yes; else printf no; fi'
+def account_answer(identity, flag):
+    """What the kernel would answer for `identity` under the fixture: the
+    agent's own uid enters neither its state room nor its territory unless
+    WALL_OPEN, the member reads neither the trace nor the declaration unless
+    TRACE_OPEN, and the admin-con account writes nothing of the territory
+    unless GROUP_WRITES. Every other look passes."""
+    if identity == 'weaver-m1': return bool(os.environ.get('WALL_OPEN'))
+    if identity == 'weaver-m1-state' and flag == '-r': return bool(os.environ.get('TRACE_OPEN'))
+    if identity == 'weaver-admincon' and flag == '-w': return bool(os.environ.get('GROUP_WRITES'))
+    return True
 
 def shell_read(arguments):
     if os.environ.get('PATH_FAIL') and os.environ['PATH_FAIL'] in arguments: sys.exit(1)
@@ -298,7 +317,19 @@ elif name == 'sudo':
         command.pop(0)
         identity = command.pop(0)
     op, *rest = command
-    if op == 'sh': shell_read(rest)
+    # **A drop sudo refuses** (#577): the walk's operator rule named (root)
+    # alone, so `sudo -u <account>` failed before any look was made.
+    if identity and os.environ.get('DROP_FAIL') in (identity, 'all'):
+        print(f'sudo: you are not permitted to run commands as {identity}', file=sys.stderr)
+        sys.exit(1)
+    if op == '--version':
+        print(os.environ.get('SUDO_VERSION', 'Sudo version 1.9.16'))
+    elif identity and op == 'sh' and rest[:2] == ['-c', ACCESS_LOOK]:
+        # **The look as an account through the shell's own `[`** (#577),
+        # answered as the kernel would for that account under the fixture.
+        print('yes' if account_answer(identity, rest[3]) else 'no', end='')
+        sys.exit(0)
+    elif op == 'sh': shell_read(rest)
     elif op == 'systemctl': sys.exit(2 if os.environ.get('READ_FAIL') == rest[0] else 0)
     elif op in ('grep', 'sed'):
         # Execute only the text operation on scratch files, never via sudo.
@@ -378,16 +409,13 @@ elif name == 'sudo':
         for rule in sorted((root / 'etc' / 'sudoers.d').glob('weaver-*')):
             print('    ' + rule.read_text().splitlines()[-1])
     elif op == 'test':
-        # The probes of a sqlite agent's state room, asked as an account: the
-        # member passes, the agent's own uid is refused, unless the fixture
-        # opens the wall.
-        if identity == 'weaver-m1': sys.exit(0 if os.environ.get('WALL_OPEN') else 1)
-        # The member's read of the trace: refused, unless the fixture opens it.
-        if identity == 'weaver-m1-state' and '-r' in rest: sys.exit(0 if os.environ.get('TRACE_OPEN') else 1)
-        # The connector's write of the territory's files: refused, unless the
-        # fixture opens the group.
-        if identity == 'weaver-admincon' and '-w' in rest: sys.exit(0 if os.environ.get('GROUP_WRITES') else 1)
-        sys.exit(0)
+        # **The external `test` asked as an account**, which no script calls
+        # since #577 and which stays so a script of before can be run against
+        # it. UUTILS_TEST stands in for the walk's uutils `test`, which ignored
+        # supplementary groups: every access of the admin-con account comes
+        # through a group, so it answers no to all of them.
+        if os.environ.get('UUTILS_TEST') and identity == 'weaver-admincon': sys.exit(1)
+        sys.exit(0 if account_answer(identity, rest[0]) else 1)
     elif op in ('chown', 'chgrp'):
         # **An owner is set only on what stands** (#99 area 2 review, K11):
         # a path under the fixture that does not exist fails, as chown does.
@@ -554,7 +582,7 @@ class PlanTests(unittest.TestCase):
                     "USER": "fixture-no-home", "PROBE": str(self.root / "probe"),
                     "FIXTURE_ROOT": str(self.root)}
         for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
-                     "VISUDO_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
+                     "VISUDO_FAIL", "DROP_FAIL", "UUTILS_TEST", "SUDO_VERSION", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES",
                      "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
                      "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF", "ENGINE_BUILD", "NO_ENGINE_MESSAGE",
@@ -1003,7 +1031,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertEqual(self.hba.read_text(), "local all all peer\n")
         calls = self.calls()
         self.assertFalse(any("psql" in c or "systemctl" in c for c in calls), calls)
-        self.assertTrue(any(c[:4] == ["sudo", "-u", "weaver-m1", "test"] for c in calls))
+        self.assertTrue(any(c[:5] == ["sudo", "-n", "-u", "weaver-m1", "sh"] for c in calls))
         self.assert_rule(["show", "validate", "load", "unload", "stop", "save-point", "restore", "force-unload"])
         self.assertIn("validate it before loading, with the validate verb of", result.stdout)
         # **The agent has no seeding sender** (weaver-gate-world-contract
@@ -1051,6 +1079,110 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertFalse(self.rule.exists())
         self.assertFalse(list((self.root / "etc" / "sudoers.d").iterdir()))
         self.assertFalse((self.config / "m1").exists())
+
+    def reset_made(self):
+        """Take away what an apply run made, so the next run starts clean."""
+        self.log.unlink(missing_ok=True)
+        for made in (self.config / "m1", self.config / ".m1.partial", self.decl):
+            shutil.rmtree(made, ignore_errors=True)
+        self.rule.unlink(missing_ok=True)
+
+    def test_no_look_as_an_account_uses_the_external_test(self):
+        # **#577**: on the by-hand appliance walk of 2026-11-16 the box's
+        # `test` was uutils', whose `-r` ignored supplementary groups, so the
+        # admin-con account's read of the declaration, which comes through a
+        # group, was refused and the run stopped at the wall. Every look as
+        # another account goes through the shell's builtin `[`. Perturbation:
+        # put `sudo -u "$1" test "$2" "$3"` back in `allows`, and the scan
+        # finds it.
+        external = re.compile(r"sudo\s+(-n\s+)?-u\s+\S+\s+(-H\s+)?test\b|as_op\s+test\b|as_can\s+\S+\s+test\b")
+        for name in ("create-agent.sh", "decommission.sh", "verify-lifecycle.sh"):
+            with self.subTest(script=name):
+                text = (DEPLOY / name).read_text()
+                self.assertEqual([l for l in text.splitlines() if external.search(l)], [], name)
+        create = (DEPLOY / "create-agent.sh").read_text()
+        self.assertIn(f"sh -c '{ACCESS_LOOK}'", create)
+
+    def test_a_group_blind_test_changes_no_answer_of_the_wall(self):
+        # **#577**: a group-blind external `test` (UUTILS_TEST answers no to
+        # every look of the admin-con account, whose access is all through
+        # groups) changes nothing, because no look calls it. Perturbation:
+        # make `allows` call `sudo -n -u "$1" test "$2" "$3"`, and the run
+        # stops at the admin-con account's read of the declaration, as the
+        # walk's did. The script of 6b91747e stops there under this fixture.
+        self.env.update(ALLOW_APPLY_CHECKS="1", UUTILS_TEST="1")
+        result = self.create("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("weaver-admincon reads the declaration and writes nothing of the territory",
+                      result.stdout)
+        self.assertFalse([c for c in self.calls() if c[:1] == ["sudo"] and "test" in c[1:5]], self.calls())
+
+    def test_a_drop_sudo_refuses_stops_the_run_naming_sudo(self):
+        # **#577**: a drop sudo itself refuses is neither yes nor no. Before,
+        # a refused `sudo -u weaver-m1 test -x` read as "the agent's uid
+        # cannot enter", and the wall passed unchecked. Each account the wall
+        # looks as refuses here, naming sudo, and nothing is admitted.
+        # Perturbation: let `allows` return 1 on a refused drop, and the
+        # agent's case admits the root.
+        for account in ("weaver-m1-state", "weaver-m1", "weaver-admincon"):
+            with self.subTest(account=account):
+                self.reset_made()
+                self.env.update(ALLOW_APPLY_CHECKS="1", DROP_FAIL=account)
+                result = self.create("--apply")
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(f"sudo would not run a look as {account}", result.stderr)
+                self.assertIn("(ALL) and not (root) alone", result.stderr)
+                self.assertNotIn("CAN ", result.stderr)
+                self.assertFalse((self.config / "m1").exists())
+                self.assertFalse(self.rule.exists())
+                self.assert_no_printed_root_command(result)
+
+    def test_a_rule_visudo_refuses_stops_before_anything_is_made_and_names_sudo_rs(self):
+        # **#577 (and D4 of the plan)**: on the walk the box's sudo was
+        # sudo-rs, whose visudo refuses `Defaults:<user> !pam_session`, and
+        # the refusal came at the rule's install after every account and the
+        # territory stood. The rule is now judged before the accounts, and
+        # the refusal names sudo-rs where it is the box's sudo. Perturbation:
+        # drop the early check, and useradd and groupadd run before the
+        # refusal; drop the note, and sudo-rs goes unnamed.
+        for version, named in (("sudo-rs 0.2.5", True), ("Sudo version 1.9.16", False)):
+            with self.subTest(version=version):
+                self.reset_made()
+                self.env.update(ALLOW_APPLY_CHECKS="1", VISUDO_FAIL="1", SUDO_VERSION=version)
+                result = self.create("--apply")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("visudo refuses the rendered rule", result.stderr)
+                if named:
+                    self.assertIn("This box's sudo is sudo-rs 0.2.5", result.stderr)
+                    self.assertIn("Defaults:weaver-admincon !pam_session", result.stderr)
+                    self.assertIn("make the original sudo the box's sudo", result.stderr)
+                else:
+                    self.assertNotIn("sudo-rs", result.stderr)
+                calls = self.calls()
+                made = [c for c in calls if c[:2] in (["sudo", "useradd"], ["sudo", "groupadd"], ["sudo", "usermod"])
+                        or (c[:2] == ["sudo", "install"] and str(self.decl) in " ".join(c))]
+                self.assertEqual(made, [], made)
+                self.assertNotIn("== accounts", result.stdout)
+                self.assertFalse(list((self.root / "etc" / "sudoers.d").iterdir()))
+                self.assertFalse(self.decl.exists())
+                self.assert_no_printed_root_command(result)
+
+    def test_the_rule_is_checked_before_the_accounts_and_again_at_its_install(self):
+        # The early check removes its stage, and the install stages and
+        # checks again, so a rule is never placed unchecked. Perturbation:
+        # install the early stage without the second visudo, and one visudo
+        # call is left.
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        result = self.create("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        visudo = [i for i, c in enumerate(calls) if c[:2] == ["sudo", "visudo"]]
+        useradd = [i for i, c in enumerate(calls) if c[:2] == ["sudo", "useradd"]]
+        self.assertEqual(len(visudo), 2, visudo)
+        self.assertLess(visudo[0], min(useradd))
+        self.assertGreater(visudo[1], max(useradd))
+        self.assertIn("visudo accepts the rendered rule", result.stdout)
+        self.assertTrue(self.rule.exists())
 
     def test_a_sudoers_without_the_include_refuses_before_admission(self):
         # A rule in sudoers.d that sudo never reads would leave the connector
@@ -1305,9 +1437,9 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
         territory = str(self.decl)
-        self.assertIn(["sudo", "-u", "weaver-admincon", "test", "-r", territory + "/agent.toml"], calls)
+        self.assertIn(look_as("weaver-admincon", "-r", territory + "/agent.toml"), calls)
         for f in ("agent.toml", "system-prompt.md", "save-points"):
-            self.assertIn(["sudo", "-u", "weaver-admincon", "test", "-w", f"{territory}/{f}"], calls)
+            self.assertIn(look_as("weaver-admincon", "-w", f"{territory}/{f}"), calls)
         # Every mode the script gives the territory's files grants the group no write.
         for c in calls:
             if c[:2] == ["sudo", "install"] and "-m" in c and c[-1].startswith(territory):
@@ -2161,11 +2293,11 @@ esac
                            "--user-group", box_account], calls)
         self.assertFalse([c for c in calls if c[:2] == ["sudo", "useradd"] and c[-1] == "weaver-m1-admincon"], calls)
         self.assertIn(["sudo", "usermod", "-aG", "weaver-m1-trace,weaver-m1-state,weaver-m1-admin", "fixture-no-home"], calls)
-        self.assertIn(["sudo", "-u", "weaver-m1-state", "test", "-r", territory + "/trace.ndjson"], calls)
+        self.assertIn(look_as("weaver-m1-state", "-r", territory + "/trace.ndjson"), calls)
         # The agent's own uid is asked to pass the territory and must not
         # (the #94 survey's S1), and the member to read the declaration.
-        self.assertIn(["sudo", "-u", "weaver-m1", "test", "-x", territory], calls)
-        self.assertIn(["sudo", "-u", "weaver-m1-state", "test", "-r", territory + "/agent.toml"], calls)
+        self.assertIn(look_as("weaver-m1", "-x", territory), calls)
+        self.assertIn(look_as("weaver-m1-state", "-r", territory + "/agent.toml"), calls)
         self.assertFalse([c for c in calls if "setfacl" in c or c[0] == "mktemp"], calls)
 
     def test_a_trace_the_member_can_read_refuses_before_admission(self):
@@ -4984,6 +5116,61 @@ class LifecycleTeardownTests(unittest.TestCase):
         self.assertNotIn("GOES-ON", result.stdout)
 
 
+class LifecycleAccountLookTests(unittest.TestCase):
+    """**A look as an account is the shell's own `[`, and a refused drop is
+    its own answer** (#577): verify-lifecycle.sh's `as_look` answers yes or
+    no as the builtin answers for the account, so a group-blind external
+    `test` (here one first on PATH that answers no to everything, reached as
+    sudo reaches it, by exec) changes no answer, and a drop sudo refuses
+    answers `refused`, so an expectation of `no` fails on it. Run as the
+    script defines them, with a stand-in for sudo. Perturbations: make
+    `as_look` run `test "$2" "$3"` as the account, and the readable file
+    reads no; answer `no` on a refused drop, and the expectation passes."""
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-looks-")
+        self.addCleanup(self.scratch.cleanup)
+        root = Path(self.scratch.name)
+        self.bin_dir = root / "bin"
+        self.bin_dir.mkdir()
+        for name, body in (
+            ("sudo", '[ "$1" = "-n" ] && shift\n'
+                     'if [ "$1" = "-u" ]; then [ -z "$DROP_REFUSED" ] || exit 1; shift 2; fi\n'
+                     'exec env "$@"\n'),
+            ("test", "exit 1\n"),
+        ):
+            stand_in = self.bin_dir / name
+            stand_in.write_text("#!/bin/sh\n" + body)
+            stand_in.chmod(0o755)
+        self.file = root / "agent.toml"
+        self.file.write_text("declared\n")
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        self.functions = ("set -euo pipefail\n" + 'STEP_LABEL="step 2 (test)"\n'
+                          + lifecycle_functions(script, "fail", "pass", "expect_eq", "as_look"))
+
+    def run_program(self, body, **env):
+        full = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"], **env}
+        full.pop("BASH_ENV", None)
+        return subprocess.run(["bash", "-c", self.functions + body], env=full, text=True,
+                              capture_output=True, timeout=20)
+
+    def test_the_answers_are_the_builtins(self):
+        for flag, path, said in (("-r", self.file, "yes"), ("-e", self.file, "yes"),
+                                 ("-e", self.file.with_name("none"), "no")):
+            with self.subTest(flag=flag, path=path.name):
+                result = self.run_program(f'as_look weaver-m1-state {flag} {shlex.quote(str(path))}\n')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, said)
+
+    def test_an_expected_no_fails_on_a_refused_drop(self):
+        result = self.run_program(
+            f'expect_eq "the member cannot read it" no "$(as_look weaver-m1-state -e {shlex.quote(str(self.file.with_name("none")))})"\n'
+            'echo GOES-ON\n', DROP_REFUSED="1")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("found:    refused", result.stderr)
+        self.assertNotIn("GOES-ON", result.stdout)
+
+
 class LifecycleGroupLookupTests(unittest.TestCase):
     """**A group lookup that fails is its own answer** (CodeRabbit on #533):
     `holds_group` answers `unreadable` where `id -Gn` fails, so an
@@ -7110,8 +7297,11 @@ class RoundOneOf79Tests(unittest.TestCase):
         line = next(l.strip() for l in script.splitlines() if l.strip().startswith("archive_name() {"))
         dest = self.dir / "dest"
         dest.mkdir()
-        # `free_name` looks as the operator (#98); here the test is the operator.
-        program = (line + "\nas_op() { \"$@\"; }\n" + shell_function(script, "free_name")
+        # `free_name` looks as the operator (#98), through `op_has` (#577);
+        # here the test is the operator.
+        die = next(l for l in script.splitlines() if l.startswith("die()"))
+        program = (line + "\n" + die + "\nas_op() { \"$@\"; }\n" + shell_function(script, "op_has")
+                   + shell_function(script, "free_name")
                    + 'for p in "$@"; do n=$(free_name "$(archive_name territories "$p")"); touch "$DEST/$n.tar.zst"; echo "$n"; done')
         run = subprocess.run(["bash", "-c", program, "x", "/var/lib/weaver-agent", "/var/lib/weaver/agent",
                               "/var/lib/weaver-agent"], env={**os.environ, "DEST": str(dest)},
@@ -7119,7 +7309,47 @@ class RoundOneOf79Tests(unittest.TestCase):
         self.assertEqual(run.stdout.split(), ["territories-var-lib-weaver-agent",
                                               "territories-var-lib-weaver-agent-2",
                                               "territories-var-lib-weaver-agent-3"], run.stderr)
-        self.assertIn('name=$(free_name "$1"); shift', script)
+        self.assertIn('name=$(free_name "$1") || exit 1; shift', script)
+
+    def test_op_has_looks_through_the_builtin_and_refuses_a_refused_drop(self):
+        # **#577**: the operator's looks at DEST go through the shell's
+        # builtin `[`, so a group-blind external `test` (here a `test` first
+        # on PATH that answers no to everything, reached as sudo reaches it,
+        # by exec) changes no answer. A drop sudo refuses is neither yes nor
+        # no: it refuses naming sudo, so `free_name` never takes an archive
+        # for absent. Perturbations: make `op_has` call `as_op test "$1"
+        # "$2"`, and the existing archive reads absent; let a refused drop
+        # return 1, and `free_name` prints a name.
+        script = (DEPLOY / "decommission.sh").read_text()
+        die = next(l for l in script.splitlines() if l.startswith("die()"))
+        blind = self.dir / "blind"
+        blind.mkdir()
+        (blind / "test").write_text("#!/bin/sh\nexit 1\n")
+        (blind / "test").chmod(0o755)
+        dest = self.dir / "dest"
+        dest.mkdir()
+        (dest / "SHA256SUMS").write_text("")
+        env = {**os.environ, "PATH": f"{blind}{os.pathsep}{os.environ['PATH']}", "DEST": str(dest),
+               "OPERATOR": "fixture-operator"}
+        env.pop("BASH_ENV", None)
+        functions = die + "\n" + shell_function(script, "op_has") + shell_function(script, "free_name")
+        def run(as_op, tail):
+            return subprocess.run(["bash", "-c", as_op + "\n" + functions + tail], env=env,
+                                  text=True, capture_output=True, timeout=20)
+        passes = 'as_op() { env "$@"; }'
+        answers = run(passes, 'for f in "-f $DEST/SHA256SUMS" "-f $DEST/PURGE-LIST" "-w $DEST" "-e $DEST/none"; do'
+                              ' if op_has $f; then echo yes; else echo no; fi; done')
+        self.assertEqual(answers.stdout.split(), ["yes", "no", "yes", "no"], answers.stderr)
+        refused = 'as_op() { echo "sudo: a password is required" >&2; return 1; }'
+        for tail in ('op_has -e "$DEST/SHA256SUMS"; echo "answered $?"',
+                     'name=$(free_name territories) || exit 1; echo "named $name"'):
+            with self.subTest(tail=tail):
+                run_ = run(refused, tail)
+                self.assertEqual(run_.returncode, 1, run_.stdout)
+                self.assertIn("sudo would not run a look as fixture-operator", run_.stderr)
+                self.assertNotIn("answered", run_.stdout)
+                self.assertNotIn("named", run_.stdout)
+        self.assertIn('name=$(free_name "$1") || exit 1; shift', script)
 
     def test_query_runs_finds_a_run_by_its_accounts(self):
         # Codex on #79: a run whose root was lost is found by processes under

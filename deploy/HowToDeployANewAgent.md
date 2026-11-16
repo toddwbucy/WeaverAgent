@@ -101,6 +101,14 @@ group in one shell.
   `weaver-<name>-admin`, and neither any other group, `wheel`, `sudo` or `docker`
   among them. The plan says which it found, and refuses an account in any other shape.
 - `/etc/sudoers` includes `/etc/sudoers.d` (`@includedir /etc/sudoers.d`).
+- The box's sudo is the original sudo (`sudo --version` prints `Sudo version`), not
+  sudo-rs, whose visudo refuses `Defaults:weaver-admincon !pam_session`, a line the
+  agent's rule carries (`weaver-admin-operator-contract` section 2). With `--apply`,
+  `create-agent.sh` checks the include and the rendered rule before it makes anything,
+  and names sudo-rs where visudo refuses the rule.
+- The operator's own sudo runs commands as other accounts (`(ALL)`, not `(root)` alone):
+  the wall checks run as the agent's accounts, and a drop that sudo refuses stops the
+  run, naming sudo.
 
 ## 2. An agent with a store
 
@@ -122,10 +130,12 @@ agent serves from the stack's. `--connector-role operator|observer` chooses whic
 command lines the agent's sudo rule grants the box's admin-con account, section 5,
 default `operator`.
 
-Apply lays the box's two connector accounts where the plan found them absent and judges
-them by their shape, adds `weaver-gatecon` to the agent's group and `weaver-admincon` to
-its state and access groups, makes the agent's accounts and the territory, writes the
-declaration and the draft into it as root, then stages the agent root under the dot-name
+Apply first checks that `/etc/sudoers` includes `/etc/sudoers.d` and that visudo accepts
+the rendered rule, and refuses before it makes anything otherwise. It then lays the
+box's two connector accounts where the plan found them absent and judges them by their
+shape, adds `weaver-gatecon` to the agent's group and `weaver-admincon` to its state and
+access groups, makes the agent's accounts and the territory, writes the declaration and
+the draft into it as root, then stages the agent root under the dot-name
 `/etc/weaver/admin/.<name>.partial`, which admin's name check never admits, and probes
 the boundary: the member can write its state room, the agent's own uid cannot enter it
 nor pass the territory, the member cannot read the trace, the relay holds the trace
@@ -133,13 +143,15 @@ group alone, the admin-con account holds the state and access groups and no grou
 agent's or the trace's, the gate-con account holds the agent's group and no state,
 access or trace group, and the admin-con account reads the declaration and can write
 neither it, the draft nor the save points directory. A refusal there is the boundary
-being wrong, not the agent, and leaves the staged root in place to read and remove. Then
-the sudo rule is rendered, checked with `visudo -cf`, and installed, and only after all
-of it does the root move to `/etc/weaver/admin/<name>/`, which is the admission. The
-last step runs one line through the rule as `weaver-admincon` (`validate` for the
-operator role, `show` for the observer), the way admin-con will. A gate-con or admin-con
-process already running takes the new agent's groups only when it restarts, since a
-process's groups are fixed at its start.
+being wrong, not the agent, and leaves the staged root in place to read and remove. Each
+probe runs as the account it names through the shell's own `[`, so a `test` command that
+ignores supplementary groups changes no answer. Then the sudo rule is staged, checked
+with `visudo -cf` again, and installed, and only after all of it does the root move to
+`/etc/weaver/admin/<name>/`, which is the admission. The last step runs one line through
+the rule as `weaver-admincon` (`validate` for the operator role, `show` for the
+observer), the way admin-con will. A gate-con or admin-con process already running takes
+the new agent's groups only when it restarts, since a process's groups are fixed at its
+start.
 
 The declaration the script writes is a working default: the artifact, `devices = [0]`,
 an empty tool set (no tool is offered, #29), surprisal on, the sink in the territory,
