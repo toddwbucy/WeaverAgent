@@ -1256,7 +1256,8 @@ key reaches the box through Weaver Web over TLS after pairing, and SSH takes tha
 and never a password**, in the operator's words of 2026-11-16. Both are the image's to
 build. The appliance's setup script writes the key during its drive-setup run at the
 VM's console, fetching it from Weaver Web over the paired link, and a changed key is
-written by running the setup command again at the console. Root acts stay at a screen
+written by running the setup command again at the console, as the Planner's notes to
+the operator's rulings of 2026-11-16 (setup pages) brief it. Root acts stay at a screen
 the operator sits at. It follows that the operator is at the VM's console before the
 first SSH and can read the host key's fingerprints there.
 
