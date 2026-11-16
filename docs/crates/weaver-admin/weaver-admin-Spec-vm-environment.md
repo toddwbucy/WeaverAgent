@@ -118,11 +118,13 @@ Per `weaver-admin-PRD` sections 7 and 7.1.
 **Starting and stopping the agent are its load and unload through admin.** The console
 asks for either through admin-con, per `weaver-admin-operator-contract`.
 
-**The console's shutdown command is enabled on a VM and disabled on a host**, on the
-operator's rulings of 2026-11-16 (setup pages), per the charter's section 7.1. It shuts
-the machine down from inside it, and the console touches no hypervisor. Which component
-carries it inside the machine and by what grant, and what it does with a loaded agent,
-are a cell of section 9.
+**The console's stop of the agent service is that unload, which writes the unload's save
+point, and its start again is that load**, on a VM and on a host alike, on the
+operator's rulings of 2026-11-16 (setup pages), per the charter's section 7.1. Both
+lines are already granted to admin-con, so admin's grant does not grow, and the console
+powers nothing off. The operator powers the machine from the hypervisor. A machine
+stopped with the agent loaded loses the state since the last published save point,
+because the agent's processes end on the stop signal and only the unload writes one.
 
 **Nothing of this framework starts the agent after a reboot.** Admin runs per verb and
 is not resident, and it lays no persistent unit, timer or other start of its own. An
@@ -163,8 +165,8 @@ Per apex section 11. Each election above is listed with what catches its failure
   as of 2026-11-15.
 - **Admin's table, its replacement at every load and its absence after a reboot**
   (section 3): no instrument exists as of 2026-11-15.
-- **The save point on the state mount and the shutdown command** (sections 1 and 4): no
-  instrument exists as of 2026-11-16.
+- **The save point on the state mount** (sections 1 and 4): no instrument exists as of
+  2026-11-16.
 - The act that adds the check and the act that adds the table each owe walks and
   perturbation tests in the manner of `weaver-admin-Spec` section 10, before any code,
   per `weaver-admin-PRD` section 11's entry for the load additions.
@@ -173,9 +175,10 @@ Per apex section 11. Each election above is listed with what catches its failure
 
 - **The image**: its operating system, its build from named commits, its identity and
   stamp, its driver, its seal, its boot rules, its root account with the password the
-  setup's first question sets, its SSH taking the operator's key and never a password,
-  its setup script at the VM's console with the pairing's entry and the drive setup, its
-  time source, its versions and formats, and what it lays at the two mount points. Its
+  setup's first question sets, its SSH taking the operator's key, which its setup script
+  writes at the VM's console from Weaver Web, and never a password, its setup script at
+  the VM's console with the pairing's entry and the drive setup, its time source, its
+  versions and formats, and what it lays at the two mount points. Its
   build's documents in `toddwbucy/WeaverTools` represent it. The requirements are
   `weaver-admin-PRD` sections 7.2 to 7.5.
 - **The console's side**, in `weaver-web-PRD` and its Spec in `toddwbucy/WeaverWeb`:
@@ -183,8 +186,7 @@ Per apex section 11. Each election above is listed with what catches its failure
   keys and certificates, the operator's SSH public key carried to the box over TLS after
   pairing, what the console does with a clone, the connectors' units and
   how they come up after a reboot, the survey's report, the model store and the model's
-  pull, the image download, the display of the storage report, and where the shutdown
-  command stands in the console's flow.
+  pull, the image download, and the display of the storage report.
 - **The build's two settings and the image's seal**: the compiler's flag and the list
   of architectures that are the two settings of `weaver-admin-PRD` section 7.2, and the
   compaction that ends the seal, the published digest being of the compacted file. The
@@ -230,6 +232,3 @@ registers.
 - **How the save points meet the state mount, against the territory that holds them.**
   Settled by the act that places the save points on the state mount, per
   `weaver-admin-PRD` section 11.
-- **Which component carries the console's shutdown command inside the machine and by
-  what grant, and what it does with a loaded agent.** Settled by the act that adds the
-  command, per `weaver-admin-PRD` section 11.

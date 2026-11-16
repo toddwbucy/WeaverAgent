@@ -1092,10 +1092,7 @@ amend them where a sentence says so.
 installs Weaver Web, loads the image into a hypervisor they already run, and makes a
 virtual machine from it. From then on the operator manages the agent through the console
 and the machine through the hypervisor. The console knows the agent. The hypervisor
-knows the machine. **The console reaches into the machine at one point only, its
-shutdown command on a VM** (below), on the operator's rulings of 2026-11-16 (setup
-pages). The console never touches the hypervisor, and the hypervisor never reaches into
-the console's side.
+knows the machine. Neither reaches into the side of the other.
 
 **The image exists to hand an operator a held deployment tuple.** The output of a turn
 depends on what computes it: the binaries, the libraries they load, the driver, the
@@ -1123,12 +1120,15 @@ the WeaverAgent system needs is the operator's choice, and it is outside this ch
 **Starting and stopping the agent is its load and unload through admin, inside a running
 appliance.** The machine's own lifecycle, creating, cloning, starting, stopping,
 snapshotting, networking or destroying it, is the operator's and their hypervisor's, and
-the suite holds no opinion about it, with one exception. **On a VM the console's
-shutdown command is enabled, and on a host it is disabled entirely**, on the operator's
-rulings of 2026-11-16 (setup pages). The command shuts the machine down from inside it,
-so the console still touches no hypervisor. Which component carries it inside the
-machine and by what grant, and what it does with a loaded agent, are settled by the act
-that adds it (section 11). That Weaver Web never touches a hypervisor is
+the suite holds no opinion about it. **The console's stop of the agent service is
+admin's `unload`, which writes the unload's save point, and its start is `load`**, on a
+VM and on a host alike, on the operator's rulings of 2026-11-16 (setup pages).
+Admin-con's strict sudo rule already grants both lines, so admin's grant does not grow,
+and the console powers nothing off. The operator powers the machine from the hypervisor.
+A hard power-off loses the state since the last published save point, and avoiding it is
+the operator's, on the same rulings. As built, a graceful shut down from the hypervisor
+loses it the same way, because the agent's processes end on the stop signal and only the
+unload writes a save point. That Weaver Web never touches a hypervisor is
 `weaver-web-PRD`'s to carry, in `toddwbucy/WeaverWeb`. Nothing of the image starts the
 agent, per section 7.
 
@@ -1238,8 +1238,11 @@ default password**, on the operator's rulings of 2026-11-16 (setup pages), as
 root's password**, in the operator's words of 2026-11-16. **The operator's SSH public
 key reaches the box through Weaver Web over TLS after pairing, and SSH takes that key
 and never a password**, in the operator's words of 2026-11-16. Both are the image's to
-build. It follows that the operator is at the VM's console before the first SSH and can
-read the host key's fingerprints there.
+build. The appliance's setup script writes the key during its drive-setup run at the
+VM's console, fetching it from Weaver Web over the paired link, and a changed key is
+written by running the setup command again at the console. Root acts stay at a screen
+the operator sits at. It follows that the operator is at the VM's console before the
+first SSH and can read the host key's fingerprints there.
 
 ### 7.4 Pairing and models: the environment's half
 
@@ -1652,12 +1655,12 @@ both `open-items` entries as that list shrank. The last entry, the
 the human's ruling, and the register stood empty from that date until the act of
 2026-08-05 filled it.
 
-**What this register holds, as of 2026-11-16.** Nine entries. Seven come from the
+**What this register holds, as of 2026-11-16.** Eight entries. Seven come from the
 amendment of 2026-11-15, which takes the operator's rulings of 2026-11-14 and 2026-11-15
 on the VM environment: the firewall table and its declared ports, the data-mount check,
 the refusal of state a version cannot read, the guest's processor in the tuple, and the
-trace's destination. Two come from the operator's rulings of 2026-11-16 (setup pages):
-the save points on the state mount and the console's shutdown command on a VM.
+trace's destination. One comes from the operator's rulings of 2026-11-16 (setup pages):
+the save points on the state mount.
 
 - **`weaver-admin-Spec`, the load additions.** The firewall table of section 2: its
   name, the shape of its rules, its place in the load and the unload with its rollback,
@@ -1707,11 +1710,6 @@ the save points on the state mount and the console's shutdown command on a VM.
   section 5 and `weaver-admin-Spec` sections 3.0, 4 and 9, with `deploy/create-agent.sh`
   and the runbooks that lay the territory out. **Settled by:** the act that places the
   save points on the state mount.
-- **The console's shutdown command on a VM**, on the operator's rulings of 2026-11-16
-  (setup pages), per section 7.1. Which component carries it inside the machine and by
-  what grant, what it does with a loaded agent, and the edits that follow in
-  `weaver-admin-operator-contract` and in the strict sudo rule `deploy/create-agent.sh`
-  writes where admin-con carries it. **Settled by:** the act that adds the command.
 
 ## 12. Children
 
