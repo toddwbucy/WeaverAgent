@@ -1179,9 +1179,11 @@ updates are off.
 operator's ruling of 2026-11-15. Any accurate source serves.
 
 **No shared key or secret ships in the image.** Root ships expired and empty, with no
-default password, on the operator's rulings of 2026-11-16 (setup pages). The one-time
-code the box shows and the console's fingerprint, which the operator compares in Weaver
-Web, begin trust without a secret that every copy of the image carries (section 7.4).
+default password, on the operator's rulings of 2026-11-16 (setup pages), and the
+operator sets root's password at the setup script's first question (section 7.3). The
+one-time code the box shows and the console's fingerprint, which the operator compares
+in Weaver Web, begin trust without a secret that every copy of the image carries
+(section 7.4).
 
 **One image exists for each version, and a security fix is a new version.** A version
 is `<release>.<respin>`, on the operator's ruling of 2026-11-15. The release moves when
@@ -1232,10 +1234,11 @@ runs as root**, with no login prompt, in the operator's words of 2026-11-16: the
 at the console is root and the administrator. The operator sets the network there by
 hand, on the operator's ruling of 2026-11-15. **Root ships expired and empty, with no
 default password**, on the operator's rulings of 2026-11-16 (setup pages), as
-`toddwbucy/WeaverTools` #33 builds the image. Whether the setup's first question sets
-root's password, and whether the operator's SSH public key reaches the box through
-Weaver Web over TLS after pairing, are open as of 2026-11-16 and are the image's to
-carry. It follows that the operator is at the VM's console before the first SSH and can
+`toddwbucy/WeaverTools` #33 builds the image. **The setup script's first question sets
+root's password**, in the operator's words of 2026-11-16. **The operator's SSH public
+key reaches the box through Weaver Web over TLS after pairing, and SSH takes that key
+and never a password**, in the operator's words of 2026-11-16. Both are the image's to
+build. It follows that the operator is at the VM's console before the first SSH and can
 read the host key's fingerprints there.
 
 ### 7.4 Pairing and models: the environment's half

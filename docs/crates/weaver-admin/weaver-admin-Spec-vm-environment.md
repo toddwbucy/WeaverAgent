@@ -172,14 +172,16 @@ Per apex section 11. Each election above is listed with what catches its failure
 ## 7. Held elsewhere
 
 - **The image**: its operating system, its build from named commits, its identity and
-  stamp, its driver, its seal, its boot rules, its root account, its setup script at the
-  VM's console with the pairing's entry and the drive setup, its time source, its
-  versions and formats, and what it lays at the two mount points. Its build's documents
-  in `toddwbucy/WeaverTools` represent it. The requirements are `weaver-admin-PRD`
-  sections 7.2 to 7.5.
+  stamp, its driver, its seal, its boot rules, its root account with the password the
+  setup's first question sets, its SSH taking the operator's key and never a password,
+  its setup script at the VM's console with the pairing's entry and the drive setup, its
+  time source, its versions and formats, and what it lays at the two mount points. Its
+  build's documents in `toddwbucy/WeaverTools` represent it. The requirements are
+  `weaver-admin-PRD` sections 7.2 to 7.5.
 - **The console's side**, in `weaver-web-PRD` and its Spec in `toddwbucy/WeaverWeb`:
   enrollment's console half, the one-time code and its confirmation, the connectors'
-  keys and certificates, what the console does with a clone, the connectors' units and
+  keys and certificates, the operator's SSH public key carried to the box over TLS after
+  pairing, what the console does with a clone, the connectors' units and
   how they come up after a reboot, the survey's report, the model store and the model's
   pull, the image download, the display of the storage report, and where the shutdown
   command stands in the console's flow.
