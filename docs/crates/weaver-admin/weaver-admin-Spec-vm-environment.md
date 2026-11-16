@@ -63,8 +63,11 @@ required mounts are reported.
 How admin knows it runs on an appliance, how it represents a separate filesystem, the
 refusal's case and what it names, and the form of the report with the surface it crosses
 are cells of section 9. The judgment of a size is the console's, per the charter's
-section 7.5. How the state mount meets the agent's territory is settled by the act the
-charter's section 11 registers.
+section 7.5. The agent's home is a folder named after the agent on the state mount,
+`/mnt/weaver/state/<agent-name>`, and the agent's territory stands inside it, on the
+operator's rulings of 2026-11-16 (setup pages), per the charter's section 7.5. How that
+home meets the territory's custody is settled by the act the charter's section 11
+registers.
 
 ## 2. State a version cannot read
 
@@ -174,13 +177,13 @@ Per apex section 11. Each election above is listed with what catches its failure
 ## 7. Held elsewhere
 
 - **The image**: its operating system, its build from named commits, its identity and
-  stamp, its driver, its seal, its boot rules, its root account with the password the
-  setup's first question sets, its SSH taking the operator's key, which its setup script
-  writes at the VM's console from Weaver Web, and never a password, its setup script at
-  the VM's console with the pairing's entry and the drive setup, its time source, its
-  versions and formats, and what it lays at the two mount points. Its
-  build's documents in `toddwbucy/WeaverTools` represent it. The requirements are
-  `weaver-admin-PRD` sections 7.2 to 7.5.
+  stamp, its driver, its seal, its boot rules, the accounts the agent needs, its root
+  account with the password the setup's first question sets, its SSH taking the
+  operator's key, which its setup script writes at the VM's console from Weaver Web, and
+  never a password, its setup script at the VM's console with the pairing's entry and
+  the drive setup, its time source, its versions and formats, and what it lays at the
+  two mount points. Its build's documents in `toddwbucy/WeaverTools` represent it. The
+  requirements are `weaver-admin-PRD` sections 7.2 to 7.5.
 - **The console's side**, in `weaver-web-PRD` and its Spec in `toddwbucy/WeaverWeb`:
   enrollment's console half, the one-time code and its confirmation, the connectors'
   keys and certificates, the operator's SSH public key carried to the box over TLS after
@@ -205,9 +208,9 @@ None of this document's own. The operator's one open ruling that bears on it, wh
 run card is, is carried in `weaver-admin-PRD` section 10. A stopped agent against a
 machine that is down is a cell of the charter's section 10, settled by an act. The
 unload's automatic save point on the state mount is in scope and operator-managed save
-points stay out, on the operator's rulings of 2026-11-16 (setup pages), and how the
-state mount meets the agent's territory is settled by the act the charter's section 11
-registers.
+points stay out, on the operator's rulings of 2026-11-16 (setup pages), and the agent's
+territory stands in the agent's home on the state mount, how the two meet being settled
+by the act the charter's section 11 registers.
 
 ## 9. Open cells, each with what settles it
 
@@ -229,6 +232,7 @@ registers.
 - **The record of an upgrade.** Which record carries an upgrade, and how state made
   under an older version is marked as used under the newer one. Settled by the act that
   writes it, per `weaver-admin-PRD` section 11.
-- **How the save points meet the state mount, against the territory that holds them.**
-  Settled by the act that places the save points on the state mount, per
-  `weaver-admin-PRD` section 11.
+- **How the agent's home on the state mount meets the territory's custody, the
+  territory's exact path inside it, and how the image's fixed agent account meets the
+  names admin derives from the agent's name.** Settled by the act that places the
+  territory in the agent's home, per `weaver-admin-PRD` section 11.
