@@ -777,13 +777,13 @@ refuse_existing "$SUDO_RULE" "sudo rule"
 if [ "$APPLY" -eq 0 ]; then
   printf '   no collision found in accounts and paths visible to this uid\n'
   printf '   PENDING --apply: privileged collision checks\n'
-  printf '   PENDING --apply: authentication paths, the sudoers include, visudo\n'
+  printf '   PENDING --apply: authentication paths, the sudoers include, visudo, the operator'"'"'s sudo as other accounts\n'
   say "plan only"
   printf '   no provisioning performed; rerun with --apply to check and make it\n'
   exit 0
 fi
 
-say "sudo rule, checked before anything is made"
+say "sudo, checked before anything is made"
 # **The sudoers include and the rendered rule are judged before any account
 # stands** (#577). On the by-hand appliance walk of 2026-11-16 the box's sudo
 # was sudo-rs, whose visudo refuses `Defaults:<user> !pam_session`, a line the
@@ -822,11 +822,18 @@ sudo_rs_note() {
 }
 # stage_rule: the rendered rule staged under a dot-name sudo skips, root 0440,
 # and checked by visudo. Prints the stage's path, or removes it and refuses.
+# The stage lives only across its write, its mode and visudo, and sudo never
+# reads a name with a dot in it.
 stage_rule() {
   local stage
   stage=$(sudo mktemp "/etc/sudoers.d/.weaver-$NAME.XXXXXX") || die "cannot stage the sudo rule in /etc/sudoers.d"
-  printf '%s\n' "$RULE_TEXT" | sudo tee "$stage" >/dev/null
-  sudo chmod 0440 "$stage"
+  # **Each step is checked here**: this function runs inside `$(...)`, where
+  # bash clears `set -e`, so a failed write or mode would otherwise stage an
+  # empty rule that visudo accepts.
+  if ! printf '%s\n' "$RULE_TEXT" | sudo tee "$stage" >/dev/null || ! sudo chmod 0440 "$stage"; then
+    sudo rm -f -- "$stage"
+    die "cannot write the staged sudo rule $stage, so it was not installed"
+  fi
   if ! sudo visudo -cqf "$stage"; then
     sudo rm -f -- "$stage"
     die "visudo refuses the rendered rule, so it was not installed.$(sudo_rs_note)"
@@ -836,6 +843,14 @@ stage_rule() {
 rule_stage=$(stage_rule) || exit 1
 sudo rm -f -- "$rule_stage"
 printf '   /etc/sudoers includes /etc/sudoers.d, and visudo accepts the rendered rule\n'
+# **The operator's sudo runs commands as other accounts** (#577): the wall
+# below looks as the agent's accounts, which do not stand yet, so the drop is
+# asked here as `nobody`. On the walk the operator's rule named (root) alone,
+# and the refusal came at the wall, after every account and the territory.
+sudo -n -u nobody true 2>/dev/null \
+  || die "sudo would not run a command as nobody, so it could not look as the agent's accounts at the wall:" \
+         "the operator's sudo must run commands as other accounts, (ALL) and not (root) alone"
+printf "   the operator's sudo runs commands as other accounts\n"
 
 say "accounts"
 # **The box's connector accounts are laid where absent, once per box**, each

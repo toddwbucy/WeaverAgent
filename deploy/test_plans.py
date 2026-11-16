@@ -95,8 +95,9 @@ def privileged(paths, run):
             except OSError: pass
 
 # **A look made as an account** (#577): create-agent.sh's `allows` hands
-# exactly this text to `sh -c`, so the shell's builtin `[` answers it.
-ACCESS_LOOK = 'if [ "$1" "$2" ]; then printf yes; else printf no; fi'
+# exactly this text to `sh -c`, so the shell's builtin `[` answers it. It is
+# the suite's ACCESS_LOOK, written in when the double is.
+ACCESS_LOOK = @ACCESS_LOOK@
 def account_answer(identity, flag):
     """What the kernel would answer for `identity` under the fixture: the
     agent's own uid enters neither its state room nor its territory unless
@@ -324,10 +325,17 @@ elif name == 'sudo':
         sys.exit(1)
     if op == '--version':
         print(os.environ.get('SUDO_VERSION', 'Sudo version 1.9.16'))
-    elif identity and op == 'sh' and rest[:2] == ['-c', ACCESS_LOOK]:
+    elif identity and op == 'sh':
         # **The look as an account through the shell's own `[`** (#577),
         # answered as the kernel would for that account under the fixture.
+        # Any other shell run as an account fails loudly, so a look whose text
+        # drifts is never run as the tester, past the fixture's walls.
+        assert rest[:2] == ['-c', ACCESS_LOOK], ('a shell as an account the double does not know', rest)
         print('yes' if account_answer(identity, rest[3]) else 'no', end='')
+        sys.exit(0)
+    elif identity == 'nobody' and op == 'true':
+        # The early ask that the operator's sudo runs commands as other
+        # accounts (#577), refused only where DROP_FAIL names nobody or all.
         sys.exit(0)
     elif op == 'sh': shell_read(rest)
     elif op == 'systemctl': sys.exit(2 if os.environ.get('READ_FAIL') == rest[0] else 0)
@@ -344,6 +352,7 @@ elif name == 'sudo':
         args = [a for a in rest[:-1] if a != '--']
         sys.exit(privileged([file], lambda: subprocess.run(['/usr/bin/' + op, *args, str(file)]).returncode))
     elif op == 'tee':
+        if os.environ.get('TEE_FAIL') and os.environ['TEE_FAIL'] in rest[-1]: sys.exit(1)
         file = pathlib.Path(mapped(rest[-1]))
         assert file.is_relative_to(root), file
         text = sys.stdin.read()
@@ -463,6 +472,7 @@ elif name == 'ldd':
         else: print(f'\t{soname} => {at}/{soname} (0x0000)')
 else: sys.exit(99)
 '''
+DOUBLE = DOUBLE.replace('@ACCESS_LOOK@', repr(ACCESS_LOOK))
 
 # The six sampling defaults the harness reads from every serving declaration
 # (weaver-harness-Spec section 6.1), at the values create-agent.sh writes. A
@@ -582,7 +592,7 @@ class PlanTests(unittest.TestCase):
                     "USER": "fixture-no-home", "PROBE": str(self.root / "probe"),
                     "FIXTURE_ROOT": str(self.root)}
         for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
-                     "VISUDO_FAIL", "DROP_FAIL", "UUTILS_TEST", "SUDO_VERSION", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
+                     "VISUDO_FAIL", "DROP_FAIL", "UUTILS_TEST", "SUDO_VERSION", "TEE_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES",
                      "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
                      "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF", "ENGINE_BUILD", "NO_ENGINE_MESSAGE",
@@ -1095,13 +1105,18 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         # another account goes through the shell's builtin `[`. Perturbation:
         # put `sudo -u "$1" test "$2" "$3"` back in `allows`, and the scan
         # finds it.
-        external = re.compile(r"sudo\s+(-n\s+)?-u\s+\S+\s+(-H\s+)?test\b|as_op\s+test\b|as_can\s+\S+\s+test\b")
+        # A drop in any spelling (`-u`, `-nu`, after `-n` or before it,
+        # runuser, setpriv, or a script's own wrapper), then `test` before the
+        # command ends.
+        external = re.compile(r"(\bsudo\b[^|;&#]*\s-n?u\b|\brunuser\b|\bsetpriv\b|\bas_(op|can)\b)[^|;&#]*\btest\b")
+        for script in sorted(DEPLOY.glob("*.sh")):
+            with self.subTest(script=script.name):
+                code = [l for l in script.read_text().splitlines() if not l.lstrip().startswith("#")]
+                self.assertEqual([l for l in code if external.search(l)], [], script.name)
+        # The look's one text, in each script that looks as an account.
         for name in ("create-agent.sh", "decommission.sh", "verify-lifecycle.sh"):
-            with self.subTest(script=name):
-                text = (DEPLOY / name).read_text()
-                self.assertEqual([l for l in text.splitlines() if external.search(l)], [], name)
-        create = (DEPLOY / "create-agent.sh").read_text()
-        self.assertIn(f"sh -c '{ACCESS_LOOK}'", create)
+            with self.subTest(pinned=name):
+                self.assertIn(f"sh -c '{ACCESS_LOOK}'", (DEPLOY / name).read_text())
 
     def test_a_group_blind_test_changes_no_answer_of_the_wall(self):
         # **#577**: a group-blind external `test` (UUTILS_TEST answers no to
@@ -1136,6 +1151,35 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 self.assertFalse((self.config / "m1").exists())
                 self.assertFalse(self.rule.exists())
                 self.assert_no_printed_root_command(result)
+
+    def test_an_operator_sudo_that_runs_as_root_alone_stops_before_anything_is_made(self):
+        # **#577, the review's finding 1**: the wall looks as the agent's
+        # accounts, which stand only once made, so a `(root)`-only operator
+        # rule is asked of before anything is made, as `nobody`. Perturbation:
+        # drop the early ask, and the accounts and the territory stand before
+        # the wall refuses.
+        self.env.update(ALLOW_APPLY_CHECKS="1", DROP_FAIL="nobody")
+        result = self.create("--apply")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("sudo would not run a command as nobody", result.stderr)
+        self.assertIn("(ALL) and not (root) alone", result.stderr)
+        made = [c for c in self.calls() if c[:2] in (["sudo", "useradd"], ["sudo", "groupadd"], ["sudo", "usermod"])]
+        self.assertEqual(made, [], made)
+        self.assertFalse(self.decl.exists())
+        self.assertFalse(list((self.root / "etc" / "sudoers.d").iterdir()))
+        self.assert_no_printed_root_command(result)
+
+    def test_a_staged_rule_that_cannot_be_written_is_never_installed(self):
+        # **The review's finding 2**: `stage_rule` runs inside `$(...)`, where
+        # bash clears `set -e`, so its write is checked by hand. Perturbation:
+        # leave the write unchecked, and an empty stage passes visudo and is
+        # installed as the rule.
+        self.env.update(ALLOW_APPLY_CHECKS="1", TEE_FAIL="/.weaver-m1.")
+        result = self.create("--apply")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("cannot write the staged sudo rule", result.stderr)
+        self.assertFalse(list((self.root / "etc" / "sudoers.d").iterdir()))
+        self.assertFalse((self.config / "m1").exists())
 
     def test_a_rule_visudo_refuses_stops_before_anything_is_made_and_names_sudo_rs(self):
         # **#577 (and D4 of the plan)**: on the walk the box's sudo was
