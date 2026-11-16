@@ -513,19 +513,18 @@ conflict discovered at model admission is such a refusal, named by the SPU insid
 the aggregate, and admin holds no earlier check to catch it, per ruling C.
 
 **On an appliance the load checks its data mounts between steps 3 and 4, and the check
-takes no step number of its own.** That place is this charter's. **The model mount is
-required, and a model mount point that is not a separate filesystem refuses the load.
-The state mount is required only where the declaration elects state, and then it refuses
-on the same test**, on the operator's rulings of 2026-11-14 and 2026-11-15 (section
-7.5). An agent whose declaration elects no state runs on the model mount alone. The
-sizes are reported. The check stands before step 4, so a refusal comes before the load
-opens or starts anything, and it reads the declaration's election of state from step 2.
-It takes no number because it starts nothing and opens nothing, so section 5's rollback
-has nothing to discriminate by it. It judges the filesystem and not what lies on it,
-whether the model resolves staying the SPU's to answer at admission, per section 4.3,
-and nothing here mounts or repairs, the mounts being the operator's act. Where the
-territory stands against the state mount is a later item, per section 7.5, and the
-check's place may move with it, since step 2 reads the declaration from the territory.
+takes no step number of its own.** That place is this charter's. **The model mount and
+the state mount are both required for every agent, and a mount point that is not a
+separate filesystem refuses the load**, per section 7.5, on the operator's ruling of
+2026-11-14 and the operator's rulings of 2026-11-16 (setup pages). The sizes are
+reported. The check stands before step 4, so a refusal comes before the load opens or
+starts anything. It takes no number because it starts nothing and opens nothing, so
+section 5's rollback has nothing to discriminate by it. It judges the filesystem and not
+what lies on it, whether the model resolves staying the SPU's to answer at admission,
+per section 4.3, and nothing here mounts or repairs, the mounts being the operator's
+act. Where the territory stands against the state mount is settled by the act that
+places the save points on the state mount (section 11), and the check's place may move
+with it, since step 2 reads the declaration from the territory.
 
 **A load refuses state this version cannot read, and the refusal says why**, on the
 operator's rulings of 2026-11-14. A load never starts fresh silently. State an earlier
@@ -1054,11 +1053,12 @@ what it asks of a component lands in that component's charter. Sections 7.1 to 7
 the environment an agent runs in when it runs in a virtual machine made from the image
 of section 7.2. Admin's own share of it is the table of section 2, the data-mount check
 of section 4.1, the refusal of state a version cannot read, the load and the unload that
-start and stop the agent (section 7), and the trace's handoff (section 7.5).
-`weaver-admin-Spec-vm-environment` says how admin represents that share. The rest binds
-the image's build, which this crate does not perform, and the connectors, which are
-WeaverWeb's. Every requirement of sections 7.1 to 7.5 is the operator's ruling of
-2026-11-14 unless the sentence says otherwise, and the operator's rulings of 2026-11-15
+start and stop the agent (section 7), the unload's save point on the state mount and the
+trace's handoff (section 7.5). `weaver-admin-Spec-vm-environment` says how admin
+represents that share. The rest binds the image's build, which this crate does not
+perform, and the connectors, which are WeaverWeb's. Every requirement of sections 7.1 to
+7.5 is the operator's ruling of 2026-11-14 unless the sentence says otherwise, and the
+operator's rulings of 2026-11-15 and the operator's rulings of 2026-11-16 (setup pages)
 amend them where a sentence says so.
 
 **The stance, on the operator's ruling of 2026-11-15.**
@@ -1092,7 +1092,10 @@ amend them where a sentence says so.
 installs Weaver Web, loads the image into a hypervisor they already run, and makes a
 virtual machine from it. From then on the operator manages the agent through the console
 and the machine through the hypervisor. The console knows the agent. The hypervisor
-knows the machine. Neither reaches into the side of the other.
+knows the machine. **The console reaches into the machine at one point only, its
+shutdown command on a VM** (below), on the operator's rulings of 2026-11-16 (setup
+pages). The console never touches the hypervisor, and the hypervisor never reaches into
+the console's side.
 
 **The image exists to hand an operator a held deployment tuple.** The output of a turn
 depends on what computes it: the binaries, the libraries they load, the driver, the
@@ -1120,7 +1123,12 @@ the WeaverAgent system needs is the operator's choice, and it is outside this ch
 **Starting and stopping the agent is its load and unload through admin, inside a running
 appliance.** The machine's own lifecycle, creating, cloning, starting, stopping,
 snapshotting, networking or destroying it, is the operator's and their hypervisor's, and
-the suite holds no opinion about it. That Weaver Web never touches a hypervisor is
+the suite holds no opinion about it, with one exception. **On a VM the console's
+shutdown command is enabled, and on a host it is disabled entirely**, on the operator's
+rulings of 2026-11-16 (setup pages). The command shuts the machine down from inside it,
+so the console still touches no hypervisor. Which component carries it inside the
+machine and by what grant, and what it does with a loaded agent, are settled by the act
+that adds it (section 11). That Weaver Web never touches a hypervisor is
 `weaver-web-PRD`'s to carry, in `toddwbucy/WeaverWeb`. Nothing of the image starts the
 agent, per section 7.
 
@@ -1170,8 +1178,10 @@ updates are off.
 **The time source is the image's default, and the operator may name a server**, on the
 operator's ruling of 2026-11-15. Any accurate source serves.
 
-**No shared key or secret ships in the image.** The pairing line and the console's
-fingerprint begin trust without a secret that every copy of the image carries.
+**No shared key or secret ships in the image.** Root ships expired and empty, with no
+default password, on the operator's rulings of 2026-11-16 (setup pages). The one-time
+code the box shows and the console's fingerprint, which the operator compares in Weaver
+Web, begin trust without a secret that every copy of the image carries (section 7.4).
 
 **One image exists for each version, and a security fix is a new version.** A version
 is `<release>.<respin>`, on the operator's ruling of 2026-11-15. The release moves when
@@ -1190,8 +1200,10 @@ version of the harness. Reproducibility is claimed within one version on one set
 hardware, and nothing is claimed across versions.
 
 **The image carries no model and no state.** The model lives on a disk that the operator
-attaches, per section 7.5. Where state lives, against the agent's territory, is a later
-item, per section 7.5.
+attaches, per section 7.5. The unload's automatic save point, which carries state across
+an unload and a restart, lands on a second disk, the state mount, on the operator's
+rulings of 2026-11-16 (setup pages). How that mount meets the agent's territory is
+settled by the act section 11 registers.
 
 **One image comes first, for KVM.** Proxmox is the first format named as later, and
 `toddwbucy/WeaverTools` issue 29 records one Proxmox condition to settle then. Other
@@ -1204,6 +1216,10 @@ on SSH alone.** The VM's console is the operator's and the hypervisor's. No othe
 is open unless a declaration names it, per section 2, on the operator's rule that a port
 which does not have to be open is not open.
 
+**SSH is the operator's own admin door, separate from Weaver Web, and setup never uses
+it**, on the operator's rulings of 2026-11-16 (setup pages) and the operator's words of
+2026-11-16.
+
 **The image's own boot rules carry the base policy, input dropped but SSH**, on the
 operator's ruling of 2026-11-15, and admin's table of section 2 does not carry it. How a
 port that a declaration names gets through those rules is open in section 10.
@@ -1211,17 +1227,31 @@ port that a declaration names gets through those rules is open in section 10.
 **Cloud-init is not among the requirements at this stage**, on the operator's ruling of
 2026-11-15, and it is carried as a later item.
 
-**On first boot the operator logs in at the VM's console, places their key and sets the
-network by hand**, on the same ruling. How the operator authenticates at the VM's
-console is not written here. It follows from that ruling that the operator is at the
-VM's console before the first SSH and can read the host key's fingerprints there.
+**On first boot the VM's console goes straight to the appliance's setup script, which
+runs as root**, with no login prompt, in the operator's words of 2026-11-16: the person
+at the console is root and the administrator. The operator sets the network there by
+hand, on the operator's ruling of 2026-11-15. **Root ships expired and empty, with no
+default password**, on the operator's rulings of 2026-11-16 (setup pages), as
+`toddwbucy/WeaverTools` #33 builds the image. Whether the setup's first question sets
+root's password, and whether the operator's SSH public key reaches the box through
+Weaver Web over TLS after pairing, are open as of 2026-11-16 and are the image's to
+carry. It follows that the operator is at the VM's console before the first SSH and can
+read the host key's fingerprints there.
 
 ### 7.4 Pairing and models: the environment's half
 
-**The appliance listens for no console.** The console begins pairing, and the
-appliance's connectors dial the console's link port, since the console is the network
-service whose work is to listen. The console fetches models, and the appliance dials the
-console for them.
+**The appliance listens for no console.** The box begins pairing, and the appliance's
+connectors dial the console's link port, for pairing and always after, since the console
+is the network service whose work is to listen, on the operator's ruling of 2026-11-14,
+the operator's rulings of 2026-11-16 (setup pages) and the operator's words of
+2026-11-16. The console fetches models, and the appliance dials the console for them.
+
+**Pairing is entered at the appliance's setup script**, on the operator's rulings of
+2026-11-16 (setup pages) and the operator's words of 2026-11-16. The script asks for
+Weaver Web's address and port, dials it over TLS, and shows a short one-time code and
+Weaver Web's fingerprint. In Weaver Web the operator compares the fingerprint and enters
+the code. The connectors send the public halves of keys made in the box, and mutual TLS
+comes up. The box's survey runs locally, and its report crosses to the console over TLS.
 
 **What an appliance reaches outbound is the operator's**, on the operator's ruling of
 2026-11-15. The image carries no egress limit.
@@ -1233,42 +1263,56 @@ with a clone is the console's documents'. **The connectors' keys and
 certificates live on the root disk**, on the operator's ruling of 2026-11-15, so a new
 image is a new enrollment.
 
-**The one-time secret of the pairing line is the only secret that travels on a command
-line.** It is the exception because no other way to begin exists. It is single-use,
-short-lived, and bound to one pending enrollment that the operator opened.
+**The one-time code is the only secret that pairing carries.** The box shows it and the
+operator enters it in Weaver Web, never on a command line, on the operator's rulings of
+2026-11-16 (setup pages). It is the exception because no other way to begin exists. It
+is single-use and bound to the one pending enrollment the box's dial opened.
 
 **Access tokens live in the console and never in an appliance.** An appliance pulls a
 model from the console's cache over the same mutual TLS trust and checks its digest, so
 the model's pull, too, is a dial from the appliance to the console.
 
-What crosses at pairing and at a model's pull is WeaverWeb's: the line, the secret's
-form and lifetime, the link port, the certificates, what the console does with a clone,
-the model store with its sources, and the image download with its hash check.
-They are `weaver-web-PRD`'s, its Spec's and the connectors' contracts', in
-`toddwbucy/WeaverWeb`. The enrollment connection is the link's one unauthenticated
+What crosses at pairing and at a model's pull is WeaverWeb's: the code, its form and
+lifetime, the link port, the certificates, what the console does with a clone, the
+survey's report as it crosses, the model store with its sources, and the image download
+with its hash check. They are `weaver-web-PRD`'s, its Spec's and the connectors'
+contracts', in `toddwbucy/WeaverWeb`. The appliance's setup script is the image's, in
+`toddwbucy/WeaverTools`. The enrollment connection is the link's one unauthenticated
 surface, and the console's documents name it.
 
 ### 7.5 Storage
 
-**Two mount points are fixed, the model's and the state's.** The model mount is
-required. The state mount is required only where the declaration elects state, on the
-operator's ruling of 2026-11-15, and an agent whose declaration elects no state runs on
-the model mount alone. The mounts carry what the agent keeps, per section 7.1. **The
-agent's territory stays at `/var/lib/weaver-agent/weaver-<agent>/`**, on the operator's
-rulings of 2026-10-07 and 2026-11-15.
+**Two mount points are fixed, the model's and the state's, and both are required for
+every agent**, on the operator's rulings of 2026-11-16 (setup pages), which supersede
+the ruling of 2026-11-15 that the state mount is required only where the declaration
+elects state. **The state mount is at least 10 GiB**, because the system prompt lives in
+state and the unload's automatic save point lands there. The mounts carry what the agent
+keeps, per section 7.1. **The agent's territory stays at
+`/var/lib/weaver-agent/weaver-<agent>/`**, on the operator's rulings of 2026-10-07 and
+2026-11-15.
 
-**The first production agent declares no state**, on the operator's ruling of
-2026-11-15, and state and save points on an appliance are out of scope until that agent
-runs from the console. How the state mount meets the territory, which holds the save
-points and the state member's room, is a later item on that ruling. So is where the
-member's room stands when the trace's sink stands outside the territory, since
+**The first production agent declares a store and keeps the system prompt**, in the
+operator's words of 2026-11-16. **The automatic save point the unload writes is in scope
+on an appliance, and it lands on the state mount**, on the operator's rulings of
+2026-11-16 (setup pages): no new persistent store, the existing save point path placed
+on the state mount. The first agent's test exercises it: the prompt entered into state,
+a load, an unload, the VM shut down and restarted, a reload, and the prompt restored.
+Operator-managed save points stay out of scope. How the state mount meets the territory,
+which holds the save points and the state member's room, is settled by the act section
+11 registers. Where the member's room stands when the trace's sink stands outside the
+territory stays a later item, on the operator's ruling of 2026-11-15, since
 `weaver-admin-Spec` section 9 derives the room from the sink's directory.
 
-**The operator attaches the disks in the hypervisor and mounts them, and the WeaverAgent
-system checks, refuses and reports.** A required mount point that is not a separate
-filesystem refuses the load, per section 4.1, and the sizes are reported. The check runs
-at every load and not once at enrollment, because a mount can go missing between two
-loads. What the console does with the report is WeaverWeb's.
+**The operator attaches the disks in the hypervisor, the appliance's setup script
+formats and mounts them, and the WeaverAgent system checks, refuses and reports.** On
+the operator's rulings of 2026-11-16 (setup pages), Weaver Web shows a command to run at
+the VM's console, which starts the script's drive setup: the state drive, at least 10
+GiB, and the models drive, sized from the model, each shown and confirmed before it is
+formatted. Every root act of setup runs in that script at the VM's console, so admin's
+grant does not grow. A required mount point that is not a separate filesystem refuses
+the load, per section 4.1, and the sizes are reported. The check runs at every load and
+not once at enrollment, because a mount can go missing between two loads. What the
+console does with the report is WeaverWeb's.
 
 **The trace is not a disk matter of the agent's**, on the operator's ruling of
 2026-11-15. The agent hands its trace off. **The trace goes where it is declared**, on
@@ -1277,9 +1321,7 @@ Web's declaration page when the agent is created, and the suite sends the trace 
 is told. The destination may be `/dev/null`, a file on a local store, or a sink off the
 machine, and "nowhere" is the sink `/dev/null`. A null sink is legitimate, and the run
 card records the choice. What stands behind the destination, and whether anything can
-read it, is the operator's. A trace path on the state mount of an agent whose
-declaration elects no state stands on a mount that no check judges, and that too is the
-operator's declaration. The suite's duty is to make the trace available.
+read it, is the operator's. The suite's duty is to make the trace available.
 
 **One safety property stays.** Admin opens the sink as root, so a file sink's directory
 must be one that no principal of the agent can write or replace, and the open follows no
@@ -1352,14 +1394,15 @@ whose entry condition resolves to no work is closed rather than carried. The tra
 of 2026-10-03 (#50) is a second binary of this crate for a different reason, a process
 under another account holding the trace door, and separates no authority of admin's.
 
-**The load additions of the VM environment are staged, as of 2026-11-15**: the table of
-section 2, the data-mount check of section 4.1 with its report, and the refusal of state
-this version cannot read wherever the save points' representation does not already
-hold it. The entry condition is the merge of the amendment of 2026-11-15 and the
-`weaver-admin-Spec` act
-of section 11 that represents them before any code. The GID-mask item this section
-carried was written against admin owning the record's file, and it left with the record
-on 2026-08-01, the write path now ending at a sink the operator declares.
+**The VM environment's additions to the load and the unload are staged, as of
+2026-11-16**: the table of section 2, the data-mount check of section 4.1 with its
+report, the refusal of state this version cannot read wherever the save points'
+representation does not already hold it, and, on the operator's rulings of 2026-11-16
+(setup pages), the unload's save point on the state mount (section 7.5). The amendment
+of 2026-11-15 merged in #561, so the entry condition is the `weaver-admin-Spec` act of
+section 11 that represents them before any code. The GID-mask item this section carried
+was written against admin owning the record's file, and it left with the record on
+2026-08-01, the write path now ending at a sink the operator declares.
 
 ## 10. Open rulings
 
@@ -1606,19 +1649,19 @@ both `open-items` entries as that list shrank. The last entry, the
 the human's ruling, and the register stood empty from that date until the act of
 2026-08-05 filled it.
 
-**What this register holds, as of 2026-11-15.** Seven entries, all from the amendment of
-that date, which takes the operator's rulings of 2026-11-14 and 2026-11-15 on the VM
-environment: the firewall table and its declared ports, the data-mount check, the
-refusal of state a version cannot read, the guest's processor in the tuple, and the
-trace's destination.
+**What this register holds, as of 2026-11-16.** Nine entries. Seven come from the
+amendment of 2026-11-15, which takes the operator's rulings of 2026-11-14 and 2026-11-15
+on the VM environment: the firewall table and its declared ports, the data-mount check,
+the refusal of state a version cannot read, the guest's processor in the tuple, and the
+trace's destination. Two come from the operator's rulings of 2026-11-16 (setup pages):
+the save points on the state mount and the console's shutdown command on a VM.
 
 - **`weaver-admin-Spec`, the load additions.** The firewall table of section 2: its
   name, the shape of its rules, its place in the load and the unload with its rollback,
   and what the run records of it. The data-mount check of section 4.1 with its report.
   The refusal of state this version cannot read, which that Spec's section 4 already
   holds for save points. Each act owes walks and perturbation tests in the manner of
-  that Spec's section 10 before any code. **Settled by:** the act that adds them, once
-  the amendment of 2026-11-15 merges.
+  that Spec's section 10 before any code. **Settled by:** the act that adds them.
 - **`weaver-types-Spec` section 2, the declaration's ports.** How a declaration names
   the ports of a tool or of the gate. **Settled by:** the act that adds the
   declaration's ports member, per section 2.
@@ -1652,6 +1695,20 @@ trace's destination.
   property section 7.5 keeps. **Settled by:** the act "the trace goes where it is
   declared". Where the member's room stands when the sink stands outside the territory
   is the later item of section 7.5.
+- **The save points on the state mount**, on the operator's rulings of 2026-11-16 (setup
+  pages), per section 7.5. How the state mount meets the agent's territory, and with it
+  where the territory's `save-points/` and the member's room stand, and every text that
+  places the save points in the territory's `save-points/` that the answer moves:
+  `weaver-agent-PRD` section 2, `weaver-state-PRD` sections 2 and 4, `weaver-state-Spec`
+  sections 2 and 5, `weaver-types-Spec` section 2, `weaver-admin-operator-contract`
+  section 5 and `weaver-admin-Spec` sections 3.0, 4 and 9, with `deploy/create-agent.sh`
+  and the runbooks that lay the territory out. **Settled by:** the act that places the
+  save points on the state mount.
+- **The console's shutdown command on a VM**, on the operator's rulings of 2026-11-16
+  (setup pages), per section 7.1. Which component carries it inside the machine and by
+  what grant, what it does with a loaded agent, and the edits that follow in
+  `weaver-admin-operator-contract` and in the strict sudo rule `deploy/create-agent.sh`
+  writes where admin-con carries it. **Settled by:** the act that adds the command.
 
 ## 12. Children
 
