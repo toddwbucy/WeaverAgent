@@ -522,7 +522,7 @@ starts anything. It takes no number because it starts nothing and opens nothing,
 section 5's rollback has nothing to discriminate by it. It judges the filesystem and not
 what lies on it, whether the model resolves staying the SPU's to answer at admission,
 per section 4.3, and nothing here mounts or repairs, the mounts being the operator's
-act. **The agent's territory stands in the agent's home on the state mount** (section
+act. **The agent's territory stands in the agent's folder on the state mount** (section
 7.5), so step 2 reads the declaration from the state mount before this check, and the
 check's place may move ahead of step 2. That is settled by the act section 11 registers.
 
@@ -1056,7 +1056,7 @@ and the Spark-class machine relate is out of scope as of 2026-11-15, on the oper
 ruling of that date, and it is carried as a later item. The operator's rulings of
 2026-11-16 (setup pages) settle three facts of the host install that this charter
 carries: the console's stop and start (below), the host's load check (section 4.1) and
-the agent's home (section 7.5). A profile is a description in `toddwbucy/WeaverTools`.
+the agent's folder (section 7.5). A profile is a description in `toddwbucy/WeaverTools`.
 It decides nothing about any component and binds no Spec, and what it asks of a
 component lands in that component's charter. Sections 7.1 to 7.5 carry the environment
 an agent runs in when it runs in a virtual machine made from the image of section 7.2.
@@ -1213,15 +1213,18 @@ hardware, and nothing is claimed across versions.
 **The image carries no model and no state.** The model lives on a disk that the operator
 attaches, per section 7.5. The unload's automatic save point, which carries state across
 an unload and a restart, lands on a second disk, the state mount, on the operator's
-rulings of 2026-11-16 (setup pages). The agent's territory stands in the agent's home on
-that mount (section 7.5).
+rulings of 2026-11-16 (setup pages). The agent's territory stands in the agent's folder
+on that mount, beside the agent's home (section 7.5).
 
-**The image ships the accounts the agent needs**, in the operator's words of 2026-11-16:
-the agent's own account and the connectors' accounts. The agent's account has a fixed
-name, since the image is built before the agent is named, and `weaver-agent` is the name
-proposed. The appliance's setup script points that account's home at the agent's folder
-on the state drive (section 7.5). How a fixed account meets the names admin derives from
-the agent's name is settled by the act section 11 registers.
+**The image ships the connectors' two accounts, and an agent's own accounts are named
+after the agent**, on the operator's ruling of 2026-11-16 on the layout (#578). The
+image ships `weaver-gatecon` and `weaver-admincon`, laid as `deploy/create-agent.sh`
+lays them, and the script judges each by its shape before it uses it, as it judges any
+standing account. **The agent's own accounts are laid by `deploy/create-agent.sh` when
+the agent is made**, under the names admin derives from the agent's name:
+`weaver-<agent>`, its member `weaver-<agent>-state` and its relay
+`weaver-<agent>-relay`. No fixed agent account exists, and no name admin derives
+changes.
 
 **One image comes first, for KVM.** Proxmox is the first format named as later, and
 `toddwbucy/WeaverTools` issue 29 records one Proxmox condition to settle then. Other
@@ -1312,18 +1315,25 @@ elects state. **The state mount is at least 10 GiB**, because the system prompt 
 state and the unload's automatic save point lands there. The mounts carry what the agent
 keeps, per section 7.1.
 
-**The agent is a real user, and its home lives on the state drive**, in the operator's
-words of 2026-11-16: `/mnt/weaver/state/<agent-name>` on an appliance, and
-`/home/<agent-name>` on a host with the same layout inside. **The agent's territory,
-which holds the declaration, the prompt draft, the logs, the trace, the save points and
-the state member's room, stands inside that home.** This supersedes the territory at
-`/var/lib/weaver-agent/weaver-<agent>/` of the operator's rulings of 2026-10-07 and
-2026-11-15, and the whole agent still lives in its territory, as the ruling of
-2026-10-07 has it. The territory's custody does not change: root's, grouped to the state
-group, `0710`, the agent's own uid denied passage, and every directory above it root's
-and closed to other writers (`weaver-admin-Spec` section 9). How the agent's home meets
-that custody, and the territory's exact path inside it, are settled by the act section
-11 registers.
+**The agent is a real user, and its folder lives on the state drive**, on the operator's
+rulings of 2026-11-16 (setup pages) and the same day's ruling on the layout (#578).
+**Each agent gets one folder named after it and held by root,
+`/mnt/weaver/state/<agent-name>/` on an appliance, and inside it, side by side, stand
+the agent's territory, `weaver-<agent-name>/`, and the agent's home, `home/`, which the
+agent's own account owns.** The territory holds the declaration, the prompt draft, the
+logs, the trace, the save points and the state member's room. It stands beside the home
+and never inside it, since the agent could rename a folder inside a home it owns. This
+supersedes the territory at `/var/lib/weaver-agent/weaver-<agent>/` of the operator's
+rulings of 2026-10-07 and 2026-11-15, and the whole agent still lives in its territory,
+as the ruling of 2026-10-07 has it. The territory's custody does not change: root's,
+grouped to the state group, `0710`, the agent's own uid denied passage, and every
+directory above it root's and closed to other writers (`weaver-admin-Spec` section 9).
+The folder held by root meets that rule, and the home is no directory above the
+territory. **On a host the same layout follows from the rule** under the directory the
+host names for its agents, so a host that names `/home` gives `/home/<agent-name>/` with
+the territory and `home/` inside it. That case is unmeasured, and this charter claims
+nothing more for it. The scripts that lay the folder and the texts that place the
+territory are settled by the act section 11 registers.
 
 **The first production agent declares a store and keeps the system prompt**, in the
 operator's words of 2026-11-16. **The automatic save point the unload writes is in scope
@@ -1688,7 +1698,7 @@ amendment of 2026-11-15, which takes the operator's rulings of 2026-11-14 and 20
 on the VM environment: the firewall table and its declared ports, the data-mount check,
 the refusal of state a version cannot read, the guest's processor in the tuple, and the
 trace's destination. One comes from the operator's rulings of 2026-11-16 (setup pages):
-the agent's home and territory on the state drive.
+the agent's folder on the state drive, with its territory and its home inside.
 
 - **`weaver-admin-Spec`, the load additions.** The firewall table of section 2: its
   name, the shape of its rules, its place in the load and the unload with its rollback,
@@ -1729,23 +1739,20 @@ the agent's home and territory on the state drive.
   property section 7.5 keeps. **Settled by:** the act "the trace goes where it is
   declared". Where the member's room stands when the sink stands outside the territory
   is the later item of section 7.5.
-- **The agent's home and territory on the state drive**, on the operator's rulings of
-  2026-11-16 (setup pages), per sections 4.1, 7.2 and 7.5. How the agent's home meets
-  the territory's custody: admin requires every directory above the territory root's and
-  closed to other writers (`weaver-admin-Spec` section 9), which a home the agent's uid
-  owns does not meet, and the territory denies the agent's uid passage. The territory's
-  exact path inside the home, and the config root's `territory` key that names it. How
-  the image's fixed agent account meets the names admin derives from the agent's name:
-  the agent's identity, its member, relay and groups, its cgroup, its scope and its
-  coordination directory are `weaver-<name>` and its suffixes (`weaver-admin-Spec`
-  section 6). The data-mount check's place against step 2, which reads the declaration
-  from the territory. Every text that places the territory or its save points under
-  `/var/lib/weaver-agent/`: `weaver-agent-PRD` section 2, `weaver-state-PRD` sections 2
-  and 4, `weaver-state-Spec` sections 2 and 5, `weaver-types-Spec` section 2,
-  `weaver-admin-operator-contract` section 5 and `weaver-admin-Spec` sections 3.0, 4, 6
-  and 9, with `deploy/create-agent.sh`, `deploy/bootstrap-stack.sh`,
-  `deploy/decommission.sh` and the runbooks. **Settled by:** the act that places the
-  territory in the agent's home.
+- **The agent's folder on the state drive**, on the operator's rulings of 2026-11-16
+  (setup pages) and the same day's ruling on the layout (#578), per sections 4.1, 7.2
+  and 7.5. `deploy/create-agent.sh` makes the folder held by root, lays the territory
+  and the home inside it and lays the agent's accounts under the names admin derives,
+  `deploy/decommission.sh` takes an agent's home from its account wherever it stands,
+  and `deploy/verify-lifecycle.sh` follows the layout. The config root's `territory` key
+  names the territory in the folder. The data-mount check's place against step 2, which
+  reads the declaration from the territory. Every text that places the territory or its
+  save points under `/var/lib/weaver-agent/`: `weaver-agent-PRD` section 2,
+  `weaver-state-PRD` sections 2 and 4, `weaver-state-Spec` sections 2 and 5,
+  `weaver-types-Spec` section 2, `weaver-admin-operator-contract` section 5 and
+  `weaver-admin-Spec` sections 3.0, 4, 6 and 9, with `deploy/create-agent.sh`,
+  `deploy/bootstrap-stack.sh`, `deploy/decommission.sh` and the runbooks. **Settled
+  by:** the act that lays the agent's folder.
 
 ## 12. Children
 
