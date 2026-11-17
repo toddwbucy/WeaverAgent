@@ -543,6 +543,23 @@ remove_home_quotas() {
   done
   return "$failed"
 }
+# **project_in_use PROJECT MOUNT: repquota's line for PROJECT on MOUNT where it
+# shows any usage or any limit**, nothing where it shows none, and 1 where the
+# quotas cannot be read. The fields are the ones create-agent.sh reads: the
+# project, two statuses, the block counts used, soft and hard, a grace, the
+# file counts used, soft and hard, and a grace.
+project_in_use() {
+  local report line who b_used b_soft b_hard f_used f_soft f_hard count
+  command -v repquota >/dev/null || return 1
+  report=$(repquota -P -n -v -O csv "$2" 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    IFS=, read -r who _ _ b_used b_soft b_hard _ f_used f_soft f_hard _ <<< "$line"
+    [ "$who" = "#$1" ] || continue
+    for count in "$b_used" "$b_soft" "$b_hard" "$f_used" "$f_soft" "$f_hard"; do
+      [ "$count" = 0 ] || { printf '%s\n' "$line"; return 0; }
+    done
+  done <<< "$report"
+}
 HOME_PROJECTS=()
 HOME_PROJECTS_LISTED=$(home_projects "${AGENT_FOLDERS[@]}")
 [ -z "$HOME_PROJECTS_LISTED" ] || mapfile -t HOME_PROJECTS <<< "$HOME_PROJECTS_LISTED"
@@ -1126,8 +1143,16 @@ load_held() {
 # and none replaced. Checked whole before a rerun's first act, so a rerun never
 # removes, stops or changes what the first run did not judge. Names the first
 # that is not, and answers 1.
+# **A listed limit is still the agent's** (CodeRabbit on #582) where its
+# project's number names the account this purge judged at that number, which
+# still stands, or names no account and repquota shows the project neither
+# used nor limited. A limit that will not go stops the first run with its
+# account standing (the home quotas step), so a limit whose account is gone
+# was removed, and one shown on the number since is another's: a newcomer
+# given the reused uid, or a project set by hand. That, a number naming an
+# account this purge did not judge, or quotas that cannot be read refuse.
 rerun_unchanged() {
-  local u r line p entry now scan
+  local u r line p entry now scan q project mount_point shown
   for u in "${UNITS[@]}"; do
     [ -n "${HELD_UNIT["$u"]:-}" ] || { printf 'the unit %s, which this purge did not judge\n' "$u"; return 1; }
   done
@@ -1157,6 +1182,18 @@ rerun_unchanged() {
         now=$(getent group "${line#group }" | cut -d: -f3 || true)
         [ -z "$now" ] || [ "$now" = "${HELD_GID["${line#group }"]:-}" ] \
           || { rm -f -- "$scan"; printf 'the group %s, which is not the group this purge judged\n' "${line#group }"; return 1; } ;;
+      "quota "*)
+        q=${line#quota } && project=${q%% *} && mount_point=${q#* }
+        now=$(getent passwd "$project" | cut -d: -f1 || true)
+        if [ -n "$now" ]; then
+          [ "${HELD_UID["$now"]:-}" = "$project" ] \
+            || { rm -f -- "$scan"; printf 'the limit of project %s on %s, whose number now names the account %s, which this purge did not judge\n' "$project" "$mount_point" "$now"; return 1; }
+        else
+          shown=$(project_in_use "$project" "$mount_point") \
+            || { rm -f -- "$scan"; printf 'the limit of project %s on %s, whose quotas cannot be read (repquota)\n' "$project" "$mount_point"; return 1; }
+          [ -z "$shown" ] \
+            || { rm -f -- "$scan"; printf 'the limit of project %s on %s, which repquota shows in use (%s) while no account this purge judged holds the number, so it may be another'"'"'s (where it is the agent'"'"'s own, clear it by hand by deploy/HowToDeployANewAgent.md section 7)\n' "$project" "$mount_point" "$shown"; return 1; }
+        fi ;;
     esac
   done < "$PURGE_ACTED"
   rm -f -- "$scan"
@@ -1339,13 +1376,18 @@ say "home quotas"
 # so no stale limit stands in the drive's quota file for a later account of
 # the same uid. Only the limits this archive's PURGE-LIST names and the
 # derivation holds are removed, as with every other line, and they are on
-# root's record, so a rerun whose first run failed here removes them again.
-# Removing a limit removes nothing on disk, so the rerun is harmless.
+# root's record. **A limit that will not go stops the purge here**
+# (CodeRabbit on #582), its folder and its account standing and the record
+# kept, so the rerun finds the agent's own account at the project's number
+# and removes the limit first. A rerun that finds a listed limit's account
+# gone therefore knows the first run removed it, and refuses a limit shown
+# on the number since (rerun_unchanged).
 PURGE_QUOTAS=()
 while IFS= read -r line; do
   case $line in "quota "*) PURGE_QUOTAS+=("${line#quota }") ;; esac
 done < "$PURGE_ACTED"
-remove_home_quotas "${PURGE_QUOTAS[@]}" || PURGE_FAILED=1
+remove_home_quotas "${PURGE_QUOTAS[@]}" \
+  || die "a home quota's limit above was not removed, so nothing more is removed: the folder and the account that name it stand, and root's record is kept at $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM. Make setquota answer, then rerun the purge, which removes the limit first"
 
 say "paths"
 while IFS= read -r line; do

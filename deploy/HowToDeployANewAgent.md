@@ -851,6 +851,15 @@ would leave the limit with nothing to name it. Read the mark by hand as above, a
 once it reads. Or, where it carries the account's uid, set the limit to none by hand as
 above, clear the mark with `sudo chattr -p 0 <agent-directory>/<name>`, and rerun.
 
+**Where a rerun of the purge refuses over a home quota's limit**, the project's number
+names an account the purge did not judge, or `repquota` shows the project in use while
+no account the purge judged holds the number, or the quotas cannot be read. The limit
+may be another's: a later agent given the same uid, or a project set by hand.
+`sudo repquota -P -n -v <mount point>` shows the project, and `getent passwd <uid>` its
+account. Where it is the agent's own, set it to none by hand as above and rerun. Where
+it is another's, leave it standing, and finish or abandon the purge by `REDEPLOY.md`
+section 2.
+
 **An agent of an older layout or an older declaration form is not migrated.** Admin and
 `update-stack.sh` refuse it by name, and it is recreated with `create-agent.sh` after
 its take-down by this section; nothing migrates it (the operator's ruling of 2026-10-08

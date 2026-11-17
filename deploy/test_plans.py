@@ -8162,8 +8162,10 @@ def write(kind, kept):
     (model / kind).write_text("".join(":".join(f) + "\n" for f in kept))
 if name == "getent":
     # An enumeration answers 0 however few rows match, as on a box, where root's
-    # own always stand; a lookup of a name absent answers 2.
-    hit = [f for f in rows(args[0]) if len(args) == 1 or f[0] == args[1]]
+    # own always stand; a lookup of a name absent answers 2. A key of digits is
+    # looked up by number, as getent looks it up.
+    hit = [f for f in rows(args[0])
+           if len(args) == 1 or (f[2] == args[1] if args[1].isdigit() else f[0] == args[1])]
     if not hit and len(args) > 1:
         sys.exit(2)
     print("".join(":".join(f) + "\n" for f in hit), end="")
@@ -8237,7 +8239,11 @@ class PurgeRecordTests(unittest.TestCase):
             stand_in.write_text(ACCOUNT_MODEL)
             stand_in.chmod(0o755)
         for tool, body in (("ldconfig", "#!/bin/sh\n[ \"${1:-}\" = -p ] && echo libggml.so\nexit 0\n"),
-                           ("systemctl", "#!/bin/sh\necho \"systemctl $*\" >> \"$MODEL/calls\"\nexit 0\n")):
+                           ("systemctl", "#!/bin/sh\necho \"systemctl $*\" >> \"$MODEL/calls\"\nexit 0\n"),
+                           # The drive's project quotas, as the model's
+                           # `quotas.csv` holds them, or unreadable.
+                           ("repquota", "#!/bin/sh\n[ -e \"$MODEL/repquota-fails\" ] && exit 1\n"
+                                        "cat \"$MODEL/quotas.csv\" 2>/dev/null\nexit 0\n")):
             stand_in = box / "model" / tool
             stand_in.write_text(body)
             stand_in.chmod(0o755)
@@ -8272,8 +8278,9 @@ class PurgeRecordTests(unittest.TestCase):
                    "query_runs() { :; }\n" + shell_function(text, "sudo_rules")
                    # The accounts phase asks which accounts are the box's.
                    + shell_function(text, "is_box_account") + shell_function(text, "box_account_role")
-                   # The home quotas' removal (#585).
-                   + shell_function(text, "remove_home_quotas")
+                   # The home quotas' removal (#585), and the rerun's reading
+                   # of a listed limit (CodeRabbit on #582).
+                   + shell_function(text, "remove_home_quotas") + shell_function(text, "project_in_use")
                    + ("" if removals is None else
                       "RM_SEEN=0\nrm() { local s=0; command rm \"$@\" || s=$?; RM_SEEN=$((RM_SEEN + 1)); "
                       f"[ \"$RM_SEEN\" -lt {removals} ] || exit 0; return \"$s\"; }}\n")
@@ -8542,24 +8549,33 @@ class PurgeRecordTests(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assert_purged(box)
 
-    def test_a_home_quota_that_fails_is_removed_again_by_the_rerun(self):
-        """#585, the self-check's finding 4: a quota line of the list goes to
-        root's record, a removal that fails keeps the record and fails the
-        close, and the rerun, with the folder already gone, removes the limit
-        from the record. Perturbation: act on the live discovery in place of
-        the record, and the first run never asks setquota and closes clean."""
+    def test_a_home_quota_that_fails_stops_the_purge_and_the_rerun_removes_it_first(self):
+        """#585, the self-check's finding 4, and CodeRabbit on #582: a quota
+        line of the list goes to root's record, and a removal that fails
+        stops the purge there, the paths and the accounts standing and the
+        record kept. The rerun finds the agent's own account at the project's
+        number, removes the limit first, and finishes. Perturbations: act on
+        the live discovery in place of the record, and the first run never
+        asks setquota and closes clean; carry on past the failure, and the
+        territory and the account go with the limit standing; judge the
+        limit by repquota even where the agent's own account holds the
+        number, and the rerun refuses its own limit."""
         box = self.box()
         with (box / "PURGE-LIST").open("a") as listed:
             listed.write("quota 2001 /state drive\n")
         stand_in = box / "model" / "setquota"
         stand_in.write_text('#!/bin/sh\necho "setquota $*" >> "$MODEL/calls"\n[ ! -e "$MODEL/setquota-fails" ]\n')
         stand_in.chmod(0o755)
+        (box / "model" / "quotas.csv").write_text("#2001,--,--,8,0,1048576,0,2,0,65536,0\n")
         (box / "model" / "setquota-fails").touch()
         ran = self.run_purge(box)
         self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
         self.assertIn("home quota of project 2001 on /state drive: its limit was not removed", ran.stdout)
+        self.assertIn("a home quota's limit above was not removed, so nothing more is removed", ran.stderr)
         self.assertIn("root's record is kept", ran.stderr)
         self.assertTrue(self.record(box).exists())
+        self.assertTrue((box / "var/lib/weaver-agent/weaver-a").exists(), "the territory stands")
+        self.assertIn("weaver-a:x:2001:", (box / "model/passwd").read_text(), "the account stands")
         (box / "model" / "setquota-fails").unlink()
         again = self.run_purge(box)
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
@@ -8567,6 +8583,66 @@ class PurgeRecordTests(unittest.TestCase):
         self.assert_purged(box)
         calls = [c for c in (box / "model" / "calls").read_text().splitlines() if c.startswith("setquota ")]
         self.assertEqual(calls, ["setquota -P 2001 0 0 0 0 /state drive"] * 2)
+
+    def test_a_rerun_never_replays_a_limit_another_may_hold(self):
+        """**CodeRabbit on #582, the Planner's ruling of 2026-11-17**: a first
+        run removes a home quota's limit and the agent's account, then stops
+        with root's record kept. Before the rerun replays the removal, a
+        project number that now names an account this purge did not judge (a
+        newcomer given the reused uid), a project repquota shows in use with
+        no account holding the number (a limit set by hand), or quotas that
+        cannot be read refuse the rerun before anything goes, and the limit
+        stands. With the number free and the project shown neither used nor
+        limited, the rerun replays the removal, which changes nothing, and
+        finishes. Perturbations: take any account at the number for the
+        agent's, drop the repquota test, answer an unreadable repquota as
+        free, or drop the quota case, and the newcomer's or the hand-set
+        limit is set to none."""
+        header = "Project,BlockStatus,FileStatus,BlockUsed,BlockSoft,BlockHard,BlockGrace,FileUsed,FileSoft,FileHard,FileGrace\n"
+        for case in ("newcomer", "by hand", "unreadable", "free"):
+            with self.subTest(case=case):
+                box = self.box()
+                with (box / "PURGE-LIST").open("a") as listed:
+                    listed.write("quota 2001 /state drive\n")
+                stand_in = box / "model" / "setquota"
+                stand_in.write_text('#!/bin/sh\necho "setquota $*" >> "$MODEL/calls"\n')
+                stand_in.chmod(0o755)
+                # The first run removes the limit and every account, and a
+                # path that will not go keeps the record.
+                ran = self.run_purge(box, failing="rm")
+                self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+                self.assertIn("set the home quota of project 2001 on /state drive to none", ran.stdout)
+                self.assertIn("root's record is kept", ran.stderr)
+                passwd = box / "model" / "passwd"
+                self.assertNotIn("weaver-a:", passwd.read_text())
+                quotas = box / "model" / "quotas.csv"
+                expect = None
+                if case == "newcomer":
+                    passwd.write_text(passwd.read_text() + "weaver-b:x:2001:2001::/nonexistent:/bin/false\n")
+                    quotas.write_text(header + "#2001,--,--,8,0,1048576,0,2,0,65536,0\n")
+                    expect = ("the limit of project 2001 on /state drive, whose number now names the account "
+                              "weaver-b, which this purge did not judge")
+                elif case == "by hand":
+                    quotas.write_text(header + "#2001,--,--,0,0,1048576,0,0,0,65536,0\n")
+                    expect = ("the limit of project 2001 on /state drive, which repquota shows in use "
+                              "(#2001,--,--,0,0,1048576,0,0,0,65536,0) while no account this purge judged holds "
+                              "the number, so it may be another's")
+                elif case == "unreadable":
+                    (box / "model" / "repquota-fails").touch()
+                    expect = "the limit of project 2001 on /state drive, whose quotas cannot be read (repquota)"
+                else:
+                    quotas.write_text(header + "#2001,--,--,0,0,0,0,0,0,0,0\n")
+                again = self.run_purge(box)
+                calls = [c for c in (box / "model" / "calls").read_text().splitlines() if c.startswith("setquota ")]
+                if expect:
+                    self.assertEqual(again.returncode, 1, again.stdout + again.stderr)
+                    self.assertIn(expect, again.stderr)
+                    self.assertEqual(calls, ["setquota -P 2001 0 0 0 0 /state drive"], "the rerun sets no limit")
+                    self.assertTrue(self.record(box).exists())
+                else:
+                    self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+                    self.assertEqual(calls, ["setquota -P 2001 0 0 0 0 /state drive"] * 2)
+                    self.assert_purged(box)
 
     def test_an_empty_prefix_that_will_not_go_keeps_the_record_and_refuses(self):
         """Codex on #159, round 2: a failure on the left of `&&` is exempt
@@ -9065,8 +9141,8 @@ class RoundOneOf79Tests(unittest.TestCase):
         # another agent's uid until #587 lands, so a home moved to m1's project
         # has only its own account's limit removed, and the plan names the
         # move. The purge sets each project's limit to none before the paths
-        # go, and a limit left standing (setquota failing, or absent) fails the
-        # purge's close. Perturbations: read the project off the home, follow a
+        # go, and a limit left standing (setquota failing, or absent) stops the
+        # purge there (CodeRabbit on #582). Perturbations: read the project off the home, follow a
         # linked home, skip the prjquota check, drop the failure's return, or
         # move the step after the paths, and a read below fails.
         script = (DEPLOY / "decommission.sh").read_text()
@@ -9155,7 +9231,8 @@ class RoundOneOf79Tests(unittest.TestCase):
         step = script[script.index('say "home quotas"'):script.index('say "paths"')]
         self.assertIn('  case $line in "quota "*) PURGE_QUOTAS+=("${line#quota }") ;; esac\n'
                       'done < "$PURGE_ACTED"\n'
-                      'remove_home_quotas "${PURGE_QUOTAS[@]}" || PURGE_FAILED=1\n', step)
+                      'remove_home_quotas "${PURGE_QUOTAS[@]}" \\\n'
+                      '  || die "a home quota\'s limit above was not removed, so nothing more is removed', step)
 
     def test_a_home_quota_is_a_purge_list_line(self):
         # **#585, the self-check's findings 1 and 4**: each capped home's limit
