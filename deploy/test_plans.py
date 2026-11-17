@@ -8145,7 +8145,7 @@ class DecommissionTests(unittest.TestCase):
                        + f'OP_HOME={shlex.quote(str(home))}\n'
                        + f'declare -A TERRITORY_BASES=([{shlex.quote(str(home / ".weaveragent"))}]=1 '
                        + f'[{shlex.quote(str(other))}]=1)\ndeclare -A LOG_PATHS=()\n'
-                       + self.script[self.script.index('for d in "${!TERRITORY_BASES[@]}"; do\n  in_operator_home'):
+                       + self.script[self.script.index('declare -A BASES_SAID=()\nfor d in "${!TERRITORY_BASES[@]}"; do\n  in_operator_home'):
                                      self.script.index("# **agent_folders BASE...")]
                        + 'printf "kept %s\\n" "${!TERRITORY_BASES[@]}"')
             run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
@@ -8389,9 +8389,14 @@ class DecommissionTests(unittest.TestCase):
 
     # agent_folders and territories_outside look as root: every fixture path
     # is root's but those STRANGERS names, a territory `weaver-<a>` carries
-    # its state group, and a folder's `home` is its account's.
+    # its state group, and a folder's `home` is its account's. A stranger's
+    # path answers STRANGER_UID, and no name, as stat does for a uid that has
+    # none, never the runner's, which is root's when the suite runs as root
+    # (Codex on #599, the same class).
     FOLDER_STAT = ('stat() { local p="${@: -1}" q; '
-                   'case ":${STRANGERS:-}:" in *":$p:"*) command stat "$@"; return ;; esac; '
+                   'case ":${STRANGERS:-}:" in *":$p:"*) case "$2" in %U) echo UNKNOWN ;; '
+                   '%u*) command stat "$@" | sed "s/^[0-9]*/' + str(STRANGER_UID) + '/" ;; '
+                   '*) command stat "$@" ;; esac; return ;; esac; '
                    'case "$2" in "%u:%G:%a") printf "0:%s-state:750\\n" "${p##*/}" ;; '
                    '"%U") case "$p" in */home) q=${p%/home}; printf "weaver-%s\\n" "${q##*/}" ;; '
                    '*) command stat "$@" ;; esac ;; '
