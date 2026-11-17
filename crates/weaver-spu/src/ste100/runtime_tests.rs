@@ -1,7 +1,7 @@
 //! Actual runtime/socket ownership with sealed test-only work. No language claim.
 use super::*;
 use crate::ste100::admission::{AdapterKind, SealedAdapter, VerifiedArtifacts, VerifiedFiles};
-use crate::ste100::channel::{Message, Receive, SendProgress, Tag};
+use crate::ste100::channel::{Fault as ChannelFault, Message, Receive, SendProgress, Tag};
 use nix::sys::socket::{
     AddressFamily, MsgFlags, SockFlag, SockType, send as send_packet, socketpair,
 };
@@ -533,8 +533,8 @@ fn ste100_runtime_peer_close_during_held_admission_revokes_late_ready_without_wa
     await_release_until(runtime.dispatcher.readiness(), release_deadline());
     let got = runtime.advance();
     assert!(
-        got.is_err(),
-        "peer loss in held admission fails, got {got:?}"
+        matches!(got, Err(Fault::Transport(ChannelFault::Closed))),
+        "peer loss in held admission is component loss, got {got:?}"
     );
     assert_eq!(runtime.position(), Position::Failed);
     assert!(
@@ -580,7 +580,10 @@ fn ste100_runtime_peer_close_during_check_preserves_worker_custody_until_its_las
     drop(peer);
     await_release_until(runtime.dispatcher.readiness(), release_deadline());
     let got = runtime.advance();
-    assert!(got.is_err(), "peer loss during a check fails, got {got:?}");
+    assert!(
+        matches!(got, Err(Fault::Transport(ChannelFault::Closed))),
+        "peer loss during a check is component loss, got {got:?}"
+    );
     assert!(files.iter().all(|file| file.strong_count() > 0));
     control.result(accepted());
     assert_dropped(&control, owner, &files);

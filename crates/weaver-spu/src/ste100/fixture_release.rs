@@ -12,12 +12,14 @@ use std::time::{Duration, Instant};
 
 /// The bound on one release wait. A fork's copy lasts until its exec, so this
 /// bounds a hang only.
-pub(super) const RELEASE_WAIT: Duration = Duration::from_secs(5);
+const RELEASE_WAIT: Duration = Duration::from_secs(5);
 
 /// Wait, without reading, until `end` shows that its far end was released:
 /// the hangup, or the error a release raises. A pending receive is not a
-/// release, and no byte is consumed. The caller supplies one absolute fixture
-/// deadline, and the wait panics at it.
+/// release, nor is a half-close, and no byte is consumed. The poll asks for no
+/// event, since the hangup and the error are always reported, so a half-closed
+/// peer's read hangup cannot turn the wait into a spin. The caller supplies one
+/// absolute fixture deadline, and the wait panics at it.
 pub(super) fn await_release_until(end: BorrowedFd<'_>, deadline: Instant) {
     loop {
         let remaining = deadline
@@ -25,7 +27,7 @@ pub(super) fn await_release_until(end: BorrowedFd<'_>, deadline: Instant) {
             .expect("fixture peer was not released by its deadline");
         let mut poll = libc::pollfd {
             fd: end.as_raw_fd(),
-            events: libc::POLLRDHUP,
+            events: 0,
             revents: 0,
         };
         // SAFETY: the caller's borrow keeps the descriptor open through this
@@ -51,3 +53,5 @@ pub(super) fn await_release_until(end: BorrowedFd<'_>, deadline: Instant) {
 pub(super) fn release_deadline() -> Instant {
     Instant::now() + RELEASE_WAIT
 }
+
+mod tests;
