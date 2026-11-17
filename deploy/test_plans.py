@@ -1131,6 +1131,42 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertFalse([c for c in self.calls() if c[:2] in (["sudo", "chattr"], ["sudo", "setquota"])])
         self.assertIn("home quota      none: no --home-quota, so the home is not capped", result.stdout)
 
+    def test_the_folder_sheds_an_inherited_project_flag_before_its_mark(self):
+        # **CodeRabbit on #582**: a folder made in a base that carries the
+        # project inherit flag takes the flag, and `chattr -p` sets the
+        # project and leaves the flag, so the territory and the state room,
+        # made in the folder after the mark, would join the home's project
+        # and count against its cap. The flag is cleared in a call of its
+        # own, after the folder is made and before its mark, and so before
+        # the territory and the state room are made in it. Without the cap
+        # the folder is left as the base made it. This pins the sequence:
+        # what ext4 does with it is proved on an appliance's drive, since a
+        # project quota needs a real ext4 mount, which no test here makes.
+        # Perturbations: drop the clearing, fold it into the mark's call, or
+        # move it after the territory, and an assertion below fails.
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_MOUNT=self.QUOTA_MOUNT)
+        folder = str(self.root / "agents" / "m1")
+        result = self.create("--home-quota", "64G", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        made = calls.index(["sudo", "install", "-d", "-o", "root", "-g", "root", "-m", "00755", folder])
+        shed = ["sudo", "chattr", "-P", folder]
+        self.assertIn(shed, calls)
+        mark = calls.index(["sudo", "chattr", "-p", "12345", folder])
+        territory = next(i for i, c in enumerate(calls) if c[:3] == ["sudo", "install", "-d"]
+                         and c[-1] == f"{folder}/weaver-m1")
+        room = next(i for i, c in enumerate(calls) if c[:3] == ["sudo", "install", "-d"]
+                    and c[-1] == f"{folder}/weaver-m1/state")
+        self.assertLess(made, calls.index(shed))
+        self.assertLess(calls.index(shed), mark)
+        self.assertLess(mark, territory)
+        self.assertLess(mark, room)
+        self.reset_made()
+        self.env.pop("FIXTURE_MOUNT")
+        result = self.create("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(shed, self.calls())
+
     def test_a_home_project_already_in_use_refuses_before_the_cap(self):
         # **#585, the Planner's ruling of 2026-11-16**: a project the drive
         # already carries, the agent's uid, with any usage or any limit,

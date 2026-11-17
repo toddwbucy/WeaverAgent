@@ -1214,9 +1214,14 @@ root chmod 2750 "$AGENT_HOME"
 # mark: the agent's folder, root's, takes the project without the inherit
 # flag, so decommission.sh can tell a cap this script set from a stranger's
 # project of the same number, and the agent, owning nothing of the folder,
-# cannot change it. Then the project and its inherit flag on the home and what
+# cannot change it. A folder made in a base that carries the inherit flag
+# takes the flag too, and `chattr -p` leaves it, so the territory and the
+# state room made in the folder below would join the home's project and count
+# against its cap (CodeRabbit on #582): the flag is cleared first, in a call
+# of its own. Then the project and its inherit flag on the home and what
 # useradd laid in it, then the project's block and inode limits on the drive.
 if [ -n "${HOME_QUOTA+given}" ]; then
+  root chattr -P "$AGENT_FOLDER"
   root chattr -p "$HOME_PROJECT" "$AGENT_FOLDER"
   root chattr -R +P -p "$HOME_PROJECT" "$AGENT_HOME"
   root setquota -P "$HOME_PROJECT" 0 "$HOME_QUOTA_KIB" 0 "$HOME_QUOTA_INODES" "$QUOTA_MOUNT"

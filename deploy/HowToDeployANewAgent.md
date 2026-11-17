@@ -191,8 +191,9 @@ inherit flag, and the project's limits are set on the drive: the size, and one f
 space or the inodes the save points and the state room need on the same drive: it bounds
 the space and the count of files. Until #587 lands, an agent that deliberately changes
 its files' project can leave the cap. #587 closes that. The agent's folder carries the
-same project, the mark that tells `decommission.sh` the cap is this script's. Without
-the option the home is not capped. A malformed size, a base not on ext4, an ext4 base
+same project, the mark that tells `decommission.sh` the cap is this script's, without
+the inherit flag, which the script clears where the base carries it, so the territory
+and the state room stay out of the cap. Without the option the home is not capped. A malformed size, a base not on ext4, an ext4 base
 not mounted `prjquota`, or a missing tool refuses before anything is made. A project the
 drive already carries with any usage or any limit refuses once the agent's account
 stands, since the project is its uid: take that account and its home down by section 7,
