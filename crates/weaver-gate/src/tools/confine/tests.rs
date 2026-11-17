@@ -79,6 +79,39 @@ impl Drop for Layout {
     }
 }
 
+/// A filter test's scratch home, removed when the test ends, a failed
+/// assertion included.
+struct ScratchHome(PathBuf);
+
+impl ScratchHome {
+    fn new(tag: &str) -> ScratchHome {
+        let home =
+            std::env::temp_dir().join(format!("weaver-confine-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        ScratchHome(home)
+    }
+
+    /// The confinement on this home, granting nothing the probes run: the
+    /// test binary as the grant's file, the home as its commands directory.
+    fn shell(&self) -> Shell {
+        Shell::confined_in(
+            &ShellGrant {
+                binary: std::env::current_exe().unwrap(),
+                commands: self.0.clone(),
+            },
+            self.0.clone(),
+            own(),
+        )
+        .expect("the confinement builds")
+    }
+}
+
+impl Drop for ScratchHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Runs `script` as an execution's child would, without the move into
 /// `tools/`: the command, its layers, no input. A spawn that meets
 /// `ETXTBSY` (a parallel test's fork holding a fresh copy open for write) is
@@ -161,17 +194,8 @@ fn the_rlimits_are_the_ruled_values() {
 #[test]
 #[ignore = "a measurement of this box's kernel: needs Landlock ABI 6 and io_uring"]
 fn the_filter_refuses_every_socket() {
-    let home = std::env::temp_dir().join(format!("weaver-confine-sockets-{}", std::process::id()));
-    std::fs::create_dir_all(&home).unwrap();
-    let empty = Shell::confined_in(
-        &ShellGrant {
-            binary: std::env::current_exe().unwrap(),
-            commands: home.clone(),
-        },
-        home.clone(),
-        own(),
-    )
-    .expect("the confinement builds");
+    let home = ScratchHome::new("sockets");
+    let empty = home.shell();
     let ruleset = empty.layers.as_ref().unwrap().ruleset.as_raw_fd();
     let filtered = socket_probe(Some(ruleset));
     assert_eq!(
@@ -183,7 +207,6 @@ fn the_filter_refuses_every_socket() {
         control, 0b11111,
         "every kind opens with no-new-privs alone: {control:#b}"
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// A bit per kind that opened: inet TCP, inet UDP, unix stream, a unix
@@ -372,10 +395,12 @@ const ATTRIBUTE_CALLS: [&str; 7] = [
 /// `file_setattr` (after `file_getattr`), and `FS_IOC_SETFLAGS` with bit 32 of
 /// the command set. Under the layers each write answers `EACCES`, and each
 /// read answers as it does without them. With no-new-privs alone no call
-/// answers `EACCES`: each answers what the home's filesystem does (success on
-/// ext4, `EOPNOTSUPP` or `ENOTTY` where it keeps no such attribute, `ENOSYS`
-/// for `file_setattr` on a kernel without it), so the claim holds wherever the
-/// home sits.
+/// answers `EACCES`: each answers what the home's filesystem does (success
+/// where it keeps the attribute, `EOPNOTSUPP` or `ENOTTY` where it does not,
+/// `ENOSYS` for `file_setattr` on a kernel without it), measured on tmpfs and
+/// zfs, so the claim holds wherever the home sits. A box whose security module
+/// denies the `ioctl` answers `EACCES` in the control too, and fails here by
+/// name: the shell's layers use no such module.
 ///
 /// Perturbation: take each comparison out of [`SHELL_FILTER`] in turn, and its
 /// case answers the kernel's word. Require the command's high word to be zero
@@ -383,21 +408,11 @@ const ATTRIBUTE_CALLS: [&str; 7] = [
 #[test]
 #[ignore = "a measurement of this box's kernel: needs Landlock ABI 6"]
 fn the_filter_refuses_every_attribute_change() {
-    let home =
-        std::env::temp_dir().join(format!("weaver-confine-attributes-{}", std::process::id()));
-    std::fs::create_dir_all(&home).unwrap();
-    let confined = Shell::confined_in(
-        &ShellGrant {
-            binary: std::env::current_exe().unwrap(),
-            commands: home.clone(),
-        },
-        home.clone(),
-        own(),
-    )
-    .expect("the confinement builds");
+    let home = ScratchHome::new("attributes");
+    let confined = home.shell();
     let ruleset = confined.layers.as_ref().unwrap().ruleset.as_raw_fd();
-    let filtered = attribute_probe(&home, Some(ruleset));
-    let control = attribute_probe(&home, None);
+    let filtered = attribute_probe(&home.0, Some(ruleset));
+    let control = attribute_probe(&home.0, None);
     for (at, what) in ATTRIBUTE_CALLS.iter().enumerate() {
         if at < 2 {
             assert_eq!(
@@ -417,7 +432,6 @@ fn the_filter_refuses_every_attribute_change() {
             "{what} with no-new-privs alone answers the kernel's word"
         );
     }
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// 0 or `-errno`, from a raw call's result.
@@ -770,17 +784,8 @@ fn architecture_probe(ruleset: Option<RawFd>) -> (i64, i64) {
 #[test]
 #[ignore = "a measurement of this box's kernel: needs Landlock ABI 6"]
 fn the_filter_refuses_x32_and_another_architecture() {
-    let home = std::env::temp_dir().join(format!("weaver-confine-arch-{}", std::process::id()));
-    std::fs::create_dir_all(&home).unwrap();
-    let shell = Shell::confined_in(
-        &ShellGrant {
-            binary: std::env::current_exe().unwrap(),
-            commands: home.clone(),
-        },
-        home.clone(),
-        own(),
-    )
-    .expect("the confinement builds");
+    let home = ScratchHome::new("arch");
+    let shell = home.shell();
     let ruleset = shell.layers.as_ref().unwrap().ruleset.as_raw_fd();
     let eacces = -(libc::EACCES as i64);
     let (x32, i386) = architecture_probe(Some(ruleset));
@@ -796,7 +801,6 @@ fn the_filter_refuses_x32_and_another_architecture() {
         i386, eacces,
         "the control: the kernel's own i386 answer, {i386}"
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// **The home must be the gate's own directory below `/`** (the grade of

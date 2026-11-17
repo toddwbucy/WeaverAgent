@@ -113,8 +113,9 @@ const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
 const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
 const X32_SYSCALL_BIT: u32 = 0x4000_0000;
 /// Every refusal of the filter answers `EACCES` (section 8.1): one answer,
-/// which no attribute path answers itself (they answer `EPERM`, `EOPNOTSUPP`
-/// or `ENOTTY`), so a refusal reads as the filter's.
+/// which the attribute calls do not answer themselves on the shell's layers
+/// (they answer `EPERM`, `EOPNOTSUPP` or `ENOTTY`), so a refusal reads as the
+/// filter's.
 const DENY: u32 = SECCOMP_RET_ERRNO | libc::EACCES as u32;
 
 /// `seccomp_data`'s offsets: `nr` at 0, `arch` at 4, and `args[1]` at 24,
@@ -147,9 +148,11 @@ const fn op(code: u16, jt: u8, jf: u8, k: u32) -> SockFilter {
 ///   `socket`), and `socket` and `socketpair` for every family, so the shell
 ///   makes no socket.
 /// - `file_setattr`, and `ioctl` whose command is `FS_IOC_FSSETXATTR`,
-///   `FS_IOC_SETFLAGS` or `FS_IOC32_SETFLAGS` (#587), so the shell changes no
-///   attribute of its own files, a project id or its inheritance among them,
-///   and its writes stay in its home's project quota. **The command is read
+///   `FS_IOC_SETFLAGS` or `FS_IOC32_SETFLAGS` (#587), so the shell changes
+///   none of the attributes `chattr` sets on its own files, the inode flags,
+///   the project id and its inherit flag, and its writes stay in its home's
+///   project quota. A file's mode, times and extended attributes are not
+///   these, and stay its own to change. **The command is read
 ///   by its low 32 bits alone**: the kernel takes `ioctl`'s command as an
 ///   `unsigned int`, so a high word the caller sets is dropped by the kernel
 ///   and must not carry the call past the filter.
