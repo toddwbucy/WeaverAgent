@@ -142,7 +142,7 @@ group in one shell.
   - It runs under `setsid` (util-linux), with no controlling terminal. An interrupt or a
     hangup still ends it, since the script passes the signal on.
 
-  **One window stays open, #590's one open item** (the Planner's ruling of 2026-11-17):
+  **One window stays open, #605** (the Planner's ruling of 2026-11-17, split from #590):
   under sudo, the `timeout` that sudo starts as the account holds the terminal sudo
   hands it, until the `setsid` it starts takes the command out of that terminal, before
   the command's own `env` runs. `timeout` runs no code of the account's. In root mode

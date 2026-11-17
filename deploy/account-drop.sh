@@ -48,7 +48,7 @@ DROP_RELAY_WAIT=5
 #   none it keys the record to the parent process, so `sudo -n` would refuse.
 #   Under sudo the second `env` runs after setsid, so the one process of the
 #   account's that holds sudo's terminal is `timeout`, from sudo's exec to
-#   setsid's. That window is #590's one open item, kept on the issue
+#   setsid's. That window stays open as #605, split from #590
 #   (deploy/HowToDeployANewAgent.md, "Running commands as an account").
 # **An interrupt still reaches it**: setsid has moved it out of the
 # terminal's process group, so the drop runs as a job of this shell, whose
