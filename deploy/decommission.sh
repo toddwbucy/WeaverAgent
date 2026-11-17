@@ -437,8 +437,9 @@ left_in_base() {
   done < <(find "$base" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
 }
 # **spans_a_base PATH: whether PATH is a base, or above a base or an agent's
-# own folder** (CodeRabbit on #582), compared canonical: a path that does not
-# resolve is compared as written. Such a path holds what is no agent's, a
+# own folder** (CodeRabbit on #582), or the operator's home or above it, which
+# is never touched, compared canonical: a path that does not resolve is
+# compared as written. Such a path holds what is no agent's, a
 # stranger's file in the base among it, so whatever fixed name it carries it
 # is never archived as a path of its own or listed for the purge, in the
 # archive and in purge_candidates both. The agents' folders inside it go on
@@ -447,6 +448,9 @@ spans_a_base() {
   local p c b
   p=$(realpath -e -- "$1" 2>/dev/null) || p=$1
   [ "$p" != / ] || return 0
+  if [ -n "${OP_HOME:-}" ]; then
+    case "$OP_HOME" in "$p" | "$p"/*) return 0 ;; esac
+  fi
   for b in "${!TERRITORY_BASES[@]}"; do
     c=$(realpath -e -- "$b" 2>/dev/null) || continue
     case "$c" in "$p" | "$p"/*) return 0 ;; esac
@@ -543,19 +547,21 @@ remove_home_quotas() {
   done
   return "$failed"
 }
-# **project_in_use PROJECT MOUNT: repquota's line for PROJECT on MOUNT where it
-# shows any usage or any limit**, nothing where it shows none, and 1 where the
-# quotas cannot be read. The fields are the ones create-agent.sh reads: the
-# project, two statuses, the block counts used, soft and hard, a grace, the
-# file counts used, soft and hard, and a grace.
-project_in_use() {
-  local report line who b_used b_soft b_hard f_used f_soft f_hard count
+# **project_limited PROJECT MOUNT: repquota's line for PROJECT on MOUNT where it
+# shows any limit**, nothing where it shows none, and 1 where the quotas cannot
+# be read. Usage alone is not a limit a removal could take, and the agent's own
+# leftovers carry it (its folder's mark, a home a failed removal left), so it
+# is not read. The fields are the ones create-agent.sh reads: the project, two
+# statuses, the block counts used, soft and hard, a grace, the file counts
+# used, soft and hard, and a grace.
+project_limited() {
+  local report line who b_soft b_hard f_soft f_hard count
   command -v repquota >/dev/null || return 1
   report=$(repquota -P -n -v -O csv "$2" 2>/dev/null) || return 1
   while IFS= read -r line; do
-    IFS=, read -r who _ _ b_used b_soft b_hard _ f_used f_soft f_hard _ <<< "$line"
+    IFS=, read -r who _ _ _ b_soft b_hard _ _ f_soft f_hard _ <<< "$line"
     [ "$who" = "#$1" ] || continue
-    for count in "$b_used" "$b_soft" "$b_hard" "$f_used" "$f_soft" "$f_hard"; do
+    for count in "$b_soft" "$b_hard" "$f_soft" "$f_hard"; do
       [ "$count" = 0 ] || { printf '%s\n' "$line"; return 0; }
     done
   done <<< "$report"
@@ -669,7 +675,7 @@ for d in "${!TERRITORY_BASES[@]}"; do
   plan "$d  a base: the purge takes its agents' folders, and the base stands"
   while IFS= read -r e; do
     plan "$e  in the base, of no agent this discovery found: left in place, untouched"
-  done < <(left_in_base "$d" "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}" "${HOMES[@]}")
+  done < <(left_in_base "$d" "${TERRITORY_PATHS[@]}" "${HOMES[@]}")
 done
 # **tmp_paths DIR: the weaver entries directly under DIR that a weaver-
 # account owns** (#98; the custody audit's G22): DIR is writable by every
@@ -1145,10 +1151,10 @@ load_held() {
 # that is not, and answers 1.
 # **A listed limit is still the agent's** (CodeRabbit on #582) where its
 # project's number names the account this purge judged at that number, which
-# still stands, or names no account and repquota shows the project neither
-# used nor limited. A limit that will not go stops the first run with its
-# account standing (the home quotas step), so a limit whose account is gone
-# was removed, and one shown on the number since is another's: a newcomer
+# still stands, or names no account and repquota shows the project with no
+# limit. A limit that will not go stops the first run with its account
+# standing (the home quotas step), so a limit whose account is gone was
+# removed, and a limit shown on the number since is another's: a newcomer
 # given the reused uid, or a project set by hand. That, a number naming an
 # account this purge did not judge, or quotas that cannot be read refuse.
 rerun_unchanged() {
@@ -1189,10 +1195,10 @@ rerun_unchanged() {
           [ "${HELD_UID["$now"]:-}" = "$project" ] \
             || { rm -f -- "$scan"; printf 'the limit of project %s on %s, whose number now names the account %s, which this purge did not judge\n' "$project" "$mount_point" "$now"; return 1; }
         else
-          shown=$(project_in_use "$project" "$mount_point") \
+          shown=$(project_limited "$project" "$mount_point") \
             || { rm -f -- "$scan"; printf 'the limit of project %s on %s, whose quotas cannot be read (repquota)\n' "$project" "$mount_point"; return 1; }
           [ -z "$shown" ] \
-            || { rm -f -- "$scan"; printf 'the limit of project %s on %s, which repquota shows in use (%s) while no account this purge judged holds the number, so it may be another'"'"'s (where it is the agent'"'"'s own, clear it by hand by deploy/HowToDeployANewAgent.md section 7)\n' "$project" "$mount_point" "$shown"; return 1; }
+            || { rm -f -- "$scan"; printf 'the limit of project %s on %s, which repquota shows limited (%s) while no account this purge judged holds the number, so it may be another'"'"'s (where it is the agent'"'"'s own, clear it by hand by deploy/HowToDeployANewAgent.md section 7)\n' "$project" "$mount_point" "$shown"; return 1; }
         fi ;;
     esac
   done < "$PURGE_ACTED"
@@ -1387,7 +1393,7 @@ while IFS= read -r line; do
   case $line in "quota "*) PURGE_QUOTAS+=("${line#quota }") ;; esac
 done < "$PURGE_ACTED"
 remove_home_quotas "${PURGE_QUOTAS[@]}" \
-  || die "a home quota's limit above was not removed, so nothing more is removed: the folder and the account that name it stand, and root's record is kept at $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM. Make setquota answer, then rerun the purge, which removes the limit first"
+  || die "a home quota's limit above was not removed, so nothing more is removed, no path and no account, and root's record is kept at $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM. Make setquota answer, then rerun the purge, which removes the limit before them"
 
 say "paths"
 while IFS= read -r line; do

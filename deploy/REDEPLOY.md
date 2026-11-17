@@ -192,8 +192,8 @@ nothing but `models`.
    names and the box still shows goes, and root's record carries it. A limit that will
    not go stops the purge here, the folders and the accounts standing, and the rerun
    removes it first. A rerun refuses a listed limit whose number now names an account
-   the purge did not judge, or which `repquota` shows in use while no account it judged
-   holds the number, or whose quotas cannot be read: that limit may be another's.
+   the purge did not judge, or which `repquota` shows limited while no account it
+   judged holds the number, or whose quotas cannot be read: that limit may be another's.
    Where an agent folder's mount or mark cannot be read, the archive and the purge
    refuse before anything goes, naming it. `HowToDeployANewAgent.md` section 7 says how
    to read or clear the mark, or a limit, by hand before the rerun.

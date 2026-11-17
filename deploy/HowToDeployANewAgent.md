@@ -192,12 +192,14 @@ space or the inodes the save points and the state room need on the same drive: i
 the space and the count of files. Until #587 lands, an agent that deliberately changes
 its files' project can leave the cap. #587 closes that. The agent's folder carries the
 same project, the mark that tells `decommission.sh` the cap is this script's, without
-the inherit flag, which the script clears where the base carries it, so the territory
-and the state room stay out of the cap. Without the option the home is not capped. A malformed size, a base not on ext4, an ext4 base
-not mounted `prjquota`, or a missing tool refuses before anything is made. A project the
-drive already carries with any usage or any limit refuses once the agent's account
-stands, since the project is its uid: take that account and its home down by section 7,
-and free the project first only where it is a limit an earlier run of this script left.
+the inherit flag: the script clears the flag on the folder before the mark, since a base
+that carries it passes it on, and the territory and the state room made in the folder
+would join the cap. Without the option the home is not capped. A malformed size, a base
+not on ext4, an ext4 base not mounted `prjquota`, or a missing tool refuses before
+anything is made. A project the drive already carries with any usage or any limit
+refuses once the agent's account stands, since the project is its uid: take that account
+and its home down by section 7, and free the project first only where it is a limit an
+earlier run of this script left.
 
 Apply first checks that `/etc/sudoers` includes `/etc/sudoers.d` and that visudo accepts
 the rendered rule, and refuses before it makes anything otherwise. It then lays the
@@ -852,9 +854,9 @@ once it reads. Or, where it carries the account's uid, set the limit to none by 
 above, clear the mark with `sudo chattr -p 0 <agent-directory>/<name>`, and rerun.
 
 **Where a rerun of the purge refuses over a home quota's limit**, the project's number
-names an account the purge did not judge, or `repquota` shows the project in use while
-no account the purge judged holds the number, or the quotas cannot be read. The limit
-may be another's: a later agent given the same uid, or a project set by hand.
+names an account the purge did not judge, or `repquota` shows the project with a limit
+while no account the purge judged holds the number, or the quotas cannot be read. The
+limit may be another's: a later agent given the same uid, or a project set by hand.
 `sudo repquota -P -n -v <mount point>` shows the project, and `getent passwd <uid>` its
 account. Where it is the agent's own, set it to none by hand as above and rerun. Where
 it is another's, leave it standing, and finish or abandon the purge by `REDEPLOY.md`

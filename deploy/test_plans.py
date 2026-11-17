@@ -8280,7 +8280,7 @@ class PurgeRecordTests(unittest.TestCase):
                    + shell_function(text, "is_box_account") + shell_function(text, "box_account_role")
                    # The home quotas' removal (#585), and the rerun's reading
                    # of a listed limit (CodeRabbit on #582).
-                   + shell_function(text, "remove_home_quotas") + shell_function(text, "project_in_use")
+                   + shell_function(text, "remove_home_quotas") + shell_function(text, "project_limited")
                    + ("" if removals is None else
                       "RM_SEEN=0\nrm() { local s=0; command rm \"$@\" || s=$?; RM_SEEN=$((RM_SEEN + 1)); "
                       f"[ \"$RM_SEEN\" -lt {removals} ] || exit 0; return \"$s\"; }}\n")
@@ -8592,14 +8592,16 @@ class PurgeRecordTests(unittest.TestCase):
         newcomer given the reused uid), a project repquota shows in use with
         no account holding the number (a limit set by hand), or quotas that
         cannot be read refuse the rerun before anything goes, and the limit
-        stands. With the number free and the project shown neither used nor
-        limited, the rerun replays the removal, which changes nothing, and
-        finishes. Perturbations: take any account at the number for the
+        stands. With the number free and the project shown with no limit, its
+        usage the agent's own leftovers (the folder's mark, a home a failed
+        removal left), the rerun replays the removal, which changes nothing,
+        and finishes. Perturbations: take any account at the number for the
         agent's, drop the repquota test, answer an unreadable repquota as
         free, or drop the quota case, and the newcomer's or the hand-set
-        limit is set to none."""
+        limit is set to none; count usage as a limit, and the rerun refuses
+        the agent's own leftovers."""
         header = "Project,BlockStatus,FileStatus,BlockUsed,BlockSoft,BlockHard,BlockGrace,FileUsed,FileSoft,FileHard,FileGrace\n"
-        for case in ("newcomer", "by hand", "unreadable", "free"):
+        for case in ("newcomer", "by hand", "unreadable", "used, unlimited"):
             with self.subTest(case=case):
                 box = self.box()
                 with (box / "PURGE-LIST").open("a") as listed:
@@ -8624,14 +8626,14 @@ class PurgeRecordTests(unittest.TestCase):
                               "weaver-b, which this purge did not judge")
                 elif case == "by hand":
                     quotas.write_text(header + "#2001,--,--,0,0,1048576,0,0,0,65536,0\n")
-                    expect = ("the limit of project 2001 on /state drive, which repquota shows in use "
+                    expect = ("the limit of project 2001 on /state drive, which repquota shows limited "
                               "(#2001,--,--,0,0,1048576,0,0,0,65536,0) while no account this purge judged holds "
                               "the number, so it may be another's")
                 elif case == "unreadable":
                     (box / "model" / "repquota-fails").touch()
                     expect = "the limit of project 2001 on /state drive, whose quotas cannot be read (repquota)"
                 else:
-                    quotas.write_text(header + "#2001,--,--,0,0,0,0,0,0,0,0\n")
+                    quotas.write_text(header + "#2001,--,--,8,0,0,0,2,0,0,0\n")
                 again = self.run_purge(box)
                 calls = [c for c in (box / "model" / "calls").read_text().splitlines() if c.startswith("setquota ")]
                 if expect:
@@ -9022,7 +9024,7 @@ class RoundOneOf79Tests(unittest.TestCase):
             self.assertEqual(self.run_fn_in(script, "home_within", str(folder / "home"), str(folder)), str(folder))
             self.assertEqual(self.run_fn_in(script, "home_within", str(elsewhere), str(folder)), "")
         self.assertIn('*) plan "$h  (home of $u): outside /home and every agent\'s folder, left in place, untouched" ;;', script)
-        self.assertIn('done < <(left_in_base "$d" "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}" "${HOMES[@]}")', script)
+        self.assertIn('done < <(left_in_base "$d" "${TERRITORY_PATHS[@]}" "${HOMES[@]}")', script)
 
     def test_no_base_and_no_path_above_one_is_archived_or_purged_whole(self):
         # **CodeRabbit on #582, the Planner's ruling of 2026-11-17**: a base,
@@ -9039,7 +9041,11 @@ class RoundOneOf79Tests(unittest.TestCase):
         # is archived and listed; compare equal paths alone, or leave out the
         # agents' own folders, and a path above one is a candidate; list a
         # run directory past it in the archive's writer, and the sweep below
-        # fails.
+        # fails. The operator's home, and a path above it, is never a
+        # candidate either, and a legacy directory inside a base, which it
+        # does not span, is taken and named as taken, never as left: drop the
+        # home's check, or keep a taken directory out of the plan's taken
+        # paths, and a read below fails.
         script = (DEPLOY / "decommission.sh").read_text()
         lines = script.splitlines()
         start = lines.index("  archive_path() { # archive_path NAME PATH...")
@@ -9055,13 +9061,17 @@ class RoundOneOf79Tests(unittest.TestCase):
             (top / "elsewhere" / "weaver-x").mkdir(parents=True)
             (top / "old").mkdir()
             (top / "dest").mkdir()
+            (top / "users" / "op").mkdir(parents=True)
+            (top / "varlib" / "weaver").mkdir(parents=True)
+            (top / "varlib" / "m2" / "weaver-m2").mkdir(parents=True)
 
-            def run(legacy, bases, folders=(), own=(), logs=(), tail="purge_candidates\n"):
+            def run(legacy, bases, folders=(), own=(), logs=(), tail="purge_candidates\n", op_home=""):
                 program = ("set -uo pipefail\n"
                            "SUDO_RULES=(); LDSO_CONFS=(); HOMES=(); TMP_PATHS=(); WEAVER_USERS=(); WEAVER_GROUPS=()\n"
                            "HOME_QUOTAS=(); PURGE=(); PURGE_FAILED=0\n"
                            "declare -A PREFIXES=() COORD_ROOTS=() AGENTS=() LOG_PATHS=() TERRITORY_BASES=()\n"
-                           f"LEGACY_DIR={q(str(legacy))}\nDEST={q(str(top / 'dest'))}\n"
+                           f"LEGACY_DIR={q(str(legacy))}\nDEST={q(str(top / 'dest'))}\nOP_HOME={q(str(op_home))}\n"
+                           "TERRITORY_PATHS=()\n"
                            + "".join(f"TERRITORY_BASES[{q(str(b))}]=1\n" for b in bases)
                            + "".join(f"LOG_PATHS[{q(str(d))}]=1\n" for d in logs)
                            + "AGENT_FOLDERS=(" + " ".join(q(str(f)) for f in folders) + ")\n"
@@ -9071,7 +9081,8 @@ class RoundOneOf79Tests(unittest.TestCase):
                            + "free_name() { printf '%s' \"$1\"; }\ntarz() { : > \"$1\"; }\nas_op() { \"$@\"; }\n"
                            + shell_function(script, "spans_a_base") + shell_function(script, "candidate")
                            + shell_function(script, "purge_candidates") + shell_function(script, "purge_lines_outside")
-                           + shell_function(script, "purge_lines_within") + archive_path + "\n" + tail)
+                           + shell_function(script, "purge_lines_within") + shell_function(script, "left_in_base")
+                           + archive_path + "\n" + tail)
                 ran = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
                 self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
                 return ran.stdout.splitlines()
@@ -9110,6 +9121,25 @@ class RoundOneOf79Tests(unittest.TestCase):
             self.assertIn(f"path {top / 'elsewhere' / 'weaver-x'}", got)
             # Control: a legacy directory that spans no base is taken whole.
             self.assertIn(f"path {top / 'old'}", run(top / "old", [base], folders=[base / "m1"]))
+            # A log directory that is the operator's home, or above it, is no
+            # candidate, whatever base it holds or does not.
+            got = run(top / "old", [base], folders=[base / "m1"], logs=[top / "users", top / "users" / "op"],
+                      op_home=top / "users" / "op")
+            self.assertNotIn(f"path {top / 'users'}", got)
+            self.assertNotIn(f"path {top / 'users' / 'op'}", got)
+            # A legacy directory inside a base, which it does not span, is
+            # taken, and the plan names it as taken, never as left in the base.
+            plan_loop = script[script.index('for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do'):]
+            plan_loop = plan_loop[:plan_loop.index("\ndone\n") + len("\ndone\n")]
+            varlib = top / "varlib"
+            got = run(varlib / "weaver", [varlib], folders=[varlib / "m2"],
+                      tail=('TERRITORY_PATHS=("${AGENT_FOLDERS[@]}")\n' + plan_loop
+                            + 'left_in_base "$(realpath -e -- "${!TERRITORY_BASES[@]}")" "${TERRITORY_PATHS[@]}" '
+                              '| sed "s/^/LEFT /"\n'))
+            self.assertTrue(any(g.startswith(f"PLAN {varlib / 'weaver'}  ") for g in got), got)
+            self.assertNotIn(f"LEFT {varlib / 'weaver'}", got)
+            self.assertNotIn(f"LEFT {varlib / 'm2'}", got)
+            self.assertIn(f"path {varlib / 'weaver'}", run(varlib / "weaver", [varlib], folders=[varlib / "m2"]))
             # The archive lists the agent's folder and says the base is left.
             got = run(base, [base], folders=[base / "m1"], logs=[base],
                       tail=('archive_path var-lib-weaver "$LEGACY_DIR"\n'
