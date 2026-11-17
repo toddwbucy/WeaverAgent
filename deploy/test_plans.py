@@ -8314,12 +8314,18 @@ class DecommissionTests(unittest.TestCase):
         self.assertLess(refusal, script.index('if [ "$MODE" = archive ]; then'))
 
     # agent_folders and territories_outside look as root: every fixture path
-    # is root's but those STRANGERS names, and a territory `weaver-<a>`
-    # carries its state group.
-    FOLDER_STAT = ('stat() { local p="${@: -1}"; '
+    # is root's but those STRANGERS names, a territory `weaver-<a>` carries
+    # its state group, and a folder's `home` is its account's.
+    FOLDER_STAT = ('stat() { local p="${@: -1}" q; '
                    'case ":${STRANGERS:-}:" in *":$p:"*) command stat "$@"; return ;; esac; '
                    'case "$2" in "%u:%G:%a") printf "0:%s-state:750\\n" "${p##*/}" ;; '
+                   '"%U") case "$p" in */home) q=${p%/home}; printf "weaver-%s\\n" "${q##*/}" ;; '
+                   '*) command stat "$@" ;; esac ;; '
                    "*) command stat \"$@\" | sed 's/^[0-9]*/0/' ;; esac; }\n")
+
+    def read_key_line(self):
+        """read_key, which the script defines on one line."""
+        return next(line for line in self.script.splitlines() if line.startswith("read_key() {")) + "\n"
 
     @staticmethod
     def passwd_stub(homes):
@@ -8332,7 +8338,7 @@ class DecommissionTests(unittest.TestCase):
         """folder_bases ROOTS -- USERS, with m1 and m2 the agents found, and
         STAND_INS defined last, over the script's own."""
         program = (self.FOLDER_STAT + self.passwd_stub(homes) + "declare -A AGENTS=([m1]=1 [m2]=1)\n"
-                   + shell_function(self.script, "is_box_account") + shell_function(self.script, "strip_suffix")
+                   + self.read_key_line() + shell_function(self.script, "is_box_account") + shell_function(self.script, "strip_suffix")
                    + shell_function(self.script, "agent_folders") + shell_function(self.script, "folder_bases")
                    + stand_ins + 'folder_bases "$@"')
         run = subprocess.run(["bash", "-c", "set -euo pipefail\n" + program, "x", *map(str, roots), "--", *users],
@@ -8384,10 +8390,10 @@ class DecommissionTests(unittest.TestCase):
                      + 'lsattr() { echo "    12345 --------------P--- ${@: -1}"; }\n'
                      + f'setquota() {{ printf "%s\\n" "$*" >> {q(str(log))}; }}\n'
                      + "plan() { printf 'PLAN %s\\n' \"$*\"; }\nsay() { :; }\n")
-            program = ("set -euo pipefail\n" + stubs
+            program = ("set -euo pipefail\n" + stubs + self.read_key_line()
                        + f"OP_HOME=\nAGENT_ROOTS=({q(str(root))})\nWEAVER_USERS=(weaver-m1)\nWEAVER_GROUPS=()\n"
                        + "SUDO_RULES=(); LDSO_CONFS=(); TMP_PATHS=(); TERRITORY_PATHS=()\nLEGACY_DIR=/nonexistent/weaver\n"
-                       + "declare -A AGENTS=([m1]=1) PREFIXES=() LOG_PATHS=() COORD_ROOTS=()\n"
+                       + "declare -A AGENTS=([m1]=1) PREFIXES=() LOG_PATHS=() COORD_ROOTS=() BASES_SAID=()\n"
                        + f"declare -A TERRITORY_BASES=([{q(str(base_b))}]=1)\n"
                        + "".join(shell_function(script, fn) for fn in (
                            "in_operator_home", "is_box_account", "strip_suffix", "agent_folders", "folder_bases",
@@ -8433,30 +8439,85 @@ class DecommissionTests(unittest.TestCase):
         self.assertIn('done < <(folder_bases "${AGENT_ROOTS[@]}" -- "${WEAVER_USERS[@]}")\n'
                       'AGENT_FOLDERS=()\nAGENT_LISTED=$(agent_folders "${!TERRITORY_BASES[@]}")\n', script)
 
+    def test_an_entry_that_is_a_base_or_holds_what_is_taken_is_not_named_left(self):
+        # **The self-check on #594**: a base found from an agent's facts can
+        # sit in another base, and an entry of a base can hold a root's own
+        # territory the purge takes. Neither is named as left, and a stray
+        # entry still is. Perturbation: compare each entry with what is taken
+        # exactly again, and the inner base and the holder read as left.
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            outer = top / "srv"
+            inner = outer / "state"
+            folder = self.made_under(inner)
+            custom = outer / "custom" / "weaver-m2"
+            custom.mkdir(parents=True)
+            (outer / "stray").mkdir()
+            program = (f"declare -A TERRITORY_BASES=([{shlex.quote(str(outer))}]=1 [{shlex.quote(str(inner))}]=1)\n"
+                       + shell_function(self.script, "left_in_base") + 'left_in_base "$@"')
+            run = subprocess.run(["bash", "-c", "set -euo pipefail\n" + program, "x", str(outer), str(folder),
+                                  str(custom)], text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(run.stdout.splitlines(), [str(outer / "stray")])
+
+    def test_a_base_under_the_operators_home_is_said_once(self):
+        # **The self-check on #594**: a base the record names under the
+        # operator's home is said and dropped, and the same base found again
+        # from an agent's facts, in another spelling, is not said twice nor
+        # joined. Perturbation: drop the said-once check, and it is said
+        # twice.
+        script = self.script
+        prune = script[script.index("declare -A BASES_SAID=()\n"):]
+        prune = prune[:prune.index("\ndone\n") + len("\ndone\n")]
+        join = script[script.index("# **The bases an agent's own facts name join the record's**"):]
+        join = join[:join.index('done < <(folder_bases "${AGENT_ROOTS[@]}" -- "${WEAVER_USERS[@]}")\n')]
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            base = top / "operator" / "state"
+            base.mkdir(parents=True)
+            spelled = f"{top}/operator/../operator/state"
+            program = ("set -euo pipefail\n" + f"OP_HOME={shlex.quote(str(top / 'operator'))}\n"
+                       + f"declare -A TERRITORY_BASES=([{shlex.quote(spelled)}]=1)\nAGENT_ROOTS=()\nWEAVER_USERS=()\n"
+                       + "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                       + f"folder_bases() {{ printf '%s\\n' {shlex.quote(str(base))}; }}\n"
+                       + shell_function(script, "in_operator_home") + prune + join
+                       + 'done < <(folder_bases "${AGENT_ROOTS[@]}" -- "${WEAVER_USERS[@]}")\n'
+                       + 'printf "BASES %s\\n" "${#TERRITORY_BASES[@]}"\n')
+            run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertEqual(run.stdout.splitlines(),
+                             [f"PLAN {spelled}  under the operator's home: not touched", "BASES 0"])
+
     def test_a_roots_territory_key_alone_finds_the_agents_folder(self):
         # #594: the account is gone, as on a purge's rerun, so only the root's
-        # `territory` key names the folder. Perturbation: drop the key's
-        # lookup, and nothing is found.
+        # `territory` key names the folder, written plain or with a trailing
+        # slash. Perturbations: drop the key's lookup, or split the key as
+        # written, and nothing is found.
         with tempfile.TemporaryDirectory() as scratch:
             top = Path(scratch).resolve()
             folder = self.made_under(top / "state-a")
             root = top / "admin" / "m1"
             root.mkdir(parents=True)
-            (root / "territory").write_text(f"{folder / 'weaver-m1'}\n")
-            self.assertEqual(self.folder_bases([root], [], {}), [str(top / "state-a")])
+            for key in (f"{folder / 'weaver-m1'}", f"{folder / 'weaver-m1'}/"):
+                (root / "territory").write_text(f"{key}\n")
+                self.assertEqual(self.folder_bases([root], [], {}), [str(top / "state-a")], key)
 
     def test_an_accounts_home_alone_finds_the_agents_folder(self):
-        # #594: the root carries no `territory` key, so only the account's
-        # home in passwd names the folder, and a suffixed account's home is
-        # read as its agent's. Perturbation: drop the home's lookup, and
-        # nothing is found.
+        # #594: the root carries no `territory` key and the territory is
+        # gone, so only the account's home in passwd names the folder, which
+        # holds only the home its account owns. The home is read plain or
+        # with a trailing slash, and a suffixed account's home is read as its
+        # agent's. Perturbations: drop the home's lookup, or split the home
+        # as written, and nothing is found.
         with tempfile.TemporaryDirectory() as scratch:
             top = Path(scratch).resolve()
-            folder = self.made_under(top / "state-a")
+            folder = top / "state-a" / "m1"
+            (folder / "home").mkdir(parents=True)
             root = top / "admin" / "m1"
             root.mkdir(parents=True)
-            self.assertEqual(self.folder_bases([root], ["weaver-m1"], {"weaver-m1": folder / "home"}),
-                             [str(top / "state-a")])
+            for home in (folder / "home", f"{folder / 'home'}/"):
+                self.assertEqual(self.folder_bases([root], ["weaver-m1"], {"weaver-m1": home}),
+                                 [str(top / "state-a")], home)
             self.assertEqual(self.folder_bases([], ["weaver-m1-state"], {"weaver-m1-state": folder / "home"}),
                              [str(top / "state-a")])
 
@@ -8465,9 +8526,10 @@ class DecommissionTests(unittest.TestCase):
         # home naming a folder that is not root's, a folder not named for
         # its agent, a home not named `home`, or a folder in the root
         # directory adds no base, and a territory the key names is judged
-        # alone by territories_outside as before. Perturbations: skip the
-        # check against agent_folders, the folder's name check or the root
-        # directory's refusal, and a read below fails.
+        # alone by territories_outside as before. A refusal last answers 0.
+        # Perturbations: skip the check against agent_folders, the folder's
+        # name check or the root directory's refusal, or end the loop on the
+        # check's own status, and a read below fails.
         with tempfile.TemporaryDirectory() as scratch:
             top = Path(scratch).resolve()
             base = top / "state-a"
@@ -8477,7 +8539,9 @@ class DecommissionTests(unittest.TestCase):
             for name, key in (("m1", stranger / "weaver-m1"), ("m2", base / "other" / "weaver-m2")):
                 (roots / name).mkdir(parents=True)
                 (roots / name / "territory").write_text(f"{key}\n")
-            self.assertEqual(self.folder_bases([roots / "m1", roots / "m2"], [], {}, strangers=[stranger]), [])
+            # m1 last, so the lookup's last look is a refusal and the function
+            # still answers 0 (the self-check on #594).
+            self.assertEqual(self.folder_bases([roots / "m2", roots / "m1"], [], {}, strangers=[stranger]), [])
             # A home whose folder is another agent's name, one not named
             # `home`, and a box account's home in a real folder.
             self.assertEqual(self.folder_bases([], ["weaver-m2", "weaver-m1", "weaver-gatecon"], {
@@ -8493,9 +8557,10 @@ class DecommissionTests(unittest.TestCase):
             self.made_under(base, "m2")
             self.assertEqual(self.folder_bases([roots / "m2"], [], {}), [])
             # A folder in the root directory, read through stand-ins that
-            # resolve every path to it and pass every folder.
+            # resolve every existing path to it and pass every folder.
             self.assertEqual(self.folder_bases([roots / "m1"], [], {}, stand_ins=(
-                'realpath() { echo /; }\nagent_folders() { printf "%s\\n" "$1/m1"; }\n')), [])
+                'realpath() { case "$1" in -e) echo / ;; *) command realpath "$@" ;; esac; }\n'
+                'agent_folders() { printf "%s\\n" "$1/m1"; }\n')), [])
 
 # The account database's stand-ins for the purge (#140): getent reads the
 # model's passwd and group, userdel removes the user from both and, as the real

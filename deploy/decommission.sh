@@ -381,8 +381,12 @@ v=$(read_key /etc/weaver/stack agent-directory); [ -n "$v" ] && TERRITORY_BASES[
 LEGACY_DIR=/var/lib/weaver
 # A base or a log directory under the operator's home is the layout retired
 # on 2026-10-07: said, and never archived or purged.
+declare -A BASES_SAID=()
 for d in "${!TERRITORY_BASES[@]}"; do
-  in_operator_home "$d" && { plan "$d  under the operator's home: not touched"; unset 'TERRITORY_BASES[$d]'; }
+  in_operator_home "$d" || continue
+  plan "$d  under the operator's home: not touched"
+  BASES_SAID["$(realpath -e -- "$d" 2>/dev/null || printf '%s' "$d")"]=1
+  unset 'TERRITORY_BASES[$d]'
 done
 # **log_paths FILE: what a legacy `log-path` gives up** (#593, the Planner's
 # ruling of 2026-11-17), as NUL-ended pairs of a kind and a path:
@@ -500,42 +504,55 @@ agent_folders() {
 # bases alone miss. **X is a base only where `<X>/<agent>` passes
 # agent_folders' checks**, so a key or a home naming anything else adds none,
 # and a territory it names is judged alone by territories_outside as before.
-# The root directory is never a base.
+# A key or a home is read as an absolute path, its slashes and dots taken
+# lexically (`realpath -ms`), so a trailing slash does not hide it, and each
+# base is read by agent_folders once. The root directory is never a base.
 folder_bases() {
-  local r u v a f x i found
+  local r u v a f x i
   local -a pairs=()
+  local -A found=()
   while [ $# -gt 0 ] && [ "$1" != -- ]; do
     r=$1
     shift
-    v=$(cat "$r/territory" 2>/dev/null || true); v=${v%%$'\n'*}
+    v=$(read_key "$r" territory); v=${v%%$'\n'*}
+    case $v in /*) v=$(realpath -ms -- "$v") ;; *) continue ;; esac
     a=${r##*/}
-    [ "${v##*/}" = "weaver-$a" ] && pairs+=("$a" "$(dirname -- "$v")")
+    if [ "${v##*/}" = "weaver-$a" ]; then pairs+=("$a" "$(dirname -- "$v")"); fi
   done
-  [ "${1:-}" = -- ] && shift
+  [ "${1:-}" != -- ] || shift
   for u in "$@"; do
     is_box_account "$u" && continue
     v=$(getent passwd "$u" | cut -d: -f6) || v=
-    [ "${v##*/}" = home ] && pairs+=("$(strip_suffix "$u")" "$(dirname -- "$v")")
+    case $v in /*) v=$(realpath -ms -- "$v") ;; *) continue ;; esac
+    if [ "${v##*/}" = home ]; then pairs+=("$(strip_suffix "$u")" "$(dirname -- "$v")"); fi
   done
   for ((i = 0; i < ${#pairs[@]}; i += 2)); do
     a=${pairs[i]} f=${pairs[i + 1]}
     [ "${f##*/}" = "$a" ] || continue
     x=$(realpath -e -- "$(dirname -- "$f")" 2>/dev/null) && [ "$x" != / ] || continue
-    found=$(agent_folders "$x")
-    [[ $'\n'"$found"$'\n' == *$'\n'"$x/$a"$'\n'* ]] && printf '%s\n' "$x"
+    [ -n "${found[$x]+read}" ] || found[$x]=$'\n'$(agent_folders "$x")$'\n'
+    if [[ ${found[$x]} == *$'\n'"$x/$a"$'\n'* ]]; then printf '%s\n' "$x"; fi
   done | sort -u
 }
 # **left_in_base BASE TAKEN...: each entry directly in BASE that is none of
 # TAKEN**, one per line, which the plan names as left in place (the Planner's
 # ruling of 2026-11-16 on #578), so the operator sees what the purge leaves.
-# BASE and every TAKEN are compared canonical.
+# BASE and every TAKEN are compared canonical. **An entry that is a base, or
+# holds a base or anything TAKEN, is not named as left** (the self-check on
+# #594): a base found from an agent's facts can sit in another, and the
+# purge takes what such an entry holds. A base's own entries are named by
+# its own pass.
 left_in_base() {
   local base e t taken=()
   base=$(realpath -e -- "$1" 2>/dev/null) || return 0
   shift
-  for t in "$@"; do taken+=("$(realpath -e -- "$t" 2>/dev/null || printf '%s' "$t")"); done
+  for t in "$@" "${!TERRITORY_BASES[@]}"; do
+    taken+=("$(realpath -e -- "$t" 2>/dev/null || printf '%s' "$t")")
+  done
   while IFS= read -r -d '' e; do
-    for t in "${taken[@]}"; do [ "$t" = "$e" ] && continue 2; done
+    for t in "${taken[@]}"; do
+      case "$t" in "$e" | "$e"/*) continue 2 ;; esac
+    done
     printf '%s\n' "$e"
   done < <(find "$base" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
 }
@@ -575,7 +592,7 @@ candidate() {
 # its account's home, and its base is guarded and its other entries named as
 # left like any base's. One under the operator's home is said and skipped.
 while IFS= read -r b; do
-  [ -n "$b" ] || continue
+  [ -n "$b" ] && [ -z "${BASES_SAID[$b]+said}" ] || continue
   for c in "${!TERRITORY_BASES[@]}"; do
     [ "$(realpath -e -- "$c" 2>/dev/null)" = "$b" ] && continue 2
   done
