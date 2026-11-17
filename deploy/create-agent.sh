@@ -549,9 +549,10 @@ SAVE_POINTS="$HOME_DIR/save-points"
 # cannot take the space or the inodes the save points and the state room need
 # on the same drive: it bounds the space and the count of files. The home
 # takes its own project, the agent's uid, with the inherit flag, so what is
-# made in it counts against the cap. **Until #587 lands, an agent that
-# deliberately changes its files' project can leave the cap.** #587 closes
-# that. Checked here, before anything is made: the tools, and a base on ext4
+# made in it counts against the cap. **The shell the gate runs for the agent
+# refuses every change of a file's attributes** (`weaver-gate-Spec` section
+# 8.1, #587), so the agent cannot move its files out of the project. Checked
+# here, before anything is made: the tools, and a base on ext4
 # mounted with project quotas, which the box's setup lays out (formatted with
 # project quotas and mounted prjquota).
 if [ -n "${HOME_QUOTA+given}" ]; then

@@ -9,7 +9,7 @@
 //! descriptor and the seccomp program as a fixed array. Each execution's
 //! child then applies the layers in `pre_exec`, after its move into `tools/`
 //! and before its exec, on those values alone, so it allocates nothing:
-//! no-new-privs first (both filters need it), the rlimits, the socket filter,
+//! no-new-privs first (both filters need it), the rlimits, the seccomp filter,
 //! and `landlock_restrict_self`. Any of them failing ends the child before its
 //! exec, the spawn failing, answered `Errored` with nothing run.
 //!
@@ -26,12 +26,13 @@ use std::process::Command;
 use nix::libc;
 use weaver_types::ShellGrant;
 
-// **The socket filter names x86-64's architecture word and refuses every
-// other** (section 8.1's sockets row), so a build for another architecture
-// would offer a shell whose every execution its own filter ends. That build
-// fails here instead.
+// **The seccomp filter names x86-64's architecture word and refuses every
+// other** (section 8.1's sockets row), and reads an argument's low word at
+// its little-endian offset, so a build for another architecture would offer a
+// shell whose every execution its own filter ends. That build fails here
+// instead.
 #[cfg(not(target_arch = "x86_64"))]
-compile_error!("the shell's socket filter is written for x86-64 alone (weaver-gate-Spec 8.1)");
+compile_error!("the shell's seccomp filter is written for x86-64 alone (weaver-gate-Spec 8.1)");
 
 /// The lowest Landlock ABI the shell is offered on: 6 brings signal and
 /// abstract-socket scoping, with TCP rules (4) and `TRUNCATE` (3) beneath it.
@@ -111,37 +112,74 @@ const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
 const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
 const X32_SYSCALL_BIT: u32 = 0x4000_0000;
+/// Every refusal of the filter answers `EACCES` (section 8.1): one answer,
+/// which no attribute path answers itself (they answer `EPERM`, `EOPNOTSUPP`
+/// or `ENOTTY`), so a refusal reads as the filter's.
 const DENY: u32 = SECCOMP_RET_ERRNO | libc::EACCES as u32;
+
+/// `seccomp_data`'s offsets: `nr` at 0, `arch` at 4, and `args[1]` at 24,
+/// read here as its low word, the first on little-endian x86-64.
+const DATA_NR: u32 = 0;
+const DATA_ARCH: u32 = 4;
+const DATA_ARG1_LOW: u32 = 24;
+
+/// `file_setattr`, 469 on x86-64 (`asm/unistd_64.h`), which libc 0.2.189
+/// does not carry.
+const SYS_FILE_SETATTR: u32 = 469;
+/// `FS_IOC_FSSETXATTR`, `_IOW('X', 32, struct fsxattr)` with that struct's
+/// 28 bytes (`linux/fs.h`), which libc 0.2.189 does not carry.
+const FS_IOC_FSSETXATTR: u32 = libc::_IOW::<[u8; 28]>('X' as u32, 32) as u32;
+/// The two `FS_IOC_SETFLAGS` numbers: the native one and the 32-bit one,
+/// refused both, though another architecture's entry is refused whole.
+const FS_IOC_SETFLAGS: u32 = libc::FS_IOC_SETFLAGS as u32;
+const FS_IOC32_SETFLAGS: u32 = libc::FS_IOC32_SETFLAGS as u32;
 
 const fn op(code: u16, jt: u8, jf: u8, k: u32) -> SockFilter {
     SockFilter { code, jt, jf, k }
 }
 
-/// **The socket filter** (section 8.1's sockets row): any architecture but
-/// x86-64 refused whole, every x32 system call refused (`nr` with bit 30
-/// set, x32 sharing the architecture word), `io_uring_setup` refused (its
-/// `IORING_OP_SOCKET` makes a socket without `socket`), and `socket` and
-/// `socketpair` refused `EACCES` for every family. The shell makes no socket.
-static SOCKET_FILTER: [SockFilter; 11] = [
-    // seccomp_data: nr at 0, arch at 4.
-    op(BPF_LD_W_ABS, 0, 0, 4),
+/// **The shell's seccomp filter** (section 8.1's sockets and file attributes
+/// rows), every refusal `EACCES`:
+///
+/// - any architecture but x86-64 refused whole, and every x32 system call
+///   (`nr` with bit 30 set, x32 sharing the architecture word).
+/// - `io_uring_setup` (its `IORING_OP_SOCKET` makes a socket without
+///   `socket`), and `socket` and `socketpair` for every family, so the shell
+///   makes no socket.
+/// - `file_setattr`, and `ioctl` whose command is `FS_IOC_FSSETXATTR`,
+///   `FS_IOC_SETFLAGS` or `FS_IOC32_SETFLAGS` (#587), so the shell changes no
+///   attribute of its own files, a project id or its inheritance among them,
+///   and its writes stay in its home's project quota. **The command is read
+///   by its low 32 bits alone**: the kernel takes `ioctl`'s command as an
+///   `unsigned int`, so a high word the caller sets is dropped by the kernel
+///   and must not carry the call past the filter.
+///
+/// A jump goes to the next instruction plus its offset.
+static SHELL_FILTER: [SockFilter; 17] = [
+    op(BPF_LD_W_ABS, 0, 0, DATA_ARCH),
     op(BPF_JEQ_K, 1, 0, AUDIT_ARCH_X86_64),
     op(BPF_RET_K, 0, 0, DENY),
-    op(BPF_LD_W_ABS, 0, 0, 0),
+    op(BPF_LD_W_ABS, 0, 0, DATA_NR),
     op(BPF_JGE_K, 0, 1, X32_SYSCALL_BIT),
     op(BPF_RET_K, 0, 0, DENY),
-    op(BPF_JEQ_K, 3, 0, libc::SYS_io_uring_setup as u32),
-    op(BPF_JEQ_K, 2, 0, libc::SYS_socket as u32),
-    op(BPF_JEQ_K, 1, 0, libc::SYS_socketpair as u32),
+    op(BPF_JEQ_K, 9, 0, libc::SYS_io_uring_setup as u32),
+    op(BPF_JEQ_K, 8, 0, libc::SYS_socket as u32),
+    op(BPF_JEQ_K, 7, 0, libc::SYS_socketpair as u32),
+    op(BPF_JEQ_K, 6, 0, SYS_FILE_SETATTR),
+    op(BPF_JEQ_K, 0, 4, libc::SYS_ioctl as u32),
+    op(BPF_LD_W_ABS, 0, 0, DATA_ARG1_LOW),
+    op(BPF_JEQ_K, 3, 0, FS_IOC_FSSETXATTR),
+    op(BPF_JEQ_K, 2, 0, FS_IOC_SETFLAGS),
+    op(BPF_JEQ_K, 1, 0, FS_IOC32_SETFLAGS),
     op(BPF_RET_K, 0, 0, SECCOMP_RET_ALLOW),
     op(BPF_RET_K, 0, 0, DENY),
 ];
 
-/// **The socket filter's instructions as `(code, jt, jf, k)`**, read-only,
+/// **The shell filter's instructions as `(code, jt, jf, k)`**, read-only,
 /// so the instruments of `tests/landlock.rs` load the program production
 /// loads and no copy can drift from it (the grade of #176, F3).
-pub fn socket_filter_instructions() -> impl Iterator<Item = (u16, u8, u8, u32)> {
-    SOCKET_FILTER.iter().map(|instruction| {
+pub fn shell_filter_instructions() -> impl Iterator<Item = (u16, u8, u8, u32)> {
+    SHELL_FILTER.iter().map(|instruction| {
         (
             instruction.code,
             instruction.jt,
@@ -355,7 +393,7 @@ impl Shell {
     /// (`weaver-gate-Spec` section 8.1): `-c` and the call's command, the
     /// gate's environment, the home as its directory, then the caller's
     /// `first` step in `pre_exec` (the move into `tools/`), then the layers in
-    /// section 8.1's order: no-new-privs, the rlimits, the socket filter, the
+    /// section 8.1's order: no-new-privs, the rlimits, the seccomp filter, the
     /// Landlock restriction. A confined shell's command carries its layers
     /// by construction. Only the suite's `#[cfg(test)]` bare shell has none.
     ///
@@ -393,7 +431,7 @@ impl Shell {
             let ruleset: RawFd = layers.ruleset.as_raw_fd();
             // The program lives in a `static`, so its address outlives every
             // fork. An address, not a pointer, keeps the closure `Send`.
-            let filter = SOCKET_FILTER.as_ptr() as usize;
+            let filter = SHELL_FILTER.as_ptr() as usize;
             // SAFETY: `apply` makes only async-signal-safe calls on values
             // read before the fork, the child allocating nothing.
             unsafe {
@@ -406,13 +444,13 @@ impl Shell {
 
 /// **The layers, applied by the child to itself**, in section 8.1's order:
 /// no-new-privs (both filters need it), the rlimits soft and hard alike, the
-/// socket filter, the Landlock restriction. The first failure answers its
+/// seccomp filter, the Landlock restriction. The first failure answers its
 /// errno, ending the child before its exec.
 ///
 /// # Safety
 ///
 /// Called in a forked child before its exec, with `ruleset` an open Landlock
-/// ruleset and `filter` the address of [`SOCKET_FILTER`].
+/// ruleset and `filter` the address of [`SHELL_FILTER`].
 unsafe fn apply(ruleset: RawFd, filter: usize) -> std::io::Result<()> {
     // SAFETY: prctl, setrlimit and a raw system call, each async-signal-safe,
     // on values the caller read before the fork.
@@ -430,7 +468,7 @@ unsafe fn apply(ruleset: RawFd, filter: usize) -> std::io::Result<()> {
             }
         }
         let prog = SockFprog {
-            len: SOCKET_FILTER.len() as u16,
+            len: SHELL_FILTER.len() as u16,
             filter: filter as *const SockFilter,
         };
         if libc::prctl(
