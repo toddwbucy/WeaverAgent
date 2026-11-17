@@ -1626,7 +1626,7 @@ sink_lines() {
 # read the member is refused prints nothing.
 member_said() {
   local said
-  said=$(sudo -n -u "weaver-$AGENT-state" tail -n 3 "$(dirname "$1")/state/state.log" 2>/dev/null || true)
+  said=$(sudo -n -u "weaver-$AGENT-state" tail -n 3 "$(dirname "$1")/state/state.log" </dev/null 2>/dev/null || true)
   [ -n "$said" ] && printf '  the state member last said:\n%s\n' "$said" >&2
   return 0
 }

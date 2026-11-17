@@ -16,7 +16,16 @@
 # admin-con account), and
 # --adapter <path> --adapter-sha256 <hex> --adapter-scale <number>
 # --base-blake3 <hex>, all four or none, which write the binding's `adapter`
-# table (weaver-spu adapter binding amendment ADP-1 and ADP-5).
+# table (weaver-spu adapter binding amendment ADP-1 and ADP-5), --devices
+# <i,j,...> (the decoder's device ordinals in the box's PCI bus order, given
+# order kept as shard order, default 0), --context-capacity <n> (the session's
+# context in tokens, default 32768, at least the max-tokens-per-turn of 4096
+# this script writes beside it), --turn-context continuous|independent
+# (written only when given, and absent is continuous, #423), --home-quota
+# <size> (a cap on the agent's home as an ext4 project quota, such as 512M,
+# 64G or 2T in binary units, #585; without it the home is not capped), and
+# --root-operator (root runs it, on a single-purpose appliance where root is
+# the operator).
 #
 # **The adapter's digests are the operator's declared claims**, taken from the
 # conversion record and the fixture report, and this script computes nothing:
@@ -25,7 +34,10 @@
 #
 # Run it as the operator, never under sudo: the root's `operator` key names
 # the uid this script runs as, and `--apply` asks for sudo itself for every
-# root step. Nothing is written into the operator's home.
+# root step. Nothing is written into the operator's home. **On a single-purpose
+# appliance root is the operator** (the operator's ruling of 2026-11-16, #576):
+# root runs it with `--root-operator`, the `operator` key is 0, the root steps
+# run directly, and every look as another account goes through `runuser`.
 #
 # **The agent's root is `<admin base>/<name>/` and it is the admission.**
 # Admin reads that directory and nothing shared, so this script writes every
@@ -36,8 +48,14 @@
 # into place last, so a run that stops part way leaves no root admin would
 # admit.
 #
+# **Each agent has one folder, named after it** (the operator's ruling of
+# 2026-11-16 on the layout, #578): `<agent-directory>/<name>/`, root:root
+# 0755, holding the territory `weaver-<name>/` and the agent's home `home/`
+# side by side. On an appliance the base is the state drive, so both persist
+# across image versions.
+#
 # **The whole agent lives in its territory** (the operator's ruling of
-# 2026-10-07 on #1): `<agent-directory>/weaver-<name>/`, root's, holds the
+# 2026-10-07 on #1): `<agent-directory>/<name>/weaver-<name>/`, root's, holds the
 # declaration `agent.toml` (root:weaver-<name>-admin 0640, which the
 # operator edits with `sudoedit`), the prompt draft `system-prompt.md`
 # (root:weaver-<name>-admin 0640), admin's own
@@ -94,10 +112,11 @@
 # does not change (the operator contract section 2). The
 # observer role grants `show`, and the operator role adds
 # `validate`, `load`, `unload`, `stop`, `save-point`, `restore` and
-# `force-unload`, the eight lines `VERBS` below names. The rule is checked with `visudo
-# -cf` before it is installed. A delegated invocation reads admin's default
-# base, sudo stripping WEAVER_ADMIN_CONFIG, so the rule drives an agent only
-# under `/etc/weaver/admin`.
+# `force-unload`, the eight lines `VERBS` below names. The rule is checked with
+# `visudo -cf` before any account is made and again before it is installed
+# (#577). A delegated invocation reads admin's default base, sudo stripping
+# WEAVER_ADMIN_CONFIG, so the rule drives an agent only under
+# `/etc/weaver/admin`.
 #
 # **The program creates nothing and this is why the script exists.** Admin's
 # inventory refuses a missing home rather than building one, per
@@ -124,6 +143,7 @@ die()  { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 NAME=${1:-}
 shift || true
 APPLY=0
+ROOT_OPERATOR=0
 ARTIFACT=""
 SESSION=""
 # **The engine is an election and not a constant**, written into the
@@ -139,9 +159,22 @@ ADAPTER=""
 ADAPTER_SHA256=""
 ADAPTER_SCALE=""
 BASE_BLAKE3=""
+# **The decoder's placement and context are the operator's choice at setup**
+# (#580), so nobody edits the declaration by hand after this script writes it.
+# The defaults are the header's. A value given empty is judged as given, so
+# `--devices ""` refuses as the empty set rather than becoming the default, and
+# TURN_CONTEXT stays unset until the flag gives it.
+DEVICES=0
+CONTEXT_CAPACITY=32768
+unset TURN_CONTEXT
+# **The ceiling of a turn this script writes**, fixed: no option sets it (#580).
+MAX_TOKENS_PER_TURN=4096
+# **The home's cap is unset until the flag gives it** (#585).
+unset HOME_QUOTA
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply)    APPLY=1 ;;
+    --root-operator) ROOT_OPERATOR=1 ;;
     # **The value is required before the shift consumes it.** Without the
     # arity check the inline shift runs past the end of the list and `set -e`
     # exits with no message at all, which is a worse answer than the refusal
@@ -155,13 +188,17 @@ while [ $# -gt 0 ]; do
     --engine)   [ $# -ge 2 ] || die "--engine needs a name"; ENGINE=$2; shift ;;
     --spu)      [ $# -ge 2 ] || die "--spu needs a path"; SPU_OVERRIDE=$2; shift ;;
     --declaration-directory) die "--declaration-directory is retired on the operator's ruling of 2026-10-07 on #1:
-   the declaration lives in the agent's territory, <agent-directory>/weaver-<name>/agent.toml,
+   the declaration lives in the agent's territory, <agent-directory>/<name>/weaver-<name>/agent.toml,
    root's, edited with sudoedit, and nothing is written into the operator's home." ;;
     --connector-role) [ $# -ge 2 ] || die "--connector-role needs operator or observer"; CONNECTOR_ROLE=$2; shift ;;
     --adapter)        [ $# -ge 2 ] || die "--adapter needs a path"; ADAPTER=$2; shift ;;
     --adapter-sha256) [ $# -ge 2 ] || die "--adapter-sha256 needs a digest"; ADAPTER_SHA256=$2; shift ;;
     --adapter-scale)  [ $# -ge 2 ] || die "--adapter-scale needs a number"; ADAPTER_SCALE=$2; shift ;;
     --base-blake3)    [ $# -ge 2 ] || die "--base-blake3 needs a digest"; BASE_BLAKE3=$2; shift ;;
+    --devices)          [ $# -ge 2 ] || die "--devices needs device ordinals, such as 0 or 0,1"; DEVICES=$2; shift ;;
+    --context-capacity) [ $# -ge 2 ] || die "--context-capacity needs a count of tokens"; CONTEXT_CAPACITY=$2; shift ;;
+    --turn-context)     [ $# -ge 2 ] || die "--turn-context needs continuous or independent"; TURN_CONTEXT=$2; shift ;;
+    --home-quota)       [ $# -ge 2 ] || die "--home-quota needs a size, such as 64G"; HOME_QUOTA=$2; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -238,11 +275,79 @@ case "$CONNECTOR_ROLE" in
   observer) VERBS="show" ;;
   *) die "--connector-role is operator or observer: '$CONNECTOR_ROLE'" ;;
 esac
-# **The operator is the account running this script**, never root: the root's
-# `operator` key names their uid, and every root step below asks for sudo
-# itself. The gate does not admit the operator: its rule names the box's
+# **The decoder's three values refuse here what a load refuses without the
+# model or the cards**, before anything is made (#580). The parse refuses an
+# empty device set and a turn-context outside its two words (weaver-types-Spec
+# section 2). The SPU's admission refuses a repeated ordinal and a capacity
+# that is not a count below 2^32, and either engine refuses a capacity of zero.
+# Each value is written as a TOML integer, which takes no leading zero. An
+# ordinal the box has no card for, whether the family spans the devices, and
+# whether each card has room are the SPU's to judge at the load, and
+# verify-load.sh's to show.
+U32_MAX=4294967295
+[[ "$DEVICES" =~ ^(0|[1-9][0-9]{0,9})(,(0|[1-9][0-9]{0,9}))*$ ]] \
+  || die "--devices is a comma-separated list of device ordinals in the box's PCI bus order, such as 0 or 0,1, with no spaces or leading zeros: '$DEVICES'"
+declare -A SEEN_DEVICE=()
+IFS=, read -r -a DEVICE_LIST <<< "$DEVICES"
+for d in "${DEVICE_LIST[@]}"; do
+  (( d <= U32_MAX )) || die "--devices takes ordinals from 0 to $U32_MAX: '$d'"
+  [ -z "${SEEN_DEVICE[$d]:-}" ] || die "--devices names ordinal $d twice, and the SPU refuses a repeated device"
+  SEEN_DEVICE[$d]=1
+done
+DEVICES_TOML=${DEVICES//,/, }
+[[ "$CONTEXT_CAPACITY" =~ ^[1-9][0-9]{0,9}$ ]] && (( CONTEXT_CAPACITY <= U32_MAX )) \
+  || die "--context-capacity is a count of tokens from 1 to $U32_MAX, with no leading zero: '$CONTEXT_CAPACITY'"
+# **The script's own consistency rule, not a load's** (the Planner's ruling
+# of 2026-11-16 on #580): no load compares the two, but a capacity below the
+# turn's ceiling this script writes into the same declaration contradicts it,
+# a turn allowed more tokens than the whole context holds.
+(( CONTEXT_CAPACITY >= MAX_TOKENS_PER_TURN )) \
+  || die "--context-capacity $CONTEXT_CAPACITY is below the max-tokens-per-turn of $MAX_TOKENS_PER_TURN this script writes into the same declaration: give at least $MAX_TOKENS_PER_TURN"
+# **The home's cap is a whole size in binary units** (#585), set as setquota's
+# block limit, which counts kibibytes, and an inode limit of one per 16 KiB of
+# it, ext4's default ratio (the Planner's ruling of 2026-11-16), so the cap
+# bounds the count of files as well as their space.
+HOME_QUOTA_KIB="" HOME_QUOTA_INODES=""
+if [ -n "${HOME_QUOTA+given}" ]; then
+  [[ "$HOME_QUOTA" =~ ^([1-9][0-9]{0,6})([MGT])$ ]] \
+    || die "--home-quota is a whole size in mebibytes, gibibytes or tebibytes, such as 512M, 64G or 2T, with no leading zero: '$HOME_QUOTA'"
+  case ${BASH_REMATCH[2]} in
+    M) HOME_QUOTA_KIB=$(( BASH_REMATCH[1] * 1024 )) ;;
+    G) HOME_QUOTA_KIB=$(( BASH_REMATCH[1] * 1024 * 1024 )) ;;
+    T) HOME_QUOTA_KIB=$(( BASH_REMATCH[1] * 1024 * 1024 * 1024 )) ;;
+  esac
+  HOME_QUOTA_INODES=$(( HOME_QUOTA_KIB / 16 ))
+fi
+if [ -z "${TURN_CONTEXT+given}" ]; then
+  TURN_CONTEXT_LINE="" TURN_CONTEXT_SHOWN="continuous (absent, so not written)"
+else
+  case "$TURN_CONTEXT" in
+    continuous|independent) TURN_CONTEXT_LINE="
+turn-context = \"$TURN_CONTEXT\"" TURN_CONTEXT_SHOWN=$TURN_CONTEXT ;;
+    *) die "--turn-context is continuous or independent: '$TURN_CONTEXT'" ;;
+  esac
+fi
+# **The operator is the account running this script, or root where root is the
+# operator.** On a workstation the operator is the user's own account, which
+# can sudo: the root's `operator` key names their uid, and every root step below
+# asks for sudo itself. **On a single-purpose appliance root is the operator**
+# (the operator's ruling of 2026-11-16, #576), and `--root-operator` says so:
+# the key is 0, every root step runs directly, and every look as another
+# account goes through `runuser`, so root needs no sudoers line of its own. The
+# flag is explicit, so a workstation run as root by accident still refuses. The
+# gate does not admit the operator either way: its rule names the box's
 # gate-con account alone (weaver-gate-world-contract section 1).
-[ "$(id -u)" -ne 0 ] || die "run as the operator, not under sudo: the root's operator key names this uid, and --apply asks for sudo itself"
+# **sudo is a workstation's**: on the appliance root runs this from its own
+# login, so a run through sudo from another account is an operator's account
+# and never takes the flag (#576 self-check). Root through its own sudo
+# (`sudo -i`, SUDO_USER=root) is still root (the Planner's grade of #583).
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  [ "$(id -u)" -eq 0 ] || die "--root-operator is for root, on a single-purpose appliance where root is the operator: run it as root, or drop the flag and run it as the operator"
+  [ -z "${SUDO_USER:-}" ] || [ "$SUDO_USER" = root ] || die "--root-operator is for root's own login on a single-purpose appliance, not sudo from $SUDO_USER: on a workstation run it as $SUDO_USER, without sudo and without the flag"
+elif [ "$(id -u)" -eq 0 ]; then
+  [ -z "${SUDO_USER:-}" ] || [ "$SUDO_USER" = root ] || die "run as the operator, not under sudo: the root's operator key names this uid, and --apply asks for sudo itself"
+  die "run as the operator, not as root: the root's operator key names this uid, and --apply asks for sudo itself. On a single-purpose appliance, where root is the operator, run it as root with --root-operator"
+fi
 
 
 # **An engine this script cannot provision is refused here rather than written
@@ -257,8 +362,13 @@ case "$ENGINE" in
   *) die "$ENGINE is not an engine this build provides: weaver-types admits none and sqlite, and this script provisions sqlite, the default." ;;
 esac
 
-OPERATOR=$(id -un)
-OPERATOR_UID=$(id -u)
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  OPERATOR=root
+  OPERATOR_UID=0
+else
+  OPERATOR=$(id -un)
+  OPERATOR_UID=$(id -u)
+fi
 AGENT_USER="weaver-$NAME"          # the agent's own uid: the worker's identity
 MEMBER_USER="weaver-$NAME-state"   # the member's uid: owns the state room
 STATE_GROUP="$MEMBER_USER"         # the member's primary group: the territory's, passage alone
@@ -387,7 +497,7 @@ judge_names || exit 1
 # access entries** (operator's ruling of 2026-10-02, #28). The base is the stack
 # record's `agent-directory`, which bootstrap-stack.sh makes root 0755: it must
 # stand, be held closed by admin's rule, and let no other principal make a name
-# in it, since the territory is a new name there. Each territory is root-owned,
+# in it, since the agent's folder is a new name there (#578). Each territory is root-owned,
 # grouped to the state group, 0710: the state group passes and none lists, the
 # agent's own uid passes not, and the files' own modes are the wall beneath
 # (the operator's ruling of 2026-10-08 on #1); the trace has a group of its
@@ -421,7 +531,12 @@ case $rc in
   1) ;;
   *) die "whether the agent-directory $AGENT_DIR carries a default access entry cannot be read" ;;
 esac
-HOME_DIR="$AGENT_DIR/$AGENT_USER"
+# **The agent's folder holds its territory and its home side by side** (the
+# operator's ruling of 2026-11-16 on the layout, #578). `HOME_DIR` is the
+# territory, a name older than the agent's home, which is `AGENT_HOME`.
+AGENT_FOLDER="$AGENT_DIR/$NAME"
+HOME_DIR="$AGENT_FOLDER/$AGENT_USER"
+AGENT_HOME="$AGENT_FOLDER/home"
 STATE_DIR="$HOME_DIR/state"
 # **The declaration, the draft and the save points stand in the territory**
 # (the operator's ruling of 2026-10-07 on #1), which is refused below where it
@@ -429,6 +544,29 @@ STATE_DIR="$HOME_DIR/state"
 DECLARATION="$HOME_DIR/agent.toml"
 PROMPT="$HOME_DIR/system-prompt.md"
 SAVE_POINTS="$HOME_DIR/save-points"
+# **The home's cap is an ext4 project quota** (the operator's ruling of
+# 2026-11-16, #585). The cap bounds the agent's own writes in its home, so they
+# cannot take the space or the inodes the save points and the state room need
+# on the same drive: it bounds the space and the count of files. The home
+# takes its own project, the agent's uid, with the inherit flag, so what is
+# made in it counts against the cap. **Until #587 lands, an agent that
+# deliberately changes its files' project can leave the cap.** #587 closes
+# that. Checked here, before anything is made: the tools, and a base on ext4
+# mounted with project quotas, which the box's setup lays out (formatted with
+# project quotas and mounted prjquota).
+if [ -n "${HOME_QUOTA+given}" ]; then
+  for tool in chattr setquota repquota findmnt; do
+    command -v "$tool" >/dev/null \
+      || die "--home-quota needs $tool on PATH: chattr is e2fsprogs', setquota and repquota the quota tools', findmnt util-linux's"
+  done
+  QUOTA_FSTYPE=$(findmnt -n -o FSTYPE --target "$AGENT_DIR") || die "the filesystem under $AGENT_DIR cannot be read"
+  QUOTA_OPTIONS=$(findmnt -n -o OPTIONS --target "$AGENT_DIR") || die "the mount options under $AGENT_DIR cannot be read"
+  QUOTA_MOUNT=$(findmnt -n -o TARGET --target "$AGENT_DIR") || die "the mount point under $AGENT_DIR cannot be read"
+  [ "$QUOTA_FSTYPE" = ext4 ] \
+    || die "--home-quota caps the home with an ext4 project quota, and $AGENT_DIR is on $QUOTA_FSTYPE"
+  [[ ",$QUOTA_OPTIONS," == *,prjquota,* ]] \
+    || die "--home-quota needs $QUOTA_MOUNT mounted with project quotas (prjquota), and it is mounted $QUOTA_OPTIONS: the drive is formatted with project quotas and mounted prjquota"
+fi
 
 # **account_line NAME: the account's passwd line, or nothing where it is
 # absent**; a lookup that cannot answer refuses rather than reading as absence.
@@ -492,7 +630,7 @@ tool-set = []
 # **A serving binding carries a gate instruction and the inventory refuses it
 # absent.** An unstated binding-kind resolves to serving, so both are written
 # rather than left to a default a reader cannot see.
-binding-kind = "serving"
+binding-kind = "serving"$TURN_CONTEXT_LINE
 
 # **No identity here**, per weaver-types-Spec section 2 on the ruling of
 # 2026-10-06: the system prompt is state, seeded through the gate after the
@@ -500,11 +638,11 @@ binding-kind = "serving"
 [spu-instruction.decoder]
 residual-readout-election = false
 surprisal-election = true
-tunable-values = { context-capacity = 32768, max-tokens-per-turn = 4096, seed = 451234785645, temperature = 0.7, top-k = 40, top-p = 0.95, repetition-penalty = 1.1, repetition-window = 64 }
+tunable-values = { context-capacity = $CONTEXT_CAPACITY, max-tokens-per-turn = $MAX_TOKENS_PER_TURN, seed = 451234785645, temperature = 0.7, top-k = 40, top-p = 0.95, repetition-penalty = 1.1, repetition-window = 64 }
 
 [spu-instruction.decoder.model-binding]
 artifact = "$ARTIFACT"
-devices = [0]$ADAPTER_TABLE
+devices = [$DEVICES_TOML]$ADAPTER_TABLE
 
 [gate-instruction.access-rule]
 allowed-uids = [${GATECON_UID:-65534}]
@@ -543,11 +681,113 @@ printf '%s\n' "$DECLARATION_TEXT" | python3 -c 'import sys, tomllib; tomllib.loa
   || die "the rendered declaration does not parse as TOML, so nothing was made. Check --session and --artifact"
 # Plan and apply interpret the same configuration. Only the read identity
 # differs. Validate all arguments above before asking for a sudo credential.
-if [ "$APPLY" -eq 1 ]; then
+if [ "$APPLY" -eq 1 ] && [ "$ROOT_OPERATOR" -eq 0 ]; then
   sudo -v || die "--apply needs sudo"
 fi
+# **root CMD...: a root step** (#576): `sudo CMD...` where the operator runs
+# this script, and the command itself where root does. `root -n CMD...` is
+# `sudo -n CMD...` in the operator's mode.
+root() {
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    [ "$1" != -n ] || shift
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+# DROP_PATH: the PATH a command run as another account starts with, sudo's
+# default secure_path (as_account).
+DROP_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# **as_account [--stdin FILE] ACCOUNT [VAR=value...] CMD...: CMD run as
+# ACCOUNT, with that account's supplementary groups** (#576): `sudo -n -u`
+# where the operator runs this script, and `runuser -u` where root does, so
+# root needs no sudoers line of its own. **CMD is handed nothing of this
+# shell's but what the call names**, since while it runs any process of the
+# account's uid can read its environment and open its descriptors through
+# /proc. In both modes its standard input is /dev/null, or FILE, which this
+# shell opens. Its standard output and standard error are pipes this shell
+# holds, one pipe where the caller gave both the same file, so a caller's
+# `2>&1` keeps its order, and cat copies them on. Every other descriptor this
+# shell holds is closed first, as sudo's closefrom does and runuser does not,
+# and where /proc/self/fd cannot be read, nothing runs and the call fails.
+# It runs under `setsid -w`, in a session of its own with no controlling
+# terminal: before runuser in root mode, and inside sudo in the operator's,
+# since sudo looks up the operator's cached credential by terminal. It starts
+# under `env -i` with DROP_PATH and the leading VAR=value pairs alone, since
+# runuser keeps the caller's environment and sudo keeps what the box's
+# env_keep names. **An interrupt still reaches it**: setsid has moved it out
+# of the terminal's process group, so the drop runs as a job of this shell,
+# whose traps, set before it starts, pass INT, QUIT, TERM and HUP on to it
+# as SIGTERM, and which then takes the signal itself, so the script's own
+# traps run as they would have. runuser's parent passes SIGTERM on to its
+# child. Under sudo, `timeout 0`, which never times out, passes on what sudo
+# relays: under sudo's use_pty the command sudo starts leads its own process
+# group, so a setsid started there would fork and its parent alone would
+# take the signal, while timeout's child leads none, and setsid runs in it.
+# That timeout is coreutils': BusyBox's counts 0 down, and the stack puts no
+# BusyBox applet on any PATH.
+# The status is CMD's, else the standard output relay's, else the standard
+# error relay's. **Not covered** (#590): the env that runuser or sudo starts
+# holds the caller's environment, or what env_keep passes, until it replaces
+# it, and under sudo, env and timeout hold the terminal sudo hands them,
+# while CMD holds none.
+# DROP names which, for a refusal. verify-lifecycle.sh carries the same function.
+as_account() {
+  local account input=/dev/null named=()
+  if [ "${1:-}" = --stdin ]; then input=$2; shift 2; fi
+  account=$1
+  shift
+  while [[ "${1:-}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do named+=("$1"); shift; done
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    set -- setsid -w runuser -u "$account" -- env -i PATH="$DROP_PATH" "${named[@]}" "$@"
+  else
+    set -- sudo -n -u "$account" env -i PATH="$DROP_PATH" "${named[@]}" timeout 0 setsid -w "$@"
+  fi
+  (
+    set +e
+    [ -d /proc/self/fd ] && [ -r /proc/self/fd ] || {
+      echo "as_account: no command runs as $account, since /proc/self/fd cannot be read" \
+           "to close the descriptors this shell holds" >&2
+      exit 1
+    }
+    exec <"$input" || exit 1
+    for fd in /proc/self/fd/*; do
+      fd=${fd##*/}
+      case $fd in 0|1|2|*[!0-9]*) ;; *) eval "exec $fd>&-" ;; esac
+    done
+    first_failure() { local s; for s; do [ "$s" -eq 0 ] || exit "$s"; done; exit 0; }
+    err=4
+    [ ! /proc/self/fd/1 -ef /proc/self/fd/2 ] || err=1
+    {
+      {
+        {
+          drop= sig=
+          trap 'sig=INT; [ -z "$drop" ] || kill -TERM "$drop"' INT
+          trap 'sig=QUIT; [ -z "$drop" ] || kill -TERM "$drop"' QUIT
+          trap 'sig=TERM; [ -z "$drop" ] || kill -TERM "$drop"' TERM
+          trap 'sig=HUP; [ -z "$drop" ] || kill -TERM "$drop"' HUP
+          "$@" <&0 2>&"$err" 4>&- &
+          drop=$!
+          [ -z "$sig" ] || kill -TERM "$drop"
+          until wait "$drop"; rc=$?; ! kill -0 "$drop" 2>/dev/null; do :; done
+          [ -z "$sig" ] || { trap - "$sig"; kill -s "$sig" "$BASHPID"; }
+          exit "$rc"
+        } | cat 4>&-
+        first_failure "${PIPESTATUS[@]}"
+      } 4>&1 1>&3 3>&- | cat >&2
+      first_failure "${PIPESTATUS[@]}"
+    } 3>&1
+  )
+}
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  DROP="runuser"
+  DROP_NEEDS="runuser must run commands as the agent's accounts"
+else
+  DROP="sudo"
+  DROP_NEEDS="the operator's sudo must run commands as the agent's accounts, (ALL) and not (root) alone"
+fi
 read_as_owner() {
-  if [ "$APPLY" -eq 1 ]; then sudo -n "$@"; else "$@"; fi
+  if [ "$APPLY" -eq 1 ]; then root -n "$@"; else "$@"; fi
 }
 # Preserve test false separately from a failed privileged invocation. A sudo
 # failure also returns 1, so using `sudo test ...` as a boolean loses its cause.
@@ -569,6 +809,25 @@ refuse_existing() {
   local answer
   answer=$(path_answer -e "$1") || exit 1
   [ "$answer" = no ] || die "$2 already exists: $1"
+}
+# **allows ACCOUNT FLAG PATH: whether ACCOUNT passes FLAG on PATH, as the
+# kernel answers for that account** (#577). The look is the shell's own `[`,
+# a builtin of dash and of bash alike, and never the external `test`: on the
+# by-hand appliance walk of 2026-11-16 that `test` was uutils', whose `-r`
+# ignored supplementary groups, so a positive check refused wrongly and a
+# negative one could pass wrongly where the access came through a group. 0 is
+# yes and 1 is no. **A drop that sudo itself refuses is neither**: it refuses
+# here naming sudo, so a refused drop is never read as a wall closed or open,
+# as `path_answer` keeps a failed privileged call apart from a false test.
+allows() {
+  local said
+  said=$(as_account "$1" sh -c 'if [ "$1" "$2" ]; then printf yes; else printf no; fi' sh "$2" "$3") \
+    || die "$DROP would not run a look as $1 at $3, so the wall is unchecked: $DROP_NEEDS"
+  case $said in
+    yes) return 0 ;;
+    no) return 1 ;;
+    *) die "the look as $1 at $3 answered '$said', not yes or no, so the wall is unchecked" ;;
+  esac
 }
 
 # **The box's connector accounts are judged by their shape, not only their
@@ -685,8 +944,18 @@ plan "gate-con        $GATECON_USER  the box's, $(box_account_plan "$GATECON_LIN
 plan "                joins $AGENT_USER, the gate socket's group: the one caller the access rule names"
 plan "admin-con       $ADMINCON_USER  the box's, $(box_account_plan "$ADMINCON_LINE")"
 plan "                joins $STATE_GROUP and $ACCESS_GROUP: the trace reader and the sudo rule's user"
-plan "operator        $OPERATOR joins groups $TRACE_GROUP, $STATE_GROUP and $ACCESS_GROUP, never $AGENT_USER"
-plan "home            /home/$AGENT_USER        the agent's own, where its tools run"
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  plan "operator        root (--root-operator), which reads everything already and joins no group"
+else
+  plan "operator        $OPERATOR joins groups $TRACE_GROUP, $STATE_GROUP and $ACCESS_GROUP, never $AGENT_USER"
+fi
+plan "folder          $AGENT_FOLDER        root:root 0755, the territory and the home side by side"
+plan "home            $AGENT_HOME        $AGENT_USER 2750, the agent's own, where its tools run"
+if [ -n "${HOME_QUOTA+given}" ]; then
+  plan "home quota      $AGENT_HOME        capped at $HOME_QUOTA and $HOME_QUOTA_INODES files, an ext4 project quota on $QUOTA_MOUNT, the project the agent's uid, refused if the drive already carries it"
+else
+  plan "home quota      none: no --home-quota, so the home is not capped"
+fi
 plan "territory       $HOME_DIR        root:$STATE_GROUP 0710, passage for the state group alone"
 plan "trace           $HOME_DIR/trace.ndjson  root:$TRACE_GROUP 0640, made before the first load"
 plan "state room      $STATE_DIR       $MEMBER_USER 0700, which the agent's uid cannot enter"
@@ -698,6 +967,7 @@ plan "operator key    $OPERATOR_UID ($OPERATOR)"
 plan "roles.toml      trace-reader = $ADMINCON_USER"
 plan "access rule     allowed-uids = [$GATECON_UID_SHOWN] ($GATECON_USER alone)"
 plan "declaration     $DECLARATION     root:$ACCESS_GROUP 0640, session $SESSION, artifact $ARTIFACT; edited with sudoedit"
+plan "decoder         devices [$DEVICES_TOML], context-capacity $CONTEXT_CAPACITY, turn-context $TURN_CONTEXT_SHOWN"
 [ "$ADAPTER_GIVEN" -eq 0 ] || plan "adapter         $ADAPTER at scale $ADAPTER_SCALE, declared sha256 $ADAPTER_SHA256 over base blake3 $BASE_BLAKE3; checked by the SPU at admission"
 plan "prompt draft    $PROMPT     root:$ACCESS_GROUP 0640, a draft: the agent has no seeding sender (weaver-gate-world-contract section 2)"
 plan "logs            $HOME_DIR/admin.log and worker.log, made by admin at the first verb"
@@ -745,8 +1015,17 @@ done
 # standing account of the right name and the wrong shape is never adopted.
 [ -z "$GATECON_LINE" ] || { judge_box_account "$GATECON_USER"; printf '   %s stands, and its shape is the box'"'"'s gate-con account\n' "$GATECON_USER"; }
 [ -z "$ADMINCON_LINE" ] || { judge_box_account "$ADMINCON_USER"; printf '   %s stands, and its shape is the box'"'"'s admin-con account\n' "$ADMINCON_USER"; }
-refuse_existing "/home/$AGENT_USER" "agent home"
-refuse_existing "$HOME_DIR" "territory"
+# **The agent's folder refuses where it stands**, the territory and the home
+# with it. A run that stops part way leaves one, root's and empty or holding a
+# home, which is removed by hand once its accounts are gone.
+refuse_existing "$AGENT_FOLDER" "agent folder (one a run left part way is removed by hand once its accounts are gone)"
+# **An agent of the layout before #578 is refused by name and never carried
+# forward** (the operator's ruling of 2026-10-08 on #1): a territory at
+# `<agent-directory>/weaver-<name>/` or a home at `/home/weaver-<name>` is an
+# earlier agent's, taken down by hand first, so its custodied record is never
+# left orphaned beside a new agent of the same name.
+refuse_existing "$AGENT_DIR/$AGENT_USER" "territory of the layout before #578 (take that agent down by deploy/HowToDeployANewAgent.md section 7)"
+refuse_existing "/home/$AGENT_USER" "home of the layout before #578 (take that agent down by deploy/HowToDeployANewAgent.md section 7)"
 refuse_existing "$AGENT_ROOT" "agent root"
 refuse_existing "$STAGE" "a partial agent root from an earlier run (remove it by hand)"
 refuse_existing "$SUDO_RULE" "sudo rule"
@@ -756,10 +1035,98 @@ refuse_existing "$SUDO_RULE" "sudo rule"
 if [ "$APPLY" -eq 0 ]; then
   printf '   no collision found in accounts and paths visible to this uid\n'
   printf '   PENDING --apply: privileged collision checks\n'
-  printf '   PENDING --apply: authentication paths, the sudoers include, visudo\n'
+  printf '   PENDING --apply: authentication paths, the sudoers include, visudo, %s as other accounts\n' \
+    "$( [ "$ROOT_OPERATOR" -eq 1 ] && printf runuser || printf "the operator's sudo" )"
   say "plan only"
   printf '   no provisioning performed; rerun with --apply to check and make it\n'
   exit 0
+fi
+
+say "sudo, checked before anything is made"
+# **The sudoers include and the rendered rule are judged before any account
+# stands** (#577). On the by-hand appliance walk of 2026-11-16 the box's sudo
+# was sudo-rs, whose visudo refuses `Defaults:<user> !pam_session`, a line the
+# rule must carry (weaver-admin-operator-contract section 2), and the refusal
+# came at the rule's install, after every account, the territory and the
+# staged root stood: a half-made agent. The rule is staged under a dot-name
+# sudo skips, checked by visudo and removed here, and staged and checked again
+# at its install below.
+root -n grep -qE '^[#@]includedir[[:space:]]+/etc/sudoers\.d([[:space:]]|$)' /etc/sudoers \
+  || die "/etc/sudoers does not include /etc/sudoers.d, so a rule there would never be read"
+lines=""
+for verb in $VERBS; do
+  lines="$lines${lines:+, }$ADMIN_BINARY $verb $NAME"
+done
+RULE_TEXT=$(cat <<SUDOERS
+# weaver-$NAME: the box's admin-con account's fixed command lines for this
+# agent, per weaver-admin-Spec section 2. Written by deploy/create-agent.sh,
+# $CONNECTOR_ROLE role.
+Defaults:$ADMINCON_USER !pam_session
+$ADMINCON_USER ALL=(root) NOPASSWD: $lines
+SUDOERS
+)
+# sudo_rs_note: a sentence naming sudo-rs where it is this box's sudo, or
+# nothing. `sudo --version` asks no credential of either sudo.
+sudo_rs_note() {
+  local version
+  version=$(sudo --version 2>/dev/null) || version=""
+  version=${version%%$'\n'*}
+  case $version in
+    sudo-rs*)
+      printf " This box's sudo is %s, whose visudo refuses \`Defaults:%s !pam_session\`," "$version" "$ADMINCON_USER"
+      printf ' a line the rule must carry (weaver-admin-operator-contract section 2):'
+      printf " make the original sudo the box's sudo, then rerun."
+      ;;
+  esac
+}
+# stage_rule: the rendered rule staged under a dot-name sudo skips, root 0440,
+# and checked by visudo. Prints the stage's path, or removes it and refuses.
+# The stage lives only across its write, its mode and visudo, and sudo never
+# reads a name with a dot in it.
+stage_rule() {
+  local stage
+  stage=$(root mktemp "/etc/sudoers.d/.weaver-$NAME.XXXXXX") || die "cannot stage the sudo rule in /etc/sudoers.d"
+  # **Each step is checked here**: this function runs inside `$(...)`, where
+  # bash clears `set -e`, so a failed write or mode would otherwise stage an
+  # empty rule that visudo accepts.
+  if ! printf '%s\n' "$RULE_TEXT" | root tee "$stage" >/dev/null || ! root chmod 0440 "$stage"; then
+    root rm -f -- "$stage"
+    die "cannot write the staged sudo rule $stage, so it was not installed"
+  fi
+  if ! root visudo -cqf "$stage"; then
+    root rm -f -- "$stage"
+    die "visudo refuses the rendered rule, so it was not installed.$(sudo_rs_note)"
+  fi
+  printf '%s' "$stage"
+}
+rule_stage=$(stage_rule) || exit 1
+root rm -f -- "$rule_stage"
+printf '   /etc/sudoers includes /etc/sudoers.d, and visudo accepts the rendered rule\n'
+# **The operator's sudo runs commands as other accounts** (#577): the wall
+# below looks as the agent's accounts, which do not stand yet, so the drop is
+# asked here as `nobody`. On the walk the operator's rule named (root) alone,
+# and the refusal came at the wall, after every account and the territory.
+# **The drop to another account is checked before anything is made**, in
+# either mode, through as_account itself: the operator's sudo as another
+# account, or root's runuser, each under setsid and env,
+# which an image without util-linux or a PAM stack that refuses it would leave
+# failing only at the wall, after the accounts and the territory stood.
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  command -v runuser >/dev/null \
+    || die "runuser is not on PATH, and root mode looks as the agent's accounts through it: install util-linux's runuser"
+  command -v setsid >/dev/null \
+    || die "setsid is not on PATH, and root mode runs every look as the agent's accounts under it:" \
+           "install util-linux's setsid"
+  as_account nobody true >/dev/null 2>&1 \
+    || die "runuser would not run a command as nobody, so it could not look as the agent's accounts at the wall:" \
+           "$DROP_NEEDS, with env and true on $DROP_PATH and /proc mounted"
+  printf '   runuser runs commands as other accounts\n'
+else
+  as_account nobody true >/dev/null 2>&1 \
+    || die "sudo would not run a command as nobody, so it could not look as the agent's accounts at the wall:" \
+           "the operator's sudo must run commands as other accounts, (ALL) and not (root) alone, with env," \
+           "timeout, setsid and true on $DROP_PATH and /proc mounted"
+  printf "   the operator's sudo runs commands as other accounts\n"
 fi
 
 say "accounts"
@@ -771,7 +1138,7 @@ say "accounts"
 for box_account in "$GATECON_USER" "$ADMINCON_USER"; do
   line=$(account_line "$box_account") || exit 1
   if [ -z "$line" ]; then
-    sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$box_account"
+    root useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$box_account"
     printf '   laid %s, the box'"'"'s account\n' "$box_account"
   fi
   judge_box_account "$box_account"
@@ -779,14 +1146,41 @@ done
 # **The agent gets a home and the member does not.** The agent's tools run
 # somewhere, and the retirement of 2026-09-11 found one of three agents with
 # a home and the others without, which is the drift a script ends. The member
-# runs nothing and owns one room of the operator's tree instead.
-sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group "$AGENT_USER"
-sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$MEMBER_USER"
-sudo groupadd --system "$TRACE_GROUP"
-sudo groupadd --system "$ACCESS_GROUP"
+# runs nothing and owns one room of the operator's tree instead. **The home
+# stands in the agent's folder** (#578), which is made first, root's, since
+# useradd makes the home and not its parent. A five-digit mode, so no setgid
+# bit of the base's survives.
+root install -d -o root -g root -m 00755 "$AGENT_FOLDER"
+root useradd --system --shell /usr/sbin/nologin --create-home --home-dir "$AGENT_HOME" --user-group "$AGENT_USER"
+# **The home's project must be free on the drive** (#585, the Planner's ruling
+# of 2026-11-16). The project is the agent's uid, which stands only once its
+# account does, so this is judged here, before any other account of the
+# agent's is made. A project the drive already carries with any usage or any
+# limit is another's, or a limit an earlier run for this uid left, and the
+# run refuses naming it rather than share it. repquota's CSV fields are fixed:
+# the project, two statuses, the block counts used, soft and hard, a grace,
+# the file counts used, soft and hard, and a grace. `-v` keeps a project that
+# carries a limit and no usage, and `-n` names each project `#<id>`.
+if [ -n "${HOME_QUOTA+given}" ]; then
+  HOME_PROJECT=$(id -u "$AGENT_USER")
+  [[ "$HOME_PROJECT" =~ ^[1-9][0-9]*$ ]] || die "$AGENT_USER carries no uid a project can take: '$HOME_PROJECT'"
+  QUOTA_REPORT=$(root repquota -P -n -v -O csv "$QUOTA_MOUNT") \
+    || die "the project quotas on $QUOTA_MOUNT cannot be read (repquota), so whether project $HOME_PROJECT is free is unknown. $AGENT_USER and its home stand: take them down by deploy/HowToDeployANewAgent.md section 7"
+  while IFS= read -r line; do
+    IFS=, read -r who _ _ b_used b_soft b_hard _ f_used f_soft f_hard _ <<< "$line"
+    [ "$who" = "#$HOME_PROJECT" ] || continue
+    for count in "$b_used" "$b_soft" "$b_hard" "$f_used" "$f_soft" "$f_hard"; do
+      [ "$count" = 0 ] \
+        || die "project $HOME_PROJECT, $AGENT_USER's uid, is already in use on $QUOTA_MOUNT (repquota: $line), so the home cannot take it. $AGENT_USER and its home stand: take them down by deploy/HowToDeployANewAgent.md section 7, which says when that project's limit is this script's to remove"
+    done
+  done <<< "$QUOTA_REPORT"
+fi
+root useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$MEMBER_USER"
+root groupadd --system "$TRACE_GROUP"
+root groupadd --system "$ACCESS_GROUP"
 # **The relay's one group is the trace group**, primary and alone, which is
 # what admin's start step sets at its spawn (weaver-admin-Spec section 6).
-sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid "$TRACE_GROUP" "$RELAY_USER"
+root useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid "$TRACE_GROUP" "$RELAY_USER"
 GATECON_LINE=$(account_line "$GATECON_USER") || exit 1
 [ -n "$GATECON_LINE" ] || die "$GATECON_USER does not stand after it was laid"
 GATECON_UID=$(uid_in "$GATECON_LINE") || exit 1
@@ -800,8 +1194,8 @@ ADMINCON_UID=$(uid_in "$ADMINCON_LINE") || exit 1
 # as the design, and gate-con joins no other group of the agent's. **The admin-con account joins the state group for passage and the
 # access group for reading**, never the agent's own group or the trace group:
 # it reaches the trace through the relay's door alone.
-sudo usermod -aG "$AGENT_USER" "$GATECON_USER"
-sudo usermod -aG "$STATE_GROUP,$ACCESS_GROUP" "$ADMINCON_USER"
+root usermod -aG "$AGENT_USER" "$GATECON_USER"
+root usermod -aG "$STATE_GROUP,$ACCESS_GROUP" "$ADMINCON_USER"
 # **The member holds its own group alone** (the operator's ruling of
 # 2026-10-08 on #1): the territory is 0710 under that group, so the member
 # passes to its own room by it, and the access group, which reads admin.log,
@@ -813,8 +1207,26 @@ sudo usermod -aG "$STATE_GROUP,$ACCESS_GROUP" "$ADMINCON_USER"
 # group buys the operator passage of the territory and nothing more, the
 # state room being the member's alone. The operator does not join the agent's
 # own group: it does not dial the gate (weaver-gate-world-contract section 1).
-sudo usermod -aG "$TRACE_GROUP,$STATE_GROUP,$ACCESS_GROUP" "$OPERATOR"
-sudo chmod 2750 "/home/$AGENT_USER"
+# Root reads everything already, so root joins no group (#576).
+[ "$ROOT_OPERATOR" -eq 1 ] || root usermod -aG "$TRACE_GROUP,$STATE_GROUP,$ACCESS_GROUP" "$OPERATOR"
+root chmod 2750 "$AGENT_HOME"
+# **The home is capped before anything of the agent's runs** (#585). First the
+# mark: the agent's folder, root's, takes the project without the inherit
+# flag, so decommission.sh can tell a cap this script set from a stranger's
+# project of the same number, and the agent, owning nothing of the folder,
+# cannot change it. A folder made in a base that carries the inherit flag
+# takes the flag too, and `chattr -p` leaves it, so the territory and the
+# state room made in the folder below would join the home's project and count
+# against its cap (CodeRabbit on #582): the flag is cleared first, in a call
+# of its own. Then the project and its inherit flag on the home and what
+# useradd laid in it, then the project's block and inode limits on the drive.
+if [ -n "${HOME_QUOTA+given}" ]; then
+  root chattr -P "$AGENT_FOLDER"
+  root chattr -p "$HOME_PROJECT" "$AGENT_FOLDER"
+  root chattr -R +P -p "$HOME_PROJECT" "$AGENT_HOME"
+  root setquota -P "$HOME_PROJECT" 0 "$HOME_QUOTA_KIB" 0 "$HOME_QUOTA_INODES" "$QUOTA_MOUNT"
+  printf '   %s capped at %s and %s files: project %s on %s\n' "$AGENT_HOME" "$HOME_QUOTA" "$HOME_QUOTA_INODES" "$HOME_PROJECT" "$QUOTA_MOUNT"
+fi
 printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
   "$AGENT_USER" "$(id -u "$AGENT_USER")" "$MEMBER_USER" "$(id -u "$MEMBER_USER")" \
   "$RELAY_USER" "$(id -u "$RELAY_USER")" "$GATECON_USER" "$GATECON_UID" \
@@ -863,10 +1275,10 @@ say "territory"
 # rewrites none.
 # Five-digit modes, so no setgid bit survives however the base stands (#99
 # area 2 review, K4): GNU install keeps one under a four-digit mode.
-sudo install -d -o root -g "$STATE_GROUP" -m 00710 "$HOME_DIR"
-sudo install -o root -g "$TRACE_GROUP" -m 0640 /dev/null "$HOME_DIR/trace.ndjson"
-sudo install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
-sudo install -d -o root -g "$ACCESS_GROUP" -m 00750 "$SAVE_POINTS"
+root install -d -o root -g "$STATE_GROUP" -m 00710 "$HOME_DIR"
+root install -o root -g "$TRACE_GROUP" -m 0640 /dev/null "$HOME_DIR/trace.ndjson"
+root install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
+root install -d -o root -g "$ACCESS_GROUP" -m 00750 "$SAVE_POINTS"
 
 
 say "declaration"
@@ -878,10 +1290,10 @@ say "declaration"
 # home. The territory was refused above where it stood, so neither file is
 # written over.
 rule_names_gatecon
-printf '%s\n' "$DECLARATION_TEXT" | sudo tee "$DECLARATION" >/dev/null
-printf '%s' "$PROMPT_TEXT" | sudo tee "$PROMPT" >/dev/null
-sudo chown root:"$ACCESS_GROUP" "$DECLARATION" "$PROMPT"
-sudo chmod 0640 "$DECLARATION" "$PROMPT"
+printf '%s\n' "$DECLARATION_TEXT" | root tee "$DECLARATION" >/dev/null
+printf '%s' "$PROMPT_TEXT" | root tee "$PROMPT" >/dev/null
+root chown root:"$ACCESS_GROUP" "$DECLARATION" "$PROMPT"
+root chmod 0640 "$DECLARATION" "$PROMPT"
 printf '   %s and %s written, root:%s 0640\n' "$DECLARATION" "$PROMPT" "$ACCESS_GROUP"
 
 say "agent root, staged"
@@ -889,22 +1301,22 @@ say "agent root, staged"
 # is made by root at 0755 with its files 0644. Every key the stack record
 # holds is copied as written. `spu-binary` is this agent's `--spu` where given,
 # and `territory`, `operator` and `roles.toml` are the agent's own.
-sudo install -d -o root -g root -m 0755 "$STAGE"
+root install -d -o root -g root -m 0755 "$STAGE"
 for key in $REQUIRED_KEYS $OPTIONAL_KEYS; do
   [ -e "$STACK/$key" ] || continue
   if [ "$key" = spu-binary ] && [ -n "$SPU_OVERRIDE" ]; then
-    printf '%s\n' "$SPU_OVERRIDE" | sudo tee "$STAGE/$key" >/dev/null
+    printf '%s\n' "$SPU_OVERRIDE" | root tee "$STAGE/$key" >/dev/null
   else
-    sudo cp -- "$STACK/$key" "$STAGE/$key"
+    root cp -- "$STACK/$key" "$STAGE/$key"
   fi
 done
-printf '%s\n' "$HOME_DIR" | sudo tee "$STAGE/territory" >/dev/null
-printf '%s\n' "$OPERATOR_UID" | sudo tee "$STAGE/operator" >/dev/null
+printf '%s\n' "$HOME_DIR" | root tee "$STAGE/territory" >/dev/null
+printf '%s\n' "$OPERATOR_UID" | root tee "$STAGE/operator" >/dev/null
 # **The boundary file names the trace door's one reader**, the box's
 # admin-con account, in the shape of weaver-types-Spec section 3.1 and
 # nothing else.
-printf 'trace-reader = "%s"\n' "$ADMINCON_USER" | sudo tee "$STAGE/roles.toml" >/dev/null
-sudo chmod 0644 "$STAGE"/*
+printf 'trace-reader = "%s"\n' "$ADMINCON_USER" | root tee "$STAGE/roles.toml" >/dev/null
+root chmod 0644 "$STAGE"/*
 printf '   staged at %s\n' "$STAGE"
 
 say "the wall, verified rather than assumed"
@@ -912,12 +1324,12 @@ say "the wall, verified rather than assumed"
 # **The store's gate is the room itself**: the member writes its save points
 # into the state territory, so the member must be able to write there and the
 # agent's own uid must not be able to enter it.
-if sudo -u "$MEMBER_USER" test -w "$STATE_DIR" && sudo -u "$MEMBER_USER" test -x "$STATE_DIR"; then
+if allows "$MEMBER_USER" -w "$STATE_DIR" && allows "$MEMBER_USER" -x "$STATE_DIR"; then
   printf '   %s can write its state room %s\n' "$MEMBER_USER" "$STATE_DIR"
 else
   die "the member cannot write its state room $STATE_DIR: its passage or ownership is wrong"
 fi
-if sudo -u "$AGENT_USER" test -x "$STATE_DIR"; then
+if allows "$AGENT_USER" -x "$STATE_DIR"; then
   die "THE AGENT'S UID CAN ENTER THE STATE ROOM $STATE_DIR: the wall is open"
 else
   printf "   the agent's own uid cannot enter the state room, which is the wall the charter asks for\n"
@@ -925,20 +1337,20 @@ fi
 
 # **The member cannot read the trace**: its ingress is the
 # tee's distillate and nothing more (weaver-state-PRD).
-if sudo -u "$MEMBER_USER" test -r "$HOME_DIR/trace.ndjson"; then
+if allows "$MEMBER_USER" -r "$HOME_DIR/trace.ndjson"; then
   die "THE MEMBER $MEMBER_USER CAN READ THE TRACE $HOME_DIR/trace.ndjson: the trace's group or mode is open"
 else
   printf "   the member cannot read the trace, which is the boundary the state charter asks for\n"
 fi
 # **The member reads none of the access group's files**: it passes the
 # territory by its own group and holds not the access group.
-if sudo -u "$MEMBER_USER" test -r "$DECLARATION"; then
+if allows "$MEMBER_USER" -r "$DECLARATION"; then
   die "THE MEMBER $MEMBER_USER CAN READ THE DECLARATION $DECLARATION: it holds the access group, or the file's mode is open"
 fi
 # **The agent's own uid cannot pass the territory** (the #94 survey's S1):
 # admin's load refuses a sink whose directory the agent's uid can traverse,
 # so a territory it could pass would refuse every load.
-if sudo -u "$AGENT_USER" test -x "$HOME_DIR"; then
+if allows "$AGENT_USER" -x "$HOME_DIR"; then
   die "THE AGENT'S UID CAN PASS THE TERRITORY $HOME_DIR: its group or mode is open, and admin would refuse every load"
 else
   printf "   the agent's own uid cannot pass the territory, which is the trace's denial admin checks\n"
@@ -949,10 +1361,10 @@ fi
 # declaration and cannot rewrite it, the draft or the save points directory,
 # since an account that could rewrite the declaration would choose what admin
 # loads.
-sudo -u "$ADMINCON_USER" test -r "$DECLARATION" \
+allows "$ADMINCON_USER" -r "$DECLARATION" \
   || die "the admin-con account $ADMINCON_USER cannot read the declaration $DECLARATION through $STATE_GROUP and $ACCESS_GROUP: the territory's or the file's group or mode is wrong"
 for f in "$DECLARATION" "$PROMPT" "$SAVE_POINTS"; do
-  if sudo -u "$ADMINCON_USER" test -w "$f"; then
+  if allows "$ADMINCON_USER" -w "$f"; then
     die "THE ACCESS GROUP CAN WRITE $f: the admin-con account could rewrite what admin loads"
   fi
 done
@@ -980,39 +1392,19 @@ printf '   %s holds %s alone, %s holds%s, %s holds%s\n' "$RELAY_USER" "$TRACE_GR
   "$ADMINCON_USER" "${admincon_groups% }" "$GATECON_USER" "${gatecon_groups% }"
 
 say "sudo rule"
-# **Rendered, checked by visudo, then installed root 0440.** Each grant is one
+# **Rendered and checked before anything was made (above), and staged and
+# checked by visudo again here, then installed root 0440.** Each grant is one
 # fixed command line with its arguments, so sudo matches it exactly and the
 # admin-con account can pass none of its own.
-sudo -n grep -qE '^[#@]includedir[[:space:]]+/etc/sudoers\.d([[:space:]]|$)' /etc/sudoers \
-  || die "/etc/sudoers does not include /etc/sudoers.d, so a rule there would never be read"
-lines=""
-for verb in $VERBS; do
-  lines="$lines${lines:+, }$ADMIN_BINARY $verb $NAME"
-done
-RULE_TEXT=$(cat <<SUDOERS
-# weaver-$NAME: the box's admin-con account's fixed command lines for this
-# agent, per weaver-admin-Spec section 2. Written by deploy/create-agent.sh,
-# $CONNECTOR_ROLE role.
-Defaults:$ADMINCON_USER !pam_session
-$ADMINCON_USER ALL=(root) NOPASSWD: $lines
-SUDOERS
-)
-# Staged under a dot-name sudo skips, checked, then moved into place.
-rule_stage=$(sudo mktemp "/etc/sudoers.d/.weaver-$NAME.XXXXXX")
-printf '%s\n' "$RULE_TEXT" | sudo tee "$rule_stage" >/dev/null
-sudo chmod 0440 "$rule_stage"
-if ! sudo visudo -cqf "$rule_stage"; then
-  sudo rm -f -- "$rule_stage"
-  die "visudo refuses the rendered rule, so it was not installed"
-fi
-sudo mv -T -- "$rule_stage" "$SUDO_RULE"
+rule_stage=$(stage_rule) || exit 1
+root mv -T -- "$rule_stage" "$SUDO_RULE"
 printf '   %s installed: %s\n' "$SUDO_RULE" "$VERBS"
 sudo -n -l -U "$ADMINCON_USER" | sed -n '/may run the following/,$p' | sed 's/^/   /'
 
 say "admission"
 # **Moving the root into place is the admission**: before it every admin verb
 # answers no_such_agent for this name, and after it the agent is admitted.
-sudo mv -T -- "$STAGE" "$AGENT_ROOT"
+root mv -T -- "$STAGE" "$AGENT_ROOT"
 printf '   %s admitted at %s\n' "$NAME" "$AGENT_ROOT"
 
 say "made"
@@ -1024,18 +1416,26 @@ say "made"
 # login.
 printf '   %s joined %s, and %s joined %s and %s: a gate-con or admin-con already running\n' "$GATECON_USER" "$AGENT_USER" "$ADMINCON_USER" "$STATE_GROUP" "$ACCESS_GROUP"
 printf '   under either account takes the groups only when it starts again\n'
-printf '   %s joined groups %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$TRACE_GROUP" "$STATE_GROUP" "$ACCESS_GROUP"
-printf '   login before the groups apply (`newgrp` selects one group in one shell)\n'
-printf '   the declaration %s is root'"'"'s: edit it with sudoedit, and read it, the draft, the logs and\n' "$DECLARATION"
-printf '   the save points under %s through %s\n' "$HOME_DIR" "$ACCESS_GROUP"
+if [ "$ROOT_OPERATOR" -eq 0 ]; then
+  printf '   %s joined groups %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$TRACE_GROUP" "$STATE_GROUP" "$ACCESS_GROUP"
+  printf '   login before the groups apply (`newgrp` selects one group in one shell)\n'
+fi
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  printf '   the declaration %s is root'"'"'s: edit it with sudoedit, which keeps its owner, group and\n' "$DECLARATION"
+  printf '   mode, since admin refuses any other\n'
+else
+  printf '   the declaration %s is root'"'"'s: edit it with sudoedit, and read it, the draft, the logs and\n' "$DECLARATION"
+  printf '   the save points under %s through %s\n' "$HOME_DIR" "$ACCESS_GROUP"
+fi
 # **probe_connector VERB: the admin-con account reaches a line through its
-# rule**, as the stand-in for admin-con: the operator's sudo becomes the account,
-# and that user runs `sudo -n`, which only the rule can satisfy. It succeeds
+# rule**, as the stand-in for admin-con: the operator's sudo (root's runuser in
+# root mode) becomes the account, and that user runs `sudo -n`, which only the
+# rule can satisfy. It succeeds
 # only on the answer the verb owes, `validated` for validate and a state for
 # show, and prints what came back either way (Codex on #79).
 probe_connector() {
   local said answer
-  said=$(sudo -n -u "$ADMINCON_USER" sudo -n "$ADMIN_BINARY" "$1" "$NAME" 2>&1) || true
+  said=$(as_account "$ADMINCON_USER" sudo -n "$ADMIN_BINARY" "$1" "$NAME" 2>&1) || true
   answer=$(printf '%s\n' "$said" | tail -n 1)
   printf '%s' "$answer"
   python3 -c '

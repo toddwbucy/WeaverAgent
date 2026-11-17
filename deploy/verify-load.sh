@@ -147,7 +147,7 @@ plan "validate    $VERDICT"
 member_said() {
   local st said
   st="$(dirname "$SINK")/state/state.log"
-  said=$(sudo -n -u "weaver-$AGENT-state" tail -n 3 "$st" 2>/dev/null || true)
+  said=$(sudo -n -u "weaver-$AGENT-state" tail -n 3 "$st" </dev/null 2>/dev/null || true)
   [ -n "$said" ] && { plan "the state member last said:"; printf '%s\n' "$said" | sed 's/^/     /'; }
   return 0
 }

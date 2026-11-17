@@ -3586,8 +3586,10 @@ value fails the read naming the key, so no read resolves against the directory a
 ran sudo from and two invocations of one root always name the same files. **The whole
 agent lives in its territory, and the declaration with it**, on the operator's ruling
 of 2026-10-07 on #1, which retires the operator's `~/.weaveragent/<agent>/` of the
-2026-10-02 election: `territory` names it, absolute, `/var/lib/weaver-agent/weaver-<agent>/`
-as the deploy scripts lay it out, root-owned, and it holds `agent.toml`, which this
+2026-10-02 election: `territory` names it, absolute,
+`/var/lib/weaver-agent/<agent>/weaver-<agent>/` as the deploy scripts lay it out in the
+agent's root-held folder beside its home (the operator's ruling of 2026-11-16 on the
+layout, #578), root-owned, and it holds `agent.toml`, which this
 crate parses per `weaver-types-Spec` section 2 and the operator edits with `sudoedit`;
 the prompt draft `system-prompt.md`, which this crate never reads; `admin.log` and
 `worker.log`, per section 8; `save-points/`, holding the published save points and
@@ -3608,9 +3610,12 @@ at every publication, per section 6, so a planted line never names a loadable fi
 `NoSuchAgent`, as a root holding none did. **`operator` names the operator's uid**, on
 the operator's ruling of 2026-10-02 on this act's first question: a root-owned key
 `create-agent.sh` writes once, the box's own fact, set by root, about whose data defines
-the agent, and independent of who invokes a verb. The coordination name changed hands
-with the operator socket on 2026-08-05: the operator places it, the harness binds it,
-and admin dials it, so one value reaches two crates and the root is where they agree.
+the agent, and independent of who invokes a verb. **On a single-purpose appliance root
+is the operator, and the key is 0** (the operator's ruling of 2026-11-16, #576):
+`create-agent.sh --root-operator` writes it, and this crate parses it as any other uid.
+The coordination name changed hands with the operator socket on 2026-08-05: the
+operator places it, the harness binds it, and admin dials it, so one value reaches two
+crates and the root is where they agree.
 These values are not the agent config and no seam carries them, which is why the root
 takes no contract of its own. **The file and its values part company at the start step,
 and the distinction is worth holding.** This crate is the only program of the agent

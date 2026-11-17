@@ -43,6 +43,23 @@
 # `sudo -u` takes the groups create-agent.sh just joined without a new login.
 # Step 5b alone also runs a turn as the operator, against a rule it moved.
 #
+# **On a single-purpose appliance root is the operator** (#576, the
+# operator's ruling of 2026-11-16): `--root-operator`, run from root's own
+# login, passes the flag to create-agent.sh, runs every root step directly and
+# every look as another account through `runuser`, asks no credential, and
+# joins root to no group. Where root's capability makes a check measure
+# nothing, the check is made another way or the run says so: step 1 checks
+# that root holds none of the agent's groups, step 5b measures the socket's
+# admission on the box's admin-con account, whose uid does not hold the
+# agent's own group, in place of root leaving that group, and sends root's
+# seeding line while the rule names 0, step 9 asks `show` as the box's
+# gate-con account, step 0 says that update-stack.sh's reads through the
+# operator's groups cannot refuse as root, and step 3 says its cause no longer
+# tells admin's sources apart. The admin-con rule's listing (step 1) and
+# verify-load.sh's own drops (step 2) stay on root's sudo, which root mode
+# already needs (deploy/HowToDeployANewAgent.md section 1) and checks before
+# anything acts. Without the flag nothing changes.
+#
 # **Step 9 never runs decommission.sh**, which takes every agent off the box:
 # it removes this one agent by HowToDeployANewAgent.md section 7's steps,
 # archiving its territory and its root first into `--archive <dir>`.
@@ -57,7 +74,9 @@ usage: deploy/verify-lifecycle.sh --agent <name> [options]
 
 Verify an agent's lifecycle end to end against a throwaway agent this script
 creates (step 1, create-agent.sh) and takes down (step 9). Plan only unless
---apply is given. Run it as the operator, never under sudo or as root.
+--apply is given. Run it as the operator, never under sudo or as root, or,
+on a single-purpose appliance where root is the operator, as root with
+--root-operator.
 
   --agent <name>          the throwaway agent; refused if it already exists
   --artifact <path>       the model the agent's decoder binds (required with --apply)
@@ -80,12 +99,19 @@ creates (step 1, create-agent.sh) and takes down (step 9). Plan only unless
                           checks with no command for you to make against it,
                           then the --cleanup line that takes it down.
                           RECOMMENDED for a first live run
+  --root-operator         root is the operator, on a single-purpose appliance
+                          (#576): run from root's own login; create-agent.sh
+                          is given the flag, root steps run directly, looks
+                          as the agent's accounts go through runuser, and
+                          the checks root's capability voids are made
+                          another way or said to measure nothing
   --apply                 act; without it, print the plan and act on nothing
   -h, --help              this text
 
 Steps: 0 the box; 1 create; 1b near misses; 2 load, one unseeded turn;
 3 save point; 4 unload and reload; 5 restore; 5b a measurement: the access
-rule moved to the operator and back; 6 force-unload; 6b force-unload
+rule moved to the operator and back (with --root-operator, to uid 0 and
+the admin-con account's uid); 6 force-unload; 6b force-unload
 on a drifted territory; 7 crash recovery; 8 a root naming a
 declaration-directory, refused by admin and by update-stack.sh's plan;
 8b an access entry on the trace; 9 take the agent down.
@@ -109,6 +135,7 @@ APPLY=0
 CLEANUP=0
 KEEP=0
 STAGED_KEY=0
+ROOT_OPERATOR=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --agent)        [ $# -ge 2 ] || die "--agent needs a name"; AGENT=$2; shift ;;
@@ -120,6 +147,7 @@ while [ $# -gt 0 ]; do
     --prefix)       [ $# -ge 2 ] || die "--prefix needs a directory"; PREFIX_ARG=$2; shift ;;
     --cleanup)      CLEANUP=1 ;;
     --keep)         KEEP=1 ;;
+    --root-operator) ROOT_OPERATOR=1 ;;
     --apply)        APPLY=1 ;;
     -h|--help)      usage; exit 0 ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -132,10 +160,28 @@ done
 # Every refusal below is made before anything acts and before sudo is asked
 # for, except those that need root to look, which follow the credential.
 
-# **Run as the operator**: the root's `operator` key names it, and
-# create-agent.sh refuses root.
-[ "$(id -u)" -ne 0 ] || die "run as the operator, not as root: create-agent.sh names this uid as the agent's operator, and --apply asks for sudo itself"
-[ -z "${SUDO_USER:-}" ] || die "run as the operator, not under sudo: --apply asks for sudo itself where a step needs it"
+# **Run as the operator, or as root where root is the operator** (#576). On a
+# workstation the operator is an ordinary account: the root's `operator` key
+# names it, and every root step asks for sudo. **On a single-purpose appliance
+# root is the operator** (the operator's ruling of 2026-11-16), and
+# `--root-operator` says so, as create-agent.sh's flag does, and passes it on
+# to create-agent.sh: the key is 0, every root step runs directly, and every
+# look as another account goes through `runuser`. Root through its own sudo
+# (`sudo -i`) is still root, and a run through sudo from another account is
+# that account's. **Admin records a cause's uid from SUDO_UID, else 0**, so in
+# root mode SUDO_UID is unset or 0, or every cause would name another uid than
+# the key. Admin refuses a SUDO_UID that is set and empty at every verb, so
+# that refuses here too (the self-check on B2).
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  [ "$(id -u)" -eq 0 ] || die "--root-operator is for root, on a single-purpose appliance where root is the operator: run it as root, or drop the flag and run it as the operator"
+  sudo_uid_said=${SUDO_UID-unset}
+  [ -n "$sudo_uid_said" ] || sudo_uid_said=empty
+  { [ -z "${SUDO_USER:-}" ] || [ "$SUDO_USER" = root ]; } && { [ -z "${SUDO_UID+set}" ] || [ "$SUDO_UID" = 0 ]; } \
+    || die "--root-operator is for root's own login, not sudo from another account (SUDO_USER ${SUDO_USER:-unset}, SUDO_UID $sudo_uid_said): admin records the invoker's SUDO_UID as every cause and refuses an empty one, and the operator key is 0"
+else
+  [ "$(id -u)" -ne 0 ] || die "run as the operator, not as root: create-agent.sh names this uid as the agent's operator, and --apply asks for sudo itself. On a single-purpose appliance, where root is the operator, run it as root with --root-operator"
+  [ -z "${SUDO_USER:-}" ] || die "run as the operator, not under sudo: --apply asks for sudo itself where a step needs it"
+fi
 
 [ -n "$AGENT" ] || die "name the throwaway agent: --agent <name> (see --help)"
 # create-agent.sh's own rule, so the name step 1 makes is the name refused here.
@@ -221,7 +267,9 @@ AGENT_DIR=$(realpath -e -- "$AGENT_DIR_WRITTEN" 2>/dev/null) || die "the stack r
 
 A=$AGENT
 AU="weaver-$A"
-T="$AGENT_DIR/$AU"                 # the territory, canonical
+F="$AGENT_DIR/$A"                  # the agent's folder, canonical (#578)
+T="$F/$AU"                         # the territory, in the folder
+H="$F/home"                        # the agent's home, beside the territory
 R="$ADMIN_BASE/$A"                 # the agent's root
 STAGE="$ADMIN_BASE/.$A.partial"    # create-agent.sh's staged root
 RULE="/etc/sudoers.d/$AU"
@@ -232,8 +280,15 @@ MANIFEST="$SAVE_POINTS/save-points.manifest"
 RUN_DIR="$COORD/weaver.run/$A"
 RUNTIME_DIR="$COORD/$AU"
 MARKER="$STACK/verify-lifecycle-$A"
-OPERATOR=$(id -un)
-OPERATOR_UID=$(id -u)
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  OPERATOR=root
+  OPERATOR_UID=0
+  ROOT_FLAG=" --root-operator"
+else
+  OPERATOR=$(id -un)
+  OPERATOR_UID=$(id -u)
+  ROOT_FLAG=""
+fi
 # The box's two connector accounts (weaver-admin-Spec section 2): step 1's
 # create-agent.sh lays each where absent, and step 9 leaves both standing.
 GATECON=weaver-gatecon
@@ -257,7 +312,7 @@ if [ "$CLEANUP" -eq 1 ]; then
   marker_names_agent || die "no marker at $MARKER naming $A: verify-lifecycle.sh did not create $A, and --cleanup takes down only a throwaway agent this script made. Take any other agent down by deploy/HowToDeployANewAgent.md section 7"
   if [ -f "$R/territory" ]; then
     named=$(trim "$(cat -- "$R/territory")")
-    [ "$named" = "$T" ] || die "$R/territory names $named, not $T, and --cleanup removes only the territory named for its agent"
+    [ "$named" = "$T" ] || die "$R/territory names $named, not $T, and --cleanup removes only the territory named for its agent. A throwaway agent laid before #578 is taken down by hand, by deploy/HowToDeployANewAgent.md section 7"
   fi
   # **Step 8's staged key, left by a run stopped between its write and its
   # removal** (#99, from #105's Codex round 2): admin refuses the root
@@ -280,7 +335,7 @@ else
   marker_names_agent && die "a marker from an earlier run stands at $MARKER: take that agent down first with --cleanup"
   for u in $ACCOUNTS; do lookup passwd "$u" && die "the account $u already exists: this script verifies a throwaway agent it creates at step 1"; done
   for g in $GROUPS_MADE; do lookup group "$g" && die "the group $g already exists: this script verifies a throwaway agent it creates at step 1"; done
-  for p in "$R" "$STAGE" "$T" "/home/$AU"; do
+  for p in "$R" "$STAGE" "$F"; do
     { [ -e "$p" ] || [ -L "$p" ]; } && die "$p already exists: this script verifies a throwaway agent it creates at step 1"
   done
 fi
@@ -313,6 +368,101 @@ if [ "$APPLY" -eq 1 ]; then
 fi
 
 # ------------------------------------------------------------ helpers
+# **root CMD...: a root step** (#576): `sudo -n CMD...` where the operator runs
+# this script, and the command itself where root does, in the shape of
+# create-agent.sh's helper of the same name. Unlike that one, this script
+# passes a leading VAR=value, sudo's way of setting the command's environment,
+# and in root mode it goes through `env`. The two helpers are separate copies.
+root() {
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    if [[ "${1:-}" == [A-Za-z_]*=* ]]; then env "$@"; else "$@"; fi
+  else
+    sudo -n "$@"
+  fi
+}
+# DROP_PATH: the PATH a command run as another account starts with, sudo's
+# default secure_path (as_account).
+DROP_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# **as_account [--stdin FILE] ACCOUNT [VAR=value...] CMD...: CMD run as
+# ACCOUNT, with that account's supplementary groups** (#576): `sudo -n -u`
+# where the operator runs this script, and `runuser -u` where root does, so
+# root needs no sudoers line of its own. **CMD is handed nothing of this
+# shell's but what the call names**, since while it runs any process of the
+# account's uid can read its environment and open its descriptors through
+# /proc. In both modes its standard input is /dev/null, or FILE, which this
+# shell opens. Its standard output and standard error are pipes this shell
+# holds, one pipe where the caller gave both the same file, so a caller's
+# `2>&1` keeps its order, and cat copies them on. Every other descriptor this
+# shell holds is closed first, as sudo's closefrom does and runuser does not,
+# and where /proc/self/fd cannot be read, nothing runs and the call fails.
+# It runs under `setsid -w`, in a session of its own with no controlling
+# terminal: before runuser in root mode, and inside sudo in the operator's,
+# since sudo looks up the operator's cached credential by terminal. It starts
+# under `env -i` with DROP_PATH and the leading VAR=value pairs alone, since
+# runuser keeps the caller's environment and sudo keeps what the box's
+# env_keep names. **An interrupt still reaches it**: setsid has moved it out
+# of the terminal's process group, so the drop runs as a job of this shell,
+# whose traps, set before it starts, pass INT, QUIT, TERM and HUP on to it
+# as SIGTERM, and which then takes the signal itself, so the script's own
+# traps run as they would have. runuser's parent passes SIGTERM on to its
+# child. Under sudo, `timeout 0`, which never times out, passes on what sudo
+# relays: under sudo's use_pty the command sudo starts leads its own process
+# group, so a setsid started there would fork and its parent alone would
+# take the signal, while timeout's child leads none, and setsid runs in it.
+# That timeout is coreutils': BusyBox's counts 0 down, and the stack puts no
+# BusyBox applet on any PATH.
+# The status is CMD's, else the standard output relay's, else the standard
+# error relay's. **Not covered** (#590): the env that runuser or sudo starts
+# holds the caller's environment, or what env_keep passes, until it replaces
+# it, and under sudo, env and timeout hold the terminal sudo hands them,
+# while CMD holds none.
+as_account() {
+  local account input=/dev/null named=()
+  if [ "${1:-}" = --stdin ]; then input=$2; shift 2; fi
+  account=$1
+  shift
+  while [[ "${1:-}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do named+=("$1"); shift; done
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    set -- setsid -w runuser -u "$account" -- env -i PATH="$DROP_PATH" "${named[@]}" "$@"
+  else
+    set -- sudo -n -u "$account" env -i PATH="$DROP_PATH" "${named[@]}" timeout 0 setsid -w "$@"
+  fi
+  (
+    set +e
+    [ -d /proc/self/fd ] && [ -r /proc/self/fd ] || {
+      echo "as_account: no command runs as $account, since /proc/self/fd cannot be read" \
+           "to close the descriptors this shell holds" >&2
+      exit 1
+    }
+    exec <"$input" || exit 1
+    for fd in /proc/self/fd/*; do
+      fd=${fd##*/}
+      case $fd in 0|1|2|*[!0-9]*) ;; *) eval "exec $fd>&-" ;; esac
+    done
+    first_failure() { local s; for s; do [ "$s" -eq 0 ] || exit "$s"; done; exit 0; }
+    err=4
+    [ ! /proc/self/fd/1 -ef /proc/self/fd/2 ] || err=1
+    {
+      {
+        {
+          drop= sig=
+          trap 'sig=INT; [ -z "$drop" ] || kill -TERM "$drop"' INT
+          trap 'sig=QUIT; [ -z "$drop" ] || kill -TERM "$drop"' QUIT
+          trap 'sig=TERM; [ -z "$drop" ] || kill -TERM "$drop"' TERM
+          trap 'sig=HUP; [ -z "$drop" ] || kill -TERM "$drop"' HUP
+          "$@" <&0 2>&"$err" 4>&- &
+          drop=$!
+          [ -z "$sig" ] || kill -TERM "$drop"
+          until wait "$drop"; rc=$?; ! kill -0 "$drop" 2>/dev/null; do :; done
+          [ -z "$sig" ] || { trap - "$sig"; kill -s "$sig" "$BASHPID"; }
+          exit "$rc"
+        } | cat 4>&-
+        first_failure "${PIPESTATUS[@]}"
+      } 4>&1 1>&3 3>&- | cat >&2
+      first_failure "${PIPESTATUS[@]}"
+    } 3>&1
+  )
+}
 STEP_LABEL=""
 RESTORE=()
 CREATED=0
@@ -400,7 +550,7 @@ ask() {
   # **A load needs no scope of its own** (weaver-admin-Spec 6.1): admin's
   # start step asks PID1 for the agent's own scope and moves itself into it,
   # so a load from this script stands as one from any other invoker.
-  said=$(sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$ADMIN" "$1" "$A" 2>&1) || true
+  said=$(root WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$ADMIN" "$1" "$A" 2>&1) || true
   ASKED_CAUSE=$(printf '%s\n' "$said" | sed '$d')
   [ -z "$ASKED_CAUSE" ] || printf '%s\n' "$ASKED_CAUSE" | sed 's/^/     admin: /' >&2
   ANSWER=$(printf '%s\n' "$said" | sed -n '$p')
@@ -423,7 +573,7 @@ expect_unloaded_alone() { # show reads unloaded with no constituent
 # The root's reads: layout, access entries, trace, manifest, marker.
 lay() { # owner:group mode type
   local s
-  s=$(sudo -n stat -c '%U:%G %a %F' -- "$1" 2>/dev/null) || { printf 'absent'; return 0; }
+  s=$(root stat -c '%U:%G %a %F' -- "$1" 2>/dev/null) || { printf 'absent'; return 0; }
   printf '%s' "$s"
 }
 expect_lay() { # expect_lay PATH "owner:group mode type"
@@ -435,12 +585,24 @@ expect_lay() { # expect_lay PATH "owner:group mode type"
 expect_no_acl() {
   local p found
   for p in "$@"; do
-    found=$(sudo -n getfacl -p --skip-base -- "$p" 2>&1) || true
+    found=$(root getfacl -p --skip-base -- "$p" 2>&1) || true
     expect_eq "$p carries no access entry" "" "$found"
   done
 }
-as_can() { # as_can ACCOUNT TEST...: yes where the account passes the test
-  if sudo -n -u "$1" "${@:2}" >/dev/null 2>&1; then printf yes; else printf no; fi
+as_can() { # as_can ACCOUNT COMMAND...: yes where the account's command succeeds
+  if as_account "$1" "${@:2}" >/dev/null 2>&1; then printf yes; else printf no; fi
+}
+# **as_look ACCOUNT FLAG PATH: yes or no, as the shell's own `[` answers for
+# ACCOUNT** (#577), never the external `test`: on the by-hand appliance walk
+# of 2026-11-16 that `test` was uutils', whose `-r` ignored supplementary
+# groups, so an expectation of `no` could pass where the access came through a
+# group. **A drop sudo or runuser refuses answers `refused`**, never `no`, so an
+# expectation of `no` fails on it, as `holds_group` answers `unreadable`.
+as_look() {
+  local said
+  said=$(as_account "$1" sh -c 'if [ "$1" "$2" ]; then printf yes; else printf no; fi' sh "$2" "$3" 2>/dev/null) \
+    || said=refused
+  case $said in yes|no) printf '%s' "$said" ;; *) printf refused ;; esac
 }
 # holds_group ACCOUNT GROUP: yes where the group database gives ACCOUNT the
 # group GROUP, no where it gives ACCOUNT groups without it, read without
@@ -487,7 +649,7 @@ with open(path) as f:
         try: e = json.loads(line)
         except ValueError: continue
         if not kinds or e.get("kind") in kinds: print(json.dumps(e, separators=(",", ":"), sort_keys=True))'
-events_since() { local start=$1; shift; sudo -n python3 -c "$TRACE_PY" "$TRACE" "$start" "$@"; }
+events_since() { local start=$1; shift; root python3 -c "$TRACE_PY" "$TRACE" "$start" "$@"; }
 last_event() { events_since 0 "$1" | tail -n 1; }
 # **One unseeded turn, read from the record**, the events on stdin. A seeding is
 # the turnless message.system the identity door authors, the event carrying no
@@ -550,10 +712,10 @@ for n, l in enumerate(sys.stdin, 1):
     elif k == "recall": print("malformed", n); sys.exit(0)
 print("unread" if loads == 0 else "none" if recalls == 0 else recalls)'
 }
-trace_lines() { sudo -n python3 -c 'import sys; print(sum(1 for _ in open(sys.argv[1])))' "$TRACE"; }
+trace_lines() { root python3 -c 'import sys; print(sum(1 for _ in open(sys.argv[1])))' "$TRACE"; }
 # The manifest's lines, ordinal, arrival, name and digest, in file order.
 manifest() {
-  sudo -n python3 -c 'import json, os, sys
+  root python3 -c 'import json, os, sys
 if not os.path.exists(sys.argv[1]): sys.exit(0)
 for l in open(sys.argv[1]):
     if l.strip():
@@ -564,14 +726,14 @@ manifest_field() { # manifest_field LINE FIELD(1-4): LINE counted from 1, or "la
   if [ "$1" = last ]; then manifest | tail -n 1 | cut -d' ' -f"$2"
   else manifest | sed -n "$1p" | cut -d' ' -f"$2"; fi
 }
-marker() { sudo -n cat -- "$R/run.marker" 2>/dev/null || printf 'absent'; }
+marker() { root cat -- "$R/run.marker" 2>/dev/null || printf 'absent'; }
 
 expect_marker() { # expect_marker RUN STATE
   local m; m=$(marker)
   expect_at "the run marker names run $1" "$1" "$m" run
   expect_at "the run marker reads $2" "$2" "$m" state
 }
-file_size() { sudo -n stat -c %s -- "$1" 2>/dev/null || printf 0; }
+file_size() { root stat -c %s -- "$1" 2>/dev/null || printf 0; }
 # not_relay_lines_since FILE OFFSET: each line appended to admin.log past
 # OFFSET that is not the trace relay's own, or `none`. The relay writes its
 # events (connect, replaced, refused, disconnect, truncated, ended) through
@@ -579,7 +741,7 @@ file_size() { sudo -n stat -c %s -- "$1" 2>/dev/null || printf 0; }
 # carrying "actor":"relay" and an "event"; admin's own lines carry a "verb"
 # and a "command". Anything else, admin's or unreadable, is named.
 not_relay_lines_since() {
-  sudo -n tail -c +"$(( $2 + 1 ))" -- "$1" 2>/dev/null | python3 -c 'import json, sys
+  root tail -c +"$(( $2 + 1 ))" -- "$1" 2>/dev/null | python3 -c 'import json, sys
 named = []
 for line in sys.stdin:
     if not line.strip():
@@ -599,7 +761,7 @@ print("\n".join(named) if named else "none")'
 # operator, never a check.
 queue_peak_since() {
   local text
-  text=$(sudo -n tail -c +"$(( $1 + 1 ))" -- "$T/worker.log" 2>/dev/null) || { printf 'unreadable'; return 0; }
+  text=$(root tail -c +"$(( $1 + 1 ))" -- "$T/worker.log" 2>/dev/null) || { printf 'unreadable'; return 0; }
   printf '%s' "$text" | python3 -c 'import json, sys
 found = "none"
 for line in sys.stdin:
@@ -625,7 +787,7 @@ room_count_report() {
   plan "the largest finished-name count admin.log records for a room scan, printed (S16, provisional at 4096)"
   [ "$APPLY" -eq 1 ] || return 0
   local log line verb outcome count beyond largest=-1 scans=0 past=0
-  if ! log=$(sudo -n cat -- "$T/admin.log" 2>/dev/null); then
+  if ! log=$(root cat -- "$T/admin.log" 2>/dev/null); then
     measured "admin.log does not read, so no room count is reported"
     return 0
   fi
@@ -669,16 +831,16 @@ print("in order")' "$file" "$@")
   expect_eq "$check" "in order" "$found"
 }
 # turn_as ACCOUNT TEXT...: one turn through turn.py as ACCOUNT, its source on
-# standard input, since the gate-con account cannot traverse a checkout in the
-# operator's home; its exit status in TURN_RC, its answer in TURN_SAID and its
-# stderr in TURN_ERR.
+# standard input, which this shell opens, since the gate-con account cannot
+# traverse a checkout in the operator's home; its exit status in TURN_RC, its
+# answer in TURN_SAID and its stderr in TURN_ERR.
 TURN_SAID=""; TURN_ERR=""; TURN_RC=0
 turn_as() {
   local who=$1 out="$LOGDIR/turn.$RANDOM"
   shift
   TURN_RC=0
-  sudo -n -u "$who" WEAVER_ADMIN_CONFIG="$ADMIN_BASE" python3 -I - "$A" "$@" \
-    <"$CHECKOUT/deploy/turn.py" >"$out" 2>"$out.err" || TURN_RC=$?
+  as_account --stdin "$CHECKOUT/deploy/turn.py" "$who" WEAVER_ADMIN_CONFIG="$ADMIN_BASE" python3 -I - "$A" "$@" \
+    >"$out" 2>"$out.err" || TURN_RC=$?
   TURN_SAID=$(cat "$out")
   TURN_ERR=$(cat "$out.err")
 }
@@ -696,11 +858,14 @@ turn() {
 # **The near misses put back what they changed.** RESTORE holds the one
 # restore pending, run as soon as admin has answered and by the exit trap
 # where anything stops the run between the change and that answer.
-restore_mode()  { sudo -n chmod "$(printf '%05o' "$((8#$2))")" -- "$1"; }
-restore_group() { sudo -n chgrp -- "$2" "$1"; }
-restore_acl()   { sudo -n setfacl -b -- "$1"; }
-restore_key()   { printf '%s' "$1" | base64 -d | sudo -n tee -- "$R/territory" >/dev/null && sudo -n rm -f -- "$2"; }
-restore_absent() { sudo -n rm -f -- "$1"; }
+restore_mode()  { root chmod "$(printf '%05o' "$((8#$2))")" -- "$1"; }
+restore_group() { root chgrp -- "$2" "$1"; }
+restore_acl()   { root setfacl -b -- "$1"; }
+restore_key()   { printf '%s' "$1" | base64 -d | root tee -- "$R/territory" >/dev/null && root rm -f -- "$2"; }
+restore_absent() { root rm -f -- "$1"; }
+# key_through_link FOLDER LINK AGENT KEY: step 1b's H3 change, LINK made to
+# FOLDER and KEY written through it.
+key_through_link() { root ln -s -- "$1" "$2" && printf '%s\n' "$2/$3" | root tee -- "$4" >/dev/null; }
 # restore_rule B64: step 5b's measurement put back, the declaration byte for
 # byte and the operator out of the agent's own group, each attempted whatever
 # the other answers. **The removal is attempted unless the group database
@@ -708,9 +873,9 @@ restore_absent() { sudo -n rm -f -- "$1"; }
 # fails the restore rather than a skipped removal passing it.
 restore_rule() {
   local rc=0
-  printf '%s' "$1" | base64 -d | sudo -n tee -- "$DECL" >/dev/null || rc=1
+  printf '%s' "$1" | base64 -d | root tee -- "$DECL" >/dev/null || rc=1
   if [ "$(holds_group "$OPERATOR" "$AU")" != no ]; then
-    sudo -n gpasswd -d "$OPERATOR" "$AU" >/dev/null || rc=1
+    root gpasswd -d "$OPERATOR" "$AU" >/dev/null || rc=1
   fi
   return "$rc"
 }
@@ -748,7 +913,7 @@ on_exit() {
   restore_now || true
   if [ "$rc" -ne 0 ] && [ "$CREATED" -eq 1 ]; then
     printf '\n   %s is left as it stands. Look, then take it down with:\n' "$A" >&2
-    printf '   deploy/verify-lifecycle.sh --agent %s --cleanup --archive <dir> --apply\n' "$A" >&2
+    printf '   deploy/verify-lifecycle.sh --agent %s --cleanup --archive <dir> --apply%s\n' "$A" "$ROOT_FLAG" >&2
   fi
   # An invocation that wrote no output (`--cleanup` runs step 9 alone, which
   # writes none) leaves no empty directory and names none.
@@ -761,12 +926,56 @@ trap 'exit 130' INT TERM HUP
 
 script_env() { WEAVER_ADMIN_CONFIG="$ADMIN_BASE" WEAVER_STACK_RECORD="$STACK" "$@"; }
 
+# **expect_operator_groups: the operator's groups as create-agent.sh leaves
+# them** (step 1): the trace, state and access groups and never the agent's
+# own. **In root mode root holds none of the four** (#576): create-agent.sh's
+# root mode joins root to none, and root reaches every file and the gate's
+# socket by capability whatever it holds, so this shows the join was not made
+# and measures no custody. Each is read alone, so a lookup that fails answers
+# `unreadable` and fails here.
+expect_operator_groups() {
+  local g
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    for g in "$AU" "$AU-trace" "$AU-state" "$AU-admin"; do
+      expect_eq "root does not hold $g" no "$(holds_group root "$g")"
+    done
+  else
+    expect_eq "$OPERATOR holds the trace, state and access groups" 3 \
+      "$(id -Gn "$OPERATOR" | tr ' ' '\n' | grep -cE "^$AU-(trace|state|admin)$" || true)"
+    expect_eq "$OPERATOR does not hold $AU" no "$(holds_group "$OPERATOR" "$AU")"
+  fi
+}
+
+# **expect_show_closed: show after the take-down** (step 9). A caller that is
+# not root is answered unauthorized, not no_such_agent: an invocation that is
+# not root performs nothing and is refused before any verb looks at a name
+# (weaver-admin-Spec, "Authorization is the kernel's"), so admin leaks neither
+# an agent's existence nor its absence to a caller the kernel did not admit.
+# Root is answered no_such_agent. **In root mode the caller that is not root is
+# the box's gate-con account** (#576), through runuser: root is admitted, so a
+# show as root cannot measure the refusal. That account stands after the
+# take-down.
+expect_show_closed() {
+  local said
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    said=$(as_account "$GATECON" WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$ADMIN" show "$A" 2>&1 | tail -n 1 || true)
+    expect_eq "show as $GATECON answers unauthorized" unauthorized "$(json_at "$said" kind)"
+    ask show; expect_kind "show as root" no_such_agent
+  else
+    said=$(WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$ADMIN" show "$A" 2>&1 | tail -n 1 || true)
+    expect_eq "show as the operator answers unauthorized" unauthorized "$(json_at "$said" kind)"
+    ask show; expect_kind "show under sudo" no_such_agent
+  fi
+}
+
 # ------------------------------------------------------------ the steps
 step_0() {
   begin_step 0 "deploy/REDEPLOY.md section 0" "the box, before anything"
   run_line "git -C $CHECKOUT log -1 --oneline"
   run_line "read every key of $STACK; realpath of its agent-directory"
   run_line "deploy/update-stack.sh   (plan mode, no sudo; it builds the tree)"
+  [ "$ROOT_OPERATOR" -eq 0 ] \
+    || run_line "   as root (#576): its reads through the operator's groups pass by root's capability, so their refusals cannot fire here"
   want "the stack record holds worker-binary, spu-binary, gate-binary, coordination-root, prefix and agent-directory"
   want "the agent-directory as written is its canonical path (a difference is noted, not failed)"
   want "no account, group, root or territory of $A stands"
@@ -785,6 +994,8 @@ step_0() {
   ( cd "$CHECKOUT" && script_env bash deploy/update-stack.sh ) >"$LOGDIR/step0-update-stack.log" 2>&1 || rc=$?
   tail -n 15 "$LOGDIR/step0-update-stack.log" | sed 's/^/     /'
   expect_eq "update-stack.sh's plan exits 0" 0 "$rc"
+  [ "$ROOT_OPERATOR" -eq 0 ] \
+    || measured "update-stack.sh ran its plan as root: its refusals of a read through the operator's groups cannot fire, so the build and its currency are what this measures"
   expect_eq "update-stack.sh's plan names no NEW or CHANGED binary" "" \
     "$(grep -E '^  [^ ]+ +(NEW|CHANGED) ' "$LOGDIR/step0-update-stack.log" || true)"
   end_step
@@ -792,30 +1003,34 @@ step_0() {
 
 step_1() {
   begin_step 1 "weaver-admin-Spec sections 2 and 9; weaver-state-PRD section 4" "create the agent and judge its layout"
-  run_line "deploy/create-agent.sh $A --artifact ${ARTIFACT:-<--artifact>}"
+  run_line "deploy/create-agent.sh $A$ROOT_FLAG --artifact ${ARTIFACT:-<--artifact>}"
   run_line "write the creation marker $MARKER (root, 0644)"
-  run_line "deploy/create-agent.sh $A --artifact ${ARTIFACT:-<--artifact>} --apply"
+  run_line "deploy/create-agent.sh $A$ROOT_FLAG --artifact ${ARTIFACT:-<--artifact>} --apply"
   want "the plan ends PENDING --apply and == plan only"
   want "the apply prints == accounts, == territory, == declaration, the wall lines, == sudo rule, == admission, == made, in order"
-  want "$OPERATOR holds $AU-trace, $AU-state and $AU-admin and not $AU; $AU-relay holds $AU-trace alone; $AU-state holds itself alone"
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    want "root holds none of $AU, $AU-trace, $AU-state and $AU-admin: root mode joins no group, and root reaches the files and the socket by capability, so this shows the join was not made, not custody; $AU-relay holds $AU-trace alone; $AU-state holds itself alone"
+  else
+    want "$OPERATOR holds $AU-trace, $AU-state and $AU-admin and not $AU; $AU-relay holds $AU-trace alone; $AU-state holds itself alone"
+  fi
   want "$GATECON and $ADMINCON stand, the box's; $GATECON holds $AU and none of $AU-state, $AU-admin or $AU-trace; $ADMINCON holds $AU-state and $AU-admin and neither $AU nor $AU-trace"
   want "$T root:$AU-state 710 directory; state/ $AU-state:$AU-state 700; save-points/ root:$AU-admin 750; trace.ndjson root:$AU-trace 640 empty; agent.toml and system-prompt.md root:$AU-admin 640"
-  want "/home/$AU $AU:$AU 2750; $R root:root 755 with every key root:root 644; $RULE root:root 440"
+  want "$F root:root 755 holding the territory and the home; $H $AU:$AU 2750; $R root:root 755 with every key root:root 644; $RULE root:root 440"
   want "no access entry on the territory, save-points/, the trace or the declaration"
   want "territory names $T, operator is $OPERATOR_UID, roles.toml is trace-reader = \"$ADMINCON\"; the rule grants $ADMINCON the eight verbs"
   want "the declaration's allowed-uids names $GATECON's uid alone"
   want "$AU cannot pass the territory; $AU-state reads neither the trace nor the declaration"
   [ "$APPLY" -eq 1 ] || return 0
   local rc=0 out="$LOGDIR/step1-create"
-  script_env bash "$CHECKOUT/deploy/create-agent.sh" "$A" --artifact "$ARTIFACT" >"$out.plan" 2>&1 || rc=$?
+  script_env bash "$CHECKOUT/deploy/create-agent.sh" "$A" $ROOT_FLAG --artifact "$ARTIFACT" >"$out.plan" 2>&1 || rc=$?
   expect_eq "create-agent.sh's plan exits 0" 0 "$rc"
   expect_in_order "create-agent.sh's plan ends PENDING --apply, then == plan only" "$out.plan" "PENDING --apply" "== plan only"
   # The marker before the act, so a create that stops part way is ours to clean.
-  printf 'agent = "%s"\nmade-by = "deploy/verify-lifecycle.sh"\n' "$A" | sudo -n tee -- "$MARKER" >/dev/null
-  sudo -n chmod 0644 -- "$MARKER"
+  printf 'agent = "%s"\nmade-by = "deploy/verify-lifecycle.sh"\n' "$A" | root tee -- "$MARKER" >/dev/null
+  root chmod 0644 -- "$MARKER"
   CREATED=1
   rc=0
-  script_env bash "$CHECKOUT/deploy/create-agent.sh" "$A" --artifact "$ARTIFACT" --apply >"$out.apply" 2>&1 || rc=$?
+  script_env bash "$CHECKOUT/deploy/create-agent.sh" "$A" $ROOT_FLAG --artifact "$ARTIFACT" --apply >"$out.apply" 2>&1 || rc=$?
   sed 's/^/     /' "$out.apply"
   expect_eq "create-agent.sh --apply exits 0" 0 "$rc"
   local -a needles=("== accounts" "== territory" "== declaration"
@@ -827,9 +1042,7 @@ step_1() {
   [ "$ADMIN_BASE" != /etc/weaver/admin ] || needles+=("$ADMINCON ran validate through its rule: {\"kind\":\"validated\"}")
   expect_in_order "create-agent.sh's apply prints its sections in order" "$out.apply" "${needles[@]}"
 
-  expect_eq "$OPERATOR holds the trace, state and access groups" 3 \
-    "$(id -Gn "$OPERATOR" | tr ' ' '\n' | grep -cE "^$AU-(trace|state|admin)$" || true)"
-  expect_eq "$OPERATOR does not hold $AU" no "$(holds_group "$OPERATOR" "$AU")"
+  expect_operator_groups
   local u
   for u in $ACCOUNTS "$GATECON" "$ADMINCON"; do expect_eq "the account $u stands" yes "$(id "$u" >/dev/null 2>&1 && echo yes || echo no)"; done
   expect_eq "$AU-relay holds its trace group alone" "$AU-trace" "$(id -Gn "$AU-relay")"
@@ -848,7 +1061,8 @@ step_1() {
   expect_lay "$DECL" "root:$AU-admin 640 regular file"
   expect_lay "$T/system-prompt.md" "root:$AU-admin 640 regular file"
   expect_no_acl "$T" "$SAVE_POINTS" "$TRACE" "$DECL"
-  expect_lay "/home/$AU" "$AU:$AU 2750 directory"
+  expect_lay "$F" "root:root 755 directory"
+  expect_lay "$H" "$AU:$AU 2750 directory"
   expect_lay "$R" "root:root 755 directory"
   local key
   for key in $(ls -A -- "$R"); do expect_lay "$R/$key" "root:root 644 regular file"; done
@@ -857,16 +1071,16 @@ step_1() {
   expect_eq "the operator key names $OPERATOR's uid" "$OPERATOR_UID" "$(trim "$(cat -- "$R/operator")")"
   expect_eq "roles.toml names $ADMINCON the trace reader" "trace-reader = \"$ADMINCON\"" "$(trim "$(cat -- "$R/roles.toml")")"
   expect_eq "the declaration's allowed-uids names $GATECON's uid alone" "allowed-uids = [$(id -u "$GATECON")]" \
-    "$(sudo -n grep -E '^allowed-uids = ' -- "$DECL" || true)"
+    "$(root grep -E '^allowed-uids = ' -- "$DECL" || true)"
   local listing verb
   listing=$(sudo -n -l -U "$ADMINCON" 2>&1 || true)
   for verb in show validate load unload stop save-point restore force-unload; do
     expect_eq "the rule grants $ADMINCON $verb $A" yes \
       "$(grep -qF "$ADMIN $verb $A" <<<"$listing" && echo yes || echo no)"
   done
-  expect_eq "$AU cannot pass the territory" no "$(as_can "$AU" test -x "$T")"
-  expect_eq "$AU-state cannot read the trace" no "$(as_can "$AU-state" test -r "$TRACE")"
-  expect_eq "$AU-state cannot read the declaration" no "$(as_can "$AU-state" test -r "$DECL")"
+  expect_eq "$AU cannot pass the territory" no "$(as_look "$AU" -x "$T")"
+  expect_eq "$AU-state cannot read the trace" no "$(as_look "$AU-state" -r "$TRACE")"
+  expect_eq "$AU-state cannot read the declaration" no "$(as_look "$AU-state" -r "$DECL")"
   end_step
 }
 
@@ -883,19 +1097,18 @@ step_1b() {
   [ "$APPLY" -eq 1 ] || return 0
   ask validate; expect_kind validate validated
   local tmode smode dmode dgroup key_b64
-  tmode=$(sudo -n stat -c %a -- "$T"); smode=$(sudo -n stat -c %a -- "$SAVE_POINTS")
-  dmode=$(sudo -n stat -c %a -- "$DECL"); dgroup=$(sudo -n stat -c %G -- "$DECL")
+  tmode=$(root stat -c %a -- "$T"); smode=$(root stat -c %a -- "$SAVE_POINTS")
+  dmode=$(root stat -c %a -- "$DECL"); dgroup=$(root stat -c %G -- "$DECL")
   key_b64=$(base64 -w0 <"$R/territory")
-  near_miss "the territory at 0711" restore_mode "$T" "$tmode" -- sudo -n chmod 0711 -- "$T"
-  near_miss "the territory setgid" restore_mode "$T" "$tmode" -- sudo -n chmod g+s -- "$T"
-  near_miss "the territory with an access entry" restore_acl "$T" -- sudo -n setfacl -m u:nobody:x -- "$T"
-  near_miss "save-points/ at 0755" restore_mode "$SAVE_POINTS" "$smode" -- sudo -n chmod 0755 -- "$SAVE_POINTS"
-  near_miss "the declaration at 0644" restore_mode "$DECL" "$dmode" -- sudo -n chmod 0644 -- "$DECL"
-  near_miss "the declaration grouped to root" restore_group "$DECL" "$dgroup" -- sudo -n chgrp root -- "$DECL"
+  near_miss "the territory at 0711" restore_mode "$T" "$tmode" -- root chmod 0711 -- "$T"
+  near_miss "the territory setgid" restore_mode "$T" "$tmode" -- root chmod g+s -- "$T"
+  near_miss "the territory with an access entry" restore_acl "$T" -- root setfacl -m u:nobody:x -- "$T"
+  near_miss "save-points/ at 0755" restore_mode "$SAVE_POINTS" "$smode" -- root chmod 0755 -- "$SAVE_POINTS"
+  near_miss "the declaration at 0644" restore_mode "$DECL" "$dmode" -- root chmod 0644 -- "$DECL"
+  near_miss "the declaration grouped to root" restore_group "$DECL" "$dgroup" -- root chgrp root -- "$DECL"
   { [ -e "$link" ] || [ -L "$link" ]; } && fail "the H3 link's name is free" "nothing at $link" "$link stands"
   near_miss "the territory key through a link above it" restore_key "$key_b64" "$link" -- \
-    bash -c 'sudo -n ln -s -- "$1" "$2" && printf "%s\n" "$2/$3" | sudo -n tee -- "$4" >/dev/null' _ \
-      "$AGENT_DIR" "$link" "$AU" "$R/territory"
+    key_through_link "$F" "$link" "$AU" "$R/territory"
   expect_unloaded_alone
   expect_lay "$T" "root:$AU-state 710 directory"
   expect_lay "$SAVE_POINTS" "root:$AU-admin 750 directory"
@@ -926,7 +1139,7 @@ step_2() {
   ask validate; expect_kind validate validated
   local rc=0 out="$LOGDIR/step2-verify-load.log" start
   start=$(trace_lines)
-  sudo -n WEAVER_ADMIN_CONFIG="$ADMIN_BASE" WEAVER_STACK_RECORD="$STACK" bash "$CHECKOUT/deploy/verify-load.sh" "$A" --keep >"$out" 2>&1 || rc=$?
+  root WEAVER_ADMIN_CONFIG="$ADMIN_BASE" WEAVER_STACK_RECORD="$STACK" bash "$CHECKOUT/deploy/verify-load.sh" "$A" --keep >"$out" 2>&1 || rc=$?
   sed 's/^/     /' "$out"
   expect_eq "verify-load.sh --keep exits 0" 0 "$rc"
   expect_eq "verify-load validates" yes "$(grep -qF 'validate    {"kind":"validated"}' "$out" && echo yes || echo no)"
@@ -967,7 +1180,7 @@ step_2() {
   expect_lay "$RUNTIME_DIR/coordination.sock" "$AU:$AU 700 socket"
   expect_lay "$T/state/state.log" "root:$AU-state 640 regular file"
   expect_eq "$AU-state reads its state.log (K12)" yes "$(as_can "$AU-state" tail -n 1 "$T/state/state.log")"
-  expect_eq "$AU-state still cannot read the trace" no "$(as_can "$AU-state" test -r "$TRACE")"
+  expect_eq "$AU-state still cannot read the trace" no "$(as_look "$AU-state" -r "$TRACE")"
   end_step
 }
 
@@ -991,7 +1204,13 @@ step_3() {
   expect_lay "$MANIFEST" "root:root 644 regular file"
   local sp; sp=$(last_event save_point)
   expect_at "the save_point event names the digest" "$dig" "$sp" payload.save_point
+  # In root mode the cause is 0 whether admin took the invoker's SUDO_UID or
+  # fell back to 0, so this no longer tells the two apart there: the
+  # preamble's SUDO_UID refusal and admin's own parse test pin the source,
+  # and the run says so.
   expect_at "the save_point event's cause is the operator" "$OPERATOR_UID" "$sp" payload.cause.uid
+  [ "$ROOT_OPERATOR" -eq 0 ] \
+    || measured "the cause is 0 whether admin read SUDO_UID or fell back to 0, so this pins the cause to the key and not its source (#576)"
   end_step
 }
 
@@ -1043,8 +1262,8 @@ step_5() {
   ask unload; expect_state unload unloaded
   expect_eq "the manifest holds three lines" 3 "$(manifest_count)"
   expect_eq "line 3 arrived at the leave" leave "$(manifest_field 3 2)"
-  local orig; orig=$(sudo -n base64 -w0 -- "$DECL")
-  { printf '%s' "$orig" | base64 -d; printf '\n[restore]\nsave-point = "%s"\n' "$SP_A_NAME"; } | sudo -n tee -- "$DECL" >/dev/null
+  local orig; orig=$(root base64 -w0 -- "$DECL")
+  { printf '%s' "$orig" | base64 -d; printf '\n[restore]\nsave-point = "%s"\n' "$SP_A_NAME"; } | root tee -- "$DECL" >/dev/null
   expect_lay "$DECL" "root:$AU-admin 640 regular file"
   ask restore; expect_kind restore restore_named
   expect_at "restore names SP_A's digest" "$SP_A_DIG" "$ANSWER" save_point
@@ -1064,8 +1283,8 @@ step_5() {
   ask load; expect_kind "load with [restore] left behind" config_invalid
   expect_eq "admin's cause names SP_A (N6)" yes "$(grep -qF "$SP_A_NAME" <<<"$ASKED_CAUSE" && echo yes || echo no)"
   expect_eq "admin's cause names the newest save point (N6)" yes "$(grep -qF "$spd" <<<"$ASKED_CAUSE" && echo yes || echo no)"
-  printf '%s' "$orig" | base64 -d | sudo -n tee -- "$DECL" >/dev/null
-  expect_eq "the declaration is back byte for byte" "$orig" "$(sudo -n base64 -w0 -- "$DECL")"
+  printf '%s' "$orig" | base64 -d | root tee -- "$DECL" >/dev/null
+  expect_eq "the declaration is back byte for byte" "$orig" "$(root base64 -w0 -- "$DECL")"
   expect_lay "$DECL" "root:$AU-admin 640 regular file"
   ask load; expect_state load idle
   load=$(last_event load)
@@ -1079,38 +1298,73 @@ step_5b() {
   begin_step 5b "weaver-admin-Spec section 9; weaver-gate-world-contract sections 1 and 2" "a measurement on this throwaway agent: its access rule moved to a second uid and back"
   run_line "A MEASUREMENT ON THE THROWAWAY AGENT $A, NOT THE LAYOUT create-agent.sh LAYS: the rule names $GATECON again before the step passes"
   run_line "weaver-admin unload $A"
-  run_line "gpasswd -a $OPERATOR $AU; allowed-uids = [$OPERATOR_UID] in $DECL (owner and mode kept)"
-  run_line "   both put back by the step and by the exit trap: the declaration byte for byte, $OPERATOR out of $AU"
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    run_line "allowed-uids = [0] in $DECL (owner and mode kept); root joins no group (#576)"
+    run_line "   put back by the step and by the exit trap: the declaration byte for byte"
+  else
+    run_line "gpasswd -a $OPERATOR $AU; allowed-uids = [$OPERATOR_UID] in $DECL (owner and mode kept)"
+    run_line "   both put back by the step and by the exit trap: the declaration byte for byte, $OPERATOR out of $AU"
+  fi
   run_line "weaver-admin validate $A; weaver-admin load $A"
   run_line "agent_tuple.py rows --declaration $DECL --sink $TRACE --from-line <the load's first line>   (as root)"
   run_line "deploy/turn.py as $GATECON, then as $OPERATOR"
+  [ "$ROOT_OPERATOR" -eq 0 ] || run_line "deploy/turn.py $A --system --raw as root: the seeding line, from uid 0 (#576)"
   run_line "weaver-admin unload $A; [restore] save-point = \"<SP_A name>\" appended; weaver-admin restore $A; weaver-admin load $A; weaver-admin unload $A"
-  run_line "$OPERATOR out of $AU with allowed-uids = [$OPERATOR_UID] (the perturbation); weaver-admin validate $A"
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    run_line "allowed-uids = [<$ADMINCON's uid>] (the perturbation, in place of root leaving $AU, which root never joins); weaver-admin validate $A"
+  else
+    run_line "$OPERATOR out of $AU with allowed-uids = [$OPERATOR_UID] (the perturbation); weaver-admin validate $A"
+  fi
   run_line "the measurement put back; weaver-admin validate $A; weaver-admin load $A"
-  want "validated; load idle; its declaration digest differs from the load before and its boundary digest is equal"
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    want "validated, by admin's exemption of uid 0 from the reach judgment, so this measures the exemption and not reach; load idle; its declaration digest differs from the load before and its boundary digest is equal"
+  else
+    want "validated; load idle; its declaration digest differs from the load before and its boundary digest is equal"
+  fi
   want "its lineage names the newest manifest line, named_at_restore false, no reset, and no identity recall follows (nothing seated)"
   want "the tuple's bind declaration row reads recorded"
-  want "a turn as $GATECON is refused (no answer); a turn as $OPERATOR is answered: a rule naming the operator is still admitted"
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    want "a turn as $GATECON is refused (no answer); a turn as root is answered: root reaches the socket by capability, so the rule naming 0 is what admits it"
+    want "root's seeding line is answered, and the record carries one turnless message.system: a seeding from uid 0 is admitted end to end while the rule names 0"
+  else
+    want "a turn as $GATECON is refused (no answer); a turn as $OPERATOR is answered: a rule naming the operator is still admitted"
+  fi
   want "SP_A, an older save point, restores and loads under the moved rule (N6 does not read the declaration)"
-  want "the perturbation, a uid outside $AU, refuses boundary_unverified, admin's cause (gate-instruction.access-rule.allowed-uids.$OPERATOR_UID) recorded as measured"
-  want "put back: $OPERATOR out of $AU, the declaration byte for byte with allowed-uids naming $GATECON alone; validated; load idle"
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    want "the perturbation, $ADMINCON's uid, which does not hold $AU, the group the gate's socket admits (step 1), refuses boundary_unverified, admin's cause (gate-instruction.access-rule.allowed-uids.<that uid>) recorded as measured"
+    want "put back: the declaration byte for byte with allowed-uids naming $GATECON alone; root does not hold $AU; validated; load idle"
+  else
+    want "the perturbation, a uid outside $AU, refuses boundary_unverified, admin's cause (gate-instruction.access-rule.allowed-uids.$OPERATOR_UID) recorded as measured"
+    want "put back: $OPERATOR out of $AU, the declaration byte for byte with allowed-uids naming $GATECON alone; validated; load idle"
+  fi
   [ "$APPLY" -eq 1 ] || return 0
   printf '   THIS IS A MEASUREMENT ON THE THROWAWAY AGENT %s, NOT THE LAYOUT create-agent.sh LAYS\n' "$A"
-  local gatecon_uid orig moved before load start rows bind
+  local gatecon_uid orig moved perturbed probe_uid=$OPERATOR_UID before load start rows bind
   gatecon_uid=$(id -u "$GATECON") || fail "$GATECON's uid is read" "a uid" "id -u failed"
+  # **The socket half in root mode** (#576): admin exempts uid 0 from the
+  # reach judgment (root reaches a 0770 socket by capability), so root leaving
+  # the agent's group could not refuse. The perturbation moves the rule to the
+  # box's admin-con account instead, a uid other than 0 that step 1 found
+  # outside $AU, the group the socket admits.
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    probe_uid=$(id -u "$ADMINCON") || fail "$ADMINCON's uid is read" "a uid" "id -u failed"
+  fi
   before=$(last_event load)
   ask unload; expect_state unload unloaded
-  orig=$(sudo -n base64 -w0 -- "$DECL")
+  orig=$(root base64 -w0 -- "$DECL")
   expect_eq "the declaration names $GATECON's uid alone before the step" "allowed-uids = [$gatecon_uid]" \
     "$(printf '%s' "$orig" | base64 -d | grep -E '^allowed-uids = ' || true)"
   moved=$(printf '%s' "$orig" | base64 -d | sed "s/^allowed-uids = \[$gatecon_uid\]\$/allowed-uids = [$OPERATOR_UID]/" | base64 -w0)
+  perturbed=$(printf '%s' "$orig" | base64 -d | sed "s/^allowed-uids = \[$gatecon_uid\]\$/allowed-uids = [$probe_uid]/" | base64 -w0)
   RESTORE=(restore_rule "$orig")
-  sudo -n gpasswd -a "$OPERATOR" "$AU" >/dev/null \
-    || { restore_now || true; fail "$OPERATOR joins $AU for the measurement" "gpasswd -a succeeds" "it failed"; }
-  printf '%s' "$moved" | base64 -d | sudo -n tee -- "$DECL" >/dev/null \
+  if [ "$ROOT_OPERATOR" -eq 0 ]; then
+    root gpasswd -a "$OPERATOR" "$AU" >/dev/null \
+      || { restore_now || true; fail "$OPERATOR joins $AU for the measurement" "gpasswd -a succeeds" "it failed"; }
+  fi
+  printf '%s' "$moved" | base64 -d | root tee -- "$DECL" >/dev/null \
     || { restore_now || true; fail "the rule moves to $OPERATOR_UID" "the declaration is written" "it failed"; }
   expect_eq "the rule names $OPERATOR_UID alone" "allowed-uids = [$OPERATOR_UID]" \
-    "$(sudo -n grep -E '^allowed-uids = ' -- "$DECL" || true)"
+    "$(root grep -E '^allowed-uids = ' -- "$DECL" || true)"
   expect_lay "$DECL" "root:$AU-admin 640 regular file"
   ask validate; expect_kind validate validated
   start=$(trace_lines)
@@ -1128,7 +1382,7 @@ step_5b() {
   expect_eq "the load carries no reset" absent "$(json_at "$load" payload.reset)"
   expect_eq "the load is read and wrote no identity recall (nothing seated)" none \
     "$(events_since "$start" load recall | identity_recalls)"
-  rows=$(sudo -n python3 -I "$CHECKOUT/deploy/agent_tuple.py" rows --declaration "$DECL" --sink "$TRACE" \
+  rows=$(root python3 -I "$CHECKOUT/deploy/agent_tuple.py" rows --declaration "$DECL" --sink "$TRACE" \
     --from-line "$((start + 1))" 2>&1 || true)
   bind=$(grep -F 'bind    declaration' <<<"$rows" || true)
   printf '%s\n' "${bind:-no bind declaration row}" | sed 's/^/     /'
@@ -1141,8 +1395,23 @@ step_5b() {
   [ "$TURN_RC" -eq 0 ] || printf '%s\n' "$TURN_ERR" >&2
   expect_eq "a turn as $OPERATOR is answered: a rule naming the operator is admitted" answered \
     "$( [ "$TURN_RC" -eq 0 ] && [ -n "$TURN_SAID" ] && echo answered || echo "exit $TURN_RC")"
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    # **Root's seeding line, end to end** (#576's ask): the harness admits a
+    # system line from the operator's uid alone, the key is 0, and the rule
+    # names 0 here. The raw answer is the gate's close, judged by its kind,
+    # since turn.py prints a refusal's close too. The seed is state from here,
+    # and goes no further: the restore below reloads SP_A, taken before it,
+    # and every later load follows a line descended from that load.
+    local seed_start; seed_start=$(trace_lines)
+    turn_as "$OPERATOR" --system --raw
+    [ "$TURN_RC" -eq 0 ] || printf '%s\n' "$TURN_ERR" >&2
+    expect_at "root's seeding line is answered" answered "$TURN_SAID" kind
+    expect_eq "the record carries the seeding, one turnless message.system" 1 \
+      "$(events_since "$seed_start" message.system | python3 -c 'import json, sys
+print(sum(1 for l in sys.stdin if l.strip() and "turn" not in json.loads(l)))')"
+  fi
   ask unload; expect_state unload unloaded
-  { printf '%s' "$moved" | base64 -d; printf '\n[restore]\nsave-point = "%s"\n' "$SP_A_NAME"; } | sudo -n tee -- "$DECL" >/dev/null \
+  { printf '%s' "$moved" | base64 -d; printf '\n[restore]\nsave-point = "%s"\n' "$SP_A_NAME"; } | root tee -- "$DECL" >/dev/null \
     || fail "[restore] is appended under the moved rule" "the declaration is written" "it failed"
   ask restore; expect_kind restore restore_named
   expect_at "restore names SP_A's digest" "$SP_A_DIG" "$ANSWER" save_point
@@ -1153,10 +1422,15 @@ step_5b() {
   ask unload; expect_state unload unloaded
   # The perturbation: the same moved rule with the operator out of the
   # agent's group, which the socket's mode would turn away before the
-  # credential check (inventory's UidOutsideGroup).
-  sudo -n gpasswd -d "$OPERATOR" "$AU" >/dev/null || fail "$OPERATOR leaves $AU for the perturbation" "gpasswd -d succeeds" "it failed"
-  printf '%s' "$moved" | base64 -d | sudo -n tee -- "$DECL" >/dev/null \
+  # credential check (inventory's UidOutsideGroup). In root mode, the rule
+  # moved to the admin-con account's uid, outside the agent's group.
+  if [ "$ROOT_OPERATOR" -eq 0 ]; then
+    root gpasswd -d "$OPERATOR" "$AU" >/dev/null || fail "$OPERATOR leaves $AU for the perturbation" "gpasswd -d succeeds" "it failed"
+  fi
+  printf '%s' "$perturbed" | base64 -d | root tee -- "$DECL" >/dev/null \
     || fail "the moved rule is written without [restore]" "the declaration is written" "it failed"
+  [ "$ROOT_OPERATOR" -eq 0 ] || expect_eq "the rule names $ADMINCON's uid alone for the perturbation" \
+    "allowed-uids = [$probe_uid]" "$(root grep -E '^allowed-uids = ' -- "$DECL" || true)"
   ask validate
   expect_kind "validate with the rule's uid outside $AU" boundary_unverified
   # **Admin's cause is evidence, not a check** (as step 8b's): it names the
@@ -1164,9 +1438,9 @@ step_5b() {
   # below is the control that pins the refusal to the moved uid.
   measured "admin's cause: ${ASKED_CAUSE:-nothing}"
   restore_now || fail "the measurement is put back" "restore_rule succeeds" "it failed"
-  expect_eq "the declaration is back byte for byte" "$orig" "$(sudo -n base64 -w0 -- "$DECL")"
+  expect_eq "the declaration is back byte for byte" "$orig" "$(root base64 -w0 -- "$DECL")"
   expect_eq "the rule names $GATECON's uid alone again" "allowed-uids = [$gatecon_uid]" \
-    "$(sudo -n grep -E '^allowed-uids = ' -- "$DECL" || true)"
+    "$(root grep -E '^allowed-uids = ' -- "$DECL" || true)"
   expect_eq "$OPERATOR is out of $AU" no "$(holds_group "$OPERATOR" "$AU")"
   expect_lay "$DECL" "root:$AU-admin 640 regular file"
   ask validate; expect_kind validate validated
@@ -1209,9 +1483,9 @@ step_6b() {
   want "show unloaded with no constituent; the territory root:$AU-state 710 again; load idle"
   [ "$APPLY" -eq 1 ] || return 0
   local tmode lines size
-  tmode=$(sudo -n stat -c %a -- "$T")
+  tmode=$(root stat -c %a -- "$T")
   RESTORE=(restore_mode "$T" "$tmode")
-  sudo -n chmod 0711 -- "$T" || { restore_now || true; fail "the territory takes 0711" "it applies" "chmod failed"; }
+  root chmod 0711 -- "$T" || { restore_now || true; fail "the territory takes 0711" "it applies" "chmod failed"; }
   ask unload
   local unload_answer=$ANSWER
   lines=$(manifest_count); size=$(file_size "$T/admin.log")
@@ -1255,7 +1529,7 @@ step_7() {
   [ -n "$worker" ] || fail "a worker stands among the constituents" "a $WORKER_COMM owned by $AU" "$pids"
   pass "the worker is $worker"
   local lines; lines=$(manifest_count)
-  sudo -n kill -9 "$worker"
+  root kill -9 "$worker"
   local i
   for i in 1 2 3 4 5 6 7 8 9 10; do [ -e "/proc/$worker" ] || break; sleep 1; done
   sleep 1
@@ -1310,6 +1584,8 @@ step_8() {
   run_line "write $R/declaration-directory = $T, root:root 0644 (removed by the step and by the exit trap)"
   run_line "weaver-admin validate $A"
   run_line "deploy/update-stack.sh   (plan mode, no sudo; it refuses before it builds)"
+  [ "$ROOT_OPERATOR" -eq 0 ] \
+    || run_line "   as root (#576): the refusal reads the root's key, root's and readable by every uid, so it fires as root too"
   want "validate refuses config_invalid naming declaration-directory"
   want "the plan exits 1 before any build, refusing $A by name for its declaration-directory"
   want "the key removed: $R holds no declaration-directory; validate answers validated"
@@ -1319,8 +1595,8 @@ step_8() {
   { [ -e "$R/declaration-directory" ] || [ -L "$R/declaration-directory" ]; } \
     && fail "the declaration-directory key's name is free" "nothing at $R/declaration-directory" "it stands"
   RESTORE=(restore_absent "$R/declaration-directory")
-  { printf '%s\n' "$T" | sudo -n tee -- "$R/declaration-directory" >/dev/null \
-      && sudo -n chmod 0644 -- "$R/declaration-directory"; } \
+  { printf '%s\n' "$T" | root tee -- "$R/declaration-directory" >/dev/null \
+      && root chmod 0644 -- "$R/declaration-directory"; } \
     || { restore_now || true; fail "the key is staged" "it is written" "it failed"; }
   ask validate
   local validated=$ANSWER
@@ -1352,7 +1628,7 @@ step_8b() {
   [ "$APPLY" -eq 1 ] || return 0
   expect_unloaded_alone
   RESTORE=(restore_acl "$TRACE")
-  sudo -n setfacl -m "u:$AU-state:r" -- "$TRACE" || { restore_now || true; fail "the entry applies" "setfacl succeeds" "it failed"; }
+  root setfacl -m "u:$AU-state:r" -- "$TRACE" || { restore_now || true; fail "the entry applies" "setfacl succeeds" "it failed"; }
   ask load
   local answer=$ANSWER cause=$ASKED_CAUSE down
   # **Anything but the refusal may have stood, and is taken down, the entry
@@ -1406,7 +1682,7 @@ ROOT_TAR="${ARCHIVE%/}/$AU-root-$ARCHIVE_STAMP.tar"
 # back" (the first live run, 2026-10-13).
 archive_reads_back() {
   local listed
-  listed=$(sudo -n tar -tf "$1" 2>/dev/null) && [ -n "$listed" ]
+  listed=$(root tar -tf "$1" 2>/dev/null) && [ -n "$listed" ]
 }
 # **unload_for_teardown**: the run ended before the take-down, by `unload`,
 # else `force-unload`.
@@ -1428,63 +1704,63 @@ step_9() {
     || run_line "rm -f $R/declaration-directory (step 8's staged key naming $T, left by a run stopped between its write and its removal)"
   run_line "weaver-admin unload $A (force-unload where it refuses); weaver-admin show $A"
   run_line "rm -f $RULE (and any staged .$AU.* rule)"
-  run_line "tar --acls --xattrs -C $AGENT_DIR -cpf ${ARCHIVE:-<--archive>}/$AU-territory-<stamp>.tar $AU"
+  run_line "tar --acls --xattrs -C $F -cpf ${ARCHIVE:-<--archive>}/$AU-territory-<stamp>.tar $AU"
   run_line "tar -C $ADMIN_BASE -cpf ${ARCHIVE:-<--archive>}/$AU-root-<stamp>.tar $A"
   run_line "rm -rf $R $STAGE $RUN_DIR $RUNTIME_DIR"
   run_line "userdel -r $AU; userdel $AU-state; userdel $AU-relay   ($GATECON and $ADMINCON are the box's and stay)"
   run_line "groupdel $GROUPS_MADE (each that stands)"
-  run_line "rm -rf $T"
+  run_line "rm -rf $T; rm -rf $F (the folder, which userdel -r and the line before have emptied)"
   run_line "rm -f $MARKER"
-  run_line "weaver-admin show $A, as the operator and under sudo"
-  want "show unloaded with no constituent before; afterwards show answers unauthorized as the operator and no_such_agent under sudo"
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    run_line "weaver-admin show $A, as $GATECON through runuser and as root"
+    want "show unloaded with no constituent before; afterwards show answers unauthorized as $GATECON, a caller that is not root, and no_such_agent as root"
+  else
+    run_line "weaver-admin show $A, as the operator and under sudo"
+    want "show unloaded with no constituent before; afterwards show answers unauthorized as the operator and no_such_agent under sudo"
+  fi
   want "the accounts, the groups, $R, $RULE and $T are absent; each archive reads back"
   want "$GATECON and $ADMINCON still stand, holding no group of $A, the groups having gone with it"
   want "never decommission.sh, which takes every agent off the box; no other agent is touched"
   [ "$APPLY" -eq 1 ] || return 0
   if [ "$STAGED_KEY" -eq 1 ]; then
-    sudo -n rm -f -- "$R/declaration-directory"
+    root rm -f -- "$R/declaration-directory"
     expect_eq "step 8's staged key is removed" absent "$(lay "$R/declaration-directory")"
   fi
-  if sudo -n test -d "$R"; then
+  if root test -d "$R"; then
     unload_for_teardown
   else
     measured "no root at $R, so no verb was asked"
   fi
-  sudo -n rm -f -- "$RULE"
-  sudo -n find /etc/sudoers.d -maxdepth 1 -type f -name ".$AU.*" -delete
-  if sudo -n test -d "$T" && ! sudo -n test -L "$T"; then
+  root rm -f -- "$RULE"
+  root find /etc/sudoers.d -maxdepth 1 -type f -name ".$AU.*" -delete
+  if root test -d "$T" && ! root test -L "$T"; then
     # Under umask 077, so the archive of the custodied territory is root's
     # 0600 and readable by no one the territory was closed to.
-    sudo -n sh -c 'umask 077 && exec tar --acls --xattrs -C "$1" -cpf "$2" "$3"' sh "$AGENT_DIR" "$TERRITORY_TAR" "$AU"
+    root sh -c 'umask 077 && exec tar --acls --xattrs -C "$1" -cpf "$2" "$3"' sh "$F" "$TERRITORY_TAR" "$AU"
     expect_eq "the territory's archive reads back" yes "$(archive_reads_back "$TERRITORY_TAR" && echo yes || echo no)"
   else
     measured "no territory at $T to archive"
   fi
-  if sudo -n test -d "$R"; then
-    sudo -n sh -c 'umask 077 && exec tar -C "$1" -cpf "$2" "$3"' sh "$ADMIN_BASE" "$ROOT_TAR" "$A"
+  if root test -d "$R"; then
+    root sh -c 'umask 077 && exec tar -C "$1" -cpf "$2" "$3"' sh "$ADMIN_BASE" "$ROOT_TAR" "$A"
     expect_eq "the root's archive reads back" yes "$(archive_reads_back "$ROOT_TAR" && echo yes || echo no)"
   else
     measured "no root at $R to archive"
   fi
-  sudo -n rm -rf -- "$R" "$STAGE" "$RUN_DIR" "$RUNTIME_DIR"
+  root rm -rf -- "$R" "$STAGE" "$RUN_DIR" "$RUNTIME_DIR"
   local u g
-  if lookup passwd "$AU"; then sudo -n userdel -r "$AU"; fi
+  if lookup passwd "$AU"; then root userdel -r "$AU"; fi
   for u in "$AU-state" "$AU-relay"; do
-    if lookup passwd "$u"; then sudo -n userdel "$u"; fi
+    if lookup passwd "$u"; then root userdel "$u"; fi
   done
   for g in $GROUPS_MADE; do
-    if lookup group "$g"; then sudo -n groupdel "$g"; fi
+    if lookup group "$g"; then root groupdel "$g"; fi
   done
-  if sudo -n test -d "$T" && ! sudo -n test -L "$T"; then sudo -n rm -rf -- "$T"; fi
-  # The operator is answered unauthorized, not no_such_agent: an invocation
-  # that is not root performs nothing and is refused before any verb looks at
-  # a name (weaver-admin-Spec, "Authorization is the kernel's"), so admin
-  # leaks neither an agent's existence nor its absence to a caller the kernel
-  # did not admit.
-  local said
-  said=$(WEAVER_ADMIN_CONFIG="$ADMIN_BASE" "$ADMIN" show "$A" 2>&1 | tail -n 1 || true)
-  expect_eq "show as the operator answers unauthorized" unauthorized "$(json_at "$said" kind)"
-  ask show; expect_kind "show under sudo" no_such_agent
+  if root test -d "$T" && ! root test -L "$T"; then root rm -rf -- "$T"; fi
+  # **The folder goes last** (#578): userdel -r took the home inside it and
+  # the line above the territory, so what stands is the folder, root's.
+  if root test -d "$F" && ! root test -L "$F"; then root rm -rf -- "$F"; fi
+  expect_show_closed
   for u in $ACCOUNTS; do expect_eq "the account $u is gone" no "$(lookup passwd "$u" && echo yes || echo no)"; done
   for g in $GROUPS_MADE; do expect_eq "the group $g is gone" no "$(lookup group "$g" && echo yes || echo no)"; done
   # **The box's connector accounts are not this agent's** (weaver-admin-Spec
@@ -1499,10 +1775,10 @@ step_9() {
     fi
   done
   local p
-  for p in "$T" "$R" "$STAGE" "$RULE" "/home/$AU" "$RUN_DIR" "$RUNTIME_DIR"; do
+  for p in "$T" "$H" "$F" "$R" "$STAGE" "$RULE" "$RUN_DIR" "$RUNTIME_DIR"; do
     expect_eq "$p is gone" absent "$(lay "$p")"
   done
-  sudo -n rm -f -- "$MARKER"
+  root rm -f -- "$MARKER"
   CREATED=0
   end_step
 }
@@ -1527,19 +1803,41 @@ plan "prefix          $PREFIX  (weaver-admin $ADMIN)"
 plan "territory       $T"
 plan "agent root      $R"
 plan "creation mark   $MARKER"
+[ "$ROOT_OPERATOR" -eq 0 ] || plan "operator        root, by --root-operator (#576): root steps run directly, looks as accounts through runuser"
 plan "archive         ${ARCHIVE:-<--archive, default ~/.weaver-archive made 0700>}"
 if [ "$CLEANUP" -eq 0 ]; then
   plan "artifact        ${ARTIFACT:-<--artifact, required with --apply>}"
 fi
 
 if [ "$APPLY" -eq 1 ]; then
-  sudo -v || die "--apply needs sudo"
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    # **Root asks no credential** (#576): the drop probe, made through
+    # as_account itself, stands where the operator's `sudo -v` stands, as
+    # create-agent.sh's root mode makes it, so a runuser that cannot drop
+    # stops the run before anything acts.
+    command -v runuser >/dev/null \
+      || die "runuser is not on PATH, and root mode looks as the agent's accounts through it: install util-linux's runuser"
+    command -v setsid >/dev/null \
+      || die "setsid is not on PATH, and root mode runs every look as the agent's accounts under it:" \
+             "install util-linux's setsid"
+    as_account nobody true >/dev/null 2>&1 \
+      || die "runuser would not run a command as nobody, with env and true on $DROP_PATH and /proc mounted," \
+             "so no look as the agent's accounts could be made"
+    # **Root's own sudo is checked too** (the self-check on B2): the admin-con
+    # rule's listing (step 1) and verify-load.sh's drops (step 2) go through
+    # it, so a sudo that cannot run a command as another account without a
+    # prompt stops the run before the agent is made.
+    sudo -n -u nobody true </dev/null >/dev/null 2>&1 \
+      || die "root's sudo would not run a command as nobody without a prompt, and the admin-con rule's listing (step 1) and verify-load.sh's drops (step 2) go through it: see deploy/HowToDeployANewAgent.md section 1"
+  else
+    sudo -v || die "--apply needs sudo"
+  fi
   # The looks that need root, made before anything acts.
   if [ "$CLEANUP" -eq 0 ]; then
-    if sudo -n test -e "$RULE"; then die "the sudo rule $RULE already exists: this script verifies a throwaway agent it creates at step 1"; fi
+    if root test -e "$RULE"; then die "the sudo rule $RULE already exists: this script verifies a throwaway agent it creates at step 1"; fi
   fi
   for t in "$TERRITORY_TAR" "$ROOT_TAR"; do
-    if sudo -n test -e "$t" || sudo -n test -L "$t"; then die "the archive $t already exists, and no archive is written over another"; fi
+    if root test -e "$t" || root test -L "$t"; then die "the archive $t already exists, and no archive is written over another"; fi
   done
   LOGDIR=$(mktemp -d "${TMPDIR:-/tmp}/verify-lifecycle-$A.XXXXXX")
 fi
@@ -1579,7 +1877,7 @@ if [ "$KEEP" -eq 1 ]; then
   manual_checks
   room_count_report
   say "kept: $A stands loaded for the checks above; when they are made, take it down with"
-  plan "deploy/verify-lifecycle.sh --agent $A --cleanup --apply${ARCHIVE:+ --archive $ARCHIVE}"
+  plan "deploy/verify-lifecycle.sh --agent $A --cleanup --apply$ROOT_FLAG${ARCHIVE:+ --archive $ARCHIVE}"
   if [ "$APPLY" -eq 1 ]; then
     say "PASS: every step of $A's lifecycle before the take-down answered as expected"
   else

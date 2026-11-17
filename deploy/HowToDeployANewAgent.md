@@ -12,17 +12,25 @@ layout is logged under `docs/project/`. Standing the stack itself up is `REDEPLO
 and this document starts where that one ends.
 
 Every command runs from the WeaverAgent tree, as the operator, never under sudo. The
-scripts ask for sudo where a step needs it. `<name>` is the agent's name: a unix user, a
-group and a directory, so `create-agent.sh` takes lowercase letters and digits, 2 to 16
-characters. Paths below are the defaults, and a box's real values
-are in the stack record `/etc/weaver/stack/`, one file per key, which
+scripts ask for sudo where a step needs it. **On a single-purpose appliance root is the
+operator** (the operator's ruling of 2026-11-16, #576): there `create-agent.sh` and
+`verify-lifecycle.sh` run as root with `--root-operator`, and their root steps run
+without sudo, though root's own sudo still serves the admin-con account's rule (sections
+1, 2 and 4). On a workstation the operator is your own account, which can sudo. `<name>`
+is the agent's name: a unix user, a group and a directory, so `create-agent.sh` takes
+lowercase letters and digits, 2 to 16 characters. Paths below are the defaults, and a
+box's real values are in the stack record `/etc/weaver/stack/`, one file per key, which
 `bootstrap-stack.sh` wrote and the scripts read, and in each agent's own root
 `/etc/weaver/admin/<name>/`, which is all admin reads besides the territory that root
 names (`WEAVER_ADMIN_CONFIG` names another base, but a delegated invocation under sudo
 always reads `/etc/weaver/admin`). **The whole agent lives in its territory** (the
 operator's ruling of 2026-10-07 on #1): the declaration, the prompt draft, the two logs
-and the published save points stand under `/var/lib/weaver-agent/weaver-<name>/` beside the
-state room and the trace, root's, and nothing of the agent is in your home.
+and the published save points stand in the territory beside the state room and the
+trace, root's, and nothing of the agent is in your home. **Each agent has one folder,
+named after it** (the operator's ruling of 2026-11-16 on the layout, #578):
+`<agent-directory>/<name>/`, holding the territory `weaver-<name>/` and the agent's home
+`home/` side by side. The base is the stack record's `agent-directory`, by default
+`/var/lib/weaver-agent`, and on an appliance the state drive.
 
 ## 0. What an agent is, on disk
 
@@ -33,26 +41,28 @@ table.
 
 | Piece | Path | Owner and mode |
 |---|---|---|
-| Agent account, the worker's uid | `weaver-<name>`, home `/home/weaver-<name>` | system user, nologin, home 2750; its group `weaver-<name>` is the gate socket's, held by the box's gate-con account |
+| Agent's folder | `<agent-directory>/<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:root 0755, made by create-agent before the home, holding the territory and the home side by side (#578) |
+| Agent account, the worker's uid | `weaver-<name>`, home `<agent-directory>/<name>/home` | system user, nologin, home 2750; its group `weaver-<name>` is the gate socket's, held by the box's gate-con account |
 | Member account, the state store's uid (agents with a store) | `weaver-<name>-state`, no home | system user, nologin; its group `weaver-<name>-state`, the state group, is the territory's and stands for every agent, a storeless one included |
 | Trace group | `weaver-<name>-trace`, the trace's readers: the operator and the relay, never the member | system group |
 | Relay account, the trace relay's uid | `weaver-<name>-relay`, no home | system user, nologin, its one group the trace group |
 | Access group, the territory files' and the trace door's | `weaver-<name>-admin` | system group, held by the box's admin-con account and the operator, never the member or the agent's uid; it reads and never writes |
 | The box's gate-con account, gate-con's service user, one per box | `weaver-gatecon`, no home | system user below `UID_MIN`, nologin, its own primary group shared with no other account; laid by the first create-agent run that finds it absent and judged by its shape by every later one; holds each agent's group `weaver-<name>` for the gate's socket and no state, access or trace group; the one uid each new agent's access rule names |
 | The box's admin-con account, admin-con's service user, one per box | `weaver-admincon`, no home | system user below `UID_MIN`, nologin, its own primary group shared with no other account; laid and judged as gate-con's is; holds each agent's state group for passage and access group for reading, and no agent's own group or trace group; the account each agent's sudo rule and `roles.toml` name |
-| Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:weaver-<name>-state 0710, not setgid: the state group passes to what stands in it by name, which the member holds as its own and the operator and the box's admin-con account join; the agent's own uid passes not; none lists; the files' own modes are the wall beneath, and no access entry is set |
+| Territory | `<agent-directory>/<name>/weaver-<name>/`, in the agent's folder | root:weaver-<name>-state 0710, not setgid: the state group passes to what stands in it by name, which the member holds as its own and the operator and the box's admin-con account join; the agent's own uid passes not; none lists; the files' own modes are the wall beneath, and no access entry is set |
 | State room (agents with a store) | `<territory>/state/`, where the member writes its save points | member 0700, unreachable by the agent's uid |
 | Trace sink | `<territory>/trace.ndjson` | made by create-agent before the first load, root:weaver-<name>-trace 0640, so the member cannot read it, and admin opens it append-only at load and leaves its owner and mode alone |
 | Declaration | `<territory>/agent.toml` | root:weaver-<name>-admin 0640, written by create-agent as root; you edit it with `sudoedit`, and admin refuses any other owner, group or mode |
 | Prompt draft | `<territory>/system-prompt.md` | root:weaver-<name>-admin 0640, written by create-agent; `deploy/turn.py <name> --system` reads it through the access group, for an agent with a seeding sender (section 4) |
 | Operations and worker logs | `<territory>/admin.log` and `worker.log` | made by admin at the first verb, root:weaver-<name>-admin 0640 |
 | Published save points and their manifest | `<territory>/save-points/`: `<YYYYMMDDTHHMMSSZ>-<digest>.save-point` and `save-points.manifest` | the directory root:weaver-<name>-admin 0750; each save point root:weaver-<name>-admin 0640, the manifest root 0644, all written by admin |
-| Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root` (and `library-path`, `headroom-bytes`, `load-bound-seconds`, `shell-binary` where the stack record has them), copied from the stack record, plus `territory` (the territory's path), `operator` (the operator's uid) and `roles.toml` (`trace-reader = "weaver-admincon"`) | root, directory 0755, files 0644, and admin refuses a root that is not root-owned or is group- or world-writable |
+| Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root` (and `library-path`, `headroom-bytes`, `load-bound-seconds`, `shell-binary` where the stack record has them), copied from the stack record, plus `territory` (the territory's path), `operator` (the operator's uid, 0 where root is the operator) and `roles.toml` (`trace-reader = "weaver-admincon"`) | root, directory 0755, files 0644, and admin refuses a root that is not root-owned or is group- or world-writable |
 | Sudo rule | `/etc/sudoers.d/weaver-<name>` | root 0440, checked by `visudo` |
 | Run directory | `<coordination-root>/weaver.run/<name>/`: `run.lock`, `admin.lock`, `trace.sock` | made by admin, root 0755 |
 
 **The territory is the state group's and passes it; the access group reads the files**
-(the operator's ruling of 2026-10-08 on #1). The operator joins three groups:
+(the operator's ruling of 2026-10-08 on #1). The operator joins three groups, except
+root where it is the operator, which reads everything already and joins none:
 `weaver-<name>-trace` to read the trace without sudo, `weaver-<name>-state` to pass the
 territory, and `weaver-<name>-admin` to read the declaration, the draft, the logs and
 the save points without sudo. The operator does not join `weaver-<name>`: the gate's
@@ -87,8 +97,8 @@ group in one shell.
 - The name collides with nothing and is neither `gatecon` nor `admincon`, which name the
   box's accounts and refuse: `id weaver-<name>`, `id weaver-<name>-state`, `id
   weaver-<name>-relay` and `getent group weaver-<name> weaver-<name>-state
-  weaver-<name>-trace weaver-<name>-admin` fail, `/home/weaver-<name>`,
-  `<agent-directory>/weaver-<name>`, `/etc/weaver/admin/<name>`,
+  weaver-<name>-trace weaver-<name>-admin` fail, the agent's folder
+  `<agent-directory>/<name>`, `/etc/weaver/admin/<name>`,
   `/etc/weaver/admin/.<name>.partial` and `/etc/sudoers.d/weaver-<name>` are absent. The
   script checks all of this and refuses rather than merging, because a half-made agent
   that looks whole is worse than an absent one.
@@ -101,6 +111,41 @@ group in one shell.
   `weaver-<name>-admin`, and neither any other group, `wheel`, `sudo` or `docker`
   among them. The plan says which it found, and refuses an account in any other shape.
 - `/etc/sudoers` includes `/etc/sudoers.d` (`@includedir /etc/sudoers.d`).
+- The box's sudo is the original sudo (`sudo --version` prints `Sudo version`), not
+  sudo-rs, whose visudo refuses `Defaults:weaver-admincon !pam_session`, a line the
+  agent's rule carries (`weaver-admin-operator-contract` section 2). With `--apply`,
+  `create-agent.sh` checks the include and the rendered rule before it makes anything,
+  and names sudo-rs where visudo refuses the rule.
+- The operator's own sudo runs commands as other accounts (`(ALL)`, not `(root)` alone):
+  the wall checks run as the agent's accounts, and a drop that sudo refuses stops the
+  run, naming sudo.
+- A command `create-agent.sh` or `verify-lifecycle.sh` runs as another account is handed
+  nothing of yours but what the step names, in either mode, since any process of that
+  account's uid can read its environment and open its descriptors through `/proc` while
+  it runs. Its standard input is `/dev/null`, or a file the script opens for it. Its
+  standard output and standard error are pipes the script holds and copies on. Every
+  other descriptor the script holds is closed, and where `/proc` is not mounted, nothing
+  is run. It runs under `setsid` (util-linux), with
+  no controlling terminal, and under `env -i`, with sudo's default `secure_path` as
+  `PATH` and the variables the step names alone. An interrupt or a hangup still ends it,
+  since the script passes the signal on. Two windows stay open (#590): the `env` that
+  `runuser` or sudo starts holds the caller's environment, or what sudo's `env_keep`
+  passes, until it replaces it, and under sudo, the `env` and `timeout` that start the
+  command hold the terminal sudo hands them. The reads `verify-load.sh` and
+  `update-stack.sh` make as the agent's accounts go through sudo alone, with a named input
+  and a captured output, and are #590's too. In the operator's mode these drops find the
+  credential `sudo -v` caches by sudo's default `timestamp_type`, the terminal. Under the
+  non-default `timestamp_type=ppid` they do not, since their sudo's parent is a subshell
+  of the script, so the run is refused at its first drop.
+- On a single-purpose appliance, where root is the operator, `runuser` (util-linux) is
+  on the box: in root mode the wall checks and the closing probe run as the agent's
+  accounts through it, and no sudo credential is asked for. The include and the
+  original sudo still bind, since the admin-con account's rule is sudo's, and root
+  lists that rule through sudo at the end.
+- With `--home-quota`, the agent-directory stands on ext4 formatted with project quotas
+  and mounted `prjquota`, and `chattr` and `lsattr` (e2fsprogs), `setquota` and
+  `repquota` (the quota tools) and `findmnt` are on the box. The box's setup lays the
+  drive out so: the setup script on an appliance, the operator on a workstation.
 
 ## 2. An agent with a store
 
@@ -112,20 +157,56 @@ deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact>
 deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact> --apply
 ```
 
+**On a single-purpose appliance root is the operator**, and root runs both lines with
+`--root-operator` added (the operator's ruling of 2026-11-16, #576). The root's
+`operator` key is then 0, every root step runs directly, every look as another account
+goes through `runuser`, and root joins no group. Root without the flag refuses, so a
+workstation run as root by accident still refuses, and the flag under any other uid
+refuses.
+
 The store is the embedded sqlite engine, `--engine sqlite` and the default, the one
 engine this build provides (#1, #86), and any other engine refuses as one this build
 does not provide. `--engine none` is refused too, and section 3 makes that agent by
 hand. `--session` names the session the declaration opens, default `<name>-001`. `--spu
 <path>` gives this agent its own SPU, written as its root's `spu-binary` in place of the
-stack record's (a separately installed Rust SPU, for instance), and without it the
-agent serves from the stack's. `--connector-role operator|observer` chooses which
-command lines the agent's sudo rule grants the box's admin-con account, section 5,
-default `operator`.
+stack record's (a separately installed Rust SPU, for instance), and without it the agent
+serves from the stack's. `--connector-role operator|observer` chooses which command
+lines the agent's sudo rule grants the box's admin-con account, section 5, default
+`operator`. Three options set the decoder (#580): `--devices i,j,...` names its device
+ordinals in the box's PCI bus order, the given order kept as the shard order, default
+`0`. `--context-capacity n` sets the session's context in tokens, default 32768. It
+refuses a count below the `max-tokens-per-turn` of 4096 the script writes beside it, as
+the script's own consistency rule: no load compares the two, but a turn allowed more
+tokens than the whole context contradicts the declaration. `--turn-context
+continuous|independent` writes the top-level election, and without it nothing is written
+and the agent reads `continuous`. Each refuses before anything is made what a load
+refuses without the model or the cards: an empty device set, an ordinal named twice, a
+capacity that is not a count from 1 to 4294967295, or a third turn-context word. An
+ordinal the box has no card for, whether the model spans the devices, and whether each
+card has room are the SPU's to judge at the load, which `verify-load.sh` shows.
+`--home-quota <size>` caps the agent's home (#585), a whole size in binary units such as
+`512M`, `64G` or `2T`: the home takes its own ext4 project, the agent's uid, with the
+inherit flag, and the project's limits are set on the drive: the size, and one file per
+16 KiB of it. The cap bounds the agent's own writes in its home, so they cannot take the
+space or the inodes the save points and the state room need on the same drive: it bounds
+the space and the count of files. Until #587 lands, an agent that deliberately changes
+its files' project can leave the cap. #587 closes that. The agent's folder carries the
+same project, the mark that tells `decommission.sh` the cap is this script's, without
+the inherit flag: the script clears the flag on the folder before the mark, since a base
+that carries it passes it on, and the territory and the state room made in the folder
+would join the cap. Without the option the home is not capped. A malformed size, a base
+not on ext4, an ext4 base not mounted `prjquota`, or a missing tool refuses before
+anything is made. A project the drive already carries with any usage or any limit
+refuses once the agent's account stands, since the project is its uid: take that account
+and its home down by section 7, and free the project first only where it is a limit an
+earlier run of this script left.
 
-Apply lays the box's two connector accounts where the plan found them absent and judges
-them by their shape, adds `weaver-gatecon` to the agent's group and `weaver-admincon` to
-its state and access groups, makes the agent's accounts and the territory, writes the
-declaration and the draft into it as root, then stages the agent root under the dot-name
+Apply first checks that `/etc/sudoers` includes `/etc/sudoers.d` and that visudo accepts
+the rendered rule, and refuses before it makes anything otherwise. It then lays the
+box's two connector accounts where the plan found them absent and judges them by their
+shape, adds `weaver-gatecon` to the agent's group and `weaver-admincon` to its state and
+access groups, makes the agent's accounts and the territory, writes the declaration and
+the draft into it as root, then stages the agent root under the dot-name
 `/etc/weaver/admin/.<name>.partial`, which admin's name check never admits, and probes
 the boundary: the member can write its state room, the agent's own uid cannot enter it
 nor pass the territory, the member cannot read the trace, the relay holds the trace
@@ -133,36 +214,40 @@ group alone, the admin-con account holds the state and access groups and no grou
 agent's or the trace's, the gate-con account holds the agent's group and no state,
 access or trace group, and the admin-con account reads the declaration and can write
 neither it, the draft nor the save points directory. A refusal there is the boundary
-being wrong, not the agent, and leaves the staged root in place to read and remove. Then
-the sudo rule is rendered, checked with `visudo -cf`, and installed, and only after all
-of it does the root move to `/etc/weaver/admin/<name>/`, which is the admission. The
-last step runs one line through the rule as `weaver-admincon` (`validate` for the
-operator role, `show` for the observer), the way admin-con will. A gate-con or admin-con
-process already running takes the new agent's groups only when it restarts, since a
-process's groups are fixed at its start.
+being wrong, not the agent, and leaves the staged root in place to read and remove. Each
+probe runs as the account it names (through `runuser` in root mode) through the shell's
+own `[`, so a `test` command that ignores supplementary groups changes no answer. Then the sudo rule is staged, checked
+with `visudo -cf` again, and installed, and only after all of it does the root move to
+`/etc/weaver/admin/<name>/`, which is the admission. The last step runs one line through
+the rule as `weaver-admincon` (`validate` for the operator role, `show` for the
+observer), the way admin-con will. A gate-con or admin-con process already running takes
+the new agent's groups only when it restarts, since a process's groups are fixed at its
+start.
 
-The declaration the script writes is a working default: the artifact, `devices = [0]`,
-an empty tool set (no tool is offered, #29), surprisal on, the sink in the territory,
-and the store's engine, and its `allowed-uids` names the gate-con account's uid alone.
-It carries no system prompt: the prompt is state, on the operator's ruling of
-2026-10-06, and a seeding line is taken from the operator's uid alone, which this
-declaration's gate does not admit. **An agent laid this way has no seeding sender**
+The declaration the script writes is a working default: the artifact, the devices and
+the context the options above name (`[0]` and 32768 tokens by default), an empty tool
+set (no tool is offered, #29), surprisal on, the sink in the territory, and the store's
+engine, and its `allowed-uids` names the gate-con account's uid alone. It carries no
+system prompt: the prompt is state, on the operator's ruling of 2026-10-06, and a
+seeding line is taken from the operator's uid alone, which this declaration's gate does
+not admit. **An agent laid this way has no seeding sender**
 (`weaver-gate-world-contract` section 2, the operator's ruling of 2026-11-10), and how
 its prompt enters is deferred to its own act, section 4. Beside the declaration the
 script still writes the draft, `<territory>/system-prompt.md`, a plain prompt that is
-yours to edit. Edit `agent.toml` for a wider context before validating. Both files
+yours to edit. To change a value later, edit `agent.toml` before validating. Both files
 are root:weaver-<name>-admin 0640: `sudoedit
-/var/lib/weaver-agent/weaver-<name>/agent.toml` edits one, and you read either through
-the access group. The fields are in `docs/technical/weaver-agent/agent-declaration.md`,
-a snapshot of 2026-08-25 that still shows an identity table, and
-`docs/crates/weaver-types/weaver-types-Spec.md` section 2 is the authority. A required
-key absent, or any key misspelled, refuses the parse by name, and the optional keys
-(`tool-set`, `binding-kind`, `gate-instruction`, `state-election`, `state-store`,
-`restore`, `lifecycle`, `turn-context`) carry the absence their Spec rules.
-`turn-context = "independent"` (#423), a top-level key, answers every turn from the
-seated prompt and that turn's request alone, the decode context returned to the prompt
-before each turn and the load event naming the election. Absent, it is `continuous`,
-the conversation accumulating as before.
+<agent-directory>/<name>/weaver-<name>/agent.toml` edits one, and you read either
+through the access group. The fields are in
+`docs/technical/weaver-agent/agent-declaration.md`, a snapshot of 2026-08-25 that still
+shows an identity table, and `docs/crates/weaver-types/weaver-types-Spec.md` section 2
+is the authority. A required key absent, or any key misspelled, refuses the parse by
+name, and the optional keys (`tool-set`, `binding-kind`, `gate-instruction`,
+`state-election`, `state-store`, `restore`, `lifecycle`, `turn-context`) carry the
+absence their Spec rules. `turn-context = "independent"` (#423), a top-level key that
+`--turn-context independent` writes, answers every turn from the seated prompt and that
+turn's request alone, the decode context returned to the prompt before each turn and the
+load event naming the election. Absent, it is `continuous`, the conversation
+accumulating as before.
 
 **Electing the shell** (#29). `tool-set = ["sh"]` offers the agent one tool, a POSIX `sh`
 (busybox's ash) over the stack's listed commands (`<prefix>/bin/busybox.applets`), in
@@ -213,30 +298,34 @@ made last because it is the admission. **A storeless agent carries the state gro
 operator and the box's admin-con account pass by, and admin resolves it for every verb.
 **The box's two accounts must already stand in their shape** (section 0), since the
 block judges nothing: a `create-agent.sh` run lays and judges them, and its plan for any
-name prints what it found. The block runs as the operator, one chain, so
-a step that fails stops the rest; it refuses a territory, a stage or a root that already
-stands, since `install -d` would merge with it. The territory is the stack record's
-`agent-directory` made canonical, as `create-agent.sh` makes it, and the 5-digit modes
-clear a setgid bit the base would otherwise pass down. The block stages the root; then
+name prints what it found. Where root is the operator it joins no group, and its
+`operator` key is 0 (section 2). The block runs as the operator, one chain, so
+a step that fails stops the rest. It refuses an agent's folder, a stage or a root that
+already stands, since `install -d` would merge with it. The folder is the stack
+record's `agent-directory` made canonical, as `create-agent.sh` makes it, with the
+territory and the home inside it (#578), and the 5-digit modes clear a setgid bit the
+base would otherwise pass down. The block stages the root. Then
 install the sudo rule by the second block below, with `A=$N`, and only then move the
 root into place, which is the admission: `sudo mv -T --
 /etc/weaver/admin/.$N.partial /etc/weaver/admin/$N`.
 
 ```sh
 N=<name>
-T=$(realpath -e -- "$(cat /etc/weaver/stack/agent-directory)")/weaver-$N \
+F=$(realpath -e -- "$(cat /etc/weaver/stack/agent-directory)")/$N \
+&& T=$F/weaver-$N \
 && R=/etc/weaver/admin/.$N.partial \
-&& [ ! -e "$T" ] && [ ! -L "$T" ] && [ ! -e "$R" ] && [ ! -e /etc/weaver/admin/$N ] \
+&& [ ! -e "$F" ] && [ ! -L "$F" ] && [ ! -e "$R" ] && [ ! -e /etc/weaver/admin/$N ] \
 && getent passwd weaver-gatecon weaver-admincon >/dev/null \
-&& sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group weaver-$N \
+&& sudo install -d -o root -g root -m 00755 "$F" \
+&& sudo useradd --system --shell /usr/sbin/nologin --create-home --home-dir "$F/home" --user-group weaver-$N \
 && sudo groupadd --system weaver-$N-state \
 && sudo groupadd --system weaver-$N-trace \
 && sudo groupadd --system weaver-$N-admin \
 && sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid weaver-$N-trace weaver-$N-relay \
 && sudo usermod -aG weaver-$N weaver-gatecon \
 && sudo usermod -aG weaver-$N-state,weaver-$N-admin weaver-admincon \
-&& sudo usermod -aG weaver-$N-trace,weaver-$N-state,weaver-$N-admin "$(id -un)" \
-&& sudo chmod 2750 /home/weaver-$N \
+&& { [ "$(id -u)" = 0 ] || sudo usermod -aG weaver-$N-trace,weaver-$N-state,weaver-$N-admin "$(id -un)"; } \
+&& sudo chmod 2750 "$F/home" \
 && sudo install -d -o root -g weaver-$N-state -m 00710 "$T" \
 && sudo install -o root -g weaver-$N-trace -m 0640 /dev/null "$T/trace.ndjson" \
 && sudo install -d -o root -g weaver-$N-admin -m 00750 "$T/save-points" \
@@ -303,7 +392,7 @@ denied-uids = []
 
 [trace-sink]
 kind = "file"
-path = "/var/lib/weaver-agent/weaver-karl/trace.ndjson"
+path = "/var/lib/weaver-agent/karl/weaver-karl/trace.ndjson"
 create = true
 
 [state-store]
@@ -458,15 +547,31 @@ A `FAULT` line unloads the run and fails the script, `--keep` included, like eve
 failed check.
 
 `deploy/verify-lifecycle.sh --agent <throwaway>`, run as the operator, verifies a whole
-lifecycle end to end
-(create with the box's accounts, load, an unseeded turn through the gate as gate-con,
-save points, restore, a measurement with the throwaway agent's rule moved to the
-operator's uid and back, in which a turn as gate-con is refused and an ordinary turn as
-the operator is answered (no seeding line is sent), force-unload, crash recovery, the
-refusal by name of a root of an older layout, the refusal of a load over an access
-entry on the trace, take-down) on a throwaway agent it creates; it plans
-unless given `--apply`, and `--keep` stops it before the take-down so the checks it
-cannot make are made against the loaded agent.
+lifecycle end to end on a throwaway agent it creates: create with the box's accounts,
+load, an unseeded turn through the gate as gate-con, save points, restore, a measurement
+with the throwaway agent's rule moved to the operator's uid and back, in which a turn as
+gate-con is refused and an ordinary turn as the operator is answered (in the operator's
+mode no seeding line is sent), force-unload, crash recovery, the refusal by name of a
+root of an older layout, the refusal of a load over an access entry on the trace, and
+take-down. It plans unless given `--apply`, and `--keep` stops it before the take-down
+so the checks it cannot make are made against the loaded agent.
+
+**On a single-purpose appliance root runs it with `--root-operator`** (#576), from
+root's own login, and passes the flag to `create-agent.sh`. Root steps run directly, the
+looks as the agent's accounts go through `runuser`, and no sudo credential is asked for.
+The admin-con rule's listing and `verify-load.sh`'s own drops still go through root's
+sudo, which the run checks before anything acts. Root reaches every file and the gate's
+socket by capability, and admin exempts uid 0 from the reach judgment, so the checks
+that capability voids are made another way. The groups check finds root in none of the
+agent's groups. The measurement moves the rule to uid 0, where root's ordinary turn and
+root's seeding line are both answered. The seed is in the save point published at the
+unload that follows, and the restore of an older save point right after leaves it
+behind. The perturbation moves the rule to the admin-con account's uid, which does not
+hold the agent's own group `weaver-<name>`, and validate refuses. The final `show` is
+asked as gate-con, a caller that is not root. At step 0 the run says that
+`update-stack.sh`'s reads through the operator's groups cannot refuse as root. Step 8's
+refusal reads the root's key and fires as root too. At step 3 the run says that a cause
+of 0 no longer tells whether admin read `SUDO_UID` or fell back to 0.
 
 `load` never ends a run that stands: it answers `agent_running` and leaves the decision
 to its caller, who reads `show` and issues `unload`.
@@ -719,10 +824,20 @@ for u in weaver-<name> weaver-<name>-state weaver-<name>-relay weaver-<name>-adm
 done
 ```
 
-Then `userdel -r` the agent's account and `userdel` the member's, the relay's and,
-where it stands, the per-agent connector's, then delete the groups, which `userdel`
-leaves while a member remains and which a later `useradd --user-group` of the same
-name would refuse on.
+Where `create-agent.sh` capped the home, remove its limit first, while the account
+stands (#585). The cap is the script's only where the agent's folder carries the
+account's uid as its project: `sudo lsattr -pd <agent-directory>/<name>` prints it, and
+`id -u weaver-<name>` prints the uid. Then
+`sudo setquota -P <uid> 0 0 0 0 <mount point>` sets its limits to none. Where the
+folder carries project 0, the script set no cap, and a limit on that number is
+another's. Never take the project from `lsattr` on the home, which the agent can
+change.
+Then `userdel -r` the agent's account, which removes its home in the agent's folder, and
+`userdel` the member's, the relay's and, where it stands, the per-agent connector's,
+then delete the groups, which `userdel` leaves while a member remains and which a later
+`useradd --user-group` of the same name would refuse on. **Last, remove the agent's
+folder** `<agent-directory>/<name>/` (#578), which the territory's removal and
+`userdel -r` have emptied, and which `create-agent.sh` refuses while it stands.
 
 The groups, once the accounts are gone:
 
@@ -731,6 +846,21 @@ for g in weaver-<name> weaver-<name>-state weaver-<name>-trace weaver-<name>-adm
   getent group "$g" >/dev/null && sudo groupdel "$g"
 done
 ```
+
+**Where `decommission.sh` refuses over a folder's mount or mark** (`findmnt`, `lsattr`),
+it has archived and removed nothing, since a purge that took the folder and the account
+would leave the limit with nothing to name it. Read the mark by hand as above, and rerun
+once it reads. Or, where it carries the account's uid, set the limit to none by hand as
+above, clear the mark with `sudo chattr -p 0 <agent-directory>/<name>`, and rerun.
+
+**Where a rerun of the purge refuses over a home quota's limit**, the project's number
+names an account the purge did not judge, or `repquota` shows the project with a limit
+while no account the purge judged holds the number, or the quotas cannot be read. The
+limit may be another's: a later agent given the same uid, or a project set by hand.
+`sudo repquota -P -n -v <mount point>` shows the project, and `getent passwd <uid>` its
+account. Where it is the agent's own, set it to none by hand as above and rerun. Where
+it is another's, leave it standing, and finish or abandon the purge by `REDEPLOY.md`
+section 2.
 
 **An agent of an older layout or an older declaration form is not migrated.** Admin and
 `update-stack.sh` refuse it by name, and it is recreated with `create-agent.sh` after

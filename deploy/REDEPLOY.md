@@ -60,9 +60,9 @@ something this runbook does not mention, the runbook is what gets amended.
 | Engine libraries `libggml*`, `libllama*` | `<prefix>/lib/`, reached by `/etc/ld.so.conf.d/weaver.conf` and named by the record's `library-path`, which admin sets as the worker's `LD_LIBRARY_PATH` | bootstrap, update-stack |
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
 | Retired Python SPU, where an older install left it | `<prefix>/python-spu/` | archive and purge only, Python retirement below |
-| Accounts: the agent's `weaver-<name>` (home `/home/weaver-<name>`, 2750), the member's `weaver-<name>-state`, the relay's `weaver-<name>-relay`, and the groups `weaver-<name>-trace` and `weaver-<name>-admin`; an agent laid by an earlier create-agent also has its own connector `weaver-<name>-admincon` | passwd | create-agent |
+| Accounts: the agent's `weaver-<name>` (home `<agent-directory>/<name>/home`, 2750, in the agent's folder, #578), the member's `weaver-<name>-state`, the relay's `weaver-<name>-relay`, and the groups `weaver-<name>-trace` and `weaver-<name>-admin`; an agent laid by an earlier create-agent also has its own connector `weaver-<name>-admincon` | passwd | create-agent |
 | The box's two connector accounts, one per box: `weaver-gatecon` (WeaverWeb's gate-con, in each agent's group `weaver-<name>`) and `weaver-admincon` (WeaverWeb's admin-con, in each agent's state and access groups), no home, nologin | passwd | create-agent, at the first run that finds each absent; decommission removes them after every agent's accounts |
-| Territory `weaver-<name>/` (root:weaver-<name>-state 0710, passage for the state group alone) with `agent.toml` and `system-prompt.md` (root:weaver-<name>-admin 0640), `admin.log` and `worker.log` once admin has run a verb (root:weaver-<name>-admin 0640), `save-points/` (root:weaver-<name>-admin 0750, the published save points 0640 and the manifest root 0644), `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640); the whole agent, on the operator's ruling of 2026-10-07 on #1 | the stack record's `agent-directory`,  default `/var/lib/weaver-agent` | create-agent, admin for the logs and the save points |
+| Territory `weaver-<name>/` (root:weaver-<name>-state 0710, passage for the state group alone) with `agent.toml` and `system-prompt.md` (root:weaver-<name>-admin 0640), `admin.log` and `worker.log` once admin has run a verb (root:weaver-<name>-admin 0640), `save-points/` (root:weaver-<name>-admin 0750, the published save points 0640 and the manifest root 0644), `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640); the whole agent, on the operator's ruling of 2026-10-07 on #1 | the agent's folder `<agent-directory>/<name>/` (root:root 0755, beside the home, #578), the base the stack record's `agent-directory`, default `/var/lib/weaver-agent` | create-agent, admin for the logs and the save points |
 | Run directory: `run.lock`, `admin.lock` and the trace door `trace.sock` | `<coordination-root>/weaver.run/<name>/` (root 0755, on tmpfs under `/run`) | admin, at its first verb |
 
 No unit and no init system is part of a stack. Admin's start step stands the worker, its
@@ -148,7 +148,8 @@ the archive and the purge (#99 area 2 review, H4). The archive holds:
   `home-weaver-users`, `tmp-weaver`. A name built from a path carries the whole path, its slashes made dashes
   (`territories-var-lib-weaver-agent`), and a name an archive already holds takes the
   first free `-2`, `-3`, so no archive is ever written over another.
-- `PURGE-LIST`: the exact paths, users and groups the purge may touch. Read it.
+- `PURGE-LIST`: the exact paths, users and groups the purge may touch, and each capped
+  home's quota limit. Read it.
 - `SHA256SUMS`, verified before the script says archived, and again before a purge.
 
 Models stay in `<prefix>/models` on purpose: they are artifacts, not binaries or
@@ -162,7 +163,10 @@ logs and published save points beside its state room and trace. A box from befor
 2026-10-07 keeps its `~/.weaveragent/` directories where they stand, the operator's
 own, neither archived nor purged: a territory base or a root's territory under the
 operator's home (the stack record's `agent-directory` defaulted there from 2026-10-02
-to 2026-10-07) is said in the plan and skipped.
+to 2026-10-07) is said in the plan and skipped. No base is archived or purged whole,
+nor any path above a base or an agent's folder, whatever its name (`/var/lib/weaver`, a
+log directory): the agents' folders inside it are archived and purged on their own, and
+the rest of it is named in the plan as left.
 
 ## 2. Purge
 
@@ -182,12 +186,24 @@ nothing but `models`.
    takes, and then `/etc/weaver` goes. A stop leaves a root standing whole or not at
    all, never one half removed for its `weaver-admin show` to refuse, and it ends
    admission.
-2. Every other path on the list: the territories, the logs, the homes, the `/tmp`
-   entries, the run directories, `/var/lib/weaver`, the `ld.so` confs and each prefix's
-   `bin`, `lib`, `python-spu` and backups. (The sudo rules went before step 1.) The
-   accounts still resolve, so every owner and group still reads by name.
-3. The `weaver-*` users, then their groups, `userdel` taking no home: a home the purge
-   judged went as a path in step 2, and one outside `/home` is left. A group `userdel`
+2. Each home quota limit on the list (#585), set to none: the project `create-agent.sh`
+   gave a capped home, which is the agent account's uid, on its drive, taken only where
+   the agent's folder carries that project as the script's mark. Only a limit the list
+   names and the box still shows goes, and root's record carries it. A limit that will
+   not go stops the purge here, the folders and the accounts standing, and the rerun
+   removes it first. A rerun refuses a listed limit whose number now names an account
+   the purge did not judge, or which `repquota` shows limited while no account it
+   judged holds the number, or whose quotas cannot be read: that limit may be another's.
+   Where an agent folder's mount or mark cannot be read, the archive and the purge
+   refuse before anything goes, naming it. `HowToDeployANewAgent.md` section 7 says how
+   to read or clear the mark, or a limit, by hand before the rerun.
+3. Every other path on the list: the territories, the logs, the homes, the `/tmp`
+   entries, the run directories, `/var/lib/weaver` where it spans no base, the `ld.so`
+   confs and each prefix's `bin`, `lib`, `python-spu` and backups. (The sudo rules went
+   before step 1.) The accounts still resolve, so every owner and group still reads by
+   name.
+4. The `weaver-*` users, then their groups, `userdel` taking no home: a home the purge
+   judged went as a path in step 3, and one outside `/home` is left. A group `userdel`
    already removed with its user, as it removes a private group, is done.
 
 **The door** (#140). The sudo rules go first, and only rules this purge judged: a first
@@ -342,7 +358,8 @@ What it does, so the log can say which step a failure was at:
    `headroom-bytes` or `load-bound-seconds` on every agent writes
    it into the record before making agents. Creates the admin base `/etc/weaver/admin`
    empty (root 0755) and the agent directory `/var/lib/weaver-agent` (root 0755), under
-   which each territory is root:weaver-<name>-state 0710, not setgid. Then prints
+   which each agent's folder holds its territory, root:weaver-<name>-state 0710, not
+   setgid, and its home. Then prints
    and writes `install-tuple`, the box-side half of the deployment tuple, which
    `update-stack.sh` rewrites after each verified install. One `key = value` line
    per fact, in this order, with `unknown` where the box cannot answer
@@ -393,8 +410,9 @@ The store is the embedded sqlite engine, the default (the service engine retired
 operator's ruling of 2026-10-02 on #1). The script lays the box's two connector accounts
 where they are absent and judges them by their shape where they stand
 (`HowToDeployANewAgent.md` section 0), makes the agent's three accounts and two groups,
-the territory (root:weaver-<name>-state 0710 under the stack record's `agent-directory`,
-made canonical, with no access entries), its trace (root:weaver-<name>-trace 0640, which
+the agent's folder (root:root 0755, under the stack record's `agent-directory` made
+canonical, #578) with the agent's home and the territory in it (root:weaver-<name>-state
+0710, with no access entries), its trace (root:weaver-<name>-trace 0640, which
 the member cannot read), the declaration and the prompt draft in the territory
 (root:weaver-<name>-admin 0640; `sudoedit` edits the declaration) and `save-points/`
 beside them (root:weaver-<name>-admin 0750), and the agent root staged under a dot-name:
@@ -459,9 +477,10 @@ thing the next box will hit first.
 
 ## 6. Olympus, where it differs
 
-- Three cards. A declaration's `devices = [0]` binds whichever card CUDA numbers 0, so
-  record `serving_device` from the first load and change the declaration's device if it
-  is the wrong one. The two-card tests only olympus can run are the SPU gate's
+- Three cards. A declaration's `devices` names cards in the box's PCI bus order, which
+  the harness sets as CUDA's order for the SPU, and `create-agent.sh --devices` chooses
+  them (default `0`). Record `serving_device` from the first load and check it is the
+  card intended. The two-card tests only olympus can run are the SPU gate's
   business, not this runbook's.
 - `CARGO_TARGET_DIR` is set there and shared. Export a fresh one for the install so
   the members are built from this tree and not compared against another project's

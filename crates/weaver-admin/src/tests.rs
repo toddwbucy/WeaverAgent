@@ -562,7 +562,10 @@ fn a_territory_under_another_group_than_the_access_group_refuses() {
 /// agent's uid cannot pass. At `0711` the two could never both hold, and
 /// every load refused. The mode and the group are read from the script's
 /// own line, so the script, the judgment and the walk cannot drift apart
-/// again. Perturbation: lay the territory out, or judge it, at `0711`.
+/// again. The line is found by its `install -d` and its `"$HOME_DIR"`,
+/// whatever runs it (`sudo`, or the script's `root` helper since #583), so
+/// the wrapper's name is not part of the pin. Perturbation: lay the
+/// territory out, or judge it, at `0711`.
 #[test]
 fn the_territory_create_agent_lays_out_passes_both_judgments() {
     use std::os::unix::fs::PermissionsExt;
@@ -570,10 +573,18 @@ fn the_territory_create_agent_lays_out_passes_both_judgments() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/create-agent.sh"),
     )
     .unwrap();
-    let line = script
+    let lines: Vec<&str> = script
         .lines()
-        .find(|line| line.starts_with("sudo install -d") && line.ends_with("\"$HOME_DIR\""))
-        .expect("create-agent.sh lays the territory out with one install line");
+        .filter(|line| {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            !line.trim_start().starts_with('#')
+                && words.windows(2).any(|pair| pair == ["install", "-d"])
+                && line.ends_with("\"$HOME_DIR\"")
+        })
+        .collect();
+    let [line] = lines[..] else {
+        panic!("create-agent.sh lays the territory out with one install line: {lines:?}");
+    };
     let words: Vec<&str> = line.split_whitespace().collect();
     let after = |flag: &str| words[words.iter().position(|w| *w == flag).unwrap() + 1];
     assert_eq!(after("-o"), "root", "{line}");
