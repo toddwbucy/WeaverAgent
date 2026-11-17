@@ -3608,9 +3608,12 @@ at every publication, per section 6, so a planted line never names a loadable fi
 `NoSuchAgent`, as a root holding none did. **`operator` names the operator's uid**, on
 the operator's ruling of 2026-10-02 on this act's first question: a root-owned key
 `create-agent.sh` writes once, the box's own fact, set by root, about whose data defines
-the agent, and independent of who invokes a verb. The coordination name changed hands
-with the operator socket on 2026-08-05: the operator places it, the harness binds it,
-and admin dials it, so one value reaches two crates and the root is where they agree.
+the agent, and independent of who invokes a verb. **On a single-purpose appliance root
+is the operator, and the key is 0** (the operator's ruling of 2026-11-16, #576):
+`create-agent.sh --root-operator` writes it, and this crate parses it as any other uid.
+The coordination name changed hands with the operator socket on 2026-08-05: the
+operator places it, the harness binds it, and admin dials it, so one value reaches two
+crates and the root is where they agree.
 These values are not the agent config and no seam carries them, which is why the root
 takes no contract of its own. **The file and its values part company at the start step,
 and the distinction is worth holding.** This crate is the only program of the agent

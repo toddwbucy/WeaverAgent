@@ -16,7 +16,9 @@
 # admin-con account), and
 # --adapter <path> --adapter-sha256 <hex> --adapter-scale <number>
 # --base-blake3 <hex>, all four or none, which write the binding's `adapter`
-# table (weaver-spu adapter binding amendment ADP-1 and ADP-5).
+# table (weaver-spu adapter binding amendment ADP-1 and ADP-5), and
+# --root-operator (root runs it, on a single-purpose appliance where root is
+# the operator).
 #
 # **The adapter's digests are the operator's declared claims**, taken from the
 # conversion record and the fixture report, and this script computes nothing:
@@ -25,7 +27,10 @@
 #
 # Run it as the operator, never under sudo: the root's `operator` key names
 # the uid this script runs as, and `--apply` asks for sudo itself for every
-# root step. Nothing is written into the operator's home.
+# root step. Nothing is written into the operator's home. **On a single-purpose
+# appliance root is the operator** (the operator's ruling of 2026-11-16, #576):
+# root runs it with `--root-operator`, the `operator` key is 0, the root steps
+# run directly, and every look as another account goes through `runuser`.
 #
 # **The agent's root is `<admin base>/<name>/` and it is the admission.**
 # Admin reads that directory and nothing shared, so this script writes every
@@ -125,6 +130,7 @@ die()  { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 NAME=${1:-}
 shift || true
 APPLY=0
+ROOT_OPERATOR=0
 ARTIFACT=""
 SESSION=""
 # **The engine is an election and not a constant**, written into the
@@ -143,6 +149,7 @@ BASE_BLAKE3=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply)    APPLY=1 ;;
+    --root-operator) ROOT_OPERATOR=1 ;;
     # **The value is required before the shift consumes it.** Without the
     # arity check the inline shift runs past the end of the list and `set -e`
     # exits with no message at all, which is a worse answer than the refusal
@@ -239,11 +246,21 @@ case "$CONNECTOR_ROLE" in
   observer) VERBS="show" ;;
   *) die "--connector-role is operator or observer: '$CONNECTOR_ROLE'" ;;
 esac
-# **The operator is the account running this script**, never root: the root's
-# `operator` key names their uid, and every root step below asks for sudo
-# itself. The gate does not admit the operator: its rule names the box's
+# **The operator is the account running this script, or root where root is the
+# operator.** On a workstation the operator is the user's own account, which
+# can sudo: the root's `operator` key names their uid, and every root step below
+# asks for sudo itself. **On a single-purpose appliance root is the operator**
+# (the operator's ruling of 2026-11-16, #576), and `--root-operator` says so:
+# the key is 0, every root step runs directly, and every look as another
+# account goes through `runuser`, so root needs no sudoers line of its own. The
+# flag is explicit, so a workstation run as root by accident still refuses. The
+# gate does not admit the operator either way: its rule names the box's
 # gate-con account alone (weaver-gate-world-contract section 1).
-[ "$(id -u)" -ne 0 ] || die "run as the operator, not under sudo: the root's operator key names this uid, and --apply asks for sudo itself"
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  [ "$(id -u)" -eq 0 ] || die "--root-operator is for root, on a single-purpose appliance where root is the operator: run it as root, or drop the flag and run it as the operator"
+else
+  [ "$(id -u)" -ne 0 ] || die "run as the operator, not under sudo: the root's operator key names this uid, and --apply asks for sudo itself. On a single-purpose appliance, where root is the operator, run it as root with --root-operator"
+fi
 
 
 # **An engine this script cannot provision is refused here rather than written
@@ -258,8 +275,13 @@ case "$ENGINE" in
   *) die "$ENGINE is not an engine this build provides: weaver-types admits none and sqlite, and this script provisions sqlite, the default." ;;
 esac
 
-OPERATOR=$(id -un)
-OPERATOR_UID=$(id -u)
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  OPERATOR=root
+  OPERATOR_UID=0
+else
+  OPERATOR=$(id -un)
+  OPERATOR_UID=$(id -u)
+fi
 AGENT_USER="weaver-$NAME"          # the agent's own uid: the worker's identity
 MEMBER_USER="weaver-$NAME-state"   # the member's uid: owns the state room
 STATE_GROUP="$MEMBER_USER"         # the member's primary group: the territory's, passage alone
@@ -544,11 +566,42 @@ printf '%s\n' "$DECLARATION_TEXT" | python3 -c 'import sys, tomllib; tomllib.loa
   || die "the rendered declaration does not parse as TOML, so nothing was made. Check --session and --artifact"
 # Plan and apply interpret the same configuration. Only the read identity
 # differs. Validate all arguments above before asking for a sudo credential.
-if [ "$APPLY" -eq 1 ]; then
+if [ "$APPLY" -eq 1 ] && [ "$ROOT_OPERATOR" -eq 0 ]; then
   sudo -v || die "--apply needs sudo"
 fi
+# **root CMD...: a root step** (#576): `sudo CMD...` where the operator runs
+# this script, and the command itself where root does. `root -n CMD...` is
+# `sudo -n CMD...` in the operator's mode.
+root() {
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    [ "$1" != -n ] || shift
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+# **as_account ACCOUNT CMD...: CMD run as ACCOUNT, with that account's
+# supplementary groups** (#576): `sudo -n -u` where the operator runs this
+# script, and `runuser -u` where root does, so root needs no sudoers line of
+# its own. DROP names which, for a refusal.
+as_account() {
+  local account=$1
+  shift
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    runuser -u "$account" -- "$@"
+  else
+    sudo -n -u "$account" "$@"
+  fi
+}
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  DROP="runuser"
+  DROP_NEEDS="runuser must run commands as the agent's accounts"
+else
+  DROP="sudo"
+  DROP_NEEDS="the operator's sudo must run commands as the agent's accounts, (ALL) and not (root) alone"
+fi
 read_as_owner() {
-  if [ "$APPLY" -eq 1 ]; then sudo -n "$@"; else "$@"; fi
+  if [ "$APPLY" -eq 1 ]; then root -n "$@"; else "$@"; fi
 }
 # Preserve test false separately from a failed privileged invocation. A sudo
 # failure also returns 1, so using `sudo test ...` as a boolean loses its cause.
@@ -582,9 +635,8 @@ refuse_existing() {
 # as `path_answer` keeps a failed privileged call apart from a false test.
 allows() {
   local said
-  said=$(sudo -n -u "$1" sh -c 'if [ "$1" "$2" ]; then printf yes; else printf no; fi' sh "$2" "$3") \
-    || die "sudo would not run a look as $1 at $3, so the wall is unchecked:" \
-           "the operator's sudo must run commands as the agent's accounts, (ALL) and not (root) alone"
+  said=$(as_account "$1" sh -c 'if [ "$1" "$2" ]; then printf yes; else printf no; fi' sh "$2" "$3") \
+    || die "$DROP would not run a look as $1 at $3, so the wall is unchecked: $DROP_NEEDS"
   case $said in
     yes) return 0 ;;
     no) return 1 ;;
@@ -706,7 +758,11 @@ plan "gate-con        $GATECON_USER  the box's, $(box_account_plan "$GATECON_LIN
 plan "                joins $AGENT_USER, the gate socket's group: the one caller the access rule names"
 plan "admin-con       $ADMINCON_USER  the box's, $(box_account_plan "$ADMINCON_LINE")"
 plan "                joins $STATE_GROUP and $ACCESS_GROUP: the trace reader and the sudo rule's user"
-plan "operator        $OPERATOR joins groups $TRACE_GROUP, $STATE_GROUP and $ACCESS_GROUP, never $AGENT_USER"
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  plan "operator        root (--root-operator), which reads everything already and joins no group"
+else
+  plan "operator        $OPERATOR joins groups $TRACE_GROUP, $STATE_GROUP and $ACCESS_GROUP, never $AGENT_USER"
+fi
 plan "home            /home/$AGENT_USER        the agent's own, where its tools run"
 plan "territory       $HOME_DIR        root:$STATE_GROUP 0710, passage for the state group alone"
 plan "trace           $HOME_DIR/trace.ndjson  root:$TRACE_GROUP 0640, made before the first load"
@@ -777,7 +833,11 @@ refuse_existing "$SUDO_RULE" "sudo rule"
 if [ "$APPLY" -eq 0 ]; then
   printf '   no collision found in accounts and paths visible to this uid\n'
   printf '   PENDING --apply: privileged collision checks\n'
-  printf '   PENDING --apply: authentication paths, the sudoers include, visudo, the operator'"'"'s sudo as other accounts\n'
+  if [ "$ROOT_OPERATOR" -eq 1 ]; then
+    printf '   PENDING --apply: authentication paths, the sudoers include, visudo\n'
+  else
+    printf '   PENDING --apply: authentication paths, the sudoers include, visudo, the operator'"'"'s sudo as other accounts\n'
+  fi
   say "plan only"
   printf '   no provisioning performed; rerun with --apply to check and make it\n'
   exit 0
@@ -792,7 +852,7 @@ say "sudo, checked before anything is made"
 # staged root stood: a half-made agent. The rule is staged under a dot-name
 # sudo skips, checked by visudo and removed here, and staged and checked again
 # at its install below.
-sudo -n grep -qE '^[#@]includedir[[:space:]]+/etc/sudoers\.d([[:space:]]|$)' /etc/sudoers \
+root -n grep -qE '^[#@]includedir[[:space:]]+/etc/sudoers\.d([[:space:]]|$)' /etc/sudoers \
   || die "/etc/sudoers does not include /etc/sudoers.d, so a rule there would never be read"
 lines=""
 for verb in $VERBS; do
@@ -826,31 +886,34 @@ sudo_rs_note() {
 # reads a name with a dot in it.
 stage_rule() {
   local stage
-  stage=$(sudo mktemp "/etc/sudoers.d/.weaver-$NAME.XXXXXX") || die "cannot stage the sudo rule in /etc/sudoers.d"
+  stage=$(root mktemp "/etc/sudoers.d/.weaver-$NAME.XXXXXX") || die "cannot stage the sudo rule in /etc/sudoers.d"
   # **Each step is checked here**: this function runs inside `$(...)`, where
   # bash clears `set -e`, so a failed write or mode would otherwise stage an
   # empty rule that visudo accepts.
-  if ! printf '%s\n' "$RULE_TEXT" | sudo tee "$stage" >/dev/null || ! sudo chmod 0440 "$stage"; then
-    sudo rm -f -- "$stage"
+  if ! printf '%s\n' "$RULE_TEXT" | root tee "$stage" >/dev/null || ! root chmod 0440 "$stage"; then
+    root rm -f -- "$stage"
     die "cannot write the staged sudo rule $stage, so it was not installed"
   fi
-  if ! sudo visudo -cqf "$stage"; then
-    sudo rm -f -- "$stage"
+  if ! root visudo -cqf "$stage"; then
+    root rm -f -- "$stage"
     die "visudo refuses the rendered rule, so it was not installed.$(sudo_rs_note)"
   fi
   printf '%s' "$stage"
 }
 rule_stage=$(stage_rule) || exit 1
-sudo rm -f -- "$rule_stage"
+root rm -f -- "$rule_stage"
 printf '   /etc/sudoers includes /etc/sudoers.d, and visudo accepts the rendered rule\n'
 # **The operator's sudo runs commands as other accounts** (#577): the wall
 # below looks as the agent's accounts, which do not stand yet, so the drop is
 # asked here as `nobody`. On the walk the operator's rule named (root) alone,
 # and the refusal came at the wall, after every account and the territory.
-sudo -n -u nobody true 2>/dev/null \
-  || die "sudo would not run a command as nobody, so it could not look as the agent's accounts at the wall:" \
-         "the operator's sudo must run commands as other accounts, (ALL) and not (root) alone"
-printf "   the operator's sudo runs commands as other accounts\n"
+# Root drops through runuser, which no policy narrows.
+if [ "$ROOT_OPERATOR" -eq 0 ]; then
+  sudo -n -u nobody true 2>/dev/null \
+    || die "sudo would not run a command as nobody, so it could not look as the agent's accounts at the wall:" \
+           "the operator's sudo must run commands as other accounts, (ALL) and not (root) alone"
+  printf "   the operator's sudo runs commands as other accounts\n"
+fi
 
 say "accounts"
 # **The box's connector accounts are laid where absent, once per box**, each
@@ -861,7 +924,7 @@ say "accounts"
 for box_account in "$GATECON_USER" "$ADMINCON_USER"; do
   line=$(account_line "$box_account") || exit 1
   if [ -z "$line" ]; then
-    sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$box_account"
+    root useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$box_account"
     printf '   laid %s, the box'"'"'s account\n' "$box_account"
   fi
   judge_box_account "$box_account"
@@ -870,13 +933,13 @@ done
 # somewhere, and the retirement of 2026-09-11 found one of three agents with
 # a home and the others without, which is the drift a script ends. The member
 # runs nothing and owns one room of the operator's tree instead.
-sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group "$AGENT_USER"
-sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$MEMBER_USER"
-sudo groupadd --system "$TRACE_GROUP"
-sudo groupadd --system "$ACCESS_GROUP"
+root useradd --system --shell /usr/sbin/nologin --create-home --user-group "$AGENT_USER"
+root useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$MEMBER_USER"
+root groupadd --system "$TRACE_GROUP"
+root groupadd --system "$ACCESS_GROUP"
 # **The relay's one group is the trace group**, primary and alone, which is
 # what admin's start step sets at its spawn (weaver-admin-Spec section 6).
-sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid "$TRACE_GROUP" "$RELAY_USER"
+root useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid "$TRACE_GROUP" "$RELAY_USER"
 GATECON_LINE=$(account_line "$GATECON_USER") || exit 1
 [ -n "$GATECON_LINE" ] || die "$GATECON_USER does not stand after it was laid"
 GATECON_UID=$(uid_in "$GATECON_LINE") || exit 1
@@ -890,8 +953,8 @@ ADMINCON_UID=$(uid_in "$ADMINCON_LINE") || exit 1
 # as the design, and gate-con joins no other group of the agent's. **The admin-con account joins the state group for passage and the
 # access group for reading**, never the agent's own group or the trace group:
 # it reaches the trace through the relay's door alone.
-sudo usermod -aG "$AGENT_USER" "$GATECON_USER"
-sudo usermod -aG "$STATE_GROUP,$ACCESS_GROUP" "$ADMINCON_USER"
+root usermod -aG "$AGENT_USER" "$GATECON_USER"
+root usermod -aG "$STATE_GROUP,$ACCESS_GROUP" "$ADMINCON_USER"
 # **The member holds its own group alone** (the operator's ruling of
 # 2026-10-08 on #1): the territory is 0710 under that group, so the member
 # passes to its own room by it, and the access group, which reads admin.log,
@@ -903,8 +966,9 @@ sudo usermod -aG "$STATE_GROUP,$ACCESS_GROUP" "$ADMINCON_USER"
 # group buys the operator passage of the territory and nothing more, the
 # state room being the member's alone. The operator does not join the agent's
 # own group: it does not dial the gate (weaver-gate-world-contract section 1).
-sudo usermod -aG "$TRACE_GROUP,$STATE_GROUP,$ACCESS_GROUP" "$OPERATOR"
-sudo chmod 2750 "/home/$AGENT_USER"
+# Root reads everything already, so root joins no group (#576).
+[ "$ROOT_OPERATOR" -eq 1 ] || root usermod -aG "$TRACE_GROUP,$STATE_GROUP,$ACCESS_GROUP" "$OPERATOR"
+root chmod 2750 "/home/$AGENT_USER"
 printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
   "$AGENT_USER" "$(id -u "$AGENT_USER")" "$MEMBER_USER" "$(id -u "$MEMBER_USER")" \
   "$RELAY_USER" "$(id -u "$RELAY_USER")" "$GATECON_USER" "$GATECON_UID" \
@@ -953,10 +1017,10 @@ say "territory"
 # rewrites none.
 # Five-digit modes, so no setgid bit survives however the base stands (#99
 # area 2 review, K4): GNU install keeps one under a four-digit mode.
-sudo install -d -o root -g "$STATE_GROUP" -m 00710 "$HOME_DIR"
-sudo install -o root -g "$TRACE_GROUP" -m 0640 /dev/null "$HOME_DIR/trace.ndjson"
-sudo install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
-sudo install -d -o root -g "$ACCESS_GROUP" -m 00750 "$SAVE_POINTS"
+root install -d -o root -g "$STATE_GROUP" -m 00710 "$HOME_DIR"
+root install -o root -g "$TRACE_GROUP" -m 0640 /dev/null "$HOME_DIR/trace.ndjson"
+root install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
+root install -d -o root -g "$ACCESS_GROUP" -m 00750 "$SAVE_POINTS"
 
 
 say "declaration"
@@ -968,10 +1032,10 @@ say "declaration"
 # home. The territory was refused above where it stood, so neither file is
 # written over.
 rule_names_gatecon
-printf '%s\n' "$DECLARATION_TEXT" | sudo tee "$DECLARATION" >/dev/null
-printf '%s' "$PROMPT_TEXT" | sudo tee "$PROMPT" >/dev/null
-sudo chown root:"$ACCESS_GROUP" "$DECLARATION" "$PROMPT"
-sudo chmod 0640 "$DECLARATION" "$PROMPT"
+printf '%s\n' "$DECLARATION_TEXT" | root tee "$DECLARATION" >/dev/null
+printf '%s' "$PROMPT_TEXT" | root tee "$PROMPT" >/dev/null
+root chown root:"$ACCESS_GROUP" "$DECLARATION" "$PROMPT"
+root chmod 0640 "$DECLARATION" "$PROMPT"
 printf '   %s and %s written, root:%s 0640\n' "$DECLARATION" "$PROMPT" "$ACCESS_GROUP"
 
 say "agent root, staged"
@@ -979,22 +1043,22 @@ say "agent root, staged"
 # is made by root at 0755 with its files 0644. Every key the stack record
 # holds is copied as written. `spu-binary` is this agent's `--spu` where given,
 # and `territory`, `operator` and `roles.toml` are the agent's own.
-sudo install -d -o root -g root -m 0755 "$STAGE"
+root install -d -o root -g root -m 0755 "$STAGE"
 for key in $REQUIRED_KEYS $OPTIONAL_KEYS; do
   [ -e "$STACK/$key" ] || continue
   if [ "$key" = spu-binary ] && [ -n "$SPU_OVERRIDE" ]; then
-    printf '%s\n' "$SPU_OVERRIDE" | sudo tee "$STAGE/$key" >/dev/null
+    printf '%s\n' "$SPU_OVERRIDE" | root tee "$STAGE/$key" >/dev/null
   else
-    sudo cp -- "$STACK/$key" "$STAGE/$key"
+    root cp -- "$STACK/$key" "$STAGE/$key"
   fi
 done
-printf '%s\n' "$HOME_DIR" | sudo tee "$STAGE/territory" >/dev/null
-printf '%s\n' "$OPERATOR_UID" | sudo tee "$STAGE/operator" >/dev/null
+printf '%s\n' "$HOME_DIR" | root tee "$STAGE/territory" >/dev/null
+printf '%s\n' "$OPERATOR_UID" | root tee "$STAGE/operator" >/dev/null
 # **The boundary file names the trace door's one reader**, the box's
 # admin-con account, in the shape of weaver-types-Spec section 3.1 and
 # nothing else.
-printf 'trace-reader = "%s"\n' "$ADMINCON_USER" | sudo tee "$STAGE/roles.toml" >/dev/null
-sudo chmod 0644 "$STAGE"/*
+printf 'trace-reader = "%s"\n' "$ADMINCON_USER" | root tee "$STAGE/roles.toml" >/dev/null
+root chmod 0644 "$STAGE"/*
 printf '   staged at %s\n' "$STAGE"
 
 say "the wall, verified rather than assumed"
@@ -1075,14 +1139,14 @@ say "sudo rule"
 # fixed command line with its arguments, so sudo matches it exactly and the
 # admin-con account can pass none of its own.
 rule_stage=$(stage_rule) || exit 1
-sudo mv -T -- "$rule_stage" "$SUDO_RULE"
+root mv -T -- "$rule_stage" "$SUDO_RULE"
 printf '   %s installed: %s\n' "$SUDO_RULE" "$VERBS"
 sudo -n -l -U "$ADMINCON_USER" | sed -n '/may run the following/,$p' | sed 's/^/   /'
 
 say "admission"
 # **Moving the root into place is the admission**: before it every admin verb
 # answers no_such_agent for this name, and after it the agent is admitted.
-sudo mv -T -- "$STAGE" "$AGENT_ROOT"
+root mv -T -- "$STAGE" "$AGENT_ROOT"
 printf '   %s admitted at %s\n' "$NAME" "$AGENT_ROOT"
 
 say "made"
@@ -1094,18 +1158,21 @@ say "made"
 # login.
 printf '   %s joined %s, and %s joined %s and %s: a gate-con or admin-con already running\n' "$GATECON_USER" "$AGENT_USER" "$ADMINCON_USER" "$STATE_GROUP" "$ACCESS_GROUP"
 printf '   under either account takes the groups only when it starts again\n'
-printf '   %s joined groups %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$TRACE_GROUP" "$STATE_GROUP" "$ACCESS_GROUP"
-printf '   login before the groups apply (`newgrp` selects one group in one shell)\n'
+if [ "$ROOT_OPERATOR" -eq 0 ]; then
+  printf '   %s joined groups %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$TRACE_GROUP" "$STATE_GROUP" "$ACCESS_GROUP"
+  printf '   login before the groups apply (`newgrp` selects one group in one shell)\n'
+fi
 printf '   the declaration %s is root'"'"'s: edit it with sudoedit, and read it, the draft, the logs and\n' "$DECLARATION"
 printf '   the save points under %s through %s\n' "$HOME_DIR" "$ACCESS_GROUP"
 # **probe_connector VERB: the admin-con account reaches a line through its
-# rule**, as the stand-in for admin-con: the operator's sudo becomes the account,
-# and that user runs `sudo -n`, which only the rule can satisfy. It succeeds
+# rule**, as the stand-in for admin-con: the operator's sudo (root's runuser in
+# root mode) becomes the account, and that user runs `sudo -n`, which only the
+# rule can satisfy. It succeeds
 # only on the answer the verb owes, `validated` for validate and a state for
 # show, and prints what came back either way (Codex on #79).
 probe_connector() {
   local said answer
-  said=$(sudo -n -u "$ADMINCON_USER" sudo -n "$ADMIN_BINARY" "$1" "$NAME" 2>&1) || true
+  said=$(as_account "$ADMINCON_USER" sudo -n "$ADMIN_BINARY" "$1" "$NAME" 2>&1) || true
   answer=$(printf '%s\n' "$said" | tail -n 1)
   printf '%s' "$answer"
   python3 -c '

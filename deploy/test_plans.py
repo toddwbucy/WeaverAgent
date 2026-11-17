@@ -70,6 +70,15 @@ if name == 'mktemp' and args and '/weaver-deploy-messages-' in args[-1]:
     os.execv('/usr/bin/mktemp', ['mktemp', *args])
 with open(os.environ['CALLS'], 'a') as log:
     log.write(json.dumps([name, *args]) + '\n')
+# **Root mode** (#576): a root step root runs directly reaches the double as
+# `as-root <command>...`, through the root-mode tests' shell functions, and a
+# look as an account as `runuser -u <account> -- <command>...`. Each is logged
+# as it came, then answered as the same step through sudo would be.
+if name == 'as-root':
+    name = 'sudo'
+elif name == 'runuser':
+    assert args[0] == '-u' and args[2] == '--', ('runuser as create-agent.sh calls it', args)
+    name, args = 'sudo', ['-n', '-u', args[1], *args[3:]]
 def mapped(value):
     if value.startswith('/home/') or value.startswith('/etc/sudoers') or value.startswith('/etc/ld.so.conf.d/'):
         return str(root / value.lstrip('/'))
@@ -580,7 +589,8 @@ class PlanTests(unittest.TestCase):
         self.artifact.touch()
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for name in ("sudo", "systemctl", "psql", "mktemp", "setfacl", "getent", "git", "cargo", "hostname", "nvidia-smi", "pacman", "sh", "id", "stat", "ldd", "nvcc"):
+        for name in ("sudo", "systemctl", "psql", "mktemp", "setfacl", "getent", "git", "cargo", "hostname", "nvidia-smi", "pacman", "sh", "id", "stat", "ldd", "nvcc",
+                     "runuser", "as-root"):
             command = self.bin / name
             command.write_text(DOUBLE)
             command.chmod(0o755)
@@ -1151,6 +1161,80 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 self.assertFalse((self.config / "m1").exists())
                 self.assertFalse(self.rule.exists())
                 self.assert_no_printed_root_command(result)
+
+    def root_mode(self):
+        """**Root runs the script** (#576): uid 0, and a shell in which each
+        command a root step runs reaches the double as `as-root <command>`,
+        as the bare command would run as root on the box. The script calls
+        none of these names outside a root step, so only root steps are
+        routed. `grep` reaches the double only for `/etc/sudoers`, which the
+        double maps into the fixture."""
+        self.env["FIXTURE_UID"] = "0"
+        preamble = self.root / "fixture-root.bash"
+        steps = "useradd groupadd usermod install chown chgrp chmod tee cp mv rm mktemp visudo"
+        preamble.write_text(f'. {shlex.quote(self.env["BASH_ENV"])}\n'
+                            f'for c in {steps}; do eval "$c() {{ \\"\\$FIXTURE_ROOT/bin/as-root\\" $c \\"\\$@\\"; }}"; done\n'
+                            'grep() { case " $* " in *" /etc/sudoers "*) "$FIXTURE_ROOT/bin/as-root" grep "$@" ;;\n'
+                            '  *) fixture_args "$@"; command grep "${fixture_mapped[@]}" ;; esac; }\n')
+        self.env["BASH_ENV"] = str(preamble)
+
+    def test_root_alone_needs_the_flag_and_the_flag_needs_root(self):
+        # **#576**: on a single-purpose appliance root is the operator, and
+        # says so with --root-operator. Root without the flag refuses, naming
+        # the flag, so a workstation run as root by accident still refuses,
+        # and the flag under another uid refuses. Perturbations: drop either
+        # uid check, and its case runs on.
+        for case, uid, args, said in (("root, no flag", "0", (), "run it as root with --root-operator"),
+                                      ("flag, not root", "12345", ("--root-operator",), "--root-operator is for root")):
+            with self.subTest(case=case):
+                self.log.unlink(missing_ok=True)
+                self.env["FIXTURE_UID"] = uid
+                result = self.create(*args)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(said, result.stderr)
+                self.assertNotIn("== plan", result.stdout)
+                self.assertFalse([c for c in self.calls() if c[0] in ("sudo", "runuser", "as-root")], self.calls())
+
+    def test_root_mode_makes_the_agent_without_sudo_and_writes_operator_zero(self):
+        # **#576**: root runs every root step itself, looks as each account
+        # through runuser, joins no group, and writes the root's `operator` key
+        # as 0. The one sudo call left is the listing of the admin-con
+        # account's rule, which root may read. Perturbations: run root steps
+        # through sudo in root mode, and sudo install appears; join root to
+        # the groups, and a usermod names root; look through sudo, and no
+        # runuser look is made.
+        self.root_mode()
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        result = self.create("--root-operator", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("== made", result.stdout)
+        self.assertIn("operator        root (--root-operator), which reads everything already", result.stdout)
+        calls = self.calls()
+        sudo = [c for c in calls if c[0] == "sudo"]
+        self.assertEqual(sudo, [["sudo", "-n", "-l", "-U", "weaver-admincon"]], sudo)
+        territory = str(self.decl)
+        self.assertIn(["runuser", "-u", "weaver-m1", "--", "sh", "-c", ACCESS_LOOK, "sh", "-x", territory], calls)
+        self.assertIn(["runuser", "-u", "weaver-admincon", "--", "sh", "-c", ACCESS_LOOK, "sh", "-r",
+                       territory + "/agent.toml"], calls)
+        self.assertTrue([c for c in calls if c[:2] == ["as-root", "useradd"] and c[-1] == "weaver-m1"], calls)
+        self.assertTrue([c for c in calls if c[:2] == ["as-root", "visudo"]], calls)
+        self.assertFalse([c for c in calls if c[:2] == ["as-root", "usermod"] and c[-1] in ("root", "fixture-no-home")],
+                         calls)
+        self.assertEqual((self.config / "m1" / "operator").read_text(), "0\n")
+        self.assertNotIn("joined groups", result.stdout)
+        self.assert_no_printed_root_command(result)
+
+    def test_root_mode_refuses_a_look_runuser_refuses_naming_runuser(self):
+        # A drop runuser refuses is neither yes nor no in root mode either,
+        # and the refusal names runuser, not sudo. Perturbation: keep sudo in
+        # the message, and the case reads wrong.
+        self.root_mode()
+        self.env.update(ALLOW_APPLY_CHECKS="1", DROP_FAIL="weaver-m1")
+        result = self.create("--root-operator", "--apply")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("runuser would not run a look as weaver-m1", result.stderr)
+        self.assertIn("runuser must run commands as the agent's accounts", result.stderr)
+        self.assertFalse((self.config / "m1").exists())
 
     def test_an_operator_sudo_that_runs_as_root_alone_stops_before_anything_is_made(self):
         # **#577, the review's finding 1**: the wall looks as the agent's
@@ -7228,10 +7312,10 @@ class RoundOneOf79Tests(unittest.TestCase):
         sudo = self.dir / "sudo"
         sudo.write_text('#!/bin/sh\nprintf "%s\\n" "$PROBE_ANSWER"\n')
         sudo.chmod(0o755)
-        program = shell_function(script, "probe_connector") + 'probe_connector "$1"'
+        program = shell_function(script, "as_account") + shell_function(script, "probe_connector") + 'probe_connector "$1"'
         env = {**os.environ, "PATH": f"{self.dir}{os.pathsep}{os.environ['PATH']}",
                "ADMINCON_USER": "weaver-admincon", "ADMIN_BINARY": "/opt/weaver/bin/weaver-admin",
-               "NAME": "m1"}
+               "NAME": "m1", "ROOT_OPERATOR": "0"}
         env.pop("BASH_ENV", None)
         for verb, answer, passes in (("validate", '{"kind":"validated"}', True),
                                      ("show", '{"kind":"state","state":"unloaded"}', True),
@@ -7245,6 +7329,19 @@ class RoundOneOf79Tests(unittest.TestCase):
                 self.assertEqual(run.stdout, answer)
         self.assertIn("if answer=$(probe_connector", script)
         self.assertNotIn('"$check_verb" "$NAME" 2>&1) || true', script)
+        # **In root mode the drop is runuser's** (#576): root becomes the
+        # admin-con account through runuser, and that account's own `sudo -n`
+        # is still the one the rule must satisfy. Perturbation: drop through
+        # sudo in root mode, and the runuser log is empty.
+        drops = self.dir / "drops"
+        runuser = self.dir / "runuser"
+        runuser.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$DROPS"\nshift 3\nexec "$@"\n')
+        runuser.chmod(0o755)
+        run = subprocess.run(["bash", "-c", program, "x", "validate"],
+                             env={**env, "ROOT_OPERATOR": "1", "DROPS": str(drops), "PROBE_ANSWER": '{"kind":"validated"}'},
+                             text=True, capture_output=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertEqual(drops.read_text(), "-u weaver-admincon -- sudo -n /opt/weaver/bin/weaver-admin validate m1\n")
 
     def test_the_purge_shuts_the_delegated_door_and_asks_again(self):
         # The purge removes the sudo rules and queries every agent afresh before
