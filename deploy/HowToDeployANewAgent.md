@@ -12,10 +12,13 @@ layout is logged under `docs/project/`. Standing the stack itself up is `REDEPLO
 and this document starts where that one ends.
 
 Every command runs from the WeaverAgent tree, as the operator, never under sudo. The
-scripts ask for sudo where a step needs it. `<name>` is the agent's name: a unix user, a
-group and a directory, so `create-agent.sh` takes lowercase letters and digits, 2 to 16
-characters. Paths below are the defaults, and a box's real values
-are in the stack record `/etc/weaver/stack/`, one file per key, which
+scripts ask for sudo where a step needs it. **On a single-purpose appliance root is the
+operator** (the operator's ruling of 2026-11-16, #576): there `create-agent.sh` runs as
+root with `--root-operator`, and its root steps run without sudo (section 2). On a
+workstation the operator is your own account, which can sudo. `<name>` is the agent's
+name: a unix user, a group and a directory, so `create-agent.sh` takes lowercase
+letters and digits, 2 to 16 characters. Paths below are the defaults, and a box's real
+values are in the stack record `/etc/weaver/stack/`, one file per key, which
 `bootstrap-stack.sh` wrote and the scripts read, and in each agent's own root
 `/etc/weaver/admin/<name>/`, which is all admin reads besides the territory that root
 names (`WEAVER_ADMIN_CONFIG` names another base, but a delegated invocation under sudo
@@ -47,12 +50,13 @@ table.
 | Prompt draft | `<territory>/system-prompt.md` | root:weaver-<name>-admin 0640, written by create-agent; `deploy/turn.py <name> --system` reads it through the access group, for an agent with a seeding sender (section 4) |
 | Operations and worker logs | `<territory>/admin.log` and `worker.log` | made by admin at the first verb, root:weaver-<name>-admin 0640 |
 | Published save points and their manifest | `<territory>/save-points/`: `<YYYYMMDDTHHMMSSZ>-<digest>.save-point` and `save-points.manifest` | the directory root:weaver-<name>-admin 0750; each save point root:weaver-<name>-admin 0640, the manifest root 0644, all written by admin |
-| Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root` (and `library-path`, `headroom-bytes`, `load-bound-seconds`, `shell-binary` where the stack record has them), copied from the stack record, plus `territory` (the territory's path), `operator` (the operator's uid) and `roles.toml` (`trace-reader = "weaver-admincon"`) | root, directory 0755, files 0644, and admin refuses a root that is not root-owned or is group- or world-writable |
+| Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root` (and `library-path`, `headroom-bytes`, `load-bound-seconds`, `shell-binary` where the stack record has them), copied from the stack record, plus `territory` (the territory's path), `operator` (the operator's uid, 0 where root is the operator) and `roles.toml` (`trace-reader = "weaver-admincon"`) | root, directory 0755, files 0644, and admin refuses a root that is not root-owned or is group- or world-writable |
 | Sudo rule | `/etc/sudoers.d/weaver-<name>` | root 0440, checked by `visudo` |
 | Run directory | `<coordination-root>/weaver.run/<name>/`: `run.lock`, `admin.lock`, `trace.sock` | made by admin, root 0755 |
 
 **The territory is the state group's and passes it; the access group reads the files**
-(the operator's ruling of 2026-10-08 on #1). The operator joins three groups:
+(the operator's ruling of 2026-10-08 on #1). The operator joins three groups, except
+root where it is the operator, which reads everything already and joins none:
 `weaver-<name>-trace` to read the trace without sudo, `weaver-<name>-state` to pass the
 territory, and `weaver-<name>-admin` to read the declaration, the draft, the logs and
 the save points without sudo. The operator does not join `weaver-<name>`: the gate's
@@ -109,6 +113,11 @@ group in one shell.
 - The operator's own sudo runs commands as other accounts (`(ALL)`, not `(root)` alone):
   the wall checks run as the agent's accounts, and a drop that sudo refuses stops the
   run, naming sudo.
+- On a single-purpose appliance, where root is the operator, `runuser` (util-linux) is
+  on the box: in root mode the wall checks and the closing probe run as the agent's
+  accounts through it, and no sudo credential is asked for. The include and the
+  original sudo still bind, since the admin-con account's rule is sudo's, and root
+  lists that rule through sudo at the end.
 
 ## 2. An agent with a store
 
@@ -119,6 +128,13 @@ first. The plan needs no sudo and prints exactly what apply will make.
 deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact>
 deploy/create-agent.sh <name> --artifact /opt/weaver/models/<artifact> --apply
 ```
+
+**On a single-purpose appliance root is the operator**, and root runs both lines with
+`--root-operator` added (the operator's ruling of 2026-11-16, #576). The root's
+`operator` key is then 0, every root step runs directly, every look as another account
+goes through `runuser`, and root joins no group. Root without the flag refuses, so a
+workstation run as root by accident still refuses, and the flag under any other uid
+refuses.
 
 The store is the embedded sqlite engine, `--engine sqlite` and the default, the one
 engine this build provides (#1, #86), and any other engine refuses as one this build
@@ -144,8 +160,8 @@ agent's or the trace's, the gate-con account holds the agent's group and no stat
 access or trace group, and the admin-con account reads the declaration and can write
 neither it, the draft nor the save points directory. A refusal there is the boundary
 being wrong, not the agent, and leaves the staged root in place to read and remove. Each
-probe runs as the account it names through the shell's own `[`, so a `test` command that
-ignores supplementary groups changes no answer. Then the sudo rule is staged, checked
+probe runs as the account it names (through `runuser` in root mode) through the shell's
+own `[`, so a `test` command that ignores supplementary groups changes no answer. Then the sudo rule is staged, checked
 with `visudo -cf` again, and installed, and only after all of it does the root move to
 `/etc/weaver/admin/<name>/`, which is the admission. The last step runs one line through
 the rule as `weaver-admincon` (`validate` for the operator role, `show` for the
@@ -225,7 +241,8 @@ made last because it is the admission. **A storeless agent carries the state gro
 operator and the box's admin-con account pass by, and admin resolves it for every verb.
 **The box's two accounts must already stand in their shape** (section 0), since the
 block judges nothing: a `create-agent.sh` run lays and judges them, and its plan for any
-name prints what it found. The block runs as the operator, one chain, so
+name prints what it found. Where root is the operator it joins no group, and its
+`operator` key is 0 (section 2). The block runs as the operator, one chain, so
 a step that fails stops the rest; it refuses a territory, a stage or a root that already
 stands, since `install -d` would merge with it. The territory is the stack record's
 `agent-directory` made canonical, as `create-agent.sh` makes it, and the 5-digit modes
@@ -247,7 +264,7 @@ T=$(realpath -e -- "$(cat /etc/weaver/stack/agent-directory)")/weaver-$N \
 && sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid weaver-$N-trace weaver-$N-relay \
 && sudo usermod -aG weaver-$N weaver-gatecon \
 && sudo usermod -aG weaver-$N-state,weaver-$N-admin weaver-admincon \
-&& sudo usermod -aG weaver-$N-trace,weaver-$N-state,weaver-$N-admin "$(id -un)" \
+&& { [ "$(id -u)" = 0 ] || sudo usermod -aG weaver-$N-trace,weaver-$N-state,weaver-$N-admin "$(id -un)"; } \
 && sudo chmod 2750 /home/weaver-$N \
 && sudo install -d -o root -g weaver-$N-state -m 00710 "$T" \
 && sudo install -o root -g weaver-$N-trace -m 0640 /dev/null "$T/trace.ndjson" \

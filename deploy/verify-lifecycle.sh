@@ -133,7 +133,8 @@ done
 # for, except those that need root to look, which follow the credential.
 
 # **Run as the operator**: the root's `operator` key names it, and
-# create-agent.sh refuses root.
+# create-agent.sh refuses root unless told root is the operator
+# (`--root-operator`, #576), which this verifier never passes.
 [ "$(id -u)" -ne 0 ] || die "run as the operator, not as root: create-agent.sh names this uid as the agent's operator, and --apply asks for sudo itself"
 [ -z "${SUDO_USER:-}" ] || die "run as the operator, not under sudo: --apply asks for sudo itself where a step needs it"
 
