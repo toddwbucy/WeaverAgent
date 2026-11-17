@@ -9167,14 +9167,15 @@ class RoundOneOf79Tests(unittest.TestCase):
         # account is gone, a folder with no home, a linked home, and a drive without
         # project quotas carry no cap, and a folder whose mount cannot be read
         # is named and keeps the purge from closing clean. **What the home carries is a report and
-        # never acted on**: the agent owns its home and can set its project to
-        # another agent's uid until #587 lands, so a home moved to m1's project
-        # has only its own account's limit removed, and the plan names the
-        # move. The purge sets each project's limit to none before the paths
-        # go, and a limit left standing (setquota failing, or absent) stops the
-        # purge there (CodeRabbit on #582). Perturbations: read the project off the home, follow a
-        # linked home, skip the prjquota check, drop the failure's return, or
-        # move the step after the paths, and a read below fails.
+        # never acted on**: the agent owns its home, and a home made before
+        # #587 or moved by hand can carry another agent's uid, so a home moved
+        # to m1's project has only its own account's limit removed, and the
+        # plan names the move. The purge sets each project's limit to none
+        # before the paths go, and a limit left standing (setquota failing, or
+        # absent) stops the purge there (CodeRabbit on #582). Perturbations:
+        # read the project off the home, follow a linked home, skip the
+        # prjquota check, drop the failure's return, or move the step after
+        # the paths, and a read below fails.
         script = (DEPLOY / "decommission.sh").read_text()
         with tempfile.TemporaryDirectory() as scratch:
             base = Path(scratch).resolve() / "state"

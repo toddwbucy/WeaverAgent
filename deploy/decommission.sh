@@ -478,9 +478,11 @@ for d in "${AGENT_FOLDERS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && pla
 # only root can change, so an agent made without --home-quota, or one refused
 # because the drive carried its project already, never has a stranger's limit
 # of the same number lifted. **Nothing is read off the home**: the agent owns
-# its home and, until #587 lands, can set its project to any number, another
-# agent's uid included. What the home carries is printed as <seen>, a report
-# and never acted on ("-" where it cannot be read). A folder whose account is
+# it, so what it carries is no fact of root's. The gate's shell refuses every
+# command the agent runs a change of its files' project (#587), but a home made
+# before that, or moved by hand, can carry any number, another agent's uid
+# included. What the home carries is printed as <seen>, a report and never
+# acted on ("-" where it cannot be read). A folder whose account is
 # gone, or whose drive has no project quotas, carries no cap. A folder whose
 # mount or mark cannot be read is printed as "? mount <folder>" or "? mark
 # <folder>", so the plan names it and what could not be read, rather than
