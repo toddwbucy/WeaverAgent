@@ -60,9 +60,9 @@ something this runbook does not mention, the runbook is what gets amended.
 | Engine libraries `libggml*`, `libllama*` | `<prefix>/lib/`, reached by `/etc/ld.so.conf.d/weaver.conf` and named by the record's `library-path`, which admin sets as the worker's `LD_LIBRARY_PATH` | bootstrap, update-stack |
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
 | Retired Python SPU, where an older install left it | `<prefix>/python-spu/` | archive and purge only, Python retirement below |
-| Accounts: the agent's `weaver-<name>` (home `/home/weaver-<name>`, 2750), the member's `weaver-<name>-state`, the relay's `weaver-<name>-relay`, and the groups `weaver-<name>-trace` and `weaver-<name>-admin`; an agent laid by an earlier create-agent also has its own connector `weaver-<name>-admincon` | passwd | create-agent |
+| Accounts: the agent's `weaver-<name>` (home `<agent-directory>/<name>/home`, 2750, in the agent's folder, #578), the member's `weaver-<name>-state`, the relay's `weaver-<name>-relay`, and the groups `weaver-<name>-trace` and `weaver-<name>-admin`; an agent laid by an earlier create-agent also has its own connector `weaver-<name>-admincon` | passwd | create-agent |
 | The box's two connector accounts, one per box: `weaver-gatecon` (WeaverWeb's gate-con, in each agent's group `weaver-<name>`) and `weaver-admincon` (WeaverWeb's admin-con, in each agent's state and access groups), no home, nologin | passwd | create-agent, at the first run that finds each absent; decommission removes them after every agent's accounts |
-| Territory `weaver-<name>/` (root:weaver-<name>-state 0710, passage for the state group alone) with `agent.toml` and `system-prompt.md` (root:weaver-<name>-admin 0640), `admin.log` and `worker.log` once admin has run a verb (root:weaver-<name>-admin 0640), `save-points/` (root:weaver-<name>-admin 0750, the published save points 0640 and the manifest root 0644), `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640); the whole agent, on the operator's ruling of 2026-10-07 on #1 | the stack record's `agent-directory`,  default `/var/lib/weaver-agent` | create-agent, admin for the logs and the save points |
+| Territory `weaver-<name>/` (root:weaver-<name>-state 0710, passage for the state group alone) with `agent.toml` and `system-prompt.md` (root:weaver-<name>-admin 0640), `admin.log` and `worker.log` once admin has run a verb (root:weaver-<name>-admin 0640), `save-points/` (root:weaver-<name>-admin 0750, the published save points 0640 and the manifest root 0644), `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640); the whole agent, on the operator's ruling of 2026-10-07 on #1 | the agent's folder `<agent-directory>/<name>/` (root:root 0755, beside the home, #578), the base the stack record's `agent-directory`, default `/var/lib/weaver-agent` | create-agent, admin for the logs and the save points |
 | Run directory: `run.lock`, `admin.lock` and the trace door `trace.sock` | `<coordination-root>/weaver.run/<name>/` (root 0755, on tmpfs under `/run`) | admin, at its first verb |
 
 No unit and no init system is part of a stack. Admin's start step stands the worker, its
@@ -342,7 +342,8 @@ What it does, so the log can say which step a failure was at:
    `headroom-bytes` or `load-bound-seconds` on every agent writes
    it into the record before making agents. Creates the admin base `/etc/weaver/admin`
    empty (root 0755) and the agent directory `/var/lib/weaver-agent` (root 0755), under
-   which each territory is root:weaver-<name>-state 0710, not setgid. Then prints
+   which each agent's folder holds its territory, root:weaver-<name>-state 0710, not
+   setgid, and its home. Then prints
    and writes `install-tuple`, the box-side half of the deployment tuple, which
    `update-stack.sh` rewrites after each verified install. One `key = value` line
    per fact, in this order, with `unknown` where the box cannot answer
@@ -393,8 +394,9 @@ The store is the embedded sqlite engine, the default (the service engine retired
 operator's ruling of 2026-10-02 on #1). The script lays the box's two connector accounts
 where they are absent and judges them by their shape where they stand
 (`HowToDeployANewAgent.md` section 0), makes the agent's three accounts and two groups,
-the territory (root:weaver-<name>-state 0710 under the stack record's `agent-directory`,
-made canonical, with no access entries), its trace (root:weaver-<name>-trace 0640, which
+the agent's folder (root:root 0755, under the stack record's `agent-directory` made
+canonical, #578) with the agent's home and the territory in it (root:weaver-<name>-state
+0710, with no access entries), its trace (root:weaver-<name>-trace 0640, which
 the member cannot read), the declaration and the prompt draft in the territory
 (root:weaver-<name>-admin 0640; `sudoedit` edits the declaration) and `save-points/`
 beside them (root:weaver-<name>-admin 0750), and the agent root staged under a dot-name:

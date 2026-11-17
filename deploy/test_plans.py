@@ -540,8 +540,10 @@ class PlanTests(unittest.TestCase):
         (self.existing_territory / "save-points").mkdir(mode=0o750)
         (self.existing_territory / "save-points").chmod(0o750)
         (existing / "territory").write_text(str(self.existing_territory) + "\n")
-        # m1's territory, where its declaration and draft land.
-        self.decl = self.root / "agents" / "weaver-m1"
+        # m1's folder, and its territory inside it, where its declaration and
+        # draft land (the operator's ruling of 2026-11-16 on the layout, #578).
+        self.folder = self.root / "agents" / "m1"
+        self.decl = self.folder / "weaver-m1"
         # The box's sudoers, which includes sudoers.d, mapped into the fixture.
         (self.root / "etc" / "sudoers.d").mkdir(parents=True)
         (self.root / "etc" / "sudoers").write_text("@includedir /etc/sudoers.d\n")
@@ -749,7 +751,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 for path in (self.config / "m1", self.config / ".m1.partial"):
                     if path.exists(): path.rmdir()
                 self.rule.unlink(missing_ok=True)
-                shutil.rmtree(self.decl, ignore_errors=True)
+                shutil.rmtree(self.folder, ignore_errors=True)
                 if collision == "account": self.env["COLLISION"] = "weaver-m1-state"
                 elif collision == "relay account": self.env["COLLISION"] = "weaver-m1-relay"
                 elif collision == "access group": self.env["COLLISION"] = "weaver-m1-admin"
@@ -878,8 +880,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 self.assertFalse(any(c[0] == "sudo" for c in self.calls()))
 
     def test_apply_uses_privileged_collision_reads(self):
-        for path in (self.config / "m1", self.home / "weaver-m1",
-                     self.root / "agents" / "weaver-m1"):
+        for path in (self.config / "m1", self.root / "agents" / "m1"):
             with self.subTest(path=path):
                 self.log.unlink(missing_ok=True)
                 path.touch()
@@ -896,7 +897,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         (self.stack / "agent-directory").write_text(f"  {self.root / 'agents'} \r\n")
         result = self.create()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"territory       {self.root / 'agents' / 'weaver-m1'} ", result.stdout)
+        self.assertIn(f"territory       {self.root / 'agents' / 'm1' / 'weaver-m1'} ", result.stdout)
 
     def test_the_territory_is_named_by_its_canonical_path(self):
         # The #94 survey's S23: admin compares the declaration's sink
@@ -909,7 +910,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         (self.stack / "agent-directory").write_text(f"{linked}\n")
         result = self.create()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"territory       {self.root / 'agents' / 'weaver-m1'} ", result.stdout)
+        self.assertIn(f"territory       {self.root / 'agents' / 'm1' / 'weaver-m1'} ", result.stdout)
         self.assertNotIn(str(linked), result.stdout)
 
     def test_a_territory_base_another_principal_could_write_refuses(self):
@@ -1108,7 +1109,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
     def reset_made(self):
         """Take away what an apply run made, so the next run starts clean."""
         self.log.unlink(missing_ok=True)
-        for made in (self.config / "m1", self.config / ".m1.partial", self.decl):
+        for made in (self.config / "m1", self.config / ".m1.partial", self.folder):
             shutil.rmtree(made, ignore_errors=True)
         self.rule.unlink(missing_ok=True)
 
@@ -1209,6 +1210,17 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 if case == "sudo, no flag": self.assertNotIn("--root-operator", result.stderr)
                 self.assertNotIn("== plan", result.stdout)
                 self.assertFalse([c for c in self.calls() if c[0] in ("sudo", "runuser", "as-root")], self.calls())
+        # **Root through its own sudo is root** (the Planner's grade of #583):
+        # SUDO_USER=root takes the flag, and without it is told to add it.
+        # Perturbation: refuse SUDO_USER=root again, and the plan never runs.
+        self.env.update(FIXTURE_UID="0", SUDO_USER="root")
+        result = self.create("--root-operator")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("== plan", result.stdout)
+        result = self.create()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("run it as root with --root-operator", result.stderr)
+        self.env.pop("SUDO_USER")
 
     def test_root_mode_makes_the_agent_without_sudo_and_writes_operator_zero(self):
         # **#576**: root runs every root step itself, looks as each account
@@ -1405,8 +1417,8 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                            "holds disk, outside what the box's account may hold")):
             with self.subTest(env=env):
                 shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
-                shutil.rmtree(self.root / "agents" / "weaver-m1", ignore_errors=True)
-                shutil.rmtree(self.decl, ignore_errors=True)
+                shutil.rmtree(self.folder, ignore_errors=True)
+                shutil.rmtree(self.folder, ignore_errors=True)
                 for name in ("RELAY_GROUPS", "ADMINCON_GROUPS", "GATECON_GROUPS", "ADMINCON_JOINED", "GATECON_JOINED"):
                     self.env.pop(name, None)
                 (self.root / "laid-box-accounts").unlink(missing_ok=True)
@@ -1538,7 +1550,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         script = (DEPLOY / "create-agent.sh").read_text()
         accounts = script.index('say "accounts"')
         self.assertLess(script.index('root useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$box_account"', accounts),
-                        script.index('--create-home --user-group "$AGENT_USER"', accounts),
+                        script.index('--create-home --home-dir "$AGENT_HOME" --user-group "$AGENT_USER"', accounts),
                         "the box's accounts are laid before any of the agent's")
 
     def test_the_box_accounts_names_are_not_agents(self):
@@ -1622,7 +1634,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.log.unlink(missing_ok=True)
         shutil.rmtree(self.config / "m1", ignore_errors=True)
         shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
-        shutil.rmtree(self.decl, ignore_errors=True)
+        shutil.rmtree(self.folder, ignore_errors=True)
         self.rule.unlink(missing_ok=True)
         self.env["GROUP_WRITES"] = "1"
         result = self.create("--apply")
@@ -1925,7 +1937,7 @@ esac
         for adapter, evidence in ((False, False), (True, False), (True, True)):
             with self.subTest(adapter=adapter, evidence=evidence):
                 shutil.rmtree(self.config / "m1", ignore_errors=True)
-                shutil.rmtree(self.decl, ignore_errors=True)
+                shutil.rmtree(self.folder, ignore_errors=True)
                 shutil.rmtree(self.root / "installed", ignore_errors=True)
                 shutil.rmtree(self.root / "stub-state", ignore_errors=True)
                 state = self.verify_fixture()
@@ -1989,7 +2001,7 @@ esac
                 ("outlived", "KEEP_CGROUP", "outlived the unload")):
             with self.subTest(case):
                 shutil.rmtree(self.config / "m1", ignore_errors=True)
-                shutil.rmtree(self.decl, ignore_errors=True)
+                shutil.rmtree(self.folder, ignore_errors=True)
                 shutil.rmtree(self.root / "stub-state", ignore_errors=True)
                 shutil.rmtree(self.root / "installed", ignore_errors=True)
                 shutil.rmtree(self.root / "cgroup-fs", ignore_errors=True)
@@ -2012,7 +2024,7 @@ esac
         case refuses at the leaf."""
         for leaf, passes in (("worker/run", True), ("constituents", False)):
             with self.subTest(leaf):
-                for d in (self.config / "m1", self.decl, self.root / "stub-state",
+                for d in (self.config / "m1", self.folder, self.root / "stub-state",
                           self.root / "installed", self.root / "cgroup-fs"):
                     shutil.rmtree(d, ignore_errors=True)
                 state = self.verify_fixture()
@@ -2044,7 +2056,7 @@ esac
         for case in ("refused unload", "unload event", "refused load"):
             with self.subTest(case):
                 shutil.rmtree(self.config / "m1", ignore_errors=True)
-                shutil.rmtree(self.decl, ignore_errors=True)
+                shutil.rmtree(self.folder, ignore_errors=True)
                 shutil.rmtree(self.root / "stub-state", ignore_errors=True)
                 shutil.rmtree(self.root / "installed", ignore_errors=True)
                 state = self.verify_fixture()
@@ -2451,8 +2463,24 @@ esac
         result = self.create("--apply")
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
-        territory = str(self.root / "agents" / "weaver-m1")
+        territory = str(self.root / "agents" / "m1" / "weaver-m1")
         self.assertIn(["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-state", "-m", "00710", territory], calls)
+        # **The agent's folder holds the territory and the home side by side**
+        # (#578): root's 0755, made before the account whose home stands in
+        # it, and the home the agent's 2750. Perturbations: make the home
+        # under /home again, or the folder after the useradd, and this fails.
+        folder = str(self.root / "agents" / "m1")
+        make_folder = ["sudo", "install", "-d", "-o", "root", "-g", "root", "-m", "00755", folder]
+        add_agent = ["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", "--create-home",
+                     "--home-dir", folder + "/home", "--user-group", "weaver-m1"]
+        self.assertIn(make_folder, calls)
+        self.assertIn(add_agent, calls)
+        self.assertLess(calls.index(make_folder), calls.index(add_agent))
+        self.assertIn(["sudo", "chmod", "2750", folder + "/home"], calls)
+        self.assertLess(calls.index(make_folder), calls.index(
+            ["sudo", "install", "-d", "-o", "root", "-g", "weaver-m1-state", "-m", "00710", territory]))
+        self.assertIn(f"folder          {folder}        root:root 0755", result.stdout)
+        self.assertIn(f"home            {folder}/home        weaver-m1 2750", result.stdout)
         self.assertIn(["sudo", "install", "-o", "root", "-g", "weaver-m1-trace", "-m", "0640", "/dev/null",
                        territory + "/trace.ndjson"], calls)
         self.assertIn(["sudo", "install", "-d", "-o", "weaver-m1-state", "-g", "weaver-m1-state", "-m", "0700",
@@ -2481,8 +2509,8 @@ esac
             with self.subTest(engine=engine):
                 self.log.unlink(missing_ok=True)
                 shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
-                shutil.rmtree(self.root / "agents" / "weaver-m1", ignore_errors=True)
-                shutil.rmtree(self.decl, ignore_errors=True)
+                shutil.rmtree(self.folder, ignore_errors=True)
+                shutil.rmtree(self.folder, ignore_errors=True)
                 self.env.update(ALLOW_APPLY_CHECKS="1", TRACE_OPEN="1")
                 result = self.create("--engine", engine, "--apply")
                 self.assertNotEqual(result.returncode, 0)
@@ -5013,7 +5041,7 @@ esac
             ("existing root", {}, "root", [], "already exists"),
             ("existing account", {"COLLISION": "weaver-m1-relay"}, None, [], "the account weaver-m1-relay already exists"),
             ("existing group", {"COLLISION_GROUP": "weaver-m1-admin"}, None, [], "the group weaver-m1-admin already exists"),
-            ("existing territory", {}, "territory", [], "already exists"),
+            ("existing folder", {}, "folder", [], "already exists"),
             ("root", {"FIXTURE_UID": "0"}, None, [], "not as root"),
             ("sudo", {"SUDO_USER": "someone"}, None, [], "not under sudo"),
             ("no stack record", {}, "stack", [], "no stack record"),
@@ -5028,7 +5056,7 @@ esac
                 saved = dict(self.env)
                 self.env.update(ALLOW_APPLY_CHECKS="1", **env)
                 if make == "root": (self.config / "m1").mkdir()
-                elif make == "territory": self.decl.mkdir()
+                elif make == "folder": self.folder.mkdir()
                 elif make == "stack": shutil.move(self.stack, self.root / "stack.aside")
                 elif make == "marker": marker.write_text('agent = "m1"\n')
                 try:
@@ -5039,7 +5067,7 @@ esac
                 finally:
                     self.env = saved
                     if make == "root": (self.config / "m1").rmdir()
-                    elif make == "territory": self.decl.rmdir()
+                    elif make == "folder": self.folder.rmdir()
                     elif make == "stack": shutil.move(self.root / "stack.aside", self.stack)
                     elif make == "marker": marker.unlink()
                 self.assertNotEqual(result.returncode, 0, result.stdout)
@@ -5106,7 +5134,7 @@ esac
         root = self.config / "m1"
         root.mkdir()
         key = root / "declaration-directory"
-        territory = (self.root / "agents").resolve() / "weaver-m1"
+        territory = (self.root / "agents").resolve() / "m1" / "weaver-m1"
         key.write_text(f"  {territory}\n")
         result = self.lifecycle("--cleanup")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -6416,7 +6444,7 @@ class DecommissionTests(unittest.TestCase):
         # the territories' archive takes whole, and the operator's home is
         # never read, archived or purged. Perturbation: archive or purge a
         # path under the home again, and this fails.
-        self.assertIn('archive_path "$(archive_name territories "$d")" "$d"', self.script)
+        self.assertIn('for d in "${AGENT_FOLDERS[@]}"; do archive_path "$(archive_name agent "$d")" "$d"; done', self.script)
         self.assertNotIn("declaration-directories", self.script)
         self.assertNotIn("DECL_DIRS", self.script)
         self.assertFalse([l for l in self.script.splitlines()
@@ -6461,6 +6489,14 @@ class DecommissionTests(unittest.TestCase):
             listed = self.run_fn("territories_outside", str(base), "--",
                                  str(dotted / "b"), str(dotted / "a"), env=self.stat_env(scratch))
             self.assertEqual(listed.splitlines(), [str(custom.resolve())])
+            # **A folder of the layout before #578 is the territory itself**,
+            # `<base>/weaver-<agent>`, which the purge takes as that agent's
+            # folder: the territory it names is covered, not listed twice.
+            # Perturbation: cover only what stands below a folder, and the
+            # territory prints.
+            listed = self.run_fn("territories_outside", str(under), "--", str(roots / "a"),
+                                 env=self.stat_env(scratch))
+            self.assertEqual(listed, "")
         self.assertIn('for d in "${OWN_TERRITORIES[@]}"; do archive_path "$(archive_name territory "$d")" "$d"; done',
                       self.script)
         self.assertIn('OWN_LISTED=$(territories_outside', self.script)
@@ -6539,7 +6575,7 @@ class DecommissionTests(unittest.TestCase):
         refusal = self.script.index('[ "$TERRITORIES_JUDGED" = 1 ] || die ')
         self.assertLess(self.script.index('[ "$MODE" = plan ] && { say "plan only.'), refusal)
         self.assertLess(refusal, self.script.index('if [ "$MODE" = archive ]; then'))
-        self.assertIn("territories_outside \"${!TERRITORY_BASES[@]}\" -- \"${AGENT_ROOTS[@]}\") || TERRITORIES_JUDGED=0",
+        self.assertIn("territories_outside \"${AGENT_FOLDERS[@]}\" -- \"${AGENT_ROOTS[@]}\") || TERRITORIES_JUDGED=0",
                       self.script)
 
     def test_the_archive_and_the_purge_name_their_directory(self):
@@ -6803,7 +6839,7 @@ class DecommissionTests(unittest.TestCase):
                        + f'declare -A TERRITORY_BASES=([{shlex.quote(str(home / ".weaveragent"))}]=1 '
                        + f'[{shlex.quote(str(other))}]=1)\ndeclare -A LOG_PATHS=()\n'
                        + self.script[self.script.index('for d in "${!TERRITORY_BASES[@]}"; do\n  in_operator_home'):
-                                     self.script.index('for d in /var/lib/weaver "${!TERRITORY_BASES[@]}"')]
+                                     self.script.index("# **agent_folders BASE...")]
                        + 'printf "kept %s\\n" "${!TERRITORY_BASES[@]}"')
             run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
             self.assertIn(f"{home / '.weaveragent'}  under the operator's home: not touched", run.stdout, run.stderr)
@@ -7450,13 +7486,72 @@ class RoundOneOf79Tests(unittest.TestCase):
             open_dir.chmod(0o755)
         self.assertEqual(run.stdout, str(closed_dir / "weaver-admin"), run.stderr)
 
+    def test_the_purge_takes_each_agents_folder_and_never_a_base(self):
+        # **#578, the Planner's ruling of 2026-11-16**: a base is the state
+        # drive's mount point on an appliance or `/home` on a host, so the
+        # purge takes each discovered agent's folder from it, `<base>/<agent>`
+        # or the older `<base>/weaver-<agent>`, root's by uid, and never the
+        # base. What else the base holds is named as left in place.
+        # Perturbations: drop the uid test, and alice's own home is taken;
+        # list the bases in purge_candidates again, and the base is a purge
+        # line; drop left_in_base's taken filter, and a folder reads as left.
+        script = (DEPLOY / "decommission.sh").read_text()
+        with tempfile.TemporaryDirectory() as scratch:
+            base = Path(scratch).resolve() / "state"
+            for name in ("m1", "weaver-old", "lost+found", "alice", "stray"):
+                (base / name).mkdir(parents=True)
+            (base / "m1" / "weaver-m1").mkdir()
+            (base / "m1" / "home").mkdir()
+            roots_owned = f"{base / 'm1'}:{base / 'weaver-old'}:{base / 'lost+found'}"
+            # The tester owns every file here, so `stat -c %u` answers 0 for
+            # what the fixture calls root's and the tester's uid elsewhere.
+            stat_double = ('stat() { local p="${@: -1}"; case ":$ROOTS_OWNED:" in *":$p:"*) echo 0 ;; '
+                           '*) command stat "$@" ;; esac; }\n')
+            program = (stat_double + "declare -A AGENTS=([m1]=1 [old]=1 [alice]=1)\n"
+                       + shell_function(script, "agent_folders") + shell_function(script, "left_in_base")
+                       + 'mapfile -t F < <(agent_folders "$1")\nprintf "folder %s\\n" "${F[@]}"\n'
+                       + 'left_in_base "$1" "${F[@]}" | sort | sed "s/^/left /"')
+            run = subprocess.run(["bash", "-c", program, "x", str(base)], env={**os.environ, "ROOTS_OWNED": roots_owned},
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(run.stdout.splitlines(), [
+                f"folder {base / 'm1'}", f"folder {base / 'weaver-old'}",
+                f"left {base / 'alice'}", f"left {base / 'lost+found'}", f"left {base / 'stray'}"])
+            # The purge's candidates name the folders and never the base.
+            candidates = subprocess.run(
+                ["bash", "-c", "SUDO_RULES=(); LDSO_CONFS=(); OWN_TERRITORIES=(); HOMES=(); TMP_PATHS=()\n"
+                 "WEAVER_USERS=(); WEAVER_GROUPS=(); declare -A PREFIXES=() LOG_PATHS=() COORD_ROOTS=() AGENTS=()\n"
+                 f"declare -A TERRITORY_BASES=([{shlex.quote(str(base))}]=1)\nAGENT_FOLDERS=({shlex.quote(str(base / 'm1'))})\n"
+                 + shell_function(script, "purge_candidates") + "purge_candidates"],
+                text=True, capture_output=True, timeout=20)
+            self.assertEqual(candidates.returncode, 0, candidates.stderr)
+            self.assertIn(f"path {base / 'm1'}", candidates.stdout.splitlines())
+            self.assertNotIn(f"path {base}", candidates.stdout.splitlines())
+        # A home in an agent's folder goes with the folder.
+        with tempfile.TemporaryDirectory() as scratch:
+            folder = Path(scratch).resolve() / "state" / "m1"
+            (folder / "home").mkdir(parents=True)
+            elsewhere = Path(scratch).resolve() / "srv" / "weaver-x"
+            elsewhere.mkdir(parents=True)
+            self.assertEqual(self.run_fn_in(script, "home_within", str(folder / "home"), str(folder)), str(folder))
+            self.assertEqual(self.run_fn_in(script, "home_within", str(elsewhere), str(folder)), "")
+        self.assertIn('*) plan "$h  (home of $u): outside /home and every agent\'s folder, left in place, untouched" ;;', script)
+        self.assertIn('done < <(left_in_base "$d" "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}" "${HOMES[@]}")', script)
+
+    def run_fn_in(self, script, name, *args):
+        run = subprocess.run(["bash", "-c", shell_function(script, name) + f'{name} "$@"', "x", *args],
+                             text=True, capture_output=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        return run.stdout
+
     def test_decommission_archives_and_purges_every_territory_base(self):
         # Codex on #79: the per-agent layout's territories under the stack
-        # record's agent-directory are archived, so they reach the purge list.
-        # Perturbation: drop the loop, and they are left behind.
+        # record's agent-directory are archived, so they reach the purge list,
+        # each agent's folder on its own since #578. Perturbation: drop the
+        # loop, and they are left behind.
         script = (DEPLOY / "decommission.sh").read_text()
         archive = script[script.index('if [ "$MODE" = archive ]; then'):script.index(" 3. purge\n")]
-        self.assertIn('archive_path "$(archive_name territories "$d")" "$d"', archive)
+        self.assertIn('for d in "${AGENT_FOLDERS[@]}"; do archive_path "$(archive_name agent "$d")" "$d"; done', archive)
         self.assertIn("read_key /etc/weaver/stack agent-directory", script)
 
     def test_archive_names_never_collide(self):
@@ -7470,7 +7565,7 @@ class RoundOneOf79Tests(unittest.TestCase):
                                  text=True, capture_output=True, timeout=20)
             names.append(run.stdout)
         self.assertEqual(names, ["territories-srv-weaver-agent", "territories-var-lib-weaver-agent"])
-        for sink in ("opt", "territories", "log"):
+        for sink in ("opt", "agent", "log"):
             self.assertIn(f'archive_path "$(archive_name {sink} ', script)
         self.assertNotIn('$(basename "$d")" "$d"', script)
 

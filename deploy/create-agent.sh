@@ -41,8 +41,14 @@
 # into place last, so a run that stops part way leaves no root admin would
 # admit.
 #
+# **Each agent has one folder, named after it** (the operator's ruling of
+# 2026-11-16 on the layout, #578): `<agent-directory>/<name>/`, root:root
+# 0755, holding the territory `weaver-<name>/` and the agent's home `home/`
+# side by side. On an appliance the base is the state drive, so both persist
+# across image versions.
+#
 # **The whole agent lives in its territory** (the operator's ruling of
-# 2026-10-07 on #1): `<agent-directory>/weaver-<name>/`, root's, holds the
+# 2026-10-07 on #1): `<agent-directory>/<name>/weaver-<name>/`, root's, holds the
 # declaration `agent.toml` (root:weaver-<name>-admin 0640, which the
 # operator edits with `sudoedit`), the prompt draft `system-prompt.md`
 # (root:weaver-<name>-admin 0640), admin's own
@@ -163,7 +169,7 @@ while [ $# -gt 0 ]; do
     --engine)   [ $# -ge 2 ] || die "--engine needs a name"; ENGINE=$2; shift ;;
     --spu)      [ $# -ge 2 ] || die "--spu needs a path"; SPU_OVERRIDE=$2; shift ;;
     --declaration-directory) die "--declaration-directory is retired on the operator's ruling of 2026-10-07 on #1:
-   the declaration lives in the agent's territory, <agent-directory>/weaver-<name>/agent.toml,
+   the declaration lives in the agent's territory, <agent-directory>/<name>/weaver-<name>/agent.toml,
    root's, edited with sudoedit, and nothing is written into the operator's home." ;;
     --connector-role) [ $# -ge 2 ] || die "--connector-role needs operator or observer"; CONNECTOR_ROLE=$2; shift ;;
     --adapter)        [ $# -ge 2 ] || die "--adapter needs a path"; ADAPTER=$2; shift ;;
@@ -257,13 +263,14 @@ esac
 # gate does not admit the operator either way: its rule names the box's
 # gate-con account alone (weaver-gate-world-contract section 1).
 # **sudo is a workstation's**: on the appliance root runs this from its own
-# login, so a run through sudo is an operator's account and never takes the
-# flag (#576 self-check).
+# login, so a run through sudo from another account is an operator's account
+# and never takes the flag (#576 self-check). Root through its own sudo
+# (`sudo -i`, SUDO_USER=root) is still root (the Planner's grade of #583).
 if [ "$ROOT_OPERATOR" -eq 1 ]; then
   [ "$(id -u)" -eq 0 ] || die "--root-operator is for root, on a single-purpose appliance where root is the operator: run it as root, or drop the flag and run it as the operator"
-  [ -z "${SUDO_USER:-}" ] || die "--root-operator is for root's own login on a single-purpose appliance, not sudo from $SUDO_USER: on a workstation run it as $SUDO_USER, without sudo and without the flag"
+  [ -z "${SUDO_USER:-}" ] || [ "$SUDO_USER" = root ] || die "--root-operator is for root's own login on a single-purpose appliance, not sudo from $SUDO_USER: on a workstation run it as $SUDO_USER, without sudo and without the flag"
 elif [ "$(id -u)" -eq 0 ]; then
-  [ -z "${SUDO_USER:-}" ] || die "run as the operator, not under sudo: the root's operator key names this uid, and --apply asks for sudo itself"
+  [ -z "${SUDO_USER:-}" ] || [ "$SUDO_USER" = root ] || die "run as the operator, not under sudo: the root's operator key names this uid, and --apply asks for sudo itself"
   die "run as the operator, not as root: the root's operator key names this uid, and --apply asks for sudo itself. On a single-purpose appliance, where root is the operator, run it as root with --root-operator"
 fi
 
@@ -415,7 +422,7 @@ judge_names || exit 1
 # access entries** (operator's ruling of 2026-10-02, #28). The base is the stack
 # record's `agent-directory`, which bootstrap-stack.sh makes root 0755: it must
 # stand, be held closed by admin's rule, and let no other principal make a name
-# in it, since the territory is a new name there. Each territory is root-owned,
+# in it, since the agent's folder is a new name there (#578). Each territory is root-owned,
 # grouped to the state group, 0710: the state group passes and none lists, the
 # agent's own uid passes not, and the files' own modes are the wall beneath
 # (the operator's ruling of 2026-10-08 on #1); the trace has a group of its
@@ -449,7 +456,12 @@ case $rc in
   1) ;;
   *) die "whether the agent-directory $AGENT_DIR carries a default access entry cannot be read" ;;
 esac
-HOME_DIR="$AGENT_DIR/$AGENT_USER"
+# **The agent's folder holds its territory and its home side by side** (the
+# operator's ruling of 2026-11-16 on the layout, #578). `HOME_DIR` is the
+# territory, a name older than the agent's home, which is `AGENT_HOME`.
+AGENT_FOLDER="$AGENT_DIR/$NAME"
+HOME_DIR="$AGENT_FOLDER/$AGENT_USER"
+AGENT_HOME="$AGENT_FOLDER/home"
 STATE_DIR="$HOME_DIR/state"
 # **The declaration, the draft and the save points stand in the territory**
 # (the operator's ruling of 2026-10-07 on #1), which is refused below where it
@@ -768,7 +780,8 @@ if [ "$ROOT_OPERATOR" -eq 1 ]; then
 else
   plan "operator        $OPERATOR joins groups $TRACE_GROUP, $STATE_GROUP and $ACCESS_GROUP, never $AGENT_USER"
 fi
-plan "home            /home/$AGENT_USER        the agent's own, where its tools run"
+plan "folder          $AGENT_FOLDER        root:root 0755, the territory and the home side by side"
+plan "home            $AGENT_HOME        $AGENT_USER 2750, the agent's own, where its tools run"
 plan "territory       $HOME_DIR        root:$STATE_GROUP 0710, passage for the state group alone"
 plan "trace           $HOME_DIR/trace.ndjson  root:$TRACE_GROUP 0640, made before the first load"
 plan "state room      $STATE_DIR       $MEMBER_USER 0700, which the agent's uid cannot enter"
@@ -827,7 +840,7 @@ done
 # standing account of the right name and the wrong shape is never adopted.
 [ -z "$GATECON_LINE" ] || { judge_box_account "$GATECON_USER"; printf '   %s stands, and its shape is the box'"'"'s gate-con account\n' "$GATECON_USER"; }
 [ -z "$ADMINCON_LINE" ] || { judge_box_account "$ADMINCON_USER"; printf '   %s stands, and its shape is the box'"'"'s admin-con account\n' "$ADMINCON_USER"; }
-refuse_existing "/home/$AGENT_USER" "agent home"
+refuse_existing "$AGENT_FOLDER" "agent folder"
 refuse_existing "$HOME_DIR" "territory"
 refuse_existing "$AGENT_ROOT" "agent root"
 refuse_existing "$STAGE" "a partial agent root from an earlier run (remove it by hand)"
@@ -944,8 +957,12 @@ done
 # **The agent gets a home and the member does not.** The agent's tools run
 # somewhere, and the retirement of 2026-09-11 found one of three agents with
 # a home and the others without, which is the drift a script ends. The member
-# runs nothing and owns one room of the operator's tree instead.
-root useradd --system --shell /usr/sbin/nologin --create-home --user-group "$AGENT_USER"
+# runs nothing and owns one room of the operator's tree instead. **The home
+# stands in the agent's folder** (#578), which is made first, root's, since
+# useradd makes the home and not its parent. A five-digit mode, so no setgid
+# bit of the base's survives.
+root install -d -o root -g root -m 00755 "$AGENT_FOLDER"
+root useradd --system --shell /usr/sbin/nologin --create-home --home-dir "$AGENT_HOME" --user-group "$AGENT_USER"
 root useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$MEMBER_USER"
 root groupadd --system "$TRACE_GROUP"
 root groupadd --system "$ACCESS_GROUP"
@@ -980,7 +997,7 @@ root usermod -aG "$STATE_GROUP,$ACCESS_GROUP" "$ADMINCON_USER"
 # own group: it does not dial the gate (weaver-gate-world-contract section 1).
 # Root reads everything already, so root joins no group (#576).
 [ "$ROOT_OPERATOR" -eq 1 ] || root usermod -aG "$TRACE_GROUP,$STATE_GROUP,$ACCESS_GROUP" "$OPERATOR"
-root chmod 2750 "/home/$AGENT_USER"
+root chmod 2750 "$AGENT_HOME"
 printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
   "$AGENT_USER" "$(id -u "$AGENT_USER")" "$MEMBER_USER" "$(id -u "$MEMBER_USER")" \
   "$RELAY_USER" "$(id -u "$RELAY_USER")" "$GATECON_USER" "$GATECON_UID" \

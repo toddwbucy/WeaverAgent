@@ -3586,8 +3586,10 @@ value fails the read naming the key, so no read resolves against the directory a
 ran sudo from and two invocations of one root always name the same files. **The whole
 agent lives in its territory, and the declaration with it**, on the operator's ruling
 of 2026-10-07 on #1, which retires the operator's `~/.weaveragent/<agent>/` of the
-2026-10-02 election: `territory` names it, absolute, `/var/lib/weaver-agent/weaver-<agent>/`
-as the deploy scripts lay it out, root-owned, and it holds `agent.toml`, which this
+2026-10-02 election: `territory` names it, absolute,
+`/var/lib/weaver-agent/<agent>/weaver-<agent>/` as the deploy scripts lay it out in the
+agent's root-held folder beside its home (the operator's ruling of 2026-11-16 on the
+layout, #578), root-owned, and it holds `agent.toml`, which this
 crate parses per `weaver-types-Spec` section 2 and the operator edits with `sudoedit`;
 the prompt draft `system-prompt.md`, which this crate never reads; `admin.log` and
 `worker.log`, per section 8; `save-points/`, holding the published save points and
