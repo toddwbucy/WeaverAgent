@@ -59,6 +59,11 @@ def look_as(account, flag, path):
 BOX_PATH = os.environ.get("PATH", os.defpath)
 STAND_IN_NAMES = ("sudo", "runuser", "setsid", "env", "timeout")
 TEST_ROOT = os.path.realpath(tempfile.gettempdir())
+# **A stranger's uid is never the runner's** (Codex on #599): a stand-in that
+# answers a path the tests made as not root's answers this uid, held by no
+# fixture account, rather than the file's own owner, which is 0 when the suite
+# runs as root.
+STRANGER_UID = 54321
 STAND_IN_GUARD = Path(tempfile.mkdtemp(prefix="weaver-test-guard-"))
 atexit.register(shutil.rmtree, STAND_IN_GUARD, True)
 for _name in ("sudo", "runuser"):
@@ -128,17 +133,25 @@ import json, os, pathlib, re, shutil, subprocess, sys, time
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 root = pathlib.Path(os.environ['FIXTURE_ROOT'])
+def owner(path, st):
+    """uid 0 under the fixture, STRANGER_UID for any other path the tests
+    made, and the file's own owner elsewhere, so a stranger's file is never
+    read as root's when the suite runs as root (Codex on #599)."""
+    if path.is_relative_to(root): return 0
+    if path != pathlib.Path('@TEST_ROOT@') and path.is_relative_to('@TEST_ROOT@'): return @STRANGER_UID@
+    return st.st_uid
 if name == 'stat':
     # **The fixture's files are root's.** Every file the tests make is the
     # tester's, so the ownership `held_closed` judges is answered as uid 0
-    # for anything under the fixture and read from the file itself elsewhere;
-    # the mode is always the file's own. Not logged: it is a look, not a call.
+    # for anything under the fixture, STRANGER_UID for any other file the
+    # tests made, and read from the file itself elsewhere; the mode is always
+    # the file's own. Not logged: it is a look, not a call.
     if args[:1] == ['-c'] and args[1] == '%u %G %a':
         # The trace's look: root under the fixture, its group what the test
         # names, its mode the file's own.
         path = pathlib.Path(args[-1])
         st = os.lstat(path)
-        print(0 if path.is_relative_to(root) else st.st_uid, os.environ.get('TRACE_GROUP_AS', 'nobody-group'),
+        print(owner(path, st), os.environ.get('TRACE_GROUP_AS', 'nobody-group'),
               format(st.st_mode & 0o7777, 'o'))
         sys.exit(0)
     if args[:1] == ['-c'] and args[1] == '%u:%G:%a':
@@ -152,12 +165,12 @@ if name == 'stat':
         if str(path) in groups: group = groups[str(path)]
         elif path.name == 'save-points': group = path.parent.name + '-admin'
         else: group = path.name + '-state'
-        print(f"{0 if path.is_relative_to(root) else st.st_uid}:{group}:{format(st.st_mode & 0o7777, 'o')}")
+        print(f"{owner(path, st)}:{group}:{format(st.st_mode & 0o7777, 'o')}")
         sys.exit(0)
     if args[:1] == ['-c'] and args[1] == '%u %a':
         path = pathlib.Path(args[-1])
         st = os.lstat(path)
-        print(0 if path.is_relative_to(root) else st.st_uid, format(st.st_mode & 0o7777, 'o'))
+        print(owner(path, st), format(st.st_mode & 0o7777, 'o'))
         sys.exit(0)
     os.execv('/usr/bin/stat', ['stat', *args])
 if name == 'findmnt':
@@ -614,7 +627,8 @@ elif name == 'ldd':
 else: sys.exit(99)
 '''
 DOUBLE = DOUBLE.replace('@ACCESS_LOOK@', repr(ACCESS_LOOK)).replace('@DROP_PATH@', DROP_PATH)
-DOUBLE = DOUBLE.replace('@DROP_NAMED@', DROP_NAMED)
+DOUBLE = DOUBLE.replace('@DROP_NAMED@', DROP_NAMED).replace('@TEST_ROOT@', TEST_ROOT)
+DOUBLE = DOUBLE.replace('@STRANGER_UID@', str(STRANGER_UID))
 
 # The six sampling defaults the harness reads from every serving declaration
 # (weaver-harness-Spec section 6.1), at the values create-agent.sh writes. A
@@ -7855,7 +7869,7 @@ class DecommissionTests(unittest.TestCase):
             self.assertEqual(run.stdout.splitlines(), [str(good)], run.stderr)
             self.assertIn(f"refused: {roots / 'b'}/territory names {grouped}, which stands uid 0, "
                           f"group weaver-b-admin, mode 755, not root:weaver-b-state", run.stderr)
-            self.assertIn(f"refused: {roots / 'c'}/territory names {foreign}, which stands uid {os.getuid()}",
+            self.assertIn(f"refused: {roots / 'c'}/territory names {foreign}, which stands uid {STRANGER_UID}",
                           run.stderr)
             self.assertIn(f"skipped: {roots / 'd'}/territory names {homed}, under the operator's home",
                           run.stderr)
@@ -8148,9 +8162,10 @@ class DecommissionTests(unittest.TestCase):
 
 
     # The tester owns every file a fixture makes, so this stand-in answers uid
-    # 0 for each path but those STRANGERS names, which keep the tester's.
-    ROOT_STAT = ('stat() { local p="${@: -1}"; case ":${STRANGERS:-}:" in *":$p:"*) command stat "$@" ;; '
-                 "*) command stat \"$@\" | sed 's/^[0-9]*/0/' ;; esac; }\n")
+    # 0 for each path but those STRANGERS names, which answer STRANGER_UID,
+    # never the runner's (Codex on #599). Each keeps its own link count.
+    ROOT_STAT = ('stat() { local p="${@: -1}" u=0; case ":${STRANGERS:-}:" in *":$p:"*) u=' + str(STRANGER_UID)
+                 + ' ;; esac; command stat "$@" | sed "s/^[0-9]*/$u/"; }\n')
 
     def log_takes(self, log, agents=("m1",), strangers=()):
         """log_paths LOG with AGENTS naming AGENTS, as (kind, path) pairs."""
@@ -9155,9 +9170,11 @@ class RoundOneOf79Tests(unittest.TestCase):
             (base / "m1" / "home").mkdir()
             roots_owned = ":".join(str(base / n) for n in ("m1", "weaver-old", "lost+found", "web", "weaver-web"))
             # The tester owns every file here, so `stat -c %u` answers 0 for
-            # what the fixture calls root's and the tester's uid elsewhere.
+            # what the fixture calls root's and STRANGER_UID elsewhere, never
+            # the runner's (Codex on #599).
             stat_double = ('stat() { local p="${@: -1}"; case ":$ROOTS_OWNED:" in *":$p:"*) echo 0 ;; '
-                           '*) command stat "$@" ;; esac; }\n')
+                           '*) case "$2" in %u) echo ' + str(STRANGER_UID) + ' ;; *) command stat "$@" ;; esac ;; '
+                           'esac; }\n')
             program = (stat_double + "declare -A AGENTS=([m1]=1 [old]=1 [alice]=1 [web]=1)\n"
                        + shell_function(script, "agent_folders") + shell_function(script, "left_in_base")
                        + 'mapfile -t F < <(agent_folders "$1")\nprintf "folder %s\\n" "${F[@]}"\n'
