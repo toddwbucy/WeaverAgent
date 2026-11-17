@@ -142,12 +142,14 @@ the archive and the purge (#99 area 2 review, H4). The archive holds:
   facts: an old box's `weaver_*` roles, databases and authentication lines are the
   operator's to inspect and drop by hand (section 2, #35).
 - One `.tar.zst` per piece, owners, ACLs and xattrs preserved: `etc-weaver`,
-  `sudoers-weaver`, `ld-so-conf`, `opt-<prefix path>` (bin,
-  lib, python-spu, the backup-* directories, never models), `territories-<base path>`
-  for each territory base, `var-lib-weaver`, `log-<path>` (a box from before #50),
-  `home-weaver-users`, `tmp-weaver`. A name built from a path carries the whole path, its slashes made dashes
-  (`territories-var-lib-weaver-agent`), and a name an archive already holds takes the
-  first free `-2`, `-3`, so no archive is ever written over another.
+  `sudoers-weaver`, `ld-so-conf`, `opt-<prefix path>` (bin, lib, python-spu, the
+  backup-* directories, never models), `agent-<folder path>` for each agent's folder,
+  `territory-<path>` for each root's own territory outside them, `var-lib-weaver`,
+  `legacy-logs` (every legacy log a box from before #50 names, in one archive),
+  `home-weaver-users`, `tmp-weaver`. A name built from a path carries the whole path,
+  its slashes made dashes (`agent-var-lib-weaver-agent-m1`), and a name an archive
+  already holds takes the first free `-2`, `-3`, so no archive is ever written over
+  another.
 - `PURGE-LIST`: the exact paths, users and groups the purge may touch, and each capped
   home's quota limit. Read it.
 - `SHA256SUMS`, verified before the script says archived, and again before a purge.
@@ -167,10 +169,14 @@ to 2026-10-07) is said in the plan and skipped. No base is archived or purged wh
 nor any path above a base or an agent's folder, whatever its name (`/var/lib/weaver`, a
 log directory): the agents' folders inside it are archived and purged on their own, and
 the rest of it is named in the plan as left. **A legacy log path** (a box from before
-#50) gives up its directory whole only where the directory is named `weaver-<agent>` for
-an agent the discovery found and holds nothing but the log and its rotations. Any other
-directory, `/var/log` included, gives up the log and its rotations one by one, and the
-plan names everything else in it as left (#593).
+#50) gives up its directory whole only where the directory is the agent's own, as
+`create-agent.sh` laid it then (`<log-directory>/<agent>/admin.log`): named for an agent
+the discovery found, root's, and holding nothing but the log and its rotations. Any
+other directory, `/var/log` included, gives up the log and its rotations one by one,
+each root's with one link, and the plan names everything else in it as left (#593). A
+legacy log's directory that cannot be listed refuses the archive and the purge. An
+archive made before #593 lists a legacy log's directory whole, and the purge refuses it
+as a path it would not find: archive again, then purge.
 
 ## 2. Purge
 

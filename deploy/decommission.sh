@@ -385,52 +385,77 @@ for d in "${!TERRITORY_BASES[@]}"; do
   in_operator_home "$d" && { plan "$d  under the operator's home: not touched"; unset 'TERRITORY_BASES[$d]'; }
 done
 # **log_paths FILE: what a legacy `log-path` gives up** (#593, the Planner's
-# ruling of 2026-11-17), as NUL-ended pairs: `take` and a path the purge takes
-# whole, or `left` and an entry of the log's directory left in place. **The
-# directory is taken whole only when it is an agent's own**: named
-# `weaver-<agent>` for an agent the discovery found, and holding nothing but
-# the log and its rotations. create-agent.sh writes no `log-path`, retired
-# since #50, so no log directory is one it laid. **Any other directory**,
-# `/var/log` included, gives up the log and its rotations one by one, each a
-# regular file and no link, and stands with whatever else it holds, each
-# entry named as left. A rotation is the log's name followed by `.` or `-`
-# digit groups, with an optional compression suffix (`x.log.1`,
-# `x.log.2.gz`, `x.log-20261101`). The pairs are NUL-ended because the
-# directory may be anyone's to write in, and a name carrying a newline would
-# otherwise read as a line of its writer's choosing.
+# ruling of 2026-11-17), as NUL-ended pairs of a kind and a path:
+#   take PATH    a path the archive and the purge take
+#   left PATH    an entry of the log's directory that this log leaves
+#   stands DIR   the log's directory, which stands once its files go
+#   unread DIR   the log's directory, whose listing failed
+#   passed DIR   the log's directory, gone or a link, so nothing is taken
+# **The directory is taken whole only when it is the agent's own**: the layout
+# create-agent.sh laid from 2026-10-01 until #50 retired the key,
+# `<log-directory>/<agent>/admin.log` in a directory root:root 0750. So it is
+# named for an agent the discovery found, root's by uid, and holds nothing but
+# the log and its rotations. **Any other directory**, `/var/log` included,
+# gives up the log and its rotations one by one, each a regular file, root's,
+# with one link, and stands with whatever else it holds. A rotation is the
+# log's name followed by `.` or `-` digit groups, with an optional compression
+# suffix (`x.log.1`, `x.log.2.gz`, `x.log-20261101`). **A listing that fails
+# is never read as an empty directory**: it is `unread`, and the archive and
+# the purge refuse. The pairs are NUL-ended because the directory may be
+# anyone's to write in, and a name carrying a newline would otherwise read as
+# a line of its writer's choosing.
 log_paths() {
-  local f=$1 d name e entry suffix owner a own=() other=()
+  local f=$1 d name e entry suffix owner rc
+  local -a entries=() own=() other=()
   d=$(dirname -- "$f") name=$(basename -- "$f")
-  [ -d "$d" ] && [ ! -L "$d" ] || return 0
-  while IFS= read -r -d '' e; do
+  if [ ! -d "$d" ] || [ -L "$d" ]; then printf 'passed\0%s\0' "$d"; return 0; fi
+  mapfile -d '' -t entries < <(find "$d" -mindepth 1 -maxdepth 1 -print0 2>/dev/null; printf '%s' "$?")
+  rc=${entries[-1]}
+  unset 'entries[-1]'
+  if [ "$rc" != 0 ]; then printf 'unread\0%s\0' "$d"; return 0; fi
+  for e in "${entries[@]}"; do
     entry=${e##*/}
     if [[ "$entry" == "$name"* ]]; then
       suffix=${entry#"$name"}
-      if [[ "$suffix" =~ ^([.-][0-9]+)*(\.(gz|xz|zst|bz2))?$ ]] && [ -f "$e" ] && [ ! -L "$e" ]; then
+      if [[ "$suffix" =~ ^([.-][0-9]+)*(\.(gz|xz|zst|bz2))?$ ]] && [ -f "$e" ] && [ ! -L "$e" ] \
+        && [ "$(stat -c %u:%h -- "$e" 2>/dev/null)" = 0:1 ]; then
         own+=("$e"); continue
       fi
     fi
     other+=("$e")
-  done < <(find "$d" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+  done
   owner=${d##*/}
-  a=${owner#weaver-}
-  if [ "$owner" != "$a" ] && [ -n "$a" ] && [ -n "${AGENTS[$a]+given}" ] && [ ${#other[@]} -eq 0 ]; then
+  if [ -n "$owner" ] && [ -n "${AGENTS[$owner]+given}" ] && [ ${#other[@]} -eq 0 ] \
+    && [ "$(stat -c %u -- "$d" 2>/dev/null)" = 0 ]; then
     printf 'take\0%s\0' "$d"
     return 0
   fi
   for e in "${own[@]}"; do printf 'take\0%s\0' "$e"; done
   for e in "${other[@]}"; do printf 'left\0%s\0' "$e"; done
+  printf 'stands\0%s\0' "$d"
 }
-for f in "${!LOG_FILES[@]}"; do
+# The logs are read in order, and a directory or an entry two logs share is
+# said once, by the first.
+declare -A LOG_LEFT=() LOG_DIRS_SAID=()
+LOG_UNREAD=()
+while IFS= read -r -d '' f; do
   d=$(dirname -- "$f")
   in_operator_home "$d" && { plan "$d  under the operator's home: not touched"; continue; }
   while IFS= read -r -d '' kind && IFS= read -r -d '' pth; do
     case $kind in
-      take) LOG_PATHS["$pth"]=1 ;;
-      left) plan "$pth  beside the legacy log $f, of no agent: left in place, untouched" ;;
+      take) LOG_PATHS["$pth"]=1; continue ;;
+      left) [ -n "${LOG_LEFT[$pth]+named}" ] || LOG_LEFT["$pth"]=$f; continue ;;
+    esac
+    [ -z "${LOG_DIRS_SAID[$pth]+said}" ] || continue
+    LOG_DIRS_SAID["$pth"]=1
+    case $kind in
+      stands) plan "$pth  the directory of the legacy log $f, not the agent's own: the log and its rotations go, and the directory stands" ;;
+      unread) plan "$pth  the directory of the legacy log $f cannot be listed, so the archive and the purge refuse"
+              LOG_UNREAD+=("$pth") ;;
+      passed) plan "$pth  the directory of the legacy log $f is gone or a link: nothing in it is taken" ;;
     esac
   done < <(log_paths "$f")
-done
+done < <([ ${#LOG_FILES[@]} -eq 0 ] || printf '%s\0' "${!LOG_FILES[@]}" | sort -z)
 # **agent_folders BASE...: each discovered agent's folder in each base**, one
 # per line, canonical: `<base>/<agent>` (the operator's ruling of 2026-11-16 on
 # the layout, #578) and `<base>/weaver-<agent>` (a territory laid before it),
@@ -686,6 +711,19 @@ for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do
   TERRITORY_PATHS+=("$d")
   plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"
 done
+# **An entry beside a legacy log is named as left only when nothing takes
+# it**, judged once every log's takes and every agent's folder are known (the
+# self-check on #593): another legacy log in the same directory, or an agent's
+# folder, is taken, not left. A name's newline or tab prints as `?`, so a name
+# chosen in a shared directory cannot write a plan line of its own.
+while IFS= read -r -d '' e; do
+  [ -z "${LOG_PATHS[$e]+taken}" ] || continue
+  c=$(realpath -e -- "$e" 2>/dev/null) || c=$e
+  for t in "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}"; do
+    [ "$(realpath -e -- "$t" 2>/dev/null)" = "$c" ] && continue 2
+  done
+  plan "${e//[$'\n\t']/?}  beside the legacy log ${LOG_LEFT[$e]}, and taken by nothing this discovery found: left in place, untouched"
+done < <([ ${#LOG_LEFT[@]} -eq 0 ] || printf '%s\0' "${!LOG_LEFT[@]}" | sort -z)
 # **home_within HOME FOLDER...: the folder HOME stands in**, canonical, or
 # nothing. A home in an agent's folder (#578) goes with the folder.
 home_within() {
@@ -745,6 +783,10 @@ mapfile -t TMP_PATHS < <(tmp_paths /tmp)
 
 [ "$MODE" = plan ] && { say "plan only. rerun with --archive DIR, then --purge DIR"; exit 0; }
 [ "$TERRITORIES_JUDGED" = 1 ] || die "a territory a root names is not root:weaver-<agent>-state, named above, and only a territory standing as create-agent.sh lays it is archived and purged. Look at it by hand, then rerun"
+# **A legacy log's directory that cannot be listed refuses** (the self-check
+# on #593): what it holds beside the log is unknown, so whether it is the
+# agent's own, and what a take of it would remove, cannot be told.
+[ ${#LOG_UNREAD[@]} -eq 0 ] || die "the directory of a legacy log cannot be listed: ${LOG_UNREAD[*]}. Nothing is archived or purged until it reads. Look at it by hand, then rerun"
 # **A capped home's limit never outlives what names it** (Codex on #588): the
 # folder's mark and the account's uid are all that tell create-agent.sh's
 # limit from a stranger's, so where any folder's mount or mark cannot be read,
@@ -952,7 +994,7 @@ if [ "$MODE" = archive ]; then
   for d in "${AGENT_FOLDERS[@]}"; do archive_path "$(archive_name agent "$d")" "$d"; done
   # Each root's own territory the bases miss, by the path its root names.
   for d in "${OWN_TERRITORIES[@]}"; do archive_path "$(archive_name territory "$d")" "$d"; done
-  for d in "${!LOG_PATHS[@]}"; do archive_path "$(archive_name log "$d")" "$d"; done
+  [ ${#LOG_PATHS[@]} -gt 0 ] && archive_path legacy-logs "${!LOG_PATHS[@]}"
   [ ${#HOMES[@]} -gt 0 ] && archive_path home-weaver-users "${HOMES[@]}"
   [ ${#TMP_PATHS[@]} -gt 0 ] && archive_path tmp-weaver "${TMP_PATHS[@]}"
 
