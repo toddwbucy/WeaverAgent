@@ -115,8 +115,9 @@ group in one shell.
   run, naming sudo.
 - On a single-purpose appliance, where root is the operator, `runuser` (util-linux) is
   on the box: in root mode the wall checks and the closing probe run as the agent's
-  accounts through it, and the operator's own sudo is not asked for. The include and
-  the original sudo still bind, since the admin-con account's rule is sudo's.
+  accounts through it, and no sudo credential is asked for. The include and the
+  original sudo still bind, since the admin-con account's rule is sudo's, and root
+  lists that rule through sudo at the end.
 
 ## 2. An agent with a store
 
@@ -240,7 +241,8 @@ made last because it is the admission. **A storeless agent carries the state gro
 operator and the box's admin-con account pass by, and admin resolves it for every verb.
 **The box's two accounts must already stand in their shape** (section 0), since the
 block judges nothing: a `create-agent.sh` run lays and judges them, and its plan for any
-name prints what it found. The block runs as the operator, one chain, so
+name prints what it found. Where root is the operator it joins no group, and its
+`operator` key is 0 (section 2). The block runs as the operator, one chain, so
 a step that fails stops the rest; it refuses a territory, a stage or a root that already
 stands, since `install -d` would merge with it. The territory is the stack record's
 `agent-directory` made canonical, as `create-agent.sh` makes it, and the 5-digit modes
@@ -262,7 +264,7 @@ T=$(realpath -e -- "$(cat /etc/weaver/stack/agent-directory)")/weaver-$N \
 && sudo useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid weaver-$N-trace weaver-$N-relay \
 && sudo usermod -aG weaver-$N weaver-gatecon \
 && sudo usermod -aG weaver-$N-state,weaver-$N-admin weaver-admincon \
-&& sudo usermod -aG weaver-$N-trace,weaver-$N-state,weaver-$N-admin "$(id -un)" \
+&& { [ "$(id -u)" = 0 ] || sudo usermod -aG weaver-$N-trace,weaver-$N-state,weaver-$N-admin "$(id -un)"; } \
 && sudo chmod 2750 /home/weaver-$N \
 && sudo install -d -o root -g weaver-$N-state -m 00710 "$T" \
 && sudo install -o root -g weaver-$N-trace -m 0640 /dev/null "$T/trace.ndjson" \

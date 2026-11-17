@@ -26,6 +26,11 @@ DEPLOY = Path(__file__).resolve().parent
 # The text create-agent.sh's `allows` hands `sh -c` for a look as an account
 # (#577), and the call it makes.
 ACCESS_LOOK = 'if [ "$1" "$2" ]; then printf yes; else printf no; fi'
+# **The commands create-agent.sh runs as root steps** (#576), which the
+# root-mode tests route to the double. A scan holds the script to this list,
+# so a new root step cannot reach the real command in a root-mode test.
+ROOT_STEPS = ("useradd", "groupadd", "usermod", "install", "chown", "chgrp", "chmod", "tee", "cp", "mv", "rm",
+              "mktemp", "visudo")
 def look_as(account, flag, path):
     return ["sudo", "-n", "-u", account, "sh", "-c", ACCESS_LOOK, "sh", flag, path]
 DOUBLE = r'''#!/usr/bin/env python3
@@ -1171,7 +1176,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         double maps into the fixture."""
         self.env["FIXTURE_UID"] = "0"
         preamble = self.root / "fixture-root.bash"
-        steps = "useradd groupadd usermod install chown chgrp chmod tee cp mv rm mktemp visudo"
+        steps = " ".join(ROOT_STEPS)
         preamble.write_text(f'. {shlex.quote(self.env["BASH_ENV"])}\n'
                             f'for c in {steps}; do eval "$c() {{ \\"\\$FIXTURE_ROOT/bin/as-root\\" $c \\"\\$@\\"; }}"; done\n'
                             'grep() { case " $* " in *" /etc/sudoers "*) "$FIXTURE_ROOT/bin/as-root" grep "$@" ;;\n'
@@ -1184,14 +1189,24 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         # the flag, so a workstation run as root by accident still refuses,
         # and the flag under another uid refuses. Perturbations: drop either
         # uid check, and its case runs on.
-        for case, uid, args, said in (("root, no flag", "0", (), "run it as root with --root-operator"),
-                                      ("flag, not root", "12345", ("--root-operator",), "--root-operator is for root")):
+        # **Through sudo it is a workstation's operator** (the self-check):
+        # sudo with the flag refuses, and sudo without it is not told to add
+        # the flag. Perturbation: drop the SUDO_USER check under the flag, and
+        # the run goes on as root.
+        for case, uid, sudo_user, args, said in (
+                ("root, no flag", "0", None, (), "run it as root with --root-operator"),
+                ("flag, not root", "12345", None, ("--root-operator",), "--root-operator is for root"),
+                ("sudo, flag", "0", "someone", ("--root-operator",), "not sudo from someone"),
+                ("sudo, no flag", "0", "someone", (), "not under sudo")):
             with self.subTest(case=case):
                 self.log.unlink(missing_ok=True)
                 self.env["FIXTURE_UID"] = uid
+                self.env.pop("SUDO_USER", None)
+                if sudo_user: self.env["SUDO_USER"] = sudo_user
                 result = self.create(*args)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn(said, result.stderr)
+                if case == "sudo, no flag": self.assertNotIn("--root-operator", result.stderr)
                 self.assertNotIn("== plan", result.stdout)
                 self.assertFalse([c for c in self.calls() if c[0] in ("sudo", "runuser", "as-root")], self.calls())
 
@@ -1222,7 +1237,37 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                          calls)
         self.assertEqual((self.config / "m1" / "operator").read_text(), "0\n")
         self.assertNotIn("joined groups", result.stdout)
+        self.assertIn(["runuser", "-u", "nobody", "--", "true"], calls)
+        self.assertNotIn("through weaver-m1-admin", result.stdout)
         self.assert_no_printed_root_command(result)
+
+    def test_root_mode_checks_runuser_before_anything_is_made(self):
+        # **A runuser that cannot drop stops the run before any account is
+        # made** (the self-check), as the operator's sudo does in the
+        # operator's mode (#577). Perturbation: drop the early check, and the
+        # accounts are made before the wall refuses.
+        self.root_mode()
+        self.env.update(ALLOW_APPLY_CHECKS="1", DROP_FAIL="nobody")
+        result = self.create("--root-operator", "--apply")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("runuser would not run a command as nobody", result.stderr)
+        made = [c for c in self.calls() if c[0] == "as-root" and c[1] in ("useradd", "groupadd", "usermod", "install")]
+        self.assertFalse(made, made)
+        self.assertNotIn("== accounts", result.stdout)
+
+    def test_every_root_step_is_one_the_root_mode_tests_route(self):
+        # A root step whose command the root-mode preamble does not route
+        # would run the real command in a root-mode test. Perturbation: add a
+        # `root ln` to the script, and this names it.
+        script = (self.repo / "deploy" / "create-agent.sh").read_text()
+        used = set()
+        for line in script.splitlines():
+            if line.lstrip().startswith("#"): continue
+            used.update(m.group(1) for m in re.finditer(r"(?:^\s*|[|;&(!{]\s*|\$\(\s*|\b(?:then|do|else)\s+)root (?:-n )?([a-z][a-z-]*)", line))
+        # The scan sees an indented step (`cp` in the copy loop) and one under
+        # `if !` (`visudo`), or it is blind to them.
+        self.assertTrue({"cp", "visudo", "useradd"} <= used, used)
+        self.assertEqual(used - set(ROOT_STEPS) - {"grep"}, set(), used)
 
     def test_root_mode_refuses_a_look_runuser_refuses_naming_runuser(self):
         # A drop runuser refuses is neither yes nor no in root mode either,

@@ -256,10 +256,15 @@ esac
 # flag is explicit, so a workstation run as root by accident still refuses. The
 # gate does not admit the operator either way: its rule names the box's
 # gate-con account alone (weaver-gate-world-contract section 1).
+# **sudo is a workstation's**: on the appliance root runs this from its own
+# login, so a run through sudo is an operator's account and never takes the
+# flag (#576 self-check).
 if [ "$ROOT_OPERATOR" -eq 1 ]; then
   [ "$(id -u)" -eq 0 ] || die "--root-operator is for root, on a single-purpose appliance where root is the operator: run it as root, or drop the flag and run it as the operator"
-else
-  [ "$(id -u)" -ne 0 ] || die "run as the operator, not under sudo: the root's operator key names this uid, and --apply asks for sudo itself. On a single-purpose appliance, where root is the operator, run it as root with --root-operator"
+  [ -z "${SUDO_USER:-}" ] || die "--root-operator is for root's own login on a single-purpose appliance, not sudo from $SUDO_USER: on a workstation run it as $SUDO_USER, without sudo and without the flag"
+elif [ "$(id -u)" -eq 0 ]; then
+  [ -z "${SUDO_USER:-}" ] || die "run as the operator, not under sudo: the root's operator key names this uid, and --apply asks for sudo itself"
+  die "run as the operator, not as root: the root's operator key names this uid, and --apply asks for sudo itself. On a single-purpose appliance, where root is the operator, run it as root with --root-operator"
 fi
 
 
@@ -833,11 +838,8 @@ refuse_existing "$SUDO_RULE" "sudo rule"
 if [ "$APPLY" -eq 0 ]; then
   printf '   no collision found in accounts and paths visible to this uid\n'
   printf '   PENDING --apply: privileged collision checks\n'
-  if [ "$ROOT_OPERATOR" -eq 1 ]; then
-    printf '   PENDING --apply: authentication paths, the sudoers include, visudo\n'
-  else
-    printf '   PENDING --apply: authentication paths, the sudoers include, visudo, the operator'"'"'s sudo as other accounts\n'
-  fi
+  printf '   PENDING --apply: authentication paths, the sudoers include, visudo, %s as other accounts\n' \
+    "$( [ "$ROOT_OPERATOR" -eq 1 ] && printf runuser || printf "the operator's sudo" )"
   say "plan only"
   printf '   no provisioning performed; rerun with --apply to check and make it\n'
   exit 0
@@ -907,8 +909,18 @@ printf '   /etc/sudoers includes /etc/sudoers.d, and visudo accepts the rendered
 # below looks as the agent's accounts, which do not stand yet, so the drop is
 # asked here as `nobody`. On the walk the operator's rule named (root) alone,
 # and the refusal came at the wall, after every account and the territory.
-# Root drops through runuser, which no policy narrows.
-if [ "$ROOT_OPERATOR" -eq 0 ]; then
+# **The drop to another account is checked before anything is made**, in
+# either mode: the operator's sudo as another account, or root's runuser,
+# which an image without util-linux or a PAM stack that refuses it would leave
+# failing only at the wall, after the accounts and the territory stood.
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  command -v runuser >/dev/null \
+    || die "runuser is not on PATH, and root mode looks as the agent's accounts through it: install util-linux's runuser"
+  runuser -u nobody -- true 2>/dev/null \
+    || die "runuser would not run a command as nobody, so it could not look as the agent's accounts at the wall:" \
+           "$DROP_NEEDS"
+  printf '   runuser runs commands as other accounts\n'
+else
   sudo -n -u nobody true 2>/dev/null \
     || die "sudo would not run a command as nobody, so it could not look as the agent's accounts at the wall:" \
            "the operator's sudo must run commands as other accounts, (ALL) and not (root) alone"
@@ -1162,8 +1174,13 @@ if [ "$ROOT_OPERATOR" -eq 0 ]; then
   printf '   %s joined groups %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$TRACE_GROUP" "$STATE_GROUP" "$ACCESS_GROUP"
   printf '   login before the groups apply (`newgrp` selects one group in one shell)\n'
 fi
-printf '   the declaration %s is root'"'"'s: edit it with sudoedit, and read it, the draft, the logs and\n' "$DECLARATION"
-printf '   the save points under %s through %s\n' "$HOME_DIR" "$ACCESS_GROUP"
+if [ "$ROOT_OPERATOR" -eq 1 ]; then
+  printf '   the declaration %s is root'"'"'s: edit it with sudoedit, which keeps its owner, group and\n' "$DECLARATION"
+  printf '   mode, since admin refuses any other\n'
+else
+  printf '   the declaration %s is root'"'"'s: edit it with sudoedit, and read it, the draft, the logs and\n' "$DECLARATION"
+  printf '   the save points under %s through %s\n' "$HOME_DIR" "$ACCESS_GROUP"
+fi
 # **probe_connector VERB: the admin-con account reaches a line through its
 # rule**, as the stand-in for admin-con: the operator's sudo (root's runuser in
 # root mode) becomes the account, and that user runs `sudo -n`, which only the
