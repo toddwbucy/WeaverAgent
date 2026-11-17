@@ -1131,6 +1131,21 @@ else
 fi
 
 say "accounts"
+# **A run that stops once it has laid anything says what stands** (#600): a
+# step that fails under set -e prints its own error alone, and a rerun is then
+# refused by what the run left. So each thing this run lays is named here as
+# it lands, and any exit but success, a refusal or a failed step alike, names
+# them and the take-down. The box's connector accounts, laid once per box, are
+# the box's and are not named.
+STANDING=()
+standing_note() {
+  local said
+  [ ${#STANDING[@]} -gt 0 ] || return 0
+  said=$(printf '%s, ' "${STANDING[@]}")
+  printf '\nSTANDS: this run stopped after it laid %s. Take %s down by deploy/HowToDeployANewAgent.md section 7 before creating it again.\n' \
+    "${said%, }" "$NAME" >&2
+}
+trap 'rc=$?; [ "$rc" -eq 0 ] || standing_note' EXIT
 # **The box's connector accounts are laid where absent, once per box**, each
 # a system account with no login shell, no home and its own group, then
 # judged as a standing one is. Neither is laid per agent. **They are laid
@@ -1152,7 +1167,9 @@ done
 # useradd makes the home and not its parent. A five-digit mode, so no setgid
 # bit of the base's survives.
 root install -d -o root -g root -m 00755 "$AGENT_FOLDER"
+STANDING+=("the folder $AGENT_FOLDER")
 root useradd --system --shell /usr/sbin/nologin --create-home --home-dir "$AGENT_HOME" --user-group "$AGENT_USER"
+STANDING+=("the account $AGENT_USER with its home $AGENT_HOME")
 # **The home's project must be free on the drive** (#585, the Planner's ruling
 # of 2026-11-16). The project is the agent's uid, which stands only once its
 # account does, so this is judged here, before any other account of the
@@ -1166,22 +1183,26 @@ if [ -n "${HOME_QUOTA+given}" ]; then
   HOME_PROJECT=$(id -u "$AGENT_USER")
   [[ "$HOME_PROJECT" =~ ^[1-9][0-9]*$ ]] || die "$AGENT_USER carries no uid a project can take: '$HOME_PROJECT'"
   QUOTA_REPORT=$(root repquota -P -n -v -O csv "$QUOTA_MOUNT") \
-    || die "the project quotas on $QUOTA_MOUNT cannot be read (repquota), so whether project $HOME_PROJECT is free is unknown. $AGENT_USER and its home stand: take them down by deploy/HowToDeployANewAgent.md section 7"
+    || die "the project quotas on $QUOTA_MOUNT cannot be read (repquota), so whether project $HOME_PROJECT is free is unknown"
   while IFS= read -r line; do
     IFS=, read -r who _ _ b_used b_soft b_hard _ f_used f_soft f_hard _ <<< "$line"
     [ "$who" = "#$HOME_PROJECT" ] || continue
     for count in "$b_used" "$b_soft" "$b_hard" "$f_used" "$f_soft" "$f_hard"; do
       [ "$count" = 0 ] \
-        || die "project $HOME_PROJECT, $AGENT_USER's uid, is already in use on $QUOTA_MOUNT (repquota: $line), so the home cannot take it. $AGENT_USER and its home stand: take them down by deploy/HowToDeployANewAgent.md section 7, which says when that project's limit is this script's to remove"
+        || die "project $HOME_PROJECT, $AGENT_USER's uid, is already in use on $QUOTA_MOUNT (repquota: $line), so the home cannot take it. deploy/HowToDeployANewAgent.md section 7 says when that project's limit is this script's to remove"
     done
   done <<< "$QUOTA_REPORT"
 fi
 root useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$MEMBER_USER"
+STANDING+=("the account $MEMBER_USER")
 root groupadd --system "$TRACE_GROUP"
+STANDING+=("the group $TRACE_GROUP")
 root groupadd --system "$ACCESS_GROUP"
+STANDING+=("the group $ACCESS_GROUP")
 # **The relay's one group is the trace group**, primary and alone, which is
 # what admin's start step sets at its spawn (weaver-admin-Spec section 6).
 root useradd --system --shell /usr/sbin/nologin --no-create-home --no-user-group --gid "$TRACE_GROUP" "$RELAY_USER"
+STANDING+=("the account $RELAY_USER")
 GATECON_LINE=$(account_line "$GATECON_USER") || exit 1
 [ -n "$GATECON_LINE" ] || die "$GATECON_USER does not stand after it was laid"
 GATECON_UID=$(uid_in "$GATECON_LINE") || exit 1
@@ -1219,13 +1240,26 @@ root chmod 2750 "$AGENT_HOME"
 # takes the flag too, and `chattr -p` leaves it, so the territory and the
 # state room made in the folder below would join the home's project and count
 # against its cap (CodeRabbit on #582): the flag is cleared first, in a call
-# of its own. Then the project and its inherit flag on the home and what
-# useradd laid in it, then the project's block and inode limits on the drive.
+# of its own. Then the project on the home and on everything useradd laid in
+# it, and the inherit flag on its directories alone: **ext4 refuses the flag
+# on any other file** (EOPNOTSUPP, #600), and useradd copies the skeleton's
+# regular files in. The walk follows no link and hands chattr regular files
+# and directories alone, which are all chattr sets anything on, and nothing
+# of the agent's has run in the home yet. Then the project's block and inode
+# limits on the drive.
 if [ -n "${HOME_QUOTA+given}" ]; then
-  root chattr -P "$AGENT_FOLDER"
-  root chattr -p "$HOME_PROJECT" "$AGENT_FOLDER"
-  root chattr -R +P -p "$HOME_PROJECT" "$AGENT_HOME"
-  root setquota -P "$HOME_PROJECT" 0 "$HOME_QUOTA_KIB" 0 "$HOME_QUOTA_INODES" "$QUOTA_MOUNT"
+  root chattr -P "$AGENT_FOLDER" \
+    || die "the project inherit flag on $AGENT_FOLDER could not be cleared (chattr)"
+  root chattr -p "$HOME_PROJECT" "$AGENT_FOLDER" \
+    || die "$AGENT_FOLDER could not take project $HOME_PROJECT as the cap's mark (chattr)"
+  STANDING+=("project $HOME_PROJECT on $AGENT_FOLDER")
+  root find -P "$AGENT_HOME" \( -type d -o -type f \) -exec chattr -p "$HOME_PROJECT" {} + \
+    || die "$AGENT_HOME and what useradd laid in it could not take project $HOME_PROJECT (chattr)"
+  root find -P "$AGENT_HOME" -type d -exec chattr +P {} + \
+    || die "the directories of $AGENT_HOME could not take the project inherit flag (chattr)"
+  root setquota -P "$HOME_PROJECT" 0 "$HOME_QUOTA_KIB" 0 "$HOME_QUOTA_INODES" "$QUOTA_MOUNT" \
+    || die "project $HOME_PROJECT's limits could not be set on $QUOTA_MOUNT (setquota)"
+  STANDING+=("project $HOME_PROJECT's limits on $QUOTA_MOUNT")
   printf '   %s capped at %s and %s files: project %s on %s\n' "$AGENT_HOME" "$HOME_QUOTA" "$HOME_QUOTA_INODES" "$HOME_PROJECT" "$QUOTA_MOUNT"
 fi
 printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
@@ -1277,6 +1311,7 @@ say "territory"
 # Five-digit modes, so no setgid bit survives however the base stands (#99
 # area 2 review, K4): GNU install keeps one under a four-digit mode.
 root install -d -o root -g "$STATE_GROUP" -m 00710 "$HOME_DIR"
+STANDING+=("the territory $HOME_DIR")
 root install -o root -g "$TRACE_GROUP" -m 0640 /dev/null "$HOME_DIR/trace.ndjson"
 root install -d -o "$MEMBER_USER" -g "$MEMBER_USER" -m 0700 "$STATE_DIR"
 root install -d -o root -g "$ACCESS_GROUP" -m 00750 "$SAVE_POINTS"
@@ -1303,6 +1338,7 @@ say "agent root, staged"
 # holds is copied as written. `spu-binary` is this agent's `--spu` where given,
 # and `territory`, `operator` and `roles.toml` are the agent's own.
 root install -d -o root -g root -m 0755 "$STAGE"
+STANDING+=("the staged agent root $STAGE")
 for key in $REQUIRED_KEYS $OPTIONAL_KEYS; do
   [ -e "$STACK/$key" ] || continue
   if [ "$key" = spu-binary ] && [ -n "$SPU_OVERRIDE" ]; then
@@ -1399,6 +1435,7 @@ say "sudo rule"
 # admin-con account can pass none of its own.
 rule_stage=$(stage_rule) || exit 1
 root mv -T -- "$rule_stage" "$SUDO_RULE"
+STANDING+=("the sudo rule $SUDO_RULE")
 printf '   %s installed: %s\n' "$SUDO_RULE" "$VERBS"
 sudo -n -l -U "$ADMINCON_USER" | sed -n '/may run the following/,$p' | sed 's/^/   /'
 
@@ -1406,6 +1443,9 @@ say "admission"
 # **Moving the root into place is the admission**: before it every admin verb
 # answers no_such_agent for this name, and after it the agent is admitted.
 root mv -T -- "$STAGE" "$AGENT_ROOT"
+for i in "${!STANDING[@]}"; do
+  [ "${STANDING[$i]}" != "the staged agent root $STAGE" ] || STANDING[i]="the agent root $AGENT_ROOT, admitted"
+done
 printf '   %s admitted at %s\n' "$NAME" "$AGENT_ROOT"
 
 say "made"
