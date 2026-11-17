@@ -16,6 +16,8 @@ pub mod dispatcher;
 mod inclusion;
 
 mod entry;
+#[cfg(test)]
+mod fixture_release;
 mod runtime;
 
 // Executable entry only; this does not activate the worker serving composition.

@@ -416,6 +416,7 @@ fn peer_status(fd: RawFd) -> nix::Result<i16> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::fixture_release::{await_release_until, release_deadline};
     use super::*;
     use nix::sys::socket::{AddressFamily, SockFlag, socket, socketpair};
 
@@ -619,7 +620,10 @@ mod tests {
                 }
                 match close {
                     Some(direction) => shutdown(writer.as_raw_fd(), direction).unwrap(),
-                    None => drop(writer),
+                    None => {
+                        drop(writer);
+                        await_release_until(channel.readiness(), release_deadline());
+                    }
                 }
                 assert_eq!(channel.try_receive(), Err(Fault::Closed));
                 assert_failed(&mut channel);
@@ -689,6 +693,7 @@ mod tests {
                 shutdown(writer.as_raw_fd(), Shutdown::Write).unwrap();
             } else {
                 drop(writer);
+                await_release_until(channel.readiness(), release_deadline());
             }
             assert_eq!(channel.try_receive(), Ok(Receive::Fragment));
             assert_eq!(
@@ -843,7 +848,12 @@ mod tests {
             .begin_send(Tag::Reply, 1, b"reply".to_vec())
             .unwrap();
         drop(reader);
-        assert!(matches!(channel.try_send(), Err(Fault::Io(_))));
+        await_release_until(channel.readiness(), release_deadline());
+        let got = channel.try_send();
+        assert!(
+            matches!(got, Err(Fault::Io(_))),
+            "a send to a released peer fails, got {got:?}"
+        );
         assert_failed(&mut channel);
     }
 }
