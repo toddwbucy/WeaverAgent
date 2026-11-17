@@ -8167,9 +8167,18 @@ class DecommissionTests(unittest.TestCase):
     ROOT_STAT = ('stat() { local p="${@: -1}" u=0; case ":${STRANGERS:-}:" in *":$p:"*) u=' + str(STRANGER_UID)
                  + ' ;; esac; command stat "$@" | sed "s/^[0-9]*/$u/"; }\n')
 
-    def log_takes(self, log, agents=("m1",), strangers=()):
-        """log_paths LOG with AGENTS naming AGENTS, as (kind, path) pairs."""
-        program = (self.ROOT_STAT + "declare -A AGENTS=(" + " ".join(f"[{a}]=1" for a in agents) + ")\n"
+    def script_options(self):
+        """The script's own `set` line, under which its functions run."""
+        found = re.findall(r"^set -[a-z]+(?: -o [a-z]+| [a-z]+)*$", self.script, re.M)
+        self.assertEqual(len(found), 1, found)
+        return found[0] + "\n"
+
+    def log_takes(self, log, agents=("m1",), strangers=(), find=None):
+        """log_paths LOG with AGENTS naming AGENTS, as (kind, path) pairs,
+        under the script's own options, with FIND as a stand-in for find."""
+        program = (self.script_options() + self.ROOT_STAT
+                   + ("" if find is None else f"find() {{ {find}; }}\n")
+                   + "declare -A AGENTS=(" + " ".join(f"[{a}]=1" for a in agents) + ")\n"
                    + shell_function(self.script, "log_paths") + 'log_paths "$1"')
         run = subprocess.run(["bash", "-c", program, "x", str(log)], capture_output=True, timeout=20,
                              env={**os.environ, "STRANGERS": ":".join(str(s) for s in strangers)})
@@ -8243,6 +8252,56 @@ class DecommissionTests(unittest.TestCase):
                     self.assertEqual(self.log_takes(shut / "admin.log", agents=("m9",)), [("unread", str(shut))])
                 finally:
                     shut.chmod(0o755)
+            # Under the script's errexit (Codex on #599), a find that fails
+            # and prints nothing, run as root or not, and a listing that ends
+            # before its status is printed, are unread as well.
+            for find in ("return 1", 'kill -9 "$BASHPID"'):
+                with self.subTest(find=find):
+                    self.assertEqual(self.log_takes(own / "admin.log", find=find), [("unread", str(own))])
+
+    def test_a_legacy_log_read_short_under_errexit_refuses_the_archive_and_the_purge(self):
+        """**Codex on #599**: the discovery loop and its refusal, under the
+        script's own options. A find that fails and prints nothing, and an
+        answer from log_paths cut off before its directory's verdict, each
+        name the directory and refuse both modes. Perturbations: print find's
+        status unguarded after it, as before, and the first case runs on with
+        nothing refused. Drop the loop's check for the verdict, and the second
+        does."""
+        script = self.script
+        q = shlex.quote
+        loop = script[script.index("declare -A LOG_LEFT=() LOG_DIRS_SAID=()\n"):]
+        loop = loop[:loop.index(" | sort -z)\n") + len(" | sort -z)\n")]
+        refusal = next(line for line in script.splitlines()
+                       if line.startswith('[ ${#LOG_UNREAD[@]} -eq 0 ] || die "the directory of a legacy log'))
+        with tempfile.TemporaryDirectory() as scratch:
+            shared = Path(scratch).resolve() / "var-log"
+            shared.mkdir()
+            log = shared / "weaver-worker.log"
+            log.write_text("the agent's\n")
+            cases = {
+                "find fails": ("find() { return 1; }\n" + shell_function(script, "log_paths"),
+                               f"PLAN {shared}  the directory of the legacy log {log} cannot be listed"),
+                "answer cut off": (shell_function(script, "log_paths")
+                                   + "log_paths() { printf 'take\\0%s\\0' \"$1\"; exit 1; }\n",
+                                   f"PLAN {shared}  the directory of the legacy log {log} was not read to its end"),
+            }
+            for case, (functions, said) in cases.items():
+                with self.subTest(case=case):
+                    program = (self.script_options() + self.ROOT_STAT
+                               + "declare -A AGENTS=([m1]=1) LOG_PATHS=()\n"
+                               + f"declare -A LOG_FILES=([{q(str(log))}]=1)\n"
+                               + "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                               + "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\n"
+                               + "in_operator_home() { return 1; }\n"
+                               + functions + loop + refusal + "\necho REACHED\n")
+                    run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20,
+                                         env={**os.environ, "STRANGERS": ""})
+                    got = run.stdout.splitlines()
+                    self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+                    self.assertTrue(any(line.startswith(said) for line in got), run.stdout + run.stderr)
+                    self.assertIn(f"DIE the directory of a legacy log cannot be listed: {shared}. Nothing is "
+                                  "archived or purged until it reads. Look at it by hand, then rerun", got)
+                    self.assertNotIn("REACHED", got)
 
     def test_a_legacy_log_in_a_shared_directory_leaves_the_directory_and_its_strangers(self):
         # **#593's acceptance**: a legacy log path in a shared directory beside
