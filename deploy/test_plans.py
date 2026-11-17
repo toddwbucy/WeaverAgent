@@ -1537,7 +1537,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assert_unprivileged()
         script = (DEPLOY / "create-agent.sh").read_text()
         accounts = script.index('say "accounts"')
-        self.assertLess(script.index('sudo useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$box_account"', accounts),
+        self.assertLess(script.index('root useradd --system --shell /usr/sbin/nologin --no-create-home --user-group "$box_account"', accounts),
                         script.index('--create-home --user-group "$AGENT_USER"', accounts),
                         "the box's accounts are laid before any of the agent's")
 
