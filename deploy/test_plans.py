@@ -251,6 +251,11 @@ if name == 'findmnt':
 if name == 'mktemp' and args and '/weaver-deploy-messages-' in args[-1]:
     # The build's messages file, made as the scripts make it; not logged.
     os.execv('/usr/bin/mktemp', ['mktemp', *args])
+if (name == 'mktemp' and args or name == 'as-root' and args[:1] == ['mktemp']) and '/weaver-drop.' in args[-1]:
+    # **A drop's relays' directory** (#590), which account-drop.sh makes
+    # under TMPDIR in either mode, root mode's routing included: made as the
+    # helper makes it, and not logged, since it is no root step.
+    os.execv('/usr/bin/mktemp', ['mktemp', *args[args.index('mktemp') + 1:]] if name == 'as-root' else ['mktemp', *args])
 with open(os.environ['CALLS'], 'a') as log:
     log.write(json.dumps([name, *args]) + '\n')
 # **Root mode** (#576): a root step root runs directly reaches the double as
@@ -1024,7 +1029,11 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertIn("PENDING --apply", result.stdout)
         self.assertNotIn("nothing of this agent exists", result.stdout)
         self.assert_unprivileged()
-        after = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file() and p != self.log}
+        # The settings file the suite writes beside the stand-ins for each run
+        # (#590) is the suite's, not the plan's.
+        after = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file() and p != self.log
+                 and p.name != FIXTURE_ENVIRON}
+        before = {p: b for p, b in before.items() if p.name != FIXTURE_ENVIRON}
         self.assertEqual(before, after)
 
     def test_agent_plan_refuses_missing_or_empty_stack_keys(self):
@@ -5686,7 +5695,11 @@ esac
         self.assertIn("== plan only", result.stdout)
         self.assertNotIn("PASS", result.stdout)
         self.assert_unprivileged()
-        after = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file() and p != self.log}
+        # The settings file the suite writes beside the stand-ins for each run
+        # (#590) is the suite's, not the plan's.
+        after = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file() and p != self.log
+                 and p.name != FIXTURE_ENVIRON}
+        before = {p: b for p, b in before.items() if p.name != FIXTURE_ENVIRON}
         self.assertEqual(before, after)
 
     def test_lifecycle_steps_name_what_they_check(self):

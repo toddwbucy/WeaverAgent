@@ -32,7 +32,8 @@ DROP_RELAY_WAIT=5
 # - Its standard output and standard error are pipes to two relays this
 #   shell holds, one where the caller gave both the same file, so a caller's
 #   `2>&1` keeps its order. Each relay is a `cat` run as a job of this shell
-#   on a FIFO made in a directory of its own, mode 0700, and unlinked once
+#   on a FIFO made in a directory of its own, `weaver-drop.XXXXXX` under
+#   TMPDIR, mode 0700, and unlinked once
 #   both ends are open, so its status is waited for by its pid in any bash
 #   (a process substitution's is, before bash 5.3, only for the last one).
 #   **After CMD exits, the relays get DROP_RELAY_WAIT seconds to drain**,
@@ -96,7 +97,7 @@ as_account() {
     done
     merged=0
     [ ! /proc/self/fd/1 -ef /proc/self/fd/2 ] || merged=1
-    relays=$(mktemp -d) && mkfifo -m 600 -- "$relays/out" "$relays/err" "$relays/tick" || {
+    relays=$(mktemp -d "${TMPDIR:-/tmp}/weaver-drop.XXXXXX") && mkfifo -m 600 -- "$relays/out" "$relays/err" "$relays/tick" || {
       echo "as_account: no command runs as $account, since its relays could not be made" >&2
       [ -z "$relays" ] || rm -rf -- "$relays"
       exit 1
