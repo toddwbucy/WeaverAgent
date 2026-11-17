@@ -161,7 +161,16 @@ store before relying on that. On 2026-09-30 the three 0.5b ggufs were under
 the installed one by 256 bytes, so the installed one is the only copy of itself.
 
 The territories' archive holds each agent whole: its declaration, prompt draft, two
-logs and published save points beside its state room and trace. A box from before
+logs and published save points beside its state room and trace. **An agent's folder is
+found wherever the agent was made** (#594): in the default base, in the one the stack
+record names, and in the base of each folder the agent's own facts name, its root's
+`territory` key (`<base>/<agent>/weaver-<agent>`) and its account's home
+(`<base>/<agent>/home`). Such a base counts only where the folder stands as
+`create-agent.sh` lays it (a directory, no link, root's, holding the territory or a home
+the account owns), and it is guarded and its other entries named as left like any base,
+so an agent made before the record moved has its home archived with its folder and its
+cap's limit cleared. An entry of a base that is itself a base, or holds what the purge
+takes, is not named as left. A box from before
 2026-10-07 keeps its `~/.weaveragent/` directories where they stand, the operator's
 own, neither archived nor purged: a territory base or a root's territory under the
 operator's home (the stack record's `agent-directory` defaulted there from 2026-10-02
