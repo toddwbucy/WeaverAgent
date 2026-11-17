@@ -24,7 +24,11 @@ pub(super) fn hang_up(end: impl std::os::fd::AsFd) {
 /// For a test that drops its end and needs the release itself, not the
 /// shutdown [`hang_up`] gives. A concurrent test's fork that holds a copy of
 /// the dropped end delays the release until its exec, and this wait spans
-/// that. The caller supplies one absolute fixture deadline.
+/// that. The poll asks for no event, since the hangup and the error are always
+/// reported, so a half-closed peer's read hangup cannot turn the wait into a
+/// spin. The caller supplies one absolute fixture deadline. Its twin in
+/// weaver-spu, `ste100/fixture_release.rs`, keeps the same form: an edit to
+/// one is made to both.
 pub(super) fn await_release_until(fd: RawFd, deadline: Instant) {
     loop {
         let remaining = deadline
@@ -32,7 +36,7 @@ pub(super) fn await_release_until(fd: RawFd, deadline: Instant) {
             .expect("fixture peer was not released by its deadline");
         let mut poll = libc::pollfd {
             fd,
-            events: libc::POLLRDHUP,
+            events: 0,
             revents: 0,
         };
         // SAFETY: callers retain fd through this bounded observation, and poll
@@ -120,3 +124,5 @@ fn bytes_arriving_after_a_pending_receive_are_rejected() {
         "later bytes cannot be discarded as EOF"
     );
 }
+
+mod tests;

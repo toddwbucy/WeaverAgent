@@ -1,7 +1,7 @@
 //! Actual runtime/socket ownership with sealed test-only work. No language claim.
 use super::*;
 use crate::ste100::admission::{AdapterKind, SealedAdapter, VerifiedArtifacts, VerifiedFiles};
-use crate::ste100::channel::{Message, Receive, SendProgress, Tag};
+use crate::ste100::channel::{Fault as ChannelFault, Message, Receive, SendProgress, Tag};
 use nix::sys::socket::{
     AddressFamily, MsgFlags, SockFlag, SockType, send as send_packet, socketpair,
 };
@@ -14,6 +14,7 @@ use weaver_types::state_flow::{
     Ste100Reply, Ste100Target, decode_strict,
 };
 
+use crate::ste100::fixture_release::{await_release_until, release_deadline};
 use crate::ste100_test_fixture as fixture;
 
 #[derive(Debug)]
@@ -436,6 +437,7 @@ fn ste100_runtime_retains_declared_inputs_through_thread_affine_check_and_destru
     assert_eq!(reply(&mut runtime, &mut peer, &request).result, accepted());
     assert_eq!(runtime.position(), Position::Idle);
     drop(peer);
+    await_release_until(runtime.dispatcher.readiness(), release_deadline());
     assert_eq!(
         runtime.advance().unwrap(),
         RuntimeProgress::Stopped(Stop::PeerClosed)
@@ -465,6 +467,7 @@ fn ste100_runtime_correct_defect_keeps_the_same_owner_usable_and_preserves_targe
         assert_eq!(runtime.position(), Position::Idle);
     }
     drop(peer);
+    await_release_until(runtime.dispatcher.readiness(), release_deadline());
     assert_eq!(
         runtime.advance().unwrap(),
         RuntimeProgress::Stopped(Stop::PeerClosed)
@@ -527,7 +530,12 @@ fn ste100_runtime_peer_close_during_held_admission_revokes_late_ready_without_wa
         panic!();
     };
     drop(peer);
-    assert!(runtime.advance().is_err());
+    await_release_until(runtime.dispatcher.readiness(), release_deadline());
+    let got = runtime.advance();
+    assert!(
+        matches!(got, Err(Fault::Transport(ChannelFault::Closed))),
+        "peer loss in held admission is component loss, got {got:?}"
+    );
     assert_eq!(runtime.position(), Position::Failed);
     assert!(
         files.iter().all(|file| file.strong_count() > 0),
@@ -570,7 +578,12 @@ fn ste100_runtime_peer_close_during_check_preserves_worker_custody_until_its_las
     submit(&mut runtime, &mut peer, &control, &first, owner);
     drop(fixture);
     drop(peer);
-    assert!(runtime.advance().is_err());
+    await_release_until(runtime.dispatcher.readiness(), release_deadline());
+    let got = runtime.advance();
+    assert!(
+        matches!(got, Err(Fault::Transport(ChannelFault::Closed))),
+        "peer loss during a check is component loss, got {got:?}"
+    );
     assert!(files.iter().all(|file| file.strong_count() > 0));
     control.result(accepted());
     assert_dropped(&control, owner, &files);
@@ -779,6 +792,7 @@ fn ste100_runtime_whole_reply_exact_bound_succeeds_and_one_byte_over_closes_with
             assert_eq!(reply(&mut runtime, &mut peer, &first).result, result);
             assert_eq!(runtime.position(), Position::Idle);
             drop(peer);
+            await_release_until(runtime.dispatcher.readiness(), release_deadline());
             assert_eq!(
                 runtime.advance().unwrap(),
                 RuntimeProgress::Stopped(Stop::PeerClosed)
@@ -839,6 +853,7 @@ fn ste100_runtime_complete_multi_binding_and_template_results_are_single_correla
     // These injected complete results only pin the runtime's transport boundary;
     // they do not run a grammar compiler or prove production inclusion.
     drop(peer);
+    await_release_until(runtime.dispatcher.readiness(), release_deadline());
     runtime.advance().unwrap();
     assert_dropped(&control, owner, &files);
 }
@@ -1063,6 +1078,7 @@ fn ste100_runtime_review_panic_notifies_before_a_blocked_backend_destructor() {
 fn ste100_runtime_review_backend_drop_precedes_grammar_owner_retirement() {
     let (_fixture, peer, mut runtime, control, owner, files) = ready();
     drop(peer);
+    await_release_until(runtime.dispatcher.readiness(), release_deadline());
     assert_eq!(
         runtime.advance().unwrap(),
         RuntimeProgress::Stopped(Stop::PeerClosed)
@@ -1149,6 +1165,7 @@ fn ste100_runtime_review_actual_wait_wakes_for_reply_writability() {
         expected
     );
     drop(peer.take());
+    await_release_until(runtime.dispatcher.readiness(), release_deadline());
     assert_eq!(
         runtime.advance().unwrap(),
         RuntimeProgress::Stopped(Stop::PeerClosed)
