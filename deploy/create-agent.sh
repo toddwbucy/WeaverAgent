@@ -19,7 +19,8 @@
 # table (weaver-spu adapter binding amendment ADP-1 and ADP-5), --devices
 # <i,j,...> (the decoder's device ordinals in the box's PCI bus order, given
 # order kept as shard order, default 0), --context-capacity <n> (the session's
-# context in tokens, default 32768), --turn-context continuous|independent
+# context in tokens, default 32768, at least the max-tokens-per-turn of 4096
+# this script writes beside it), --turn-context continuous|independent
 # (written only when given, and absent is continuous, #423), and
 # --root-operator (root runs it, on a single-purpose appliance where root is
 # the operator).
@@ -164,6 +165,8 @@ BASE_BLAKE3=""
 DEVICES=0
 CONTEXT_CAPACITY=32768
 unset TURN_CONTEXT
+# **The ceiling of a turn this script writes**, fixed: no option sets it (#580).
+MAX_TOKENS_PER_TURN=4096
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply)    APPLY=1 ;;
@@ -289,6 +292,12 @@ done
 DEVICES_TOML=${DEVICES//,/, }
 [[ "$CONTEXT_CAPACITY" =~ ^[1-9][0-9]{0,9}$ ]] && (( CONTEXT_CAPACITY <= U32_MAX )) \
   || die "--context-capacity is a count of tokens from 1 to $U32_MAX, with no leading zero: '$CONTEXT_CAPACITY'"
+# **The script's own consistency rule, not a load's** (the Planner's ruling
+# of 2026-11-16 on #580): no load compares the two, but a capacity below the
+# turn's ceiling this script writes into the same declaration contradicts it,
+# a turn allowed more tokens than the whole context holds.
+(( CONTEXT_CAPACITY >= MAX_TOKENS_PER_TURN )) \
+  || die "--context-capacity $CONTEXT_CAPACITY is below the max-tokens-per-turn of $MAX_TOKENS_PER_TURN this script writes into the same declaration: give at least $MAX_TOKENS_PER_TURN"
 if [ -z "${TURN_CONTEXT+given}" ]; then
   TURN_CONTEXT_LINE="" TURN_CONTEXT_SHOWN="continuous (absent, so not written)"
 else
@@ -586,7 +595,7 @@ binding-kind = "serving"$TURN_CONTEXT_LINE
 [spu-instruction.decoder]
 residual-readout-election = false
 surprisal-election = true
-tunable-values = { context-capacity = $CONTEXT_CAPACITY, max-tokens-per-turn = 4096, seed = 451234785645, temperature = 0.7, top-k = 40, top-p = 0.95, repetition-penalty = 1.1, repetition-window = 64 }
+tunable-values = { context-capacity = $CONTEXT_CAPACITY, max-tokens-per-turn = $MAX_TOKENS_PER_TURN, seed = 451234785645, temperature = 0.7, top-k = 40, top-p = 0.95, repetition-penalty = 1.1, repetition-window = 64 }
 
 [spu-instruction.decoder.model-binding]
 artifact = "$ARTIFACT"

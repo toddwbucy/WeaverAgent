@@ -151,14 +151,16 @@ serves from the stack's. `--connector-role operator|observer` chooses which comm
 lines the agent's sudo rule grants the box's admin-con account, section 5, default
 `operator`. Three options set the decoder (#580): `--devices i,j,...` names its device
 ordinals in the box's PCI bus order, the given order kept as the shard order, default
-`0`. `--context-capacity n` sets the session's context in tokens, default 32768.
-`--turn-context continuous|independent` writes the top-level election, and without it
-nothing is written and the agent reads `continuous`. Each refuses before anything is
-made what a load refuses without the model or the cards: an empty device set, an ordinal
-named twice, a capacity that is not a count from 1 to 4294967295, or a third
-turn-context word. An ordinal the box has no card for, whether the model spans the
-devices, and whether each card has room are the SPU's to judge at the load, which
-`verify-load.sh` shows.
+`0`. `--context-capacity n` sets the session's context in tokens, default 32768. It
+refuses a count below the `max-tokens-per-turn` of 4096 the script writes beside it, as
+the script's own consistency rule: no load compares the two, but a turn allowed more
+tokens than the whole context contradicts the declaration. `--turn-context
+continuous|independent` writes the top-level election, and without it nothing is written
+and the agent reads `continuous`. Each refuses before anything is made what a load
+refuses without the model or the cards: an empty device set, an ordinal named twice, a
+capacity that is not a count from 1 to 4294967295, or a third turn-context word. An
+ordinal the box has no card for, whether the model spans the devices, and whether each
+card has room are the SPU's to judge at the load, which `verify-load.sh` shows.
 
 Apply first checks that `/etc/sudoers` includes `/etc/sudoers.d` and that visudo accepts
 the rendered rule, and refuses before it makes anything otherwise. It then lays the

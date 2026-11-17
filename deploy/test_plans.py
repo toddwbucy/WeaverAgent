@@ -881,8 +881,8 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 ((), [0], 32768, None, "devices [0], context-capacity 32768, turn-context continuous (absent, so not written)"),
                 (("--devices", "1,0", "--context-capacity", "131072", "--turn-context", "independent"),
                  [1, 0], 131072, "independent", "devices [1, 0], context-capacity 131072, turn-context independent"),
-                (("--turn-context", "continuous"), [0], 32768, "continuous",
-                 "devices [0], context-capacity 32768, turn-context continuous"),
+                (("--turn-context", "continuous", "--context-capacity", "4096"), [0], 4096, "continuous",
+                 "devices [0], context-capacity 4096, turn-context continuous"),
                 (("--devices", "4294967295", "--context-capacity", "4294967295"), [4294967295], 4294967295, None,
                  "devices [4294967295], context-capacity 4294967295, turn-context continuous (absent, so not written)")):
             with self.subTest(given=given):
@@ -920,6 +920,13 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
             cases.append((("--context-capacity", bad), "--context-capacity is a count of tokens from 1 to 4294967295"))
         for bad in ("", "Continuous", "both", "independent "):
             cases.append((("--turn-context", bad), "--turn-context is continuous or independent"))
+        # **A capacity below the turn's ceiling the script writes refuses**,
+        # naming both values (the Planner's ruling of 2026-11-16 on #580): the
+        # script's own consistency rule, which no load checks. Perturbation:
+        # drop the floor, and both cases run on.
+        for bad in ("1", "4095"):
+            cases.append((("--context-capacity", bad),
+                          f"--context-capacity {bad} is below the max-tokens-per-turn of 4096 this script writes"))
         for given, said in cases:
             for mode in ((), ("--apply",)):
                 with self.subTest(given=given, mode=mode):
