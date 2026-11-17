@@ -102,8 +102,9 @@ group in one shell.
   `/etc/weaver/admin/.<name>.partial` and `/etc/sudoers.d/weaver-<name>` are absent. The
   script checks all of this and refuses rather than merging, because a half-made agent
   that looks whole is worse than an absent one. A run that stops after it has laid
-  anything, by a refusal or a step that fails, ends with a `STANDS:` line naming what it
-  laid, in order, for the take-down in section 7 (#600).
+  anything, by a refusal, a failed step or a signal, ends naming what it laid, in order
+  (`STANDS:`), and the one thing it was laying when it stopped, which may stand in part
+  (`MAY STAND:`), for the take-down in section 7 (#600).
 - `weaver-gatecon` and `weaver-admincon` either are absent, and apply lays them, or
   stand in the box's shape: `getent passwd weaver-gatecon weaver-admincon` shows a uid
   above 0 and below `UID_MIN` and a nologin shell, and each one's primary group has no
@@ -187,23 +188,24 @@ capacity that is not a count from 1 to 4294967295, or a third turn-context word.
 ordinal the box has no card for, whether the model spans the devices, and whether each
 card has room are the SPU's to judge at the load, which `verify-load.sh` shows.
 `--home-quota <size>` caps the agent's home (#585), a whole size in binary units such as
-`512M`, `64G` or `2T`: the home and what useradd laid in it take their own ext4 project,
-the agent's uid, the home's directories take the inherit flag, which ext4 sets on a
-directory alone (#600), and the project's limits are set on the drive: the size, and one
-file per 16 KiB of it. The cap bounds the agent's own writes in its home, so they cannot
-take the space or the inodes the save points and the state room need on the same drive:
-it bounds the space and the count of files. The shell the gate runs for the agent
-refuses the attribute changes `chattr` makes (`weaver-gate-Spec` section 8.1, #587), so
-no command the agent runs moves its files out of the cap's project. The agent's folder
-carries the same project, the mark that tells `decommission.sh` the cap is this
-script's, without the inherit flag: the script clears the flag on the folder before the
-mark, since a base that carries it passes it on, and the territory and the state room
-made in the folder would join the cap. Without the option the home is not capped. A
-malformed size, a base not on ext4, an ext4 base not mounted `prjquota`, or a missing
-tool refuses before anything is made. A project the drive already carries with any usage
-or any limit refuses once the agent's account stands, since the project is its uid: take
-that account and its home down by section 7, and free the project first only where it is
-a limit an earlier run of this script left.
+`512M`, `64G` or `2T`: the home and the directories and regular files useradd laid in it
+take their own ext4 project (a link the skeleton lays is passed over), the agent's uid,
+the home's directories take the inherit flag, which ext4 sets on a directory alone
+(#600), and the project's limits are set on the drive: the size, and one file per 16 KiB
+of it. The cap bounds the agent's own writes in its home, so they cannot take the space
+or the inodes the save points and the state room need on the same drive: it bounds the
+space and the count of files. The shell the gate runs for the agent refuses the
+attribute changes `chattr` makes (`weaver-gate-Spec` section 8.1, #587), so no command
+the agent runs moves its files out of the cap's project. The agent's folder carries the
+same project, the mark that tells `decommission.sh` the cap is this script's, without
+the inherit flag: the script clears the flag on the folder before the mark, since a base
+that carries it passes it on, and the territory and the state room made in the folder
+would join the cap. Without the option the home is not capped. A malformed size, a base
+not on ext4, an ext4 base not mounted `prjquota`, or a missing tool refuses before
+anything is made. A project the drive already carries with any usage or any limit
+refuses once the agent's account stands, since the project is its uid: take that account
+and its home down by section 7, and free the project first only where it is a limit an
+earlier run of this script left.
 
 Apply first checks that `/etc/sudoers` includes `/etc/sudoers.d` and that visudo accepts
 the rendered rule, and refuses before it makes anything otherwise. It then lays the
