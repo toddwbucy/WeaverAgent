@@ -184,10 +184,11 @@ nothing but `models`.
    all, never one half removed for its `weaver-admin show` to refuse, and it ends
    admission.
 2. Each home quota limit on the list (#585), set to none: the project `create-agent.sh`
-   gave a capped home, which is the agent account's uid, on its drive. Only a limit the
-   list names and the box still shows goes, and root's record carries it, so a rerun
-   whose first run failed here removes it again. A drive whose mount cannot be read is
-   named, and the purge does not close clean.
+   gave a capped home, which is the agent account's uid, on its drive, taken only where
+   the agent's folder carries that project as the script's mark. Only a limit the list
+   names and the box still shows goes, and root's record carries it, so a rerun whose
+   first run failed here removes it again. A drive whose mount or mark cannot be read
+   is named, and the purge does not close clean.
 3. Every other path on the list: the territories, the logs, the homes, the `/tmp`
    entries, the run directories, `/var/lib/weaver`, the `ld.so` confs and each prefix's
    `bin`, `lib`, `python-spu` and backups. (The sudo rules went before step 1.) The

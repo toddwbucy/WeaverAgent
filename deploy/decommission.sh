@@ -438,18 +438,21 @@ AGENT_LISTED=$(agent_folders "${!TERRITORY_BASES[@]}")
 [ -z "$AGENT_LISTED" ] || mapfile -t AGENT_FOLDERS <<< "$AGENT_LISTED"
 for d in /var/lib/weaver "${AGENT_FOLDERS[@]}" "${!LOG_PATHS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
 # **home_projects FOLDER...: "<project> <seen> <mount point>" for each agent's
-# home on a drive mounted with project quotas** (#585). The project is the
-# agent account's uid, read from passwd, the number create-agent.sh gives the
-# home, and the mount is read off the root-owned folder. **Neither is read off
-# the home**: the agent owns its home and, until #587 lands, can set its
-# project to any number, another agent's uid included, so a project read there
-# would have root lift a cap that is not this agent's. What the home carries is
-# printed as <seen>, a report and never acted on ("-" where it cannot be
-# read). A folder whose account is gone, or whose drive has no project quotas,
-# carries no cap of create-agent.sh's. A folder whose mount cannot be read is
-# printed as "? - <folder>", so the plan names it rather than passing it over.
+# home create-agent.sh capped** (#585). The project is the agent account's uid,
+# read from passwd, the number create-agent.sh gives the home, and the mount is
+# read off the root-owned folder. **A cap is create-agent.sh's only where the
+# folder carries that project**, the mark it sets before the cap and which
+# only root can change, so an agent made without --home-quota, or one refused
+# because the drive carried its project already, never has a stranger's limit
+# of the same number lifted. **Nothing is read off the home**: the agent owns
+# its home and, until #587 lands, can set its project to any number, another
+# agent's uid included. What the home carries is printed as <seen>, a report
+# and never acted on ("-" where it cannot be read). A folder whose account is
+# gone, or whose drive has no project quotas, carries no cap. A folder whose
+# mount or mark cannot be read is printed as "? - <folder>", so the plan names
+# it rather than passing it over.
 home_projects() {
-  local f project seen _ options mount_point
+  local f project marked seen _ options mount_point
   for f in "$@"; do
     [ -d "$f/home" ] && [ ! -L "$f/home" ] || continue
     project=$(getent passwd "weaver-${f##*/}" | cut -d: -f3) || continue
@@ -458,6 +461,9 @@ home_projects() {
         && mount_point=$(findmnt -n -o TARGET --target "$f" 2>/dev/null); } \
       || { printf '? - %s\n' "$f"; continue; }
     [[ ",$options," == *,prjquota,* ]] || continue
+    read -r marked _ < <(lsattr -pd -- "$f" 2>/dev/null) && [[ "$marked" =~ ^[0-9]+$ ]] \
+      || { printf '? - %s\n' "$f"; continue; }
+    [ "$marked" = "$project" ] || continue
     read -r seen _ < <(lsattr -pd -- "$f/home" 2>/dev/null) || seen=-
     printf '%s %s %s\n' "$project" "${seen:--}" "$mount_point"
   done
@@ -473,7 +479,7 @@ plan_home_quotas() {
   for q in "$@"; do
     read -r project seen mount_point <<< "$q"
     if [ "$project" = "?" ]; then
-      plan "home quota of $mount_point: its drive's mount cannot be read (findmnt), so whether a cap stands there is unknown and the purge does not close clean"
+      plan "home quota of $mount_point: its drive's mount or the folder's mark cannot be read (findmnt, lsattr), so whether a cap stands there is unknown and the purge does not close clean"
       HOME_QUOTA_UNREAD=1; continue
     fi
     HOME_QUOTAS+=("$project $mount_point")

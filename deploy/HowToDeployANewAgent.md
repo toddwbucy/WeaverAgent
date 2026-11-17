@@ -124,8 +124,9 @@ group in one shell.
   original sudo still bind, since the admin-con account's rule is sudo's, and root
   lists that rule through sudo at the end.
 - With `--home-quota`, the agent-directory stands on ext4 formatted with project quotas
-  and mounted `prjquota`, and `chattr`, `setquota` (the quota tools) and `findmnt` are
-  on the box. On an appliance the image lays the drive out so.
+  and mounted `prjquota`, and `chattr` and `lsattr` (e2fsprogs), `setquota` and
+  `repquota` (the quota tools) and `findmnt` are on the box. The box's setup lays the
+  drive out so: the setup script on an appliance, the operator on a workstation.
 
 ## 2. An agent with a store
 
@@ -166,13 +167,17 @@ ordinal the box has no card for, whether the model spans the devices, and whethe
 card has room are the SPU's to judge at the load, which `verify-load.sh` shows.
 `--home-quota <size>` caps the agent's home (#585), a whole size in binary units such as
 `512M`, `64G` or `2T`: the home takes its own ext4 project, the agent's uid, with the
-inherit flag, and the project's block limit is set on the drive. The cap bounds the
-agent's own writes in its home, so they cannot take the space the save points and the
-state room need on the same drive. It bounds their space and not their count of files.
-Until #587 lands, an agent that deliberately changes its files' project can leave the
-cap. #587 closes that. Without the option the home is not capped. A malformed size, a
-base not on ext4, an ext4 base not mounted `prjquota`, or a missing tool refuses before
-anything is made.
+inherit flag, and the project's limits are set on the drive: the size, and one file per
+16 KiB of it. The cap bounds the agent's own writes in its home, so they cannot take the
+space or the inodes the save points and the state room need on the same drive: it bounds
+the space and the count of files. Until #587 lands, an agent that deliberately changes
+its files' project can leave the cap. #587 closes that. The agent's folder carries the
+same project, the mark that tells `decommission.sh` the cap is this script's. Without
+the option the home is not capped. A malformed size, a base not on ext4, an ext4 base
+not mounted `prjquota`, or a missing tool refuses before anything is made. A project the
+drive already carries with any usage or any limit refuses once the agent's account
+stands, since the project is its uid: take that account and its home down by section 7,
+and free the project first only where it is a limit an earlier run of this script left.
 
 Apply first checks that `/etc/sudoers` includes `/etc/sudoers.d` and that visudo accepts
 the rendered rule, and refuses before it makes anything otherwise. It then lays the
@@ -782,9 +787,13 @@ done
 ```
 
 Where `create-agent.sh` capped the home, remove its limit first, while the account
-stands: the project is the agent account's uid (`id -u weaver-<name>`), and
-`sudo setquota -P <uid> 0 0 0 0 <mount point>` sets its limit to none (#585). Take the
-project from the uid, not from `lsattr` on the home, which the agent can change.
+stands (#585). The cap is the script's only where the agent's folder carries the
+account's uid as its project: `sudo lsattr -pd <agent-directory>/<name>` prints it, and
+`id -u weaver-<name>` prints the uid. Then
+`sudo setquota -P <uid> 0 0 0 0 <mount point>` sets its limits to none. Where the
+folder carries project 0, the script set no cap, and a limit on that number is
+another's. Never take the project from `lsattr` on the home, which the agent can
+change.
 Then `userdel -r` the agent's account, which removes its home in the agent's folder, and
 `userdel` the member's, the relay's and, where it stands, the per-agent connector's,
 then delete the groups, which `userdel` leaves while a member remains and which a later
