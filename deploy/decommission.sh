@@ -376,6 +376,9 @@ TERRITORY_PATHS=()
 # own `agent-directory`, where create-agent.sh made every territory.
 declare -A TERRITORY_BASES=([/var/lib/weaver-agent]=1)
 v=$(read_key /etc/weaver/stack agent-directory); [ -n "$v" ] && TERRITORY_BASES["$v"]=1
+# The directory where the trace sinks of a layout before the territories
+# stood, taken whole only where it spans no base (spans_a_base, below).
+LEGACY_DIR=/var/lib/weaver
 # A base or a log directory under the operator's home is the layout retired
 # on 2026-10-07: said, and never archived or purged.
 for d in "${!TERRITORY_BASES[@]}"; do
@@ -433,10 +436,40 @@ left_in_base() {
     printf '%s\n' "$e"
   done < <(find "$base" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
 }
+# **spans_a_base PATH: whether PATH is a base, or above a base or an agent's
+# own folder** (CodeRabbit on #582), or the operator's home or above it, which
+# is never touched, compared canonical: a path that does not resolve is
+# compared as written. Such a path holds what is no agent's, a
+# stranger's file in the base among it, so whatever fixed name it carries it
+# is never archived as a path of its own or listed for the purge, in the
+# archive and in purge_candidates both. The agents' folders inside it go on
+# their own, and the plan names it as left.
+spans_a_base() {
+  local p c b
+  p=$(realpath -e -- "$1" 2>/dev/null) || p=$1
+  [ "$p" != / ] || return 0
+  if [ -n "${OP_HOME:-}" ]; then
+    case "$OP_HOME" in "$p" | "$p"/*) return 0 ;; esac
+  fi
+  for b in "${!TERRITORY_BASES[@]}"; do
+    c=$(realpath -e -- "$b" 2>/dev/null) || continue
+    case "$c" in "$p" | "$p"/*) return 0 ;; esac
+  done
+  for b in "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}"; do
+    c=$(realpath -e -- "$b" 2>/dev/null) || continue
+    case "$c" in "$p"/*) return 0 ;; esac
+  done
+  return 1
+}
+# **candidate PATH: the purge line for PATH, unless PATH spans a base**, so the
+# archive's list and the purge's derivation drop the same paths.
+candidate() {
+  spans_a_base "$1" || printf 'path %s\n' "$1"
+}
 AGENT_FOLDERS=()
 AGENT_LISTED=$(agent_folders "${!TERRITORY_BASES[@]}")
 [ -z "$AGENT_LISTED" ] || mapfile -t AGENT_FOLDERS <<< "$AGENT_LISTED"
-for d in /var/lib/weaver "${AGENT_FOLDERS[@]}" "${!LOG_PATHS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
+for d in "${AGENT_FOLDERS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
 # **home_projects FOLDER...: "<project> <seen> <mount point>" for each agent's
 # home create-agent.sh capped** (#585). The project is the agent account's uid,
 # read from passwd, the number create-agent.sh gives the home, and the mount is
@@ -514,6 +547,25 @@ remove_home_quotas() {
   done
   return "$failed"
 }
+# **project_limited PROJECT MOUNT: repquota's line for PROJECT on MOUNT where it
+# shows any limit**, nothing where it shows none, and 1 where the quotas cannot
+# be read. Usage alone is not a limit a removal could take, and the agent's own
+# leftovers carry it (its folder's mark, a home a failed removal left), so it
+# is not read. The fields are the ones create-agent.sh reads: the project, two
+# statuses, the block counts used, soft and hard, a grace, the file counts
+# used, soft and hard, and a grace.
+project_limited() {
+  local report line who b_soft b_hard f_soft f_hard count
+  command -v repquota >/dev/null || return 1
+  report=$(repquota -P -n -v -O csv "$2" 2>/dev/null) || return 1
+  while IFS= read -r line; do
+    IFS=, read -r who _ _ _ b_soft b_hard _ _ f_soft f_hard _ <<< "$line"
+    [ "$who" = "#$1" ] || continue
+    for count in "$b_soft" "$b_hard" "$f_soft" "$f_hard"; do
+      [ "$count" = 0 ] || { printf '%s\n' "$line"; return 0; }
+    done
+  done <<< "$report"
+}
 HOME_PROJECTS=()
 HOME_PROJECTS_LISTED=$(home_projects "${AGENT_FOLDERS[@]}")
 [ -z "$HOME_PROJECTS_LISTED" ] || mapfile -t HOME_PROJECTS <<< "$HOME_PROJECTS_LISTED"
@@ -577,6 +629,18 @@ OWN_TERRITORIES=()
 [ -z "$OWN_LISTED" ] || mapfile -t OWN_TERRITORIES <<< "$OWN_LISTED"
 [ "$TERRITORIES_JUDGED" = 1 ] || plan "REFUSED: a territory a root names is not root:weaver-<agent>-state (see above); the archive and the purge refuse"
 for d in "${OWN_TERRITORIES[@]}"; do TERRITORY_PATHS+=("$d") && plan "$d  (a root's own territory, outside every agent's folder) $(du -sh "$d" 2>/dev/null | cut -f1)"; done
+# **The earlier layout's directory and each log directory are taken whole
+# only where they span no base** (CodeRabbit on #582), judged once every
+# agent's folder and every root's own territory is known.
+for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do
+  [ -e "$d" ] || continue
+  if spans_a_base "$d"; then
+    plan "$d  a base, or above a base or an agent's folder: not taken whole, left in place"
+    continue
+  fi
+  TERRITORY_PATHS+=("$d")
+  plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"
+done
 # **home_within HOME FOLDER...: the folder HOME stands in**, canonical, or
 # nothing. A home in an agent's folder (#578) goes with the folder.
 home_within() {
@@ -611,7 +675,7 @@ for d in "${!TERRITORY_BASES[@]}"; do
   plan "$d  a base: the purge takes its agents' folders, and the base stands"
   while IFS= read -r e; do
     plan "$e  in the base, of no agent this discovery found: left in place, untouched"
-  done < <(left_in_base "$d" "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}" "${HOMES[@]}")
+  done < <(left_in_base "$d" "${TERRITORY_PATHS[@]}" "${HOMES[@]}")
 done
 # **tmp_paths DIR: the weaver entries directly under DIR that a weaver-
 # account owns** (#98; the custody audit's G22): DIR is writable by every
@@ -812,7 +876,14 @@ if [ "$MODE" = archive ]; then
   archive_path() { # archive_path NAME PATH...
     local name present=()
     name=$(free_name "$1") || exit 1; shift
-    for pth in "$@"; do [ -e "$pth" ] && present+=("$pth"); done
+    for pth in "$@"; do
+      [ -e "$pth" ] || continue
+      if spans_a_base "$pth"; then
+        plan "$pth: a base, or above a base or an agent's folder, so it is not archived whole or listed for the purge"
+        continue
+      fi
+      present+=("$pth")
+    done
     [ ${#present[@]} -gt 0 ] || return 0
     tarz "$DEST/$name.tar.zst" "${present[@]}"
     # Apparent size, not blocks: on NFS the blocks are not yet accounted
@@ -830,7 +901,7 @@ if [ "$MODE" = archive ]; then
     for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && parts+=("$sub"); done
     [ ${#parts[@]} -gt 0 ] && archive_path "$(archive_name opt "$p")" "${parts[@]}"
   done
-  [ -e /var/lib/weaver ] && archive_path var-lib-weaver /var/lib/weaver
+  [ -e "$LEGACY_DIR" ] && archive_path var-lib-weaver "$LEGACY_DIR"
   # Every agent's folder, with its territory and its home, from each base
   # (Codex on #79, #578): never the base itself.
   for d in "${AGENT_FOLDERS[@]}"; do archive_path "$(archive_name agent "$d")" "$d"; done
@@ -846,8 +917,8 @@ if [ "$MODE" = archive ]; then
     for pth in "${PURGE[@]}"; do echo "path $pth"; done
     # The run directories are tmpfs state, purged without an archive.
     for c in "${!COORD_ROOTS[@]}"; do
-      [ -d "$c/weaver.run" ] && echo "path $c/weaver.run"
-      for a in "${!AGENTS[@]}"; do [ -d "$c/weaver-$a" ] && echo "path $c/weaver-$a"; done
+      [ -d "$c/weaver.run" ] && candidate "$c/weaver.run"
+      for a in "${!AGENTS[@]}"; do [ -d "$c/weaver-$a" ] && candidate "$c/weaver-$a"; done
     done
     for u in "${WEAVER_USERS[@]}";  do echo "user $u"; done
     for g in "${WEAVER_GROUPS[@]}"; do echo "group $g"; done
@@ -877,19 +948,19 @@ fi
 # derivation also finds.
 purge_candidates() {
   local p sub d c a u g
-  [ -d /etc/weaver ] && echo "path /etc/weaver"
-  for p in "${SUDO_RULES[@]}" "${LDSO_CONFS[@]}"; do echo "path $p"; done
+  [ -d /etc/weaver ] && candidate /etc/weaver
+  for p in "${SUDO_RULES[@]}" "${LDSO_CONFS[@]}"; do candidate "$p"; done
   for p in "${!PREFIXES[@]}"; do
-    for sub in bin lib python-spu; do [ -d "$p/$sub" ] && echo "path $p/$sub"; done
-    for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && echo "path $sub"; done
+    for sub in bin lib python-spu; do [ -d "$p/$sub" ] && candidate "$p/$sub"; done
+    for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && candidate "$sub"; done
   done
-  [ -e /var/lib/weaver ] && echo "path /var/lib/weaver"
+  [ -e "$LEGACY_DIR" ] && candidate "$LEGACY_DIR"
   for d in "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}" "${!LOG_PATHS[@]}" "${HOMES[@]}" "${TMP_PATHS[@]}"; do
-    echo "path $d"
+    candidate "$d"
   done
   for c in "${!COORD_ROOTS[@]}"; do
-    echo "path $c/weaver.run"
-    for a in "${!AGENTS[@]}"; do echo "path $c/weaver-$a"; done
+    candidate "$c/weaver.run"
+    for a in "${!AGENTS[@]}"; do candidate "$c/weaver-$a"; done
   done
   for u in "${WEAVER_USERS[@]}"; do echo "user $u"; done
   for g in "${WEAVER_GROUPS[@]}"; do echo "group $g"; done
@@ -1078,8 +1149,16 @@ load_held() {
 # and none replaced. Checked whole before a rerun's first act, so a rerun never
 # removes, stops or changes what the first run did not judge. Names the first
 # that is not, and answers 1.
+# **A listed limit is still the agent's** (CodeRabbit on #582) where its
+# project's number names the account this purge judged at that number, which
+# still stands, or names no account and repquota shows the project with no
+# limit. A limit that will not go stops the first run with its account
+# standing (the home quotas step), so a limit whose account is gone was
+# removed, and a limit shown on the number since is another's: a newcomer
+# given the reused uid, or a project set by hand. That, a number naming an
+# account this purge did not judge, or quotas that cannot be read refuse.
 rerun_unchanged() {
-  local u r line p entry now scan
+  local u r line p entry now scan q project mount_point shown
   for u in "${UNITS[@]}"; do
     [ -n "${HELD_UNIT["$u"]:-}" ] || { printf 'the unit %s, which this purge did not judge\n' "$u"; return 1; }
   done
@@ -1109,6 +1188,18 @@ rerun_unchanged() {
         now=$(getent group "${line#group }" | cut -d: -f3 || true)
         [ -z "$now" ] || [ "$now" = "${HELD_GID["${line#group }"]:-}" ] \
           || { rm -f -- "$scan"; printf 'the group %s, which is not the group this purge judged\n' "${line#group }"; return 1; } ;;
+      "quota "*)
+        q=${line#quota } && project=${q%% *} && mount_point=${q#* }
+        now=$(getent passwd "$project" | cut -d: -f1 || true)
+        if [ -n "$now" ]; then
+          [ "${HELD_UID["$now"]:-}" = "$project" ] \
+            || { rm -f -- "$scan"; printf 'the limit of project %s on %s, whose number now names the account %s, which this purge did not judge\n' "$project" "$mount_point" "$now"; return 1; }
+        else
+          shown=$(project_limited "$project" "$mount_point") \
+            || { rm -f -- "$scan"; printf 'the limit of project %s on %s, whose quotas cannot be read (repquota)\n' "$project" "$mount_point"; return 1; }
+          [ -z "$shown" ] \
+            || { rm -f -- "$scan"; printf 'the limit of project %s on %s, which repquota shows limited (%s) while no account this purge judged holds the number, so it may be another'"'"'s (where it is the agent'"'"'s own, clear it by hand by deploy/HowToDeployANewAgent.md section 7)\n' "$project" "$mount_point" "$shown"; return 1; }
+        fi ;;
     esac
   done < "$PURGE_ACTED"
   rm -f -- "$scan"
@@ -1291,13 +1382,18 @@ say "home quotas"
 # so no stale limit stands in the drive's quota file for a later account of
 # the same uid. Only the limits this archive's PURGE-LIST names and the
 # derivation holds are removed, as with every other line, and they are on
-# root's record, so a rerun whose first run failed here removes them again.
-# Removing a limit removes nothing on disk, so the rerun is harmless.
+# root's record. **A limit that will not go stops the purge here**
+# (CodeRabbit on #582), its folder and its account standing and the record
+# kept, so the rerun finds the agent's own account at the project's number
+# and removes the limit first. A rerun that finds a listed limit's account
+# gone therefore knows the first run removed it, and refuses a limit shown
+# on the number since (rerun_unchanged).
 PURGE_QUOTAS=()
 while IFS= read -r line; do
   case $line in "quota "*) PURGE_QUOTAS+=("${line#quota }") ;; esac
 done < "$PURGE_ACTED"
-remove_home_quotas "${PURGE_QUOTAS[@]}" || PURGE_FAILED=1
+remove_home_quotas "${PURGE_QUOTAS[@]}" \
+  || die "a home quota's limit above was not removed, so nothing more is removed, no path and no account, and root's record is kept at $RECORD_PARENT/$RECORD_DIR_NAME/$COPY_SUM. Make setquota answer, then rerun the purge, which removes the limit before them"
 
 say "paths"
 while IFS= read -r line; do

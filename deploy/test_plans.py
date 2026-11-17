@@ -1131,6 +1131,42 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertFalse([c for c in self.calls() if c[:2] in (["sudo", "chattr"], ["sudo", "setquota"])])
         self.assertIn("home quota      none: no --home-quota, so the home is not capped", result.stdout)
 
+    def test_the_folder_sheds_an_inherited_project_flag_before_its_mark(self):
+        # **CodeRabbit on #582**: a folder made in a base that carries the
+        # project inherit flag takes the flag, and `chattr -p` sets the
+        # project and leaves the flag, so the territory and the state room,
+        # made in the folder after the mark, would join the home's project
+        # and count against its cap. The flag is cleared in a call of its
+        # own, after the folder is made and before its mark, and so before
+        # the territory and the state room are made in it. Without the cap
+        # the folder is left as the base made it. This pins the sequence:
+        # what ext4 does with it is proved on an appliance's drive, since a
+        # project quota needs a real ext4 mount, which no test here makes.
+        # Perturbations: drop the clearing, fold it into the mark's call, or
+        # move it after the territory, and an assertion below fails.
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_MOUNT=self.QUOTA_MOUNT)
+        folder = str(self.root / "agents" / "m1")
+        result = self.create("--home-quota", "64G", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        made = calls.index(["sudo", "install", "-d", "-o", "root", "-g", "root", "-m", "00755", folder])
+        shed = ["sudo", "chattr", "-P", folder]
+        self.assertIn(shed, calls)
+        mark = calls.index(["sudo", "chattr", "-p", "12345", folder])
+        territory = next(i for i, c in enumerate(calls) if c[:3] == ["sudo", "install", "-d"]
+                         and c[-1] == f"{folder}/weaver-m1")
+        room = next(i for i, c in enumerate(calls) if c[:3] == ["sudo", "install", "-d"]
+                    and c[-1] == f"{folder}/weaver-m1/state")
+        self.assertLess(made, calls.index(shed))
+        self.assertLess(calls.index(shed), mark)
+        self.assertLess(mark, territory)
+        self.assertLess(mark, room)
+        self.reset_made()
+        self.env.pop("FIXTURE_MOUNT")
+        result = self.create("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(shed, self.calls())
+
     def test_a_home_project_already_in_use_refuses_before_the_cap(self):
         # **#585, the Planner's ruling of 2026-11-16**: a project the drive
         # already carries, the agent's uid, with any usage or any limit,
@@ -8126,8 +8162,10 @@ def write(kind, kept):
     (model / kind).write_text("".join(":".join(f) + "\n" for f in kept))
 if name == "getent":
     # An enumeration answers 0 however few rows match, as on a box, where root's
-    # own always stand; a lookup of a name absent answers 2.
-    hit = [f for f in rows(args[0]) if len(args) == 1 or f[0] == args[1]]
+    # own always stand; a lookup of a name absent answers 2. A key of digits is
+    # looked up by number, as getent looks it up.
+    hit = [f for f in rows(args[0])
+           if len(args) == 1 or (f[2] == args[1] if args[1].isdigit() else f[0] == args[1])]
     if not hit and len(args) > 1:
         sys.exit(2)
     print("".join(":".join(f) + "\n" for f in hit), end="")
@@ -8201,7 +8239,11 @@ class PurgeRecordTests(unittest.TestCase):
             stand_in.write_text(ACCOUNT_MODEL)
             stand_in.chmod(0o755)
         for tool, body in (("ldconfig", "#!/bin/sh\n[ \"${1:-}\" = -p ] && echo libggml.so\nexit 0\n"),
-                           ("systemctl", "#!/bin/sh\necho \"systemctl $*\" >> \"$MODEL/calls\"\nexit 0\n")):
+                           ("systemctl", "#!/bin/sh\necho \"systemctl $*\" >> \"$MODEL/calls\"\nexit 0\n"),
+                           # The drive's project quotas, as the model's
+                           # `quotas.csv` holds them, or unreadable.
+                           ("repquota", "#!/bin/sh\n[ -e \"$MODEL/repquota-fails\" ] && exit 1\n"
+                                        "cat \"$MODEL/quotas.csv\" 2>/dev/null\nexit 0\n")):
             stand_in = box / "model" / tool
             stand_in.write_text(body)
             stand_in.chmod(0o755)
@@ -8236,8 +8278,9 @@ class PurgeRecordTests(unittest.TestCase):
                    "query_runs() { :; }\n" + shell_function(text, "sudo_rules")
                    # The accounts phase asks which accounts are the box's.
                    + shell_function(text, "is_box_account") + shell_function(text, "box_account_role")
-                   # The home quotas' removal (#585).
-                   + shell_function(text, "remove_home_quotas")
+                   # The home quotas' removal (#585), and the rerun's reading
+                   # of a listed limit (CodeRabbit on #582).
+                   + shell_function(text, "remove_home_quotas") + shell_function(text, "project_limited")
                    + ("" if removals is None else
                       "RM_SEEN=0\nrm() { local s=0; command rm \"$@\" || s=$?; RM_SEEN=$((RM_SEEN + 1)); "
                       f"[ \"$RM_SEEN\" -lt {removals} ] || exit 0; return \"$s\"; }}\n")
@@ -8506,24 +8549,33 @@ class PurgeRecordTests(unittest.TestCase):
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assert_purged(box)
 
-    def test_a_home_quota_that_fails_is_removed_again_by_the_rerun(self):
-        """#585, the self-check's finding 4: a quota line of the list goes to
-        root's record, a removal that fails keeps the record and fails the
-        close, and the rerun, with the folder already gone, removes the limit
-        from the record. Perturbation: act on the live discovery in place of
-        the record, and the first run never asks setquota and closes clean."""
+    def test_a_home_quota_that_fails_stops_the_purge_and_the_rerun_removes_it_first(self):
+        """#585, the self-check's finding 4, and CodeRabbit on #582: a quota
+        line of the list goes to root's record, and a removal that fails
+        stops the purge there, the paths and the accounts standing and the
+        record kept. The rerun finds the agent's own account at the project's
+        number, removes the limit first, and finishes. Perturbations: act on
+        the live discovery in place of the record, and the first run never
+        asks setquota and closes clean; carry on past the failure, and the
+        territory and the account go with the limit standing; judge the
+        limit by repquota even where the agent's own account holds the
+        number, and the rerun refuses its own limit."""
         box = self.box()
         with (box / "PURGE-LIST").open("a") as listed:
             listed.write("quota 2001 /state drive\n")
         stand_in = box / "model" / "setquota"
         stand_in.write_text('#!/bin/sh\necho "setquota $*" >> "$MODEL/calls"\n[ ! -e "$MODEL/setquota-fails" ]\n')
         stand_in.chmod(0o755)
+        (box / "model" / "quotas.csv").write_text("#2001,--,--,8,0,1048576,0,2,0,65536,0\n")
         (box / "model" / "setquota-fails").touch()
         ran = self.run_purge(box)
         self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
         self.assertIn("home quota of project 2001 on /state drive: its limit was not removed", ran.stdout)
+        self.assertIn("a home quota's limit above was not removed, so nothing more is removed", ran.stderr)
         self.assertIn("root's record is kept", ran.stderr)
         self.assertTrue(self.record(box).exists())
+        self.assertTrue((box / "var/lib/weaver-agent/weaver-a").exists(), "the territory stands")
+        self.assertIn("weaver-a:x:2001:", (box / "model/passwd").read_text(), "the account stands")
         (box / "model" / "setquota-fails").unlink()
         again = self.run_purge(box)
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
@@ -8531,6 +8583,68 @@ class PurgeRecordTests(unittest.TestCase):
         self.assert_purged(box)
         calls = [c for c in (box / "model" / "calls").read_text().splitlines() if c.startswith("setquota ")]
         self.assertEqual(calls, ["setquota -P 2001 0 0 0 0 /state drive"] * 2)
+
+    def test_a_rerun_never_replays_a_limit_another_may_hold(self):
+        """**CodeRabbit on #582, the Planner's ruling of 2026-11-17**: a first
+        run removes a home quota's limit and the agent's account, then stops
+        with root's record kept. Before the rerun replays the removal, a
+        project number that now names an account this purge did not judge (a
+        newcomer given the reused uid), a project repquota shows in use with
+        no account holding the number (a limit set by hand), or quotas that
+        cannot be read refuse the rerun before anything goes, and the limit
+        stands. With the number free and the project shown with no limit, its
+        usage the agent's own leftovers (the folder's mark, a home a failed
+        removal left), the rerun replays the removal, which changes nothing,
+        and finishes. Perturbations: take any account at the number for the
+        agent's, drop the repquota test, answer an unreadable repquota as
+        free, or drop the quota case, and the newcomer's or the hand-set
+        limit is set to none; count usage as a limit, and the rerun refuses
+        the agent's own leftovers."""
+        header = "Project,BlockStatus,FileStatus,BlockUsed,BlockSoft,BlockHard,BlockGrace,FileUsed,FileSoft,FileHard,FileGrace\n"
+        for case in ("newcomer", "by hand", "unreadable", "used, unlimited"):
+            with self.subTest(case=case):
+                box = self.box()
+                with (box / "PURGE-LIST").open("a") as listed:
+                    listed.write("quota 2001 /state drive\n")
+                stand_in = box / "model" / "setquota"
+                stand_in.write_text('#!/bin/sh\necho "setquota $*" >> "$MODEL/calls"\n')
+                stand_in.chmod(0o755)
+                # The first run removes the limit and every account, and a
+                # path that will not go keeps the record.
+                ran = self.run_purge(box, failing="rm")
+                self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+                self.assertIn("set the home quota of project 2001 on /state drive to none", ran.stdout)
+                self.assertIn("root's record is kept", ran.stderr)
+                passwd = box / "model" / "passwd"
+                self.assertNotIn("weaver-a:", passwd.read_text())
+                quotas = box / "model" / "quotas.csv"
+                expect = None
+                if case == "newcomer":
+                    passwd.write_text(passwd.read_text() + "weaver-b:x:2001:2001::/nonexistent:/bin/false\n")
+                    quotas.write_text(header + "#2001,--,--,8,0,1048576,0,2,0,65536,0\n")
+                    expect = ("the limit of project 2001 on /state drive, whose number now names the account "
+                              "weaver-b, which this purge did not judge")
+                elif case == "by hand":
+                    quotas.write_text(header + "#2001,--,--,0,0,1048576,0,0,0,65536,0\n")
+                    expect = ("the limit of project 2001 on /state drive, which repquota shows limited "
+                              "(#2001,--,--,0,0,1048576,0,0,0,65536,0) while no account this purge judged holds "
+                              "the number, so it may be another's")
+                elif case == "unreadable":
+                    (box / "model" / "repquota-fails").touch()
+                    expect = "the limit of project 2001 on /state drive, whose quotas cannot be read (repquota)"
+                else:
+                    quotas.write_text(header + "#2001,--,--,8,0,0,0,2,0,0,0\n")
+                again = self.run_purge(box)
+                calls = [c for c in (box / "model" / "calls").read_text().splitlines() if c.startswith("setquota ")]
+                if expect:
+                    self.assertEqual(again.returncode, 1, again.stdout + again.stderr)
+                    self.assertIn(expect, again.stderr)
+                    self.assertEqual(calls, ["setquota -P 2001 0 0 0 0 /state drive"], "the rerun sets no limit")
+                    self.assertTrue(self.record(box).exists())
+                else:
+                    self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+                    self.assertEqual(calls, ["setquota -P 2001 0 0 0 0 /state drive"] * 2)
+                    self.assert_purged(box)
 
     def test_an_empty_prefix_that_will_not_go_keeps_the_record_and_refuses(self):
         """Codex on #159, round 2: a failure on the left of `&&` is exempt
@@ -8894,6 +9008,8 @@ class RoundOneOf79Tests(unittest.TestCase):
                 ["bash", "-c", "SUDO_RULES=(); LDSO_CONFS=(); OWN_TERRITORIES=(); HOMES=(); TMP_PATHS=()\n"
                  "WEAVER_USERS=(); WEAVER_GROUPS=(); declare -A PREFIXES=() LOG_PATHS=() COORD_ROOTS=() AGENTS=()\n"
                  f"declare -A TERRITORY_BASES=([{shlex.quote(str(base))}]=1)\nAGENT_FOLDERS=({shlex.quote(str(base / 'm1'))})\n"
+                 "LEGACY_DIR=/nonexistent/weaver\n"
+                 + shell_function(script, "spans_a_base") + shell_function(script, "candidate")
                  + shell_function(script, "purge_candidates") + "purge_candidates"],
                 text=True, capture_output=True, timeout=20)
             self.assertEqual(candidates.returncode, 0, candidates.stderr)
@@ -8908,7 +9024,137 @@ class RoundOneOf79Tests(unittest.TestCase):
             self.assertEqual(self.run_fn_in(script, "home_within", str(folder / "home"), str(folder)), str(folder))
             self.assertEqual(self.run_fn_in(script, "home_within", str(elsewhere), str(folder)), "")
         self.assertIn('*) plan "$h  (home of $u): outside /home and every agent\'s folder, left in place, untouched" ;;', script)
-        self.assertIn('done < <(left_in_base "$d" "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}" "${HOMES[@]}")', script)
+        self.assertIn('done < <(left_in_base "$d" "${TERRITORY_PATHS[@]}" "${HOMES[@]}")', script)
+
+    def test_no_base_and_no_path_above_one_is_archived_or_purged_whole(self):
+        # **CodeRabbit on #582, the Planner's ruling of 2026-11-17**: a base,
+        # or a path above a base or an agent's own folder, is never archived
+        # as a path or listed for the purge, whatever fixed name it carries:
+        # `/var/lib/weaver` where the stack record names it the
+        # agent-directory, a log directory that is the base, or one above a
+        # root's own territory. The archive and the purge's derivation both
+        # drop it, so a list written before the drop refuses at the purge,
+        # and the purge takes the agent's folder and leaves the stranger's
+        # file in the base. Perturbations: drop the guard from the
+        # derivation's candidate, or list the legacy directory past it, and
+        # the stranger's file goes; drop it from archive_path, and the base
+        # is archived and listed; compare equal paths alone, or leave out the
+        # agents' own folders, and a path above one is a candidate; list a
+        # run directory past it in the archive's writer, and the sweep below
+        # fails. The operator's home, and a path above it, is never a
+        # candidate either, and a legacy directory inside a base, which it
+        # does not span, is taken and named as taken, never as left: drop the
+        # home's check, or keep a taken directory out of the plan's taken
+        # paths, and a read below fails.
+        script = (DEPLOY / "decommission.sh").read_text()
+        lines = script.splitlines()
+        start = lines.index("  archive_path() { # archive_path NAME PATH...")
+        archive_path = "\n".join(lines[start:next(i for i in range(start, len(lines)) if lines[i] == "  }") + 1])
+        paths_phase = script[script.index('say "paths"\n'):script.index('say "accounts"\n')]
+        q = shlex.quote
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            base = top / "var-lib-weaver"
+            (base / "m1" / "weaver-m1").mkdir(parents=True)
+            (base / "stranger.txt").write_text("not the agent's\n")
+            (top / "legacy" / "agents").mkdir(parents=True)
+            (top / "elsewhere" / "weaver-x").mkdir(parents=True)
+            (top / "old").mkdir()
+            (top / "dest").mkdir()
+            (top / "users" / "op").mkdir(parents=True)
+            (top / "varlib" / "weaver").mkdir(parents=True)
+            (top / "varlib" / "m2" / "weaver-m2").mkdir(parents=True)
+
+            def run(legacy, bases, folders=(), own=(), logs=(), tail="purge_candidates\n", op_home=""):
+                program = ("set -uo pipefail\n"
+                           "SUDO_RULES=(); LDSO_CONFS=(); HOMES=(); TMP_PATHS=(); WEAVER_USERS=(); WEAVER_GROUPS=()\n"
+                           "HOME_QUOTAS=(); PURGE=(); PURGE_FAILED=0\n"
+                           "declare -A PREFIXES=() COORD_ROOTS=() AGENTS=() LOG_PATHS=() TERRITORY_BASES=()\n"
+                           f"LEGACY_DIR={q(str(legacy))}\nDEST={q(str(top / 'dest'))}\nOP_HOME={q(str(op_home))}\n"
+                           "TERRITORY_PATHS=()\n"
+                           + "".join(f"TERRITORY_BASES[{q(str(b))}]=1\n" for b in bases)
+                           + "".join(f"LOG_PATHS[{q(str(d))}]=1\n" for d in logs)
+                           + "AGENT_FOLDERS=(" + " ".join(q(str(f)) for f in folders) + ")\n"
+                           + "OWN_TERRITORIES=(" + " ".join(q(str(o)) for o in own) + ")\n"
+                           + "say() { :; }\nplan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                           + "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\nheld_is() { return 0; }\n"
+                           + "free_name() { printf '%s' \"$1\"; }\ntarz() { : > \"$1\"; }\nas_op() { \"$@\"; }\n"
+                           + shell_function(script, "spans_a_base") + shell_function(script, "candidate")
+                           + shell_function(script, "purge_candidates") + shell_function(script, "purge_lines_outside")
+                           + shell_function(script, "purge_lines_within") + shell_function(script, "left_in_base")
+                           + archive_path + "\n" + tail)
+                ran = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+                self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                return ran.stdout.splitlines()
+
+            # A list written before the drop names the base and the agent's
+            # folder. The purge's judgment names the base as what it would not
+            # find, so that purge refuses, and the paths phase, acting only on
+            # the lines the derivation holds, takes the folder and leaves the
+            # stranger's file and the base. A list the archive writes now
+            # names the folder alone, and nothing of it is outside.
+            old_list, new_list = top / "old-list", top / "new-list"
+            old_list.write_text(f"path {base}\npath {base / 'm1'}\n")
+            new_list.write_text(f"path {base / 'm1'}\n")
+            got = run(base, [base], folders=[base / "m1"],
+                      tail=(f"purge_lines_outside {q(str(old_list))} | sed 's/^/OUTSIDE /'\n"
+                            f"[ -z \"$(purge_lines_outside {q(str(new_list))})\" ] || echo 'OUTSIDE new'\n"
+                            f"PURGE_ACTED=$(mktemp)\npurge_lines_within {q(str(old_list))} > \"$PURGE_ACTED\"\n"
+                            + paths_phase + 'rm -f -- "$PURGE_ACTED"\n'))
+            self.assertEqual((base / "stranger.txt").read_text(), "not the agent's\n")
+            self.assertIn(f"PLAN removed {base / 'm1'}", got)
+            self.assertFalse((base / "m1").exists())
+            self.assertEqual([g for g in got if g.startswith("OUTSIDE ")], [f"OUTSIDE path {base}"])
+            (base / "m1" / "weaver-m1").mkdir(parents=True)
+            # The record names the legacy directory as its base, and a log
+            # directory is the base: the agent's folder is a candidate, the
+            # base is not.
+            got = run(base, [base], folders=[base / "m1"], logs=[base])
+            self.assertIn(f"path {base / 'm1'}", got)
+            self.assertNotIn(f"path {base}", got)
+            # A legacy directory above a base, and a log directory above a
+            # root's own territory, are no candidates; the territory is.
+            got = run(top / "legacy", [top / "legacy" / "agents"], own=[top / "elsewhere" / "weaver-x"],
+                      logs=[top / "elsewhere"])
+            self.assertNotIn(f"path {top / 'legacy'}", got)
+            self.assertNotIn(f"path {top / 'elsewhere'}", got)
+            self.assertIn(f"path {top / 'elsewhere' / 'weaver-x'}", got)
+            # Control: a legacy directory that spans no base is taken whole.
+            self.assertIn(f"path {top / 'old'}", run(top / "old", [base], folders=[base / "m1"]))
+            # A log directory that is the operator's home, or above it, is no
+            # candidate, whatever base it holds or does not.
+            got = run(top / "old", [base], folders=[base / "m1"], logs=[top / "users", top / "users" / "op"],
+                      op_home=top / "users" / "op")
+            self.assertNotIn(f"path {top / 'users'}", got)
+            self.assertNotIn(f"path {top / 'users' / 'op'}", got)
+            # A legacy directory inside a base, which it does not span, is
+            # taken, and the plan names it as taken, never as left in the base.
+            plan_loop = script[script.index('for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do'):]
+            plan_loop = plan_loop[:plan_loop.index("\ndone\n") + len("\ndone\n")]
+            varlib = top / "varlib"
+            got = run(varlib / "weaver", [varlib], folders=[varlib / "m2"],
+                      tail=('TERRITORY_PATHS=("${AGENT_FOLDERS[@]}")\n' + plan_loop
+                            + 'left_in_base "$(realpath -e -- "${!TERRITORY_BASES[@]}")" "${TERRITORY_PATHS[@]}" '
+                              '| sed "s/^/LEFT /"\n'))
+            self.assertTrue(any(g.startswith(f"PLAN {varlib / 'weaver'}  ") for g in got), got)
+            self.assertNotIn(f"LEFT {varlib / 'weaver'}", got)
+            self.assertNotIn(f"LEFT {varlib / 'm2'}", got)
+            self.assertIn(f"path {varlib / 'weaver'}", run(varlib / "weaver", [varlib], folders=[varlib / "m2"]))
+            # The archive lists the agent's folder and says the base is left.
+            got = run(base, [base], folders=[base / "m1"], logs=[base],
+                      tail=('archive_path var-lib-weaver "$LEGACY_DIR"\n'
+                            'for d in "${!LOG_PATHS[@]}"; do archive_path log "$d"; done\n'
+                            'archive_path agent "${AGENT_FOLDERS[0]}"\nprintf "LISTED %s\\n" "${PURGE[@]}"\n'))
+            self.assertEqual([g for g in got if g.startswith("LISTED ")], [f"LISTED {base / 'm1'}"])
+            self.assertIn(f"PLAN {base}: a base, or above a base or an agent's folder, so it is not archived whole "
+                          "or listed for the purge", got)
+        # Every purge line the derivation and the archive's list write runs
+        # through the one guard, beside the paths archive_path kept.
+        self.assertNotIn('echo "path', shell_function(script, "purge_candidates"))
+        writer = script[script.index("# What --purge may touch, and nothing else."):
+                        script.index('} | to_file "$DEST/PURGE-LIST"')]
+        self.assertEqual([w.strip() for w in writer.splitlines() if '"path ' in w],
+                         ['for pth in "${PURGE[@]}"; do echo "path $pth"; done'])
 
     def test_each_capped_homes_limit_goes_before_its_folder(self):
         # **#585**: discovery takes each home's project from its account's uid
@@ -8925,8 +9171,8 @@ class RoundOneOf79Tests(unittest.TestCase):
         # another agent's uid until #587 lands, so a home moved to m1's project
         # has only its own account's limit removed, and the plan names the
         # move. The purge sets each project's limit to none before the paths
-        # go, and a limit left standing (setquota failing, or absent) fails the
-        # purge's close. Perturbations: read the project off the home, follow a
+        # go, and a limit left standing (setquota failing, or absent) stops the
+        # purge there (CodeRabbit on #582). Perturbations: read the project off the home, follow a
         # linked home, skip the prjquota check, drop the failure's return, or
         # move the step after the paths, and a read below fails.
         script = (DEPLOY / "decommission.sh").read_text()
@@ -9015,7 +9261,8 @@ class RoundOneOf79Tests(unittest.TestCase):
         step = script[script.index('say "home quotas"'):script.index('say "paths"')]
         self.assertIn('  case $line in "quota "*) PURGE_QUOTAS+=("${line#quota }") ;; esac\n'
                       'done < "$PURGE_ACTED"\n'
-                      'remove_home_quotas "${PURGE_QUOTAS[@]}" || PURGE_FAILED=1\n', step)
+                      'remove_home_quotas "${PURGE_QUOTAS[@]}" \\\n'
+                      '  || die "a home quota\'s limit above was not removed, so nothing more is removed', step)
 
     def test_a_home_quota_is_a_purge_list_line(self):
         # **#585, the self-check's findings 1 and 4**: each capped home's limit
@@ -9028,7 +9275,8 @@ class RoundOneOf79Tests(unittest.TestCase):
         # line, drop the archive's line, or drop the pass-over, and a read
         # below fails.
         script = (DEPLOY / "decommission.sh").read_text()
-        fns = "".join(shell_function(script, n) for n in ("purge_candidates", "purge_lines_outside", "purge_lines_within"))
+        fns = "".join(shell_function(script, n) for n in ("spans_a_base", "candidate", "purge_candidates",
+                                                          "purge_lines_outside", "purge_lines_within"))
         with tempfile.TemporaryDirectory() as scratch:
             listed = Path(scratch) / "PURGE-LIST"
             listed.write_text("quota 12345 /state drive\nquota 999 /gone\n")

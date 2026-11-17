@@ -171,10 +171,10 @@ into the operator's tooling are all conforming sinks, and the program treats the
 alike: it writes the stream and holds no opinion about what stands behind the
 handle. Whatever its kind, the sink stands in the agent's territory, and only a file
 sink is served through the trace door. The mechanism is the Spec's. **The declaration itself lives in the agent's
-territory**, `/var/lib/weaver-agent/<agent>/weaver-<agent>/agent.toml` by default,
-root's, on the operator's ruling of 2026-10-07 on #1: the operator edits it with
-`sudoedit`, the connector reads it through the access group and never writes it, and
-admin reads it through the territory's descriptor, per `weaver-admin-Spec` section 9.
+territory**, root's, on the operator's ruling of 2026-10-07 on #1: the operator writes
+it, the connector reads it and never writes it, and admin reads it only as part of the
+territory it has judged. Its path, how the operator edits it and how each party reaches
+it are `weaver-admin-Spec` section 9's.
 
 **Custody survives the ruling and survives the recut.** The agent principal does not
 reach
