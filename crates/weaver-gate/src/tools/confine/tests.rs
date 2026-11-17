@@ -79,6 +79,39 @@ impl Drop for Layout {
     }
 }
 
+/// A filter test's scratch home, removed when the test ends, a failed
+/// assertion included.
+struct ScratchHome(PathBuf);
+
+impl ScratchHome {
+    fn new(tag: &str) -> ScratchHome {
+        let home =
+            std::env::temp_dir().join(format!("weaver-confine-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&home).unwrap();
+        ScratchHome(home)
+    }
+
+    /// The confinement on this home, granting nothing the probes run: the
+    /// test binary as the grant's file, the home as its commands directory.
+    fn shell(&self) -> Shell {
+        Shell::confined_in(
+            &ShellGrant {
+                binary: std::env::current_exe().unwrap(),
+                commands: self.0.clone(),
+            },
+            self.0.clone(),
+            own(),
+        )
+        .expect("the confinement builds")
+    }
+}
+
+impl Drop for ScratchHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Runs `script` as an execution's child would, without the move into
 /// `tools/`: the command, its layers, no input. A spawn that meets
 /// `ETXTBSY` (a parallel test's fork holding a fresh copy open for write) is
@@ -150,28 +183,19 @@ fn the_rlimits_are_the_ruled_values() {
     assert_eq!(SHELL_RLIMIT_CORE, 0);
 }
 
-/// **The layers' socket filter refuses every socket, and the control opens
+/// **The layers' seccomp filter refuses every socket, and the control opens
 /// them** (section 8.1's sockets row, as M9): a child applies [`apply`] on a
 /// ruleset granting nothing and tries `socket` for inet TCP and UDP and
 /// `AF_UNIX`, `socketpair`, and `io_uring_setup`. With no-new-privs alone,
 /// the same calls succeed.
 ///
-/// Perturbation: take `SYS_socket` out of [`SOCKET_FILTER`] and the inet
+/// Perturbation: take `SYS_socket` out of [`SHELL_FILTER`] and the inet
 /// and unix sockets open.
 #[test]
 #[ignore = "a measurement of this box's kernel: needs Landlock ABI 6 and io_uring"]
 fn the_filter_refuses_every_socket() {
-    let home = std::env::temp_dir().join(format!("weaver-confine-sockets-{}", std::process::id()));
-    std::fs::create_dir_all(&home).unwrap();
-    let empty = Shell::confined_in(
-        &ShellGrant {
-            binary: std::env::current_exe().unwrap(),
-            commands: home.clone(),
-        },
-        home.clone(),
-        own(),
-    )
-    .expect("the confinement builds");
+    let home = ScratchHome::new("sockets");
+    let empty = home.shell();
     let ruleset = empty.layers.as_ref().unwrap().ruleset.as_raw_fd();
     let filtered = socket_probe(Some(ruleset));
     assert_eq!(
@@ -183,7 +207,6 @@ fn the_filter_refuses_every_socket() {
         control, 0b11111,
         "every kind opens with no-new-privs alone: {control:#b}"
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// A bit per kind that opened: inet TCP, inet UDP, unix stream, a unix
@@ -194,7 +217,7 @@ fn socket_probe(ruleset: Option<RawFd>) -> u8 {
     match unsafe { nix::unistd::fork() }.unwrap() {
         nix::unistd::ForkResult::Child => unsafe {
             let applied = match ruleset {
-                Some(ruleset) => apply(ruleset, SOCKET_FILTER.as_ptr() as usize).is_ok(),
+                Some(ruleset) => apply(ruleset, SHELL_FILTER.as_ptr() as usize).is_ok(),
                 None => libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0,
             };
             if !applied {
@@ -235,6 +258,268 @@ fn socket_probe(ruleset: Option<RawFd>) -> u8 {
             let mut byte = [0u8; 1];
             assert_eq!(nix::unistd::read(&read, &mut byte).unwrap(), 1);
             byte[0]
+        }
+    }
+}
+
+// ------------------------------------------------------------ the file attributes
+
+/// The filter's verdict on one call, by [`SHELL_FILTER`]'s own instructions
+/// run over a `seccomp_data` as the kernel runs them: `nr`, `arch`, the
+/// instruction pointer and six arguments, little-endian, `args[1]` at 24.
+fn verdict(arch: u32, nr: u32, arg1: u64) -> u32 {
+    let mut data = [0u8; 64];
+    data[0..4].copy_from_slice(&nr.to_le_bytes());
+    data[4..8].copy_from_slice(&arch.to_le_bytes());
+    data[24..32].copy_from_slice(&arg1.to_le_bytes());
+    let mut accumulator = 0u32;
+    let mut next = 0usize;
+    loop {
+        let SockFilter { code, jt, jf, k } = SHELL_FILTER[next];
+        next += 1;
+        match code {
+            BPF_LD_W_ABS => {
+                let at = k as usize;
+                accumulator = u32::from_le_bytes(data[at..at + 4].try_into().unwrap());
+            }
+            BPF_JEQ_K => next += usize::from(if accumulator == k { jt } else { jf }),
+            BPF_JGE_K => next += usize::from(if accumulator >= k { jt } else { jf }),
+            BPF_RET_K => return k,
+            other => panic!("an instruction this reader does not know: {other:#x}"),
+        }
+    }
+}
+
+/// **The numbers the filter compares are the headers'**: `FS_IOC_FSSETXATTR`
+/// and the two `FS_IOC_SETFLAGS` from `linux/fs.h`, `file_setattr` from
+/// `asm/unistd_64.h`.
+#[test]
+fn the_attribute_numbers_are_the_headers() {
+    assert_eq!(FS_IOC_FSSETXATTR, 0x401C_5820);
+    assert_eq!(FS_IOC_SETFLAGS, 0x4008_6602);
+    assert_eq!(FS_IOC32_SETFLAGS, 0x4004_6602);
+    assert_eq!(SYS_FILE_SETATTR, 469);
+}
+
+/// **The program decides each call as section 8.1 states**, read by the
+/// program's own instructions, so a jump offset that lands one instruction
+/// off fails here without a kernel: another architecture, an x32 call,
+/// `io_uring_setup`, the two socket calls, `file_setattr` and the three
+/// attribute commands are refused `EACCES`, a command with its high word set
+/// among them, and a read, `file_getattr`, the attribute reads, a terminal
+/// `ioctl` and a non-`ioctl` call carrying a refused command as its second
+/// argument are allowed.
+///
+/// Perturbation: shift any refusal's jump by one, or compare the command's
+/// high word as well, and a case here turns.
+#[test]
+fn the_filter_decides_each_call_as_section_8_1_states() {
+    const X86_64: u32 = AUDIT_ARCH_X86_64;
+    const I386: u32 = 0x4000_0003;
+    let ioctl = libc::SYS_ioctl as u32;
+    let refused: [(&str, u32, u32, u64); 11] = [
+        ("another architecture", I386, 20, 0),
+        (
+            "an x32 call",
+            X86_64,
+            X32_SYSCALL_BIT | libc::SYS_getpid as u32,
+            0,
+        ),
+        ("io_uring_setup", X86_64, libc::SYS_io_uring_setup as u32, 0),
+        ("socket", X86_64, libc::SYS_socket as u32, 0),
+        ("socketpair", X86_64, libc::SYS_socketpair as u32, 0),
+        ("file_setattr", X86_64, 469, 0),
+        ("FS_IOC_FSSETXATTR", X86_64, ioctl, 0x401C_5820),
+        ("FS_IOC_SETFLAGS", X86_64, ioctl, 0x4008_6602),
+        ("FS_IOC32_SETFLAGS", X86_64, ioctl, 0x4004_6602),
+        (
+            "FS_IOC_SETFLAGS with bit 32 set",
+            X86_64,
+            ioctl,
+            1 << 32 | 0x4008_6602,
+        ),
+        (
+            "FS_IOC_FSSETXATTR with every high bit set",
+            X86_64,
+            ioctl,
+            0xFFFF_FFFF_401C_5820,
+        ),
+    ];
+    for (what, arch, nr, arg1) in refused {
+        assert_eq!(verdict(arch, nr, arg1), DENY, "{what} is refused EACCES");
+    }
+    let allowed: [(&str, u32, u64); 7] = [
+        ("read", libc::SYS_read as u32, 0),
+        ("file_getattr", 468, 0),
+        ("FS_IOC_GETFLAGS", ioctl, 0x8008_6601),
+        ("FS_IOC_FSGETXATTR", ioctl, 0x801C_581F),
+        ("TCGETS", ioctl, 0x5401),
+        (
+            "a command whose high word alone is FS_IOC_SETFLAGS",
+            ioctl,
+            0x4008_6602 << 32,
+        ),
+        (
+            "write carrying FS_IOC_SETFLAGS as its second argument",
+            libc::SYS_write as u32,
+            0x4008_6602,
+        ),
+    ];
+    for (what, nr, arg1) in allowed {
+        assert_eq!(
+            verdict(X86_64, nr, arg1),
+            SECCOMP_RET_ALLOW,
+            "{what} is allowed"
+        );
+    }
+}
+
+/// The calls [`attribute_probe`] makes, in its order: two reads, then each
+/// write back of what they read.
+const ATTRIBUTE_CALLS: [&str; 7] = [
+    "FS_IOC_FSGETXATTR",
+    "FS_IOC_GETFLAGS",
+    "FS_IOC_FSSETXATTR",
+    "FS_IOC_SETFLAGS",
+    "FS_IOC32_SETFLAGS",
+    "file_setattr",
+    "FS_IOC_SETFLAGS with bit 32 of the command set",
+];
+
+/// **The layers' seccomp filter refuses every change of a file's attributes,
+/// and the control's answers are the kernel's** (section 8.1's file
+/// attributes row, #587): a child holding a file it made in its home applies
+/// [`apply`] on a ruleset granting that home, reads the file's attributes by
+/// `FS_IOC_FSGETXATTR` and `FS_IOC_GETFLAGS`, then writes them back unchanged
+/// by `FS_IOC_FSSETXATTR`, `FS_IOC_SETFLAGS`, `FS_IOC32_SETFLAGS`,
+/// `file_setattr` (after `file_getattr`), and `FS_IOC_SETFLAGS` with bit 32 of
+/// the command set. Under the layers each write answers `EACCES`, and each
+/// read answers as it does without them. With no-new-privs alone no call
+/// answers `EACCES`: each answers what the home's filesystem does (success
+/// where it keeps the attribute, `EOPNOTSUPP` or `ENOTTY` where it does not,
+/// `ENOSYS` for `file_setattr` on a kernel without it), measured on tmpfs and
+/// zfs, so the claim holds wherever the home sits. A box whose security module
+/// denies the `ioctl` answers `EACCES` in the control too, and fails here by
+/// name: the shell's layers use no such module.
+///
+/// Perturbation: take each comparison out of [`SHELL_FILTER`] in turn, and its
+/// case answers the kernel's word. Require the command's high word to be zero
+/// before comparing it, and the bit-32 case does.
+#[test]
+#[ignore = "a measurement of this box's kernel: needs Landlock ABI 6"]
+fn the_filter_refuses_every_attribute_change() {
+    let home = ScratchHome::new("attributes");
+    let confined = home.shell();
+    let ruleset = confined.layers.as_ref().unwrap().ruleset.as_raw_fd();
+    let filtered = attribute_probe(&home.0, Some(ruleset));
+    let control = attribute_probe(&home.0, None);
+    for (at, what) in ATTRIBUTE_CALLS.iter().enumerate() {
+        if at < 2 {
+            assert_eq!(
+                filtered[at], control[at],
+                "{what} reads under the layers as without them"
+            );
+        } else {
+            assert_eq!(
+                filtered[at],
+                -libc::EACCES,
+                "{what} is refused EACCES under the layers"
+            );
+        }
+        assert_ne!(
+            control[at],
+            -libc::EACCES,
+            "{what} with no-new-privs alone answers the kernel's word"
+        );
+    }
+}
+
+/// 0 or `-errno`, from a raw call's result.
+fn answered(result: libc::c_long) -> i32 {
+    if result < 0 {
+        -nix::errno::Errno::last_raw()
+    } else {
+        0
+    }
+}
+
+/// What each of [`ATTRIBUTE_CALLS`] answered, 0 or `-errno`, on a file in
+/// `home`, the child's layers applied where a ruleset is given and
+/// no-new-privs alone where none is.
+fn attribute_probe(home: &Path, ruleset: Option<RawFd>) -> [i32; 7] {
+    use std::io::Read;
+    let path = home.join("attributes");
+    std::fs::write(&path, b"x").unwrap();
+    let file = std::fs::File::open(&path).unwrap();
+    let fd = file.as_raw_fd();
+    let fs_ioc_fsgetxattr = libc::_IOR::<[u8; 28]>('X' as u32, 31);
+    let (read, write) = nix::unistd::pipe().unwrap();
+    // SAFETY: the child makes raw system calls only and exits.
+    match unsafe { nix::unistd::fork() }.unwrap() {
+        nix::unistd::ForkResult::Child => unsafe {
+            let applied = match ruleset {
+                Some(ruleset) => apply(ruleset, SHELL_FILTER.as_ptr() as usize).is_ok(),
+                None => libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0,
+            };
+            if !applied {
+                libc::_exit(2);
+            }
+            let mut fsx = [0u8; 28];
+            let mut flags: libc::c_long = 0;
+            let mut attr = [0u8; 24];
+            let mut out = [0i32; 7];
+            out[0] = answered(libc::ioctl(fd, fs_ioc_fsgetxattr, fsx.as_mut_ptr()).into());
+            out[1] = answered(libc::ioctl(fd, libc::FS_IOC_GETFLAGS, &mut flags).into());
+            let flags32 = flags as libc::c_int;
+            out[2] =
+                answered(libc::ioctl(fd, FS_IOC_FSSETXATTR as libc::Ioctl, fsx.as_ptr()).into());
+            out[3] = answered(libc::ioctl(fd, libc::FS_IOC_SETFLAGS, &flags).into());
+            out[4] = answered(libc::ioctl(fd, libc::FS_IOC32_SETFLAGS, &flags32).into());
+            libc::syscall(
+                468,
+                fd,
+                c"".as_ptr(),
+                attr.as_mut_ptr(),
+                24usize,
+                libc::AT_EMPTY_PATH,
+            );
+            out[5] = answered(libc::syscall(
+                469,
+                fd,
+                c"".as_ptr(),
+                attr.as_ptr(),
+                24usize,
+                libc::AT_EMPTY_PATH,
+            ));
+            out[6] = answered(libc::syscall(
+                libc::SYS_ioctl,
+                fd,
+                1u64 << 32 | libc::FS_IOC_SETFLAGS,
+                &flags,
+            ));
+            let mut bytes = [0u8; 28];
+            for (at, value) in out.iter().enumerate() {
+                bytes[at * 4..at * 4 + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            libc::write(write.as_raw_fd(), bytes.as_ptr().cast(), bytes.len());
+            libc::_exit(0);
+        },
+        nix::unistd::ForkResult::Parent { child } => {
+            drop(write);
+            let status = nix::sys::wait::waitpid(child, None).unwrap();
+            assert_eq!(
+                status,
+                nix::sys::wait::WaitStatus::Exited(child, 0),
+                "the probe applied its layers"
+            );
+            let mut bytes = [0u8; 28];
+            std::fs::File::from(read).read_exact(&mut bytes).unwrap();
+            drop(file);
+            let mut out = [0i32; 7];
+            for (at, value) in out.iter_mut().enumerate() {
+                *value = i32::from_le_bytes(bytes[at * 4..at * 4 + 4].try_into().unwrap());
+            }
+            out
         }
     }
 }
@@ -440,7 +725,7 @@ fn architecture_probe(ruleset: Option<RawFd>) -> (i64, i64) {
     match unsafe { nix::unistd::fork() }.unwrap() {
         nix::unistd::ForkResult::Child => unsafe {
             let applied = match ruleset {
-                Some(ruleset) => apply(ruleset, SOCKET_FILTER.as_ptr() as usize).is_ok(),
+                Some(ruleset) => apply(ruleset, SHELL_FILTER.as_ptr() as usize).is_ok(),
                 None => libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0,
             };
             if !applied {
@@ -499,17 +784,8 @@ fn architecture_probe(ruleset: Option<RawFd>) -> (i64, i64) {
 #[test]
 #[ignore = "a measurement of this box's kernel: needs Landlock ABI 6"]
 fn the_filter_refuses_x32_and_another_architecture() {
-    let home = std::env::temp_dir().join(format!("weaver-confine-arch-{}", std::process::id()));
-    std::fs::create_dir_all(&home).unwrap();
-    let shell = Shell::confined_in(
-        &ShellGrant {
-            binary: std::env::current_exe().unwrap(),
-            commands: home.clone(),
-        },
-        home.clone(),
-        own(),
-    )
-    .expect("the confinement builds");
+    let home = ScratchHome::new("arch");
+    let shell = home.shell();
     let ruleset = shell.layers.as_ref().unwrap().ruleset.as_raw_fd();
     let eacces = -(libc::EACCES as i64);
     let (x32, i386) = architecture_probe(Some(ruleset));
@@ -525,7 +801,6 @@ fn the_filter_refuses_x32_and_another_architecture() {
         i386, eacces,
         "the control: the kernel's own i386 answer, {i386}"
     );
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// **The home must be the gate's own directory below `/`** (the grade of

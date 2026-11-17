@@ -146,7 +146,7 @@ impl Ruleset {
     }
 
     /// [`Ruleset::run`] with a seccomp filter loaded first where one is given,
-    /// as section 8.1's child loads its socket filter.
+    /// as section 8.1's child loads its seccomp filter.
     fn run_filtered(&self, command: &mut Command, filter: Option<&[SockFilter]>) -> Output {
         let ruleset = self.0.as_raw_fd();
         let prog = filter.map(|filter| SockFprog {
@@ -1023,13 +1023,14 @@ const fn op(code: u16, jt: u8, jf: u8, k: u32) -> SockFilter {
     SockFilter { code, jt, jf, k }
 }
 
-/// **The socket filter the shell applies**, loaded from production
-/// (`weaver_gate::tools::confine::socket_filter_instructions`, the grade of
+/// **The seccomp filter the shell applies**, loaded from production
+/// (`weaver_gate::tools::confine::shell_filter_instructions`, the grade of
 /// #176, F3): any architecture but x86-64 refused whole, every x32 system
-/// call refused, `io_uring_setup` refused, and `socket` and `socketpair`
-/// refused `EACCES` for every family. No copy stands here to drift.
-fn socket_filter() -> Vec<SockFilter> {
-    weaver_gate::tools::confine::socket_filter_instructions()
+/// call refused, `io_uring_setup` refused, `socket` and `socketpair` refused
+/// for every family, and the file attribute changes refused (#587), each
+/// `EACCES`. No copy stands here to drift.
+fn shell_filter() -> Vec<SockFilter> {
+    weaver_gate::tools::confine::shell_filter_instructions()
         .map(|(code, jt, jf, k)| op(code, jt, jf, k))
         .collect()
 }
@@ -1184,7 +1185,7 @@ fn socket_probe(filter: &[SockFilter]) -> String {
     }
 }
 
-/// **M9: the socket filter: no socket of any family.** Unfiltered, every
+/// **M9: the seccomp filter: no socket of any family.** Unfiltered, every
 /// kind opens (the box allows raw only to root, so `inet raw` is refused by
 /// DAC alone). Filtered, nothing opens: TCP, UDP, raw, netlink, MPTCP and SCTP
 /// on inet, `AF_UNIX` by `socket` and by `socketpair`, and `io_uring_setup`,
@@ -1199,7 +1200,7 @@ fn m9_the_socket_family_filter() {
     assert!(unfiltered.contains("inet tcp=open"), "{unfiltered}");
     assert!(unfiltered.contains("io_uring=open"), "{unfiltered}");
     assert!(unfiltered.contains("x32=ENOSYS"), "{unfiltered}");
-    let filtered = socket_probe(&socket_filter());
+    let filtered = socket_probe(&shell_filter());
     println!("M9 filtered: {filtered}");
     for kind in filtered.split(", ") {
         if kind.starts_with("x32=") {
@@ -1487,7 +1488,7 @@ impl ShellLayout {
         self.sh_filtered(rules, script, None)
     }
 
-    /// [`ShellLayout::sh`] with the child's socket filter loaded too.
+    /// [`ShellLayout::sh`] with the child's seccomp filter loaded too.
     fn sh_filtered(&self, rules: &Ruleset, script: &str, filter: Option<&[SockFilter]>) -> Output {
         rules.run_filtered(&mut self.sh_command(script), filter)
     }
@@ -1891,7 +1892,7 @@ fn m9c_pathname_sockets_and_the_shell_under_the_filter() {
     drop(listener);
     let _ = std::fs::remove_file(&path);
     let layout = ShellLayout::new("m9c", &APPLETS);
-    let filter = socket_filter();
+    let filter = shell_filter();
     let out = layout.sh_filtered(
         &layout.rules(true, true),
         "echo a b c | tr ' ' '\\n' | wc -l; ls /nonexistent 2>/dev/null; echo x > f && cat f",

@@ -20,6 +20,7 @@ import re
 import resource
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -36,14 +37,15 @@ ACCESS_LOOK = 'if [ "$1" "$2" ]; then printf yes; else printf no; fi'
 # root-mode tests route to the double. A scan holds the script to this list,
 # so a new root step cannot reach the real command in a root-mode test.
 ROOT_STEPS = ("useradd", "groupadd", "usermod", "install", "chown", "chgrp", "chmod", "tee", "cp", "mv", "rm",
-              "mktemp", "visudo", "chattr", "setquota", "repquota")
-# **The drop's clean start** (B3): the PATH as_account hands a command run as
-# another account, sudo's default secure_path, and the rule that tells a
-# leading VAR=value from the command, as both scripts and the double read it.
+              "mktemp", "visudo", "chattr", "setquota", "repquota", "find")
+# **The drop's clean start** (B3, #590): the PATH as_account hands a command
+# run as another account, sudo's default secure_path, and the rule that tells
+# a leading VAR=value from the command, as account-drop.sh and the double
+# read it.
 DROP_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 DROP_NAMED = r"^[A-Za-z_][A-Za-z0-9_]*="
 def look_as(account, flag, path):
-    return ["sudo", "-n", "-u", account, "env", "-i", "PATH=" + DROP_PATH, "timeout", "0", "setsid", "-w",
+    return ["sudo", "-n", "-u", account, "timeout", "0", "setsid", "-w", "env", "-i", "PATH=" + DROP_PATH,
             "sh", "-c", ACCESS_LOOK, "sh", flag, path]
 
 
@@ -59,6 +61,11 @@ def look_as(account, flag, path):
 BOX_PATH = os.environ.get("PATH", os.defpath)
 STAND_IN_NAMES = ("sudo", "runuser", "setsid", "env", "timeout")
 TEST_ROOT = os.path.realpath(tempfile.gettempdir())
+# **A stranger's uid is never the runner's** (Codex on #599): a stand-in that
+# answers a path the tests made as not root's answers this uid, held by no
+# fixture account, rather than the file's own owner, which is 0 when the suite
+# runs as root.
+STRANGER_UID = 54321
 STAND_IN_GUARD = Path(tempfile.mkdtemp(prefix="weaver-test-guard-"))
 atexit.register(shutil.rmtree, STAND_IN_GUARD, True)
 for _name in ("sudo", "runuser"):
@@ -107,14 +114,74 @@ def _runs_a_script(args):
                for a in argv)
 
 
+def _socket_input(stdin):
+    # The input a child starts with: the one named, else this process's own.
+    if stdin is None:
+        fd = 0
+    elif isinstance(stdin, int):
+        if stdin < 0:
+            return False  # PIPE, DEVNULL, STDOUT
+        fd = stdin
+    else:
+        try:
+            fd = stdin.fileno()
+        except (AttributeError, OSError, ValueError):
+            return False
+    try:
+        return stat.S_ISSOCK(os.fstat(fd).st_mode)
+    except OSError:
+        return False
+
+
+def guard_shell_files(stdin, env):
+    # **Nothing a shell reads after this guard may rewrite its PATH**: bash
+    # whose standard input is a socket reads ~/.bashrc, as one sshd started,
+    # and a non-interactive bash reads BASH_ENV, so either could put the box's
+    # sudo first after guard_path has read the PATH. A BASH_ENV a test writes
+    # lies under the tests' temporary root.
+    if _socket_input(stdin):
+        raise StandInGuardError("a test hands a shell or a deploy script a socket as its standard input, and bash "
+                                "then reads ~/.bashrc, which can rewrite the PATH this guard read: refused before "
+                                "it runs")
+    if env.get("BASH_ENV") and not _inside(env["BASH_ENV"]):
+        raise StandInGuardError(f"a test hands a shell or a deploy script BASH_ENV {env['BASH_ENV']}, outside "
+                                f"{TEST_ROOT}, which bash reads after this guard read the PATH: refused before it "
+                                "runs")
+
+
+FIXTURE_ENVIRON = "fixture-environ.json"
+
+
+def _hand_settings(env):
+    # **A drop clears the environment** (#590): as_account starts runuser and
+    # sudo under `env -i`, so a stand-in for either reads the run's settings
+    # from FIXTURE_ENVIRON beside it, written here for every directory of the
+    # run's PATH under the tests' temporary root that holds one. A test runs
+    # its scripts one at a time, so each run's file is its own.
+    for d in env.get("PATH", "").split(os.pathsep):
+        if d and _inside(d) and any(os.path.isfile(os.path.join(d, n)) for n in ("sudo", "runuser")):
+            with open(os.path.join(d, FIXTURE_ENVIRON), "w") as settings:
+                json.dump(dict(env), settings)
+
+
 class _GuardedPopen(_REAL_POPEN):
     def __init__(self, args, *rest, **kwargs):
+        # **A run that names no input reads /dev/null.** bash whose standard
+        # input is a socket reads ~/.bashrc as one sshd started, which can
+        # rewrite the PATH a test hands it, and the runner's own input may be
+        # one: a check of a PATH lacking runuser found the box's that way, now
+        # and then, until this.
+        if len(rest) < 3 and kwargs.get("stdin") is None:
+            kwargs["stdin"] = subprocess.DEVNULL
+        if kwargs.get("env") is not None:
+            _hand_settings(kwargs["env"])
         if _runs_a_script(args):
             env = kwargs.get("env")
             env = os.environ if env is None else env
             guard_path(env.get("PATH", os.defpath), "PATH")
             if "DROP_PATH" in env:
                 guard_path(env["DROP_PATH"], "DROP_PATH")
+            guard_shell_files(rest[2] if len(rest) > 2 else kwargs.get("stdin"), env)
             # A PATH an `env` wrapper hands on in the command line itself.
             for a in ([] if isinstance(args, (str, os.PathLike)) else args):
                 if str(a).startswith("PATH="):
@@ -124,21 +191,35 @@ class _GuardedPopen(_REAL_POPEN):
 
 subprocess.Popen = _GuardedPopen
 DOUBLE = r'''#!/usr/bin/env python3
-import json, os, pathlib, re, shutil, subprocess, sys, time
+import json, os, pathlib, re, shutil, stat, subprocess, sys, time
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
+# **A drop starts the double clean** (#590): as_account hands runuser and sudo
+# `env -i` with DROP_PATH alone, so the run's settings, which the suite writes
+# beside the double, come back here, PATH among them.
+if 'FIXTURE_ROOT' not in os.environ:
+    settings = pathlib.Path(sys.argv[0]).parent / '@FIXTURE_ENVIRON@'
+    if settings.exists(): os.environ.update(json.loads(settings.read_text()))
 root = pathlib.Path(os.environ['FIXTURE_ROOT'])
+def owner(path, st):
+    """uid 0 under the fixture, STRANGER_UID for any other path the tests
+    made, and the file's own owner elsewhere, so a stranger's file is never
+    read as root's when the suite runs as root (Codex on #599)."""
+    if path.is_relative_to(root): return 0
+    if path != pathlib.Path('@TEST_ROOT@') and path.is_relative_to('@TEST_ROOT@'): return @STRANGER_UID@
+    return st.st_uid
 if name == 'stat':
     # **The fixture's files are root's.** Every file the tests make is the
     # tester's, so the ownership `held_closed` judges is answered as uid 0
-    # for anything under the fixture and read from the file itself elsewhere;
-    # the mode is always the file's own. Not logged: it is a look, not a call.
+    # for anything under the fixture, STRANGER_UID for any other file the
+    # tests made, and read from the file itself elsewhere; the mode is always
+    # the file's own. Not logged: it is a look, not a call.
     if args[:1] == ['-c'] and args[1] == '%u %G %a':
         # The trace's look: root under the fixture, its group what the test
         # names, its mode the file's own.
         path = pathlib.Path(args[-1])
         st = os.lstat(path)
-        print(0 if path.is_relative_to(root) else st.st_uid, os.environ.get('TRACE_GROUP_AS', 'nobody-group'),
+        print(owner(path, st), os.environ.get('TRACE_GROUP_AS', 'nobody-group'),
               format(st.st_mode & 0o7777, 'o'))
         sys.exit(0)
     if args[:1] == ['-c'] and args[1] == '%u:%G:%a':
@@ -152,12 +233,12 @@ if name == 'stat':
         if str(path) in groups: group = groups[str(path)]
         elif path.name == 'save-points': group = path.parent.name + '-admin'
         else: group = path.name + '-state'
-        print(f"{0 if path.is_relative_to(root) else st.st_uid}:{group}:{format(st.st_mode & 0o7777, 'o')}")
+        print(f"{owner(path, st)}:{group}:{format(st.st_mode & 0o7777, 'o')}")
         sys.exit(0)
     if args[:1] == ['-c'] and args[1] == '%u %a':
         path = pathlib.Path(args[-1])
         st = os.lstat(path)
-        print(0 if path.is_relative_to(root) else st.st_uid, format(st.st_mode & 0o7777, 'o'))
+        print(owner(path, st), format(st.st_mode & 0o7777, 'o'))
         sys.exit(0)
     os.execv('/usr/bin/stat', ['stat', *args])
 if name == 'findmnt':
@@ -170,6 +251,11 @@ if name == 'findmnt':
 if name == 'mktemp' and args and '/weaver-deploy-messages-' in args[-1]:
     # The build's messages file, made as the scripts make it; not logged.
     os.execv('/usr/bin/mktemp', ['mktemp', *args])
+if (name == 'mktemp' and args or name == 'as-root' and args[:1] == ['mktemp']) and '/weaver-drop.' in args[-1]:
+    # **A drop's relays' directory** (#590), which account-drop.sh makes
+    # under TMPDIR in either mode, root mode's routing included: made as the
+    # helper makes it, and not logged, since it is no root step.
+    os.execv('/usr/bin/mktemp', ['mktemp', *args[args.index('mktemp') + 1:]] if name == 'as-root' else ['mktemp', *args])
 with open(os.environ['CALLS'], 'a') as log:
     log.write(json.dumps([name, *args]) + '\n')
 # **Root mode** (#576): a root step root runs directly reaches the double as
@@ -179,20 +265,27 @@ with open(os.environ['CALLS'], 'a') as log:
 if name == 'as-root':
     name = 'sudo'
 via_runuser = False
-# **Every drop as_account makes starts clean** (B3): runuser and sudo are
-# each handed `env -i PATH=<DROP_PATH>`, then the VAR=value pairs the script
-# names, by the scripts' own rule, and sudo then `timeout 0 setsid -w`. Each
-# is checked and set aside here, so the double answers the command the
-# account would run.
+# **Every drop as_account makes starts clean** (B3, #590): runuser is handed
+# `env -i PATH=<DROP_PATH>` and the VAR=value pairs the script names, by the
+# helper's own rule, and sudo the same after `timeout 0 setsid -w`, so the
+# account's env starts with no terminal. Each is checked and set aside here,
+# so the double answers the command the account would run.
 DROP_PATH = '@DROP_PATH@'
 DROP_NAMED = re.compile(r'@DROP_NAMED@')
-def clean_start(command, tail):
+with open('/proc/self/environ', 'rb') as _block:
+    STARTED_WITH = [item for item in _block.read().split(b'\0') if item]
+def clean_start(command, head):
+    # The drop's own block: runuser or sudo started under `env -i` with
+    # DROP_PATH alone (#590), read as it was handed, before the settings
+    # above came back.
+    assert STARTED_WITH == [b'PATH=' + DROP_PATH.encode()], ('a drop handed the caller\'s environment', STARTED_WITH)
+    assert command[:len(head)] == head, ('a drop without its session and its relay', command)
+    command = command[len(head):]
     want = ['env', '-i', 'PATH=' + DROP_PATH]
     assert command[:len(want)] == want, ('a drop that does not start clean', command)
     command = command[len(want):]
     while command and DROP_NAMED.match(command[0]): command = command[1:]
-    assert command[:len(tail)] == tail, ('a drop without its session and its relay', command)
-    return command[len(tail):]
+    return command
 if name == 'runuser':
     assert args[0] == '-u' and args[2] == '--', ('runuser as create-agent.sh calls it', args)
     name, args, via_runuser = 'sudo', ['-n', '-u', args[1], *clean_start(args[3:], [])], True
@@ -219,6 +312,53 @@ def privileged(paths, run):
         for d, mode in reversed(opened):
             try: os.chmod(d, mode)
             except OSError: pass
+
+# **chattr as ext4 answers it** (#600): flags and a project are set on a
+# regular file or a directory alone, and the project inherit flag, `+P`, on a
+# directory alone. Any other file, a link named outright among them, is
+# refused with EOPNOTSUPP in chattr's words, and the run goes on to the next
+# path and fails at the end, as chattr does. A path that does not stand fails
+# its stat. `-R` walks what a directory holds without following a link. What
+# each path takes is kept in ATTRS, the fixture's record of the drive's
+# attributes, by path: its project and whether it carries the inherit flag.
+ATTRS = root / 'attrs.json'
+def chattr_model(argv):
+    recursive, project, flags, paths, i = False, None, [], [], 0
+    while i < len(argv):
+        a = argv[i]
+        if a == '-R': recursive = True
+        elif a == '-p': project, i = argv[i + 1], i + 1
+        elif a[:1] in '+-=' and len(a) > 1 and a[1:].isalpha(): flags.append(a)
+        else: paths.append(a)
+        i += 1
+    attrs = json.loads(ATTRS.read_text()) if ATTRS.exists() else {}
+    failed = False
+    def one(path, named):
+        nonlocal failed
+        try: st = os.lstat(path)
+        except OSError as e:
+            print(f'chattr: {os.strerror(e.errno)} while trying to stat {path}', file=sys.stderr)
+            failed = True
+            return
+        if stat.S_ISLNK(st.st_mode) and not named: return
+        regular, directory = stat.S_ISREG(st.st_mode), stat.S_ISDIR(st.st_mode)
+        if not (regular or directory) or ('+P' in flags and not directory):
+            print(f'chattr: Operation not supported while setting {"flags" if flags else "project"} on {path}',
+                  file=sys.stderr)
+            failed = True
+            return
+        held = attrs.setdefault(path, {'project': 0, 'inherit': False})
+        if '+P' in flags: held['inherit'] = True
+        if '-P' in flags: held['inherit'] = False
+        if project is not None: held['project'] = int(project)
+        if recursive and directory:
+            for entry in sorted(os.listdir(path)): one(os.path.join(path, entry), False)
+    for path in paths:
+        path = mapped(path)
+        assert pathlib.Path(path).is_relative_to(root), ('chattr outside the fixture', path)
+        privileged([path], lambda: one(path, True))
+    ATTRS.write_text(json.dumps(attrs))
+    return 1 if failed else 0
 
 # **A look made as an account** (#577): create-agent.sh's `allows` hands
 # exactly this text to `sh -c`, so the shell's builtin `[` answers it. It is
@@ -443,18 +583,13 @@ elif name == 'sudo':
     if command[0] == '-u':
         command.pop(0)
         identity = command.pop(0)
-    if identity and command[:2] == ['env', '-i']:
+    if identity and command[:1] in (['env'], ['timeout']):
         command = clean_start(command, ['timeout', '0', 'setsid', '-w'])
     op, *rest = command
     # **A drop sudo refuses** (#577): the walk's operator rule named (root)
     # alone, so `sudo -u <account>` failed before any look was made.
     if identity and os.environ.get('DROP_FAIL') in (identity, 'all'):
         print(f'sudo: you are not permitted to run commands as {identity}', file=sys.stderr)
-        sys.exit(1)
-    # A drop root's own sudo refuses where runuser's passes (the self-check
-    # on B2): the verifier's root mode checks both.
-    if identity and not via_runuser and os.environ.get('SUDO_DROP_FAIL') == identity:
-        print('sudo: a password is required', file=sys.stderr)
         sys.exit(1)
     if op == '--version':
         print(os.environ.get('SUDO_VERSION', 'Sudo version 1.9.16'))
@@ -566,12 +701,62 @@ elif name == 'sudo':
             if a.startswith('/') and p.is_relative_to(root) and not privileged([p], lambda: os.path.lexists(p)):
                 sys.exit(1)
     elif op == 'useradd':
+        if os.environ.get('USERADD_FAIL') == rest[-1]:
+            # **The account made and its home not** (#600): useradd's exit 12,
+            # after the account's lines are written.
+            with (root / 'made-then-failed').open('a') as made: made.write(rest[-1] + '\n')
+            sys.exit(12)
+        if '--create-home' in rest:
+            # **useradd lays the home and copies the skeleton in** (#600): the
+            # three regular files the appliance's /etc/skel holds, and a link
+            # where FIXTURE_SKEL_LINK names a file for it to point at. A home
+            # that stands already takes nothing, as useradd warns and goes on.
+            home = pathlib.Path(mapped(rest[rest.index('--home-dir') + 1]))
+            assert home.is_relative_to(root), home
+            def lay():
+                if home.exists(): return
+                home.mkdir()
+                for skel in ('.bashrc', '.bash_profile', '.bash_logout'): (home / skel).write_text('# skel\n')
+                if os.environ.get('FIXTURE_SKEL_LINK'): (home / '.profile').symlink_to(os.environ['FIXTURE_SKEL_LINK'])
+            privileged([home], lay)
         if rest[-1] in BOX_ACCOUNTS:
             with (root / 'laid-box-accounts').open('a') as laid: laid.write(rest[-1] + '\n')
     elif op == 'usermod':
         if rest[-1] in BOX_ACCOUNTS:
             with (root / 'joined-box-accounts').open('a') as joined: joined.write(rest[-1] + '\n')
-    elif op in ('groupadd', 'chmod', 'setfacl', 'ldconfig', 'chattr', 'setquota'): pass
+    elif op == 'chattr': sys.exit(chattr_model(rest))
+    elif op == 'find':
+        # **Root's walk over the home** (#600): `find -P DIR <tests> -exec
+        # chattr ARGS {} +` alone, the walk run on the fixture's tree in the
+        # mode named (-P, or -L, which follows links) and its chattr answered
+        # by the model above. Any other action is refused, so a walk that
+        # would act otherwise never runs here.
+        assert rest[0] in ('-P', '-L') and rest[-2:] == ['{}', '+'] and rest.count('-exec') == 1, ('a walk the double does not know', rest)
+        at = rest.index('-exec')
+        assert rest[at + 1] == 'chattr', rest
+        top, tests = mapped(rest[1]), rest[2:at]
+        assert pathlib.Path(top).is_relative_to(root), top
+        assert not set(tests) & {'-execdir', '-delete', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls'}, tests
+        real_find = shutil.which('find', path='/usr/bin:/bin')
+        walk = privileged([top], lambda: subprocess.run([real_find, rest[0], top, *tests, '-print0'],
+                                                       capture_output=True))
+        if walk.returncode:
+            sys.stderr.buffer.write(walk.stderr)
+            sys.exit(1)
+        found = [p.decode() for p in walk.stdout.split(b'\0') if p]
+        sys.exit(chattr_model(rest[at + 2:-2] + found) if found else 0)
+    elif op in ('groupadd', 'chmod', 'setfacl', 'ldconfig'): pass
+    elif op == 'setquota':
+        # SETQUOTA_HOLD names a file this step waits for, up to 15 s, once it
+        # has said it is under way beside it, so a test signals the run in
+        # the middle of a step (#600).
+        hold = os.environ.get('SETQUOTA_HOLD')
+        if hold:
+            pathlib.Path(hold + '.ready').write_text('')
+            for _ in range(1500):
+                if os.path.exists(hold): break
+                time.sleep(0.01)
+        sys.exit(1 if os.environ.get('SETQUOTA_FAIL') else 0)
     elif op == 'repquota':
         # **The drive's project quotas as CSV** (#585): FIXTURE_REPQUOTA is
         # the report's lines after the header, and FIXTURE_REPQUOTA_FAILS
@@ -614,7 +799,8 @@ elif name == 'ldd':
 else: sys.exit(99)
 '''
 DOUBLE = DOUBLE.replace('@ACCESS_LOOK@', repr(ACCESS_LOOK)).replace('@DROP_PATH@', DROP_PATH)
-DOUBLE = DOUBLE.replace('@DROP_NAMED@', DROP_NAMED)
+DOUBLE = DOUBLE.replace('@DROP_NAMED@', DROP_NAMED).replace('@FIXTURE_ENVIRON@', FIXTURE_ENVIRON)
+DOUBLE = DOUBLE.replace('@TEST_ROOT@', TEST_ROOT).replace('@STRANGER_UID@', str(STRANGER_UID))
 
 # The six sampling defaults the harness reads from every serving declaration
 # (weaver-harness-Spec section 6.1), at the values create-agent.sh writes. A
@@ -737,10 +923,10 @@ class PlanTests(unittest.TestCase):
                     "USER": "fixture-no-home", "PROBE": str(self.root / "probe"),
                     "FIXTURE_ROOT": str(self.root)}
         for name in ("BASH_ENV", "FIXTURE_MOUNT", "FIXTURE_REPQUOTA", "FIXTURE_REPQUOTA_FAILS", "SUDO_USER", "SUDO_UID", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
-                     "VISUDO_FAIL", "DROP_FAIL", "SUDO_DROP_FAIL", "UUTILS_TEST", "SUDO_VERSION", "TEE_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
+                     "VISUDO_FAIL", "DROP_FAIL", "UUTILS_TEST", "SUDO_VERSION", "TEE_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES",
                      "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
-                     "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF", "ENGINE_BUILD", "NO_ENGINE_MESSAGE",
+                     "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "FIXTURE_SKEL_LINK", "SETQUOTA_FAIL", "SETQUOTA_HOLD", "USERADD_FAIL", "STAND_IN_LEAF", "ENGINE_BUILD", "NO_ENGINE_MESSAGE",
                      "LDD_MISSING", "CUDA_LIB_DIR", "DECOY_ENGINE", "LDD_ELSEWHERE", "LDD_STATIC",
                      "CMAKE_DISABLE_FIND_PACKAGE_OpenSSL", "STALE_ENGINE",
                      "BOX_PASSWD", "BOX_GROUP", "EXTRA_PASSWD", "GATECON_GROUPS", "ADMINCON_GROUPS",
@@ -843,7 +1029,11 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertIn("PENDING --apply", result.stdout)
         self.assertNotIn("nothing of this agent exists", result.stdout)
         self.assert_unprivileged()
-        after = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file() and p != self.log}
+        # The settings file the suite writes beside the stand-ins for each run
+        # (#590) is the suite's, not the plan's.
+        after = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file() and p != self.log
+                 and p.name != FIXTURE_ENVIRON}
+        before = {p: b for p, b in before.items() if p.name != FIXTURE_ENVIRON}
         self.assertEqual(before, after)
 
     def test_agent_plan_refuses_missing_or_empty_stack_keys(self):
@@ -1088,13 +1278,20 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         # account stands, and before any other account of the agent's, the
         # drive's project quotas are read. After the home's mode is set and
         # before anything of the agent's runs, the folder takes the project
-        # as the mark, the home takes its own project, the agent's uid, with
-        # the inherit flag, on itself and what useradd laid in it, and the
-        # project's limits are set on the drive's mount: the size in
+        # as the mark, the home and its directories and regular files take
+        # their own project, the agent's uid, its directories the inherit
+        # flag, and the project's limits are set on the drive's mount: the size in
         # kibibytes and one inode per 16 KiB of it (the Planner's ruling).
+        # **What the drive holds after is read, not the calls alone** (#600):
+        # the chattr stand-in answers as ext4 does, refusing the inherit flag
+        # on a regular file, and keeps what each path took. The home and its
+        # directories carry the project and the flag, the skeleton's files
+        # the project alone, and the folder the project alone.
         # Without the flag nothing is capped and the plan says so.
-        # Perturbations: drop -R or +P, set the limit from the size as given,
-        # set no inode limit, drop the mark, read the quotas after the other
+        # Perturbations: set the flag with the project in one recursive call
+        # (the line #600 found), set it on the files as well, leave the files
+        # without the project, set the limit from the size as given, set no
+        # inode limit, drop the mark, read the quotas after the other
         # accounts, or cap before the home stands, and a read below fails.
         self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_MOUNT=self.QUOTA_MOUNT)
         folder = str(self.root / "agents" / "m1")
@@ -1107,9 +1304,11 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 calls = self.calls()
                 read = ["sudo", "repquota", "-P", "-n", "-v", "-O", "csv", "/state"]
                 mark = ["sudo", "chattr", "-p", "12345", folder]
-                cap = ["sudo", "chattr", "-R", "+P", "-p", "12345", home]
+                project = ["sudo", "find", "-P", home, "(", "-type", "d", "-o", "-type", "f", ")",
+                           "-exec", "chattr", "-p", "12345", "{}", "+"]
+                inherit = ["sudo", "find", "-P", home, "-type", "d", "-exec", "chattr", "+P", "{}", "+"]
                 limit = ["sudo", "setquota", "-P", "12345", "0", str(kib), "0", str(kib // 16), "/state"]
-                for call in (read, mark, cap, limit):
+                for call in (read, mark, project, inherit, limit):
                     self.assertIn(call, calls)
                 made = calls.index(["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", "--create-home",
                                     "--home-dir", home, "--user-group", "weaver-m1"])
@@ -1119,8 +1318,12 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 self.assertLess(made, calls.index(read))
                 self.assertLess(calls.index(read), member)
                 self.assertLess(moded, calls.index(mark))
-                self.assertLess(calls.index(mark), calls.index(cap))
-                self.assertLess(calls.index(cap), calls.index(limit))
+                self.assertLess(calls.index(mark), calls.index(project))
+                self.assertLess(calls.index(project), calls.index(inherit))
+                self.assertLess(calls.index(inherit), calls.index(limit))
+                self.assertEqual(self.drive_attrs(home, alone=[folder]), {
+                    folder: (12345, False), home: (12345, True), **{f"{home}/{skel}": (12345, False)
+                                                                   for skel in (".bashrc", ".bash_profile", ".bash_logout")}})
                 self.assertIn(f"home quota      {home}        capped at {size} and {kib // 16} files, an ext4 project "
                               "quota on /state", result.stdout)
         self.assertEqual(64 * 1024 * 1024 // 16, 4194304, "64G holds 4,194,304 files, the Planner's figure")
@@ -1131,6 +1334,207 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertFalse([c for c in self.calls() if c[:2] in (["sudo", "chattr"], ["sudo", "setquota"])])
         self.assertIn("home quota      none: no --home-quota, so the home is not capped", result.stdout)
 
+    def drive_attrs(self, *trees, alone=()):
+        """What the chattr stand-in left on each of TREES and everything
+        under it, walked without following a link, and on each path ALONE,
+        as {path: (project, inherit flag)}: a path the stand-in never set is
+        (0, False)."""
+        held = json.loads((self.root / "attrs.json").read_text()) if (self.root / "attrs.json").exists() else {}
+        seen = {}
+        for path in alone:
+            a = held.get(path, {"project": 0, "inherit": False})
+            seen[path] = (a["project"], a["inherit"])
+        for top in trees:
+            for d, dirs, files in os.walk(top):
+                for path in [d, *(os.path.join(d, f) for f in files),
+                             *(os.path.join(d, x) for x in dirs if os.path.islink(os.path.join(d, x)))]:
+                    a = held.get(path, {"project": 0, "inherit": False})
+                    seen[path] = (a["project"], a["inherit"])
+        return seen
+
+    def test_the_chattr_stand_in_holds_ext4s_rule(self):
+        # **#600**: ext4 sets the project inherit flag on a directory alone
+        # and refuses it on a regular file with EOPNOTSUPP, in chattr's words,
+        # going on to the next path and failing at the end. A project is set
+        # on a file or a directory, a link named outright is refused, and -R
+        # walks without following one. The suite's stand-in answers so, or
+        # the quota step's tests would pass a line the drive refuses, as they
+        # passed the line the first appliance run met. Perturbation: let the
+        # stand-in set the flag on a regular file, and the first case passes.
+        self.env.update(ALLOW_APPLY_CHECKS="1")
+        drive = self.root / "drive"
+        (drive / "sub").mkdir(parents=True)
+        (drive / ".bashrc").write_text("x\n")
+        (drive / "sub" / "notes").write_text("x\n")
+        outside = self.root / "outside"
+        outside.write_text("not the drive's\n")
+        (drive / "link").symlink_to(outside)
+
+        def chattr(*args):
+            return subprocess.run([str(self.bin / "sudo"), "chattr", *args], env=self.env, text=True,
+                                  capture_output=True, timeout=20)
+
+        run = chattr("-R", "+P", "-p", "7", str(drive))
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertEqual(sorted(run.stderr.splitlines()), [
+            f"chattr: Operation not supported while setting flags on {drive / '.bashrc'}",
+            f"chattr: Operation not supported while setting flags on {drive / 'sub' / 'notes'}"])
+        self.assertEqual(self.drive_attrs(str(drive)), {
+            str(drive): (7, True), str(drive / "sub"): (7, True), str(drive / ".bashrc"): (0, False),
+            str(drive / "sub" / "notes"): (0, False), str(drive / "link"): (0, False)})
+        (self.root / "attrs.json").unlink()
+        run = chattr("-R", "-p", "7", str(drive))
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual({p: a for p, a in self.drive_attrs(str(drive)).items() if a != (7, False)},
+                         {str(drive / "link"): (0, False)}, "the walk follows no link")
+        for args, said in ((("-p", "7", str(drive / "link")), "setting project"),
+                           (("+P", str(drive / "link")), "setting flags"),
+                           (("-p", "7", str(drive / "absent")), "No such file or directory while trying to stat")):
+            with self.subTest(args=args):
+                run = chattr(*args)
+                self.assertEqual(run.returncode, 1, run.stderr)
+                self.assertIn(said, run.stderr)
+        self.assertNotIn(str(outside), json.loads((self.root / "attrs.json").read_text()))
+
+    def test_the_home_s_walk_passes_over_a_link_the_skeleton_carries(self):
+        # **#600**: the walk that sets the home's project follows no link, so
+        # a link the skeleton carries is passed over and what it names takes
+        # nothing, and chattr is handed regular files and directories alone.
+        # Perturbation: walk with -L, or hand chattr every entry, and the run
+        # is refused at the link.
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_MOUNT=self.QUOTA_MOUNT)
+        outside = self.root / "outside"
+        outside.write_text("not the home's\n")
+        self.env["FIXTURE_SKEL_LINK"] = str(outside)
+        home = str(self.root / "agents" / "m1" / "home")
+        result = self.create("--home-quota", "64G", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        held = self.drive_attrs(home)
+        self.assertEqual(held[f"{home}/.profile"], (0, False))
+        self.assertEqual(held[f"{home}/.bashrc"], (12345, False))
+        self.assertEqual(held[home], (12345, True))
+        self.assertNotIn(str(outside), json.loads((self.root / "attrs.json").read_text()))
+
+    def test_a_run_that_stops_after_it_lays_anything_names_what_stands(self):
+        """**#600**: a run that stops once it has laid anything, by a refusal
+        or by a step that fails under set -e, names what it laid, in order
+        (STANDS), the one thing in hand when it stopped (MAY STAND), and the
+        take-down. A useradd that makes the account and fails on its home
+        leaves the account named as one that may stand. A run that stops
+        before it lays anything, or that succeeds, names nothing. After the
+        admission the staged root is named as the admitted one.
+        Perturbations: drop the exit trap, or one name, or the mark before a
+        step, or the rename after the admission, and a case below fails."""
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_MOUNT=self.QUOTA_MOUNT)
+        folder = str(self.root / "agents" / "m1")
+        home = f"the account weaver-m1 with its home {folder}/home"
+        accounts = [f"the folder {folder}", home, "the account weaver-m1-state", "the group weaver-m1-trace",
+                    "the group weaver-m1-admin", "the account weaver-m1-relay"]
+        take_down = "Take m1 down by deploy/HowToDeployANewAgent.md section 7 before creating it again."
+        limits = "project 12345's limits on /state"
+        cases = {
+            "a limit that is not set": ({"SETQUOTA_FAIL": "1"}, ("--home-quota", "64G"),
+                                        "REFUSED: project 12345's limits could not be set on /state (setquota)",
+                                        [*accounts, f"project 12345 on {folder}"], limits),
+            "a write that fails": ({"TEE_FAIL": "/agent.toml"}, (), None,
+                                   [*accounts, f"the territory {folder}/weaver-m1"], None),
+            "an account made and its home not": ({"USERADD_FAIL": "weaver-m1"}, (), None,
+                                                 [f"the folder {folder}"], home),
+        }
+        for case, (env, given, refused, laid, in_hand) in cases.items():
+            with self.subTest(case=case):
+                self.reset_made()
+                (self.root / "made-then-failed").unlink(missing_ok=True)
+                self.env.update(env)
+                try:
+                    result = self.create(*given, "--apply")
+                finally:
+                    for key in env: self.env.pop(key)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                if refused: self.assertIn(refused, result.stderr)
+                note = result.stderr[result.stderr.index("\nSTANDS: ") + 1:].splitlines()
+                expected = [f"STANDS: this run stopped after it laid {', '.join(laid)}."]
+                if in_hand: expected.append(f"MAY STAND: {in_hand}, which this run was laying when it stopped.")
+                self.assertEqual(note, [*expected, take_down])
+        self.assertEqual((self.root / "made-then-failed").read_text(), "weaver-m1\n",
+                         "the double made the account it then failed on")
+        with self.subTest(case="nothing laid, or nothing left"):
+            self.reset_made()
+            refused = self.create("--home-quota", "64g", "--apply")
+            self.assertNotEqual(refused.returncode, 0)
+            self.reset_made()
+            made = self.create("--home-quota", "64G", "--apply")
+            self.assertEqual(made.returncode, 0, made.stderr)
+            self.assertNotIn("STAND", refused.stderr + made.stderr)
+        with self.subTest(case="after the admission"):
+            # No suite run reaches a step after the admission (the connector's
+            # probe runs under the installed admin base alone), so the note and
+            # the rename run as the script holds them.
+            script = (self.repo / "deploy" / "create-agent.sh").read_text()
+            note = script[script.index("STANDING=() LAYING=''"):script.index("trap 'rc=$?")]
+            admit = script.index('root mv -T -- "$STAGE" "$AGENT_ROOT"\n')
+            rename = script[script.index("\n", admit) + 1:script.index("\ndone\n", admit) + len("\ndone\n")]
+            self.assertTrue(rename.startswith('for i in "${!STANDING[@]}"; do\n'), rename)
+            program = ("set -euo pipefail\nNAME=m1 STAGE=/x/.m1.partial AGENT_ROOT=/x/m1\n" + note
+                       + "trap 'rc=$?; [ \"$rc\" -eq 0 ] || standing_note' EXIT\n"
+                       + 'STANDING+=("the folder /f" "the staged agent root $STAGE" "the sudo rule /r")\n'
+                       + rename + "LAYING=''\nexit 1\n")
+            run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.stderr.strip().splitlines(), [
+                "STANDS: this run stopped after it laid the folder /f, the agent root /x/m1, admitted, the sudo rule /r.",
+                take_down])
+
+    def test_a_run_stopped_by_a_signal_names_what_stands(self):
+        """**#600**: bash runs the EXIT trap with the last command's status on
+        a fatal signal, 0 after a step that passed, so a run hung up or
+        terminated would name nothing. Each of HUP, INT, TERM and PIPE ends
+        the run with 128 and its number, and the note names the signal, what
+        stands and the step in hand. Cases: SIGTERM to the script alone while
+        setquota is under way, which bash takes once the step returns, and
+        SIGHUP to its whole process group, as a terminal's hang-up reaches
+        it, which ends the step too. Perturbations: drop the signal traps, or
+        exit 0 from them, and no note is written. Drop the signal's record
+        and the note does not name it."""
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_MOUNT=self.QUOTA_MOUNT)
+        self.install_stack()
+        folder = str(self.root / "agents" / "m1")
+        laid = [f"the folder {folder}", f"the account weaver-m1 with its home {folder}/home",
+                "the account weaver-m1-state", "the group weaver-m1-trace", "the group weaver-m1-admin",
+                "the account weaver-m1-relay", f"project 12345 on {folder}"]
+        for name, to_group in (("TERM", False), ("HUP", True)):
+            with self.subTest(signal=name):
+                self.reset_made()
+                hold = self.root / f"hold-{name}"
+                self.env["SETQUOTA_HOLD"] = str(hold)
+                try:
+                    run = subprocess.Popen(["bash", str(self.repo / "deploy" / "create-agent.sh"), "m1",
+                                            "--artifact", str(self.artifact), "--engine", "sqlite",
+                                            "--home-quota", "64G", "--apply"],
+                                           env=self.env, text=True, stdin=subprocess.DEVNULL,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+                finally:
+                    self.env.pop("SETQUOTA_HOLD")
+                try:
+                    ready = Path(str(hold) + ".ready")
+                    for _ in range(1500):
+                        if ready.exists() or run.poll() is not None: break
+                        time.sleep(0.01)
+                    self.assertTrue(ready.exists(), "setquota was never reached")
+                    sig = getattr(signal, "SIG" + name)
+                    if to_group: os.killpg(run.pid, sig)
+                    else: os.kill(run.pid, sig)
+                    hold.write_text("")
+                    out, err = run.communicate(timeout=20)
+                finally:
+                    if run.poll() is None:
+                        os.killpg(run.pid, signal.SIGKILL)
+                        run.wait()
+                self.assertEqual(run.returncode, 128 + sig, err)
+                self.assertEqual(err[err.index("\nSTANDS: ") + 1:].splitlines(), [
+                    f"STANDS: this run stopped on SIG{name} after it laid {', '.join(laid)}.",
+                    f"MAY STAND: project 12345's limits on /state, which this run was laying when it stopped "
+                    f"on SIG{name}.",
+                    "Take m1 down by deploy/HowToDeployANewAgent.md section 7 before creating it again."])
     def test_the_folder_sheds_an_inherited_project_flag_before_its_mark(self):
         # **CodeRabbit on #582**: a folder made in a base that carries the
         # project inherit flag takes the flag, and `chattr -p` sets the
@@ -1504,6 +1908,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
     def reset_made(self):
         """Take away what an apply run made, so the next run starts clean."""
         self.log.unlink(missing_ok=True)
+        (self.root / "attrs.json").unlink(missing_ok=True)
         for made in (self.config / "m1", self.config / ".m1.partial", self.folder):
             shutil.rmtree(made, ignore_errors=True)
         self.rule.unlink(missing_ok=True)
@@ -2274,7 +2679,9 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         cgroup beneath the agent's scope under a stand-in cgroup mount, and writes
         a load event, `show` names it, `unload` ends it and removes the cgroup
         unless KEEP_ALIVE is set (or, for the cgroup, KEEP_CGROUP)."""
-        self.env.update(FIXTURE_UID="0", FIXTURE_ACCOUNT_UID=str(os.getuid()))
+        # verify-load.sh probes its drop as nobody before anything loads
+        # (#590), which the double answers only under ALLOW_APPLY_CHECKS.
+        self.env.update(FIXTURE_UID="0", FIXTURE_ACCOUNT_UID=str(os.getuid()), ALLOW_APPLY_CHECKS="1")
         cgroup_fs = self.root / "cgroup-fs"
         agent_cgroup = cgroup_fs / "weaver.slice" / "weaver-m1.scope" / "weaver-m1"
 
@@ -2437,6 +2844,26 @@ esac
                     self.assertIn("no relay stands among the constituents", result.stderr)
                 else:
                     self.assertIn("is not in ", result.stderr)
+
+    def test_verify_load_refuses_a_drop_that_cannot_run_before_its_first_unload(self):
+        """**#590**: verify-load.sh's reads as the agent's accounts discard
+        their own refusal, so a runuser that cannot drop is probed as nobody
+        and refused by name before admin unloads or loads anything.
+        Perturbation: drop the probe, and admin is asked to unload and load."""
+        stub = self.root / "installed" / "bin" / "weaver-admin"
+        verbs = self.root / "admin-verbs"
+        state = self.verify_fixture()
+        text = stub.read_text()
+        stub.write_text(text.replace('#!/bin/sh\n', f'#!/bin/sh\necho "$1" >> {shlex.quote(str(verbs))}\n', 1))
+        self.env["DROP_FAIL"] = "nobody"
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.env.pop("DROP_FAIL")
+            self.end_stand_in(state)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("runuser would not run a command as nobody", result.stderr)
+        self.assertEqual(verbs.read_text().split(), ["validate"])
 
     def test_verify_load_reads_its_unload_and_takes_only_a_load_event(self):
         """**verify-load reads its first unload's answer, and only `load` is a
@@ -2959,7 +3386,7 @@ esac
                      if "tail" in l and ("state.log" in l or '"$st"' in l)]
             self.assertTrue(reads, script)
             for line in reads:
-                self.assertIn('sudo -n -u "weaver-$AGENT-state" tail', line, (script, line))
+                self.assertIn('as_account "weaver-$AGENT-state" tail', line, (script, line))
 
     def test_update_stack_writes_no_declaration(self):
         # The declaration is root's in root's territory (the operator's ruling
@@ -5268,7 +5695,11 @@ esac
         self.assertIn("== plan only", result.stdout)
         self.assertNotIn("PASS", result.stdout)
         self.assert_unprivileged()
-        after = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file() and p != self.log}
+        # The settings file the suite writes beside the stand-ins for each run
+        # (#590) is the suite's, not the plan's.
+        after = {p: p.read_bytes() for p in self.root.rglob("*") if p.is_file() and p != self.log
+                 and p.name != FIXTURE_ENVIRON}
+        before = {p: b for p, b in before.items() if p.name != FIXTURE_ENVIRON}
         self.assertEqual(before, after)
 
     def test_lifecycle_steps_name_what_they_check(self):
@@ -5572,22 +6003,19 @@ esac
         result = self.lifecycle("--root-operator")
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_lifecycle_root_mode_probes_runuser_and_root_s_sudo_and_asks_no_credential(self):
+    def test_lifecycle_root_mode_probes_runuser_and_asks_no_credential(self):
         # **#576, B2**: --apply in root mode asks for no sudo credential. The
         # drop probe, runuser as nobody, stands where the operator's sudo -v
         # stands, and a runuser that cannot drop refuses before anything acts.
-        # Root's own sudo, which the admin-con rule's listing and
-        # verify-load.sh's drops go through, is checked next (the self-check
-        # on B2), and refuses before anything acts where it cannot drop
-        # without a prompt. Perturbations: keep sudo -v in root mode, and the
-        # calls name it; drop either probe, and its case runs on.
+        # verify-load.sh's drops are runuser's too (#590), so root's own sudo
+        # is not probed. Perturbations: keep sudo -v in root mode, or put the
+        # probe of root's sudo back, and the calls name it; drop the runuser
+        # probe, and the case runs on.
         archive = self.root / "archive"
         archive.mkdir()
         self.env.update(FIXTURE_UID="0", ALLOW_APPLY_CHECKS="1", CARGO_TARGET_DIR=str(self.root / "t"))
         probe = ["runuser", "-u", "nobody", "--", "env", "-i", "PATH=" + DROP_PATH, "true"]
-        for fail, said, made in (("DROP_FAIL", "runuser would not run a command as nobody", [probe]),
-                                 ("SUDO_DROP_FAIL", "root's sudo would not run a command as nobody without a prompt",
-                                  [probe, ["sudo", "-n", "-u", "nobody", "true"]])):
+        for fail, said, made in (("DROP_FAIL", "runuser would not run a command as nobody", [probe]),):
             with self.subTest(fail=fail):
                 self.log.unlink(missing_ok=True)
                 self.env[fail] = "nobody"
@@ -5598,8 +6026,6 @@ esac
                     self.env.pop(fail)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn(said, result.stderr)
-                if fail == "SUDO_DROP_FAIL":
-                    self.assertIn("HowToDeployANewAgent.md section 1", result.stderr)
                 self.assertEqual([c for c in self.calls() if c[0] in ("sudo", "runuser", "as-root")], made)
 
     def test_lifecycle_cleanup_takes_down_only_an_agent_it_made(self):
@@ -5763,18 +6189,25 @@ def admin_retired_root_keys():
     return keys
 
 
+def account_drop_source():
+    """account-drop.sh sourced as the scripts source it (#590), then the
+    DROP_PATH the test hands in the environment, or an empty one (B3), so a
+    bare name looked up on the account's side resolves nothing the test did
+    not stand in, and the guard reads what the test hands."""
+    return ('drop_path=${DROP_PATH-}\n' + f'source {shlex.quote(str(DEPLOY / "account-drop.sh"))}\n'
+            + 'DROP_PATH=$drop_path\n')
+
+
 def lifecycle_functions(script, *names):
     """verify-lifecycle.sh's functions as the script defines them, a
     one-line definition as its line and any other to its closing brace.
-    **The root step and the drop come with them** (#576): `root` and
-    `as_account`, which every root step and every look as an account runs
-    through, in the operator's mode unless ROOT_OPERATOR says otherwise, and
-    a DROP_PATH empty unless the test hands one (B3), so a bare name looked up
-    on the account's side resolves nothing the test did not stand in, and the
-    guard reads what the test hands."""
+    **The root step and the drop come with them** (#576): `root`, which
+    every root step runs through, and account-drop.sh's `as_account`, which
+    every look as an account runs through, in the operator's mode unless
+    ROOT_OPERATOR says otherwise."""
     lines = script.splitlines()
-    out = ["ROOT_OPERATOR=${ROOT_OPERATOR:-0}", "DROP_PATH=${DROP_PATH:-}"]
-    for name in [n for n in ("root", "as_account") if n not in names] + list(names):
+    out = ["ROOT_OPERATOR=${ROOT_OPERATOR:-0}", account_drop_source().rstrip("\n")]
+    for name in [n for n in ("root",) if n not in names] + list(names):
         start = next(i for i, l in enumerate(lines) if l.startswith(f"{name}()"))
         if lines[start].rstrip().endswith("}"):
             out.append(lines[start])
@@ -5790,7 +6223,8 @@ class LifecycleRootModeHelperTests(unittest.TestCase):
     the command itself for root, a leading VAR=value through `env`, and
     `as_account ACCOUNT CMD...` is `sudo -n -u` for the operator and `runuser
     -u ... --` for root, under `setsid` and `env -i` in either mode (B3), a
-    leading VAR=value handed to env. Each runs alone with sudo, runuser and
+    leading VAR=value handed to env, and under sudo the env after setsid
+    (#590). Each runs alone with sudo, runuser and
     the command as stand-ins that log their argv."""
 
     def setUp(self):
@@ -5840,8 +6274,8 @@ class LifecycleRootModeHelperTests(unittest.TestCase):
         # Perturbation: drop the env under runuser, and runuser is handed the
         # VAR=value as its command.
         self.assertEqual(self.run_fns(False, 'as_account weaver-m1 cmd x\nas_account weaver-m1 V=1 cmd y\n'),
-                         ["sudo -n -u weaver-m1 env -i PATH= timeout 0 setsid -w cmd x [unset]",
-                          "sudo -n -u weaver-m1 env -i PATH= V=1 timeout 0 setsid -w cmd y [unset]"])
+                         ["sudo -n -u weaver-m1 timeout 0 setsid -w env -i PATH= cmd x [unset]",
+                          "sudo -n -u weaver-m1 timeout 0 setsid -w env -i PATH= V=1 cmd y [unset]"])
         self.assertEqual(self.run_fns(True, 'as_account weaver-m1 cmd x\nas_account weaver-m1 V=1 cmd y\n'),
                          ["runuser -u weaver-m1 -- env -i PATH= cmd x [unset]",
                           "runuser -u weaver-m1 -- env -i PATH= V=1 cmd y [unset]"])
@@ -5851,22 +6285,20 @@ class LifecycleRootModeHelperTests(unittest.TestCase):
         # root's under runuser. Perturbation: pass the VAR=value to runuser
         # bare, and the root line fails.
         self.assertEqual(self.run_fns(False, 'turn_as weaver-gatecon hello there\n'),
-                         ["sudo -n -u weaver-gatecon env -i PATH= WEAVER_ADMIN_CONFIG=/base timeout 0 setsid -w "
+                         ["sudo -n -u weaver-gatecon timeout 0 setsid -w env -i PATH= WEAVER_ADMIN_CONFIG=/base "
                           "python3 -I - m1 hello there [unset]"])
         self.assertEqual(self.run_fns(True, 'turn_as weaver-gatecon --system --raw\n'),
                          ["runuser -u weaver-gatecon -- env -i PATH= WEAVER_ADMIN_CONFIG=/base python3 -I - m1 "
                           "--system --raw [unset]"])
 
-    def test_sudo_is_the_helpers_the_listing_s_and_the_credential_s_alone(self):
-        # Every other privileged call is a root step or a look as an account.
-        # Root mode's probe of root's own sudo is the one other.
-        # Perturbation: put back a bare `sudo -n` at any root step, and this
-        # names it.
+    def test_sudo_is_the_root_step_s_the_listing_s_and_the_credential_s_alone(self):
+        # Every other privileged call is a root step or a look as an account,
+        # and the look's sudo is account-drop.sh's (#590), so root mode no
+        # longer probes root's own sudo. Perturbation: put back a bare `sudo
+        # -n` at any root step, or the probe, and this names it.
         code = [l for l in self.script.splitlines() if not l.lstrip().startswith("#")]
         found = sorted(m.group(0) for l in code for m in re.finditer(r"\bsudo -[nv]\b[^)|;&]*", l))
-        self.assertEqual(found, ['sudo -n "$@"', 'sudo -n -l -U "$ADMINCON" 2>',
-                                 'sudo -n -u "$account" env -i PATH="$DROP_PATH" "${named[@]}" timeout 0 setsid -w "$@"',
-                                 'sudo -n -u nobody true </dev/null >/dev/null 2>', 'sudo -v '], found)
+        self.assertEqual(found, ['sudo -n "$@"', 'sudo -n -l -U "$ADMINCON" 2>', 'sudo -v '], found)
 
 
 class LifecycleStep5bRootModeTests(unittest.TestCase):
@@ -5884,9 +6316,12 @@ class LifecycleStep5bRootModeTests(unittest.TestCase):
     join the group, perturb on the operator's uid, or drop the seeding line,
     and a read below fails."""
 
-    GATE = r"""#!/usr/bin/env python3
+    GATE = r"""#!/usr/bin/python3 -I
 import json, os, re, sys
 name, args = os.path.basename(sys.argv[0]), sys.argv[1:]
+if "CALLS" not in os.environ:
+    with open(os.path.join(os.path.dirname(sys.argv[0]), "@FIXTURE_ENVIRON@")) as settings:
+        os.environ.update(json.load(settings))
 if name == "sudo":
     args = args[1:] if args[:1] == ["-n"] else args
     if args[:1] != ["-u"]:
@@ -5897,13 +6332,13 @@ else:
     who, cmd = args[1], args[3:]
 with open(os.environ["CALLS"], "a") as log:
     log.write(json.dumps([name, who, *cmd]) + "\n")
+if name == "sudo":
+    assert cmd[:4] == ["timeout", "0", "setsid", "-w"], cmd
+    cmd = cmd[4:]
 assert cmd[:2] == ["env", "-i"] and cmd[2].startswith("PATH="), cmd
 cmd = cmd[3:]
 while cmd and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", cmd[0]):
     cmd = cmd[1:]
-if name == "sudo":
-    assert cmd[:4] == ["timeout", "0", "setsid", "-w"], cmd
-    cmd = cmd[4:]
 assert cmd[:3] == ["python3", "-I", "-"], cmd
 uids = {"root": 0, "weaver-gatecon": 111, "weaver-admincon": 222, "op": 12345}
 rule = re.search(r"^allowed-uids = \[(\d+)\]$", open(os.environ["DECL"]).read(), re.M)
@@ -5915,7 +6350,7 @@ if "--system" in cmd:
                      {"kind": "refused", "reason": "a line of role system is admitted from the operator alone"}))
 else:
     print("Red, yellow and blue.")
-"""
+""".replace("@FIXTURE_ENVIRON@", FIXTURE_ENVIRON)
 
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory(prefix="weaver-lifecycle-5b-root-")
@@ -6047,7 +6482,8 @@ class LifecycleRootModeGroupsAndShowTests(unittest.TestCase):
                        'held = os.environ.get("GROUPS_" + sys.argv[2]) if sys.argv[1:2] == ["-Gn"] else None\n'
                        'sys.exit(1) if held is None else print(held)\n'),
                 ("sudo", f'#!/bin/sh\necho "sudo $*" >> {log}\n[ "$1" = -n ] && shift\nAS=root exec env "$@"\n'),
-                ("runuser", f'#!/bin/sh\necho "runuser $*" >> {log}\nwho=$2\nshift 3\nAS=$who exec "$@"\n'),
+                ("runuser", f'#!/bin/sh\necho "runuser $*" >> {log}\nwho=$2\nshift 4\n'
+                            f'AS=$who exec {shutil.which("env", path=BOX_PATH)} "$@"\n'),
                 ("weaver-admin", '#!/bin/sh\ncase $AS in root) echo \'{"kind":"no_such_agent"}\' ;; '
                                  '*) echo \'{"kind":"unauthorized"}\' ;; esac\n')):
             stand_in = self.bin_dir / tool
@@ -6116,27 +6552,51 @@ class LifecycleRootModeGroupsAndShowTests(unittest.TestCase):
 
 
 class AccountDropTests(unittest.TestCase):
-    """**B3: a command run as another account is handed nothing of the
-    caller's but what the call names** (the Planner's rulings of 2026-11-17).
-    While such a command runs, any process of the account's uid can read its
-    environment and open its descriptors through /proc. So `as_account`, in
-    `create-agent.sh` and `verify-lifecycle.sh` alike and in both modes, gives
-    it /dev/null or a named file on standard input, pipes the script holds on
-    standard output and standard error, no other descriptor, a session of its
-    own with no controlling terminal, and DROP_PATH with the named VAR=value
-    pairs as its whole environment, passes an interrupt on to it, and returns
-    its status, else a relay's. The function runs alone under bash whose
-    controlling terminal is a real pseudo-terminal and which holds one more
-    descriptor, with stand-ins for runuser and sudo that drop their own
-    arguments and run the rest, and a reporter, the command, that records
-    what it was handed. Perturbations: take away any one of these, in either
-    mode, or either relay's status, and a case below fails."""
+    """**B3 and #590: a command run as another account is handed nothing of
+    the caller's but what the call names** (the Planner's rulings of
+    2026-11-17). While such a command runs, any process of the account's uid
+    can read its environment and open its descriptors through /proc. So
+    `as_account`, account-drop.sh's, which every deploy script that drops to
+    an account sources, in both modes, starts runuser or sudo with DROP_PATH
+    alone, and gives the command /dev/null or a named file on standard input,
+    pipes the script holds on standard output and standard error, bounded
+    past its exit, no other descriptor, a session of its own with no
+    controlling terminal, and DROP_PATH with the named VAR=value pairs as its
+    whole environment, passes an interrupt on to it, and returns its status,
+    else a relay's. The helper runs sourced under bash whose controlling
+    terminal is a real pseudo-terminal and which holds one more descriptor,
+    with stand-ins for runuser and sudo that record what they were handed and
+    run the rest, tripwires of the same names on the drop's PATH, and a
+    reporter, the command, that records what it was handed. Perturbations:
+    take away any one of these, in either mode, or either relay's status, and
+    a case below fails."""
 
-    SCRIPTS = ("create-agent.sh", "verify-lifecycle.sh")
+    # A stand-in for runuser or sudo: records its arguments, its own
+    # environment block as it was handed and whether it holds a controlling
+    # terminal, beside itself, then runs the rest, as runuser's `-u A --` and
+    # sudo's `-n -u A` leave it.
+    STAND_IN = """#!/usr/bin/python3 -I
+import json, os, sys
+r = {"argv": sys.argv[1:], "env": {}}
+with open("/proc/self/environ", "rb") as block:
+    for item in block.read().split(b"\\0"):
+        if item:
+            key, _, value = item.decode().partition("=")
+            r["env"][key] = value
+try:
+    os.close(os.open("/dev/tty", os.O_RDWR))
+    r["tty"] = "opened"
+except OSError as e:
+    r["tty"] = e.errno
+with open(sys.argv[0] + ".json", "w") as record:
+    json.dump(r, record)
+os.execvp(sys.argv[4], sys.argv[4:])
+"""
     REPORTER = """#!/usr/bin/python3 -I
-import json, os, select, sys
+import json, os, select, stat, sys
 r = {"links": [os.readlink(f"/proc/self/fd/{n}") for n in (0, 1, 2)],
-     "inodes": [os.fstat(n).st_ino for n in (0, 1, 2)], "extra": [], "env": {}}
+     "inodes": [os.fstat(n).st_ino for n in (0, 1, 2)],
+     "fifo": [stat.S_ISFIFO(os.fstat(n).st_mode) for n in (0, 1, 2)], "extra": [], "env": {}}
 for fd in range(3, 1024):
     try:
         os.fstat(fd)
@@ -6208,13 +6668,18 @@ sys.exit(code if code >= 0 else 128 - code)
         self.root = Path(self.scratch.name)
         self.bin_dir = self.root / "bin"
         self.bin_dir.mkdir()
-        # The drop's PATH: the box's setsid and timeout, which the operator's
-        # drop runs under, and nothing else, so a bare name looked up on the
-        # account's side finds nothing more.
+        # The drop's PATH: the box's setsid, timeout and env, which the drop
+        # runs under, and nothing else, so a bare name looked up on the
+        # account's side finds nothing more. A runuser or sudo found there,
+        # after the clear, is a tripwire (#590).
         self.drop_bin = self.root / "drop-bin"
         self.drop_bin.mkdir()
-        for tool in ("setsid", "timeout"):
+        for tool in ("setsid", "timeout", "env"):
             (self.drop_bin / tool).symlink_to(shutil.which(tool, path=BOX_PATH))
+        self.tripped = self.root / "tripped"
+        for tool in ("runuser", "sudo"):
+            (self.drop_bin / tool).write_text(f'#!/bin/sh\necho "$0" >> {shlex.quote(str(self.tripped))}\nexit 97\n')
+            (self.drop_bin / tool).chmod(0o755)
         self.drop_path = str(self.drop_bin)
         self.report = self.root / "report.json"
         self.feed = self.root / "feed"
@@ -6222,7 +6687,7 @@ sys.exit(code if code >= 0 else 128 - code)
         self.extra = self.root / "extra"
         for tool in ("runuser", "sudo"):
             stand_in = self.bin_dir / tool
-            stand_in.write_text('#!/bin/sh\nshift 3\nexec "$@"\n')
+            stand_in.write_text(self.STAND_IN)
             stand_in.chmod(0o755)
         self.reporter = self.root / "reporter"
         self.reporter.write_text(self.REPORTER)
@@ -6234,7 +6699,7 @@ sys.exit(code if code >= 0 else 128 - code)
         env.pop("BASH_ENV", None)
         return env
 
-    def drop(self, script, root_mode, before="", after="", stdin="terminal", output="pipes", status=3):
+    def drop(self, root_mode, before="", after="", stdin="terminal", output="pipes", status=3):
         """`as_account BEFORE weaver-m1 WEAVER_X=1 <reporter> AFTER` from
         SCRIPT, run by bash whose controlling terminal is a pseudo-terminal
         and which holds one more descriptor, open on a file. STDIN is
@@ -6249,7 +6714,7 @@ sys.exit(code if code >= 0 else 128 - code)
         self.report.unlink(missing_ok=True)
         rc_file = Path(str(self.report) + ".rc")
         program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n"
-                   + shell_function((DEPLOY / script).read_text(), "as_account")
+                   + account_drop_source()
                    + f"rc=0; as_account {before} weaver-m1 WEAVER_X=1 {shlex.quote(str(self.reporter))} "
                    + f"{shlex.quote(str(self.report))} {status} {after} || rc=$?\n"
                    + f'echo "$rc" > {shlex.quote(str(rc_file))}\n')
@@ -6292,11 +6757,144 @@ sys.exit(code if code >= 0 else 128 - code)
     def assert_handed_nothing(self, record, caller, stdin="/dev/null"):
         self.assertEqual(record["links"][0], stdin, "standard input")
         for n in (1, 2):
-            self.assertTrue(record["links"][n].startswith("pipe:"), record["links"])
+            # A relay's FIFO, unlinked before the command starts (#590), so
+            # no name reaches it.
+            self.assertTrue(record["fifo"][n], record["links"])
+            self.assertTrue(record["links"][n].startswith("pipe:") or record["links"][n].endswith(" (deleted)"),
+                            record["links"])
             self.assertNotIn(record["inodes"][n], caller, f"descriptor {n} is one the caller holds")
         self.assertEqual(record["extra"], [], "a descriptor above 2 reached the account")
         self.assertEqual(record["tty"], errno.ENXIO, "the command could open a controlling terminal")
         self.assertEqual(record["env"], {"PATH": self.drop_path, "WEAVER_X": "1"}, "its whole environment")
+        self.assertFalse(self.tripped.exists(), "a runuser or sudo was found on the drop's PATH")
+
+    def handed(self, tool):
+        return json.loads((self.bin_dir / f"{tool}.json").read_text())
+
+    def test_runuser_and_sudo_start_with_the_drops_path_alone(self):
+        # **#590**: runuser or sudo itself is the first process of the
+        # account's, and it is started under `env -i` with DROP_PATH alone, so
+        # nothing of the caller's environment (here SECRET) is in its block,
+        # and it is the one found on the caller's PATH before the clear, never
+        # one on DROP_PATH. In root mode setsid runs before runuser, so
+        # runuser holds no terminal. Under sudo the env runs after setsid, so
+        # sudo keeps the terminal its credential is keyed by, and the account's
+        # env starts with none. Perturbations: drop the outer `env -i`, look
+        # runuser or sudo up after it, put setsid after runuser, or the env
+        # back before timeout under sudo, and a case below fails.
+        for root_mode, tool in ((True, "runuser"), (False, "sudo")):
+            with self.subTest(root_mode=root_mode):
+                rc, record, _, _, caller = self.drop(root_mode)
+                self.assertEqual(rc, 3)
+                self.assert_handed_nothing(record, caller)
+                handed = self.handed(tool)
+                self.assertEqual(handed["env"], {"PATH": self.drop_path}, "the drop's own block")
+                command = ["env", "-i", "PATH=" + self.drop_path, "WEAVER_X=1", str(self.reporter), str(self.report), "3"]
+                if root_mode:
+                    self.assertEqual(handed["argv"], ["-u", "weaver-m1", "--", *command])
+                    self.assertEqual(handed["tty"], errno.ENXIO, "runuser holds a terminal")
+                else:
+                    self.assertEqual(handed["argv"], ["-n", "-u", "weaver-m1", "timeout", "0", "setsid", "-w", *command])
+                    self.assertEqual(handed["tty"], "opened", "sudo lost the terminal its credential is keyed by")
+
+    def test_a_process_left_holding_the_output_is_cut_off(self):
+        # **#590**: the relays drain for DROP_RELAY_WAIT seconds after the
+        # command exits. A process it left behind still holding its output
+        # then is cut off, and the call fails saying so, where before it hung
+        # until that process let go. The bound is account-drop.sh's own, 5 s.
+        # Perturbation: wait on the relays unbounded, and the case times out.
+        pid_file = self.root / "left-pid"
+        command = self.root / "leaves"
+        command.write_text("#!/usr/bin/python3 -I\nimport os, sys, time\n"
+                           "child = os.fork()\n"
+                           "if child == 0:\n    time.sleep(60)\n    os._exit(0)\n"
+                           f"open({str(pid_file)!r}, 'w').write(str(child))\n"
+                           "print('started', flush=True)\n")
+        command.chmod(0o755)
+        for root_mode in (True, False):
+            with self.subTest(root_mode=root_mode):
+                pid_file.unlink(missing_ok=True)
+                program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n" + account_drop_source()
+                           + f'rc=0; as_account weaver-m1 {shlex.quote(str(command))} || rc=$?\necho "rc=$rc"\n')
+                started = time.monotonic()
+                try:
+                    run = subprocess.run(["bash", "-c", program], env=self.env(self.bin_dir), stdin=subprocess.DEVNULL,
+                                         text=True, capture_output=True, timeout=20)
+                finally:
+                    took = time.monotonic() - started
+                    if pid_file.exists():
+                        try:
+                            os.kill(int(pid_file.read_text()), signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                self.assertEqual(run.stdout, "started\nrc=1\n", run.stderr)
+                self.assertIn("held open 5s past its exit by a process it left, so the call fails", run.stderr)
+                self.assertGreater(took, 4.5)
+                self.assertLess(took, 8)
+
+    def test_a_relay_that_has_exited_is_not_held_open(self):
+        # **#590**: bash can leave a relay that has exited unreaped through the
+        # whole drain. Such a zombie is one `kill -0` answers for, so a relay
+        # that had finished read as one held open and failed the call (the
+        # quota test, about one run in ten, 2026-11-17). drop_relay_stands
+        # reads /proc/PID/stat instead: a running child of the named parent
+        # stands, and a zombie, a pid no longer there and a process of another
+        # parent, as a reused number would be, do not. The state and the
+        # parent are read after the last `)`, so a command name that holds
+        # `) Z ` or `) S ` and spaces misleads nothing. Every relay check in
+        # as_account is that one, with its own shell as the parent, and
+        # `kill -0` is left for the drop alone, which `wait` reaps.
+        # Perturbation: the check by `kill -0`, and the zombie and other
+        # parent cases fail; a zombie that stands, the fields read after the
+        # first `)` or by spaces from the start, or no parent check, and a case
+        # fails; either relay check in as_account by `kill -0`, and the text
+        # fails.
+        def named(comm, then):
+            # A child of this process that names itself COMM, then runs THEN.
+            child = os.fork()
+            if child == 0:
+                try:
+                    with open("/proc/self/comm", "w") as name:
+                        name.write(comm)
+                    then()
+                finally:
+                    os._exit(0)
+            deadline = time.monotonic() + 5
+            while (Path(f"/proc/{child}/comm").read_text() != comm + "\n"
+                   and time.monotonic() < deadline):
+                time.sleep(0.01)
+            return child
+        running = named("r) Z  (x", lambda: time.sleep(60))
+        self.addCleanup(os.waitpid, running, 0)
+        self.addCleanup(os.kill, running, signal.SIGKILL)
+        zombie = named("z) S  (x", lambda: None)
+        self.addCleanup(os.waitpid, zombie, 0)
+        deadline = time.monotonic() + 5
+        while self.alive(zombie) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(Path(f"/proc/{zombie}").exists() and not self.alive(zombie), "the child is no zombie")
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        me, other = str(os.getpid()), str(os.getppid())
+        program = (account_drop_source()
+                   + 'while [ "$#" -gt 0 ]; do\n'
+                   + '  if drop_relay_stands "$1" "$2"; then said=stands; else said=gone; fi\n'
+                   + '  if kill -0 "$1" 2>/dev/null; then signalled=yes; else signalled=no; fi\n'
+                   + '  echo "$said $signalled"\n'
+                   + '  shift 2\n'
+                   + 'done\n')
+        run = subprocess.run(["bash", "-c", program, "bash", str(running), me, str(running), other, str(zombie), me,
+                              str(gone.pid), me],
+                             env=self.env(self.bin_dir), stdin=subprocess.DEVNULL, text=True, capture_output=True,
+                             timeout=20)
+        # A process of another parent and the zombie answer `kill -0`, which is
+        # the case's premise.
+        self.assertEqual(run.stdout.splitlines(), ["stands yes", "gone yes", "gone yes", "gone no"], run.stderr)
+        body = (DEPLOY / "account-drop.sh").read_text().split("\nas_account() {\n", 1)[1]
+        self.assertEqual(set(re.findall(r'kill -0 \S+', body)), {'kill -0 "$drop"'})
+        self.assertEqual(body.count("drop_relay_stands "), 3)
+        self.assertEqual(re.findall(r'drop_relay_stands "\$(\w+)" "\$(\w+)"', body),
+                         [("out_pid", "BASHPID"), ("err_pid", "BASHPID"), ("relay", "BASHPID")])
 
     @staticmethod
     def alive(pid):
@@ -6307,50 +6905,46 @@ sys.exit(code if code >= 0 else 128 - code)
             return False
 
     def test_nothing_of_the_caller_s_reaches_the_account(self):
-        for script in self.SCRIPTS:
-            for root_mode in (True, False):
-                for stdin in ("terminal", "pipe"):
-                    with self.subTest(script=script, root_mode=root_mode, stdin=stdin):
-                        rc, record, out, err, caller = self.drop(script, root_mode, stdin=stdin)
-                        self.assert_handed_nothing(record, caller)
-                        self.assertEqual(record["stdin"], "")
-                        self.assertNotEqual(record["inodes"][1], record["inodes"][2], "two pipes, two relays")
-                        self.assertEqual((rc, out, err), (3, "out-a\nout-c\n", "err-b\n"))
+        for root_mode in (True, False):
+            for stdin in ("terminal", "pipe"):
+                with self.subTest(root_mode=root_mode, stdin=stdin):
+                    rc, record, out, err, caller = self.drop(root_mode, stdin=stdin)
+                    self.assert_handed_nothing(record, caller)
+                    self.assertEqual(record["stdin"], "")
+                    self.assertNotEqual(record["inodes"][1], record["inodes"][2], "two pipes, two relays")
+                    self.assertEqual((rc, out, err), (3, "out-a\nout-c\n", "err-b\n"))
 
     def test_a_named_file_is_the_one_input(self):
-        for script in self.SCRIPTS:
-            for root_mode in (True, False):
-                with self.subTest(script=script, root_mode=root_mode):
-                    rc, record, _, _, caller = self.drop(script, root_mode, before=f"--stdin {shlex.quote(str(self.feed))}")
-                    self.assert_handed_nothing(record, caller, stdin=str(self.feed))
-                    self.assertEqual((rc, record["stdin"]), (3, "the named file"))
+        for root_mode in (True, False):
+            with self.subTest(root_mode=root_mode):
+                rc, record, _, _, caller = self.drop(root_mode, before=f"--stdin {shlex.quote(str(self.feed))}")
+                self.assert_handed_nothing(record, caller, stdin=str(self.feed))
+                self.assertEqual((rc, record["stdin"]), (3, "the named file"))
 
     def test_one_file_for_both_outputs_is_one_pipe_in_its_order(self):
         # A caller's `2>&1`, or a terminal on both, is one relay, so what the
         # command wrote reaches it in the order written. Perturbation: drop
         # the one-pipe choice, and the two descriptors are two pipes.
-        for script in self.SCRIPTS:
-            for root_mode in (True, False):
-                for output in ("merged", "terminal"):
-                    with self.subTest(script=script, root_mode=root_mode, output=output):
-                        rc, record, out, _, caller = self.drop(script, root_mode, output=output)
-                        self.assert_handed_nothing(record, caller)
-                        self.assertEqual(record["inodes"][1], record["inodes"][2], "one pipe for both")
-                        self.assertEqual((rc, out), (3, "out-a\nerr-b\nout-c\n"))
+        for root_mode in (True, False):
+            for output in ("merged", "terminal"):
+                with self.subTest(root_mode=root_mode, output=output):
+                    rc, record, out, _, caller = self.drop(root_mode, output=output)
+                    self.assert_handed_nothing(record, caller)
+                    self.assertEqual(record["inodes"][1], record["inodes"][2], "one pipe for both")
+                    self.assertEqual((rc, out), (3, "out-a\nerr-b\nout-c\n"))
 
     def test_the_status_is_the_command_s_else_a_relay_s(self):
         # A relay that cannot write fails the call where the command passed,
         # and never hides the command's own failure. Perturbation: return
         # either relay's status alone, or the command's alone, and a case
         # below fails.
-        for script in self.SCRIPTS:
-            for root_mode in (True, False):
-                for status, after, want in ((0, ">/dev/full", 1), (0, "2>/dev/full", 1), (3, ">/dev/full", 3),
-                                            (0, ">/dev/full 2>&1", 1), (0, "", 0)):
-                    with self.subTest(script=script, root_mode=root_mode, status=status, after=after):
-                        rc, record, _, _, _ = self.drop(script, root_mode, after=after, status=status)
-                        self.assertIsNotNone(record, "the command ran")
-                        self.assertEqual(rc, want)
+        for root_mode in (True, False):
+            for status, after, want in ((0, ">/dev/full", 1), (0, "2>/dev/full", 1), (3, ">/dev/full", 3),
+                                        (0, ">/dev/full 2>&1", 1), (0, "", 0)):
+                with self.subTest(root_mode=root_mode, status=status, after=after):
+                    rc, record, _, _, _ = self.drop(root_mode, after=after, status=status)
+                    self.assertIsNotNone(record, "the command ran")
+                    self.assertEqual(rc, want)
 
     def test_an_interrupt_ends_the_script_and_the_account_s_command(self):
         # setsid moves the command out of the terminal's process group, so a
@@ -6374,14 +6968,14 @@ sys.exit(code if code >= 0 else 128 - code)
         command.write_text("#!/usr/bin/python3 -I\nimport os, time\n"
                            f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\ntime.sleep(30)\n")
         command.chmod(0o755)
-        cases = [(script, root_mode, sig, trap) for script in self.SCRIPTS for root_mode in (True, False)
+        cases = [(root_mode, sig, trap) for root_mode in (True, False)
                  for sig in (signal.SIGINT, signal.SIGQUIT) for trap in (False, True)]
-        for script, root_mode, sig, trap in cases:
-            with self.subTest(script=script, root_mode=root_mode, signal=sig.name, trap=trap):
+        for root_mode, sig, trap in cases:
+            with self.subTest(root_mode=root_mode, signal=sig.name, trap=trap):
                 pid_file.unlink(missing_ok=True)
                 program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n"
                            + (f"trap 'echo trapped >&2; exit {128 + sig}' {sig.name[3:]}\n" if trap else "")
-                           + shell_function((DEPLOY / script).read_text(), "as_account")
+                           + account_drop_source()
                            + f"as_account weaver-m1 {shlex.quote(str(command))} >/dev/null\necho AFTER\n")
                 proc = subprocess.Popen(["bash", "-c", program], env=self.env(relay_bin),
                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -6432,22 +7026,21 @@ sys.exit(code if code >= 0 else 128 - code)
         if subprocess.run(["unshare", "--map-root-user", "true"], capture_output=True).returncode != 0:
             self.skipTest("unshare --map-root-user is not available")
         marker = self.root / "ran"
-        for script in self.SCRIPTS:
-            for root_mode in (True, False):
-                with self.subTest(script=script, root_mode=root_mode):
-                    marker.unlink(missing_ok=True)
-                    command = shlex.quote("echo ran > " + shlex.quote(str(marker)))
-                    program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n"
-                               + shell_function((DEPLOY / script).read_text(), "as_account")
-                               + f'rc=0; as_account weaver-m1 /bin/sh -c {command} || rc=$?\necho "rc=$rc"\n')
-                    run = subprocess.run(["unshare", "--map-root-user", "--mount", "bash", "-c",
-                                          'mount -t tmpfs none /proc && exec bash -c "$1"', "bash", program],
-                                         env=self.env(self.bin_dir), stdin=subprocess.DEVNULL, text=True,
-                                         capture_output=True, timeout=20)
-                    self.assertEqual((run.returncode, run.stdout), (0, "rc=1\n"), run.stderr)
-                    self.assertIn("as_account: no command runs as weaver-m1, since /proc/self/fd cannot be read",
-                                  run.stderr)
-                    self.assertFalse(marker.exists(), "the command ran")
+        for root_mode in (True, False):
+            with self.subTest(root_mode=root_mode):
+                marker.unlink(missing_ok=True)
+                command = shlex.quote("echo ran > " + shlex.quote(str(marker)))
+                program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n"
+                           + account_drop_source()
+                           + f'rc=0; as_account weaver-m1 /bin/sh -c {command} || rc=$?\necho "rc=$rc"\n')
+                run = subprocess.run(["unshare", "--map-root-user", "--mount", "bash", "-c",
+                                      'mount -t tmpfs none /proc && exec bash -c "$1"', "bash", program],
+                                     env=self.env(self.bin_dir), stdin=subprocess.DEVNULL, text=True,
+                                     capture_output=True, timeout=20)
+                self.assertEqual((run.returncode, run.stdout), (0, "rc=1\n"), run.stderr)
+                self.assertIn("as_account: no command runs as weaver-m1, since /proc/self/fd cannot be read",
+                              run.stderr)
+                self.assertFalse(marker.exists(), "the command ran")
 
     def test_turn_py_reaches_the_account_on_its_named_input(self):
         # turn_as hands turn.py over through --stdin, which this shell opens.
@@ -6474,10 +7067,11 @@ sys.exit(code if code >= 0 else 128 - code)
         # as_account, in any deploy script and in any spelling, reads its
         # standard input from /dev/null or a file and sends its output to a
         # capture, /dev/null or a file. The two `set --` lines are
-        # as_account's own. decommission.sh's as_op is root becoming the
-        # operator, whose own account holds sudo, so it crosses to no account
-        # of the agent's. Perturbation: take the stdin redirect off any one,
-        # and this names it.
+        # as_account's own. Since #590 no such drop is left but
+        # decommission.sh's as_op, which is root becoming the operator, whose
+        # own account holds sudo, so it crosses to no account of the agent's.
+        # Perturbation: write a drop outside the helper again, with no stdin
+        # redirect, and this names it.
         drop = re.compile(r"\bsudo\b[^#]*\s(-[A-Za-z]*u|--user)\b|\brunuser\b[^#]*\s-u\b")
         exempt = {"decommission.sh": 'as_op() { sudo -u "$OPERATOR" -H "$@"; }'}
         found = []
@@ -6491,20 +7085,74 @@ sys.exit(code if code >= 0 else 128 - code)
                 found.append(f"{script.name}:{n}")
                 self.assertRegex(line, r'<\s*(/dev/null|"\$)', f"{script.name}:{n} names no standard input")
                 self.assertRegex(line, r'\$\(|>\s*/dev/null', f"{script.name}:{n} may hold a terminal on its output")
-        self.assertEqual(len(found), 5, found)
+        self.assertEqual(len(found), 1, found)
         self.assertEqual(sum(f.endswith("(exempt)") for f in found), 1, found)
 
-    def test_both_scripts_carry_the_same_function_path_and_rule(self):
-        # The copies stand alone on a box (the Planner's ruling of
-        # 2026-11-17) and are held equal here, with the PATH they hand on and
-        # the VAR=value rule the double reads by. Perturbation: change either
-        # in one script, and this fails.
-        texts = [(DEPLOY / s).read_text() for s in self.SCRIPTS]
-        self.assertEqual(shell_function(texts[0], "as_account"), shell_function(texts[1], "as_account"))
-        for text in texts:
-            self.assertEqual([l for l in text.splitlines() if l.startswith("DROP_PATH=")], [f"DROP_PATH={DROP_PATH}"])
-            self.assertIn(f'while [[ "${{1:-}}" =~ {DROP_NAMED} ]]; do named+=("$1"); shift; done',
-                          shell_function(text, "as_account"))
+    def test_verify_load_refuses_without_runuser_or_setsid(self):
+        # **#590**: verify-load.sh's reads as the agent's accounts go through
+        # runuser and discard their own refusal, so the script refuses by name
+        # where runuser or setsid is not on PATH. Perturbation: test for one
+        # of the two alone, and a case below runs on.
+        text = (DEPLOY / "verify-load.sh").read_text()
+        start = text.index("command -v runuser >/dev/null && command -v setsid >/dev/null")
+        check = text[start:text.index("\n", text.index("|| die", start)) + 1]
+        for present in ((), ("runuser",), ("setsid",), ("runuser", "setsid")):
+            with self.subTest(present=present):
+                path = self.root / ("path-" + "-".join(present))
+                path.mkdir()
+                if "runuser" in present:
+                    (path / "runuser").symlink_to(self.bin_dir / "runuser")
+                if "setsid" in present:
+                    (path / "setsid").symlink_to(shutil.which("setsid", path=BOX_PATH))
+                program = 'die() { echo "REFUSED: $*" >&2; exit 1; }\n' + check + "echo RUNS-ON\n"
+                run = subprocess.run([_GUARD_BASH, "-c", program], env={"PATH": str(path)}, text=True,
+                                     capture_output=True, timeout=20)
+                if len(present) == 2:
+                    self.assertEqual((run.returncode, run.stdout), (0, "RUNS-ON\n"), run.stderr)
+                else:
+                    self.assertEqual(run.returncode, 1, run.stdout)
+                    self.assertIn("REFUSED: runuser or setsid is not on PATH", run.stderr)
+
+    def test_lifecycle_root_mode_refuses_without_sudo_for_step_1s_listing(self):
+        # **#590**: root mode asks root's sudo for one read, step 1's listing
+        # of the admin-con rule, and probes nothing of it, so --apply refuses
+        # by name where sudo is not on PATH. Perturbation: drop the check, and
+        # the case without sudo runs on.
+        text = (DEPLOY / "verify-lifecycle.sh").read_text()
+        start = text.index("    command -v sudo >/dev/null \\\n")
+        end = text.index("the box's sudo is the one that rule is written for\"\n", start)
+        check = text[start:text.index("\n", end) + 1]
+        for present in (False, True):
+            with self.subTest(sudo=present):
+                path = self.root / f"path-sudo-{present}"
+                path.mkdir()
+                if present:
+                    (path / "sudo").write_text("#!/bin/sh\nexit 97\n")
+                    (path / "sudo").chmod(0o755)
+                program = 'die() { echo "REFUSED: $*" >&2; exit 1; }\n' + check + "echo RUNS-ON\n"
+                run = subprocess.run([_GUARD_BASH, "-c", program], env={"PATH": str(path)}, text=True,
+                                     capture_output=True, timeout=20)
+                if present:
+                    self.assertEqual((run.returncode, run.stdout), (0, "RUNS-ON\n"), run.stderr)
+                else:
+                    self.assertEqual(run.returncode, 1, run.stdout)
+                    self.assertIn("REFUSED: sudo is not on PATH", run.stderr)
+
+    def test_every_script_that_drops_sources_the_one_helper(self):
+        # **One helper** (#590, in place of two copies held equal): each
+        # script that runs a command as an agent's account sources
+        # account-drop.sh once and defines neither as_account nor DROP_PATH of
+        # its own, and the helper's PATH and VAR=value rule are the ones the
+        # double reads by. Perturbation: define either in one script, or
+        # change either in the helper, and this fails.
+        helper = (DEPLOY / "account-drop.sh").read_text()
+        self.assertEqual([l for l in helper.splitlines() if l.startswith("DROP_PATH=")], [f"DROP_PATH={DROP_PATH}"])
+        self.assertIn(f'while [[ "${{1:-}}" =~ {DROP_NAMED} ]]; do named+=("$1"); shift; done',
+                      shell_function(helper, "as_account"))
+        for name in ("create-agent.sh", "verify-lifecycle.sh", "verify-load.sh", "update-stack.sh"):
+            text = (DEPLOY / name).read_text()
+            self.assertEqual(len(re.findall(r'^source ".*/account-drop\.sh"$', text, re.M)), 1, name)
+            self.assertNotRegex(text, r"(?m)^\s*(as_account\(\)|DROP_PATH=)", name)
 
 
 class StandInGuardTests(unittest.TestCase):
@@ -6545,6 +7193,43 @@ class StandInGuardTests(unittest.TestCase):
                     self.assertFalse(marker.exists(), "nothing ran")
             subprocess.run(["bash", "-c", program], env=dict(os.environ), timeout=20, check=True)
             self.assertTrue(marker.exists(), "the suite's own PATH passes")
+
+    def test_a_shell_handed_a_socket_or_a_foreign_bash_env_is_refused_before_anything_runs(self):
+        """Perturbation: let guard_shell_files pass everything, and the socket
+        cases run their command. Take out the /dev/null default, and a run
+        that names no input, made while this process's own input is a socket,
+        is refused."""
+        import socket
+        with tempfile.TemporaryDirectory(prefix="weaver-guard-") as scratch:
+            marker = Path(scratch) / "ran"
+            program = f"echo ran > {shlex.quote(str(marker))}"
+            near, far = socket.socketpair()
+            with near, far:
+                for given in (near, near.fileno()):
+                    with self.subTest(stdin=type(given).__name__):
+                        with self.assertRaises(StandInGuardError) as refused:
+                            subprocess.run(["bash", "-c", program], stdin=given, env=dict(os.environ), timeout=20)
+                        self.assertIn("a socket as its standard input", str(refused.exception))
+                        self.assertFalse(marker.exists(), "nothing ran")
+                with self.subTest(bash_env="/etc/profile"):
+                    with self.assertRaises(StandInGuardError) as refused:
+                        subprocess.run(["bash", "-c", program], env={**os.environ, "BASH_ENV": "/etc/profile"},
+                                       timeout=20)
+                    self.assertIn("BASH_ENV /etc/profile", str(refused.exception))
+                    self.assertFalse(marker.exists(), "nothing ran")
+                # **A run that names no input reads /dev/null**, so this
+                # process's own input being a socket reaches no shell.
+                held = os.dup(0)
+                try:
+                    os.dup2(far.fileno(), 0)
+                    run = subprocess.run(["bash", "-c", "readlink /proc/self/fd/0"], env=dict(os.environ),
+                                         text=True, capture_output=True, timeout=20)
+                finally:
+                    os.dup2(held, 0)
+                    os.close(held)
+                self.assertEqual(run.stdout.strip(), "/dev/null", run.stderr)
+            subprocess.run(["bash", "-c", program], env=dict(os.environ), timeout=20, check=True)
+            self.assertTrue(marker.exists(), "a run that names no input passes")
 
     def test_the_guard_s_sudo_and_runuser_refuse(self):
         for name in ("sudo", "runuser"):
@@ -6622,7 +7307,7 @@ class LifecycleAccountLookTests(unittest.TestCase):
         self.bin_dir.mkdir()
         for name, body in (
             ("sudo", '[ "$1" = "-n" ] && shift\n'
-                     'if [ "$1" = "-u" ]; then [ -z "$DROP_REFUSED" ] || exit 1; shift 2; fi\n'
+                     'if [ "$1" = "-u" ]; then [ ! -e "${0%/*}/drop-refused" ] || exit 1; shift 2; fi\n'
                      'exec env "$@"\n'),
             ("test", "exit 1\n"),
         ):
@@ -6630,9 +7315,9 @@ class LifecycleAccountLookTests(unittest.TestCase):
             stand_in.write_text("#!/bin/sh\n" + body)
             stand_in.chmod(0o755)
         # The drop's PATH is this directory (B3): the stand-in `test` first,
-        # beside the box's sh, and the timeout and setsid the operator's drop
-        # runs under.
-        for tool in ("sh", "timeout", "setsid"):
+        # beside the box's sh, and the timeout, setsid and env the operator's
+        # drop runs under.
+        for tool in ("sh", "timeout", "setsid", "env"):
             (self.bin_dir / tool).symlink_to(shutil.which(tool, path=BOX_PATH))
         self.file = root / "agent.toml"
         self.file.write_text("declared\n")
@@ -6640,9 +7325,16 @@ class LifecycleAccountLookTests(unittest.TestCase):
         self.functions = ("set -euo pipefail\n" + 'STEP_LABEL="step 2 (test)"\n'
                           + lifecycle_functions(script, "fail", "pass", "expect_eq", "as_look"))
 
-    def run_program(self, body, **env):
+    def run_program(self, body, refused=False):
+        # The drop clears the environment (#590), so a refused drop is a file
+        # beside the stand-in.
+        flag = self.bin_dir / "drop-refused"
+        if refused:
+            flag.touch()
+        else:
+            flag.unlink(missing_ok=True)
         full = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"],
-                "DROP_PATH": str(self.bin_dir), **env}
+                "DROP_PATH": str(self.bin_dir)}
         full.pop("BASH_ENV", None)
         return subprocess.run(["bash", "-c", self.functions + body], env=full, text=True,
                               capture_output=True, timeout=20)
@@ -6658,7 +7350,7 @@ class LifecycleAccountLookTests(unittest.TestCase):
     def test_an_expected_no_fails_on_a_refused_drop(self):
         result = self.run_program(
             f'expect_eq "the member cannot read it" no "$(as_look weaver-m1-state -e {shlex.quote(str(self.file.with_name("none")))})"\n'
-            'echo GOES-ON\n', DROP_REFUSED="1")
+            'echo GOES-ON\n', refused=True)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("found:    refused", result.stderr)
         self.assertNotIn("GOES-ON", result.stdout)
@@ -7613,6 +8305,17 @@ def shell_function(script, name):
     return "\n".join(lines[start:end + 1]) + "\n"
 
 
+def legacy_log_judgement(script):
+    """decommission.sh's judgment of what a legacy log leaves (CodeRabbit on
+    #598): resolved, taken_with, the loop over the directories that stand and
+    the loop over the entries left, as the script runs them once every target
+    is known."""
+    start = script.index("taken_with() {\n")
+    end_line = "done < <([ ${#LOG_LEFT[@]} -eq 0 ] || printf '%s\\0' \"${!LOG_LEFT[@]}\" | sort -z)\n"
+    end = script.index(end_line, start) + len(end_line)
+    return shell_function(script, "resolved") + script[start:end]
+
+
 class DecommissionTests(unittest.TestCase):
     """decommission.sh's reading of the per-agent layout, run as the script
     defines it. It needs root to run whole, so its pieces are run alone."""
@@ -7855,7 +8558,7 @@ class DecommissionTests(unittest.TestCase):
             self.assertEqual(run.stdout.splitlines(), [str(good)], run.stderr)
             self.assertIn(f"refused: {roots / 'b'}/territory names {grouped}, which stands uid 0, "
                           f"group weaver-b-admin, mode 755, not root:weaver-b-state", run.stderr)
-            self.assertIn(f"refused: {roots / 'c'}/territory names {foreign}, which stands uid {os.getuid()}",
+            self.assertIn(f"refused: {roots / 'c'}/territory names {foreign}, which stands uid {STRANGER_UID}",
                           run.stderr)
             self.assertIn(f"skipped: {roots / 'd'}/territory names {homed}, under the operator's home",
                           run.stderr)
@@ -8131,7 +8834,7 @@ class DecommissionTests(unittest.TestCase):
                        + f'OP_HOME={shlex.quote(str(home))}\n'
                        + f'declare -A TERRITORY_BASES=([{shlex.quote(str(home / ".weaveragent"))}]=1 '
                        + f'[{shlex.quote(str(other))}]=1)\ndeclare -A LOG_PATHS=()\n'
-                       + self.script[self.script.index('for d in "${!TERRITORY_BASES[@]}"; do\n  in_operator_home'):
+                       + self.script[self.script.index('declare -A BASES_SAID=()\nfor d in "${!TERRITORY_BASES[@]}"; do\n  in_operator_home'):
                                      self.script.index("# **agent_folders BASE...")]
                        + 'printf "kept %s\\n" "${!TERRITORY_BASES[@]}"')
             run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
@@ -8146,6 +8849,669 @@ class DecommissionTests(unittest.TestCase):
         self.assertLess(archive, first)
         self.assertLess(purge, second)
 
+
+    # The tester owns every file a fixture makes, so this stand-in answers uid
+    # 0 for each path but those STRANGERS names, which answer STRANGER_UID,
+    # never the runner's (Codex on #599). Each keeps its own link count.
+    ROOT_STAT = ('stat() { local p="${@: -1}" u=0; case ":${STRANGERS:-}:" in *":$p:"*) u=' + str(STRANGER_UID)
+                 + ' ;; esac; command stat "$@" | sed "s/^[0-9]*/$u/"; }\n')
+
+    def script_options(self):
+        """The script's own `set` line, under which its functions run."""
+        found = re.findall(r"^set -[a-z]+(?: -o [a-z]+| [a-z]+)*$", self.script, re.M)
+        self.assertEqual(len(found), 1, found)
+        return found[0] + "\n"
+
+    def log_takes(self, log, agents=("m1",), strangers=(), find=None):
+        """log_paths LOG with AGENTS naming AGENTS, as (kind, path) pairs,
+        under the script's own options, with FIND as a stand-in for find."""
+        program = (self.script_options() + self.ROOT_STAT
+                   + ("" if find is None else f"find() {{ {find}; }}\n")
+                   + "declare -A AGENTS=(" + " ".join(f"[{a}]=1" for a in agents) + ")\n"
+                   + shell_function(self.script, "log_paths") + 'log_paths "$1"')
+        run = subprocess.run(["bash", "-c", program, "x", str(log)], capture_output=True, timeout=20,
+                             env={**os.environ, "STRANGERS": ":".join(str(s) for s in strangers)})
+        self.assertEqual(run.returncode, 0, run.stderr)
+        fields = run.stdout.split(b"\0")
+        self.assertEqual(fields[-1], b"")
+        return sorted((fields[i].decode(), fields[i + 1].decode()) for i in range(0, len(fields) - 1, 2))
+
+    def test_a_legacy_log_directory_is_taken_whole_only_when_it_is_the_agents(self):
+        # **#593, the Planner's ruling of 2026-11-17**: a legacy `log-path`'s
+        # directory is taken whole only when it is the agent's own, the layout
+        # create-agent.sh laid before #50 (`<log-directory>/<agent>/admin.log`,
+        # root:root 0750): named for an agent found, root's, and holding
+        # nothing but the log and its rotations. Any other directory gives up
+        # the log and its rotations one by one, each a regular file, root's,
+        # with one link, and every other entry is named as left. A name
+        # carrying a newline is one left entry, never a take of its writer's
+        # choosing. A directory that cannot be listed is unread, never empty,
+        # and one gone or a link gives up nothing. Perturbations: take the
+        # directory whole whatever it holds, whatever its name or whoever owns
+        # it, take a rotation through a link, of a stranger's or with a second
+        # link, split the pairs on newlines, or read a failed listing as
+        # empty, and a read below fails.
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            shared = top / "log"
+            shared.mkdir()
+            for name in ("worker.log", "worker.log.1", "worker.log.2.gz", "worker.log-20261101",
+                         "stranger.txt", "worker.log.bak", "worker.logger", "worker.log.5"):
+                (shared / name).write_text("x\n")
+            (top / "elsewhere").write_text("another's\n")
+            (shared / "worker.log.3").symlink_to(top / "elsewhere")
+            (shared / "worker.log.4").mkdir()
+            os.link(top / "elsewhere", shared / "worker.log.6")
+            (shared / "evil\ntake").write_text("x\n")
+            self.assertEqual(self.log_takes(shared / "worker.log", strangers=[shared / "worker.log.5"]), sorted(
+                [("take", str(shared / n)) for n in ("worker.log", "worker.log.1", "worker.log.2.gz",
+                                                     "worker.log-20261101")]
+                + [("left", str(shared / n)) for n in ("stranger.txt", "worker.log.bak", "worker.logger",
+                                                       "worker.log.3", "worker.log.4", "worker.log.5",
+                                                       "worker.log.6", "evil\ntake")]
+                + [("stands", str(shared))]))
+            # The agent's own directory, holding the log and its rotation
+            # alone, is taken whole.
+            own = top / "m1"
+            own.mkdir()
+            (own / "admin.log").write_text("x\n")
+            (own / "admin.log.1").write_text("x\n")
+            self.assertEqual(self.log_takes(own / "admin.log"), [("take", str(own))])
+            one_by_one = [("stands", str(own)), ("take", str(own / "admin.log")),
+                          ("take", str(own / "admin.log.1"))]
+            # Named for no agent found, or not root's, it gives up its files
+            # one by one and stands.
+            self.assertEqual(self.log_takes(own / "admin.log", agents=("m2",)), one_by_one)
+            self.assertEqual(self.log_takes(own / "admin.log", strangers=[own]), one_by_one)
+            # Holding a stranger's file, it stands and the file is left.
+            (own / "notes").write_text("not the agent's\n")
+            self.assertEqual(self.log_takes(own / "admin.log"), sorted(one_by_one + [("left", str(own / "notes"))]))
+            # Gone, or a link, it gives up nothing and says so.
+            self.assertEqual(self.log_takes(top / "absent" / "admin.log"), [("passed", str(top / "absent"))])
+            (top / "linked").symlink_to(own)
+            self.assertEqual(self.log_takes(top / "linked" / "admin.log"), [("passed", str(top / "linked"))])
+            # A listing that fails is never an empty directory, and nothing in
+            # it is taken.
+            if os.geteuid() != 0:
+                shut = top / "m9"
+                shut.mkdir()
+                (shut / "admin.log").write_text("x\n")
+                shut.chmod(0o300)
+                try:
+                    self.assertEqual(self.log_takes(shut / "admin.log", agents=("m9",)), [("unread", str(shut))])
+                finally:
+                    shut.chmod(0o755)
+            # Under the script's errexit (Codex on #599), a find that fails
+            # and prints nothing, run as root or not, and a listing that ends
+            # before its status is printed, are unread as well.
+            for find in ("return 1", 'kill -9 "$BASHPID"'):
+                with self.subTest(find=find):
+                    self.assertEqual(self.log_takes(own / "admin.log", find=find), [("unread", str(own))])
+
+    def test_a_legacy_log_read_short_under_errexit_refuses_the_archive_and_the_purge(self):
+        """**Codex on #599**: the discovery loop and its refusal, under the
+        script's own options. A find that fails and prints nothing, and an
+        answer from log_paths cut off before its directory's verdict, each
+        name the directory and refuse both modes. Perturbations: print find's
+        status unguarded after it, as before, and the first case runs on with
+        nothing refused. Drop the loop's check for the verdict, and the second
+        does."""
+        script = self.script
+        q = shlex.quote
+        loop = script[script.index("declare -A LOG_LEFT=() LOG_DIRS_SAID=()\n"):]
+        loop = loop[:loop.index(" | sort -z)\n") + len(" | sort -z)\n")]
+        refusal = next(line for line in script.splitlines()
+                       if line.startswith('[ ${#LOG_UNREAD[@]} -eq 0 ] || die "the directory of a legacy log'))
+        with tempfile.TemporaryDirectory() as scratch:
+            shared = Path(scratch).resolve() / "var-log"
+            shared.mkdir()
+            log = shared / "weaver-worker.log"
+            log.write_text("the agent's\n")
+            cases = {
+                "find fails": ("find() { return 1; }\n" + shell_function(script, "log_paths"),
+                               f"PLAN {shared}  the directory of the legacy log {log} cannot be listed"),
+                "answer cut off": (shell_function(script, "log_paths")
+                                   + "log_paths() { printf 'take\\0%s\\0' \"$1\"; exit 1; }\n",
+                                   f"PLAN {shared}  the directory of the legacy log {log} was not read to its end"),
+            }
+            for case, (functions, said) in cases.items():
+                with self.subTest(case=case):
+                    program = (self.script_options() + self.ROOT_STAT
+                               + "declare -A AGENTS=([m1]=1) LOG_PATHS=()\n"
+                               + f"declare -A LOG_FILES=([{q(str(log))}]=1)\n"
+                               + "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                               + "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\n"
+                               + "in_operator_home() { return 1; }\n"
+                               + functions + loop + refusal + "\necho REACHED\n")
+                    run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20,
+                                         env={**os.environ, "STRANGERS": ""})
+                    got = run.stdout.splitlines()
+                    self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+                    self.assertTrue(any(line.startswith(said) for line in got), run.stdout + run.stderr)
+                    self.assertIn(f"DIE the directory of a legacy log cannot be listed: {shared}. Nothing is "
+                                  "archived or purged until it reads. Look at it by hand, then rerun", got)
+                    self.assertNotIn("REACHED", got)
+
+    def test_a_legacy_log_in_a_shared_directory_leaves_the_directory_and_its_strangers(self):
+        # **#593's acceptance**: a legacy log path in a shared directory beside
+        # a stranger's file and another agent's legacy log. Discovery takes
+        # each log and its rotation as paths of their own, and names the
+        # stranger's file as left, never the other log a second pass takes
+        # (the self-check on #593). The purge's derivation lists the files
+        # and never the directory, and the paths phase removes them and
+        # leaves the stranger's file and the directory, each said once by
+        # the first log in order. The archive takes
+        # every legacy log in one tarball, and an unlisted directory refuses
+        # both modes after the plan. Perturbations: take the directory whole,
+        # and the directory is a purge line and the stranger's file goes; name
+        # a left entry before every take is known, and the other log reads as
+        # left. The paths phase acts only on the lines under the test's
+        # scratch directory.
+        script = self.script
+        q = shlex.quote
+        loop = script[script.index("declare -A LOG_LEFT=() LOG_DIRS_SAID=()\n"):]
+        loop = loop[:loop.index(" | sort -z)\n") + len(" | sort -z)\n")]
+        plan_loop = script[script.index('for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do'):]
+        plan_loop = plan_loop[:plan_loop.index("\ndone\n") + len("\ndone\n")]
+        left_loop = legacy_log_judgement(script)
+        paths_phase = script[script.index('say "paths"\n'):script.index('say "accounts"\n')]
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            shared = top / "var-log"
+            shared.mkdir()
+            (shared / "weaver-worker.log").write_text("the agent's\n")
+            (shared / "weaver-worker.log.1").write_text("the agent's\n")
+            (shared / "m2-admin.log").write_text("the other agent's\n")
+            (shared / "stranger.log").write_text("not the agent's\n")
+            base = top / "state"
+            (base / "m1" / "weaver-m1").mkdir(parents=True)
+            listed = top / "purge-list"
+            program = ("set -uo pipefail\n" + self.ROOT_STAT
+                       + "SUDO_RULES=(); LDSO_CONFS=(); HOMES=(); TMP_PATHS=(); WEAVER_USERS=(); WEAVER_GROUPS=()\n"
+                       "HOME_QUOTAS=(); PURGE=(); PURGE_FAILED=0; OWN_TERRITORIES=(); TERRITORY_PATHS=()\n"
+                       "declare -A PREFIXES=() COORD_ROOTS=() AGENTS=([m1]=1 [m2]=1) LOG_PATHS=()\n"
+                       f"declare -A TERRITORY_BASES=([{q(str(base))}]=1)\n"
+                       f"declare -A LOG_FILES=([{q(str(shared / 'weaver-worker.log'))}]=1 "
+                       f"[{q(str(shared / 'm2-admin.log'))}]=1)\n"
+                       f"AGENT_FOLDERS=({q(str(base / 'm1'))})\n"
+                       "LEGACY_DIR=/nonexistent/weaver\nOP_HOME=\n"
+                       "say() { :; }\nplan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                       "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\nheld_is() { return 0; }\n"
+                       "in_operator_home() { return 1; }\n"
+                       + shell_function(script, "log_paths") + loop
+                       + shell_function(script, "spans_a_base") + shell_function(script, "candidate")
+                       + shell_function(script, "purge_candidates") + shell_function(script, "purge_lines_within")
+                       + plan_loop + left_loop
+                       # Only the lines under this scratch directory reach the
+                       # paths phase: the derivation also names the box's own
+                       # /etc/weaver, which a test never acts on.
+                       + f"purge_candidates | awk -v t={q('path ' + str(top) + '/')} 'index($0, t) == 1' > {q(str(listed))}\n"
+                       + f"sed 's/^/LISTED /' {q(str(listed))}\n"
+                       + f"PURGE_ACTED=$(mktemp)\npurge_lines_within {q(str(listed))} > \"$PURGE_ACTED\"\n"
+                       + paths_phase + 'rm -f -- "$PURGE_ACTED"\n')
+            run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20,
+                                 env={**os.environ, "STRANGERS": ""})
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            got = run.stdout.splitlines()
+            for name in ("weaver-worker.log", "weaver-worker.log.1", "m2-admin.log"):
+                self.assertIn(f"LISTED path {shared / name}", got)
+                self.assertIn(f"PLAN removed {shared / name}", got)
+                self.assertFalse((shared / name).exists())
+            self.assertNotIn(f"LISTED path {shared}", got)
+            # The logs are read in order, so the first names what both share,
+            # once.
+            self.assertEqual([line for line in got if "left in place" in line], [
+                f"PLAN {shared / 'stranger.log'}  beside the legacy log {shared / 'm2-admin.log'}, "
+                "and taken by nothing this discovery found: left in place, untouched"], run.stdout)
+            self.assertEqual([line for line in got if "directory stands" in line], [
+                f"PLAN {shared}  the directory of the legacy log {shared / 'm2-admin.log'}, "
+                "not the agent's own: the log and its rotations go, and the directory stands"], run.stdout)
+            self.assertEqual((shared / "stranger.log").read_text(), "not the agent's\n")
+            self.assertTrue(shared.is_dir())
+        # Every legacy log in one tarball, and an unlisted directory refuses
+        # both modes after the plan and before either acts.
+        self.assertIn('  [ ${#LOG_PATHS[@]} -gt 0 ] && archive_path legacy-logs "${!LOG_PATHS[@]}"\n', script)
+        refusal = script.index('[ ${#LOG_UNREAD[@]} -eq 0 ] || die ')
+        self.assertLess(script.index('[ "$MODE" = plan ] && { say "plan only.'), refusal)
+        self.assertLess(refusal, script.index('if [ "$MODE" = archive ]; then'))
+
+    def test_a_listing_that_fails_after_another_read_its_directory_still_refuses(self):
+        """**CodeRabbit on #598**: two legacy logs in one directory, the first
+        listing read and the second failing, as a directory that changes
+        between them would. The failure is counted whatever came before it,
+        said once, and refuses both modes. Perturbation: count a failure only
+        for a directory not yet said, as before, and the run goes on with
+        nothing refused."""
+        script = self.script
+        q = shlex.quote
+        loop = script[script.index("declare -A LOG_LEFT=() LOG_DIRS_SAID=()\n"):]
+        loop = loop[:loop.index(" | sort -z)\n") + len(" | sort -z)\n")]
+        refusal = next(line for line in script.splitlines()
+                       if line.startswith('[ ${#LOG_UNREAD[@]} -eq 0 ] || die "the directory of a legacy log'))
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            shared = top / "var-log"
+            shared.mkdir()
+            first, second = shared / "a-admin.log", shared / "b-admin.log"
+            for log in (first, second):
+                log.write_text("a log\n")
+            calls = top / "find-calls"
+            # find answers the first listing and fails every later one. Each
+            # listing runs in a subshell of its own, so the count is a file's.
+            find = (f'find() {{ local n; n=$(cat {q(str(calls))} 2>/dev/null || echo 0); '
+                    f'echo $((n + 1)) > {q(str(calls))}; [ "$n" -eq 0 ] || return 1; command find "$@"; }}\n')
+            program = (self.script_options() + self.ROOT_STAT
+                       + "declare -A AGENTS=([m1]=1) LOG_PATHS=()\n"
+                       + f"declare -A LOG_FILES=([{q(str(first))}]=1 [{q(str(second))}]=1)\n"
+                       + "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                       + "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\n"
+                       + "in_operator_home() { return 1; }\n"
+                       + find + shell_function(script, "log_paths") + loop + refusal + "\necho REACHED\n")
+            run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20,
+                                 env={**os.environ, "STRANGERS": ""})
+            got = run.stdout.splitlines()
+            self.assertEqual(calls.read_text().strip(), "2", run.stdout + run.stderr)
+            self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+            self.assertEqual([line for line in got if "cannot be listed, so" in line], [
+                f"PLAN {shared}  the directory of the legacy log {second} cannot be listed, so the archive "
+                "and the purge refuse"], run.stdout)
+            self.assertIn(f"DIE the directory of a legacy log cannot be listed: {shared}. Nothing is "
+                          "archived or purged until it reads. Look at it by hand, then rerun", got)
+            self.assertNotIn("REACHED", got)
+
+    def test_what_a_legacy_log_leaves_is_judged_by_containment_in_every_target(self):
+        """**CodeRabbit on #598**: a legacy log's directory that stands, and an
+        entry beside the log that no log takes, are judged once every target is
+        known, by containment on resolved paths past a slash, under the
+        script's own options. Under an agent's
+        folder, the entry is taken with the folder and the directory goes with
+        it. In the earlier layout's directory, taken whole, the entry is taken
+        with it and the directory is a target of its own. In a directory whose
+        name only begins with that one's, both stand and are left. Beside an
+        agent's folder, the folder is said by its own line alone. A home is
+        judged against every target the same way, itself a target included.
+        Perturbations: compare by equality alone, and the first two cases read
+        untouched. Drop the slash, and the near name is taken. Judge a
+        directory as it is read, and it stands in the first two. Say an entry
+        that is a target again, and the fourth case names the folder. Drop a home's
+        equality or its slash, or judge it against the agents' folders alone,
+        and a home line fails. Count a target that is a link as holding the
+        home it points into, and that home reads as archived with the link."""
+        script = self.script
+        q = shlex.quote
+        loop = script[script.index("declare -A LOG_LEFT=() LOG_DIRS_SAID=()\n"):]
+        loop = loop[:loop.index(" | sort -z)\n") + len(" | sort -z)\n")]
+        plan_loop = script[script.index('for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do'):]
+        plan_loop = plan_loop[:plan_loop.index("\ndone\n") + len("\ndone\n")]
+        judgement = legacy_log_judgement(script)
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            base = top / "state"
+            folder = base / "m1"
+            (folder / "weaver-m1").mkdir(parents=True)
+            under_folder = folder / "logs"
+            under_folder.mkdir()
+            legacy = top / "weaver"
+            legacy.mkdir()
+            near = top / "weaver2"
+            near.mkdir()
+            for d in (under_folder, legacy, near, base):
+                (d / "old-admin.log").write_text("a log\n")
+                (d / "keep.txt").write_text("not a log\n")
+            goes = "not the agent's own: the log and its rotations go"
+            cases = {
+                "under an agent's folder": (under_folder, [
+                    f"PLAN {under_folder}  the directory of the legacy log {under_folder / 'old-admin.log'}, "
+                    f"{goes}, and the directory goes with {folder}",
+                    f"PLAN {under_folder / 'keep.txt'}  beside the legacy log {under_folder / 'old-admin.log'}: "
+                    f"taken with {folder}"]),
+                "in the earlier layout's directory": (legacy, [
+                    f"PLAN {legacy}  the directory of the legacy log {legacy / 'old-admin.log'}, {goes}, "
+                    "and the directory is taken whole, a target of its own",
+                    f"PLAN {legacy / 'keep.txt'}  beside the legacy log {legacy / 'old-admin.log'}: "
+                    f"taken with {legacy}"]),
+                "a near name": (near, [
+                    f"PLAN {near}  the directory of the legacy log {near / 'old-admin.log'}, {goes}, "
+                    "and the directory stands",
+                    f"PLAN {near / 'keep.txt'}  beside the legacy log {near / 'old-admin.log'}, and taken by "
+                    "nothing this discovery found: left in place, untouched"]),
+                "beside an agent's folder": (base, [
+                    f"PLAN {base}  the directory of the legacy log {base / 'old-admin.log'}, {goes}, "
+                    "and the directory stands",
+                    f"PLAN {base / 'keep.txt'}  beside the legacy log {base / 'old-admin.log'}, and taken by "
+                    "nothing this discovery found: left in place, untouched"]),
+            }
+            for case, (d, said) in cases.items():
+                with self.subTest(case=case):
+                    program = (self.script_options() + self.ROOT_STAT
+                               + "OWN_TERRITORIES=()\n"
+                               + f"TERRITORY_PATHS=({q(str(folder))})\n"
+                               + "declare -A AGENTS=([m1]=1) LOG_PATHS=()\n"
+                               + f"declare -A TERRITORY_BASES=([{q(str(base))}]=1)\n"
+                               + f"declare -A LOG_FILES=([{q(str(d / 'old-admin.log'))}]=1)\n"
+                               + f"AGENT_FOLDERS=({q(str(folder))})\n"
+                               + f"LEGACY_DIR={q(str(legacy))}\nOP_HOME=\n"
+                               + "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                               + "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\n"
+                               + "in_operator_home() { return 1; }\n"
+                               + shell_function(script, "log_paths") + loop + shell_function(script, "spans_a_base")
+                               + plan_loop + judgement)
+                    run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20,
+                                         env={**os.environ, "STRANGERS": ""})
+                    self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                    got = run.stdout.splitlines()
+                    self.assertEqual([line for line in got if "the directory of the legacy log" in line
+                                      or "beside the legacy log" in line], said, run.stdout)
+            # A home is judged against every target, itself one included, and
+            # a near name is not one, by the script's own loop over the homes.
+            (legacy / "home").mkdir()
+            homes_loop = script[script.index('HOMES=()\nfor u in "${WEAVER_USERS[@]}"; do\n'):]
+            homes_loop = homes_loop[:homes_loop.index("\ndone\n") + len("\ndone\n")]
+            # A target that is a link holds no home: the archive keeps the link
+            # and the purge removes it, never the home it points into.
+            (top / "linked" / "home").mkdir(parents=True)
+            (top / "lnk").symlink_to(top / "linked")
+            homes = {"weaver-m1": str(legacy / "home"), "weaver-m2": str(legacy), "weaver-m3": str(near),
+                     "weaver-m4": str(top / "linked" / "home")}
+            program = (self.script_options() + self.passwd_stub(homes)
+                       + "WEAVER_USERS=(weaver-m1 weaver-m2 weaver-m3 weaver-m4)\nOWN_TERRITORIES=()\n"
+                       + f"AGENT_FOLDERS=({q(str(folder))})\n"
+                       + f"TERRITORY_PATHS=({q(str(folder))} {q(str(legacy))} {q(str(top / 'lnk'))})\n"
+                       + "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                       + shell_function(script, "home_within") + homes_loop)
+            run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertEqual(run.stdout.splitlines(), [
+                f"PLAN {legacy / 'home'}  (home of weaver-m1, archived with {legacy})",
+                f"PLAN {legacy}  (home of weaver-m2, archived with {legacy})",
+                f"PLAN {near}  (home of weaver-m3): outside /home and everything the purge takes, left in place, "
+                "untouched",
+                f"PLAN {top / 'linked' / 'home'}  (home of weaver-m4): outside /home and everything the purge "
+                "takes, left in place, untouched"], run.stdout)
+
+    # agent_folders and territories_outside look as root: every fixture path
+    # is root's but those STRANGERS names, a territory `weaver-<a>` carries
+    # its state group, and a folder's `home` is its account's. A stranger's
+    # path answers STRANGER_UID, and no name, as stat does for a uid that has
+    # none, never the runner's, which is root's when the suite runs as root
+    # (Codex on #599, the same class).
+    FOLDER_STAT = ('stat() { local p="${@: -1}" q; '
+                   'case ":${STRANGERS:-}:" in *":$p:"*) case "$2" in %U) echo UNKNOWN ;; '
+                   '%u*) command stat "$@" | sed "s/^[0-9]*/' + str(STRANGER_UID) + '/" ;; '
+                   '*) command stat "$@" ;; esac; return ;; esac; '
+                   'case "$2" in "%u:%G:%a") printf "0:%s-state:750\\n" "${p##*/}" ;; '
+                   '"%U") case "$p" in */home) q=${p%/home}; printf "weaver-%s\\n" "${q##*/}" ;; '
+                   '*) command stat "$@" ;; esac ;; '
+                   "*) command stat \"$@\" | sed 's/^[0-9]*/0/' ;; esac; }\n")
+
+    def read_key_line(self):
+        """read_key, which the script defines on one line."""
+        return next(line for line in self.script.splitlines() if line.startswith("read_key() {")) + "\n"
+
+    @staticmethod
+    def passwd_stub(homes):
+        """getent passwd answering each account of HOMES with its home."""
+        cases = "".join(f'{u}) echo "{u}:x:{uid}:{uid}::{h}:/sbin/nologin" ;; '
+                        for uid, (u, h) in enumerate(homes.items(), start=12345))
+        return f'getent() {{ case "$2" in {cases}*) return 2 ;; esac; }}\n'
+
+    def folder_bases(self, roots, users, homes, strangers=(), stand_ins=""):
+        """folder_bases ROOTS -- USERS, with m1 and m2 the agents found, and
+        STAND_INS defined last, over the script's own."""
+        program = (self.FOLDER_STAT + self.passwd_stub(homes) + "declare -A AGENTS=([m1]=1 [m2]=1)\n"
+                   + self.read_key_line() + shell_function(self.script, "is_box_account") + shell_function(self.script, "strip_suffix")
+                   + shell_function(self.script, "agent_folders") + shell_function(self.script, "folder_bases")
+                   + stand_ins + 'folder_bases "$@"')
+        run = subprocess.run(["bash", "-c", "set -euo pipefail\n" + program, "x", *map(str, roots), "--", *users],
+                             env={**os.environ, "STRANGERS": ":".join(map(str, strangers))},
+                             text=True, capture_output=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        return run.stdout.splitlines()
+
+    @staticmethod
+    def made_under(base, agent="m1"):
+        """An agent's folder of the ruled layout under BASE: its territory and
+        its home."""
+        (base / agent / f"weaver-{agent}").mkdir(parents=True)
+        (base / agent / "home").mkdir()
+        return base / agent
+
+    def test_a_folder_made_under_a_moved_record_is_archived_and_its_limit_cleared(self):
+        # **#594's acceptance** (Codex on #582): m1 was made under base A and
+        # capped, then the stack record moved to B. Discovery finds A from
+        # m1's own facts, so the folder is an agent's folder, its territory
+        # is covered and not listed alone, its home goes with it, A's other
+        # entries are named as left, and the folder's mark gives the limit,
+        # which the purge sets to none. Its derivation lists the folder, the
+        # limit and the account, never A. Perturbation: drop the joining
+        # loop, and the folder is missed and the limit is never listed.
+        script = self.script
+        q = shlex.quote
+
+        def segment(start, end):
+            return script[script.index(start):script.index(end)]
+
+        def through_line(start, last):
+            i = script.index(start)
+            j = script.index(last, i)
+            return script[i:script.index("\n", j) + 1]
+
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            base_a, base_b = top / "state-a", top / "state-b"
+            folder = self.made_under(base_a)
+            (base_a / "stray").mkdir()
+            base_b.mkdir()
+            root = top / "admin" / "m1"
+            root.mkdir(parents=True)
+            (root / "territory").write_text(f"{folder / 'weaver-m1'}\n")
+            log = top / "setquota.log"
+            stubs = (self.FOLDER_STAT + self.passwd_stub({"weaver-m1": folder / "home"})
+                     + 'findmnt() { case "$3" in OPTIONS) echo "rw,relatime,prjquota" ;; TARGET) echo "/state drive" ;; esac; }\n'
+                     + 'lsattr() { echo "    12345 --------------P--- ${@: -1}"; }\n'
+                     + f'setquota() {{ printf "%s\\n" "$*" >> {q(str(log))}; }}\n'
+                     + "plan() { printf 'PLAN %s\\n' \"$*\"; }\nsay() { :; }\n")
+            program = ("set -euo pipefail\n" + stubs + self.read_key_line()
+                       + f"OP_HOME=\nAGENT_ROOTS=({q(str(root))})\nWEAVER_USERS=(weaver-m1)\nWEAVER_GROUPS=()\n"
+                       + "SUDO_RULES=(); LDSO_CONFS=(); TMP_PATHS=(); TERRITORY_PATHS=()\nLEGACY_DIR=/nonexistent/weaver\n"
+                       + "declare -A AGENTS=([m1]=1) PREFIXES=() LOG_PATHS=() COORD_ROOTS=() BASES_SAID=()\n"
+                       + f"declare -A TERRITORY_BASES=([{q(str(base_b))}]=1)\n"
+                       + "".join(shell_function(script, fn) for fn in (
+                           "in_operator_home", "is_box_account", "strip_suffix", "agent_folders", "folder_bases",
+                           "resolved", "left_in_base", "spans_a_base", "candidate", "home_projects", "plan_home_quotas",
+                           "remove_home_quotas", "territories_outside", "home_within", "purge_candidates"))
+                       + segment("# **The bases an agent's own facts name join the record's**", "# **home_projects FOLDER...")
+                       + through_line("HOME_PROJECTS=()\n", 'plan_home_quotas "${HOME_PROJECTS[@]}"')
+                       + segment("TERRITORIES_JUDGED=1\n", "# **The earlier layout's directory and each path")
+                       + segment("# **A home is read from its account wherever it stands**", "# **tmp_paths DIR:")
+                       + 'printf "FOLDER %s\\n" "${AGENT_FOLDERS[@]}"\nprintf "OWN %s\\n" "${OWN_TERRITORIES[@]}"\n'
+                       + "purge_candidates | sed 's/^/LISTED /'\n"
+                       + "mapfile -t Q < <(purge_candidates | sed -n 's/^quota //p')\nremove_home_quotas \"${Q[@]}\"\n")
+            run = subprocess.run(["bash", "-c", program], env={**os.environ, "STRANGERS": ""},
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            got = run.stdout.splitlines()
+            self.assertIn(f"PLAN {base_a}  a base an agent's territory key or home names, beyond the stack record's",
+                          got)
+            self.assertIn(f"FOLDER {folder}", got)
+            self.assertIn("OWN ", got, "the territory is covered by its folder, not listed alone")
+            self.assertIn(f"PLAN {folder / 'home'}  (home of weaver-m1, archived with {folder})", got)
+            self.assertIn(f"PLAN {base_a / 'stray'}  in the base, of no agent this discovery found: left in place, untouched",
+                          got)
+            for line in (f"path {folder}", "user weaver-m1", "quota 12345 /state drive"):
+                self.assertIn(f"LISTED {line}", got)
+            self.assertNotIn(f"LISTED path {base_a}", got)
+            self.assertEqual(log.read_text().splitlines(), ["-P 12345 0 0 0 0 /state drive"])
+            # **A base the record names already, however spelled, is not
+            # joined twice**: the record naming A through B's parent says no
+            # new base and names A's stray entry once. Perturbation: drop the
+            # canonical comparison, and A is said again and its stray twice.
+            spelled = f"{base_b}/../{base_a.name}"
+            again = subprocess.run(["bash", "-c", program.replace(
+                f"declare -A TERRITORY_BASES=([{q(str(base_b))}]=1)\n",
+                f"declare -A TERRITORY_BASES=([{q(spelled)}]=1)\n")],
+                env={**os.environ, "STRANGERS": ""}, text=True, capture_output=True, timeout=20)
+            self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+            seen = again.stdout.splitlines()
+            self.assertFalse([line for line in seen if "beyond the stack record's" in line], again.stdout)
+            self.assertEqual(len([line for line in seen if line.startswith(f"PLAN {base_a / 'stray'}  ")]), 1,
+                             again.stdout)
+            self.assertIn(f"FOLDER {folder}", seen)
+        self.assertIn('done < <(folder_bases "${AGENT_ROOTS[@]}" -- "${WEAVER_USERS[@]}")\n'
+                      'AGENT_FOLDERS=()\nAGENT_LISTED=$(agent_folders "${!TERRITORY_BASES[@]}")\n', script)
+
+    def test_an_entry_that_is_a_base_or_holds_what_is_taken_is_not_named_left(self):
+        # **The self-check on #594**: a base found from an agent's facts can
+        # sit in another base, and an entry of a base can hold a root's own
+        # territory the purge takes. Neither is named as left, and a stray
+        # entry still is. Perturbation: compare each entry with what is taken
+        # exactly again, and the inner base and the holder read as left.
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            outer = top / "srv"
+            inner = outer / "state"
+            folder = self.made_under(inner)
+            custom = outer / "custom" / "weaver-m2"
+            custom.mkdir(parents=True)
+            (outer / "stray").mkdir()
+            program = (f"declare -A TERRITORY_BASES=([{shlex.quote(str(outer))}]=1 [{shlex.quote(str(inner))}]=1)\n"
+                       + shell_function(self.script, "resolved") + shell_function(self.script, "left_in_base")
+                       + 'left_in_base "$@"')
+            run = subprocess.run(["bash", "-c", "set -euo pipefail\n" + program, "x", str(outer), str(folder),
+                                  str(custom)], text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(run.stdout.splitlines(), [str(outer / "stray")])
+
+    def test_a_link_taken_is_compared_as_the_link_and_a_base_named_through_one_as_its_directory(self):
+        """**CodeRabbit on #598**: the purge removes a link and never what it
+        points to, so left_in_base compares each path taken as the purge
+        removes it. A link taken that points at an entry of the base leaves
+        the entry named as left, and a link taken that is itself an entry is
+        not named. A base is never removed, so one named through a link is its
+        directory, and the entry that is that base is not named. Perturbations:
+        compare what is taken canonical, as before, and the entry pointed at
+        is dropped while the link is named. Compare the bases resolved, and
+        the base named through a link is named."""
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            outer = top / "srv"
+            (outer / "stuff").mkdir(parents=True)
+            (outer / "inner").mkdir()
+            (top / "elsewhere").mkdir()
+            (outer / "lnk").symlink_to(top / "elsewhere")
+            (top / "legacy").symlink_to(outer / "stuff")
+            (top / "inner-link").symlink_to(outer / "inner")
+            q = shlex.quote
+            program = (f"declare -A TERRITORY_BASES=([{q(str(outer))}]=1 [{q(str(top / 'inner-link'))}]=1)\n"
+                       + shell_function(self.script, "resolved") + shell_function(self.script, "left_in_base")
+                       + 'left_in_base "$@"')
+            run = subprocess.run(["bash", "-c", self.script_options() + program, "x", str(outer),
+                                  str(top / "legacy"), str(outer / "lnk")],
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(run.stdout.splitlines(), [str(outer / "stuff")])
+
+    def test_a_base_under_the_operators_home_is_said_once(self):
+        # **The self-check on #594**: a base the record names under the
+        # operator's home is said and dropped, and the same base found again
+        # from an agent's facts, in another spelling, is not said twice nor
+        # joined. Perturbation: drop the said-once check, and it is said
+        # twice.
+        script = self.script
+        prune = script[script.index("declare -A BASES_SAID=()\n"):]
+        prune = prune[:prune.index("\ndone\n") + len("\ndone\n")]
+        join = script[script.index("# **The bases an agent's own facts name join the record's**"):]
+        join = join[:join.index('done < <(folder_bases "${AGENT_ROOTS[@]}" -- "${WEAVER_USERS[@]}")\n')]
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            base = top / "operator" / "state"
+            base.mkdir(parents=True)
+            spelled = f"{top}/operator/../operator/state"
+            program = ("set -euo pipefail\n" + f"OP_HOME={shlex.quote(str(top / 'operator'))}\n"
+                       + f"declare -A TERRITORY_BASES=([{shlex.quote(spelled)}]=1)\nAGENT_ROOTS=()\nWEAVER_USERS=()\n"
+                       + "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                       + f"folder_bases() {{ printf '%s\\n' {shlex.quote(str(base))}; }}\n"
+                       + shell_function(script, "in_operator_home") + prune + join
+                       + 'done < <(folder_bases "${AGENT_ROOTS[@]}" -- "${WEAVER_USERS[@]}")\n'
+                       + 'printf "BASES %s\\n" "${#TERRITORY_BASES[@]}"\n')
+            run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertEqual(run.stdout.splitlines(),
+                             [f"PLAN {spelled}  under the operator's home: not touched", "BASES 0"])
+
+    def test_a_roots_territory_key_alone_finds_the_agents_folder(self):
+        # #594: the account is gone, as on a purge's rerun, so only the root's
+        # `territory` key names the folder, written plain or with a trailing
+        # slash. Perturbations: drop the key's lookup, or split the key as
+        # written, and nothing is found.
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            folder = self.made_under(top / "state-a")
+            root = top / "admin" / "m1"
+            root.mkdir(parents=True)
+            for key in (f"{folder / 'weaver-m1'}", f"{folder / 'weaver-m1'}/"):
+                (root / "territory").write_text(f"{key}\n")
+                self.assertEqual(self.folder_bases([root], [], {}), [str(top / "state-a")], key)
+
+    def test_an_accounts_home_alone_finds_the_agents_folder(self):
+        # #594: the root carries no `territory` key and the territory is
+        # gone, so only the account's home in passwd names the folder, which
+        # holds only the home its account owns. The home is read plain or
+        # with a trailing slash, and a suffixed account's home is read as its
+        # agent's. Perturbations: drop the home's lookup, or split the home
+        # as written, and nothing is found.
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            folder = top / "state-a" / "m1"
+            (folder / "home").mkdir(parents=True)
+            root = top / "admin" / "m1"
+            root.mkdir(parents=True)
+            for home in (folder / "home", f"{folder / 'home'}/"):
+                self.assertEqual(self.folder_bases([root], ["weaver-m1"], {"weaver-m1": home}),
+                                 [str(top / "state-a")], home)
+            self.assertEqual(self.folder_bases([], ["weaver-m1-state"], {"weaver-m1-state": folder / "home"}),
+                             [str(top / "state-a")])
+
+    def test_a_key_or_a_home_naming_no_agents_folder_adds_no_base(self):
+        # #594: a folder is one only by agent_folders' checks, so a key or a
+        # home naming a folder that is not root's, a folder not named for
+        # its agent, a home not named `home`, or a folder in the root
+        # directory adds no base, and a territory the key names is judged
+        # alone by territories_outside as before. A refusal last answers 0.
+        # Perturbations: skip the check against agent_folders, the folder's
+        # name check or the root directory's refusal, or end the loop on the
+        # check's own status, and a read below fails.
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            base = top / "state-a"
+            stranger = self.made_under(base)
+            (base / "other" / "weaver-m2").mkdir(parents=True)
+            roots = top / "admin"
+            for name, key in (("m1", stranger / "weaver-m1"), ("m2", base / "other" / "weaver-m2")):
+                (roots / name).mkdir(parents=True)
+                (roots / name / "territory").write_text(f"{key}\n")
+            # m1 last, so the lookup's last look is a refusal and the function
+            # still answers 0 (the self-check on #594).
+            self.assertEqual(self.folder_bases([roots / "m2", roots / "m1"], [], {}, strangers=[stranger]), [])
+            # A home whose folder is another agent's name, one not named
+            # `home`, and a box account's home in a real folder.
+            self.assertEqual(self.folder_bases([], ["weaver-m2", "weaver-m1", "weaver-gatecon"], {
+                "weaver-m2": stranger / "home", "weaver-m1": stranger / "weaver-m1",
+                "weaver-gatecon": stranger / "home"}), [])
+            # The territory under `other/` is judged alone, as before.
+            listed = self.run_fn("territories_outside", "--", str(roots / "m2"), env=self.stat_env(top))
+            self.assertEqual(listed, str(base / "other" / "weaver-m2"))
+            # Once the folder is root's, the key finds it.
+            self.assertEqual(self.folder_bases([roots / "m1"], [], {}), [str(base)])
+            # A key naming `<X>/other/weaver-m2` names no folder of m2's, even
+            # where X holds one.
+            self.made_under(base, "m2")
+            self.assertEqual(self.folder_bases([roots / "m2"], [], {}), [])
+            # A folder in the root directory, read through stand-ins that
+            # resolve every existing path to it and pass every folder.
+            self.assertEqual(self.folder_bases([roots / "m1"], [], {}, stand_ins=(
+                'realpath() { case "$1" in -e) echo / ;; *) command realpath "$@" ;; esac; }\n'
+                'agent_folders() { printf "%s\\n" "$1/m1"; }\n')), [])
 
 # The account database's stand-ins for the purge (#140): getent reads the
 # model's passwd and group, userdel removes the user from both and, as the real
@@ -8868,7 +10234,7 @@ class RoundOneOf79Tests(unittest.TestCase):
         sudo = self.dir / "sudo"
         sudo.write_text(f'#!/bin/sh\nIFS= read -r a < {shlex.quote(str(answer_file))}\nprintf "%s\\n" "$a"\n')
         sudo.chmod(0o755)
-        program = shell_function(script, "as_account") + shell_function(script, "probe_connector") + 'probe_connector "$1"'
+        program = account_drop_source() + shell_function(script, "probe_connector") + 'probe_connector "$1"'
         # **The drop's PATH is this directory alone** (B3), so the account's
         # `sudo -n` is the stand-in, never one found on the box's PATH.
         env = {**os.environ, "PATH": f"{self.dir}{os.pathsep}{os.environ['PATH']}",
@@ -8894,11 +10260,13 @@ class RoundOneOf79Tests(unittest.TestCase):
         # sudo in root mode, and the runuser log is empty.
         drops = self.dir / "drops"
         runuser = self.dir / "runuser"
-        runuser.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$DROPS"\nshift 3\nexec "$@"\n')
+        # It starts under `env -i` (#590), so it names its log and env by path.
+        runuser.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> {shlex.quote(str(drops))}\nshift 4\n'
+                           f'exec {shutil.which("env", path=BOX_PATH)} "$@"\n')
         runuser.chmod(0o755)
         answer_file.write_text('{"kind":"validated"}\n')
         run = subprocess.run(["bash", "-c", program, "x", "validate"],
-                             env={**env, "ROOT_OPERATOR": "1", "DROPS": str(drops)},
+                             env={**env, "ROOT_OPERATOR": "1"},
                              text=True, capture_output=True, timeout=20)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual(drops.read_text(), f"-u weaver-admincon -- env -i PATH={self.dir} "
@@ -8989,11 +10357,14 @@ class RoundOneOf79Tests(unittest.TestCase):
             (base / "m1" / "home").mkdir()
             roots_owned = ":".join(str(base / n) for n in ("m1", "weaver-old", "lost+found", "web", "weaver-web"))
             # The tester owns every file here, so `stat -c %u` answers 0 for
-            # what the fixture calls root's and the tester's uid elsewhere.
+            # what the fixture calls root's and STRANGER_UID elsewhere, never
+            # the runner's (Codex on #599).
             stat_double = ('stat() { local p="${@: -1}"; case ":$ROOTS_OWNED:" in *":$p:"*) echo 0 ;; '
-                           '*) command stat "$@" ;; esac; }\n')
+                           '*) case "$2" in %u) echo ' + str(STRANGER_UID) + ' ;; *) command stat "$@" ;; esac ;; '
+                           'esac; }\n')
             program = (stat_double + "declare -A AGENTS=([m1]=1 [old]=1 [alice]=1 [web]=1)\n"
-                       + shell_function(script, "agent_folders") + shell_function(script, "left_in_base")
+                       + shell_function(script, "agent_folders") + shell_function(script, "resolved")
+                       + shell_function(script, "left_in_base")
                        + 'mapfile -t F < <(agent_folders "$1")\nprintf "folder %s\\n" "${F[@]}"\n'
                        + 'left_in_base "$1" "${F[@]}" | sort | sed "s/^/left /"')
             run = subprocess.run(["bash", "-c", program, "x", str(base)], env={**os.environ, "ROOTS_OWNED": roots_owned},
@@ -9023,7 +10394,7 @@ class RoundOneOf79Tests(unittest.TestCase):
             elsewhere.mkdir(parents=True)
             self.assertEqual(self.run_fn_in(script, "home_within", str(folder / "home"), str(folder)), str(folder))
             self.assertEqual(self.run_fn_in(script, "home_within", str(elsewhere), str(folder)), "")
-        self.assertIn('*) plan "$h  (home of $u): outside /home and every agent\'s folder, left in place, untouched" ;;', script)
+        self.assertIn('*) plan "$h  (home of $u): outside /home and everything the purge takes, left in place, untouched" ;;', script)
         self.assertIn('done < <(left_in_base "$d" "${TERRITORY_PATHS[@]}" "${HOMES[@]}")', script)
 
     def test_no_base_and_no_path_above_one_is_archived_or_purged_whole(self):
@@ -9081,7 +10452,8 @@ class RoundOneOf79Tests(unittest.TestCase):
                            + "free_name() { printf '%s' \"$1\"; }\ntarz() { : > \"$1\"; }\nas_op() { \"$@\"; }\n"
                            + shell_function(script, "spans_a_base") + shell_function(script, "candidate")
                            + shell_function(script, "purge_candidates") + shell_function(script, "purge_lines_outside")
-                           + shell_function(script, "purge_lines_within") + shell_function(script, "left_in_base")
+                           + shell_function(script, "purge_lines_within") + shell_function(script, "resolved")
+                           + shell_function(script, "left_in_base")
                            + archive_path + "\n" + tail)
                 ran = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
                 self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
@@ -9167,14 +10539,15 @@ class RoundOneOf79Tests(unittest.TestCase):
         # account is gone, a folder with no home, a linked home, and a drive without
         # project quotas carry no cap, and a folder whose mount cannot be read
         # is named and keeps the purge from closing clean. **What the home carries is a report and
-        # never acted on**: the agent owns its home and can set its project to
-        # another agent's uid until #587 lands, so a home moved to m1's project
-        # has only its own account's limit removed, and the plan names the
-        # move. The purge sets each project's limit to none before the paths
-        # go, and a limit left standing (setquota failing, or absent) stops the
-        # purge there (CodeRabbit on #582). Perturbations: read the project off the home, follow a
-        # linked home, skip the prjquota check, drop the failure's return, or
-        # move the step after the paths, and a read below fails.
+        # never acted on**: the agent owns its home, and a home made before
+        # #587 or moved by hand can carry another agent's uid, so a home moved
+        # to m1's project has only its own account's limit removed, and the
+        # plan names the move. The purge sets each project's limit to none
+        # before the paths go, and a limit left standing (setquota failing, or
+        # absent) stops the purge there (CodeRabbit on #582). Perturbations:
+        # read the project off the home, follow a linked home, skip the
+        # prjquota check, drop the failure's return, or move the step after
+        # the paths, and a read below fails.
         script = (DEPLOY / "decommission.sh").read_text()
         with tempfile.TemporaryDirectory() as scratch:
             base = Path(scratch).resolve() / "state"
@@ -9198,7 +10571,10 @@ class RoundOneOf79Tests(unittest.TestCase):
                      'weaver-m8) echo "weaver-m8:x:67890:67890::/x:/sbin/nologin" ;; '
                      'weaver-m9) echo "weaver-m9:x:78901:78901::/x:/sbin/nologin" ;; '
                      'weaver-m10) echo "weaver-m10:x:89012:89012::/x:/sbin/nologin" ;; *) return 2 ;; esac; }\n'
-                     'lsattr() { case "$(realpath -- "${@: -1}")" in */m1/home|*/m5/home|*/m1|*/m10) echo "    12345 --------------P--- ${@: -1}" ;; '
+                     # A home carries the inherit flag and a folder's mark
+                     # does not, as create-agent.sh leaves them (#582, #600).
+                     'lsattr() { case "$(realpath -- "${@: -1}")" in */m1/home|*/m5/home) echo "    12345 --------------P--- ${@: -1}" ;; '
+                     '*/m1|*/m10) echo "    12345 ---------------- ${@: -1}" ;; '
                      '*/m5) echo "    23456 ---------------- ${@: -1}" ;; */m9) return 1 ;; '
                      # m4 and m6 carry their own marks, so only the linked home
                      # and the drive's missing project quotas pass them over.
@@ -9321,8 +10697,10 @@ class RoundOneOf79Tests(unittest.TestCase):
                                  text=True, capture_output=True, timeout=20)
             names.append(run.stdout)
         self.assertEqual(names, ["territories-srv-weaver-agent", "territories-var-lib-weaver-agent"])
-        for sink in ("opt", "agent", "log"):
+        for sink in ("opt", "agent", "territory"):
             self.assertIn(f'archive_path "$(archive_name {sink} ', script)
+        # Every legacy log goes into one archive of a fixed name (#593).
+        self.assertIn('archive_path legacy-logs "${!LOG_PATHS[@]}"', script)
         self.assertNotIn('$(basename "$d")" "$d"', script)
 
     def test_no_archive_is_written_over_another(self):
