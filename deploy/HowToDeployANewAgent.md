@@ -101,7 +101,10 @@ group in one shell.
   `<agent-directory>/<name>`, `/etc/weaver/admin/<name>`,
   `/etc/weaver/admin/.<name>.partial` and `/etc/sudoers.d/weaver-<name>` are absent. The
   script checks all of this and refuses rather than merging, because a half-made agent
-  that looks whole is worse than an absent one.
+  that looks whole is worse than an absent one. A run that stops after it has laid
+  anything, by a refusal, a failed step or a signal, ends naming what it laid, in order
+  (`STANDS:`), and the one thing it was laying when it stopped, which may stand in part
+  (`MAY STAND:`), for the take-down in section 7 (#600).
 - `weaver-gatecon` and `weaver-admincon` either are absent, and apply lays them, or
   stand in the box's shape: `getent passwd weaver-gatecon weaver-admincon` shows a uid
   above 0 and below `UID_MIN` and a nologin shell, and each one's primary group has no
@@ -185,11 +188,13 @@ capacity that is not a count from 1 to 4294967295, or a third turn-context word.
 ordinal the box has no card for, whether the model spans the devices, and whether each
 card has room are the SPU's to judge at the load, which `verify-load.sh` shows.
 `--home-quota <size>` caps the agent's home (#585), a whole size in binary units such as
-`512M`, `64G` or `2T`: the home takes its own ext4 project, the agent's uid, with the
-inherit flag, and the project's limits are set on the drive: the size, and one file per
-16 KiB of it. The cap bounds the agent's own writes in its home, so they cannot take the
-space or the inodes the save points and the state room need on the same drive: it bounds
-the space and the count of files. The shell the gate runs for the agent refuses the
+`512M`, `64G` or `2T`: the home and the directories and regular files useradd laid in it
+take their own ext4 project (a link the skeleton lays is passed over), the agent's uid,
+the home's directories take the inherit flag, which ext4 sets on a directory alone
+(#600), and the project's limits are set on the drive: the size, and one file per 16 KiB
+of it. The cap bounds the agent's own writes in its home, so they cannot take the space
+or the inodes the save points and the state room need on the same drive: it bounds the
+space and the count of files. The shell the gate runs for the agent refuses the
 attribute changes `chattr` makes (`weaver-gate-Spec` section 8.1, #587), so no command
 the agent runs moves its files out of the cap's project. The agent's folder carries the
 same project, the mark that tells `decommission.sh` the cap is this script's, without

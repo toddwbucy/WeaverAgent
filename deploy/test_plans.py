@@ -36,7 +36,7 @@ ACCESS_LOOK = 'if [ "$1" "$2" ]; then printf yes; else printf no; fi'
 # root-mode tests route to the double. A scan holds the script to this list,
 # so a new root step cannot reach the real command in a root-mode test.
 ROOT_STEPS = ("useradd", "groupadd", "usermod", "install", "chown", "chgrp", "chmod", "tee", "cp", "mv", "rm",
-              "mktemp", "visudo", "chattr", "setquota", "repquota")
+              "mktemp", "visudo", "chattr", "setquota", "repquota", "find")
 # **The drop's clean start** (B3): the PATH as_account hands a command run as
 # another account, sudo's default secure_path, and the rule that tells a
 # leading VAR=value from the command, as both scripts and the double read it.
@@ -129,7 +129,7 @@ class _GuardedPopen(_REAL_POPEN):
 
 subprocess.Popen = _GuardedPopen
 DOUBLE = r'''#!/usr/bin/env python3
-import json, os, pathlib, re, shutil, subprocess, sys, time
+import json, os, pathlib, re, shutil, stat, subprocess, sys, time
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 root = pathlib.Path(os.environ['FIXTURE_ROOT'])
@@ -232,6 +232,53 @@ def privileged(paths, run):
         for d, mode in reversed(opened):
             try: os.chmod(d, mode)
             except OSError: pass
+
+# **chattr as ext4 answers it** (#600): flags and a project are set on a
+# regular file or a directory alone, and the project inherit flag, `+P`, on a
+# directory alone. Any other file, a link named outright among them, is
+# refused with EOPNOTSUPP in chattr's words, and the run goes on to the next
+# path and fails at the end, as chattr does. A path that does not stand fails
+# its stat. `-R` walks what a directory holds without following a link. What
+# each path takes is kept in ATTRS, the fixture's record of the drive's
+# attributes, by path: its project and whether it carries the inherit flag.
+ATTRS = root / 'attrs.json'
+def chattr_model(argv):
+    recursive, project, flags, paths, i = False, None, [], [], 0
+    while i < len(argv):
+        a = argv[i]
+        if a == '-R': recursive = True
+        elif a == '-p': project, i = argv[i + 1], i + 1
+        elif a[:1] in '+-=' and len(a) > 1 and a[1:].isalpha(): flags.append(a)
+        else: paths.append(a)
+        i += 1
+    attrs = json.loads(ATTRS.read_text()) if ATTRS.exists() else {}
+    failed = False
+    def one(path, named):
+        nonlocal failed
+        try: st = os.lstat(path)
+        except OSError as e:
+            print(f'chattr: {os.strerror(e.errno)} while trying to stat {path}', file=sys.stderr)
+            failed = True
+            return
+        if stat.S_ISLNK(st.st_mode) and not named: return
+        regular, directory = stat.S_ISREG(st.st_mode), stat.S_ISDIR(st.st_mode)
+        if not (regular or directory) or ('+P' in flags and not directory):
+            print(f'chattr: Operation not supported while setting {"flags" if flags else "project"} on {path}',
+                  file=sys.stderr)
+            failed = True
+            return
+        held = attrs.setdefault(path, {'project': 0, 'inherit': False})
+        if '+P' in flags: held['inherit'] = True
+        if '-P' in flags: held['inherit'] = False
+        if project is not None: held['project'] = int(project)
+        if recursive and directory:
+            for entry in sorted(os.listdir(path)): one(os.path.join(path, entry), False)
+    for path in paths:
+        path = mapped(path)
+        assert pathlib.Path(path).is_relative_to(root), ('chattr outside the fixture', path)
+        privileged([path], lambda: one(path, True))
+    ATTRS.write_text(json.dumps(attrs))
+    return 1 if failed else 0
 
 # **A look made as an account** (#577): create-agent.sh's `allows` hands
 # exactly this text to `sh -c`, so the shell's builtin `[` answers it. It is
@@ -579,12 +626,62 @@ elif name == 'sudo':
             if a.startswith('/') and p.is_relative_to(root) and not privileged([p], lambda: os.path.lexists(p)):
                 sys.exit(1)
     elif op == 'useradd':
+        if os.environ.get('USERADD_FAIL') == rest[-1]:
+            # **The account made and its home not** (#600): useradd's exit 12,
+            # after the account's lines are written.
+            with (root / 'made-then-failed').open('a') as made: made.write(rest[-1] + '\n')
+            sys.exit(12)
+        if '--create-home' in rest:
+            # **useradd lays the home and copies the skeleton in** (#600): the
+            # three regular files the appliance's /etc/skel holds, and a link
+            # where FIXTURE_SKEL_LINK names a file for it to point at. A home
+            # that stands already takes nothing, as useradd warns and goes on.
+            home = pathlib.Path(mapped(rest[rest.index('--home-dir') + 1]))
+            assert home.is_relative_to(root), home
+            def lay():
+                if home.exists(): return
+                home.mkdir()
+                for skel in ('.bashrc', '.bash_profile', '.bash_logout'): (home / skel).write_text('# skel\n')
+                if os.environ.get('FIXTURE_SKEL_LINK'): (home / '.profile').symlink_to(os.environ['FIXTURE_SKEL_LINK'])
+            privileged([home], lay)
         if rest[-1] in BOX_ACCOUNTS:
             with (root / 'laid-box-accounts').open('a') as laid: laid.write(rest[-1] + '\n')
     elif op == 'usermod':
         if rest[-1] in BOX_ACCOUNTS:
             with (root / 'joined-box-accounts').open('a') as joined: joined.write(rest[-1] + '\n')
-    elif op in ('groupadd', 'chmod', 'setfacl', 'ldconfig', 'chattr', 'setquota'): pass
+    elif op == 'chattr': sys.exit(chattr_model(rest))
+    elif op == 'find':
+        # **Root's walk over the home** (#600): `find -P DIR <tests> -exec
+        # chattr ARGS {} +` alone, the walk run on the fixture's tree in the
+        # mode named (-P, or -L, which follows links) and its chattr answered
+        # by the model above. Any other action is refused, so a walk that
+        # would act otherwise never runs here.
+        assert rest[0] in ('-P', '-L') and rest[-2:] == ['{}', '+'] and rest.count('-exec') == 1, ('a walk the double does not know', rest)
+        at = rest.index('-exec')
+        assert rest[at + 1] == 'chattr', rest
+        top, tests = mapped(rest[1]), rest[2:at]
+        assert pathlib.Path(top).is_relative_to(root), top
+        assert not set(tests) & {'-execdir', '-delete', '-ok', '-okdir', '-fprint', '-fprint0', '-fprintf', '-fls'}, tests
+        real_find = shutil.which('find', path='/usr/bin:/bin')
+        walk = privileged([top], lambda: subprocess.run([real_find, rest[0], top, *tests, '-print0'],
+                                                       capture_output=True))
+        if walk.returncode:
+            sys.stderr.buffer.write(walk.stderr)
+            sys.exit(1)
+        found = [p.decode() for p in walk.stdout.split(b'\0') if p]
+        sys.exit(chattr_model(rest[at + 2:-2] + found) if found else 0)
+    elif op in ('groupadd', 'chmod', 'setfacl', 'ldconfig'): pass
+    elif op == 'setquota':
+        # SETQUOTA_HOLD names a file this step waits for, up to 15 s, once it
+        # has said it is under way beside it, so a test signals the run in
+        # the middle of a step (#600).
+        hold = os.environ.get('SETQUOTA_HOLD')
+        if hold:
+            pathlib.Path(hold + '.ready').write_text('')
+            for _ in range(1500):
+                if os.path.exists(hold): break
+                time.sleep(0.01)
+        sys.exit(1 if os.environ.get('SETQUOTA_FAIL') else 0)
     elif op == 'repquota':
         # **The drive's project quotas as CSV** (#585): FIXTURE_REPQUOTA is
         # the report's lines after the header, and FIXTURE_REPQUOTA_FAILS
@@ -754,7 +851,7 @@ class PlanTests(unittest.TestCase):
                      "VISUDO_FAIL", "DROP_FAIL", "SUDO_DROP_FAIL", "UUTILS_TEST", "SUDO_VERSION", "TEE_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES",
                      "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
-                     "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF", "ENGINE_BUILD", "NO_ENGINE_MESSAGE",
+                     "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "FIXTURE_SKEL_LINK", "SETQUOTA_FAIL", "SETQUOTA_HOLD", "USERADD_FAIL", "STAND_IN_LEAF", "ENGINE_BUILD", "NO_ENGINE_MESSAGE",
                      "LDD_MISSING", "CUDA_LIB_DIR", "DECOY_ENGINE", "LDD_ELSEWHERE", "LDD_STATIC",
                      "CMAKE_DISABLE_FIND_PACKAGE_OpenSSL", "STALE_ENGINE",
                      "BOX_PASSWD", "BOX_GROUP", "EXTRA_PASSWD", "GATECON_GROUPS", "ADMINCON_GROUPS",
@@ -1102,13 +1199,20 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         # account stands, and before any other account of the agent's, the
         # drive's project quotas are read. After the home's mode is set and
         # before anything of the agent's runs, the folder takes the project
-        # as the mark, the home takes its own project, the agent's uid, with
-        # the inherit flag, on itself and what useradd laid in it, and the
-        # project's limits are set on the drive's mount: the size in
+        # as the mark, the home and its directories and regular files take
+        # their own project, the agent's uid, its directories the inherit
+        # flag, and the project's limits are set on the drive's mount: the size in
         # kibibytes and one inode per 16 KiB of it (the Planner's ruling).
+        # **What the drive holds after is read, not the calls alone** (#600):
+        # the chattr stand-in answers as ext4 does, refusing the inherit flag
+        # on a regular file, and keeps what each path took. The home and its
+        # directories carry the project and the flag, the skeleton's files
+        # the project alone, and the folder the project alone.
         # Without the flag nothing is capped and the plan says so.
-        # Perturbations: drop -R or +P, set the limit from the size as given,
-        # set no inode limit, drop the mark, read the quotas after the other
+        # Perturbations: set the flag with the project in one recursive call
+        # (the line #600 found), set it on the files as well, leave the files
+        # without the project, set the limit from the size as given, set no
+        # inode limit, drop the mark, read the quotas after the other
         # accounts, or cap before the home stands, and a read below fails.
         self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_MOUNT=self.QUOTA_MOUNT)
         folder = str(self.root / "agents" / "m1")
@@ -1121,9 +1225,11 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 calls = self.calls()
                 read = ["sudo", "repquota", "-P", "-n", "-v", "-O", "csv", "/state"]
                 mark = ["sudo", "chattr", "-p", "12345", folder]
-                cap = ["sudo", "chattr", "-R", "+P", "-p", "12345", home]
+                project = ["sudo", "find", "-P", home, "(", "-type", "d", "-o", "-type", "f", ")",
+                           "-exec", "chattr", "-p", "12345", "{}", "+"]
+                inherit = ["sudo", "find", "-P", home, "-type", "d", "-exec", "chattr", "+P", "{}", "+"]
                 limit = ["sudo", "setquota", "-P", "12345", "0", str(kib), "0", str(kib // 16), "/state"]
-                for call in (read, mark, cap, limit):
+                for call in (read, mark, project, inherit, limit):
                     self.assertIn(call, calls)
                 made = calls.index(["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", "--create-home",
                                     "--home-dir", home, "--user-group", "weaver-m1"])
@@ -1133,8 +1239,12 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 self.assertLess(made, calls.index(read))
                 self.assertLess(calls.index(read), member)
                 self.assertLess(moded, calls.index(mark))
-                self.assertLess(calls.index(mark), calls.index(cap))
-                self.assertLess(calls.index(cap), calls.index(limit))
+                self.assertLess(calls.index(mark), calls.index(project))
+                self.assertLess(calls.index(project), calls.index(inherit))
+                self.assertLess(calls.index(inherit), calls.index(limit))
+                self.assertEqual(self.drive_attrs(home, alone=[folder]), {
+                    folder: (12345, False), home: (12345, True), **{f"{home}/{skel}": (12345, False)
+                                                                   for skel in (".bashrc", ".bash_profile", ".bash_logout")}})
                 self.assertIn(f"home quota      {home}        capped at {size} and {kib // 16} files, an ext4 project "
                               "quota on /state", result.stdout)
         self.assertEqual(64 * 1024 * 1024 // 16, 4194304, "64G holds 4,194,304 files, the Planner's figure")
@@ -1145,6 +1255,207 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertFalse([c for c in self.calls() if c[:2] in (["sudo", "chattr"], ["sudo", "setquota"])])
         self.assertIn("home quota      none: no --home-quota, so the home is not capped", result.stdout)
 
+    def drive_attrs(self, *trees, alone=()):
+        """What the chattr stand-in left on each of TREES and everything
+        under it, walked without following a link, and on each path ALONE,
+        as {path: (project, inherit flag)}: a path the stand-in never set is
+        (0, False)."""
+        held = json.loads((self.root / "attrs.json").read_text()) if (self.root / "attrs.json").exists() else {}
+        seen = {}
+        for path in alone:
+            a = held.get(path, {"project": 0, "inherit": False})
+            seen[path] = (a["project"], a["inherit"])
+        for top in trees:
+            for d, dirs, files in os.walk(top):
+                for path in [d, *(os.path.join(d, f) for f in files),
+                             *(os.path.join(d, x) for x in dirs if os.path.islink(os.path.join(d, x)))]:
+                    a = held.get(path, {"project": 0, "inherit": False})
+                    seen[path] = (a["project"], a["inherit"])
+        return seen
+
+    def test_the_chattr_stand_in_holds_ext4s_rule(self):
+        # **#600**: ext4 sets the project inherit flag on a directory alone
+        # and refuses it on a regular file with EOPNOTSUPP, in chattr's words,
+        # going on to the next path and failing at the end. A project is set
+        # on a file or a directory, a link named outright is refused, and -R
+        # walks without following one. The suite's stand-in answers so, or
+        # the quota step's tests would pass a line the drive refuses, as they
+        # passed the line the first appliance run met. Perturbation: let the
+        # stand-in set the flag on a regular file, and the first case passes.
+        self.env.update(ALLOW_APPLY_CHECKS="1")
+        drive = self.root / "drive"
+        (drive / "sub").mkdir(parents=True)
+        (drive / ".bashrc").write_text("x\n")
+        (drive / "sub" / "notes").write_text("x\n")
+        outside = self.root / "outside"
+        outside.write_text("not the drive's\n")
+        (drive / "link").symlink_to(outside)
+
+        def chattr(*args):
+            return subprocess.run([str(self.bin / "sudo"), "chattr", *args], env=self.env, text=True,
+                                  capture_output=True, timeout=20)
+
+        run = chattr("-R", "+P", "-p", "7", str(drive))
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertEqual(sorted(run.stderr.splitlines()), [
+            f"chattr: Operation not supported while setting flags on {drive / '.bashrc'}",
+            f"chattr: Operation not supported while setting flags on {drive / 'sub' / 'notes'}"])
+        self.assertEqual(self.drive_attrs(str(drive)), {
+            str(drive): (7, True), str(drive / "sub"): (7, True), str(drive / ".bashrc"): (0, False),
+            str(drive / "sub" / "notes"): (0, False), str(drive / "link"): (0, False)})
+        (self.root / "attrs.json").unlink()
+        run = chattr("-R", "-p", "7", str(drive))
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual({p: a for p, a in self.drive_attrs(str(drive)).items() if a != (7, False)},
+                         {str(drive / "link"): (0, False)}, "the walk follows no link")
+        for args, said in ((("-p", "7", str(drive / "link")), "setting project"),
+                           (("+P", str(drive / "link")), "setting flags"),
+                           (("-p", "7", str(drive / "absent")), "No such file or directory while trying to stat")):
+            with self.subTest(args=args):
+                run = chattr(*args)
+                self.assertEqual(run.returncode, 1, run.stderr)
+                self.assertIn(said, run.stderr)
+        self.assertNotIn(str(outside), json.loads((self.root / "attrs.json").read_text()))
+
+    def test_the_home_s_walk_passes_over_a_link_the_skeleton_carries(self):
+        # **#600**: the walk that sets the home's project follows no link, so
+        # a link the skeleton carries is passed over and what it names takes
+        # nothing, and chattr is handed regular files and directories alone.
+        # Perturbation: walk with -L, or hand chattr every entry, and the run
+        # is refused at the link.
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_MOUNT=self.QUOTA_MOUNT)
+        outside = self.root / "outside"
+        outside.write_text("not the home's\n")
+        self.env["FIXTURE_SKEL_LINK"] = str(outside)
+        home = str(self.root / "agents" / "m1" / "home")
+        result = self.create("--home-quota", "64G", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        held = self.drive_attrs(home)
+        self.assertEqual(held[f"{home}/.profile"], (0, False))
+        self.assertEqual(held[f"{home}/.bashrc"], (12345, False))
+        self.assertEqual(held[home], (12345, True))
+        self.assertNotIn(str(outside), json.loads((self.root / "attrs.json").read_text()))
+
+    def test_a_run_that_stops_after_it_lays_anything_names_what_stands(self):
+        """**#600**: a run that stops once it has laid anything, by a refusal
+        or by a step that fails under set -e, names what it laid, in order
+        (STANDS), the one thing in hand when it stopped (MAY STAND), and the
+        take-down. A useradd that makes the account and fails on its home
+        leaves the account named as one that may stand. A run that stops
+        before it lays anything, or that succeeds, names nothing. After the
+        admission the staged root is named as the admitted one.
+        Perturbations: drop the exit trap, or one name, or the mark before a
+        step, or the rename after the admission, and a case below fails."""
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_MOUNT=self.QUOTA_MOUNT)
+        folder = str(self.root / "agents" / "m1")
+        home = f"the account weaver-m1 with its home {folder}/home"
+        accounts = [f"the folder {folder}", home, "the account weaver-m1-state", "the group weaver-m1-trace",
+                    "the group weaver-m1-admin", "the account weaver-m1-relay"]
+        take_down = "Take m1 down by deploy/HowToDeployANewAgent.md section 7 before creating it again."
+        limits = "project 12345's limits on /state"
+        cases = {
+            "a limit that is not set": ({"SETQUOTA_FAIL": "1"}, ("--home-quota", "64G"),
+                                        "REFUSED: project 12345's limits could not be set on /state (setquota)",
+                                        [*accounts, f"project 12345 on {folder}"], limits),
+            "a write that fails": ({"TEE_FAIL": "/agent.toml"}, (), None,
+                                   [*accounts, f"the territory {folder}/weaver-m1"], None),
+            "an account made and its home not": ({"USERADD_FAIL": "weaver-m1"}, (), None,
+                                                 [f"the folder {folder}"], home),
+        }
+        for case, (env, given, refused, laid, in_hand) in cases.items():
+            with self.subTest(case=case):
+                self.reset_made()
+                (self.root / "made-then-failed").unlink(missing_ok=True)
+                self.env.update(env)
+                try:
+                    result = self.create(*given, "--apply")
+                finally:
+                    for key in env: self.env.pop(key)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                if refused: self.assertIn(refused, result.stderr)
+                note = result.stderr[result.stderr.index("\nSTANDS: ") + 1:].splitlines()
+                expected = [f"STANDS: this run stopped after it laid {', '.join(laid)}."]
+                if in_hand: expected.append(f"MAY STAND: {in_hand}, which this run was laying when it stopped.")
+                self.assertEqual(note, [*expected, take_down])
+        self.assertEqual((self.root / "made-then-failed").read_text(), "weaver-m1\n",
+                         "the double made the account it then failed on")
+        with self.subTest(case="nothing laid, or nothing left"):
+            self.reset_made()
+            refused = self.create("--home-quota", "64g", "--apply")
+            self.assertNotEqual(refused.returncode, 0)
+            self.reset_made()
+            made = self.create("--home-quota", "64G", "--apply")
+            self.assertEqual(made.returncode, 0, made.stderr)
+            self.assertNotIn("STAND", refused.stderr + made.stderr)
+        with self.subTest(case="after the admission"):
+            # No suite run reaches a step after the admission (the connector's
+            # probe runs under the installed admin base alone), so the note and
+            # the rename run as the script holds them.
+            script = (self.repo / "deploy" / "create-agent.sh").read_text()
+            note = script[script.index("STANDING=() LAYING=''"):script.index("trap 'rc=$?")]
+            admit = script.index('root mv -T -- "$STAGE" "$AGENT_ROOT"\n')
+            rename = script[script.index("\n", admit) + 1:script.index("\ndone\n", admit) + len("\ndone\n")]
+            self.assertTrue(rename.startswith('for i in "${!STANDING[@]}"; do\n'), rename)
+            program = ("set -euo pipefail\nNAME=m1 STAGE=/x/.m1.partial AGENT_ROOT=/x/m1\n" + note
+                       + "trap 'rc=$?; [ \"$rc\" -eq 0 ] || standing_note' EXIT\n"
+                       + 'STANDING+=("the folder /f" "the staged agent root $STAGE" "the sudo rule /r")\n'
+                       + rename + "LAYING=''\nexit 1\n")
+            run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.stderr.strip().splitlines(), [
+                "STANDS: this run stopped after it laid the folder /f, the agent root /x/m1, admitted, the sudo rule /r.",
+                take_down])
+
+    def test_a_run_stopped_by_a_signal_names_what_stands(self):
+        """**#600**: bash runs the EXIT trap with the last command's status on
+        a fatal signal, 0 after a step that passed, so a run hung up or
+        terminated would name nothing. Each of HUP, INT, TERM and PIPE ends
+        the run with 128 and its number, and the note names the signal, what
+        stands and the step in hand. Cases: SIGTERM to the script alone while
+        setquota is under way, which bash takes once the step returns, and
+        SIGHUP to its whole process group, as a terminal's hang-up reaches
+        it, which ends the step too. Perturbations: drop the signal traps, or
+        exit 0 from them, and no note is written. Drop the signal's record
+        and the note does not name it."""
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_MOUNT=self.QUOTA_MOUNT)
+        self.install_stack()
+        folder = str(self.root / "agents" / "m1")
+        laid = [f"the folder {folder}", f"the account weaver-m1 with its home {folder}/home",
+                "the account weaver-m1-state", "the group weaver-m1-trace", "the group weaver-m1-admin",
+                "the account weaver-m1-relay", f"project 12345 on {folder}"]
+        for name, to_group in (("TERM", False), ("HUP", True)):
+            with self.subTest(signal=name):
+                self.reset_made()
+                hold = self.root / f"hold-{name}"
+                self.env["SETQUOTA_HOLD"] = str(hold)
+                try:
+                    run = subprocess.Popen(["bash", str(self.repo / "deploy" / "create-agent.sh"), "m1",
+                                            "--artifact", str(self.artifact), "--engine", "sqlite",
+                                            "--home-quota", "64G", "--apply"],
+                                           env=self.env, text=True, stdin=subprocess.DEVNULL,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+                finally:
+                    self.env.pop("SETQUOTA_HOLD")
+                try:
+                    ready = Path(str(hold) + ".ready")
+                    for _ in range(1500):
+                        if ready.exists() or run.poll() is not None: break
+                        time.sleep(0.01)
+                    self.assertTrue(ready.exists(), "setquota was never reached")
+                    sig = getattr(signal, "SIG" + name)
+                    if to_group: os.killpg(run.pid, sig)
+                    else: os.kill(run.pid, sig)
+                    hold.write_text("")
+                    out, err = run.communicate(timeout=20)
+                finally:
+                    if run.poll() is None:
+                        os.killpg(run.pid, signal.SIGKILL)
+                        run.wait()
+                self.assertEqual(run.returncode, 128 + sig, err)
+                self.assertEqual(err[err.index("\nSTANDS: ") + 1:].splitlines(), [
+                    f"STANDS: this run stopped on SIG{name} after it laid {', '.join(laid)}.",
+                    f"MAY STAND: project 12345's limits on /state, which this run was laying when it stopped "
+                    f"on SIG{name}.",
+                    "Take m1 down by deploy/HowToDeployANewAgent.md section 7 before creating it again."])
     def test_the_folder_sheds_an_inherited_project_flag_before_its_mark(self):
         # **CodeRabbit on #582**: a folder made in a base that carries the
         # project inherit flag takes the flag, and `chattr -p` sets the
@@ -1518,6 +1829,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
     def reset_made(self):
         """Take away what an apply run made, so the next run starts clean."""
         self.log.unlink(missing_ok=True)
+        (self.root / "attrs.json").unlink(missing_ok=True)
         for made in (self.config / "m1", self.config / ".m1.partial", self.folder):
             shutil.rmtree(made, ignore_errors=True)
         self.rule.unlink(missing_ok=True)
@@ -9695,7 +10007,10 @@ class RoundOneOf79Tests(unittest.TestCase):
                      'weaver-m8) echo "weaver-m8:x:67890:67890::/x:/sbin/nologin" ;; '
                      'weaver-m9) echo "weaver-m9:x:78901:78901::/x:/sbin/nologin" ;; '
                      'weaver-m10) echo "weaver-m10:x:89012:89012::/x:/sbin/nologin" ;; *) return 2 ;; esac; }\n'
-                     'lsattr() { case "$(realpath -- "${@: -1}")" in */m1/home|*/m5/home|*/m1|*/m10) echo "    12345 --------------P--- ${@: -1}" ;; '
+                     # A home carries the inherit flag and a folder's mark
+                     # does not, as create-agent.sh leaves them (#582, #600).
+                     'lsattr() { case "$(realpath -- "${@: -1}")" in */m1/home|*/m5/home) echo "    12345 --------------P--- ${@: -1}" ;; '
+                     '*/m1|*/m10) echo "    12345 ---------------- ${@: -1}" ;; '
                      '*/m5) echo "    23456 ---------------- ${@: -1}" ;; */m9) return 1 ;; '
                      # m4 and m6 carry their own marks, so only the linked home
                      # and the drive's missing project quotas pass them over.
