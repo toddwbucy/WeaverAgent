@@ -33,6 +33,7 @@ mod tests {
     use std::os::fd::AsRawFd;
 
     use super::super::admission::fixture_admitted;
+    use super::super::fixture_release::{await_release_until, release_deadline};
     use super::*;
     use nix::sys::socket::{
         AddressFamily, MsgFlags, SockFlag, SockType, send as send_packet, socketpair,
@@ -488,15 +489,18 @@ mod tests {
     fn idle_eof_is_teardown_but_checking_eof_is_component_loss() {
         let (peer, mut duty) = ready();
         drop(peer);
+        await_release_until(duty.readiness(), release_deadline());
         assert_eq!(duty.advance().unwrap(), Action::Stopped(Stop::PeerClosed));
         let (mut peer, mut duty) = ready();
         let first = request(&duty, 1);
         submit(&mut peer, &mut duty, &first);
         drop(peer);
-        assert!(matches!(
-            duty.advance(),
-            Err(Fault::Transport(ChannelFault::Closed))
-        ));
+        await_release_until(duty.readiness(), release_deadline());
+        let got = duty.advance();
+        assert!(
+            matches!(got, Err(Fault::Transport(ChannelFault::Closed))),
+            "checking end-of-file is component loss, got {got:?}"
+        );
         assert_eq!(duty.position(), Position::Failed);
     }
 
@@ -508,10 +512,12 @@ mod tests {
         assert_eq!(duty.position(), Position::Idle);
         assert!(duty.outstanding.is_none());
         drop(peer);
-        assert!(matches!(
-            duty.advance(),
-            Err(Fault::Transport(ChannelFault::Closed))
-        ));
+        await_release_until(duty.readiness(), release_deadline());
+        let got = duty.advance();
+        assert!(
+            matches!(got, Err(Fault::Transport(ChannelFault::Closed))),
+            "end-of-file after a partial request is failure, got {got:?}"
+        );
         assert_eq!(duty.position(), Position::Failed);
     }
 }
