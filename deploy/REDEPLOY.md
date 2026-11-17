@@ -187,8 +187,10 @@ nothing but `models`.
    gave a capped home, which is the agent account's uid, on its drive, taken only where
    the agent's folder carries that project as the script's mark. Only a limit the list
    names and the box still shows goes, and root's record carries it, so a rerun whose
-   first run failed here removes it again. A drive whose mount or mark cannot be read
-   is named, and the purge does not close clean.
+   first run failed here removes it again. Where an agent folder's mount or mark cannot
+   be read, the archive and the purge refuse before anything goes, naming it, and
+   `HowToDeployANewAgent.md` section 7 says how to read or clear the mark before the
+   rerun.
 3. Every other path on the list: the territories, the logs, the homes, the `/tmp`
    entries, the run directories, `/var/lib/weaver`, the `ld.so` confs and each prefix's
    `bin`, `lib`, `python-spu` and backups. (The sudo rules went before step 1.) The

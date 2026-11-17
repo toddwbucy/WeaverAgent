@@ -809,6 +809,12 @@ for g in weaver-<name> weaver-<name>-state weaver-<name>-trace weaver-<name>-adm
 done
 ```
 
+**Where `decommission.sh` refuses over a folder's mount or mark** (`findmnt`, `lsattr`),
+it has archived and removed nothing, since a purge that took the folder and the account
+would leave the limit with nothing to name it. Read the mark by hand as above, and rerun
+once it reads. Or, where it carries the account's uid, set the limit to none by hand as
+above, clear the mark with `sudo chattr -p 0 <agent-directory>/<name>`, and rerun.
+
 **An agent of an older layout or an older declaration form is not migrated.** Admin and
 `update-stack.sh` refuse it by name, and it is recreated with `create-agent.sh` after
 its take-down by this section; nothing migrates it (the operator's ruling of 2026-10-08

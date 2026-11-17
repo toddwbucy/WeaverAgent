@@ -449,8 +449,9 @@ for d in /var/lib/weaver "${AGENT_FOLDERS[@]}" "${!LOG_PATHS[@]}"; do [ -e "$d" 
 # agent's uid included. What the home carries is printed as <seen>, a report
 # and never acted on ("-" where it cannot be read). A folder whose account is
 # gone, or whose drive has no project quotas, carries no cap. A folder whose
-# mount or mark cannot be read is printed as "? - <folder>", so the plan names
-# it rather than passing it over.
+# mount or mark cannot be read is printed as "? mount <folder>" or "? mark
+# <folder>", so the plan names it and what could not be read, rather than
+# passing it over.
 home_projects() {
   local f project marked seen _ options mount_point
   for f in "$@"; do
@@ -459,10 +460,10 @@ home_projects() {
     [[ "$project" =~ ^[1-9][0-9]*$ ]] || continue
     { options=$(findmnt -n -o OPTIONS --target "$f" 2>/dev/null) \
         && mount_point=$(findmnt -n -o TARGET --target "$f" 2>/dev/null); } \
-      || { printf '? - %s\n' "$f"; continue; }
+      || { printf '? mount %s\n' "$f"; continue; }
     [[ ",$options," == *,prjquota,* ]] || continue
     read -r marked _ < <(lsattr -pd -- "$f" 2>/dev/null) && [[ "$marked" =~ ^[0-9]+$ ]] \
-      || { printf '? - %s\n' "$f"; continue; }
+      || { printf '? mark %s\n' "$f"; continue; }
     [ "$marked" = "$project" ] || continue
     read -r seen _ < <(lsattr -pd -- "$f/home" 2>/dev/null) || seen=-
     printf '%s %s %s\n' "$project" "${seen:--}" "$mount_point"
@@ -471,16 +472,22 @@ home_projects() {
 # **plan_home_quotas "<project> <seen> <mount point>"...: one plan line each,
 # and HOME_QUOTAS filled with "<project> <mount point>"**. A home carrying
 # another project than its account's uid is named, and that project's limit
-# is left as it stands. A folder whose mount cannot be read sets
-# HOME_QUOTA_UNREAD, and the purge does not close clean over it.
+# is left as it stands. A folder whose mount or mark cannot be read is added
+# to HOME_QUOTA_UNREAD, naming what could not be read, and the archive and
+# the purge refuse over it.
 plan_home_quotas() {
   local q project seen mount_point
-  HOME_QUOTAS=() HOME_QUOTA_UNREAD=0
+  HOME_QUOTAS=() HOME_QUOTA_UNREAD=()
   for q in "$@"; do
     read -r project seen mount_point <<< "$q"
     if [ "$project" = "?" ]; then
-      plan "home quota of $mount_point: its drive's mount or the folder's mark cannot be read (findmnt, lsattr), so whether a cap stands there is unknown and the purge does not close clean"
-      HOME_QUOTA_UNREAD=1; continue
+      case $seen in
+        mount) plan "home quota of $mount_point: its drive's mount cannot be read (findmnt), so whether a cap stands there is unknown, and the archive and the purge refuse until it reads"
+               HOME_QUOTA_UNREAD+=("the mount of $mount_point (findmnt)") ;;
+        *)     plan "home quota of $mount_point: the folder's mark cannot be read (lsattr), so whether a cap stands there is unknown, and the archive and the purge refuse until it reads"
+               HOME_QUOTA_UNREAD+=("the mark of $mount_point (lsattr)") ;;
+      esac
+      continue
     fi
     HOME_QUOTAS+=("$project $mount_point")
     plan "home quota of project $project, the account's uid, on $mount_point: its limit is set to none at the purge, before the folder"
@@ -629,6 +636,18 @@ mapfile -t TMP_PATHS < <(tmp_paths /tmp)
 
 [ "$MODE" = plan ] && { say "plan only. rerun with --archive DIR, then --purge DIR"; exit 0; }
 [ "$TERRITORIES_JUDGED" = 1 ] || die "a territory a root names is not root:weaver-<agent>-state, named above, and only a territory standing as create-agent.sh lays it is archived and purged. Look at it by hand, then rerun"
+# **A capped home's limit never outlives what names it** (Codex on #588): the
+# folder's mark and the account's uid are all that tell create-agent.sh's
+# limit from a stranger's, so where any folder's mount or mark cannot be read,
+# nothing is archived or purged, first run or rerun. A purge that went on
+# would take the folder and the account and leave the limit with nothing to
+# name it, and an agent later given that uid would be refused. Root's record
+# carries no unresolved limit: the operator reads or clears the mark by hand
+# (deploy/HowToDeployANewAgent.md section 7) and reruns.
+if [ ${#HOME_QUOTA_UNREAD[@]} -gt 0 ]; then
+  unread=$(printf '%s; ' "${HOME_QUOTA_UNREAD[@]}")
+  die "${unread%; } cannot be read, so whether that home carries create-agent.sh's cap is unknown, and nothing is archived or purged: a purge would take the folder and the account that name the limit and leave the limit standing. Read or clear the mark by hand by deploy/HowToDeployANewAgent.md section 7, then rerun"
+fi
 
 # **free_name NAME: a name no archive in DEST holds yet**, NAME itself or the
 # first NAME-2, NAME-3 that is free, so no archive is ever written over another
@@ -1279,7 +1298,6 @@ while IFS= read -r line; do
   case $line in "quota "*) PURGE_QUOTAS+=("${line#quota }") ;; esac
 done < "$PURGE_ACTED"
 remove_home_quotas "${PURGE_QUOTAS[@]}" || PURGE_FAILED=1
-[ "$HOME_QUOTA_UNREAD" = 0 ] || PURGE_FAILED=1
 
 say "paths"
 while IFS= read -r line; do

@@ -7195,12 +7195,17 @@ class PurgeRecordTests(unittest.TestCase):
             stand_in.chmod(0o755)
         return box
 
-    def run_purge(self, box, phases=None, removals=None, failing=None, record_remove_fails=False, units=()):
+    def run_purge(self, box, phases=None, removals=None, failing=None, record_remove_fails=False, units=(),
+                  quota_folder=None):
         """One `--purge` over BOX from the record's decision on: every phase,
         or the first PHASES of them in the script's own order, then a stop, or
         a stop after its REMOVALS-th `rm`, mid-phase, as an interrupt lands. A
         command FAILING names (`rm`, `mv` or `rmdir`) fails on every call, and
-        with RECORD_REMOVE_FAILS the record's own removal fails."""
+        with RECORD_REMOVE_FAILS the record's own removal fails. With
+        QUOTA_FOLDER, the home quotas' own discovery over that agent folder
+        and the refusal that follows it run first, as the script runs them
+        before either mode acts, and the derivation keeps a listed limit only
+        where discovery found it (#585)."""
         text = self.script
         cut = lambda a, b: text[text.index(a):text.index(b, text.index(a))]
         helpers = cut("RECORD_PARENT=/var/lib", "# **Everything under DEST is read as the operator**")
@@ -7217,9 +7222,10 @@ class PurgeRecordTests(unittest.TestCase):
                    "die() { printf 'REFUSED: %s\\n' \"$*\" >&2; exit 1; }\n"
                    "purge_lines_outside() { :; }\npurge_lines_within() { cat \"$1\"; }\n"
                    "query_runs() { :; }\n" + shell_function(text, "sudo_rules")
-                   # The home quotas' removal, and no mount left unread, as
-                   # discovery finds a box whose drives it read (#585).
-                   + shell_function(text, "remove_home_quotas") + "HOME_QUOTA_UNREAD=0\n"
+                   # The accounts phase asks which accounts are the box's.
+                   + shell_function(text, "is_box_account") + shell_function(text, "box_account_role")
+                   # The home quotas' removal (#585).
+                   + shell_function(text, "remove_home_quotas")
                    + ("" if removals is None else
                       "RM_SEEN=0\nrm() { local s=0; command rm \"$@\" || s=$?; RM_SEEN=$((RM_SEEN + 1)); "
                       f"[ \"$RM_SEEN\" -lt {removals} ] || exit 0; return \"$s\"; }}\n")
@@ -7240,6 +7246,15 @@ class PurgeRecordTests(unittest.TestCase):
                    # The rules and the legacy units discovery finds, as it finds them.
                    + f"mapfile -t SUDO_RULES < <(sudo_rules {shlex.quote(str(box / 'etc/sudoers.d'))})\n"
                    + "UNITS=(" + " ".join(shlex.quote(u) for u in units) + ")\nSLICE=weaver.slice\n"
+                   + ("" if quota_folder is None else
+                      shell_function(text, "home_projects") + shell_function(text, "plan_home_quotas")
+                      + f"AGENT_FOLDERS=({shlex.quote(str(quota_folder))})\n"
+                      + cut("HOME_PROJECTS=()\n", 'plan_home_quotas "${HOME_PROJECTS[@]}"\n')
+                      + 'plan_home_quotas "${HOME_PROJECTS[@]}"\n'
+                      + cut("# **A capped home's limit never outlives what names it**", "\nfi\n") + "\nfi\n"
+                      + "purge_lines_within() { local l q; while IFS= read -r l; do case $l in\n"
+                        "  \"quota \"*) for q in \"${HOME_QUOTAS[@]}\"; do [ \"$l\" != \"quota $q\" ] || printf '%s\\n' \"$l\"; done ;;\n"
+                        "  *) printf '%s\\n' \"$l\" ;; esac; done < \"$1\"; }\n")
                    + decision + region + 'echo PURGED\n')
         program = program.replace("/etc/weaver", f"{box}/etc/weaver").replace(
             "RECORD_PARENT=/var/lib", f"RECORD_PARENT={box}/var/lib")
@@ -7247,6 +7262,63 @@ class PurgeRecordTests(unittest.TestCase):
         env.pop("BASH_ENV", None)
         return subprocess.run(["unshare", "--map-root-user", "bash", "-c", program], env=env, text=True,
                               capture_output=True, timeout=60)
+
+    def capped_folder(self, box):
+        """Agent a's folder on a drive mounted with project quotas, its home
+        capped as create-agent.sh caps it: the folder marked with the
+        account's uid, 2001, and the limit listed. The mount stand-in fails
+        while `mount-unreadable` stands in the model, the mark's while
+        `mark-unreadable` does, and setquota logs its calls."""
+        folder = box / "state" / "a"
+        (folder / "home").mkdir(parents=True)
+        with open(box / "PURGE-LIST", "a") as listed:
+            listed.write(f"path {folder}\nquota 2001 /state drive\n")
+        for tool, body in (
+                ("findmnt", '#!/bin/sh\n[ -e "$MODEL/mount-unreadable" ] && exit 1\n'
+                            'case "$3" in OPTIONS) echo rw,relatime,prjquota ;; TARGET) echo "/state drive" ;; esac\n'),
+                ("lsattr", '#!/bin/sh\nfor last; do :; done\n'
+                           'case $last in */home) echo "2001 --------------P--- $last" ;;\n'
+                           '*) [ -e "$MODEL/mark-unreadable" ] && exit 1; echo "2001 ---------------- $last" ;; esac\n'),
+                ("setquota", '#!/bin/sh\necho "setquota $*" >> "$MODEL/calls"\n')):
+            stand_in = box / "model" / tool
+            stand_in.write_text(body)
+            stand_in.chmod(0o755)
+        return folder
+
+    def test_an_unreadable_mount_or_mark_refuses_before_anything_goes(self):
+        """**Codex on #588, the Planner's ruling of 2026-11-17**: where a
+        capped folder's mount or mark cannot be read, nothing is archived or
+        purged, and the refusal names the folder and what could not be read.
+        The folder, the account and the limit stand, and so does everything
+        else, the config root and the sudo rule among them, with no record
+        written. Once the read answers, the purge, a first run again, removes
+        all three. Perturbations: today's carry-on order (the purge marked
+        failed and going on), or the refusal moved to just before the paths,
+        and a read below fails."""
+        for what, flag, read in (("mark", "mark-unreadable", "the mark of {} (lsattr)"),
+                                 ("mount", "mount-unreadable", "the mount of {} (findmnt)")):
+            with self.subTest(what=what):
+                box = self.box()
+                folder = self.capped_folder(box)
+                unread = box / "model" / flag
+                unread.write_text("")
+                ran = self.run_purge(box, quota_folder=folder)
+                self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+                calls = box / "model/calls"
+                self.assertTrue((folder / "home").is_dir(), "the folder stands")
+                self.assertIn("weaver-a:x:2001:", (box / "model/passwd").read_text(), "the account stands")
+                self.assertNotIn("setquota", calls.read_text() if calls.exists() else "", "the limit stands")
+                self.assertTrue((box / "etc/weaver/admin/a").is_dir(), "the config root stands")
+                self.assertTrue((box / "etc/sudoers.d/.weaver-a.decommissioning").exists(), "the sudo rule stands")
+                self.assertFalse(self.record(box).exists(), "no record carries the limit's loss")
+                self.assertIn(read.format(folder) + " cannot be read", ran.stderr)
+                self.assertIn("HowToDeployANewAgent.md section 7", ran.stderr)
+                unread.unlink()
+                ran = self.run_purge(box, quota_folder=folder)
+                self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                self.assertIn("setquota -P 2001 0 0 0 0 /state drive", calls.read_text().splitlines())
+                self.assertFalse(os.path.lexists(folder))
+                self.assert_purged(box)
 
     def record(self, box):
         sum_ = hashlib.sha256((box / "PURGE-LIST").read_bytes()).hexdigest()
@@ -7874,10 +7946,10 @@ class RoundOneOf79Tests(unittest.TestCase):
                                  text=True, capture_output=True, timeout=20)
             self.assertEqual(run.returncode, 0, run.stderr)
             listed = run.stdout.splitlines()
-            self.assertEqual(listed, ["12345 12345 /state drive", "23456 12345 /state drive", f"? - {base}/m7",
-                                      f"? - {base}/m9"])
+            self.assertEqual(listed, ["12345 12345 /state drive", "23456 12345 /state drive", f"? mount {base}/m7",
+                                      f"? mark {base}/m9"])
             planned = subprocess.run(["bash", "-c", 'plan() { printf "%s\\n" "$*"; }\n' + shell_function(script, "plan_home_quotas")
-                                      + 'plan_home_quotas "$@"; printf "quota %s\\n" "${HOME_QUOTAS[@]}"; echo "unread $HOME_QUOTA_UNREAD"',
+                                      + 'plan_home_quotas "$@"; printf "quota %s\\n" "${HOME_QUOTAS[@]}"; printf "unread %s\\n" "${HOME_QUOTA_UNREAD[@]}"',
                                       "x", *listed],
                                      text=True, capture_output=True, timeout=20)
             self.assertEqual(planned.returncode, 0, planned.stderr)
@@ -7885,9 +7957,10 @@ class RoundOneOf79Tests(unittest.TestCase):
                 "home quota of project 12345, the account's uid, on /state drive: its limit is set to none at the purge, before the folder",
                 "home quota of project 23456, the account's uid, on /state drive: its limit is set to none at the purge, before the folder",
                 "   the home carries project 12345, not 23456: 12345's limit is not touched",
-                f"home quota of {base}/m7: its drive's mount or the folder's mark cannot be read (findmnt, lsattr), so whether a cap stands there is unknown and the purge does not close clean",
-                f"home quota of {base}/m9: its drive's mount or the folder's mark cannot be read (findmnt, lsattr), so whether a cap stands there is unknown and the purge does not close clean",
-                "quota 12345 /state drive", "quota 23456 /state drive", "unread 1"])
+                f"home quota of {base}/m7: its drive's mount cannot be read (findmnt), so whether a cap stands there is unknown, and the archive and the purge refuse until it reads",
+                f"home quota of {base}/m9: the folder's mark cannot be read (lsattr), so whether a cap stands there is unknown, and the archive and the purge refuse until it reads",
+                "quota 12345 /state drive", "quota 23456 /state drive",
+                f"unread the mount of {base}/m7 (findmnt)", f"unread the mark of {base}/m9 (lsattr)"])
             log = Path(scratch) / "setquota.log"
             remove = ('plan() { printf "%s\\n" "$*"; }\n'
                       f'setquota() {{ printf "%s\\n" "$*" >> {shlex.quote(str(log))}; [ "$2" != 999 ]; }}\n'
@@ -7908,14 +7981,21 @@ class RoundOneOf79Tests(unittest.TestCase):
                 self.assertEqual(run.stdout.splitlines(),
                                  ["home quota of project 12345 on /state: setquota is not on PATH, so its limit stands"])
         # Discovered in every mode, so the plan shows each cap, and removed in
-        # the purge before any path, from root's record, with an unreadable
-        # mount failing the close.
+        # the purge before any path, from root's record. **An unreadable mount
+        # or mark refuses the archive and the purge** (Codex on #588) after the
+        # plan, which only shows it, and before either mode acts, so neither
+        # an archive whose list lacks the limit nor a purge that takes the
+        # folder is ever made over it. Perturbation: move the refusal into
+        # one mode alone, and a read below fails.
         self.assertLess(script.index('plan_home_quotas "${HOME_PROJECTS[@]}"'), script.index('[ "$MODE" = plan ] && {'))
+        refusal = script.index('if [ ${#HOME_QUOTA_UNREAD[@]} -gt 0 ]; then')
+        self.assertLess(script.index('[ "$MODE" = plan ] && {'), refusal)
+        self.assertLess(refusal, script.index('if [ "$MODE" = archive ]; then'))
+        self.assertEqual(script.count("HOME_QUOTA_UNREAD[@]"), 2, "counted and named by the refusal alone")
         step = script[script.index('say "home quotas"'):script.index('say "paths"')]
         self.assertIn('  case $line in "quota "*) PURGE_QUOTAS+=("${line#quota }") ;; esac\n'
                       'done < "$PURGE_ACTED"\n'
-                      'remove_home_quotas "${PURGE_QUOTAS[@]}" || PURGE_FAILED=1\n'
-                      '[ "$HOME_QUOTA_UNREAD" = 0 ] || PURGE_FAILED=1\n', step)
+                      'remove_home_quotas "${PURGE_QUOTAS[@]}" || PURGE_FAILED=1\n', step)
 
     def test_a_home_quota_is_a_purge_list_line(self):
         # **#585, the self-check's findings 1 and 4**: each capped home's limit
