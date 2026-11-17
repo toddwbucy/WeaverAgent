@@ -3,7 +3,9 @@
 //! holds a copy of every descriptor in the process until its exec, so a drop
 //! alone can leave the socket open, and one nonblocking observation then reads
 //! Pending (#482). This is the harness's ruled form, `await_release_until` in
-//! weaver-harness's `flow/fixture_eof.rs`, which an organ cannot link.
+//! weaver-harness's `flow/fixture_eof.rs`, which an organ cannot link. The two
+//! copies keep the same form, each with its own tests: an edit to one is made
+//! to both.
 
 use nix::errno::Errno;
 use nix::libc;
