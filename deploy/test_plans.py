@@ -880,7 +880,12 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 self.assertFalse(any(c[0] == "sudo" for c in self.calls()))
 
     def test_apply_uses_privileged_collision_reads(self):
-        for path in (self.config / "m1", self.root / "agents" / "m1"):
+        # The agent's folder, and an agent of the layout before #578 by its
+        # territory or its home, each refuse (the operator's ruling of
+        # 2026-10-08 on #1). Perturbation: drop either old-layout refusal, and
+        # its case runs on.
+        for path in (self.config / "m1", self.root / "agents" / "m1", self.root / "agents" / "weaver-m1",
+                     self.home / "weaver-m1"):
             with self.subTest(path=path):
                 self.log.unlink(missing_ok=True)
                 path.touch()
@@ -1417,7 +1422,6 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                            "holds disk, outside what the box's account may hold")):
             with self.subTest(env=env):
                 shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
-                shutil.rmtree(self.folder, ignore_errors=True)
                 shutil.rmtree(self.folder, ignore_errors=True)
                 for name in ("RELAY_GROUPS", "ADMINCON_GROUPS", "GATECON_GROUPS", "ADMINCON_JOINED", "GATECON_JOINED"):
                     self.env.pop(name, None)
@@ -2509,7 +2513,6 @@ esac
             with self.subTest(engine=engine):
                 self.log.unlink(missing_ok=True)
                 shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
-                shutil.rmtree(self.folder, ignore_errors=True)
                 shutil.rmtree(self.folder, ignore_errors=True)
                 self.env.update(ALLOW_APPLY_CHECKS="1", TRACE_OPEN="1")
                 result = self.create("--engine", engine, "--apply")
@@ -7492,22 +7495,27 @@ class RoundOneOf79Tests(unittest.TestCase):
         # purge takes each discovered agent's folder from it, `<base>/<agent>`
         # or the older `<base>/weaver-<agent>`, root's by uid, and never the
         # base. What else the base holds is named as left in place.
-        # Perturbations: drop the uid test, and alice's own home is taken;
+        # A root-held `web/` or `weaver-web/` that only shares the name of a
+        # `weaver-web` account holds no territory, no home and no declaration
+        # of that account's, so each is left. Perturbations: drop the uid
+        # test, and alice's own home is taken; drop either holding test, and
+        # web/ or weaver-web/ is taken;
         # list the bases in purge_candidates again, and the base is a purge
         # line; drop left_in_base's taken filter, and a folder reads as left.
         script = (DEPLOY / "decommission.sh").read_text()
         with tempfile.TemporaryDirectory() as scratch:
             base = Path(scratch).resolve() / "state"
-            for name in ("m1", "weaver-old", "lost+found", "alice", "stray"):
+            for name in ("m1", "weaver-old", "lost+found", "alice", "stray", "web", "weaver-web"):
                 (base / name).mkdir(parents=True)
+            (base / "weaver-old" / "agent.toml").touch()
             (base / "m1" / "weaver-m1").mkdir()
             (base / "m1" / "home").mkdir()
-            roots_owned = f"{base / 'm1'}:{base / 'weaver-old'}:{base / 'lost+found'}"
+            roots_owned = ":".join(str(base / n) for n in ("m1", "weaver-old", "lost+found", "web", "weaver-web"))
             # The tester owns every file here, so `stat -c %u` answers 0 for
             # what the fixture calls root's and the tester's uid elsewhere.
             stat_double = ('stat() { local p="${@: -1}"; case ":$ROOTS_OWNED:" in *":$p:"*) echo 0 ;; '
                            '*) command stat "$@" ;; esac; }\n')
-            program = (stat_double + "declare -A AGENTS=([m1]=1 [old]=1 [alice]=1)\n"
+            program = (stat_double + "declare -A AGENTS=([m1]=1 [old]=1 [alice]=1 [web]=1)\n"
                        + shell_function(script, "agent_folders") + shell_function(script, "left_in_base")
                        + 'mapfile -t F < <(agent_folders "$1")\nprintf "folder %s\\n" "${F[@]}"\n'
                        + 'left_in_base "$1" "${F[@]}" | sort | sed "s/^/left /"')
@@ -7516,7 +7524,8 @@ class RoundOneOf79Tests(unittest.TestCase):
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertEqual(run.stdout.splitlines(), [
                 f"folder {base / 'm1'}", f"folder {base / 'weaver-old'}",
-                f"left {base / 'alice'}", f"left {base / 'lost+found'}", f"left {base / 'stray'}"])
+                f"left {base / 'alice'}", f"left {base / 'lost+found'}", f"left {base / 'stray'}",
+                f"left {base / 'weaver-web'}", f"left {base / 'web'}"])
             # The purge's candidates name the folders and never the base.
             candidates = subprocess.run(
                 ["bash", "-c", "SUDO_RULES=(); LDSO_CONFS=(); OWN_TERRITORIES=(); HOMES=(); TMP_PATHS=()\n"

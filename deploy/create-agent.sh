@@ -840,8 +840,17 @@ done
 # standing account of the right name and the wrong shape is never adopted.
 [ -z "$GATECON_LINE" ] || { judge_box_account "$GATECON_USER"; printf '   %s stands, and its shape is the box'"'"'s gate-con account\n' "$GATECON_USER"; }
 [ -z "$ADMINCON_LINE" ] || { judge_box_account "$ADMINCON_USER"; printf '   %s stands, and its shape is the box'"'"'s admin-con account\n' "$ADMINCON_USER"; }
-refuse_existing "$AGENT_FOLDER" "agent folder"
-refuse_existing "$HOME_DIR" "territory"
+# **The agent's folder refuses where it stands**, the territory and the home
+# with it. A run that stops part way leaves one, root's and empty or holding a
+# home, which is removed by hand once its accounts are gone.
+refuse_existing "$AGENT_FOLDER" "agent folder (one a run left part way is removed by hand once its accounts are gone)"
+# **An agent of the layout before #578 is refused by name and never carried
+# forward** (the operator's ruling of 2026-10-08 on #1): a territory at
+# `<agent-directory>/weaver-<name>/` or a home at `/home/weaver-<name>` is an
+# earlier agent's, taken down by hand first, so its custodied record is never
+# left orphaned beside a new agent of the same name.
+refuse_existing "$AGENT_DIR/$AGENT_USER" "territory of the layout before #578 (take that agent down by deploy/HowToDeployANewAgent.md section 7)"
+refuse_existing "/home/$AGENT_USER" "home of the layout before #578 (take that agent down by deploy/HowToDeployANewAgent.md section 7)"
 refuse_existing "$AGENT_ROOT" "agent root"
 refuse_existing "$STAGE" "a partial agent root from an earlier run (remove it by hand)"
 refuse_existing "$SUDO_RULE" "sudo rule"

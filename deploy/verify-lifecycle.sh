@@ -260,7 +260,7 @@ if [ "$CLEANUP" -eq 1 ]; then
   marker_names_agent || die "no marker at $MARKER naming $A: verify-lifecycle.sh did not create $A, and --cleanup takes down only a throwaway agent this script made. Take any other agent down by deploy/HowToDeployANewAgent.md section 7"
   if [ -f "$R/territory" ]; then
     named=$(trim "$(cat -- "$R/territory")")
-    [ "$named" = "$T" ] || die "$R/territory names $named, not $T, and --cleanup removes only the territory named for its agent"
+    [ "$named" = "$T" ] || die "$R/territory names $named, not $T, and --cleanup removes only the territory named for its agent. A throwaway agent laid before #578 is taken down by hand, by deploy/HowToDeployANewAgent.md section 7"
   fi
   # **Step 8's staged key, left by a run stopped between its write and its
   # removal** (#99, from #105's Codex round 2): admin refuses the root

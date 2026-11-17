@@ -399,9 +399,23 @@ agent_folders() {
   for d in "$@"; do
     d=$(realpath -e -- "$d" 2>/dev/null) && [ -d "$d" ] || continue
     for a in "${!AGENTS[@]}"; do
-      for f in "$d/$a" "$d/weaver-$a"; do
-        if [ -d "$f" ] && [ ! -L "$f" ] && [ "$(stat -c %u -- "$f" 2>/dev/null)" = 0 ]; then printf '%s\n' "$f"; fi
-      done
+      # **A folder of the ruled layout holds what makes it the agent's**: its
+      # territory, or a home its account owns, so a root-held directory that
+      # only shares a discovered name (a service account `weaver-web` beside
+      # a `web/` of something else's) is never one.
+      f="$d/$a"
+      if [ -d "$f" ] && [ ! -L "$f" ] && [ "$(stat -c %u -- "$f" 2>/dev/null)" = 0 ] \
+        && { [ -d "$f/weaver-$a" ] || [ "$(stat -c %U -- "$f/home" 2>/dev/null)" = "weaver-$a" ]; }; then
+        printf '%s\n' "$f"
+      fi
+      # **A territory of the layout before #578 is the folder itself**, and
+      # likewise holds what makes it the agent's: its declaration, or the
+      # agent's state group on the directory.
+      f="$d/weaver-$a"
+      if [ -d "$f" ] && [ ! -L "$f" ] && [ "$(stat -c %u -- "$f" 2>/dev/null)" = 0 ] \
+        && { [ -e "$f/agent.toml" ] || [ "$(stat -c %G -- "$f" 2>/dev/null)" = "weaver-$a-state" ]; }; then
+        printf '%s\n' "$f"
+      fi
     done
   done | sort -u
 }
@@ -430,9 +444,10 @@ for d in /var/lib/weaver "${AGENT_FOLDERS[@]}" "${!LOG_PATHS[@]}"; do [ -e "$d" 
 # the trace and the state room, so one the bases miss, a custom territory or
 # one made under an agent-directory the stack record no longer names, would
 # be the agent unarchived at its takedown (Codex on #94, round 8). A root
-# without the key, the pre-ruling layout, is archived by the bases as before;
-# a territory in an agent's folder, or that folder itself in the layout before
-# #578, is archived with the folder and not twice.
+# without the key, the pre-ruling layout, is archived as its agent's folder
+# `<base>/weaver-<agent>` where the discovery found that agent; a territory in
+# an agent's folder, or that folder itself in the layout before #578, is
+# archived with the folder and not twice.
 # Paths are compared canonical (Codex on #94, round 12): a territory written
 # as `<base>/../elsewhere` is outside the base however it is spelled, and a
 # base or a territory that does not resolve is left out of the comparison,
