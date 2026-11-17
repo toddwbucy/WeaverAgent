@@ -189,8 +189,9 @@ card has room are the SPU's to judge at the load, which `verify-load.sh` shows.
 inherit flag, and the project's limits are set on the drive: the size, and one file per
 16 KiB of it. The cap bounds the agent's own writes in its home, so they cannot take the
 space or the inodes the save points and the state room need on the same drive: it bounds
-the space and the count of files. Until #587 lands, an agent that deliberately changes
-its files' project can leave the cap. #587 closes that. The agent's folder carries the
+the space and the count of files. The shell the gate runs for the agent refuses the
+attribute changes `chattr` makes (`weaver-gate-Spec` section 8.1, #587), so no command
+the agent runs moves its files out of the cap's project. The agent's folder carries the
 same project, the mark that tells `decommission.sh` the cap is this script's, without
 the inherit flag: the script clears the flag on the folder before the mark, since a base
 that carries it passes it on, and the territory and the state room made in the folder

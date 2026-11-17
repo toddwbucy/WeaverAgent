@@ -405,15 +405,18 @@ done
 # log's name followed by `.` or `-` digit groups, with an optional compression
 # suffix (`x.log.1`, `x.log.2.gz`, `x.log-20261101`). **A listing that fails
 # is never read as an empty directory**: it is `unread`, and the archive and
-# the purge refuse. The pairs are NUL-ended because the directory may be
-# anyone's to write in, and a name carrying a newline would otherwise read as
-# a line of its writer's choosing.
+# the purge refuse. find's status is taken behind `||` and printed after its
+# listing, so the script's errexit cannot end the listing before it (Codex on
+# #599), and a listing that brings no status back is unread as well. The pairs
+# are NUL-ended because the directory may be anyone's to write in, and a name
+# carrying a newline would otherwise read as a line of its writer's choosing.
 log_paths() {
   local f=$1 d name e entry suffix owner rc
   local -a entries=() own=() other=()
   d=$(dirname -- "$f") name=$(basename -- "$f")
   if [ ! -d "$d" ] || [ -L "$d" ]; then printf 'passed\0%s\0' "$d"; return 0; fi
-  mapfile -d '' -t entries < <(find "$d" -mindepth 1 -maxdepth 1 -print0 2>/dev/null; printf '%s' "$?")
+  mapfile -d '' -t entries < <(rc=0; find "$d" -mindepth 1 -maxdepth 1 -print0 2>/dev/null || rc=$?; printf '%s' "$rc")
+  if [ ${#entries[@]} -eq 0 ]; then printf 'unread\0%s\0' "$d"; return 0; fi
   rc=${entries[-1]}
   unset 'entries[-1]'
   if [ "$rc" != 0 ]; then printf 'unread\0%s\0' "$d"; return 0; fi
@@ -439,17 +442,22 @@ log_paths() {
   printf 'stands\0%s\0' "$d"
 }
 # The logs are read in order, and a directory or an entry two logs share is
-# said once, by the first.
+# said once, by the first. **Every answer ends with its directory's verdict**
+# (`stands`, `unread`, `passed`, or the directory taken whole), so one that
+# ends without it, cut off by an error inside log_paths, is read as unread
+# rather than as a shorter answer (Codex on #599).
 declare -A LOG_LEFT=() LOG_DIRS_SAID=()
 LOG_UNREAD=()
 while IFS= read -r -d '' f; do
   d=$(dirname -- "$f")
   in_operator_home "$d" && { plan "$d  under the operator's home: not touched"; continue; }
+  judged=
   while IFS= read -r -d '' kind && IFS= read -r -d '' pth; do
     case $kind in
-      take) LOG_PATHS["$pth"]=1; continue ;;
+      take) LOG_PATHS["$pth"]=1; [ "$pth" != "$d" ] || judged=1; continue ;;
       left) [ -n "${LOG_LEFT[$pth]+named}" ] || LOG_LEFT["$pth"]=$f; continue ;;
     esac
+    judged=1
     [ -z "${LOG_DIRS_SAID[$pth]+said}" ] || continue
     LOG_DIRS_SAID["$pth"]=1
     case $kind in
@@ -459,6 +467,11 @@ while IFS= read -r -d '' f; do
       passed) plan "$pth  the directory of the legacy log $f is gone or a link: nothing in it is taken" ;;
     esac
   done < <(log_paths "$f")
+  if [ -z "$judged" ]; then
+    plan "$d  the directory of the legacy log $f was not read to its end, so the archive and the purge refuse"
+    LOG_DIRS_SAID["$d"]=1
+    LOG_UNREAD+=("$d")
+  fi
 done < <([ ${#LOG_FILES[@]} -eq 0 ] || printf '%s\0' "${!LOG_FILES[@]}" | sort -z)
 # **agent_folders BASE...: each discovered agent's folder in each base**, one
 # per line, canonical: `<base>/<agent>` (the operator's ruling of 2026-11-16 on
@@ -612,9 +625,11 @@ for d in "${AGENT_FOLDERS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && pla
 # only root can change, so an agent made without --home-quota, or one refused
 # because the drive carried its project already, never has a stranger's limit
 # of the same number lifted. **Nothing is read off the home**: the agent owns
-# its home and, until #587 lands, can set its project to any number, another
-# agent's uid included. What the home carries is printed as <seen>, a report
-# and never acted on ("-" where it cannot be read). A folder whose account is
+# it, so what it carries is no fact of root's. The gate's shell refuses every
+# command the agent runs a change of its files' project (#587), but a home made
+# before that, or moved by hand, can carry any number, another agent's uid
+# included. What the home carries is printed as <seen>, a report and never
+# acted on ("-" where it cannot be read). A folder whose account is
 # gone, or whose drive has no project quotas, carries no cap. A folder whose
 # mount or mark cannot be read is printed as "? mount <folder>" or "? mark
 # <folder>", so the plan names it and what could not be read, rather than

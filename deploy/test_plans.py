@@ -59,6 +59,11 @@ def look_as(account, flag, path):
 BOX_PATH = os.environ.get("PATH", os.defpath)
 STAND_IN_NAMES = ("sudo", "runuser", "setsid", "env", "timeout")
 TEST_ROOT = os.path.realpath(tempfile.gettempdir())
+# **A stranger's uid is never the runner's** (Codex on #599): a stand-in that
+# answers a path the tests made as not root's answers this uid, held by no
+# fixture account, rather than the file's own owner, which is 0 when the suite
+# runs as root.
+STRANGER_UID = 54321
 STAND_IN_GUARD = Path(tempfile.mkdtemp(prefix="weaver-test-guard-"))
 atexit.register(shutil.rmtree, STAND_IN_GUARD, True)
 for _name in ("sudo", "runuser"):
@@ -128,17 +133,25 @@ import json, os, pathlib, re, shutil, subprocess, sys, time
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
 root = pathlib.Path(os.environ['FIXTURE_ROOT'])
+def owner(path, st):
+    """uid 0 under the fixture, STRANGER_UID for any other path the tests
+    made, and the file's own owner elsewhere, so a stranger's file is never
+    read as root's when the suite runs as root (Codex on #599)."""
+    if path.is_relative_to(root): return 0
+    if path != pathlib.Path('@TEST_ROOT@') and path.is_relative_to('@TEST_ROOT@'): return @STRANGER_UID@
+    return st.st_uid
 if name == 'stat':
     # **The fixture's files are root's.** Every file the tests make is the
     # tester's, so the ownership `held_closed` judges is answered as uid 0
-    # for anything under the fixture and read from the file itself elsewhere;
-    # the mode is always the file's own. Not logged: it is a look, not a call.
+    # for anything under the fixture, STRANGER_UID for any other file the
+    # tests made, and read from the file itself elsewhere; the mode is always
+    # the file's own. Not logged: it is a look, not a call.
     if args[:1] == ['-c'] and args[1] == '%u %G %a':
         # The trace's look: root under the fixture, its group what the test
         # names, its mode the file's own.
         path = pathlib.Path(args[-1])
         st = os.lstat(path)
-        print(0 if path.is_relative_to(root) else st.st_uid, os.environ.get('TRACE_GROUP_AS', 'nobody-group'),
+        print(owner(path, st), os.environ.get('TRACE_GROUP_AS', 'nobody-group'),
               format(st.st_mode & 0o7777, 'o'))
         sys.exit(0)
     if args[:1] == ['-c'] and args[1] == '%u:%G:%a':
@@ -152,12 +165,12 @@ if name == 'stat':
         if str(path) in groups: group = groups[str(path)]
         elif path.name == 'save-points': group = path.parent.name + '-admin'
         else: group = path.name + '-state'
-        print(f"{0 if path.is_relative_to(root) else st.st_uid}:{group}:{format(st.st_mode & 0o7777, 'o')}")
+        print(f"{owner(path, st)}:{group}:{format(st.st_mode & 0o7777, 'o')}")
         sys.exit(0)
     if args[:1] == ['-c'] and args[1] == '%u %a':
         path = pathlib.Path(args[-1])
         st = os.lstat(path)
-        print(0 if path.is_relative_to(root) else st.st_uid, format(st.st_mode & 0o7777, 'o'))
+        print(owner(path, st), format(st.st_mode & 0o7777, 'o'))
         sys.exit(0)
     os.execv('/usr/bin/stat', ['stat', *args])
 if name == 'findmnt':
@@ -614,7 +627,8 @@ elif name == 'ldd':
 else: sys.exit(99)
 '''
 DOUBLE = DOUBLE.replace('@ACCESS_LOOK@', repr(ACCESS_LOOK)).replace('@DROP_PATH@', DROP_PATH)
-DOUBLE = DOUBLE.replace('@DROP_NAMED@', DROP_NAMED)
+DOUBLE = DOUBLE.replace('@DROP_NAMED@', DROP_NAMED).replace('@TEST_ROOT@', TEST_ROOT)
+DOUBLE = DOUBLE.replace('@STRANGER_UID@', str(STRANGER_UID))
 
 # The six sampling defaults the harness reads from every serving declaration
 # (weaver-harness-Spec section 6.1), at the values create-agent.sh writes. A
@@ -7855,7 +7869,7 @@ class DecommissionTests(unittest.TestCase):
             self.assertEqual(run.stdout.splitlines(), [str(good)], run.stderr)
             self.assertIn(f"refused: {roots / 'b'}/territory names {grouped}, which stands uid 0, "
                           f"group weaver-b-admin, mode 755, not root:weaver-b-state", run.stderr)
-            self.assertIn(f"refused: {roots / 'c'}/territory names {foreign}, which stands uid {os.getuid()}",
+            self.assertIn(f"refused: {roots / 'c'}/territory names {foreign}, which stands uid {STRANGER_UID}",
                           run.stderr)
             self.assertIn(f"skipped: {roots / 'd'}/territory names {homed}, under the operator's home",
                           run.stderr)
@@ -8148,13 +8162,23 @@ class DecommissionTests(unittest.TestCase):
 
 
     # The tester owns every file a fixture makes, so this stand-in answers uid
-    # 0 for each path but those STRANGERS names, which keep the tester's.
-    ROOT_STAT = ('stat() { local p="${@: -1}"; case ":${STRANGERS:-}:" in *":$p:"*) command stat "$@" ;; '
-                 "*) command stat \"$@\" | sed 's/^[0-9]*/0/' ;; esac; }\n")
+    # 0 for each path but those STRANGERS names, which answer STRANGER_UID,
+    # never the runner's (Codex on #599). Each keeps its own link count.
+    ROOT_STAT = ('stat() { local p="${@: -1}" u=0; case ":${STRANGERS:-}:" in *":$p:"*) u=' + str(STRANGER_UID)
+                 + ' ;; esac; command stat "$@" | sed "s/^[0-9]*/$u/"; }\n')
 
-    def log_takes(self, log, agents=("m1",), strangers=()):
-        """log_paths LOG with AGENTS naming AGENTS, as (kind, path) pairs."""
-        program = (self.ROOT_STAT + "declare -A AGENTS=(" + " ".join(f"[{a}]=1" for a in agents) + ")\n"
+    def script_options(self):
+        """The script's own `set` line, under which its functions run."""
+        found = re.findall(r"^set -[a-z]+(?: -o [a-z]+| [a-z]+)*$", self.script, re.M)
+        self.assertEqual(len(found), 1, found)
+        return found[0] + "\n"
+
+    def log_takes(self, log, agents=("m1",), strangers=(), find=None):
+        """log_paths LOG with AGENTS naming AGENTS, as (kind, path) pairs,
+        under the script's own options, with FIND as a stand-in for find."""
+        program = (self.script_options() + self.ROOT_STAT
+                   + ("" if find is None else f"find() {{ {find}; }}\n")
+                   + "declare -A AGENTS=(" + " ".join(f"[{a}]=1" for a in agents) + ")\n"
                    + shell_function(self.script, "log_paths") + 'log_paths "$1"')
         run = subprocess.run(["bash", "-c", program, "x", str(log)], capture_output=True, timeout=20,
                              env={**os.environ, "STRANGERS": ":".join(str(s) for s in strangers)})
@@ -8228,6 +8252,56 @@ class DecommissionTests(unittest.TestCase):
                     self.assertEqual(self.log_takes(shut / "admin.log", agents=("m9",)), [("unread", str(shut))])
                 finally:
                     shut.chmod(0o755)
+            # Under the script's errexit (Codex on #599), a find that fails
+            # and prints nothing, run as root or not, and a listing that ends
+            # before its status is printed, are unread as well.
+            for find in ("return 1", 'kill -9 "$BASHPID"'):
+                with self.subTest(find=find):
+                    self.assertEqual(self.log_takes(own / "admin.log", find=find), [("unread", str(own))])
+
+    def test_a_legacy_log_read_short_under_errexit_refuses_the_archive_and_the_purge(self):
+        """**Codex on #599**: the discovery loop and its refusal, under the
+        script's own options. A find that fails and prints nothing, and an
+        answer from log_paths cut off before its directory's verdict, each
+        name the directory and refuse both modes. Perturbations: print find's
+        status unguarded after it, as before, and the first case runs on with
+        nothing refused. Drop the loop's check for the verdict, and the second
+        does."""
+        script = self.script
+        q = shlex.quote
+        loop = script[script.index("declare -A LOG_LEFT=() LOG_DIRS_SAID=()\n"):]
+        loop = loop[:loop.index(" | sort -z)\n") + len(" | sort -z)\n")]
+        refusal = next(line for line in script.splitlines()
+                       if line.startswith('[ ${#LOG_UNREAD[@]} -eq 0 ] || die "the directory of a legacy log'))
+        with tempfile.TemporaryDirectory() as scratch:
+            shared = Path(scratch).resolve() / "var-log"
+            shared.mkdir()
+            log = shared / "weaver-worker.log"
+            log.write_text("the agent's\n")
+            cases = {
+                "find fails": ("find() { return 1; }\n" + shell_function(script, "log_paths"),
+                               f"PLAN {shared}  the directory of the legacy log {log} cannot be listed"),
+                "answer cut off": (shell_function(script, "log_paths")
+                                   + "log_paths() { printf 'take\\0%s\\0' \"$1\"; exit 1; }\n",
+                                   f"PLAN {shared}  the directory of the legacy log {log} was not read to its end"),
+            }
+            for case, (functions, said) in cases.items():
+                with self.subTest(case=case):
+                    program = (self.script_options() + self.ROOT_STAT
+                               + "declare -A AGENTS=([m1]=1) LOG_PATHS=()\n"
+                               + f"declare -A LOG_FILES=([{q(str(log))}]=1)\n"
+                               + "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                               + "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\n"
+                               + "in_operator_home() { return 1; }\n"
+                               + functions + loop + refusal + "\necho REACHED\n")
+                    run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20,
+                                         env={**os.environ, "STRANGERS": ""})
+                    got = run.stdout.splitlines()
+                    self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+                    self.assertTrue(any(line.startswith(said) for line in got), run.stdout + run.stderr)
+                    self.assertIn(f"DIE the directory of a legacy log cannot be listed: {shared}. Nothing is "
+                                  "archived or purged until it reads. Look at it by hand, then rerun", got)
+                    self.assertNotIn("REACHED", got)
 
     def test_a_legacy_log_in_a_shared_directory_leaves_the_directory_and_its_strangers(self):
         # **#593's acceptance**: a legacy log path in a shared directory beside
@@ -9404,9 +9478,11 @@ class RoundOneOf79Tests(unittest.TestCase):
             (base / "m1" / "home").mkdir()
             roots_owned = ":".join(str(base / n) for n in ("m1", "weaver-old", "lost+found", "web", "weaver-web"))
             # The tester owns every file here, so `stat -c %u` answers 0 for
-            # what the fixture calls root's and the tester's uid elsewhere.
+            # what the fixture calls root's and STRANGER_UID elsewhere, never
+            # the runner's (Codex on #599).
             stat_double = ('stat() { local p="${@: -1}"; case ":$ROOTS_OWNED:" in *":$p:"*) echo 0 ;; '
-                           '*) command stat "$@" ;; esac; }\n')
+                           '*) case "$2" in %u) echo ' + str(STRANGER_UID) + ' ;; *) command stat "$@" ;; esac ;; '
+                           'esac; }\n')
             program = (stat_double + "declare -A AGENTS=([m1]=1 [old]=1 [alice]=1 [web]=1)\n"
                        + shell_function(script, "agent_folders") + shell_function(script, "left_in_base")
                        + 'mapfile -t F < <(agent_folders "$1")\nprintf "folder %s\\n" "${F[@]}"\n'
@@ -9582,14 +9658,15 @@ class RoundOneOf79Tests(unittest.TestCase):
         # account is gone, a folder with no home, a linked home, and a drive without
         # project quotas carry no cap, and a folder whose mount cannot be read
         # is named and keeps the purge from closing clean. **What the home carries is a report and
-        # never acted on**: the agent owns its home and can set its project to
-        # another agent's uid until #587 lands, so a home moved to m1's project
-        # has only its own account's limit removed, and the plan names the
-        # move. The purge sets each project's limit to none before the paths
-        # go, and a limit left standing (setquota failing, or absent) stops the
-        # purge there (CodeRabbit on #582). Perturbations: read the project off the home, follow a
-        # linked home, skip the prjquota check, drop the failure's return, or
-        # move the step after the paths, and a read below fails.
+        # never acted on**: the agent owns its home, and a home made before
+        # #587 or moved by hand can carry another agent's uid, so a home moved
+        # to m1's project has only its own account's limit removed, and the
+        # plan names the move. The purge sets each project's limit to none
+        # before the paths go, and a limit left standing (setquota failing, or
+        # absent) stops the purge there (CodeRabbit on #582). Perturbations:
+        # read the project off the home, follow a linked home, skip the
+        # prjquota check, drop the failure's return, or move the step after
+        # the paths, and a read below fails.
         script = (DEPLOY / "decommission.sh").read_text()
         with tempfile.TemporaryDirectory() as scratch:
             base = Path(scratch).resolve() / "state"
