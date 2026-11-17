@@ -16,7 +16,12 @@
 # admin-con account), and
 # --adapter <path> --adapter-sha256 <hex> --adapter-scale <number>
 # --base-blake3 <hex>, all four or none, which write the binding's `adapter`
-# table (weaver-spu adapter binding amendment ADP-1 and ADP-5), and
+# table (weaver-spu adapter binding amendment ADP-1 and ADP-5), --devices
+# <i,j,...> (the decoder's device ordinals in the box's PCI bus order, given
+# order kept as shard order, default 0), --context-capacity <n> (the session's
+# context in tokens, default 32768, at least the max-tokens-per-turn of 4096
+# this script writes beside it), --turn-context continuous|independent
+# (written only when given, and absent is continuous, #423), and
 # --root-operator (root runs it, on a single-purpose appliance where root is
 # the operator).
 #
@@ -152,6 +157,16 @@ ADAPTER=""
 ADAPTER_SHA256=""
 ADAPTER_SCALE=""
 BASE_BLAKE3=""
+# **The decoder's placement and context are the operator's choice at setup**
+# (#580), so nobody edits the declaration by hand after this script writes it.
+# The defaults are the header's. A value given empty is judged as given, so
+# `--devices ""` refuses as the empty set rather than becoming the default, and
+# TURN_CONTEXT stays unset until the flag gives it.
+DEVICES=0
+CONTEXT_CAPACITY=32768
+unset TURN_CONTEXT
+# **The ceiling of a turn this script writes**, fixed: no option sets it (#580).
+MAX_TOKENS_PER_TURN=4096
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply)    APPLY=1 ;;
@@ -176,6 +191,9 @@ while [ $# -gt 0 ]; do
     --adapter-sha256) [ $# -ge 2 ] || die "--adapter-sha256 needs a digest"; ADAPTER_SHA256=$2; shift ;;
     --adapter-scale)  [ $# -ge 2 ] || die "--adapter-scale needs a number"; ADAPTER_SCALE=$2; shift ;;
     --base-blake3)    [ $# -ge 2 ] || die "--base-blake3 needs a digest"; BASE_BLAKE3=$2; shift ;;
+    --devices)          [ $# -ge 2 ] || die "--devices needs device ordinals, such as 0 or 0,1"; DEVICES=$2; shift ;;
+    --context-capacity) [ $# -ge 2 ] || die "--context-capacity needs a count of tokens"; CONTEXT_CAPACITY=$2; shift ;;
+    --turn-context)     [ $# -ge 2 ] || die "--turn-context needs continuous or independent"; TURN_CONTEXT=$2; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -252,6 +270,43 @@ case "$CONNECTOR_ROLE" in
   observer) VERBS="show" ;;
   *) die "--connector-role is operator or observer: '$CONNECTOR_ROLE'" ;;
 esac
+# **The decoder's three values refuse here what a load refuses without the
+# model or the cards**, before anything is made (#580). The parse refuses an
+# empty device set and a turn-context outside its two words (weaver-types-Spec
+# section 2). The SPU's admission refuses a repeated ordinal and a capacity
+# that is not a count below 2^32, and either engine refuses a capacity of zero.
+# Each value is written as a TOML integer, which takes no leading zero. An
+# ordinal the box has no card for, whether the family spans the devices, and
+# whether each card has room are the SPU's to judge at the load, and
+# verify-load.sh's to show.
+U32_MAX=4294967295
+[[ "$DEVICES" =~ ^(0|[1-9][0-9]{0,9})(,(0|[1-9][0-9]{0,9}))*$ ]] \
+  || die "--devices is a comma-separated list of device ordinals in the box's PCI bus order, such as 0 or 0,1, with no spaces or leading zeros: '$DEVICES'"
+declare -A SEEN_DEVICE=()
+IFS=, read -r -a DEVICE_LIST <<< "$DEVICES"
+for d in "${DEVICE_LIST[@]}"; do
+  (( d <= U32_MAX )) || die "--devices takes ordinals from 0 to $U32_MAX: '$d'"
+  [ -z "${SEEN_DEVICE[$d]:-}" ] || die "--devices names ordinal $d twice, and the SPU refuses a repeated device"
+  SEEN_DEVICE[$d]=1
+done
+DEVICES_TOML=${DEVICES//,/, }
+[[ "$CONTEXT_CAPACITY" =~ ^[1-9][0-9]{0,9}$ ]] && (( CONTEXT_CAPACITY <= U32_MAX )) \
+  || die "--context-capacity is a count of tokens from 1 to $U32_MAX, with no leading zero: '$CONTEXT_CAPACITY'"
+# **The script's own consistency rule, not a load's** (the Planner's ruling
+# of 2026-11-16 on #580): no load compares the two, but a capacity below the
+# turn's ceiling this script writes into the same declaration contradicts it,
+# a turn allowed more tokens than the whole context holds.
+(( CONTEXT_CAPACITY >= MAX_TOKENS_PER_TURN )) \
+  || die "--context-capacity $CONTEXT_CAPACITY is below the max-tokens-per-turn of $MAX_TOKENS_PER_TURN this script writes into the same declaration: give at least $MAX_TOKENS_PER_TURN"
+if [ -z "${TURN_CONTEXT+given}" ]; then
+  TURN_CONTEXT_LINE="" TURN_CONTEXT_SHOWN="continuous (absent, so not written)"
+else
+  case "$TURN_CONTEXT" in
+    continuous|independent) TURN_CONTEXT_LINE="
+turn-context = \"$TURN_CONTEXT\"" TURN_CONTEXT_SHOWN=$TURN_CONTEXT ;;
+    *) die "--turn-context is continuous or independent: '$TURN_CONTEXT'" ;;
+  esac
+fi
 # **The operator is the account running this script, or root where root is the
 # operator.** On a workstation the operator is the user's own account, which
 # can sudo: the root's `operator` key names their uid, and every root step below
@@ -532,7 +587,7 @@ tool-set = []
 # **A serving binding carries a gate instruction and the inventory refuses it
 # absent.** An unstated binding-kind resolves to serving, so both are written
 # rather than left to a default a reader cannot see.
-binding-kind = "serving"
+binding-kind = "serving"$TURN_CONTEXT_LINE
 
 # **No identity here**, per weaver-types-Spec section 2 on the ruling of
 # 2026-10-06: the system prompt is state, seeded through the gate after the
@@ -540,11 +595,11 @@ binding-kind = "serving"
 [spu-instruction.decoder]
 residual-readout-election = false
 surprisal-election = true
-tunable-values = { context-capacity = 32768, max-tokens-per-turn = 4096, seed = 451234785645, temperature = 0.7, top-k = 40, top-p = 0.95, repetition-penalty = 1.1, repetition-window = 64 }
+tunable-values = { context-capacity = $CONTEXT_CAPACITY, max-tokens-per-turn = $MAX_TOKENS_PER_TURN, seed = 451234785645, temperature = 0.7, top-k = 40, top-p = 0.95, repetition-penalty = 1.1, repetition-window = 64 }
 
 [spu-instruction.decoder.model-binding]
 artifact = "$ARTIFACT"
-devices = [0]$ADAPTER_TABLE
+devices = [$DEVICES_TOML]$ADAPTER_TABLE
 
 [gate-instruction.access-rule]
 allowed-uids = [${GATECON_UID:-65534}]
@@ -793,6 +848,7 @@ plan "operator key    $OPERATOR_UID ($OPERATOR)"
 plan "roles.toml      trace-reader = $ADMINCON_USER"
 plan "access rule     allowed-uids = [$GATECON_UID_SHOWN] ($GATECON_USER alone)"
 plan "declaration     $DECLARATION     root:$ACCESS_GROUP 0640, session $SESSION, artifact $ARTIFACT; edited with sudoedit"
+plan "decoder         devices [$DEVICES_TOML], context-capacity $CONTEXT_CAPACITY, turn-context $TURN_CONTEXT_SHOWN"
 [ "$ADAPTER_GIVEN" -eq 0 ] || plan "adapter         $ADAPTER at scale $ADAPTER_SCALE, declared sha256 $ADAPTER_SHA256 over base blake3 $BASE_BLAKE3; checked by the SPU at admission"
 plan "prompt draft    $PROMPT     root:$ACCESS_GROUP 0640, a draft: the agent has no seeding sender (weaver-gate-world-contract section 2)"
 plan "logs            $HOME_DIR/admin.log and worker.log, made by admin at the first verb"

@@ -863,6 +863,80 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                     self.assertIn(said, result.stderr)
                     self.assertEqual(self.calls(), [])
 
+    def test_the_decoders_three_values_are_written_as_given_and_default_when_absent(self):
+        # **#580**: the setup pages choose the devices, the context capacity
+        # and the turn context, and the script writes them, so nobody edits
+        # the declaration by hand. Given, each is written as given, the
+        # devices in their given order as the shard order, and turn-context
+        # as a top-level key. Absent, each keeps what the script wrote before:
+        # device 0, 32768 tokens, and no turn-context, which reads as
+        # continuous. The plan says all three. A TURN_CONTEXT the caller's
+        # environment carries is not the flag. Perturbations: write the
+        # devices sorted, a fixed capacity, or turn-context inside the
+        # decoder's table, or keep the inherited variable, and a read below
+        # fails.
+        import tomllib
+        self.env.update(ALLOW_APPLY_CHECKS="1", TURN_CONTEXT="independent")
+        for given, devices, capacity, turn, shown in (
+                ((), [0], 32768, None, "devices [0], context-capacity 32768, turn-context continuous (absent, so not written)"),
+                (("--devices", "1,0", "--context-capacity", "131072", "--turn-context", "independent"),
+                 [1, 0], 131072, "independent", "devices [1, 0], context-capacity 131072, turn-context independent"),
+                (("--turn-context", "continuous", "--context-capacity", "4096"), [0], 4096, "continuous",
+                 "devices [0], context-capacity 4096, turn-context continuous"),
+                (("--devices", "4294967295", "--context-capacity", "4294967295"), [4294967295], 4294967295, None,
+                 "devices [4294967295], context-capacity 4294967295, turn-context continuous (absent, so not written)")):
+            with self.subTest(given=given):
+                self.reset_made()
+                result = self.create(*given, "--apply")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("decoder         " + shown, result.stdout)
+                declaration = tomllib.loads((self.decl / "agent.toml").read_text())
+                decoder = declaration["spu-instruction"]["decoder"]
+                self.assertEqual(decoder["model-binding"]["devices"], devices)
+                self.assertEqual(decoder["tunable-values"]["context-capacity"], capacity)
+                self.assertEqual(decoder["tunable-values"]["max-tokens-per-turn"], 4096)
+                self.assertEqual(declaration.get("turn-context"), turn)
+                self.assertNotIn("turn-context", decoder)
+
+    def test_a_malformed_decoder_value_refuses_before_anything(self):
+        # **#580**: each value refuses in both modes before any command, as a
+        # load would refuse it: an empty device set and a turn-context outside
+        # its two words at the parse, a repeated ordinal and a capacity that
+        # is not a count below 2^32 at the SPU's admission, and a capacity of
+        # zero at either engine. A value TOML cannot write as an integer
+        # (a leading zero, a sign, a fraction) refuses too, and so does a flag
+        # given last with no value. Perturbations: drop any one check, and
+        # its cases run on.
+        cases = [(("--devices",), "--devices needs device ordinals"),
+                 (("--context-capacity",), "--context-capacity needs a count"),
+                 (("--turn-context",), "--turn-context needs continuous or independent")]
+        for bad in ("", "0,", ",0", "0, 1", "0 ,1", "01", "-1", "+1", "a", "0x1", "1.0", "12345678901"):
+            cases.append((("--devices", bad), "--devices is a comma-separated list"))
+        for bad in ("4294967296", "9999999999"):
+            cases.append((("--devices", bad), "--devices takes ordinals from 0 to 4294967295"))
+        for bad, twice in (("0,0", 0), ("1,2,1", 1)):
+            cases.append((("--devices", bad), f"--devices names ordinal {twice} twice"))
+        for bad in ("", "0", "-1", "+1", "032768", "1.5", "1e5", "12345678901", "4294967296", "9999999999"):
+            cases.append((("--context-capacity", bad), "--context-capacity is a count of tokens from 1 to 4294967295"))
+        for bad in ("", "Continuous", "both", "independent "):
+            cases.append((("--turn-context", bad), "--turn-context is continuous or independent"))
+        # **A capacity below the turn's ceiling the script writes refuses**,
+        # naming both values (the Planner's ruling of 2026-11-16 on #580): the
+        # script's own consistency rule, which no load checks. Perturbation:
+        # drop the floor, and both cases run on.
+        for bad in ("1", "4095"):
+            cases.append((("--context-capacity", bad),
+                          f"--context-capacity {bad} is below the max-tokens-per-turn of 4096 this script writes"))
+        for given, said in cases:
+            for mode in ((), ("--apply",)):
+                with self.subTest(given=given, mode=mode):
+                    self.log.unlink(missing_ok=True)
+                    result = self.run_script("create-agent.sh", "m1", "--artifact", str(self.artifact),
+                                             *mode, *given)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn(said, result.stderr)
+                    self.assertEqual(self.calls(), [])
+
     def test_the_rendered_declaration_is_toml_before_anything_is_made(self):
         # The plan renders and parse-checks the declaration it would write.
         # Perturbation: break the heredoc's quoting and the plan refuses here.
