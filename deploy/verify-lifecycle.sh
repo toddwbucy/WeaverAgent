@@ -393,7 +393,8 @@ DROP_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # shell opens. Its standard output and standard error are pipes this shell
 # holds, one pipe where the caller gave both the same file, so a caller's
 # `2>&1` keeps its order, and cat copies them on. Every other descriptor this
-# shell holds is closed first, as sudo's closefrom does and runuser does not.
+# shell holds is closed first, as sudo's closefrom does and runuser does not,
+# and where /proc/self/fd cannot be read, nothing runs and the call fails.
 # It runs under `setsid -w`, in a session of its own with no controlling
 # terminal: before runuser in root mode, and inside sudo in the operator's,
 # since sudo looks up the operator's cached credential by terminal. It starts
@@ -401,13 +402,15 @@ DROP_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # runuser keeps the caller's environment and sudo keeps what the box's
 # env_keep names. **An interrupt still reaches it**: setsid has moved it out
 # of the terminal's process group, so the drop runs as a job of this shell,
-# whose traps, set before it starts, pass INT, TERM and HUP on to it as
-# SIGTERM, and which then takes the signal itself, so the script's own traps
-# run as they would have. runuser's parent passes SIGTERM on to its child.
-# Under sudo, `timeout 0`, which never times out, passes on what sudo
+# whose traps, set before it starts, pass INT, QUIT, TERM and HUP on to it
+# as SIGTERM, and which then takes the signal itself, so the script's own
+# traps run as they would have. runuser's parent passes SIGTERM on to its
+# child. Under sudo, `timeout 0`, which never times out, passes on what sudo
 # relays: under sudo's use_pty the command sudo starts leads its own process
 # group, so a setsid started there would fork and its parent alone would
 # take the signal, while timeout's child leads none, and setsid runs in it.
+# That timeout is coreutils': BusyBox's counts 0 down, and the stack puts no
+# BusyBox applet on any PATH.
 # The status is CMD's, else the standard output relay's, else the standard
 # error relay's. **Not covered** (#590): the env that runuser or sudo starts
 # holds the caller's environment, or what env_keep passes, until it replaces
@@ -426,6 +429,11 @@ as_account() {
   fi
   (
     set +e
+    [ -d /proc/self/fd ] && [ -r /proc/self/fd ] || {
+      echo "as_account: no command runs as $account, since /proc/self/fd cannot be read" \
+           "to close the descriptors this shell holds" >&2
+      exit 1
+    }
     exec <"$input" || exit 1
     for fd in /proc/self/fd/*; do
       fd=${fd##*/}
@@ -439,6 +447,7 @@ as_account() {
         {
           drop= sig=
           trap 'sig=INT; [ -z "$drop" ] || kill -TERM "$drop"' INT
+          trap 'sig=QUIT; [ -z "$drop" ] || kill -TERM "$drop"' QUIT
           trap 'sig=TERM; [ -z "$drop" ] || kill -TERM "$drop"' TERM
           trap 'sig=HUP; [ -z "$drop" ] || kill -TERM "$drop"' HUP
           "$@" <&0 2>&"$err" 4>&- &
@@ -1812,7 +1821,7 @@ if [ "$APPLY" -eq 1 ]; then
       || die "setsid is not on PATH, and root mode runs every look as the agent's accounts under it:" \
              "install util-linux's setsid"
     as_account nobody true >/dev/null 2>&1 \
-      || die "runuser would not run a command as nobody, with env and true on $DROP_PATH," \
+      || die "runuser would not run a command as nobody, with env and true on $DROP_PATH and /proc mounted," \
              "so no look as the agent's accounts could be made"
     # **Root's own sudo is checked too** (the self-check on B2): the admin-con
     # rule's listing (step 1) and verify-load.sh's drops (step 2) go through

@@ -124,7 +124,8 @@ group in one shell.
   account's uid can read its environment and open its descriptors through `/proc` while
   it runs. Its standard input is `/dev/null`, or a file the script opens for it. Its
   standard output and standard error are pipes the script holds and copies on. Every
-  other descriptor the script holds is closed. It runs under `setsid` (util-linux), with
+  other descriptor the script holds is closed, and where `/proc` is not mounted, nothing
+  is run. It runs under `setsid` (util-linux), with
   no controlling terminal, and under `env -i`, with sudo's default `secure_path` as
   `PATH` and the variables the step names alone. An interrupt or a hangup still ends it,
   since the script passes the signal on. Two windows stay open (#590): the `env` that
@@ -132,7 +133,10 @@ group in one shell.
   passes, until it replaces it, and under sudo, the `env` and `timeout` that start the
   command hold the terminal sudo hands them. The reads `verify-load.sh` and
   `update-stack.sh` make as the agent's accounts go through sudo alone, with a named input
-  and a captured output, and are #590's too.
+  and a captured output, and are #590's too. In the operator's mode these drops find the
+  credential `sudo -v` caches by sudo's default `timestamp_type`, the terminal. Under the
+  non-default `timestamp_type=ppid` they do not, since their sudo's parent is a subshell
+  of the script, so the run is refused at its first drop.
 - On a single-purpose appliance, where root is the operator, `runuser` (util-linux) is
   on the box: in root mode the wall checks and the closing probe run as the agent's
   accounts through it, and no sudo credential is asked for. The include and the

@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import shlex
 import re
+import resource
 import shutil
 import signal
 import subprocess
@@ -6133,8 +6134,8 @@ sys.exit(int(sys.argv[2]))
 """
     # A stand-in for the drop's privileged parent, as it treats signals:
     # runuser's watching parent, for `-u` in the caller's session, passes
-    # SIGTERM alone on to its child, and sudo under use_pty relays TERM, INT
-    # and HUP to a child that leads its own process group.
+    # SIGTERM alone on to its child, and sudo under use_pty relays TERM, INT,
+    # QUIT and HUP to a child that leads its own process group.
     RELAY = """#!/usr/bin/python3 -I
 import os, signal, sys
 name, args = os.path.basename(sys.argv[0]), sys.argv[4:]
@@ -6148,7 +6149,7 @@ if child == 0:
     if name == "sudo":
         os.setpgid(0, 0)
     os.execvp(args[0], args)
-for s in (signal.SIGTERM,) if name == "runuser" else (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+for s in (signal.SIGTERM,) if name == "runuser" else (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT, signal.SIGHUP):
     signal.signal(s, lambda sig, _: os.kill(child, sig))
 _, status = os.waitpid(child, 0)
 code = os.waitstatus_to_exitcode(status)
@@ -6307,12 +6308,14 @@ sys.exit(code if code >= 0 else 128 - code)
 
     def test_an_interrupt_ends_the_script_and_the_account_s_command(self):
         # setsid moves the command out of the terminal's process group, so a
-        # Ctrl-C reaches it only through as_account, which passes the signal
-        # on as SIGTERM and then takes it itself: the script's own trap runs,
-        # or, without one, the script ends by the interrupt, and the command
-        # is gone. The stand-ins relay as runuser and sudo do. Perturbations:
-        # drop the traps, drop `timeout 0` in the operator's mode, or drop the
-        # signal taken again, and a case below fails.
+        # Ctrl-C or a Ctrl-\ reaches it only through as_account, which passes
+        # the signal on as SIGTERM and then takes it itself: the script's own
+        # trap runs, or, without one, the script ends by the signal, and the
+        # command is gone. The stand-ins relay as runuser and sudo do. A
+        # Ctrl-\ dumps the shells' cores, so the case keeps them off the disk.
+        # Perturbations: drop the traps or the QUIT trap alone, drop
+        # `timeout 0` in the operator's mode, or drop the signal taken again,
+        # and a case below fails.
         relay_bin = self.root / "relay-bin"
         relay_bin.mkdir()
         relay = self.root / "relay"
@@ -6325,48 +6328,80 @@ sys.exit(code if code >= 0 else 128 - code)
         command.write_text("#!/usr/bin/python3 -I\nimport os, time\n"
                            f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\ntime.sleep(30)\n")
         command.chmod(0o755)
+        cases = [(script, root_mode, sig, trap) for script in self.SCRIPTS for root_mode in (True, False)
+                 for sig in (signal.SIGINT, signal.SIGQUIT) for trap in (False, True)]
+        for script, root_mode, sig, trap in cases:
+            with self.subTest(script=script, root_mode=root_mode, signal=sig.name, trap=trap):
+                pid_file.unlink(missing_ok=True)
+                program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n"
+                           + (f"trap 'echo trapped >&2; exit {128 + sig}' {sig.name[3:]}\n" if trap else "")
+                           + shell_function((DEPLOY / script).read_text(), "as_account")
+                           + f"as_account weaver-m1 {shlex.quote(str(command))} >/dev/null\necho AFTER\n")
+                proc = subprocess.Popen(["bash", "-c", program], env=self.env(relay_bin),
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE, start_new_session=True,
+                                        preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_CORE, (0, 0)))
+                pid, took, out, err = None, None, b"", b""
+                for _ in range(200):
+                    if pid_file.exists() and pid_file.read_text():
+                        pid = int(pid_file.read_text())
+                        break
+                    time.sleep(0.05)
+                if pid is not None:
+                    started = time.monotonic()
+                    os.killpg(proc.pid, sig)
+                    try:
+                        out, err = proc.communicate(timeout=10)
+                        took = time.monotonic() - started
+                    except subprocess.TimeoutExpired:
+                        pass
+                    for _ in range(60):
+                        if not self.alive(pid):
+                            break
+                        time.sleep(0.05)
+                outlived = pid is not None and self.alive(pid)
+                if outlived:
+                    os.kill(pid, signal.SIGKILL)
+                if proc.poll() is None:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                    proc.communicate()
+                self.assertIsNotNone(pid, "the command started")
+                self.assertFalse(outlived, "the account's command outlived the interrupt")
+                self.assertIsNotNone(took, "the script still ran 10 s after the interrupt")
+                self.assertLess(took, 5)
+                self.assertNotIn(b"AFTER", out, "the script ran on past the interrupt")
+                # bash ignores SIGQUIT in every case, so without a trap a
+                # Ctrl-\ ends the script by `set -e` on as_account's 131, as
+                # when it reached the command directly.
+                self.assertEqual(proc.returncode, 128 + sig if trap or sig == signal.SIGQUIT else -sig, err)
+                if trap:
+                    self.assertIn(b"trapped", err, "the script's own trap ran")
+
+    def test_without_proc_nothing_runs(self):
+        # **Fail closed** (the Planner's ruling of 2026-11-17): where
+        # /proc/self/fd cannot be read, the descriptors this shell holds could
+        # not be closed, so as_account refuses before anything runs. An empty
+        # tmpfs covers /proc inside a user and mount namespace. Perturbation:
+        # drop the check, and the command runs.
+        if subprocess.run(["unshare", "--map-root-user", "true"], capture_output=True).returncode != 0:
+            self.skipTest("unshare --map-root-user is not available")
+        marker = self.root / "ran"
         for script in self.SCRIPTS:
             for root_mode in (True, False):
-                for trap in (False, True):
-                    with self.subTest(script=script, root_mode=root_mode, trap=trap):
-                        pid_file.unlink(missing_ok=True)
-                        program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n"
-                                   + ("trap 'echo trapped >&2; exit 130' INT\n" if trap else "")
-                                   + shell_function((DEPLOY / script).read_text(), "as_account")
-                                   + f"as_account weaver-m1 {shlex.quote(str(command))} >/dev/null\necho AFTER\n")
-                        proc = subprocess.Popen(["bash", "-c", program], env=self.env(relay_bin),
-                                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                                stderr=subprocess.PIPE, start_new_session=True)
-                        pid, took, out, err = None, None, b"", b""
-                        for _ in range(200):
-                            if pid_file.exists() and pid_file.read_text():
-                                pid = int(pid_file.read_text())
-                                break
-                            time.sleep(0.05)
-                        if pid is not None:
-                            started = time.monotonic()
-                            os.killpg(proc.pid, signal.SIGINT)
-                            try:
-                                out, err = proc.communicate(timeout=10)
-                                took = time.monotonic() - started
-                            except subprocess.TimeoutExpired:
-                                pass
-                            for _ in range(60):
-                                if not self.alive(pid):
-                                    break
-                                time.sleep(0.05)
-                        outlived = pid is not None and self.alive(pid)
-                        if outlived:
-                            os.kill(pid, signal.SIGKILL)
-                        if proc.poll() is None:
-                            os.killpg(proc.pid, signal.SIGKILL)
-                            proc.communicate()
-                        self.assertIsNotNone(pid, "the command started")
-                        self.assertFalse(outlived, "the account's command outlived the interrupt")
-                        self.assertIsNotNone(took, "the script still ran 10 s after the interrupt")
-                        self.assertLess(took, 5)
-                        self.assertNotIn(b"AFTER", out, "the script ran on past the interrupt")
-                        self.assertEqual(proc.returncode, 130 if trap else -signal.SIGINT, err)
+                with self.subTest(script=script, root_mode=root_mode):
+                    marker.unlink(missing_ok=True)
+                    command = shlex.quote("echo ran > " + shlex.quote(str(marker)))
+                    program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n"
+                               + shell_function((DEPLOY / script).read_text(), "as_account")
+                               + f'rc=0; as_account weaver-m1 /bin/sh -c {command} || rc=$?\necho "rc=$rc"\n')
+                    run = subprocess.run(["unshare", "--map-root-user", "--mount", "bash", "-c",
+                                          'mount -t tmpfs none /proc && exec bash -c "$1"', "bash", program],
+                                         env=self.env(self.bin_dir), stdin=subprocess.DEVNULL, text=True,
+                                         capture_output=True, timeout=20)
+                    self.assertEqual((run.returncode, run.stdout), (0, "rc=1\n"), run.stderr)
+                    self.assertIn("as_account: no command runs as weaver-m1, since /proc/self/fd cannot be read",
+                                  run.stderr)
+                    self.assertFalse(marker.exists(), "the command ran")
 
     def test_turn_py_reaches_the_account_on_its_named_input(self):
         # turn_as hands turn.py over through --stdin, which this shell opens.
