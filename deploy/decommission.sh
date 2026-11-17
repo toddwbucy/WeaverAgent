@@ -384,16 +384,70 @@ done
 for d in "${!LOG_PATHS[@]}"; do
   in_operator_home "$d" && { plan "$d  under the operator's home: not touched"; unset 'LOG_PATHS[$d]'; }
 done
-for d in /var/lib/weaver "${!TERRITORY_BASES[@]}" "${!LOG_PATHS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
-# **territories_outside BASE... -- ROOT...: each root's own territory that no
-# base covers**, read from the root's `territory` key (the operator's ruling of
+# **agent_folders BASE...: each discovered agent's folder in each base**, one
+# per line, canonical: `<base>/<agent>` (the operator's ruling of 2026-11-16 on
+# the layout, #578) and `<base>/weaver-<agent>` (a territory laid before it),
+# for each agent AGENTS names. Each is a directory, no link, and root's own by
+# uid, so an account's home that shares an agent's name, under a base that is
+# `/home`, is never one.
+# **The purge takes these and never a base** (the Planner's ruling of
+# 2026-11-16 on #578): a base is whatever the stack record names, the state
+# drive's mount point on an appliance or `/home` on a host, and taking it whole
+# would empty the drive or take every home on the box.
+agent_folders() {
+  local d a f
+  for d in "$@"; do
+    d=$(realpath -e -- "$d" 2>/dev/null) && [ -d "$d" ] || continue
+    for a in "${!AGENTS[@]}"; do
+      # **A folder of the ruled layout holds what makes it the agent's**: its
+      # territory, or a home its account owns, so a root-held directory that
+      # only shares a discovered name (a service account `weaver-web` beside
+      # a `web/` of something else's) is never one.
+      f="$d/$a"
+      if [ -d "$f" ] && [ ! -L "$f" ] && [ "$(stat -c %u -- "$f" 2>/dev/null)" = 0 ] \
+        && { [ -d "$f/weaver-$a" ] || [ "$(stat -c %U -- "$f/home" 2>/dev/null)" = "weaver-$a" ]; }; then
+        printf '%s\n' "$f"
+      fi
+      # **A territory of the layout before #578 is the folder itself**, and
+      # likewise holds what makes it the agent's: its declaration, or the
+      # agent's state group on the directory.
+      f="$d/weaver-$a"
+      if [ -d "$f" ] && [ ! -L "$f" ] && [ "$(stat -c %u -- "$f" 2>/dev/null)" = 0 ] \
+        && { [ -e "$f/agent.toml" ] || [ "$(stat -c %G -- "$f" 2>/dev/null)" = "weaver-$a-state" ]; }; then
+        printf '%s\n' "$f"
+      fi
+    done
+  done | sort -u
+}
+# **left_in_base BASE TAKEN...: each entry directly in BASE that is none of
+# TAKEN**, one per line, which the plan names as left in place (the Planner's
+# ruling of 2026-11-16 on #578), so the operator sees what the purge leaves.
+# BASE and every TAKEN are compared canonical.
+left_in_base() {
+  local base e t taken=()
+  base=$(realpath -e -- "$1" 2>/dev/null) || return 0
+  shift
+  for t in "$@"; do taken+=("$(realpath -e -- "$t" 2>/dev/null || printf '%s' "$t")"); done
+  while IFS= read -r -d '' e; do
+    for t in "${taken[@]}"; do [ "$t" = "$e" ] && continue 2; done
+    printf '%s\n' "$e"
+  done < <(find "$base" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+}
+AGENT_FOLDERS=()
+AGENT_LISTED=$(agent_folders "${!TERRITORY_BASES[@]}")
+[ -z "$AGENT_LISTED" ] || mapfile -t AGENT_FOLDERS <<< "$AGENT_LISTED"
+for d in /var/lib/weaver "${AGENT_FOLDERS[@]}" "${!LOG_PATHS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
+# **territories_outside FOLDER... -- ROOT...: each root's own territory that no
+# agent's folder covers**, read from the root's `territory` key (the operator's ruling of
 # 2026-10-07 on #1), one per line. Under the new layout a territory is the
 # declaration, the draft, the logs and the published save points as well as
 # the trace and the state room, so one the bases miss, a custom territory or
 # one made under an agent-directory the stack record no longer names, would
 # be the agent unarchived at its takedown (Codex on #94, round 8). A root
-# without the key, the pre-ruling layout, is archived by the bases as before;
-# a territory under a base is archived with its base and not twice.
+# without the key, the pre-ruling layout, is archived as its agent's folder
+# `<base>/weaver-<agent>` where the discovery found that agent; a territory in
+# an agent's folder, or that folder itself in the layout before #578, is
+# archived with the folder and not twice.
 # Paths are compared canonical (Codex on #94, round 12): a territory written
 # as `<base>/../elsewhere` is outside the base however it is spelled, and a
 # base or a territory that does not resolve is left out of the comparison,
@@ -430,22 +484,53 @@ territories_outside() {
       refused=1; continue
     fi
     covered=0
-    for b in "${bases[@]}"; do case "$v" in "$b"/*) covered=1;; esac; done
+    for b in "${bases[@]}"; do case "$v" in "$b"|"$b"/*) covered=1;; esac; done
     [ "$covered" = 0 ] && listed+=("$v")
   done
   [ ${#listed[@]} -eq 0 ] || printf '%s\n' "${listed[@]}" | sort -u
   return "$refused"
 }
 TERRITORIES_JUDGED=1
-OWN_LISTED=$(territories_outside "${!TERRITORY_BASES[@]}" -- "${AGENT_ROOTS[@]}") || TERRITORIES_JUDGED=0
+OWN_LISTED=$(territories_outside "${AGENT_FOLDERS[@]}" -- "${AGENT_ROOTS[@]}") || TERRITORIES_JUDGED=0
 OWN_TERRITORIES=()
 [ -z "$OWN_LISTED" ] || mapfile -t OWN_TERRITORIES <<< "$OWN_LISTED"
 [ "$TERRITORIES_JUDGED" = 1 ] || plan "REFUSED: a territory a root names is not root:weaver-<agent>-state (see above); the archive and the purge refuse"
-for d in "${OWN_TERRITORIES[@]}"; do TERRITORY_PATHS+=("$d") && plan "$d  (a root's own territory, outside the bases) $(du -sh "$d" 2>/dev/null | cut -f1)"; done
+for d in "${OWN_TERRITORIES[@]}"; do TERRITORY_PATHS+=("$d") && plan "$d  (a root's own territory, outside every agent's folder) $(du -sh "$d" 2>/dev/null | cut -f1)"; done
+# **home_within HOME FOLDER...: the folder HOME stands in**, canonical, or
+# nothing. A home in an agent's folder (#578) goes with the folder.
+home_within() {
+  local h f c
+  h=$(realpath -e -- "$1" 2>/dev/null) || return 0
+  shift
+  for f in "$@"; do
+    c=$(realpath -e -- "$f" 2>/dev/null) || continue
+    case "$h" in "$c"/*) printf '%s' "$f"; return 0 ;; esac
+  done
+}
+# **A home is read from its account wherever it stands** (#578): one in an
+# agent's folder goes with the folder, one under /home is taken as before, and
+# one anywhere else is said and left in place.
 HOMES=()
 for u in "${WEAVER_USERS[@]}"; do
   h=$(getent passwd "$u" | cut -d: -f6)
-  [ -d "$h" ] && case "$h" in /home/*) HOMES+=("$h"); plan "$h  (home of $u)";; esac
+  [ -n "$h" ] && [ -d "$h" ] || continue
+  within=$(home_within "$h" "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}")
+  if [ -n "$within" ]; then plan "$h  (home of $u, archived with $within)"
+  else
+    case "$h" in
+      /home/*) HOMES+=("$h"); plan "$h  (home of $u)" ;;
+      *) plan "$h  (home of $u): outside /home and every agent's folder, left in place, untouched" ;;
+    esac
+  fi
+done
+# **What a base holds beyond its agents' folders is named and left** (the
+# Planner's ruling of 2026-11-16 on #578): the base stands after the purge.
+for d in "${!TERRITORY_BASES[@]}"; do
+  [ -d "$d" ] && [ ! -L "$d" ] || continue
+  plan "$d  a base: the purge takes its agents' folders, and the base stands"
+  while IFS= read -r e; do
+    plan "$e  in the base, of no agent this discovery found: left in place, untouched"
+  done < <(left_in_base "$d" "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}" "${HOMES[@]}")
 done
 # **tmp_paths DIR: the weaver entries directly under DIR that a weaver-
 # account owns** (#98; the custody audit's G22): DIR is writable by every
@@ -653,10 +738,9 @@ if [ "$MODE" = archive ]; then
     [ ${#parts[@]} -gt 0 ] && archive_path "$(archive_name opt "$p")" "${parts[@]}"
   done
   [ -e /var/lib/weaver ] && archive_path var-lib-weaver /var/lib/weaver
-  # Every territory's trace and state room, under each base (Codex on #79).
-  for d in "${!TERRITORY_BASES[@]}"; do
-    [ -e "$d" ] && archive_path "$(archive_name territories "$d")" "$d"
-  done
+  # Every agent's folder, with its territory and its home, from each base
+  # (Codex on #79, #578): never the base itself.
+  for d in "${AGENT_FOLDERS[@]}"; do archive_path "$(archive_name agent "$d")" "$d"; done
   # Each root's own territory the bases miss, by the path its root names.
   for d in "${OWN_TERRITORIES[@]}"; do archive_path "$(archive_name territory "$d")" "$d"; done
   for d in "${!LOG_PATHS[@]}"; do archive_path "$(archive_name log "$d")" "$d"; done
@@ -704,7 +788,7 @@ purge_candidates() {
     for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && echo "path $sub"; done
   done
   [ -e /var/lib/weaver ] && echo "path /var/lib/weaver"
-  for d in "${!TERRITORY_BASES[@]}" "${OWN_TERRITORIES[@]}" "${!LOG_PATHS[@]}" "${HOMES[@]}" "${TMP_PATHS[@]}"; do
+  for d in "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}" "${!LOG_PATHS[@]}" "${HOMES[@]}" "${TMP_PATHS[@]}"; do
     echo "path $d"
   done
   for c in "${!COORD_ROOTS[@]}"; do

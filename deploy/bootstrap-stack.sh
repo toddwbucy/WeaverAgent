@@ -37,7 +37,7 @@
 #   WEAVER_ADMIN_CONFIG  /etc/weaver/admin      the admin base: one root per agent
 #   WEAVER_STACK_RECORD  /etc/weaver/stack      the scripts' record of this install
 #   WEAVER_OPERATOR      $SUDO_USER or $USER    named in the plan; owns nothing this makes
-#   WEAVER_AGENT_DIR     /var/lib/weaver-agent
+#   WEAVER_AGENT_DIR     /var/lib/weaver-agent  the base of each agent's folder (#578)
 #   CUDA_LIB_DIR         /opt/cuda/lib64        joins the ld.so.conf.d entry; held closed by root
 #   CARGO_TARGET_DIR     honoured; give the install its own, never a gate's
 #
@@ -391,7 +391,7 @@ plan "write $LDSO_CONF = $PREFIX/lib and $CUDA_LIB_DIR, then ldconfig"
 plan "install busybox -> $PREFIX/bin/busybox (root, 0755) and busybox.applets beside it (root, 0644)"
 plan "write $STACK/{worker-binary,spu-binary,gate-binary,shell-binary,coordination-root,library-path,prefix,agent-directory,install-tuple}  (root, 0755 / 0644)"
 plan "install -d $ADMIN_BASE (root:root 0755): empty; create-agent.sh adds one root per agent"
-plan "install -d $AGENT_DIR (root:root 0755): territories, each root:weaver-<name>-state 0710, not setgid, its trace root:weaver-<name>-trace 0640"
+plan "install -d $AGENT_DIR (root:root 0755): each agent's folder <name>/, root:root 0755, holding its territory weaver-<name>/ (root:weaver-<name>-state 0710, not setgid, its trace root:weaver-<name>-trace 0640) and its home home/"
 [ -d "$PREFIX/models" ] && plan "$PREFIX/models stands: $(ls "$PREFIX/models" | wc -l) entries" || plan "$PREFIX/models is absent: copy the artifacts before declaring an agent"
 [ "$INSTALL" -eq 1 ] || { say "plan only. rerun with --install"; exit 0; }
 

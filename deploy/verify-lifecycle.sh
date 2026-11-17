@@ -222,7 +222,9 @@ AGENT_DIR=$(realpath -e -- "$AGENT_DIR_WRITTEN" 2>/dev/null) || die "the stack r
 
 A=$AGENT
 AU="weaver-$A"
-T="$AGENT_DIR/$AU"                 # the territory, canonical
+F="$AGENT_DIR/$A"                  # the agent's folder, canonical (#578)
+T="$F/$AU"                         # the territory, in the folder
+H="$F/home"                        # the agent's home, beside the territory
 R="$ADMIN_BASE/$A"                 # the agent's root
 STAGE="$ADMIN_BASE/.$A.partial"    # create-agent.sh's staged root
 RULE="/etc/sudoers.d/$AU"
@@ -258,7 +260,7 @@ if [ "$CLEANUP" -eq 1 ]; then
   marker_names_agent || die "no marker at $MARKER naming $A: verify-lifecycle.sh did not create $A, and --cleanup takes down only a throwaway agent this script made. Take any other agent down by deploy/HowToDeployANewAgent.md section 7"
   if [ -f "$R/territory" ]; then
     named=$(trim "$(cat -- "$R/territory")")
-    [ "$named" = "$T" ] || die "$R/territory names $named, not $T, and --cleanup removes only the territory named for its agent"
+    [ "$named" = "$T" ] || die "$R/territory names $named, not $T, and --cleanup removes only the territory named for its agent. A throwaway agent laid before #578 is taken down by hand, by deploy/HowToDeployANewAgent.md section 7"
   fi
   # **Step 8's staged key, left by a run stopped between its write and its
   # removal** (#99, from #105's Codex round 2): admin refuses the root
@@ -281,7 +283,7 @@ else
   marker_names_agent && die "a marker from an earlier run stands at $MARKER: take that agent down first with --cleanup"
   for u in $ACCOUNTS; do lookup passwd "$u" && die "the account $u already exists: this script verifies a throwaway agent it creates at step 1"; done
   for g in $GROUPS_MADE; do lookup group "$g" && die "the group $g already exists: this script verifies a throwaway agent it creates at step 1"; done
-  for p in "$R" "$STAGE" "$T" "/home/$AU"; do
+  for p in "$R" "$STAGE" "$F"; do
     { [ -e "$p" ] || [ -L "$p" ]; } && die "$p already exists: this script verifies a throwaway agent it creates at step 1"
   done
 fi
@@ -813,7 +815,7 @@ step_1() {
   want "$OPERATOR holds $AU-trace, $AU-state and $AU-admin and not $AU; $AU-relay holds $AU-trace alone; $AU-state holds itself alone"
   want "$GATECON and $ADMINCON stand, the box's; $GATECON holds $AU and none of $AU-state, $AU-admin or $AU-trace; $ADMINCON holds $AU-state and $AU-admin and neither $AU nor $AU-trace"
   want "$T root:$AU-state 710 directory; state/ $AU-state:$AU-state 700; save-points/ root:$AU-admin 750; trace.ndjson root:$AU-trace 640 empty; agent.toml and system-prompt.md root:$AU-admin 640"
-  want "/home/$AU $AU:$AU 2750; $R root:root 755 with every key root:root 644; $RULE root:root 440"
+  want "$F root:root 755 holding the territory and the home; $H $AU:$AU 2750; $R root:root 755 with every key root:root 644; $RULE root:root 440"
   want "no access entry on the territory, save-points/, the trace or the declaration"
   want "territory names $T, operator is $OPERATOR_UID, roles.toml is trace-reader = \"$ADMINCON\"; the rule grants $ADMINCON the eight verbs"
   want "the declaration's allowed-uids names $GATECON's uid alone"
@@ -861,7 +863,8 @@ step_1() {
   expect_lay "$DECL" "root:$AU-admin 640 regular file"
   expect_lay "$T/system-prompt.md" "root:$AU-admin 640 regular file"
   expect_no_acl "$T" "$SAVE_POINTS" "$TRACE" "$DECL"
-  expect_lay "/home/$AU" "$AU:$AU 2750 directory"
+  expect_lay "$F" "root:root 755 directory"
+  expect_lay "$H" "$AU:$AU 2750 directory"
   expect_lay "$R" "root:root 755 directory"
   local key
   for key in $(ls -A -- "$R"); do expect_lay "$R/$key" "root:root 644 regular file"; done
@@ -908,7 +911,7 @@ step_1b() {
   { [ -e "$link" ] || [ -L "$link" ]; } && fail "the H3 link's name is free" "nothing at $link" "$link stands"
   near_miss "the territory key through a link above it" restore_key "$key_b64" "$link" -- \
     bash -c 'sudo -n ln -s -- "$1" "$2" && printf "%s\n" "$2/$3" | sudo -n tee -- "$4" >/dev/null' _ \
-      "$AGENT_DIR" "$link" "$AU" "$R/territory"
+      "$F" "$link" "$AU" "$R/territory"
   expect_unloaded_alone
   expect_lay "$T" "root:$AU-state 710 directory"
   expect_lay "$SAVE_POINTS" "root:$AU-admin 750 directory"
@@ -1441,12 +1444,12 @@ step_9() {
     || run_line "rm -f $R/declaration-directory (step 8's staged key naming $T, left by a run stopped between its write and its removal)"
   run_line "weaver-admin unload $A (force-unload where it refuses); weaver-admin show $A"
   run_line "rm -f $RULE (and any staged .$AU.* rule)"
-  run_line "tar --acls --xattrs -C $AGENT_DIR -cpf ${ARCHIVE:-<--archive>}/$AU-territory-<stamp>.tar $AU"
+  run_line "tar --acls --xattrs -C $F -cpf ${ARCHIVE:-<--archive>}/$AU-territory-<stamp>.tar $AU"
   run_line "tar -C $ADMIN_BASE -cpf ${ARCHIVE:-<--archive>}/$AU-root-<stamp>.tar $A"
   run_line "rm -rf $R $STAGE $RUN_DIR $RUNTIME_DIR"
   run_line "userdel -r $AU; userdel $AU-state; userdel $AU-relay   ($GATECON and $ADMINCON are the box's and stay)"
   run_line "groupdel $GROUPS_MADE (each that stands)"
-  run_line "rm -rf $T"
+  run_line "rm -rf $T; rm -rf $F (the folder, which userdel -r and the line before have emptied)"
   run_line "rm -f $MARKER"
   run_line "weaver-admin show $A, as the operator and under sudo"
   want "show unloaded with no constituent before; afterwards show answers unauthorized as the operator and no_such_agent under sudo"
@@ -1468,7 +1471,7 @@ step_9() {
   if sudo -n test -d "$T" && ! sudo -n test -L "$T"; then
     # Under umask 077, so the archive of the custodied territory is root's
     # 0600 and readable by no one the territory was closed to.
-    sudo -n sh -c 'umask 077 && exec tar --acls --xattrs -C "$1" -cpf "$2" "$3"' sh "$AGENT_DIR" "$TERRITORY_TAR" "$AU"
+    sudo -n sh -c 'umask 077 && exec tar --acls --xattrs -C "$1" -cpf "$2" "$3"' sh "$F" "$TERRITORY_TAR" "$AU"
     expect_eq "the territory's archive reads back" yes "$(archive_reads_back "$TERRITORY_TAR" && echo yes || echo no)"
   else
     measured "no territory at $T to archive"
@@ -1489,6 +1492,9 @@ step_9() {
     if lookup group "$g"; then sudo -n groupdel "$g"; fi
   done
   if sudo -n test -d "$T" && ! sudo -n test -L "$T"; then sudo -n rm -rf -- "$T"; fi
+  # **The folder goes last** (#578): userdel -r took the home inside it and
+  # the line above the territory, so what stands is the folder, root's.
+  if sudo -n test -d "$F" && ! sudo -n test -L "$F"; then sudo -n rm -rf -- "$F"; fi
   # The operator is answered unauthorized, not no_such_agent: an invocation
   # that is not root performs nothing and is refused before any verb looks at
   # a name (weaver-admin-Spec, "Authorization is the kernel's"), so admin
@@ -1512,7 +1518,7 @@ step_9() {
     fi
   done
   local p
-  for p in "$T" "$R" "$STAGE" "$RULE" "/home/$AU" "$RUN_DIR" "$RUNTIME_DIR"; do
+  for p in "$T" "$H" "$F" "$R" "$STAGE" "$RULE" "$RUN_DIR" "$RUNTIME_DIR"; do
     expect_eq "$p is gone" absent "$(lay "$p")"
   done
   sudo -n rm -f -- "$MARKER"

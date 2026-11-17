@@ -24,8 +24,12 @@ values are in the stack record `/etc/weaver/stack/`, one file per key, which
 names (`WEAVER_ADMIN_CONFIG` names another base, but a delegated invocation under sudo
 always reads `/etc/weaver/admin`). **The whole agent lives in its territory** (the
 operator's ruling of 2026-10-07 on #1): the declaration, the prompt draft, the two logs
-and the published save points stand under `/var/lib/weaver-agent/weaver-<name>/` beside the
-state room and the trace, root's, and nothing of the agent is in your home.
+and the published save points stand in the territory beside the state room and the
+trace, root's, and nothing of the agent is in your home. **Each agent has one folder,
+named after it** (the operator's ruling of 2026-11-16 on the layout, #578):
+`<agent-directory>/<name>/`, holding the territory `weaver-<name>/` and the agent's home
+`home/` side by side. The base is the stack record's `agent-directory`, by default
+`/var/lib/weaver-agent`, and on an appliance the state drive.
 
 ## 0. What an agent is, on disk
 
@@ -36,14 +40,15 @@ table.
 
 | Piece | Path | Owner and mode |
 |---|---|---|
-| Agent account, the worker's uid | `weaver-<name>`, home `/home/weaver-<name>` | system user, nologin, home 2750; its group `weaver-<name>` is the gate socket's, held by the box's gate-con account |
+| Agent's folder | `<agent-directory>/<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:root 0755, made by create-agent before the home, holding the territory and the home side by side (#578) |
+| Agent account, the worker's uid | `weaver-<name>`, home `<agent-directory>/<name>/home` | system user, nologin, home 2750; its group `weaver-<name>` is the gate socket's, held by the box's gate-con account |
 | Member account, the state store's uid (agents with a store) | `weaver-<name>-state`, no home | system user, nologin; its group `weaver-<name>-state`, the state group, is the territory's and stands for every agent, a storeless one included |
 | Trace group | `weaver-<name>-trace`, the trace's readers: the operator and the relay, never the member | system group |
 | Relay account, the trace relay's uid | `weaver-<name>-relay`, no home | system user, nologin, its one group the trace group |
 | Access group, the territory files' and the trace door's | `weaver-<name>-admin` | system group, held by the box's admin-con account and the operator, never the member or the agent's uid; it reads and never writes |
 | The box's gate-con account, gate-con's service user, one per box | `weaver-gatecon`, no home | system user below `UID_MIN`, nologin, its own primary group shared with no other account; laid by the first create-agent run that finds it absent and judged by its shape by every later one; holds each agent's group `weaver-<name>` for the gate's socket and no state, access or trace group; the one uid each new agent's access rule names |
 | The box's admin-con account, admin-con's service user, one per box | `weaver-admincon`, no home | system user below `UID_MIN`, nologin, its own primary group shared with no other account; laid and judged as gate-con's is; holds each agent's state group for passage and access group for reading, and no agent's own group or trace group; the account each agent's sudo rule and `roles.toml` name |
-| Territory | `<agent-directory>/weaver-<name>/`, the stack record's `agent-directory` (default `/var/lib/weaver-agent`, root 0755) | root:weaver-<name>-state 0710, not setgid: the state group passes to what stands in it by name, which the member holds as its own and the operator and the box's admin-con account join; the agent's own uid passes not; none lists; the files' own modes are the wall beneath, and no access entry is set |
+| Territory | `<agent-directory>/<name>/weaver-<name>/`, in the agent's folder | root:weaver-<name>-state 0710, not setgid: the state group passes to what stands in it by name, which the member holds as its own and the operator and the box's admin-con account join; the agent's own uid passes not; none lists; the files' own modes are the wall beneath, and no access entry is set |
 | State room (agents with a store) | `<territory>/state/`, where the member writes its save points | member 0700, unreachable by the agent's uid |
 | Trace sink | `<territory>/trace.ndjson` | made by create-agent before the first load, root:weaver-<name>-trace 0640, so the member cannot read it, and admin opens it append-only at load and leaves its owner and mode alone |
 | Declaration | `<territory>/agent.toml` | root:weaver-<name>-admin 0640, written by create-agent as root; you edit it with `sudoedit`, and admin refuses any other owner, group or mode |
@@ -91,8 +96,8 @@ group in one shell.
 - The name collides with nothing and is neither `gatecon` nor `admincon`, which name the
   box's accounts and refuse: `id weaver-<name>`, `id weaver-<name>-state`, `id
   weaver-<name>-relay` and `getent group weaver-<name> weaver-<name>-state
-  weaver-<name>-trace weaver-<name>-admin` fail, `/home/weaver-<name>`,
-  `<agent-directory>/weaver-<name>`, `/etc/weaver/admin/<name>`,
+  weaver-<name>-trace weaver-<name>-admin` fail, the agent's folder
+  `<agent-directory>/<name>`, `/etc/weaver/admin/<name>`,
   `/etc/weaver/admin/.<name>.partial` and `/etc/sudoers.d/weaver-<name>` are absent. The
   script checks all of this and refuses rather than merging, because a half-made agent
   that looks whole is worse than an absent one.
@@ -180,9 +185,10 @@ its prompt enters is deferred to its own act, section 4. Beside the declaration 
 script still writes the draft, `<territory>/system-prompt.md`, a plain prompt that is
 yours to edit. Edit `agent.toml` for a wider context before validating. Both files
 are root:weaver-<name>-admin 0640: `sudoedit
-/var/lib/weaver-agent/weaver-<name>/agent.toml` edits one, and you read either through
-the access group. The fields are in `docs/technical/weaver-agent/agent-declaration.md`,
-a snapshot of 2026-08-25 that still shows an identity table, and
+<agent-directory>/<name>/weaver-<name>/agent.toml` edits one, and you read either
+through the access group. The fields are in
+`docs/technical/weaver-agent/agent-declaration.md`, a snapshot of 2026-08-25 that still
+shows an identity table, and
 `docs/crates/weaver-types/weaver-types-Spec.md` section 2 is the authority. A required
 key absent, or any key misspelled, refuses the parse by name, and the optional keys
 (`tool-set`, `binding-kind`, `gate-instruction`, `state-election`, `state-store`,
@@ -243,21 +249,24 @@ operator and the box's admin-con account pass by, and admin resolves it for ever
 block judges nothing: a `create-agent.sh` run lays and judges them, and its plan for any
 name prints what it found. Where root is the operator it joins no group, and its
 `operator` key is 0 (section 2). The block runs as the operator, one chain, so
-a step that fails stops the rest; it refuses a territory, a stage or a root that already
-stands, since `install -d` would merge with it. The territory is the stack record's
-`agent-directory` made canonical, as `create-agent.sh` makes it, and the 5-digit modes
-clear a setgid bit the base would otherwise pass down. The block stages the root; then
+a step that fails stops the rest. It refuses an agent's folder, a stage or a root that
+already stands, since `install -d` would merge with it. The folder is the stack
+record's `agent-directory` made canonical, as `create-agent.sh` makes it, with the
+territory and the home inside it (#578), and the 5-digit modes clear a setgid bit the
+base would otherwise pass down. The block stages the root. Then
 install the sudo rule by the second block below, with `A=$N`, and only then move the
 root into place, which is the admission: `sudo mv -T --
 /etc/weaver/admin/.$N.partial /etc/weaver/admin/$N`.
 
 ```sh
 N=<name>
-T=$(realpath -e -- "$(cat /etc/weaver/stack/agent-directory)")/weaver-$N \
+F=$(realpath -e -- "$(cat /etc/weaver/stack/agent-directory)")/$N \
+&& T=$F/weaver-$N \
 && R=/etc/weaver/admin/.$N.partial \
-&& [ ! -e "$T" ] && [ ! -L "$T" ] && [ ! -e "$R" ] && [ ! -e /etc/weaver/admin/$N ] \
+&& [ ! -e "$F" ] && [ ! -L "$F" ] && [ ! -e "$R" ] && [ ! -e /etc/weaver/admin/$N ] \
 && getent passwd weaver-gatecon weaver-admincon >/dev/null \
-&& sudo useradd --system --shell /usr/sbin/nologin --create-home --user-group weaver-$N \
+&& sudo install -d -o root -g root -m 00755 "$F" \
+&& sudo useradd --system --shell /usr/sbin/nologin --create-home --home-dir "$F/home" --user-group weaver-$N \
 && sudo groupadd --system weaver-$N-state \
 && sudo groupadd --system weaver-$N-trace \
 && sudo groupadd --system weaver-$N-admin \
@@ -265,7 +274,7 @@ T=$(realpath -e -- "$(cat /etc/weaver/stack/agent-directory)")/weaver-$N \
 && sudo usermod -aG weaver-$N weaver-gatecon \
 && sudo usermod -aG weaver-$N-state,weaver-$N-admin weaver-admincon \
 && { [ "$(id -u)" = 0 ] || sudo usermod -aG weaver-$N-trace,weaver-$N-state,weaver-$N-admin "$(id -un)"; } \
-&& sudo chmod 2750 /home/weaver-$N \
+&& sudo chmod 2750 "$F/home" \
 && sudo install -d -o root -g weaver-$N-state -m 00710 "$T" \
 && sudo install -o root -g weaver-$N-trace -m 0640 /dev/null "$T/trace.ndjson" \
 && sudo install -d -o root -g weaver-$N-admin -m 00750 "$T/save-points" \
@@ -332,7 +341,7 @@ denied-uids = []
 
 [trace-sink]
 kind = "file"
-path = "/var/lib/weaver-agent/weaver-karl/trace.ndjson"
+path = "/var/lib/weaver-agent/karl/weaver-karl/trace.ndjson"
 create = true
 
 [state-store]
@@ -748,10 +757,12 @@ for u in weaver-<name> weaver-<name>-state weaver-<name>-relay weaver-<name>-adm
 done
 ```
 
-Then `userdel -r` the agent's account and `userdel` the member's, the relay's and,
-where it stands, the per-agent connector's, then delete the groups, which `userdel`
-leaves while a member remains and which a later `useradd --user-group` of the same
-name would refuse on.
+Then `userdel -r` the agent's account, which removes its home in the agent's folder, and
+`userdel` the member's, the relay's and, where it stands, the per-agent connector's,
+then delete the groups, which `userdel` leaves while a member remains and which a later
+`useradd --user-group` of the same name would refuse on. **Last, remove the agent's
+folder** `<agent-directory>/<name>/` (#578), which the territory's removal and
+`userdel -r` have emptied, and which `create-agent.sh` refuses while it stands.
 
 The groups, once the accounts are gone:
 
