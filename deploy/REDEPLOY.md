@@ -148,7 +148,8 @@ the archive and the purge (#99 area 2 review, H4). The archive holds:
   `home-weaver-users`, `tmp-weaver`. A name built from a path carries the whole path, its slashes made dashes
   (`territories-var-lib-weaver-agent`), and a name an archive already holds takes the
   first free `-2`, `-3`, so no archive is ever written over another.
-- `PURGE-LIST`: the exact paths, users and groups the purge may touch. Read it.
+- `PURGE-LIST`: the exact paths, users and groups the purge may touch, and each capped
+  home's quota limit. Read it.
 - `SHA256SUMS`, verified before the script says archived, and again before a purge.
 
 Models stay in `<prefix>/models` on purpose: they are artifacts, not binaries or
@@ -182,12 +183,20 @@ nothing but `models`.
    takes, and then `/etc/weaver` goes. A stop leaves a root standing whole or not at
    all, never one half removed for its `weaver-admin show` to refuse, and it ends
    admission.
-2. Every other path on the list: the territories, the logs, the homes, the `/tmp`
+2. Each home quota limit on the list (#585), set to none: the project `create-agent.sh`
+   gave a capped home, which is the agent account's uid, on its drive, taken only where
+   the agent's folder carries that project as the script's mark. Only a limit the list
+   names and the box still shows goes, and root's record carries it, so a rerun whose
+   first run failed here removes it again. Where an agent folder's mount or mark cannot
+   be read, the archive and the purge refuse before anything goes, naming it, and
+   `HowToDeployANewAgent.md` section 7 says how to read or clear the mark before the
+   rerun.
+3. Every other path on the list: the territories, the logs, the homes, the `/tmp`
    entries, the run directories, `/var/lib/weaver`, the `ld.so` confs and each prefix's
    `bin`, `lib`, `python-spu` and backups. (The sudo rules went before step 1.) The
    accounts still resolve, so every owner and group still reads by name.
-3. The `weaver-*` users, then their groups, `userdel` taking no home: a home the purge
-   judged went as a path in step 2, and one outside `/home` is left. A group `userdel`
+4. The `weaver-*` users, then their groups, `userdel` taking no home: a home the purge
+   judged went as a path in step 3, and one outside `/home` is left. A group `userdel`
    already removed with its user, as it removes a private group, is done.
 
 **The door** (#140). The sudo rules go first, and only rules this purge judged: a first

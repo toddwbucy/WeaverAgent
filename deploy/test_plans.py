@@ -30,7 +30,7 @@ ACCESS_LOOK = 'if [ "$1" "$2" ]; then printf yes; else printf no; fi'
 # root-mode tests route to the double. A scan holds the script to this list,
 # so a new root step cannot reach the real command in a root-mode test.
 ROOT_STEPS = ("useradd", "groupadd", "usermod", "install", "chown", "chgrp", "chmod", "tee", "cp", "mv", "rm",
-              "mktemp", "visudo")
+              "mktemp", "visudo", "chattr", "setquota", "repquota")
 def look_as(account, flag, path):
     return ["sudo", "-n", "-u", account, "sh", "-c", ACCESS_LOOK, "sh", flag, path]
 DOUBLE = r'''#!/usr/bin/env python3
@@ -70,6 +70,13 @@ if name == 'stat':
         print(0 if path.is_relative_to(root) else st.st_uid, format(st.st_mode & 0o7777, 'o'))
         sys.exit(0)
     os.execv('/usr/bin/stat', ['stat', *args])
+if name == 'findmnt':
+    # **The mount under a path** (#585), a look and not logged: FIXTURE_MOUNT
+    # is "fstype|options|target", and without it a filesystem with no
+    # project quota answers.
+    fstype, options, target = os.environ.get('FIXTURE_MOUNT', 'xfs|rw,noquota|/').split('|')
+    print({'FSTYPE': fstype, 'OPTIONS': options, 'TARGET': target}[args[args.index('-o') + 1]])
+    sys.exit(0)
 if name == 'mktemp' and args and '/weaver-deploy-messages-' in args[-1]:
     # The build's messages file, made as the scripts make it; not logged.
     os.execv('/usr/bin/mktemp', ['mktemp', *args])
@@ -452,7 +459,15 @@ elif name == 'sudo':
     elif op == 'usermod':
         if rest[-1] in BOX_ACCOUNTS:
             with (root / 'joined-box-accounts').open('a') as joined: joined.write(rest[-1] + '\n')
-    elif op in ('groupadd', 'chmod', 'setfacl', 'ldconfig'): pass
+    elif op in ('groupadd', 'chmod', 'setfacl', 'ldconfig', 'chattr', 'setquota'): pass
+    elif op == 'repquota':
+        # **The drive's project quotas as CSV** (#585): FIXTURE_REPQUOTA is
+        # the report's lines after the header, and FIXTURE_REPQUOTA_FAILS
+        # makes the read fail. Without either, project 0 alone is in use.
+        if os.environ.get('FIXTURE_REPQUOTA_FAILS'): sys.exit(1)
+        print('Project,BlockStatus,FileStatus,BlockUsed,BlockSoftLimit,BlockHardLimit,BlockGrace,'
+              'FileUsed,FileSoftLimit,FileHardLimit,FileGrace')
+        print(os.environ.get('FIXTURE_REPQUOTA', '#0,ok,ok,20,0,0,,2,0,0,'))
     else: sys.exit(99)
 elif name == 'mktemp':
     if not os.environ.get('ALLOW_APPLY_CHECKS'): sys.exit(99)
@@ -597,7 +612,7 @@ class PlanTests(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         for name in ("sudo", "systemctl", "psql", "mktemp", "setfacl", "getent", "git", "cargo", "hostname", "nvidia-smi", "pacman", "sh", "id", "stat", "ldd", "nvcc",
-                     "runuser", "as-root"):
+                     "runuser", "as-root", "findmnt", "setquota", "chattr", "repquota"):
             command = self.bin / name
             command.write_text(DOUBLE)
             command.chmod(0o755)
@@ -608,7 +623,7 @@ class PlanTests(unittest.TestCase):
                     "CARGO_TARGET_DIR": str(self.root / 'target with "quotes"'),
                     "USER": "fixture-no-home", "PROBE": str(self.root / "probe"),
                     "FIXTURE_ROOT": str(self.root)}
-        for name in ("BASH_ENV", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
+        for name in ("BASH_ENV", "FIXTURE_MOUNT", "FIXTURE_REPQUOTA", "FIXTURE_REPQUOTA_FAILS", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
                      "VISUDO_FAIL", "DROP_FAIL", "UUTILS_TEST", "SUDO_VERSION", "TEE_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES",
                      "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
@@ -936,6 +951,158 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                     self.assertEqual(result.returncode, 1, result.stderr)
                     self.assertIn(said, result.stderr)
                     self.assertEqual(self.calls(), [])
+
+    QUOTA_MOUNT = "ext4|rw,relatime,prjquota|/state"
+
+    def path_without(self, tool, box_path):
+        """The stand-ins' directory, then one directory of links to every
+        entry on the box's PATH but TOOL, the first of a name winning as the
+        PATH lookup would."""
+        farm = self.root / f"path-without-{tool}"
+        if not farm.exists():
+            farm.mkdir()
+            for d in box_path.split(os.pathsep):
+                if d == str(self.bin) or not os.path.isdir(d):
+                    continue
+                for e in os.scandir(d):
+                    link = farm / e.name
+                    if e.name != tool and not link.is_symlink():
+                        link.symlink_to(e.path)
+        return os.pathsep.join([str(self.bin), str(farm)])
+
+    def test_the_home_is_capped_by_an_ext4_project_quota_when_asked(self):
+        # **#585, the operator's ruling of 2026-11-16**: once the agent's
+        # account stands, and before any other account of the agent's, the
+        # drive's project quotas are read. After the home's mode is set and
+        # before anything of the agent's runs, the folder takes the project
+        # as the mark, the home takes its own project, the agent's uid, with
+        # the inherit flag, on itself and what useradd laid in it, and the
+        # project's limits are set on the drive's mount: the size in
+        # kibibytes and one inode per 16 KiB of it (the Planner's ruling).
+        # Without the flag nothing is capped and the plan says so.
+        # Perturbations: drop -R or +P, set the limit from the size as given,
+        # set no inode limit, drop the mark, read the quotas after the other
+        # accounts, or cap before the home stands, and a read below fails.
+        self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_MOUNT=self.QUOTA_MOUNT)
+        folder = str(self.root / "agents" / "m1")
+        home = folder + "/home"
+        for size, kib in (("64G", 64 * 1024 * 1024), ("512M", 512 * 1024), ("2T", 2 * 1024 ** 3)):
+            with self.subTest(size=size):
+                self.reset_made()
+                result = self.create("--home-quota", size, "--apply")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = self.calls()
+                read = ["sudo", "repquota", "-P", "-n", "-v", "-O", "csv", "/state"]
+                mark = ["sudo", "chattr", "-p", "12345", folder]
+                cap = ["sudo", "chattr", "-R", "+P", "-p", "12345", home]
+                limit = ["sudo", "setquota", "-P", "12345", "0", str(kib), "0", str(kib // 16), "/state"]
+                for call in (read, mark, cap, limit):
+                    self.assertIn(call, calls)
+                made = calls.index(["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", "--create-home",
+                                    "--home-dir", home, "--user-group", "weaver-m1"])
+                member = calls.index(["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin",
+                                      "--no-create-home", "--user-group", "weaver-m1-state"])
+                moded = calls.index(["sudo", "chmod", "2750", home])
+                self.assertLess(made, calls.index(read))
+                self.assertLess(calls.index(read), member)
+                self.assertLess(moded, calls.index(mark))
+                self.assertLess(calls.index(mark), calls.index(cap))
+                self.assertLess(calls.index(cap), calls.index(limit))
+                self.assertIn(f"home quota      {home}        capped at {size} and {kib // 16} files, an ext4 project "
+                              "quota on /state", result.stdout)
+        self.assertEqual(64 * 1024 * 1024 // 16, 4194304, "64G holds 4,194,304 files, the Planner's figure")
+        self.reset_made()
+        self.env.pop("FIXTURE_MOUNT")
+        result = self.create("--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse([c for c in self.calls() if c[:2] in (["sudo", "chattr"], ["sudo", "setquota"])])
+        self.assertIn("home quota      none: no --home-quota, so the home is not capped", result.stdout)
+
+    def test_a_home_project_already_in_use_refuses_before_the_cap(self):
+        # **#585, the Planner's ruling of 2026-11-16**: a project the drive
+        # already carries, the agent's uid, with any usage or any limit,
+        # refuses once the agent's account stands, naming the project and the
+        # mount, before any other account of the agent's is made and before
+        # any mark, project or limit is set. A read that fails refuses too.
+        # A project of another number, or the agent's with every count zero,
+        # passes. In both modes. Perturbations: drop the refusal, judge the
+        # usage alone, match the project by prefix, or take a failed read as
+        # free, and a case below fails.
+        free = ("#1234,ok,ok,9,0,0,,1,0,0,", "#123456,ok,ok,9,0,9,,1,0,9,", "#12345,ok,ok,0,0,0,,0,0,0,")
+        taken = {"blocks used": "#12345,ok,ok,8,0,0,,1,0,0,", "a block limit": "#12345,ok,ok,0,0,64,,0,0,0,",
+                 "a soft block limit": "#12345,ok,ok,0,64,0,,0,0,0,", "files used": "#12345,ok,ok,0,0,0,,3,0,0,",
+                 "an inode limit": "#12345,ok,ok,0,0,0,,0,0,99,", "a soft inode limit": "#12345,ok,ok,0,0,0,,0,99,0,"}
+        for root_mode in (False, True):
+            if root_mode:
+                self.root_mode()
+                self.env["FIXTURE_ACCOUNT_UID"] = "12345"
+            flag = ("--root-operator",) if root_mode else ()
+            step = (lambda name: ["as-root", name]) if root_mode else (lambda name: ["sudo", name])
+            self.env.update(ALLOW_APPLY_CHECKS="1", FIXTURE_MOUNT=self.QUOTA_MOUNT)
+            for why, line in [(w, l) for w, l in taken.items()] + [("a failed read", None)]:
+                with self.subTest(root_mode=root_mode, why=why):
+                    self.reset_made()
+                    self.env.pop("FIXTURE_REPQUOTA", None)
+                    self.env.pop("FIXTURE_REPQUOTA_FAILS", None)
+                    if line: self.env["FIXTURE_REPQUOTA"] = "\n".join((*free[:2], line))
+                    else: self.env["FIXTURE_REPQUOTA_FAILS"] = "1"
+                    result = self.create(*flag, "--home-quota", "64G", "--apply")
+                    self.assertEqual(result.returncode, 1, result.stdout)
+                    if line:
+                        self.assertIn(f"project 12345, weaver-m1's uid, is already in use on /state (repquota: {line})",
+                                      result.stderr)
+                    else:
+                        self.assertIn("the project quotas on /state cannot be read (repquota)", result.stderr)
+                    self.assertIn("section 7", result.stderr)
+                    calls = self.calls()
+                    self.assertIn(step("repquota"), [c[:2] for c in calls])
+                    self.assertFalse([c for c in calls if c[:2] in (step("chattr"), step("setquota"))], calls)
+                    self.assertFalse([c for c in calls if c[:2] == step("useradd") and c[-1] == "weaver-m1-state"], calls)
+            with self.subTest(root_mode=root_mode, why="free"):
+                self.reset_made()
+                self.env.pop("FIXTURE_REPQUOTA_FAILS", None)
+                self.env["FIXTURE_REPQUOTA"] = "\n".join(free)
+                result = self.create(*flag, "--home-quota", "64G", "--apply")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn([*step("setquota"), "-P", "12345", "0", str(64 * 1024 * 1024), "0", "4194304", "/state"],
+                              self.calls())
+
+    def test_a_home_quota_refuses_before_anything(self):
+        # **#585**: in both modes, before any account or file is made, a size
+        # that is not a whole count of M, G or T refuses, and so do a base on
+        # another filesystem than ext4, an ext4 base not mounted with project
+        # quotas, a box without setquota, and the flag with no value.
+        # Perturbations: drop any one check, and its cases run on.
+        cases = [((), self.QUOTA_MOUNT, ("--home-quota",), "--home-quota needs a size")]
+        for bad in ("", "0G", "64", "64g", "64GB", "64K", "1.5G", "064G", "-1G", "+1G", "12345678G"):
+            cases.append(((), self.QUOTA_MOUNT, ("--home-quota", bad), "--home-quota is a whole size"))
+        cases.append(((), "xfs|rw,prjquota|/state", ("--home-quota", "64G"),
+                      "--home-quota caps the home with an ext4 project quota, and "))
+        cases.append(((), "ext4|rw,relatime,usrquota,grpquota|/state", ("--home-quota", "64G"),
+                      "--home-quota needs /state mounted with project quotas (prjquota)"))
+        # Each tool absent whatever the box carries: its stand-in moved aside
+        # and the box's PATH replaced by links to everything on it but that
+        # tool, so the case runs on a box with e2fsprogs and the quota tools.
+        for tool in ("chattr", "setquota", "repquota", "findmnt"):
+            cases.append(((tool,), self.QUOTA_MOUNT, ("--home-quota", "64G"), f"--home-quota needs {tool} on PATH"))
+        box_path = self.env["PATH"]
+        for absent, mount, given, said in cases:
+            for mode in ((), ("--apply",)):
+                with self.subTest(given=given, mount=mount, absent=absent, mode=mode):
+                    self.log.unlink(missing_ok=True)
+                    for name in absent: (self.bin / name).rename(self.root / f"aside-{name}")
+                    try:
+                        self.env["FIXTURE_MOUNT"] = mount
+                        if absent:
+                            self.env["PATH"] = self.path_without(absent[0], box_path)
+                            self.assertIsNone(shutil.which(absent[0], path=self.env["PATH"]))
+                        result = self.create(*mode, *given)
+                    finally:
+                        self.env["PATH"] = box_path
+                        for name in absent: (self.root / f"aside-{name}").rename(self.bin / name)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn(said, result.stderr)
+                    self.assertFalse([c for c in self.calls() if c[0] in ("sudo", "runuser", "as-root")], self.calls())
 
     def test_the_rendered_declaration_is_toml_before_anything_is_made(self):
         # The plan renders and parse-checks the declaration it would write.
@@ -6881,8 +7048,9 @@ class DecommissionTests(unittest.TestCase):
         self.assertLess(judged, self.script.index('say "the delegated door, shut"'))
         self.assertNotIn('done < "$DEST/PURGE-LIST"', self.script)
         self.assertNotIn('done < "$PURGE_LIST"', self.script)
-        # The three removal loops, load_held, and rerun_unchanged.
-        self.assertEqual(self.script.count('done < "$PURGE_ACTED"'), 5)
+        # The four removal loops (the home quotas', #585, among them),
+        # load_held, and rerun_unchanged.
+        self.assertEqual(self.script.count('done < "$PURGE_ACTED"'), 6)
         self.assertLess(judged, self.script.index('purge_lines_within "$PURGE_LIST" > "$PURGE_ACTED"'))
         # **A line passed over is never acted on**: only lines the
         # derivation holds reach the removal loops, so a path that did not
@@ -7027,12 +7195,17 @@ class PurgeRecordTests(unittest.TestCase):
             stand_in.chmod(0o755)
         return box
 
-    def run_purge(self, box, phases=None, removals=None, failing=None, record_remove_fails=False, units=()):
+    def run_purge(self, box, phases=None, removals=None, failing=None, record_remove_fails=False, units=(),
+                  quota_folder=None):
         """One `--purge` over BOX from the record's decision on: every phase,
         or the first PHASES of them in the script's own order, then a stop, or
         a stop after its REMOVALS-th `rm`, mid-phase, as an interrupt lands. A
         command FAILING names (`rm`, `mv` or `rmdir`) fails on every call, and
-        with RECORD_REMOVE_FAILS the record's own removal fails."""
+        with RECORD_REMOVE_FAILS the record's own removal fails. With
+        QUOTA_FOLDER, the home quotas' own discovery over that agent folder
+        and the refusal that follows it run first, as the script runs them
+        before either mode acts, and the derivation keeps a listed limit only
+        where discovery found it (#585)."""
         text = self.script
         cut = lambda a, b: text[text.index(a):text.index(b, text.index(a))]
         helpers = cut("RECORD_PARENT=/var/lib", "# **Everything under DEST is read as the operator**")
@@ -7049,6 +7222,10 @@ class PurgeRecordTests(unittest.TestCase):
                    "die() { printf 'REFUSED: %s\\n' \"$*\" >&2; exit 1; }\n"
                    "purge_lines_outside() { :; }\npurge_lines_within() { cat \"$1\"; }\n"
                    "query_runs() { :; }\n" + shell_function(text, "sudo_rules")
+                   # The accounts phase asks which accounts are the box's.
+                   + shell_function(text, "is_box_account") + shell_function(text, "box_account_role")
+                   # The home quotas' removal (#585).
+                   + shell_function(text, "remove_home_quotas")
                    + ("" if removals is None else
                       "RM_SEEN=0\nrm() { local s=0; command rm \"$@\" || s=$?; RM_SEEN=$((RM_SEEN + 1)); "
                       f"[ \"$RM_SEEN\" -lt {removals} ] || exit 0; return \"$s\"; }}\n")
@@ -7069,6 +7246,15 @@ class PurgeRecordTests(unittest.TestCase):
                    # The rules and the legacy units discovery finds, as it finds them.
                    + f"mapfile -t SUDO_RULES < <(sudo_rules {shlex.quote(str(box / 'etc/sudoers.d'))})\n"
                    + "UNITS=(" + " ".join(shlex.quote(u) for u in units) + ")\nSLICE=weaver.slice\n"
+                   + ("" if quota_folder is None else
+                      shell_function(text, "home_projects") + shell_function(text, "plan_home_quotas")
+                      + f"AGENT_FOLDERS=({shlex.quote(str(quota_folder))})\n"
+                      + cut("HOME_PROJECTS=()\n", 'plan_home_quotas "${HOME_PROJECTS[@]}"\n')
+                      + 'plan_home_quotas "${HOME_PROJECTS[@]}"\n'
+                      + cut("# **A capped home's limit never outlives what names it**", "\nfi\n") + "\nfi\n"
+                      + "purge_lines_within() { local l q; while IFS= read -r l; do case $l in\n"
+                        "  \"quota \"*) for q in \"${HOME_QUOTAS[@]}\"; do [ \"$l\" != \"quota $q\" ] || printf '%s\\n' \"$l\"; done ;;\n"
+                        "  *) printf '%s\\n' \"$l\" ;; esac; done < \"$1\"; }\n")
                    + decision + region + 'echo PURGED\n')
         program = program.replace("/etc/weaver", f"{box}/etc/weaver").replace(
             "RECORD_PARENT=/var/lib", f"RECORD_PARENT={box}/var/lib")
@@ -7076,6 +7262,63 @@ class PurgeRecordTests(unittest.TestCase):
         env.pop("BASH_ENV", None)
         return subprocess.run(["unshare", "--map-root-user", "bash", "-c", program], env=env, text=True,
                               capture_output=True, timeout=60)
+
+    def capped_folder(self, box):
+        """Agent a's folder on a drive mounted with project quotas, its home
+        capped as create-agent.sh caps it: the folder marked with the
+        account's uid, 2001, and the limit listed. The mount stand-in fails
+        while `mount-unreadable` stands in the model, the mark's while
+        `mark-unreadable` does, and setquota logs its calls."""
+        folder = box / "state" / "a"
+        (folder / "home").mkdir(parents=True)
+        with open(box / "PURGE-LIST", "a") as listed:
+            listed.write(f"path {folder}\nquota 2001 /state drive\n")
+        for tool, body in (
+                ("findmnt", '#!/bin/sh\n[ -e "$MODEL/mount-unreadable" ] && exit 1\n'
+                            'case "$3" in OPTIONS) echo rw,relatime,prjquota ;; TARGET) echo "/state drive" ;; esac\n'),
+                ("lsattr", '#!/bin/sh\nfor last; do :; done\n'
+                           'case $last in */home) echo "2001 --------------P--- $last" ;;\n'
+                           '*) [ -e "$MODEL/mark-unreadable" ] && exit 1; echo "2001 ---------------- $last" ;; esac\n'),
+                ("setquota", '#!/bin/sh\necho "setquota $*" >> "$MODEL/calls"\n')):
+            stand_in = box / "model" / tool
+            stand_in.write_text(body)
+            stand_in.chmod(0o755)
+        return folder
+
+    def test_an_unreadable_mount_or_mark_refuses_before_anything_goes(self):
+        """**Codex on #588, the Planner's ruling of 2026-11-17**: where a
+        capped folder's mount or mark cannot be read, nothing is archived or
+        purged, and the refusal names the folder and what could not be read.
+        The folder, the account and the limit stand, and so does everything
+        else, the config root and the sudo rule among them, with no record
+        written. Once the read answers, the purge, a first run again, removes
+        all three. Perturbations: today's carry-on order (the purge marked
+        failed and going on), or the refusal moved to just before the paths,
+        and a read below fails."""
+        for what, flag, read in (("mark", "mark-unreadable", "the mark of {} (lsattr)"),
+                                 ("mount", "mount-unreadable", "the mount of {} (findmnt)")):
+            with self.subTest(what=what):
+                box = self.box()
+                folder = self.capped_folder(box)
+                unread = box / "model" / flag
+                unread.write_text("")
+                ran = self.run_purge(box, quota_folder=folder)
+                self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+                calls = box / "model/calls"
+                self.assertTrue((folder / "home").is_dir(), "the folder stands")
+                self.assertIn("weaver-a:x:2001:", (box / "model/passwd").read_text(), "the account stands")
+                self.assertNotIn("setquota", calls.read_text() if calls.exists() else "", "the limit stands")
+                self.assertTrue((box / "etc/weaver/admin/a").is_dir(), "the config root stands")
+                self.assertTrue((box / "etc/sudoers.d/.weaver-a.decommissioning").exists(), "the sudo rule stands")
+                self.assertFalse(self.record(box).exists(), "no record carries the limit's loss")
+                self.assertIn(read.format(folder) + " cannot be read", ran.stderr)
+                self.assertIn("HowToDeployANewAgent.md section 7", ran.stderr)
+                unread.unlink()
+                ran = self.run_purge(box, quota_folder=folder)
+                self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                self.assertIn("setquota -P 2001 0 0 0 0 /state drive", calls.read_text().splitlines())
+                self.assertFalse(os.path.lexists(folder))
+                self.assert_purged(box)
 
     def record(self, box):
         sum_ = hashlib.sha256((box / "PURGE-LIST").read_bytes()).hexdigest()
@@ -7250,6 +7493,32 @@ class PurgeRecordTests(unittest.TestCase):
         again = self.run_purge(box)
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assert_purged(box)
+
+    def test_a_home_quota_that_fails_is_removed_again_by_the_rerun(self):
+        """#585, the self-check's finding 4: a quota line of the list goes to
+        root's record, a removal that fails keeps the record and fails the
+        close, and the rerun, with the folder already gone, removes the limit
+        from the record. Perturbation: act on the live discovery in place of
+        the record, and the first run never asks setquota and closes clean."""
+        box = self.box()
+        with (box / "PURGE-LIST").open("a") as listed:
+            listed.write("quota 2001 /state drive\n")
+        stand_in = box / "model" / "setquota"
+        stand_in.write_text('#!/bin/sh\necho "setquota $*" >> "$MODEL/calls"\n[ ! -e "$MODEL/setquota-fails" ]\n')
+        stand_in.chmod(0o755)
+        (box / "model" / "setquota-fails").touch()
+        ran = self.run_purge(box)
+        self.assertEqual(ran.returncode, 1, ran.stdout + ran.stderr)
+        self.assertIn("home quota of project 2001 on /state drive: its limit was not removed", ran.stdout)
+        self.assertIn("root's record is kept", ran.stderr)
+        self.assertTrue(self.record(box).exists())
+        (box / "model" / "setquota-fails").unlink()
+        again = self.run_purge(box)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("set the home quota of project 2001 on /state drive to none", again.stdout)
+        self.assert_purged(box)
+        calls = [c for c in (box / "model" / "calls").read_text().splitlines() if c.startswith("setquota ")]
+        self.assertEqual(calls, ["setquota -P 2001 0 0 0 0 /state drive"] * 2)
 
     def test_an_empty_prefix_that_will_not_go_keeps_the_record_and_refuses(self):
         """Codex on #159, round 2: a failure on the left of `&&` is exempt
@@ -7620,6 +7889,142 @@ class RoundOneOf79Tests(unittest.TestCase):
             self.assertEqual(self.run_fn_in(script, "home_within", str(elsewhere), str(folder)), "")
         self.assertIn('*) plan "$h  (home of $u): outside /home and every agent\'s folder, left in place, untouched" ;;', script)
         self.assertIn('done < <(left_in_base "$d" "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}" "${HOMES[@]}")', script)
+
+    def test_each_capped_homes_limit_goes_before_its_folder(self):
+        # **#585**: discovery takes each home's project from its account's uid
+        # in passwd and the mount from the root-owned folder, only where the
+        # drive is mounted with project quotas and the folder carries that
+        # project as create-agent.sh's mark. A folder marked 0 (an agent made
+        # without a cap) or marked with another number carries no cap of the
+        # script's, so a stranger's limit of the agent's uid is never lifted,
+        # and a folder whose mark cannot be read is named. A folder whose
+        # account is gone, a folder with no home, a linked home, and a drive without
+        # project quotas carry no cap, and a folder whose mount cannot be read
+        # is named and keeps the purge from closing clean. **What the home carries is a report and
+        # never acted on**: the agent owns its home and can set its project to
+        # another agent's uid until #587 lands, so a home moved to m1's project
+        # has only its own account's limit removed, and the plan names the
+        # move. The purge sets each project's limit to none before the paths
+        # go, and a limit left standing (setquota failing, or absent) fails the
+        # purge's close. Perturbations: read the project off the home, follow a
+        # linked home, skip the prjquota check, drop the failure's return, or
+        # move the step after the paths, and a read below fails.
+        script = (DEPLOY / "decommission.sh").read_text()
+        with tempfile.TemporaryDirectory() as scratch:
+            base = Path(scratch).resolve() / "state"
+            names = ("m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8", "m9", "m10")
+            for name in names:
+                (base / name).mkdir(parents=True)
+            for name in ("m1", "m2", "m5", "m6", "m7", "m8", "m9", "m10"):
+                (base / name / "home").mkdir()
+            (base / "m4" / "home").symlink_to(base / "m1" / "home")
+            # The stand-ins read through a link, the worst a reader could do,
+            # so a linked home is refused by the script's own check. m2's
+            # account is gone, m5 moved its home to m1's project, m6 is on a
+            # drive without project quotas, m7's mount cannot be read, m8 was
+            # made uncapped (its folder marked 0), m9's mark cannot be read, and
+            # m10's folder carries m1's number, not its own.
+            stubs = ('getent() { case "$2" in weaver-m1) echo "weaver-m1:x:12345:12345::/x:/sbin/nologin" ;; '
+                     'weaver-m4) echo "weaver-m4:x:34567:34567::/x:/sbin/nologin" ;; '
+                     'weaver-m5) echo "weaver-m5:x:23456:23456::/x:/sbin/nologin" ;; '
+                     'weaver-m6) echo "weaver-m6:x:45678:45678::/x:/sbin/nologin" ;; '
+                     'weaver-m7) echo "weaver-m7:x:56789:56789::/x:/sbin/nologin" ;; '
+                     'weaver-m8) echo "weaver-m8:x:67890:67890::/x:/sbin/nologin" ;; '
+                     'weaver-m9) echo "weaver-m9:x:78901:78901::/x:/sbin/nologin" ;; '
+                     'weaver-m10) echo "weaver-m10:x:89012:89012::/x:/sbin/nologin" ;; *) return 2 ;; esac; }\n'
+                     'lsattr() { case "$(realpath -- "${@: -1}")" in */m1/home|*/m5/home|*/m1|*/m10) echo "    12345 --------------P--- ${@: -1}" ;; '
+                     '*/m5) echo "    23456 ---------------- ${@: -1}" ;; */m9) return 1 ;; '
+                     # m4 and m6 carry their own marks, so only the linked home
+                     # and the drive's missing project quotas pass them over.
+                     '*/m4) echo "    34567 ---------------- ${@: -1}" ;; */m6) echo "    45678 ---------------- ${@: -1}" ;; '
+                     '*) echo "    0 ---------------- ${@: -1}" ;; esac; }\n'
+                     'findmnt() { case "${@: -1}" in */m7) return 1 ;; esac; '
+                     'case "$3" in OPTIONS) case "${@: -1}" in */m6) echo "rw,relatime" ;; *) echo "rw,relatime,prjquota" ;; esac ;; '
+                     'TARGET) echo "/state drive" ;; esac; }\n')
+            run = subprocess.run(["bash", "-c", "set -euo pipefail\n" + stubs + shell_function(script, "home_projects")
+                                  + 'home_projects "$@"', "x", *(str(base / n) for n in names)],
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            listed = run.stdout.splitlines()
+            self.assertEqual(listed, ["12345 12345 /state drive", "23456 12345 /state drive", f"? mount {base}/m7",
+                                      f"? mark {base}/m9"])
+            planned = subprocess.run(["bash", "-c", 'plan() { printf "%s\\n" "$*"; }\n' + shell_function(script, "plan_home_quotas")
+                                      + 'plan_home_quotas "$@"; printf "quota %s\\n" "${HOME_QUOTAS[@]}"; printf "unread %s\\n" "${HOME_QUOTA_UNREAD[@]}"',
+                                      "x", *listed],
+                                     text=True, capture_output=True, timeout=20)
+            self.assertEqual(planned.returncode, 0, planned.stderr)
+            self.assertEqual(planned.stdout.splitlines(), [
+                "home quota of project 12345, the account's uid, on /state drive: its limit is set to none at the purge, before the folder",
+                "home quota of project 23456, the account's uid, on /state drive: its limit is set to none at the purge, before the folder",
+                "   the home carries project 12345, not 23456: 12345's limit is not touched",
+                f"home quota of {base}/m7: its drive's mount cannot be read (findmnt), so whether a cap stands there is unknown, and the archive and the purge refuse until it reads",
+                f"home quota of {base}/m9: the folder's mark cannot be read (lsattr), so whether a cap stands there is unknown, and the archive and the purge refuse until it reads",
+                "quota 12345 /state drive", "quota 23456 /state drive",
+                f"unread the mount of {base}/m7 (findmnt)", f"unread the mark of {base}/m9 (lsattr)"])
+            log = Path(scratch) / "setquota.log"
+            remove = ('plan() { printf "%s\\n" "$*"; }\n'
+                      f'setquota() {{ printf "%s\\n" "$*" >> {shlex.quote(str(log))}; [ "$2" != 999 ]; }}\n'
+                      + shell_function(script, "remove_home_quotas") + 'remove_home_quotas "$@"')
+            run = subprocess.run(["bash", "-c", remove, "x", "12345 /state drive", "999 /other"],
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 1, run.stderr)
+            self.assertEqual(log.read_text().splitlines(), ["-P 12345 0 0 0 0 /state drive", "-P 999 0 0 0 0 /other"])
+            self.assertEqual(run.stdout.splitlines(), ["set the home quota of project 12345 on /state drive to none",
+                                                       "home quota of project 999 on /other: its limit was not removed"])
+            run = subprocess.run(["bash", "-c", remove, "x", "12345 /state drive"], text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            if shutil.which("setquota") is None:
+                absent = ('plan() { printf "%s\\n" "$*"; }\n' + shell_function(script, "remove_home_quotas")
+                          + 'remove_home_quotas "$@"')
+                run = subprocess.run(["bash", "-c", absent, "x", "12345 /state"], text=True, capture_output=True, timeout=20)
+                self.assertEqual(run.returncode, 1, run.stderr)
+                self.assertEqual(run.stdout.splitlines(),
+                                 ["home quota of project 12345 on /state: setquota is not on PATH, so its limit stands"])
+        # Discovered in every mode, so the plan shows each cap, and removed in
+        # the purge before any path, from root's record. **An unreadable mount
+        # or mark refuses the archive and the purge** (Codex on #588) after the
+        # plan, which only shows it, and before either mode acts, so neither
+        # an archive whose list lacks the limit nor a purge that takes the
+        # folder is ever made over it. Perturbation: move the refusal into
+        # one mode alone, and a read below fails.
+        self.assertLess(script.index('plan_home_quotas "${HOME_PROJECTS[@]}"'), script.index('[ "$MODE" = plan ] && {'))
+        refusal = script.index('if [ ${#HOME_QUOTA_UNREAD[@]} -gt 0 ]; then')
+        self.assertLess(script.index('[ "$MODE" = plan ] && {'), refusal)
+        self.assertLess(refusal, script.index('if [ "$MODE" = archive ]; then'))
+        self.assertEqual(script.count("HOME_QUOTA_UNREAD[@]"), 2, "counted and named by the refusal alone")
+        step = script[script.index('say "home quotas"'):script.index('say "paths"')]
+        self.assertIn('  case $line in "quota "*) PURGE_QUOTAS+=("${line#quota }") ;; esac\n'
+                      'done < "$PURGE_ACTED"\n'
+                      'remove_home_quotas "${PURGE_QUOTAS[@]}" || PURGE_FAILED=1\n', step)
+
+    def test_a_home_quota_is_a_purge_list_line(self):
+        # **#585, the self-check's findings 1 and 4**: each capped home's limit
+        # is a "quota <project> <mount point>" line of the archive's PURGE-LIST
+        # and of the derivation, so a purge removes only a limit the archive
+        # kept and the box still shows, and root's record carries it for a
+        # rerun. An agent made with a cap after the archive keeps its cap, and
+        # a listed limit the derivation no longer holds is passed over, never
+        # named as outside the purge. Perturbations: drop the derivation's
+        # line, drop the archive's line, or drop the pass-over, and a read
+        # below fails.
+        script = (DEPLOY / "decommission.sh").read_text()
+        fns = "".join(shell_function(script, n) for n in ("purge_candidates", "purge_lines_outside", "purge_lines_within"))
+        with tempfile.TemporaryDirectory() as scratch:
+            listed = Path(scratch) / "PURGE-LIST"
+            listed.write_text("quota 12345 /state drive\nquota 999 /gone\n")
+            derive = 'HOME_QUOTAS=("12345 /state drive" "23456 /state drive")\n'
+            run = subprocess.run(["bash", "-c", derive + fns + 'purge_candidates | grep "^quota "', "x"],
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.stdout.splitlines(), ["quota 12345 /state drive", "quota 23456 /state drive"], run.stderr)
+            run = subprocess.run(["bash", "-c", derive + fns + 'purge_lines_outside "$1"', "x", str(listed)],
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(run.stdout, "")
+            run = subprocess.run(["bash", "-c", derive + fns + 'purge_lines_within "$1"', "x", str(listed)],
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.stdout.splitlines(), ["quota 12345 /state drive"], run.stderr)
+        block = script[script.index("  # What --purge may touch, and nothing else."):script.index('} | to_file "$DEST/PURGE-LIST"')]
+        self.assertIn('for q in "${HOME_QUOTAS[@]}"; do echo "quota $q"; done', block)
 
     def run_fn_in(self, script, name, *args):
         run = subprocess.run(["bash", "-c", shell_function(script, name) + f'{name} "$@"', "x", *args],
