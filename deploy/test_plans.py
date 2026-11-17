@@ -6832,6 +6832,70 @@ sys.exit(code if code >= 0 else 128 - code)
                 self.assertGreater(took, 4.5)
                 self.assertLess(took, 8)
 
+    def test_a_relay_that_has_exited_is_not_held_open(self):
+        # **#590**: bash can leave a relay that has exited unreaped through the
+        # whole drain. Such a zombie is one `kill -0` answers for, so a relay
+        # that had finished read as one held open and failed the call (the
+        # quota test, about one run in ten, 2026-11-17). drop_relay_stands
+        # reads /proc/PID/stat instead: a running child of the named parent
+        # stands, and a zombie, a pid no longer there and a process of another
+        # parent, as a reused number would be, do not. The state and the
+        # parent are read after the last `)`, so a command name that holds
+        # `) Z ` or `) S ` and spaces misleads nothing. Every relay check in
+        # as_account is that one, with its own shell as the parent, and
+        # `kill -0` is left for the drop alone, which `wait` reaps.
+        # Perturbation: the check by `kill -0`, and the zombie and other
+        # parent cases fail; a zombie that stands, the fields read after the
+        # first `)` or by spaces from the start, or no parent check, and a case
+        # fails; either relay check in as_account by `kill -0`, and the text
+        # fails.
+        def named(comm, then):
+            # A child of this process that names itself COMM, then runs THEN.
+            child = os.fork()
+            if child == 0:
+                try:
+                    with open("/proc/self/comm", "w") as name:
+                        name.write(comm)
+                    then()
+                finally:
+                    os._exit(0)
+            deadline = time.monotonic() + 5
+            while (Path(f"/proc/{child}/comm").read_text() != comm + "\n"
+                   and time.monotonic() < deadline):
+                time.sleep(0.01)
+            return child
+        running = named("r) Z  (x", lambda: time.sleep(60))
+        self.addCleanup(os.waitpid, running, 0)
+        self.addCleanup(os.kill, running, signal.SIGKILL)
+        zombie = named("z) S  (x", lambda: None)
+        self.addCleanup(os.waitpid, zombie, 0)
+        deadline = time.monotonic() + 5
+        while self.alive(zombie) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(Path(f"/proc/{zombie}").exists() and not self.alive(zombie), "the child is no zombie")
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        me, other = str(os.getpid()), str(os.getppid())
+        program = (account_drop_source()
+                   + 'while [ "$#" -gt 0 ]; do\n'
+                   + '  if drop_relay_stands "$1" "$2"; then said=stands; else said=gone; fi\n'
+                   + '  if kill -0 "$1" 2>/dev/null; then signalled=yes; else signalled=no; fi\n'
+                   + '  echo "$said $signalled"\n'
+                   + '  shift 2\n'
+                   + 'done\n')
+        run = subprocess.run(["bash", "-c", program, "bash", str(running), me, str(running), other, str(zombie), me,
+                              str(gone.pid), me],
+                             env=self.env(self.bin_dir), stdin=subprocess.DEVNULL, text=True, capture_output=True,
+                             timeout=20)
+        # A process of another parent and the zombie answer `kill -0`, which is
+        # the case's premise.
+        self.assertEqual(run.stdout.splitlines(), ["stands yes", "gone yes", "gone yes", "gone no"], run.stderr)
+        body = (DEPLOY / "account-drop.sh").read_text().split("\nas_account() {\n", 1)[1]
+        self.assertEqual(set(re.findall(r'kill -0 \S+', body)), {'kill -0 "$drop"'})
+        self.assertEqual(body.count("drop_relay_stands "), 3)
+        self.assertEqual(re.findall(r'drop_relay_stands "\$(\w+)" "\$(\w+)"', body),
+                         [("out_pid", "BASHPID"), ("err_pid", "BASHPID"), ("relay", "BASHPID")])
+
     @staticmethod
     def alive(pid):
         try:

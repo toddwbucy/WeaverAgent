@@ -33,14 +33,15 @@ DROP_RELAY_WAIT=5
 #   shell holds, one where the caller gave both the same file, so a caller's
 #   `2>&1` keeps its order. Each relay is a `cat` run as a job of this shell
 #   on a FIFO made in a directory of its own, `weaver-drop.XXXXXX` under
-#   TMPDIR, mode 0700, and unlinked once
-#   both ends are open, so its status is waited for by its pid in any bash
-#   (a process substitution's is, before bash 5.3, only for the last one).
+#   TMPDIR, mode 0700, and unlinked once both ends are open, so its status is
+#   waited for by its pid in any bash (a process substitution's is, before
+#   bash 5.3, only for the last one).
 #   **After CMD exits, the relays get DROP_RELAY_WAIT seconds to drain**,
 #   polled by the `read` builtin on a third FIFO no one writes: one still
 #   held open then, by a process CMD left behind, is ended, and the call
-#   fails saying so. Every caller captures the output or discards it, so no
-#   relay waits on a slow reader.
+#   fails saying so. A relay is running while drop_relay_stands says so,
+#   below. Every caller captures the output or discards it, so no relay
+#   waits on a slow reader.
 # - It runs under `setsid -w`, in a session of its own with no controlling
 #   terminal: before runuser in root mode, and inside sudo in the operator's,
 #   since sudo finds the operator's cached credential by terminal, and with
@@ -62,6 +63,27 @@ DROP_RELAY_WAIT=5
 # down, and the stack puts no BusyBox applet on any PATH.
 # The status is CMD's, else 1 where a relay was held open, else the standard
 # output relay's, else the standard error relay's.
+
+# **drop_relay_stands PID PARENT: a relay still running** (#590): the process
+# PID stands, has not exited, and is PARENT's child. A relay that has exited
+# and that bash has not reaped yet is a zombie, which `kill -0` answers for,
+# and bash has left one unreaped through the whole drain, so a relay that had
+# finished read as one held open and failed the call. Once reaped its number
+# can pass to another process, which is not PARENT's relay. Both are read
+# from /proc/PID/stat, which as_account needs /proc for in any case: the
+# state and the parent are the two fields after the last `)`, since the field
+# before them is the command's name in parentheses, which may hold spaces
+# and parentheses of its own.
+drop_relay_stands() {
+  local stat state
+  { read -r stat <"/proc/$1/stat"; } 2>/dev/null || return 1
+  stat=${stat##*) }
+  state=${stat%% *}
+  stat=${stat#* }
+  [ "${stat%% *}" = "$2" ] || return 1
+  case $state in Z | X) return 1 ;; esac
+}
+
 as_account() {
   local account input=/dev/null named=() setsid runuser sudo relays
   if [ "${1:-}" = --stdin ]; then input=$2; shift 2; fi
@@ -130,13 +152,14 @@ as_account() {
     [ "$merged" -eq 1 ] || exec {err}>&-
     for ((n = 0; n < DROP_RELAY_WAIT * 100; n++)); do
       [ -z "$sig" ] || break
-      kill -0 "$out_pid" 2>/dev/null || { [ -n "$err_pid" ] && kill -0 "$err_pid" 2>/dev/null; } || break
+      drop_relay_stands "$out_pid" "$BASHPID" \
+        || { [ -n "$err_pid" ] && drop_relay_stands "$err_pid" "$BASHPID"; } || break
       read -r -t 0.01 -u "$tick"
     done
     exec {tick}>&-
     held=0
     for relay in "$out_pid" $err_pid; do
-      if kill -0 "$relay" 2>/dev/null; then
+      if drop_relay_stands "$relay" "$BASHPID"; then
         kill -TERM "$relay" 2>/dev/null
         [ -n "$sig" ] || held=1
       fi
