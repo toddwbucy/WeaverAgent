@@ -123,6 +123,9 @@ group in one shell.
   accounts through it, and no sudo credential is asked for. The include and the
   original sudo still bind, since the admin-con account's rule is sudo's, and root
   lists that rule through sudo at the end.
+- With `--home-quota`, the agent-directory stands on ext4 formatted with project quotas
+  and mounted `prjquota`, and `chattr`, `setquota` (the quota tools) and `findmnt` are
+  on the box. On an appliance the image lays the drive out so.
 
 ## 2. An agent with a store
 
@@ -161,6 +164,15 @@ refuses without the model or the cards: an empty device set, an ordinal named tw
 capacity that is not a count from 1 to 4294967295, or a third turn-context word. An
 ordinal the box has no card for, whether the model spans the devices, and whether each
 card has room are the SPU's to judge at the load, which `verify-load.sh` shows.
+`--home-quota <size>` caps the agent's home (#585), a whole size in binary units such as
+`512M`, `64G` or `2T`: the home takes its own ext4 project, the agent's uid, with the
+inherit flag, and the project's block limit is set on the drive. The cap bounds the
+agent's own writes in its home, so they cannot take the space the save points and the
+state room need on the same drive. It bounds their space and not their count of files.
+Until #587 lands, an agent that deliberately changes its files' project can leave the
+cap. #587 closes that. Without the option the home is not capped. A malformed size, a
+base not on ext4, an ext4 base not mounted `prjquota`, or a missing tool refuses before
+anything is made.
 
 Apply first checks that `/etc/sudoers` includes `/etc/sudoers.d` and that visudo accepts
 the rendered rule, and refuses before it makes anything otherwise. It then lays the
@@ -769,6 +781,10 @@ for u in weaver-<name> weaver-<name>-state weaver-<name>-relay weaver-<name>-adm
 done
 ```
 
+Where `create-agent.sh` capped the home, remove its limit first, while the account
+stands: the project is the agent account's uid (`id -u weaver-<name>`), and
+`sudo setquota -P <uid> 0 0 0 0 <mount point>` sets its limit to none (#585). Take the
+project from the uid, not from `lsattr` on the home, which the agent can change.
 Then `userdel -r` the agent's account, which removes its home in the agent's folder, and
 `userdel` the member's, the relay's and, where it stands, the per-agent connector's,
 then delete the groups, which `userdel` leaves while a member remains and which a later

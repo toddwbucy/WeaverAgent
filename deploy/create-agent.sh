@@ -21,7 +21,9 @@
 # order kept as shard order, default 0), --context-capacity <n> (the session's
 # context in tokens, default 32768, at least the max-tokens-per-turn of 4096
 # this script writes beside it), --turn-context continuous|independent
-# (written only when given, and absent is continuous, #423), and
+# (written only when given, and absent is continuous, #423), --home-quota
+# <size> (a cap on the agent's home as an ext4 project quota, such as 512M,
+# 64G or 2T in binary units, #585; without it the home is not capped), and
 # --root-operator (root runs it, on a single-purpose appliance where root is
 # the operator).
 #
@@ -167,6 +169,8 @@ CONTEXT_CAPACITY=32768
 unset TURN_CONTEXT
 # **The ceiling of a turn this script writes**, fixed: no option sets it (#580).
 MAX_TOKENS_PER_TURN=4096
+# **The home's cap is unset until the flag gives it** (#585).
+unset HOME_QUOTA
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply)    APPLY=1 ;;
@@ -194,6 +198,7 @@ while [ $# -gt 0 ]; do
     --devices)          [ $# -ge 2 ] || die "--devices needs device ordinals, such as 0 or 0,1"; DEVICES=$2; shift ;;
     --context-capacity) [ $# -ge 2 ] || die "--context-capacity needs a count of tokens"; CONTEXT_CAPACITY=$2; shift ;;
     --turn-context)     [ $# -ge 2 ] || die "--turn-context needs continuous or independent"; TURN_CONTEXT=$2; shift ;;
+    --home-quota)       [ $# -ge 2 ] || die "--home-quota needs a size, such as 64G"; HOME_QUOTA=$2; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -298,6 +303,18 @@ DEVICES_TOML=${DEVICES//,/, }
 # a turn allowed more tokens than the whole context holds.
 (( CONTEXT_CAPACITY >= MAX_TOKENS_PER_TURN )) \
   || die "--context-capacity $CONTEXT_CAPACITY is below the max-tokens-per-turn of $MAX_TOKENS_PER_TURN this script writes into the same declaration: give at least $MAX_TOKENS_PER_TURN"
+# **The home's cap is a whole size in binary units** (#585), set as setquota's
+# block limit, which counts kibibytes.
+HOME_QUOTA_KIB=""
+if [ -n "${HOME_QUOTA+given}" ]; then
+  [[ "$HOME_QUOTA" =~ ^([1-9][0-9]{0,6})([MGT])$ ]] \
+    || die "--home-quota is a whole size in mebibytes, gibibytes or tebibytes, such as 512M, 64G or 2T, with no leading zero: '$HOME_QUOTA'"
+  case ${BASH_REMATCH[2]} in
+    M) HOME_QUOTA_KIB=$(( BASH_REMATCH[1] * 1024 )) ;;
+    G) HOME_QUOTA_KIB=$(( BASH_REMATCH[1] * 1024 * 1024 )) ;;
+    T) HOME_QUOTA_KIB=$(( BASH_REMATCH[1] * 1024 * 1024 * 1024 )) ;;
+  esac
+fi
 if [ -z "${TURN_CONTEXT+given}" ]; then
   TURN_CONTEXT_LINE="" TURN_CONTEXT_SHOWN="continuous (absent, so not written)"
 else
@@ -524,6 +541,29 @@ STATE_DIR="$HOME_DIR/state"
 DECLARATION="$HOME_DIR/agent.toml"
 PROMPT="$HOME_DIR/system-prompt.md"
 SAVE_POINTS="$HOME_DIR/save-points"
+# **The home's cap is an ext4 project quota** (the operator's ruling of
+# 2026-11-16, #585). The cap bounds the agent's own writes in its home, so they
+# cannot take the space the save points and the state room need on the same
+# drive. It bounds their space and not their count of files: no inode limit is
+# set. The home takes its own project, the agent's uid, with the inherit flag,
+# so what is made in it counts against the cap. **Until #587 lands, an agent
+# that deliberately changes its files' project can leave the cap.** #587
+# closes that. Checked here, before anything is made:
+# the tools, and a base on ext4 mounted with project quotas, which the image
+# lays out (formatted with project quotas and mounted prjquota).
+if [ -n "${HOME_QUOTA+given}" ]; then
+  for tool in chattr setquota findmnt; do
+    command -v "$tool" >/dev/null \
+      || die "--home-quota needs $tool on PATH: chattr is e2fsprogs', setquota the quota tools', findmnt util-linux's"
+  done
+  QUOTA_FSTYPE=$(findmnt -n -o FSTYPE --target "$AGENT_DIR") || die "the filesystem under $AGENT_DIR cannot be read"
+  QUOTA_OPTIONS=$(findmnt -n -o OPTIONS --target "$AGENT_DIR") || die "the mount options under $AGENT_DIR cannot be read"
+  QUOTA_MOUNT=$(findmnt -n -o TARGET --target "$AGENT_DIR") || die "the mount point under $AGENT_DIR cannot be read"
+  [ "$QUOTA_FSTYPE" = ext4 ] \
+    || die "--home-quota caps the home with an ext4 project quota, and $AGENT_DIR is on $QUOTA_FSTYPE"
+  [[ ",$QUOTA_OPTIONS," == *,prjquota,* ]] \
+    || die "--home-quota needs $QUOTA_MOUNT mounted with project quotas (prjquota), and it is mounted $QUOTA_OPTIONS: the drive is formatted with project quotas and mounted prjquota"
+fi
 
 # **account_line NAME: the account's passwd line, or nothing where it is
 # absent**; a lookup that cannot answer refuses rather than reading as absence.
@@ -837,6 +877,11 @@ else
 fi
 plan "folder          $AGENT_FOLDER        root:root 0755, the territory and the home side by side"
 plan "home            $AGENT_HOME        $AGENT_USER 2750, the agent's own, where its tools run"
+if [ -n "${HOME_QUOTA+given}" ]; then
+  plan "home quota      $AGENT_HOME        capped at $HOME_QUOTA, an ext4 project quota on $QUOTA_MOUNT, the project the agent's uid"
+else
+  plan "home quota      none: no --home-quota, so the home is not capped"
+fi
 plan "territory       $HOME_DIR        root:$STATE_GROUP 0710, passage for the state group alone"
 plan "trace           $HOME_DIR/trace.ndjson  root:$TRACE_GROUP 0640, made before the first load"
 plan "state room      $STATE_DIR       $MEMBER_USER 0700, which the agent's uid cannot enter"
@@ -1063,6 +1108,16 @@ root usermod -aG "$STATE_GROUP,$ACCESS_GROUP" "$ADMINCON_USER"
 # Root reads everything already, so root joins no group (#576).
 [ "$ROOT_OPERATOR" -eq 1 ] || root usermod -aG "$TRACE_GROUP,$STATE_GROUP,$ACCESS_GROUP" "$OPERATOR"
 root chmod 2750 "$AGENT_HOME"
+# **The home is capped before anything of the agent's runs** (#585): the
+# project and its inherit flag on the home and what useradd laid in it, then
+# the project's block limit on the drive.
+if [ -n "${HOME_QUOTA+given}" ]; then
+  HOME_PROJECT=$(id -u "$AGENT_USER")
+  [[ "$HOME_PROJECT" =~ ^[1-9][0-9]*$ ]] || die "$AGENT_USER carries no uid a project can take: '$HOME_PROJECT'"
+  root chattr -R +P -p "$HOME_PROJECT" "$AGENT_HOME"
+  root setquota -P "$HOME_PROJECT" 0 "$HOME_QUOTA_KIB" 0 0 "$QUOTA_MOUNT"
+  printf '   %s capped at %s: project %s on %s\n' "$AGENT_HOME" "$HOME_QUOTA" "$HOME_PROJECT" "$QUOTA_MOUNT"
+fi
 printf '   %s uid %s, %s uid %s, %s uid %s, %s uid %s, %s uid %s\n' \
   "$AGENT_USER" "$(id -u "$AGENT_USER")" "$MEMBER_USER" "$(id -u "$MEMBER_USER")" \
   "$RELAY_USER" "$(id -u "$RELAY_USER")" "$GATECON_USER" "$GATECON_UID" \

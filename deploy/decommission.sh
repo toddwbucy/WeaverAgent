@@ -437,6 +437,74 @@ AGENT_FOLDERS=()
 AGENT_LISTED=$(agent_folders "${!TERRITORY_BASES[@]}")
 [ -z "$AGENT_LISTED" ] || mapfile -t AGENT_FOLDERS <<< "$AGENT_LISTED"
 for d in /var/lib/weaver "${AGENT_FOLDERS[@]}" "${!LOG_PATHS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
+# **home_projects FOLDER...: "<project> <seen> <mount point>" for each agent's
+# home on a drive mounted with project quotas** (#585). The project is the
+# agent account's uid, read from passwd, the number create-agent.sh gives the
+# home, and the mount is read off the root-owned folder. **Neither is read off
+# the home**: the agent owns its home and, until #587 lands, can set its
+# project to any number, another agent's uid included, so a project read there
+# would have root lift a cap that is not this agent's. What the home carries is
+# printed as <seen>, a report and never acted on ("-" where it cannot be
+# read). A folder whose account is gone, or whose drive has no project quotas,
+# carries no cap of create-agent.sh's. A folder whose mount cannot be read is
+# printed as "? - <folder>", so the plan names it rather than passing it over.
+home_projects() {
+  local f project seen _ options mount_point
+  for f in "$@"; do
+    [ -d "$f/home" ] && [ ! -L "$f/home" ] || continue
+    project=$(getent passwd "weaver-${f##*/}" | cut -d: -f3) || continue
+    [[ "$project" =~ ^[1-9][0-9]*$ ]] || continue
+    { options=$(findmnt -n -o OPTIONS --target "$f" 2>/dev/null) \
+        && mount_point=$(findmnt -n -o TARGET --target "$f" 2>/dev/null); } \
+      || { printf '? - %s\n' "$f"; continue; }
+    [[ ",$options," == *,prjquota,* ]] || continue
+    read -r seen _ < <(lsattr -pd -- "$f/home" 2>/dev/null) || seen=-
+    printf '%s %s %s\n' "$project" "${seen:--}" "$mount_point"
+  done
+}
+# **plan_home_quotas "<project> <seen> <mount point>"...: one plan line each,
+# and HOME_QUOTAS filled with "<project> <mount point>"**. A home carrying
+# another project than its account's uid is named, and that project's limit
+# is left as it stands. A folder whose mount cannot be read sets
+# HOME_QUOTA_UNREAD, and the purge does not close clean over it.
+plan_home_quotas() {
+  local q project seen mount_point
+  HOME_QUOTAS=() HOME_QUOTA_UNREAD=0
+  for q in "$@"; do
+    read -r project seen mount_point <<< "$q"
+    if [ "$project" = "?" ]; then
+      plan "home quota of $mount_point: its drive's mount cannot be read (findmnt), so whether a cap stands there is unknown and the purge does not close clean"
+      HOME_QUOTA_UNREAD=1; continue
+    fi
+    HOME_QUOTAS+=("$project $mount_point")
+    plan "home quota of project $project, the account's uid, on $mount_point: its limit is set to none at the purge, before the folder"
+    if [[ "$seen" =~ ^[1-9][0-9]*$ ]] && [ "$seen" != "$project" ]; then
+      plan "   the home carries project $seen, not $project: $seen's limit is not touched"
+    fi
+  done
+}
+# **remove_home_quotas "<project> <mount point>"...: each project's limit set
+# to none**, one plan line each, returning 1 where any limit stands after it.
+# Setting a project with no limit to none changes nothing, so an agent made
+# without --home-quota on the same drive is no failure.
+remove_home_quotas() {
+  local q project mount_point failed=0
+  for q in "$@"; do
+    project=${q%% *} mount_point=${q#* }
+    if ! command -v setquota >/dev/null; then
+      plan "home quota of project $project on $mount_point: setquota is not on PATH, so its limit stands"; failed=1
+    elif setquota -P "$project" 0 0 0 0 "$mount_point"; then
+      plan "set the home quota of project $project on $mount_point to none"
+    else
+      plan "home quota of project $project on $mount_point: its limit was not removed"; failed=1
+    fi
+  done
+  return "$failed"
+}
+HOME_PROJECTS=()
+HOME_PROJECTS_LISTED=$(home_projects "${AGENT_FOLDERS[@]}")
+[ -z "$HOME_PROJECTS_LISTED" ] || mapfile -t HOME_PROJECTS <<< "$HOME_PROJECTS_LISTED"
+plan_home_quotas "${HOME_PROJECTS[@]}"
 # **territories_outside FOLDER... -- ROOT...: each root's own territory that no
 # agent's folder covers**, read from the root's `territory` key (the operator's ruling of
 # 2026-10-07 on #1), one per line. Under the new layout a territory is the
@@ -758,6 +826,9 @@ if [ "$MODE" = archive ]; then
     done
     for u in "${WEAVER_USERS[@]}";  do echo "user $u"; done
     for g in "${WEAVER_GROUPS[@]}"; do echo "group $g"; done
+    # Each capped home's limit, so a purge removes only the limits this
+    # archive kept, and a rerun from root's record finishes one that failed.
+    for q in "${HOME_QUOTAS[@]}"; do echo "quota $q"; done
     true
   } | to_file "$DEST/PURGE-LIST"
 
@@ -797,6 +868,7 @@ purge_candidates() {
   done
   for u in "${WEAVER_USERS[@]}"; do echo "user $u"; done
   for g in "${WEAVER_GROUPS[@]}"; do echo "group $g"; done
+  for q in "${HOME_QUOTAS[@]}"; do echo "quota $q"; done
   true
 }
 # **purge_lines_outside LIST: each line of LIST naming something that still
@@ -825,6 +897,10 @@ purge_lines_outside() {
       path) [ -e "$name" ] || [ -L "$name" ] || continue ;;
       user) getent passwd "$name" >/dev/null || continue ;;
       group) getent group "$name" >/dev/null || continue ;;
+      # A limit the derivation does not hold is a home whose folder or account
+      # is gone, or whose drive no longer carries project quotas: passed over
+      # and never acted on.
+      quota) continue ;;
     esac
     printf '%s\n' "$line"
   done < "$1"
@@ -1184,6 +1260,20 @@ if grep -qxF 'path /etc/weaver' -- "$PURGE_ACTED" && { [ -e /etc/weaver ] || [ -
   done
   if rm -rf -- /etc/weaver; then plan "removed /etc/weaver"; else plan "/etc/weaver: not removed"; PURGE_FAILED=1; fi
 fi
+
+say "home quotas"
+# **Each capped home's limit goes before its folder and its account** (#585),
+# so no stale limit stands in the drive's quota file for a later account of
+# the same uid. Only the limits this archive's PURGE-LIST names and the
+# derivation holds are removed, as with every other line, and they are on
+# root's record, so a rerun whose first run failed here removes them again.
+# Removing a limit removes nothing on disk, so the rerun is harmless.
+PURGE_QUOTAS=()
+while IFS= read -r line; do
+  case $line in "quota "*) PURGE_QUOTAS+=("${line#quota }") ;; esac
+done < "$PURGE_ACTED"
+remove_home_quotas "${PURGE_QUOTAS[@]}" || PURGE_FAILED=1
+[ "$HOME_QUOTA_UNREAD" = 0 ] || PURGE_FAILED=1
 
 say "paths"
 while IFS= read -r line; do
