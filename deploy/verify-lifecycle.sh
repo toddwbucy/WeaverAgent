@@ -439,8 +439,20 @@ expect_no_acl() {
     expect_eq "$p carries no access entry" "" "$found"
   done
 }
-as_can() { # as_can ACCOUNT TEST...: yes where the account passes the test
+as_can() { # as_can ACCOUNT COMMAND...: yes where the account's command succeeds
   if sudo -n -u "$1" "${@:2}" >/dev/null 2>&1; then printf yes; else printf no; fi
+}
+# **as_look ACCOUNT FLAG PATH: yes or no, as the shell's own `[` answers for
+# ACCOUNT** (#577), never the external `test`: on the by-hand appliance walk
+# of 2026-11-16 that `test` was uutils', whose `-r` ignored supplementary
+# groups, so an expectation of `no` could pass where the access came through a
+# group. **A drop sudo refuses answers `refused`**, never `no`, so an
+# expectation of `no` fails on it, as `holds_group` answers `unreadable`.
+as_look() {
+  local said
+  said=$(sudo -n -u "$1" sh -c 'if [ "$1" "$2" ]; then printf yes; else printf no; fi' sh "$2" "$3" 2>/dev/null) \
+    || said=refused
+  case $said in yes|no) printf '%s' "$said" ;; *) printf refused ;; esac
 }
 # holds_group ACCOUNT GROUP: yes where the group database gives ACCOUNT the
 # group GROUP, no where it gives ACCOUNT groups without it, read without
@@ -864,9 +876,9 @@ step_1() {
     expect_eq "the rule grants $ADMINCON $verb $A" yes \
       "$(grep -qF "$ADMIN $verb $A" <<<"$listing" && echo yes || echo no)"
   done
-  expect_eq "$AU cannot pass the territory" no "$(as_can "$AU" test -x "$T")"
-  expect_eq "$AU-state cannot read the trace" no "$(as_can "$AU-state" test -r "$TRACE")"
-  expect_eq "$AU-state cannot read the declaration" no "$(as_can "$AU-state" test -r "$DECL")"
+  expect_eq "$AU cannot pass the territory" no "$(as_look "$AU" -x "$T")"
+  expect_eq "$AU-state cannot read the trace" no "$(as_look "$AU-state" -r "$TRACE")"
+  expect_eq "$AU-state cannot read the declaration" no "$(as_look "$AU-state" -r "$DECL")"
   end_step
 }
 
@@ -967,7 +979,7 @@ step_2() {
   expect_lay "$RUNTIME_DIR/coordination.sock" "$AU:$AU 700 socket"
   expect_lay "$T/state/state.log" "root:$AU-state 640 regular file"
   expect_eq "$AU-state reads its state.log (K12)" yes "$(as_can "$AU-state" tail -n 1 "$T/state/state.log")"
-  expect_eq "$AU-state still cannot read the trace" no "$(as_can "$AU-state" test -r "$TRACE")"
+  expect_eq "$AU-state still cannot read the trace" no "$(as_look "$AU-state" -r "$TRACE")"
   end_step
 }
 

@@ -476,7 +476,7 @@ mapfile -t TMP_PATHS < <(tmp_paths /tmp)
 # while both sources stay on the purge list (Codex on #79).
 free_name() {
   local name=$1 n=2
-  while as_op test -e "$DEST/$name.tar.zst"; do name="$1-$n"; n=$((n + 1)); done
+  while op_has -e "$DEST/$name.tar.zst"; do name="$1-$n"; n=$((n + 1)); done
   printf '%s' "$name"
 }
 
@@ -489,6 +489,22 @@ free_name() {
 # shell writes the file. Measured 2026-09-30: mkdir as root failed on the
 # export, and a file root did write arrived owned by nobody.
 as_op() { sudo -u "$OPERATOR" -H "$@"; }
+# **op_has FLAG PATH: whether the operator passes FLAG on PATH** (#577), as
+# the shell's own `[` answers it as the operator, never the external `test`,
+# which on the by-hand appliance walk of 2026-11-16 was uutils' and ignored
+# supplementary groups. 0 is yes and 1 is no. **A drop that sudo itself
+# refuses is neither**: it refuses here naming sudo, so a refused drop never
+# reads as an archive absent or a directory unwritable.
+op_has() {
+  local said
+  said=$(as_op sh -c 'if [ "$1" "$2" ]; then printf yes; else printf no; fi' sh "$1" "$2") \
+    || die "sudo would not run a look as $OPERATOR at $2"
+  case $said in
+    yes) return 0 ;;
+    no) return 1 ;;
+    *) die "the look as $OPERATOR at $2 answered '$said', not yes or no" ;;
+  esac
+}
 # stdin -> $1, owned by the operator and **readable by the operator alone**
 # (#98; the custody audit's G22): the archive holds the trace and the save
 # points, which the box keeps to their groups, so the invoker's umask does
@@ -529,7 +545,7 @@ sha_all() { find "$1" -maxdepth 1 -type f -exec sha256sum {} \; 2>/dev/null || t
 if [ "$MODE" = archive ]; then
   [ ${#ACTIVE_UNITS[@]} -eq 0 ] || die "units still active: ${ACTIVE_UNITS[*]}. Unload them (weaver-admin unload <agent>) or stop them, then rerun"
   [ ${#RUNNING[@]} -eq 0 ] || die "agents still run or cannot be read: ${RUNNING[*]}. Unload each (weaver-admin unload <agent>), then rerun"
-  as_op test -e "$DEST/SHA256SUMS" && die "$DEST already holds an archive; name another directory"
+  ! op_has -e "$DEST/SHA256SUMS" || die "$DEST already holds an archive; name another directory"
   # **The delegated door shuts for the snapshot** (Codex on #79): each rule is
   # moved to a dot-name sudo never reads, so no connector can start a run
   # while tar copies, then every agent is asked again. A run found
@@ -559,7 +575,7 @@ if [ "$MODE" = archive ]; then
     die "agents run or cannot be read: ${RUNNING[*]}. The sudo rules are restored; unload each, then rerun"
   fi
   as_op sh -c 'umask 077 && mkdir -p "$1"' _ "$DEST" || die "the operator cannot create $DEST"
-  as_op test -w "$DEST" || die "$DEST is not writable by $OPERATOR"
+  op_has -w "$DEST" || die "$DEST is not writable by $OPERATOR"
   # A run that died part way leaves files here the operator may not own;
   # they are this script's and go before it writes again.
   # Removed as the operator (#98): DEST is the operator's, and root acting
@@ -617,7 +633,7 @@ if [ "$MODE" = archive ]; then
   archive_name() { local flat=${2#/}; printf '%s-%s' "$1" "${flat//\//-}"; }
   archive_path() { # archive_path NAME PATH...
     local name present=()
-    name=$(free_name "$1"); shift
+    name=$(free_name "$1") || exit 1; shift
     for pth in "$@"; do [ -e "$pth" ] && present+=("$pth"); done
     [ ${#present[@]} -gt 0 ] || return 0
     tarz "$DEST/$name.tar.zst" "${present[@]}"
@@ -941,7 +957,7 @@ record_lines_outside() {
 # **Everything under DEST is read as the operator** (#98): the archive is the
 # operator's alone, 0600 in a 0700 directory, and on an export where root's
 # writes are squashed root could not read it either way.
-as_op test -f "$DEST/SHA256SUMS" && as_op test -f "$DEST/PURGE-LIST" || die "$DEST holds no finished archive"
+op_has -f "$DEST/SHA256SUMS" && op_has -f "$DEST/PURGE-LIST" || die "$DEST holds no finished archive"
 say "re-verify $DEST"
 as_op sh -c 'cd "$1" && sha256sum -c --quiet SHA256SUMS' _ "$DEST" || die "the archive no longer verifies; purge refused"
 # The list is read once, into root's own copy, and judged there, so what is

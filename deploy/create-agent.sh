@@ -94,10 +94,11 @@
 # does not change (the operator contract section 2). The
 # observer role grants `show`, and the operator role adds
 # `validate`, `load`, `unload`, `stop`, `save-point`, `restore` and
-# `force-unload`, the eight lines `VERBS` below names. The rule is checked with `visudo
-# -cf` before it is installed. A delegated invocation reads admin's default
-# base, sudo stripping WEAVER_ADMIN_CONFIG, so the rule drives an agent only
-# under `/etc/weaver/admin`.
+# `force-unload`, the eight lines `VERBS` below names. The rule is checked with
+# `visudo -cf` before any account is made and again before it is installed
+# (#577). A delegated invocation reads admin's default base, sudo stripping
+# WEAVER_ADMIN_CONFIG, so the rule drives an agent only under
+# `/etc/weaver/admin`.
 #
 # **The program creates nothing and this is why the script exists.** Admin's
 # inventory refuses a missing home rather than building one, per
@@ -570,6 +571,26 @@ refuse_existing() {
   answer=$(path_answer -e "$1") || exit 1
   [ "$answer" = no ] || die "$2 already exists: $1"
 }
+# **allows ACCOUNT FLAG PATH: whether ACCOUNT passes FLAG on PATH, as the
+# kernel answers for that account** (#577). The look is the shell's own `[`,
+# a builtin of dash and of bash alike, and never the external `test`: on the
+# by-hand appliance walk of 2026-11-16 that `test` was uutils', whose `-r`
+# ignored supplementary groups, so a positive check refused wrongly and a
+# negative one could pass wrongly where the access came through a group. 0 is
+# yes and 1 is no. **A drop that sudo itself refuses is neither**: it refuses
+# here naming sudo, so a refused drop is never read as a wall closed or open,
+# as `path_answer` keeps a failed privileged call apart from a false test.
+allows() {
+  local said
+  said=$(sudo -n -u "$1" sh -c 'if [ "$1" "$2" ]; then printf yes; else printf no; fi' sh "$2" "$3") \
+    || die "sudo would not run a look as $1 at $3, so the wall is unchecked:" \
+           "the operator's sudo must run commands as the agent's accounts, (ALL) and not (root) alone"
+  case $said in
+    yes) return 0 ;;
+    no) return 1 ;;
+    *) die "the look as $1 at $3 answered '$said', not yes or no, so the wall is unchecked" ;;
+  esac
+}
 
 # **The box's connector accounts are judged by their shape, not only their
 # name** (weaver-admin-Spec section 4): a standing account of the name is
@@ -756,11 +777,80 @@ refuse_existing "$SUDO_RULE" "sudo rule"
 if [ "$APPLY" -eq 0 ]; then
   printf '   no collision found in accounts and paths visible to this uid\n'
   printf '   PENDING --apply: privileged collision checks\n'
-  printf '   PENDING --apply: authentication paths, the sudoers include, visudo\n'
+  printf '   PENDING --apply: authentication paths, the sudoers include, visudo, the operator'"'"'s sudo as other accounts\n'
   say "plan only"
   printf '   no provisioning performed; rerun with --apply to check and make it\n'
   exit 0
 fi
+
+say "sudo, checked before anything is made"
+# **The sudoers include and the rendered rule are judged before any account
+# stands** (#577). On the by-hand appliance walk of 2026-11-16 the box's sudo
+# was sudo-rs, whose visudo refuses `Defaults:<user> !pam_session`, a line the
+# rule must carry (weaver-admin-operator-contract section 2), and the refusal
+# came at the rule's install, after every account, the territory and the
+# staged root stood: a half-made agent. The rule is staged under a dot-name
+# sudo skips, checked by visudo and removed here, and staged and checked again
+# at its install below.
+sudo -n grep -qE '^[#@]includedir[[:space:]]+/etc/sudoers\.d([[:space:]]|$)' /etc/sudoers \
+  || die "/etc/sudoers does not include /etc/sudoers.d, so a rule there would never be read"
+lines=""
+for verb in $VERBS; do
+  lines="$lines${lines:+, }$ADMIN_BINARY $verb $NAME"
+done
+RULE_TEXT=$(cat <<SUDOERS
+# weaver-$NAME: the box's admin-con account's fixed command lines for this
+# agent, per weaver-admin-Spec section 2. Written by deploy/create-agent.sh,
+# $CONNECTOR_ROLE role.
+Defaults:$ADMINCON_USER !pam_session
+$ADMINCON_USER ALL=(root) NOPASSWD: $lines
+SUDOERS
+)
+# sudo_rs_note: a sentence naming sudo-rs where it is this box's sudo, or
+# nothing. `sudo --version` asks no credential of either sudo.
+sudo_rs_note() {
+  local version
+  version=$(sudo --version 2>/dev/null) || version=""
+  version=${version%%$'\n'*}
+  case $version in
+    sudo-rs*)
+      printf " This box's sudo is %s, whose visudo refuses \`Defaults:%s !pam_session\`," "$version" "$ADMINCON_USER"
+      printf ' a line the rule must carry (weaver-admin-operator-contract section 2):'
+      printf " make the original sudo the box's sudo, then rerun."
+      ;;
+  esac
+}
+# stage_rule: the rendered rule staged under a dot-name sudo skips, root 0440,
+# and checked by visudo. Prints the stage's path, or removes it and refuses.
+# The stage lives only across its write, its mode and visudo, and sudo never
+# reads a name with a dot in it.
+stage_rule() {
+  local stage
+  stage=$(sudo mktemp "/etc/sudoers.d/.weaver-$NAME.XXXXXX") || die "cannot stage the sudo rule in /etc/sudoers.d"
+  # **Each step is checked here**: this function runs inside `$(...)`, where
+  # bash clears `set -e`, so a failed write or mode would otherwise stage an
+  # empty rule that visudo accepts.
+  if ! printf '%s\n' "$RULE_TEXT" | sudo tee "$stage" >/dev/null || ! sudo chmod 0440 "$stage"; then
+    sudo rm -f -- "$stage"
+    die "cannot write the staged sudo rule $stage, so it was not installed"
+  fi
+  if ! sudo visudo -cqf "$stage"; then
+    sudo rm -f -- "$stage"
+    die "visudo refuses the rendered rule, so it was not installed.$(sudo_rs_note)"
+  fi
+  printf '%s' "$stage"
+}
+rule_stage=$(stage_rule) || exit 1
+sudo rm -f -- "$rule_stage"
+printf '   /etc/sudoers includes /etc/sudoers.d, and visudo accepts the rendered rule\n'
+# **The operator's sudo runs commands as other accounts** (#577): the wall
+# below looks as the agent's accounts, which do not stand yet, so the drop is
+# asked here as `nobody`. On the walk the operator's rule named (root) alone,
+# and the refusal came at the wall, after every account and the territory.
+sudo -n -u nobody true 2>/dev/null \
+  || die "sudo would not run a command as nobody, so it could not look as the agent's accounts at the wall:" \
+         "the operator's sudo must run commands as other accounts, (ALL) and not (root) alone"
+printf "   the operator's sudo runs commands as other accounts\n"
 
 say "accounts"
 # **The box's connector accounts are laid where absent, once per box**, each
@@ -912,12 +1002,12 @@ say "the wall, verified rather than assumed"
 # **The store's gate is the room itself**: the member writes its save points
 # into the state territory, so the member must be able to write there and the
 # agent's own uid must not be able to enter it.
-if sudo -u "$MEMBER_USER" test -w "$STATE_DIR" && sudo -u "$MEMBER_USER" test -x "$STATE_DIR"; then
+if allows "$MEMBER_USER" -w "$STATE_DIR" && allows "$MEMBER_USER" -x "$STATE_DIR"; then
   printf '   %s can write its state room %s\n' "$MEMBER_USER" "$STATE_DIR"
 else
   die "the member cannot write its state room $STATE_DIR: its passage or ownership is wrong"
 fi
-if sudo -u "$AGENT_USER" test -x "$STATE_DIR"; then
+if allows "$AGENT_USER" -x "$STATE_DIR"; then
   die "THE AGENT'S UID CAN ENTER THE STATE ROOM $STATE_DIR: the wall is open"
 else
   printf "   the agent's own uid cannot enter the state room, which is the wall the charter asks for\n"
@@ -925,20 +1015,20 @@ fi
 
 # **The member cannot read the trace**: its ingress is the
 # tee's distillate and nothing more (weaver-state-PRD).
-if sudo -u "$MEMBER_USER" test -r "$HOME_DIR/trace.ndjson"; then
+if allows "$MEMBER_USER" -r "$HOME_DIR/trace.ndjson"; then
   die "THE MEMBER $MEMBER_USER CAN READ THE TRACE $HOME_DIR/trace.ndjson: the trace's group or mode is open"
 else
   printf "   the member cannot read the trace, which is the boundary the state charter asks for\n"
 fi
 # **The member reads none of the access group's files**: it passes the
 # territory by its own group and holds not the access group.
-if sudo -u "$MEMBER_USER" test -r "$DECLARATION"; then
+if allows "$MEMBER_USER" -r "$DECLARATION"; then
   die "THE MEMBER $MEMBER_USER CAN READ THE DECLARATION $DECLARATION: it holds the access group, or the file's mode is open"
 fi
 # **The agent's own uid cannot pass the territory** (the #94 survey's S1):
 # admin's load refuses a sink whose directory the agent's uid can traverse,
 # so a territory it could pass would refuse every load.
-if sudo -u "$AGENT_USER" test -x "$HOME_DIR"; then
+if allows "$AGENT_USER" -x "$HOME_DIR"; then
   die "THE AGENT'S UID CAN PASS THE TERRITORY $HOME_DIR: its group or mode is open, and admin would refuse every load"
 else
   printf "   the agent's own uid cannot pass the territory, which is the trace's denial admin checks\n"
@@ -949,10 +1039,10 @@ fi
 # declaration and cannot rewrite it, the draft or the save points directory,
 # since an account that could rewrite the declaration would choose what admin
 # loads.
-sudo -u "$ADMINCON_USER" test -r "$DECLARATION" \
+allows "$ADMINCON_USER" -r "$DECLARATION" \
   || die "the admin-con account $ADMINCON_USER cannot read the declaration $DECLARATION through $STATE_GROUP and $ACCESS_GROUP: the territory's or the file's group or mode is wrong"
 for f in "$DECLARATION" "$PROMPT" "$SAVE_POINTS"; do
-  if sudo -u "$ADMINCON_USER" test -w "$f"; then
+  if allows "$ADMINCON_USER" -w "$f"; then
     die "THE ACCESS GROUP CAN WRITE $f: the admin-con account could rewrite what admin loads"
   fi
 done
@@ -980,31 +1070,11 @@ printf '   %s holds %s alone, %s holds%s, %s holds%s\n' "$RELAY_USER" "$TRACE_GR
   "$ADMINCON_USER" "${admincon_groups% }" "$GATECON_USER" "${gatecon_groups% }"
 
 say "sudo rule"
-# **Rendered, checked by visudo, then installed root 0440.** Each grant is one
+# **Rendered and checked before anything was made (above), and staged and
+# checked by visudo again here, then installed root 0440.** Each grant is one
 # fixed command line with its arguments, so sudo matches it exactly and the
 # admin-con account can pass none of its own.
-sudo -n grep -qE '^[#@]includedir[[:space:]]+/etc/sudoers\.d([[:space:]]|$)' /etc/sudoers \
-  || die "/etc/sudoers does not include /etc/sudoers.d, so a rule there would never be read"
-lines=""
-for verb in $VERBS; do
-  lines="$lines${lines:+, }$ADMIN_BINARY $verb $NAME"
-done
-RULE_TEXT=$(cat <<SUDOERS
-# weaver-$NAME: the box's admin-con account's fixed command lines for this
-# agent, per weaver-admin-Spec section 2. Written by deploy/create-agent.sh,
-# $CONNECTOR_ROLE role.
-Defaults:$ADMINCON_USER !pam_session
-$ADMINCON_USER ALL=(root) NOPASSWD: $lines
-SUDOERS
-)
-# Staged under a dot-name sudo skips, checked, then moved into place.
-rule_stage=$(sudo mktemp "/etc/sudoers.d/.weaver-$NAME.XXXXXX")
-printf '%s\n' "$RULE_TEXT" | sudo tee "$rule_stage" >/dev/null
-sudo chmod 0440 "$rule_stage"
-if ! sudo visudo -cqf "$rule_stage"; then
-  sudo rm -f -- "$rule_stage"
-  die "visudo refuses the rendered rule, so it was not installed"
-fi
+rule_stage=$(stage_rule) || exit 1
 sudo mv -T -- "$rule_stage" "$SUDO_RULE"
 printf '   %s installed: %s\n' "$SUDO_RULE" "$VERBS"
 sudo -n -l -U "$ADMINCON_USER" | sed -n '/may run the following/,$p' | sed 's/^/   /'
