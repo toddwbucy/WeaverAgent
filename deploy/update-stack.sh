@@ -74,7 +74,9 @@ source "$REPO/deploy/engine-libraries.sh"
 source "$REPO/deploy/install-tuple.sh"
 # **Every drop to an agent's account is the operator's sudo** (#590): this
 # script has no root mode, and nothing of the operator's environment reaches
-# the account (account-drop.sh).
+# the account (account-drop.sh). Its one drop, member_said, follows --install's
+# `sudo -v`, on the path that runs admin through `sudo -n` as well. The plan
+# that verify-lifecycle.sh's root mode runs at step 0 ends before it.
 ROOT_OPERATOR=0
 source "$REPO/deploy/account-drop.sh"
 

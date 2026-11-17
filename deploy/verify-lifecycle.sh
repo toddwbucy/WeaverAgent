@@ -1744,6 +1744,12 @@ if [ "$APPLY" -eq 1 ]; then
     as_account nobody true >/dev/null 2>&1 \
       || die "runuser would not run a command as nobody, with env and true on $DROP_PATH and /proc mounted," \
              "so no look as the agent's accounts could be made"
+    # Root's sudo makes one read, step 1's listing of the admin-con rule,
+    # which asks no rule of root's own (#590), so its presence alone is
+    # checked here.
+    command -v sudo >/dev/null \
+      || die "sudo is not on PATH, and step 1 lists the admin-con account's rule through root's sudo:" \
+             "the box's sudo is the one that rule is written for"
   else
     sudo -v || die "--apply needs sudo"
   fi

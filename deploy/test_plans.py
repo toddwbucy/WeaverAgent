@@ -20,6 +20,7 @@ import re
 import resource
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -108,6 +109,41 @@ def _runs_a_script(args):
                for a in argv)
 
 
+def _socket_input(stdin):
+    # The input a child starts with: the one named, else this process's own.
+    if stdin is None:
+        fd = 0
+    elif isinstance(stdin, int):
+        if stdin < 0:
+            return False  # PIPE, DEVNULL, STDOUT
+        fd = stdin
+    else:
+        try:
+            fd = stdin.fileno()
+        except (AttributeError, OSError, ValueError):
+            return False
+    try:
+        return stat.S_ISSOCK(os.fstat(fd).st_mode)
+    except OSError:
+        return False
+
+
+def guard_shell_files(stdin, env):
+    # **Nothing a shell reads after this guard may rewrite its PATH**: bash
+    # whose standard input is a socket reads ~/.bashrc, as one sshd started,
+    # and a non-interactive bash reads BASH_ENV, so either could put the box's
+    # sudo first after guard_path has read the PATH. A BASH_ENV a test writes
+    # lies under the tests' temporary root.
+    if _socket_input(stdin):
+        raise StandInGuardError("a test hands a shell or a deploy script a socket as its standard input, and bash "
+                                "then reads ~/.bashrc, which can rewrite the PATH this guard read: refused before "
+                                "it runs")
+    if env.get("BASH_ENV") and not _inside(env["BASH_ENV"]):
+        raise StandInGuardError(f"a test hands a shell or a deploy script BASH_ENV {env['BASH_ENV']}, outside "
+                                f"{TEST_ROOT}, which bash reads after this guard read the PATH: refused before it "
+                                "runs")
+
+
 FIXTURE_ENVIRON = "fixture-environ.json"
 
 
@@ -125,6 +161,13 @@ def _hand_settings(env):
 
 class _GuardedPopen(_REAL_POPEN):
     def __init__(self, args, *rest, **kwargs):
+        # **A run that names no input reads /dev/null.** bash whose standard
+        # input is a socket reads ~/.bashrc as one sshd started, which can
+        # rewrite the PATH a test hands it, and the runner's own input may be
+        # one: a check of a PATH lacking runuser found the box's that way, now
+        # and then, until this.
+        if len(rest) < 3 and kwargs.get("stdin") is None:
+            kwargs["stdin"] = subprocess.DEVNULL
         if kwargs.get("env") is not None:
             _hand_settings(kwargs["env"])
         if _runs_a_script(args):
@@ -133,6 +176,7 @@ class _GuardedPopen(_REAL_POPEN):
             guard_path(env.get("PATH", os.defpath), "PATH")
             if "DROP_PATH" in env:
                 guard_path(env["DROP_PATH"], "DROP_PATH")
+            guard_shell_files(rest[2] if len(rest) > 2 else kwargs.get("stdin"), env)
             # A PATH an `env` wrapper hands on in the command line itself.
             for a in ([] if isinstance(args, (str, os.PathLike)) else args):
                 if str(a).startswith("PATH="):
@@ -210,7 +254,13 @@ via_runuser = False
 # so the double answers the command the account would run.
 DROP_PATH = '@DROP_PATH@'
 DROP_NAMED = re.compile(r'@DROP_NAMED@')
+with open('/proc/self/environ', 'rb') as _block:
+    STARTED_WITH = [item for item in _block.read().split(b'\0') if item]
 def clean_start(command, head):
+    # The drop's own block: runuser or sudo started under `env -i` with
+    # DROP_PATH alone (#590), read as it was handed, before the settings
+    # above came back.
+    assert STARTED_WITH == [b'PATH=' + DROP_PATH.encode()], ('a drop handed the caller\'s environment', STARTED_WITH)
     assert command[:len(head)] == head, ('a drop without its session and its relay', command)
     command = command[len(head):]
     want = ['env', '-i', 'PATH=' + DROP_PATH]
@@ -2294,7 +2344,9 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         cgroup beneath the agent's scope under a stand-in cgroup mount, and writes
         a load event, `show` names it, `unload` ends it and removes the cgroup
         unless KEEP_ALIVE is set (or, for the cgroup, KEEP_CGROUP)."""
-        self.env.update(FIXTURE_UID="0", FIXTURE_ACCOUNT_UID=str(os.getuid()))
+        # verify-load.sh probes its drop as nobody before anything loads
+        # (#590), which the double answers only under ALLOW_APPLY_CHECKS.
+        self.env.update(FIXTURE_UID="0", FIXTURE_ACCOUNT_UID=str(os.getuid()), ALLOW_APPLY_CHECKS="1")
         cgroup_fs = self.root / "cgroup-fs"
         agent_cgroup = cgroup_fs / "weaver.slice" / "weaver-m1.scope" / "weaver-m1"
 
@@ -2457,6 +2509,26 @@ esac
                     self.assertIn("no relay stands among the constituents", result.stderr)
                 else:
                     self.assertIn("is not in ", result.stderr)
+
+    def test_verify_load_refuses_a_drop_that_cannot_run_before_its_first_unload(self):
+        """**#590**: verify-load.sh's reads as the agent's accounts discard
+        their own refusal, so a runuser that cannot drop is probed as nobody
+        and refused by name before admin unloads or loads anything.
+        Perturbation: drop the probe, and admin is asked to unload and load."""
+        stub = self.root / "installed" / "bin" / "weaver-admin"
+        verbs = self.root / "admin-verbs"
+        state = self.verify_fixture()
+        text = stub.read_text()
+        stub.write_text(text.replace('#!/bin/sh\n', f'#!/bin/sh\necho "$1" >> {shlex.quote(str(verbs))}\n', 1))
+        self.env["DROP_FAIL"] = "nobody"
+        try:
+            result = self.run_script("verify-load.sh", "m1")
+        finally:
+            self.env.pop("DROP_FAIL")
+            self.end_stand_in(state)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("runuser would not run a command as nobody", result.stderr)
+        self.assertEqual(verbs.read_text().split(), ["validate"])
 
     def test_verify_load_reads_its_unload_and_takes_only_a_load_event(self):
         """**verify-load reads its first unload's answer, and only `load` is a
@@ -6182,9 +6254,10 @@ with open(sys.argv[0] + ".json", "w") as record:
 os.execvp(sys.argv[4], sys.argv[4:])
 """
     REPORTER = """#!/usr/bin/python3 -I
-import json, os, select, sys
+import json, os, select, stat, sys
 r = {"links": [os.readlink(f"/proc/self/fd/{n}") for n in (0, 1, 2)],
-     "inodes": [os.fstat(n).st_ino for n in (0, 1, 2)], "extra": [], "env": {}}
+     "inodes": [os.fstat(n).st_ino for n in (0, 1, 2)],
+     "fifo": [stat.S_ISFIFO(os.fstat(n).st_mode) for n in (0, 1, 2)], "extra": [], "env": {}}
 for fd in range(3, 1024):
     try:
         os.fstat(fd)
@@ -6345,7 +6418,11 @@ sys.exit(code if code >= 0 else 128 - code)
     def assert_handed_nothing(self, record, caller, stdin="/dev/null"):
         self.assertEqual(record["links"][0], stdin, "standard input")
         for n in (1, 2):
-            self.assertTrue(record["links"][n].startswith("pipe:"), record["links"])
+            # A relay's FIFO, unlinked before the command starts (#590), so
+            # no name reaches it.
+            self.assertTrue(record["fifo"][n], record["links"])
+            self.assertTrue(record["links"][n].startswith("pipe:") or record["links"][n].endswith(" (deleted)"),
+                            record["links"])
             self.assertNotIn(record["inodes"][n], caller, f"descriptor {n} is one the caller holds")
         self.assertEqual(record["extra"], [], "a descriptor above 2 reached the account")
         self.assertEqual(record["tty"], errno.ENXIO, "the command could open a controlling terminal")
@@ -6633,6 +6710,31 @@ sys.exit(code if code >= 0 else 128 - code)
                     self.assertEqual(run.returncode, 1, run.stdout)
                     self.assertIn("REFUSED: runuser or setsid is not on PATH", run.stderr)
 
+    def test_lifecycle_root_mode_refuses_without_sudo_for_step_1s_listing(self):
+        # **#590**: root mode asks root's sudo for one read, step 1's listing
+        # of the admin-con rule, and probes nothing of it, so --apply refuses
+        # by name where sudo is not on PATH. Perturbation: drop the check, and
+        # the case without sudo runs on.
+        text = (DEPLOY / "verify-lifecycle.sh").read_text()
+        start = text.index("    command -v sudo >/dev/null \\\n")
+        end = text.index("the box's sudo is the one that rule is written for\"\n", start)
+        check = text[start:text.index("\n", end) + 1]
+        for present in (False, True):
+            with self.subTest(sudo=present):
+                path = self.root / f"path-sudo-{present}"
+                path.mkdir()
+                if present:
+                    (path / "sudo").write_text("#!/bin/sh\nexit 97\n")
+                    (path / "sudo").chmod(0o755)
+                program = 'die() { echo "REFUSED: $*" >&2; exit 1; }\n' + check + "echo RUNS-ON\n"
+                run = subprocess.run([_GUARD_BASH, "-c", program], env={"PATH": str(path)}, text=True,
+                                     capture_output=True, timeout=20)
+                if present:
+                    self.assertEqual((run.returncode, run.stdout), (0, "RUNS-ON\n"), run.stderr)
+                else:
+                    self.assertEqual(run.returncode, 1, run.stdout)
+                    self.assertIn("REFUSED: sudo is not on PATH", run.stderr)
+
     def test_every_script_that_drops_sources_the_one_helper(self):
         # **One helper** (#590, in place of two copies held equal): each
         # script that runs a command as an agent's account sources
@@ -6688,6 +6790,43 @@ class StandInGuardTests(unittest.TestCase):
                     self.assertFalse(marker.exists(), "nothing ran")
             subprocess.run(["bash", "-c", program], env=dict(os.environ), timeout=20, check=True)
             self.assertTrue(marker.exists(), "the suite's own PATH passes")
+
+    def test_a_shell_handed_a_socket_or_a_foreign_bash_env_is_refused_before_anything_runs(self):
+        """Perturbation: let guard_shell_files pass everything, and the socket
+        cases run their command. Take out the /dev/null default, and a run
+        that names no input, made while this process's own input is a socket,
+        is refused."""
+        import socket
+        with tempfile.TemporaryDirectory(prefix="weaver-guard-") as scratch:
+            marker = Path(scratch) / "ran"
+            program = f"echo ran > {shlex.quote(str(marker))}"
+            near, far = socket.socketpair()
+            with near, far:
+                for given in (near, near.fileno()):
+                    with self.subTest(stdin=type(given).__name__):
+                        with self.assertRaises(StandInGuardError) as refused:
+                            subprocess.run(["bash", "-c", program], stdin=given, env=dict(os.environ), timeout=20)
+                        self.assertIn("a socket as its standard input", str(refused.exception))
+                        self.assertFalse(marker.exists(), "nothing ran")
+                with self.subTest(bash_env="/etc/profile"):
+                    with self.assertRaises(StandInGuardError) as refused:
+                        subprocess.run(["bash", "-c", program], env={**os.environ, "BASH_ENV": "/etc/profile"},
+                                       timeout=20)
+                    self.assertIn("BASH_ENV /etc/profile", str(refused.exception))
+                    self.assertFalse(marker.exists(), "nothing ran")
+                # **A run that names no input reads /dev/null**, so this
+                # process's own input being a socket reaches no shell.
+                held = os.dup(0)
+                try:
+                    os.dup2(far.fileno(), 0)
+                    run = subprocess.run(["bash", "-c", "readlink /proc/self/fd/0"], env=dict(os.environ),
+                                         text=True, capture_output=True, timeout=20)
+                finally:
+                    os.dup2(held, 0)
+                    os.close(held)
+                self.assertEqual(run.stdout.strip(), "/dev/null", run.stderr)
+            subprocess.run(["bash", "-c", program], env=dict(os.environ), timeout=20, check=True)
+            self.assertTrue(marker.exists(), "a run that names no input passes")
 
     def test_the_guard_s_sudo_and_runuser_refuse(self):
         for name in ("sudo", "runuser"):

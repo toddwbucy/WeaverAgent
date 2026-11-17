@@ -31,11 +31,15 @@ DROP_RELAY_WAIT=5
 #   nothing runs and the call fails.
 # - Its standard output and standard error are pipes to two relays this
 #   shell holds, one where the caller gave both the same file, so a caller's
-#   `2>&1` keeps its order. **After CMD exits, the relays get
-#   DROP_RELAY_WAIT seconds to drain**: one still held open then, by a
-#   process CMD left behind, is ended, and the call fails saying so. Each
-#   relay is a process substitution, waited for by its pid (measured on bash
-#   5.3).
+#   `2>&1` keeps its order. Each relay is a `cat` run as a job of this shell
+#   on a FIFO made in a directory of its own, mode 0700, and unlinked once
+#   both ends are open, so its status is waited for by its pid in any bash
+#   (a process substitution's is, before bash 5.3, only for the last one).
+#   **After CMD exits, the relays get DROP_RELAY_WAIT seconds to drain**,
+#   polled by the `read` builtin on a third FIFO no one writes: one still
+#   held open then, by a process CMD left behind, is ended, and the call
+#   fails saying so. Every caller captures the output or discards it, so no
+#   relay waits on a slow reader.
 # - It runs under `setsid -w`, in a session of its own with no controlling
 #   terminal: before runuser in root mode, and inside sudo in the operator's,
 #   since sudo finds the operator's cached credential by terminal, and with
@@ -58,7 +62,7 @@ DROP_RELAY_WAIT=5
 # The status is CMD's, else 1 where a relay was held open, else the standard
 # output relay's, else the standard error relay's.
 as_account() {
-  local account input=/dev/null named=() setsid runuser sudo
+  local account input=/dev/null named=() setsid runuser sudo relays
   if [ "${1:-}" = --stdin ]; then input=$2; shift 2; fi
   account=$1
   shift
@@ -92,33 +96,43 @@ as_account() {
     done
     merged=0
     [ ! /proc/self/fd/1 -ef /proc/self/fd/2 ] || merged=1
+    relays=$(mktemp -d) && mkfifo -m 600 -- "$relays/out" "$relays/err" "$relays/tick" || {
+      echo "as_account: no command runs as $account, since its relays could not be made" >&2
+      [ -z "$relays" ] || rm -rf -- "$relays"
+      exit 1
+    }
     err_pid=
-    exec {out}> >(exec cat)
+    cat <"$relays/out" &
     out_pid=$!
     if [ "$merged" -eq 0 ]; then
-      exec {err}> >(exec cat >&2 {out}>&-)
+      cat <"$relays/err" >&2 &
       err_pid=$!
     fi
+    exec {out}>"$relays/out"
+    [ "$merged" -eq 1 ] || exec {err}>"$relays/err"
+    exec {tick}<>"$relays/tick"
+    rm -rf -- "$relays"
     drop= sig=
     trap 'sig=INT; [ -z "$drop" ] || kill -TERM "$drop"' INT
     trap 'sig=QUIT; [ -z "$drop" ] || kill -TERM "$drop"' QUIT
     trap 'sig=TERM; [ -z "$drop" ] || kill -TERM "$drop"' TERM
     trap 'sig=HUP; [ -z "$drop" ] || kill -TERM "$drop"' HUP
     if [ "$merged" -eq 0 ]; then
-      "$@" <&0 >&"$out" 2>&"$err" {out}>&- {err}>&- &
+      "$@" <&0 >&"$out" 2>&"$err" {out}>&- {err}>&- {tick}>&- &
     else
-      "$@" <&0 >&"$out" 2>&1 {out}>&- &
+      "$@" <&0 >&"$out" 2>&1 {out}>&- {tick}>&- &
     fi
     drop=$!
     [ -z "$sig" ] || kill -TERM "$drop"
     until wait "$drop"; rc=$?; ! kill -0 "$drop" 2>/dev/null; do :; done
     exec {out}>&-
     [ "$merged" -eq 1 ] || exec {err}>&-
-    for ((tick = 0; tick < DROP_RELAY_WAIT * 10; tick++)); do
+    for ((n = 0; n < DROP_RELAY_WAIT * 100; n++)); do
       [ -z "$sig" ] || break
       kill -0 "$out_pid" 2>/dev/null || { [ -n "$err_pid" ] && kill -0 "$err_pid" 2>/dev/null; } || break
-      sleep 0.1
+      read -r -t 0.01 -u "$tick"
     done
+    exec {tick}>&-
     held=0
     for relay in "$out_pid" $err_pid; do
       if kill -0 "$relay" 2>/dev/null; then

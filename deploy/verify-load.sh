@@ -60,7 +60,8 @@ held_closed() {
 # root's, so root's own sudo is never asked, and nothing of root's
 # environment reaches the account (account-drop.sh). Each read as an account
 # discards its own refusal, so a box without util-linux's runuser and setsid
-# is refused here, by name, before anything loads.
+# is refused here, by name, and one whose runuser cannot drop before the
+# first unload.
 ROOT_OPERATOR=1
 source "$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")/account-drop.sh"
 command -v runuser >/dev/null && command -v setsid >/dev/null \
@@ -160,6 +161,12 @@ member_said() {
   [ -n "$said" ] && { plan "the state member last said:"; printf '%s\n' "$said" | sed 's/^/     /'; }
   return 0
 }
+# **The drop is probed before anything acts** (#590): the reads as the
+# agent's accounts discard their own refusal, so a runuser that cannot drop
+# is named here rather than read as an empty log or a refused header.
+as_account nobody true >/dev/null 2>&1 \
+  || die "runuser would not run a command as nobody, with env and true on $DROP_PATH and /proc mounted," \
+         "so the reads as the agent's accounts could not be made"
 # **The first unload is read from its answer** (#99 area 2 review, K8, the
 # sibling of S22): a refused unload leaves a run standing, whose state and
 # constituents the checks below would then read as this load's. The count is
