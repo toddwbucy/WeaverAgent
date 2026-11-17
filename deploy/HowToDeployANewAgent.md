@@ -146,10 +146,18 @@ engine this build provides (#1, #86), and any other engine refuses as one this b
 does not provide. `--engine none` is refused too, and section 3 makes that agent by
 hand. `--session` names the session the declaration opens, default `<name>-001`. `--spu
 <path>` gives this agent its own SPU, written as its root's `spu-binary` in place of the
-stack record's (a separately installed Rust SPU, for instance), and without it the
-agent serves from the stack's. `--connector-role operator|observer` chooses which
-command lines the agent's sudo rule grants the box's admin-con account, section 5,
-default `operator`.
+stack record's (a separately installed Rust SPU, for instance), and without it the agent
+serves from the stack's. `--connector-role operator|observer` chooses which command
+lines the agent's sudo rule grants the box's admin-con account, section 5, default
+`operator`. Three options set the decoder (#580): `--devices i,j,...` names its device
+ordinals in the box's PCI bus order, the given order kept as the shard order, default
+`0`. `--context-capacity n` sets the session's context in tokens, default 32768.
+`--turn-context continuous|independent` writes the top-level election, and without it
+nothing is written and the agent reads `continuous`. Each refuses before anything is
+made where a load would refuse it: an empty device set, an ordinal named twice, a
+capacity that is not a count from 1 to 4294967295, or a third turn-context word. Whether
+the model spans the devices and each card has room is the SPU's to judge at the load,
+which `verify-load.sh` shows.
 
 Apply first checks that `/etc/sudoers` includes `/etc/sudoers.d` and that visudo accepts
 the rendered rule, and refuses before it makes anything otherwise. It then lays the
@@ -174,29 +182,30 @@ observer), the way admin-con will. A gate-con or admin-con process already runni
 the new agent's groups only when it restarts, since a process's groups are fixed at its
 start.
 
-The declaration the script writes is a working default: the artifact, `devices = [0]`,
-an empty tool set (no tool is offered, #29), surprisal on, the sink in the territory,
-and the store's engine, and its `allowed-uids` names the gate-con account's uid alone.
-It carries no system prompt: the prompt is state, on the operator's ruling of
-2026-10-06, and a seeding line is taken from the operator's uid alone, which this
-declaration's gate does not admit. **An agent laid this way has no seeding sender**
+The declaration the script writes is a working default: the artifact, the devices and
+the context the options above name (`[0]` and 32768 tokens by default), an empty tool
+set (no tool is offered, #29), surprisal on, the sink in the territory, and the store's
+engine, and its `allowed-uids` names the gate-con account's uid alone. It carries no
+system prompt: the prompt is state, on the operator's ruling of 2026-10-06, and a
+seeding line is taken from the operator's uid alone, which this declaration's gate does
+not admit. **An agent laid this way has no seeding sender**
 (`weaver-gate-world-contract` section 2, the operator's ruling of 2026-11-10), and how
 its prompt enters is deferred to its own act, section 4. Beside the declaration the
 script still writes the draft, `<territory>/system-prompt.md`, a plain prompt that is
-yours to edit. Edit `agent.toml` for a wider context before validating. Both files
+yours to edit. To change a value later, edit `agent.toml` before validating. Both files
 are root:weaver-<name>-admin 0640: `sudoedit
 <agent-directory>/<name>/weaver-<name>/agent.toml` edits one, and you read either
 through the access group. The fields are in
 `docs/technical/weaver-agent/agent-declaration.md`, a snapshot of 2026-08-25 that still
-shows an identity table, and
-`docs/crates/weaver-types/weaver-types-Spec.md` section 2 is the authority. A required
-key absent, or any key misspelled, refuses the parse by name, and the optional keys
-(`tool-set`, `binding-kind`, `gate-instruction`, `state-election`, `state-store`,
-`restore`, `lifecycle`, `turn-context`) carry the absence their Spec rules.
-`turn-context = "independent"` (#423), a top-level key, answers every turn from the
-seated prompt and that turn's request alone, the decode context returned to the prompt
-before each turn and the load event naming the election. Absent, it is `continuous`,
-the conversation accumulating as before.
+shows an identity table, and `docs/crates/weaver-types/weaver-types-Spec.md` section 2
+is the authority. A required key absent, or any key misspelled, refuses the parse by
+name, and the optional keys (`tool-set`, `binding-kind`, `gate-instruction`,
+`state-election`, `state-store`, `restore`, `lifecycle`, `turn-context`) carry the
+absence their Spec rules. `turn-context = "independent"` (#423), a top-level key that
+`--turn-context independent` writes, answers every turn from the seated prompt and that
+turn's request alone, the decode context returned to the prompt before each turn and the
+load event naming the election. Absent, it is `continuous`, the conversation
+accumulating as before.
 
 **Electing the shell** (#29). `tool-set = ["sh"]` offers the agent one tool, a POSIX `sh`
 (busybox's ash) over the stack's listed commands (`<prefix>/bin/busybox.applets`), in
