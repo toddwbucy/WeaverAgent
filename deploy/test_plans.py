@@ -8310,10 +8310,10 @@ def legacy_log_judgement(script):
     #598): resolved, taken_with, the loop over the directories that stand and
     the loop over the entries left, as the script runs them once every target
     is known."""
-    start = script.index("resolved() {\n")
+    start = script.index("taken_with() {\n")
     end_line = "done < <([ ${#LOG_LEFT[@]} -eq 0 ] || printf '%s\\0' \"${!LOG_LEFT[@]}\" | sort -z)\n"
     end = script.index(end_line, start) + len(end_line)
-    return script[start:end]
+    return shell_function(script, "resolved") + script[start:end]
 
 
 class DecommissionTests(unittest.TestCase):
@@ -9135,7 +9135,8 @@ class DecommissionTests(unittest.TestCase):
         directory as it is read, and it stands in the first two. Say an entry
         that is a target again, and the fourth case names the folder. Drop a home's
         equality or its slash, or judge it against the agents' folders alone,
-        and a home line fails."""
+        and a home line fails. Count a target that is a link as holding the
+        home it points into, and that home reads as archived with the link."""
         script = self.script
         q = shlex.quote
         loop = script[script.index("declare -A LOG_LEFT=() LOG_DIRS_SAID=()\n"):]
@@ -9206,10 +9207,16 @@ class DecommissionTests(unittest.TestCase):
             (legacy / "home").mkdir()
             homes_loop = script[script.index('HOMES=()\nfor u in "${WEAVER_USERS[@]}"; do\n'):]
             homes_loop = homes_loop[:homes_loop.index("\ndone\n") + len("\ndone\n")]
-            homes = {"weaver-m1": str(legacy / "home"), "weaver-m2": str(legacy), "weaver-m3": str(near)}
+            # A target that is a link holds no home: the archive keeps the link
+            # and the purge removes it, never the home it points into.
+            (top / "linked" / "home").mkdir(parents=True)
+            (top / "lnk").symlink_to(top / "linked")
+            homes = {"weaver-m1": str(legacy / "home"), "weaver-m2": str(legacy), "weaver-m3": str(near),
+                     "weaver-m4": str(top / "linked" / "home")}
             program = (self.script_options() + self.passwd_stub(homes)
-                       + "WEAVER_USERS=(weaver-m1 weaver-m2 weaver-m3)\nOWN_TERRITORIES=()\n"
-                       + f"AGENT_FOLDERS=({q(str(folder))})\nTERRITORY_PATHS=({q(str(folder))} {q(str(legacy))})\n"
+                       + "WEAVER_USERS=(weaver-m1 weaver-m2 weaver-m3 weaver-m4)\nOWN_TERRITORIES=()\n"
+                       + f"AGENT_FOLDERS=({q(str(folder))})\n"
+                       + f"TERRITORY_PATHS=({q(str(folder))} {q(str(legacy))} {q(str(top / 'lnk'))})\n"
                        + "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
                        + shell_function(script, "home_within") + homes_loop)
             run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
@@ -9218,7 +9225,9 @@ class DecommissionTests(unittest.TestCase):
                 f"PLAN {legacy / 'home'}  (home of weaver-m1, archived with {legacy})",
                 f"PLAN {legacy}  (home of weaver-m2, archived with {legacy})",
                 f"PLAN {near}  (home of weaver-m3): outside /home and everything the purge takes, left in place, "
-                "untouched"], run.stdout)
+                "untouched",
+                f"PLAN {top / 'linked' / 'home'}  (home of weaver-m4): outside /home and everything the purge "
+                "takes, left in place, untouched"], run.stdout)
 
     # agent_folders and territories_outside look as root: every fixture path
     # is root's but those STRANGERS names, a territory `weaver-<a>` carries
@@ -9309,7 +9318,7 @@ class DecommissionTests(unittest.TestCase):
                        + f"declare -A TERRITORY_BASES=([{q(str(base_b))}]=1)\n"
                        + "".join(shell_function(script, fn) for fn in (
                            "in_operator_home", "is_box_account", "strip_suffix", "agent_folders", "folder_bases",
-                           "left_in_base", "spans_a_base", "candidate", "home_projects", "plan_home_quotas",
+                           "resolved", "left_in_base", "spans_a_base", "candidate", "home_projects", "plan_home_quotas",
                            "remove_home_quotas", "territories_outside", "home_within", "purge_candidates"))
                        + segment("# **The bases an agent's own facts name join the record's**", "# **home_projects FOLDER...")
                        + through_line("HOME_PROJECTS=()\n", 'plan_home_quotas "${HOME_PROJECTS[@]}"')
@@ -9366,11 +9375,41 @@ class DecommissionTests(unittest.TestCase):
             custom.mkdir(parents=True)
             (outer / "stray").mkdir()
             program = (f"declare -A TERRITORY_BASES=([{shlex.quote(str(outer))}]=1 [{shlex.quote(str(inner))}]=1)\n"
-                       + shell_function(self.script, "left_in_base") + 'left_in_base "$@"')
+                       + shell_function(self.script, "resolved") + shell_function(self.script, "left_in_base")
+                       + 'left_in_base "$@"')
             run = subprocess.run(["bash", "-c", "set -euo pipefail\n" + program, "x", str(outer), str(folder),
                                   str(custom)], text=True, capture_output=True, timeout=20)
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertEqual(run.stdout.splitlines(), [str(outer / "stray")])
+
+    def test_a_link_taken_is_compared_as_the_link_and_a_base_named_through_one_as_its_directory(self):
+        """**CodeRabbit on #598**: the purge removes a link and never what it
+        points to, so left_in_base compares each path taken as the purge
+        removes it. A link taken that points at an entry of the base leaves
+        the entry named as left, and a link taken that is itself an entry is
+        not named. A base is never removed, so one named through a link is its
+        directory, and the entry that is that base is not named. Perturbations:
+        compare what is taken canonical, as before, and the entry pointed at
+        is dropped while the link is named. Compare the bases resolved, and
+        the base named through a link is named."""
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            outer = top / "srv"
+            (outer / "stuff").mkdir(parents=True)
+            (outer / "inner").mkdir()
+            (top / "elsewhere").mkdir()
+            (outer / "lnk").symlink_to(top / "elsewhere")
+            (top / "legacy").symlink_to(outer / "stuff")
+            (top / "inner-link").symlink_to(outer / "inner")
+            q = shlex.quote
+            program = (f"declare -A TERRITORY_BASES=([{q(str(outer))}]=1 [{q(str(top / 'inner-link'))}]=1)\n"
+                       + shell_function(self.script, "resolved") + shell_function(self.script, "left_in_base")
+                       + 'left_in_base "$@"')
+            run = subprocess.run(["bash", "-c", self.script_options() + program, "x", str(outer),
+                                  str(top / "legacy"), str(outer / "lnk")],
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(run.stdout.splitlines(), [str(outer / "stuff")])
 
     def test_a_base_under_the_operators_home_is_said_once(self):
         # **The self-check on #594**: a base the record names under the
@@ -10324,7 +10363,8 @@ class RoundOneOf79Tests(unittest.TestCase):
                            '*) case "$2" in %u) echo ' + str(STRANGER_UID) + ' ;; *) command stat "$@" ;; esac ;; '
                            'esac; }\n')
             program = (stat_double + "declare -A AGENTS=([m1]=1 [old]=1 [alice]=1 [web]=1)\n"
-                       + shell_function(script, "agent_folders") + shell_function(script, "left_in_base")
+                       + shell_function(script, "agent_folders") + shell_function(script, "resolved")
+                       + shell_function(script, "left_in_base")
                        + 'mapfile -t F < <(agent_folders "$1")\nprintf "folder %s\\n" "${F[@]}"\n'
                        + 'left_in_base "$1" "${F[@]}" | sort | sed "s/^/left /"')
             run = subprocess.run(["bash", "-c", program, "x", str(base)], env={**os.environ, "ROOTS_OWNED": roots_owned},
@@ -10412,7 +10452,8 @@ class RoundOneOf79Tests(unittest.TestCase):
                            + "free_name() { printf '%s' \"$1\"; }\ntarz() { : > \"$1\"; }\nas_op() { \"$@\"; }\n"
                            + shell_function(script, "spans_a_base") + shell_function(script, "candidate")
                            + shell_function(script, "purge_candidates") + shell_function(script, "purge_lines_outside")
-                           + shell_function(script, "purge_lines_within") + shell_function(script, "left_in_base")
+                           + shell_function(script, "purge_lines_within") + shell_function(script, "resolved")
+                           + shell_function(script, "left_in_base")
                            + archive_path + "\n" + tail)
                 ran = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
                 self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)

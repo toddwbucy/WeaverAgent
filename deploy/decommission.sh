@@ -553,10 +553,22 @@ folder_bases() {
     if [[ ${found[$x]} == *$'\n'"$x/$a"$'\n'* ]]; then printf '%s\n' "$x"; fi
   done | sort -u
 }
+# **resolved PATH: PATH with its directory resolved and its last name kept**,
+# or PATH as written where its directory does not resolve. A link is compared
+# as the link, since the purge's `rm -rf` removes a link and never what it
+# points to.
+resolved() {
+  local d
+  d=$(realpath -e -- "$(dirname -- "$1")" 2>/dev/null) || { printf '%s' "$1"; return 0; }
+  printf '%s/%s' "${d%/}" "$(basename -- "$1")"
+}
 # **left_in_base BASE TAKEN...: each entry directly in BASE that is none of
 # TAKEN**, one per line, which the plan names as left in place (the Planner's
 # ruling of 2026-11-16 on #578), so the operator sees what the purge leaves.
-# BASE and every TAKEN are compared canonical. **An entry that is a base, or
+# BASE is compared canonical, and **every TAKEN as the purge removes it**,
+# resolved, so a link is the link and never what it points to (CodeRabbit on
+# #598). A base is compared canonical, since none is removed and one named
+# through a link is its directory. **An entry that is a base, or
 # holds a base or anything TAKEN, is not named as left** (the self-check on
 # #594): a base found from an agent's facts can sit in another, and the
 # purge takes what such an entry holds. A base's own entries are named by
@@ -565,7 +577,8 @@ left_in_base() {
   local base e t taken=()
   base=$(realpath -e -- "$1" 2>/dev/null) || return 0
   shift
-  for t in "$@" "${!TERRITORY_BASES[@]}"; do
+  for t in "$@"; do taken+=("$(resolved "$t")"); done
+  for t in "${!TERRITORY_BASES[@]}"; do
     taken+=("$(realpath -e -- "$t" 2>/dev/null || printf '%s' "$t")")
   done
   while IFS= read -r -d '' e; do
@@ -797,15 +810,6 @@ for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do
   TERRITORY_PATHS+=("$d")
   plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"
 done
-# **resolved PATH: PATH with its directory resolved and its last name kept**,
-# or PATH as written where its directory does not resolve. A link is compared
-# as the link, since the purge's `rm -rf` removes a link and never what it
-# points to.
-resolved() {
-  local d
-  d=$(realpath -e -- "$(dirname -- "$1")" 2>/dev/null) || { printf '%s' "$1"; return 0; }
-  printf '%s/%s' "${d%/}" "$(basename -- "$1")"
-}
 # **taken_with PATH: the first target PATH is or lies under, or nothing**
 # (CodeRabbit on #598). The targets are TERRITORY_PATHS: every agent's folder,
 # every root's own territory, the earlier layout's directory and each legacy
@@ -848,12 +852,16 @@ while IFS= read -r -d '' e; do
   plan "${e//[$'\n\t']/?}  beside the legacy log ${LOG_LEFT[$e]}, and taken by nothing this discovery found: left in place, untouched"
 done < <([ ${#LOG_LEFT[@]} -eq 0 ] || printf '%s\0' "${!LOG_LEFT[@]}" | sort -z)
 # **home_within HOME FOLDER...: the folder HOME is or stands in**, canonical,
-# or nothing. A home in an agent's folder (#578) goes with the folder.
+# or nothing. A home in an agent's folder (#578) goes with the folder. **A
+# FOLDER that is a link holds no home** (CodeRabbit on #598): the archive
+# keeps the link and the purge removes it, never what it points to, so a home
+# it points into is neither archived nor purged with it.
 home_within() {
   local h f c
   h=$(realpath -e -- "$1" 2>/dev/null) || return 0
   shift
   for f in "$@"; do
+    [ -L "$f" ] && continue
     c=$(realpath -e -- "$f" 2>/dev/null) || continue
     case "$h" in "$c" | "$c"/*) printf '%s' "$f"; return 0 ;; esac
   done
