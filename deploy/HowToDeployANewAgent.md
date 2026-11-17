@@ -119,24 +119,38 @@ group in one shell.
 - The operator's own sudo runs commands as other accounts (`(ALL)`, not `(root)` alone):
   the wall checks run as the agent's accounts, and a drop that sudo refuses stops the
   run, naming sudo.
-- A command `create-agent.sh` or `verify-lifecycle.sh` runs as another account is handed
-  nothing of yours but what the step names, in either mode, since any process of that
-  account's uid can read its environment and open its descriptors through `/proc` while
-  it runs. Its standard input is `/dev/null`, or a file the script opens for it. Its
-  standard output and standard error are pipes the script holds and copies on. Every
-  other descriptor the script holds is closed, and where `/proc` is not mounted, nothing
-  is run. It runs under `setsid` (util-linux), with
-  no controlling terminal, and under `env -i`, with sudo's default `secure_path` as
-  `PATH` and the variables the step names alone. An interrupt or a hangup still ends it,
-  since the script passes the signal on. Two windows stay open (#590): the `env` that
-  `runuser` or sudo starts holds the caller's environment, or what sudo's `env_keep`
-  passes, until it replaces it, and under sudo, the `env` and `timeout` that start the
-  command hold the terminal sudo hands them. The reads `verify-load.sh` and
-  `update-stack.sh` make as the agent's accounts go through sudo alone, with a named input
-  and a captured output, and are #590's too. In the operator's mode these drops find the
-  credential `sudo -v` caches by sudo's default `timestamp_type`, the terminal. Under the
-  non-default `timestamp_type=ppid` they do not, since their sudo's parent is a subshell
-  of the script, so the run is refused at its first drop.
+- **Running commands as an account.** A command a deploy script runs as another account
+  is handed nothing of yours but what the step names, in either mode, since any process
+  of that account's uid can read its environment and open its descriptors through
+  `/proc` while it runs. `create-agent.sh`, `verify-lifecycle.sh`, `verify-load.sh` and
+  `update-stack.sh` all run such commands through one helper, `deploy/account-drop.sh`
+  (#590):
+  - `runuser` or sudo itself starts under `env -i`, with sudo's default `secure_path` as
+    `PATH` and nothing else. The command starts under a second `env -i`, with that
+    `PATH` and the variables the step names alone. So no environment block a process of
+    the account's uid holds carries anything of yours or of what sudo's `env_keep`
+    names, and the command's own block holds that `PATH` and the named variables alone.
+  - Its standard input is `/dev/null`, or a file the script opens for it. Every other
+    descriptor the script holds is closed, and where `/proc` is not mounted, nothing is
+    run.
+  - Its standard output and standard error are pipes the script holds and copies on.
+    After the command exits they get 5 seconds to drain: a process the command left
+    holding them then is cut off, and the step fails saying so.
+  - It runs under `setsid` (util-linux), with no controlling terminal. An interrupt or a
+    hangup still ends it, since the script passes the signal on.
+
+  **One window stays open, #590's one open item** (the Planner's ruling of 2026-11-17):
+  under sudo, the `timeout` that sudo starts as the account holds the terminal sudo
+  hands it, until the `setsid` it starts takes the command out of that terminal, before
+  the command's own `env` runs. `timeout` runs no code of the account's. In root mode
+  `setsid` runs before `runuser`, so no process of the account's holds a terminal. In
+  the operator's mode these drops find the credential `sudo -v` caches by sudo's default
+  `timestamp_type`, the terminal. Under the non-default `timestamp_type=ppid` they do
+  not, since their sudo's parent is a subshell of the script, so the run is refused at
+  its first drop.
+- `runuser` and `setsid` (util-linux) are on every box: `verify-load.sh` runs as root,
+  and makes its reads as the agent's accounts through `runuser`, and refuses by name
+  without them.
 - On a single-purpose appliance, where root is the operator, `runuser` (util-linux) is
   on the box: in root mode the wall checks and the closing probe run as the agent's
   accounts through it, and no sudo credential is asked for. The include and the
@@ -560,19 +574,20 @@ so the checks it cannot make are made against the loaded agent.
 **On a single-purpose appliance root runs it with `--root-operator`** (#576), from
 root's own login, and passes the flag to `create-agent.sh`. Root steps run directly, the
 looks as the agent's accounts go through `runuser`, and no sudo credential is asked for.
-The admin-con rule's listing and `verify-load.sh`'s own drops still go through root's
-sudo, which the run checks before anything acts. Root reaches every file and the gate's
-socket by capability, and admin exempts uid 0 from the reach judgment, so the checks
-that capability voids are made another way. The groups check finds root in none of the
-agent's groups. The measurement moves the rule to uid 0, where root's ordinary turn and
-root's seeding line are both answered. The seed is in the save point published at the
-unload that follows, and the restore of an older save point right after leaves it
-behind. The perturbation moves the rule to the admin-con account's uid, which does not
-hold the agent's own group `weaver-<name>`, and validate refuses. The final `show` is
-asked as gate-con, a caller that is not root. At step 0 the run says that
-`update-stack.sh`'s reads through the operator's groups cannot refuse as root. Step 8's
-refusal reads the root's key and fires as root too. At step 3 the run says that a cause
-of 0 no longer tells whether admin read `SUDO_UID` or fell back to 0.
+The admin-con rule's listing still goes through root's sudo (`sudo -l -U`), and
+`verify-load.sh`'s reads as the agent's accounts go through `runuser`, as every root
+drop does (#590). Root reaches every file and the gate's socket by capability, and admin
+exempts uid 0 from the reach judgment, so the checks that capability voids are made
+another way. The groups check finds root in none of the agent's groups. The measurement
+moves the rule to uid 0, where root's ordinary turn and root's seeding line are both
+answered. The seed is in the save point published at the unload that follows, and the
+restore of an older save point right after leaves it behind. The perturbation moves the
+rule to the admin-con account's uid, which does not hold the agent's own group
+`weaver-<name>`, and validate refuses. The final `show` is asked as gate-con, a caller
+that is not root. At step 0 the run says that `update-stack.sh`'s reads through the
+operator's groups cannot refuse as root. Step 8's refusal reads the root's key and fires
+as root too. At step 3 the run says that a cause of 0 no longer tells whether admin read
+`SUDO_UID` or fell back to 0.
 
 `load` never ends a run that stands: it answers `agent_running` and leaves the decision
 to its caller, who reads `show` and issues `unload`.

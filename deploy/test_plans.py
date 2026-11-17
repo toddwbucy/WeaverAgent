@@ -37,13 +37,14 @@ ACCESS_LOOK = 'if [ "$1" "$2" ]; then printf yes; else printf no; fi'
 # so a new root step cannot reach the real command in a root-mode test.
 ROOT_STEPS = ("useradd", "groupadd", "usermod", "install", "chown", "chgrp", "chmod", "tee", "cp", "mv", "rm",
               "mktemp", "visudo", "chattr", "setquota", "repquota")
-# **The drop's clean start** (B3): the PATH as_account hands a command run as
-# another account, sudo's default secure_path, and the rule that tells a
-# leading VAR=value from the command, as both scripts and the double read it.
+# **The drop's clean start** (B3, #590): the PATH as_account hands a command
+# run as another account, sudo's default secure_path, and the rule that tells
+# a leading VAR=value from the command, as account-drop.sh and the double
+# read it.
 DROP_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 DROP_NAMED = r"^[A-Za-z_][A-Za-z0-9_]*="
 def look_as(account, flag, path):
-    return ["sudo", "-n", "-u", account, "env", "-i", "PATH=" + DROP_PATH, "timeout", "0", "setsid", "-w",
+    return ["sudo", "-n", "-u", account, "timeout", "0", "setsid", "-w", "env", "-i", "PATH=" + DROP_PATH,
             "sh", "-c", ACCESS_LOOK, "sh", flag, path]
 
 
@@ -107,8 +108,25 @@ def _runs_a_script(args):
                for a in argv)
 
 
+FIXTURE_ENVIRON = "fixture-environ.json"
+
+
+def _hand_settings(env):
+    # **A drop clears the environment** (#590): as_account starts runuser and
+    # sudo under `env -i`, so a stand-in for either reads the run's settings
+    # from FIXTURE_ENVIRON beside it, written here for every directory of the
+    # run's PATH under the tests' temporary root that holds one. A test runs
+    # its scripts one at a time, so each run's file is its own.
+    for d in env.get("PATH", "").split(os.pathsep):
+        if d and _inside(d) and any(os.path.isfile(os.path.join(d, n)) for n in ("sudo", "runuser")):
+            with open(os.path.join(d, FIXTURE_ENVIRON), "w") as settings:
+                json.dump(dict(env), settings)
+
+
 class _GuardedPopen(_REAL_POPEN):
     def __init__(self, args, *rest, **kwargs):
+        if kwargs.get("env") is not None:
+            _hand_settings(kwargs["env"])
         if _runs_a_script(args):
             env = kwargs.get("env")
             env = os.environ if env is None else env
@@ -127,6 +145,12 @@ DOUBLE = r'''#!/usr/bin/env python3
 import json, os, pathlib, re, shutil, subprocess, sys, time
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
+# **A drop starts the double clean** (#590): as_account hands runuser and sudo
+# `env -i` with DROP_PATH alone, so the run's settings, which the suite writes
+# beside the double, come back here, PATH among them.
+if 'FIXTURE_ROOT' not in os.environ:
+    settings = pathlib.Path(sys.argv[0]).parent / '@FIXTURE_ENVIRON@'
+    if settings.exists(): os.environ.update(json.loads(settings.read_text()))
 root = pathlib.Path(os.environ['FIXTURE_ROOT'])
 if name == 'stat':
     # **The fixture's files are root's.** Every file the tests make is the
@@ -179,20 +203,21 @@ with open(os.environ['CALLS'], 'a') as log:
 if name == 'as-root':
     name = 'sudo'
 via_runuser = False
-# **Every drop as_account makes starts clean** (B3): runuser and sudo are
-# each handed `env -i PATH=<DROP_PATH>`, then the VAR=value pairs the script
-# names, by the scripts' own rule, and sudo then `timeout 0 setsid -w`. Each
-# is checked and set aside here, so the double answers the command the
-# account would run.
+# **Every drop as_account makes starts clean** (B3, #590): runuser is handed
+# `env -i PATH=<DROP_PATH>` and the VAR=value pairs the script names, by the
+# helper's own rule, and sudo the same after `timeout 0 setsid -w`, so the
+# account's env starts with no terminal. Each is checked and set aside here,
+# so the double answers the command the account would run.
 DROP_PATH = '@DROP_PATH@'
 DROP_NAMED = re.compile(r'@DROP_NAMED@')
-def clean_start(command, tail):
+def clean_start(command, head):
+    assert command[:len(head)] == head, ('a drop without its session and its relay', command)
+    command = command[len(head):]
     want = ['env', '-i', 'PATH=' + DROP_PATH]
     assert command[:len(want)] == want, ('a drop that does not start clean', command)
     command = command[len(want):]
     while command and DROP_NAMED.match(command[0]): command = command[1:]
-    assert command[:len(tail)] == tail, ('a drop without its session and its relay', command)
-    return command[len(tail):]
+    return command
 if name == 'runuser':
     assert args[0] == '-u' and args[2] == '--', ('runuser as create-agent.sh calls it', args)
     name, args, via_runuser = 'sudo', ['-n', '-u', args[1], *clean_start(args[3:], [])], True
@@ -443,18 +468,13 @@ elif name == 'sudo':
     if command[0] == '-u':
         command.pop(0)
         identity = command.pop(0)
-    if identity and command[:2] == ['env', '-i']:
+    if identity and command[:1] in (['env'], ['timeout']):
         command = clean_start(command, ['timeout', '0', 'setsid', '-w'])
     op, *rest = command
     # **A drop sudo refuses** (#577): the walk's operator rule named (root)
     # alone, so `sudo -u <account>` failed before any look was made.
     if identity and os.environ.get('DROP_FAIL') in (identity, 'all'):
         print(f'sudo: you are not permitted to run commands as {identity}', file=sys.stderr)
-        sys.exit(1)
-    # A drop root's own sudo refuses where runuser's passes (the self-check
-    # on B2): the verifier's root mode checks both.
-    if identity and not via_runuser and os.environ.get('SUDO_DROP_FAIL') == identity:
-        print('sudo: a password is required', file=sys.stderr)
         sys.exit(1)
     if op == '--version':
         print(os.environ.get('SUDO_VERSION', 'Sudo version 1.9.16'))
@@ -614,7 +634,7 @@ elif name == 'ldd':
 else: sys.exit(99)
 '''
 DOUBLE = DOUBLE.replace('@ACCESS_LOOK@', repr(ACCESS_LOOK)).replace('@DROP_PATH@', DROP_PATH)
-DOUBLE = DOUBLE.replace('@DROP_NAMED@', DROP_NAMED)
+DOUBLE = DOUBLE.replace('@DROP_NAMED@', DROP_NAMED).replace('@FIXTURE_ENVIRON@', FIXTURE_ENVIRON)
 
 # The six sampling defaults the harness reads from every serving declaration
 # (weaver-harness-Spec section 6.1), at the values create-agent.sh writes. A
@@ -737,7 +757,7 @@ class PlanTests(unittest.TestCase):
                     "USER": "fixture-no-home", "PROBE": str(self.root / "probe"),
                     "FIXTURE_ROOT": str(self.root)}
         for name in ("BASH_ENV", "FIXTURE_MOUNT", "FIXTURE_REPQUOTA", "FIXTURE_REPQUOTA_FAILS", "SUDO_USER", "SUDO_UID", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
-                     "VISUDO_FAIL", "DROP_FAIL", "SUDO_DROP_FAIL", "UUTILS_TEST", "SUDO_VERSION", "TEE_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
+                     "VISUDO_FAIL", "DROP_FAIL", "UUTILS_TEST", "SUDO_VERSION", "TEE_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES",
                      "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
                      "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF", "ENGINE_BUILD", "NO_ENGINE_MESSAGE",
@@ -2959,7 +2979,7 @@ esac
                      if "tail" in l and ("state.log" in l or '"$st"' in l)]
             self.assertTrue(reads, script)
             for line in reads:
-                self.assertIn('sudo -n -u "weaver-$AGENT-state" tail', line, (script, line))
+                self.assertIn('as_account "weaver-$AGENT-state" tail', line, (script, line))
 
     def test_update_stack_writes_no_declaration(self):
         # The declaration is root's in root's territory (the operator's ruling
@@ -5572,22 +5592,19 @@ esac
         result = self.lifecycle("--root-operator")
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_lifecycle_root_mode_probes_runuser_and_root_s_sudo_and_asks_no_credential(self):
+    def test_lifecycle_root_mode_probes_runuser_and_asks_no_credential(self):
         # **#576, B2**: --apply in root mode asks for no sudo credential. The
         # drop probe, runuser as nobody, stands where the operator's sudo -v
         # stands, and a runuser that cannot drop refuses before anything acts.
-        # Root's own sudo, which the admin-con rule's listing and
-        # verify-load.sh's drops go through, is checked next (the self-check
-        # on B2), and refuses before anything acts where it cannot drop
-        # without a prompt. Perturbations: keep sudo -v in root mode, and the
-        # calls name it; drop either probe, and its case runs on.
+        # verify-load.sh's drops are runuser's too (#590), so root's own sudo
+        # is not probed. Perturbations: keep sudo -v in root mode, or put the
+        # probe of root's sudo back, and the calls name it; drop the runuser
+        # probe, and the case runs on.
         archive = self.root / "archive"
         archive.mkdir()
         self.env.update(FIXTURE_UID="0", ALLOW_APPLY_CHECKS="1", CARGO_TARGET_DIR=str(self.root / "t"))
         probe = ["runuser", "-u", "nobody", "--", "env", "-i", "PATH=" + DROP_PATH, "true"]
-        for fail, said, made in (("DROP_FAIL", "runuser would not run a command as nobody", [probe]),
-                                 ("SUDO_DROP_FAIL", "root's sudo would not run a command as nobody without a prompt",
-                                  [probe, ["sudo", "-n", "-u", "nobody", "true"]])):
+        for fail, said, made in (("DROP_FAIL", "runuser would not run a command as nobody", [probe]),):
             with self.subTest(fail=fail):
                 self.log.unlink(missing_ok=True)
                 self.env[fail] = "nobody"
@@ -5598,8 +5615,6 @@ esac
                     self.env.pop(fail)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn(said, result.stderr)
-                if fail == "SUDO_DROP_FAIL":
-                    self.assertIn("HowToDeployANewAgent.md section 1", result.stderr)
                 self.assertEqual([c for c in self.calls() if c[0] in ("sudo", "runuser", "as-root")], made)
 
     def test_lifecycle_cleanup_takes_down_only_an_agent_it_made(self):
@@ -5763,18 +5778,25 @@ def admin_retired_root_keys():
     return keys
 
 
+def account_drop_source():
+    """account-drop.sh sourced as the scripts source it (#590), then the
+    DROP_PATH the test hands in the environment, or an empty one (B3), so a
+    bare name looked up on the account's side resolves nothing the test did
+    not stand in, and the guard reads what the test hands."""
+    return ('drop_path=${DROP_PATH-}\n' + f'source {shlex.quote(str(DEPLOY / "account-drop.sh"))}\n'
+            + 'DROP_PATH=$drop_path\n')
+
+
 def lifecycle_functions(script, *names):
     """verify-lifecycle.sh's functions as the script defines them, a
     one-line definition as its line and any other to its closing brace.
-    **The root step and the drop come with them** (#576): `root` and
-    `as_account`, which every root step and every look as an account runs
-    through, in the operator's mode unless ROOT_OPERATOR says otherwise, and
-    a DROP_PATH empty unless the test hands one (B3), so a bare name looked up
-    on the account's side resolves nothing the test did not stand in, and the
-    guard reads what the test hands."""
+    **The root step and the drop come with them** (#576): `root`, which
+    every root step runs through, and account-drop.sh's `as_account`, which
+    every look as an account runs through, in the operator's mode unless
+    ROOT_OPERATOR says otherwise."""
     lines = script.splitlines()
-    out = ["ROOT_OPERATOR=${ROOT_OPERATOR:-0}", "DROP_PATH=${DROP_PATH:-}"]
-    for name in [n for n in ("root", "as_account") if n not in names] + list(names):
+    out = ["ROOT_OPERATOR=${ROOT_OPERATOR:-0}", account_drop_source().rstrip("\n")]
+    for name in [n for n in ("root",) if n not in names] + list(names):
         start = next(i for i, l in enumerate(lines) if l.startswith(f"{name}()"))
         if lines[start].rstrip().endswith("}"):
             out.append(lines[start])
@@ -5790,7 +5812,8 @@ class LifecycleRootModeHelperTests(unittest.TestCase):
     the command itself for root, a leading VAR=value through `env`, and
     `as_account ACCOUNT CMD...` is `sudo -n -u` for the operator and `runuser
     -u ... --` for root, under `setsid` and `env -i` in either mode (B3), a
-    leading VAR=value handed to env. Each runs alone with sudo, runuser and
+    leading VAR=value handed to env, and under sudo the env after setsid
+    (#590). Each runs alone with sudo, runuser and
     the command as stand-ins that log their argv."""
 
     def setUp(self):
@@ -5840,8 +5863,8 @@ class LifecycleRootModeHelperTests(unittest.TestCase):
         # Perturbation: drop the env under runuser, and runuser is handed the
         # VAR=value as its command.
         self.assertEqual(self.run_fns(False, 'as_account weaver-m1 cmd x\nas_account weaver-m1 V=1 cmd y\n'),
-                         ["sudo -n -u weaver-m1 env -i PATH= timeout 0 setsid -w cmd x [unset]",
-                          "sudo -n -u weaver-m1 env -i PATH= V=1 timeout 0 setsid -w cmd y [unset]"])
+                         ["sudo -n -u weaver-m1 timeout 0 setsid -w env -i PATH= cmd x [unset]",
+                          "sudo -n -u weaver-m1 timeout 0 setsid -w env -i PATH= V=1 cmd y [unset]"])
         self.assertEqual(self.run_fns(True, 'as_account weaver-m1 cmd x\nas_account weaver-m1 V=1 cmd y\n'),
                          ["runuser -u weaver-m1 -- env -i PATH= cmd x [unset]",
                           "runuser -u weaver-m1 -- env -i PATH= V=1 cmd y [unset]"])
@@ -5851,22 +5874,20 @@ class LifecycleRootModeHelperTests(unittest.TestCase):
         # root's under runuser. Perturbation: pass the VAR=value to runuser
         # bare, and the root line fails.
         self.assertEqual(self.run_fns(False, 'turn_as weaver-gatecon hello there\n'),
-                         ["sudo -n -u weaver-gatecon env -i PATH= WEAVER_ADMIN_CONFIG=/base timeout 0 setsid -w "
+                         ["sudo -n -u weaver-gatecon timeout 0 setsid -w env -i PATH= WEAVER_ADMIN_CONFIG=/base "
                           "python3 -I - m1 hello there [unset]"])
         self.assertEqual(self.run_fns(True, 'turn_as weaver-gatecon --system --raw\n'),
                          ["runuser -u weaver-gatecon -- env -i PATH= WEAVER_ADMIN_CONFIG=/base python3 -I - m1 "
                           "--system --raw [unset]"])
 
-    def test_sudo_is_the_helpers_the_listing_s_and_the_credential_s_alone(self):
-        # Every other privileged call is a root step or a look as an account.
-        # Root mode's probe of root's own sudo is the one other.
-        # Perturbation: put back a bare `sudo -n` at any root step, and this
-        # names it.
+    def test_sudo_is_the_root_step_s_the_listing_s_and_the_credential_s_alone(self):
+        # Every other privileged call is a root step or a look as an account,
+        # and the look's sudo is account-drop.sh's (#590), so root mode no
+        # longer probes root's own sudo. Perturbation: put back a bare `sudo
+        # -n` at any root step, or the probe, and this names it.
         code = [l for l in self.script.splitlines() if not l.lstrip().startswith("#")]
         found = sorted(m.group(0) for l in code for m in re.finditer(r"\bsudo -[nv]\b[^)|;&]*", l))
-        self.assertEqual(found, ['sudo -n "$@"', 'sudo -n -l -U "$ADMINCON" 2>',
-                                 'sudo -n -u "$account" env -i PATH="$DROP_PATH" "${named[@]}" timeout 0 setsid -w "$@"',
-                                 'sudo -n -u nobody true </dev/null >/dev/null 2>', 'sudo -v '], found)
+        self.assertEqual(found, ['sudo -n "$@"', 'sudo -n -l -U "$ADMINCON" 2>', 'sudo -v '], found)
 
 
 class LifecycleStep5bRootModeTests(unittest.TestCase):
@@ -5884,9 +5905,12 @@ class LifecycleStep5bRootModeTests(unittest.TestCase):
     join the group, perturb on the operator's uid, or drop the seeding line,
     and a read below fails."""
 
-    GATE = r"""#!/usr/bin/env python3
+    GATE = r"""#!/usr/bin/python3 -I
 import json, os, re, sys
 name, args = os.path.basename(sys.argv[0]), sys.argv[1:]
+if "CALLS" not in os.environ:
+    with open(os.path.join(os.path.dirname(sys.argv[0]), "@FIXTURE_ENVIRON@")) as settings:
+        os.environ.update(json.load(settings))
 if name == "sudo":
     args = args[1:] if args[:1] == ["-n"] else args
     if args[:1] != ["-u"]:
@@ -5897,13 +5921,13 @@ else:
     who, cmd = args[1], args[3:]
 with open(os.environ["CALLS"], "a") as log:
     log.write(json.dumps([name, who, *cmd]) + "\n")
+if name == "sudo":
+    assert cmd[:4] == ["timeout", "0", "setsid", "-w"], cmd
+    cmd = cmd[4:]
 assert cmd[:2] == ["env", "-i"] and cmd[2].startswith("PATH="), cmd
 cmd = cmd[3:]
 while cmd and re.match(r"[A-Za-z_][A-Za-z0-9_]*=", cmd[0]):
     cmd = cmd[1:]
-if name == "sudo":
-    assert cmd[:4] == ["timeout", "0", "setsid", "-w"], cmd
-    cmd = cmd[4:]
 assert cmd[:3] == ["python3", "-I", "-"], cmd
 uids = {"root": 0, "weaver-gatecon": 111, "weaver-admincon": 222, "op": 12345}
 rule = re.search(r"^allowed-uids = \[(\d+)\]$", open(os.environ["DECL"]).read(), re.M)
@@ -5915,7 +5939,7 @@ if "--system" in cmd:
                      {"kind": "refused", "reason": "a line of role system is admitted from the operator alone"}))
 else:
     print("Red, yellow and blue.")
-"""
+""".replace("@FIXTURE_ENVIRON@", FIXTURE_ENVIRON)
 
     def setUp(self):
         self.scratch = tempfile.TemporaryDirectory(prefix="weaver-lifecycle-5b-root-")
@@ -6047,7 +6071,8 @@ class LifecycleRootModeGroupsAndShowTests(unittest.TestCase):
                        'held = os.environ.get("GROUPS_" + sys.argv[2]) if sys.argv[1:2] == ["-Gn"] else None\n'
                        'sys.exit(1) if held is None else print(held)\n'),
                 ("sudo", f'#!/bin/sh\necho "sudo $*" >> {log}\n[ "$1" = -n ] && shift\nAS=root exec env "$@"\n'),
-                ("runuser", f'#!/bin/sh\necho "runuser $*" >> {log}\nwho=$2\nshift 3\nAS=$who exec "$@"\n'),
+                ("runuser", f'#!/bin/sh\necho "runuser $*" >> {log}\nwho=$2\nshift 4\n'
+                            f'AS=$who exec {shutil.which("env", path=BOX_PATH)} "$@"\n'),
                 ("weaver-admin", '#!/bin/sh\ncase $AS in root) echo \'{"kind":"no_such_agent"}\' ;; '
                                  '*) echo \'{"kind":"unauthorized"}\' ;; esac\n')):
             stand_in = self.bin_dir / tool
@@ -6116,23 +6141,46 @@ class LifecycleRootModeGroupsAndShowTests(unittest.TestCase):
 
 
 class AccountDropTests(unittest.TestCase):
-    """**B3: a command run as another account is handed nothing of the
-    caller's but what the call names** (the Planner's rulings of 2026-11-17).
-    While such a command runs, any process of the account's uid can read its
-    environment and open its descriptors through /proc. So `as_account`, in
-    `create-agent.sh` and `verify-lifecycle.sh` alike and in both modes, gives
-    it /dev/null or a named file on standard input, pipes the script holds on
-    standard output and standard error, no other descriptor, a session of its
-    own with no controlling terminal, and DROP_PATH with the named VAR=value
-    pairs as its whole environment, passes an interrupt on to it, and returns
-    its status, else a relay's. The function runs alone under bash whose
-    controlling terminal is a real pseudo-terminal and which holds one more
-    descriptor, with stand-ins for runuser and sudo that drop their own
-    arguments and run the rest, and a reporter, the command, that records
-    what it was handed. Perturbations: take away any one of these, in either
-    mode, or either relay's status, and a case below fails."""
+    """**B3 and #590: a command run as another account is handed nothing of
+    the caller's but what the call names** (the Planner's rulings of
+    2026-11-17). While such a command runs, any process of the account's uid
+    can read its environment and open its descriptors through /proc. So
+    `as_account`, account-drop.sh's, which every deploy script that drops to
+    an account sources, in both modes, starts runuser or sudo with DROP_PATH
+    alone, and gives the command /dev/null or a named file on standard input,
+    pipes the script holds on standard output and standard error, bounded
+    past its exit, no other descriptor, a session of its own with no
+    controlling terminal, and DROP_PATH with the named VAR=value pairs as its
+    whole environment, passes an interrupt on to it, and returns its status,
+    else a relay's. The helper runs sourced under bash whose controlling
+    terminal is a real pseudo-terminal and which holds one more descriptor,
+    with stand-ins for runuser and sudo that record what they were handed and
+    run the rest, tripwires of the same names on the drop's PATH, and a
+    reporter, the command, that records what it was handed. Perturbations:
+    take away any one of these, in either mode, or either relay's status, and
+    a case below fails."""
 
-    SCRIPTS = ("create-agent.sh", "verify-lifecycle.sh")
+    # A stand-in for runuser or sudo: records its arguments, its own
+    # environment block as it was handed and whether it holds a controlling
+    # terminal, beside itself, then runs the rest, as runuser's `-u A --` and
+    # sudo's `-n -u A` leave it.
+    STAND_IN = """#!/usr/bin/python3 -I
+import json, os, sys
+r = {"argv": sys.argv[1:], "env": {}}
+with open("/proc/self/environ", "rb") as block:
+    for item in block.read().split(b"\\0"):
+        if item:
+            key, _, value = item.decode().partition("=")
+            r["env"][key] = value
+try:
+    os.close(os.open("/dev/tty", os.O_RDWR))
+    r["tty"] = "opened"
+except OSError as e:
+    r["tty"] = e.errno
+with open(sys.argv[0] + ".json", "w") as record:
+    json.dump(r, record)
+os.execvp(sys.argv[4], sys.argv[4:])
+"""
     REPORTER = """#!/usr/bin/python3 -I
 import json, os, select, sys
 r = {"links": [os.readlink(f"/proc/self/fd/{n}") for n in (0, 1, 2)],
@@ -6208,13 +6256,18 @@ sys.exit(code if code >= 0 else 128 - code)
         self.root = Path(self.scratch.name)
         self.bin_dir = self.root / "bin"
         self.bin_dir.mkdir()
-        # The drop's PATH: the box's setsid and timeout, which the operator's
-        # drop runs under, and nothing else, so a bare name looked up on the
-        # account's side finds nothing more.
+        # The drop's PATH: the box's setsid, timeout and env, which the drop
+        # runs under, and nothing else, so a bare name looked up on the
+        # account's side finds nothing more. A runuser or sudo found there,
+        # after the clear, is a tripwire (#590).
         self.drop_bin = self.root / "drop-bin"
         self.drop_bin.mkdir()
-        for tool in ("setsid", "timeout"):
+        for tool in ("setsid", "timeout", "env"):
             (self.drop_bin / tool).symlink_to(shutil.which(tool, path=BOX_PATH))
+        self.tripped = self.root / "tripped"
+        for tool in ("runuser", "sudo"):
+            (self.drop_bin / tool).write_text(f'#!/bin/sh\necho "$0" >> {shlex.quote(str(self.tripped))}\nexit 97\n')
+            (self.drop_bin / tool).chmod(0o755)
         self.drop_path = str(self.drop_bin)
         self.report = self.root / "report.json"
         self.feed = self.root / "feed"
@@ -6222,7 +6275,7 @@ sys.exit(code if code >= 0 else 128 - code)
         self.extra = self.root / "extra"
         for tool in ("runuser", "sudo"):
             stand_in = self.bin_dir / tool
-            stand_in.write_text('#!/bin/sh\nshift 3\nexec "$@"\n')
+            stand_in.write_text(self.STAND_IN)
             stand_in.chmod(0o755)
         self.reporter = self.root / "reporter"
         self.reporter.write_text(self.REPORTER)
@@ -6234,7 +6287,7 @@ sys.exit(code if code >= 0 else 128 - code)
         env.pop("BASH_ENV", None)
         return env
 
-    def drop(self, script, root_mode, before="", after="", stdin="terminal", output="pipes", status=3):
+    def drop(self, root_mode, before="", after="", stdin="terminal", output="pipes", status=3):
         """`as_account BEFORE weaver-m1 WEAVER_X=1 <reporter> AFTER` from
         SCRIPT, run by bash whose controlling terminal is a pseudo-terminal
         and which holds one more descriptor, open on a file. STDIN is
@@ -6249,7 +6302,7 @@ sys.exit(code if code >= 0 else 128 - code)
         self.report.unlink(missing_ok=True)
         rc_file = Path(str(self.report) + ".rc")
         program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n"
-                   + shell_function((DEPLOY / script).read_text(), "as_account")
+                   + account_drop_source()
                    + f"rc=0; as_account {before} weaver-m1 WEAVER_X=1 {shlex.quote(str(self.reporter))} "
                    + f"{shlex.quote(str(self.report))} {status} {after} || rc=$?\n"
                    + f'echo "$rc" > {shlex.quote(str(rc_file))}\n')
@@ -6297,6 +6350,71 @@ sys.exit(code if code >= 0 else 128 - code)
         self.assertEqual(record["extra"], [], "a descriptor above 2 reached the account")
         self.assertEqual(record["tty"], errno.ENXIO, "the command could open a controlling terminal")
         self.assertEqual(record["env"], {"PATH": self.drop_path, "WEAVER_X": "1"}, "its whole environment")
+        self.assertFalse(self.tripped.exists(), "a runuser or sudo was found on the drop's PATH")
+
+    def handed(self, tool):
+        return json.loads((self.bin_dir / f"{tool}.json").read_text())
+
+    def test_runuser_and_sudo_start_with_the_drops_path_alone(self):
+        # **#590**: runuser or sudo itself is the first process of the
+        # account's, and it is started under `env -i` with DROP_PATH alone, so
+        # nothing of the caller's environment (here SECRET) is in its block,
+        # and it is the one found on the caller's PATH before the clear, never
+        # one on DROP_PATH. In root mode setsid runs before runuser, so
+        # runuser holds no terminal. Under sudo the env runs after setsid, so
+        # sudo keeps the terminal its credential is keyed by, and the account's
+        # env starts with none. Perturbations: drop the outer `env -i`, look
+        # runuser or sudo up after it, put setsid after runuser, or the env
+        # back before timeout under sudo, and a case below fails.
+        for root_mode, tool in ((True, "runuser"), (False, "sudo")):
+            with self.subTest(root_mode=root_mode):
+                rc, record, _, _, caller = self.drop(root_mode)
+                self.assertEqual(rc, 3)
+                self.assert_handed_nothing(record, caller)
+                handed = self.handed(tool)
+                self.assertEqual(handed["env"], {"PATH": self.drop_path}, "the drop's own block")
+                command = ["env", "-i", "PATH=" + self.drop_path, "WEAVER_X=1", str(self.reporter), str(self.report), "3"]
+                if root_mode:
+                    self.assertEqual(handed["argv"], ["-u", "weaver-m1", "--", *command])
+                    self.assertEqual(handed["tty"], errno.ENXIO, "runuser holds a terminal")
+                else:
+                    self.assertEqual(handed["argv"], ["-n", "-u", "weaver-m1", "timeout", "0", "setsid", "-w", *command])
+                    self.assertEqual(handed["tty"], "opened", "sudo lost the terminal its credential is keyed by")
+
+    def test_a_process_left_holding_the_output_is_cut_off(self):
+        # **#590**: the relays drain for DROP_RELAY_WAIT seconds after the
+        # command exits. A process it left behind still holding its output
+        # then is cut off, and the call fails saying so, where before it hung
+        # until that process let go. The bound is account-drop.sh's own, 5 s.
+        # Perturbation: wait on the relays unbounded, and the case times out.
+        pid_file = self.root / "left-pid"
+        command = self.root / "leaves"
+        command.write_text("#!/usr/bin/python3 -I\nimport os, sys, time\n"
+                           "child = os.fork()\n"
+                           "if child == 0:\n    time.sleep(60)\n    os._exit(0)\n"
+                           f"open({str(pid_file)!r}, 'w').write(str(child))\n"
+                           "print('started', flush=True)\n")
+        command.chmod(0o755)
+        for root_mode in (True, False):
+            with self.subTest(root_mode=root_mode):
+                pid_file.unlink(missing_ok=True)
+                program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n" + account_drop_source()
+                           + f'rc=0; as_account weaver-m1 {shlex.quote(str(command))} || rc=$?\necho "rc=$rc"\n')
+                started = time.monotonic()
+                try:
+                    run = subprocess.run(["bash", "-c", program], env=self.env(self.bin_dir), stdin=subprocess.DEVNULL,
+                                         text=True, capture_output=True, timeout=20)
+                finally:
+                    took = time.monotonic() - started
+                    if pid_file.exists():
+                        try:
+                            os.kill(int(pid_file.read_text()), signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                self.assertEqual(run.stdout, "started\nrc=1\n", run.stderr)
+                self.assertIn("held open 5s past its exit by a process it left, so the call fails", run.stderr)
+                self.assertGreater(took, 4.5)
+                self.assertLess(took, 8)
 
     @staticmethod
     def alive(pid):
@@ -6307,50 +6425,46 @@ sys.exit(code if code >= 0 else 128 - code)
             return False
 
     def test_nothing_of_the_caller_s_reaches_the_account(self):
-        for script in self.SCRIPTS:
-            for root_mode in (True, False):
-                for stdin in ("terminal", "pipe"):
-                    with self.subTest(script=script, root_mode=root_mode, stdin=stdin):
-                        rc, record, out, err, caller = self.drop(script, root_mode, stdin=stdin)
-                        self.assert_handed_nothing(record, caller)
-                        self.assertEqual(record["stdin"], "")
-                        self.assertNotEqual(record["inodes"][1], record["inodes"][2], "two pipes, two relays")
-                        self.assertEqual((rc, out, err), (3, "out-a\nout-c\n", "err-b\n"))
+        for root_mode in (True, False):
+            for stdin in ("terminal", "pipe"):
+                with self.subTest(root_mode=root_mode, stdin=stdin):
+                    rc, record, out, err, caller = self.drop(root_mode, stdin=stdin)
+                    self.assert_handed_nothing(record, caller)
+                    self.assertEqual(record["stdin"], "")
+                    self.assertNotEqual(record["inodes"][1], record["inodes"][2], "two pipes, two relays")
+                    self.assertEqual((rc, out, err), (3, "out-a\nout-c\n", "err-b\n"))
 
     def test_a_named_file_is_the_one_input(self):
-        for script in self.SCRIPTS:
-            for root_mode in (True, False):
-                with self.subTest(script=script, root_mode=root_mode):
-                    rc, record, _, _, caller = self.drop(script, root_mode, before=f"--stdin {shlex.quote(str(self.feed))}")
-                    self.assert_handed_nothing(record, caller, stdin=str(self.feed))
-                    self.assertEqual((rc, record["stdin"]), (3, "the named file"))
+        for root_mode in (True, False):
+            with self.subTest(root_mode=root_mode):
+                rc, record, _, _, caller = self.drop(root_mode, before=f"--stdin {shlex.quote(str(self.feed))}")
+                self.assert_handed_nothing(record, caller, stdin=str(self.feed))
+                self.assertEqual((rc, record["stdin"]), (3, "the named file"))
 
     def test_one_file_for_both_outputs_is_one_pipe_in_its_order(self):
         # A caller's `2>&1`, or a terminal on both, is one relay, so what the
         # command wrote reaches it in the order written. Perturbation: drop
         # the one-pipe choice, and the two descriptors are two pipes.
-        for script in self.SCRIPTS:
-            for root_mode in (True, False):
-                for output in ("merged", "terminal"):
-                    with self.subTest(script=script, root_mode=root_mode, output=output):
-                        rc, record, out, _, caller = self.drop(script, root_mode, output=output)
-                        self.assert_handed_nothing(record, caller)
-                        self.assertEqual(record["inodes"][1], record["inodes"][2], "one pipe for both")
-                        self.assertEqual((rc, out), (3, "out-a\nerr-b\nout-c\n"))
+        for root_mode in (True, False):
+            for output in ("merged", "terminal"):
+                with self.subTest(root_mode=root_mode, output=output):
+                    rc, record, out, _, caller = self.drop(root_mode, output=output)
+                    self.assert_handed_nothing(record, caller)
+                    self.assertEqual(record["inodes"][1], record["inodes"][2], "one pipe for both")
+                    self.assertEqual((rc, out), (3, "out-a\nerr-b\nout-c\n"))
 
     def test_the_status_is_the_command_s_else_a_relay_s(self):
         # A relay that cannot write fails the call where the command passed,
         # and never hides the command's own failure. Perturbation: return
         # either relay's status alone, or the command's alone, and a case
         # below fails.
-        for script in self.SCRIPTS:
-            for root_mode in (True, False):
-                for status, after, want in ((0, ">/dev/full", 1), (0, "2>/dev/full", 1), (3, ">/dev/full", 3),
-                                            (0, ">/dev/full 2>&1", 1), (0, "", 0)):
-                    with self.subTest(script=script, root_mode=root_mode, status=status, after=after):
-                        rc, record, _, _, _ = self.drop(script, root_mode, after=after, status=status)
-                        self.assertIsNotNone(record, "the command ran")
-                        self.assertEqual(rc, want)
+        for root_mode in (True, False):
+            for status, after, want in ((0, ">/dev/full", 1), (0, "2>/dev/full", 1), (3, ">/dev/full", 3),
+                                        (0, ">/dev/full 2>&1", 1), (0, "", 0)):
+                with self.subTest(root_mode=root_mode, status=status, after=after):
+                    rc, record, _, _, _ = self.drop(root_mode, after=after, status=status)
+                    self.assertIsNotNone(record, "the command ran")
+                    self.assertEqual(rc, want)
 
     def test_an_interrupt_ends_the_script_and_the_account_s_command(self):
         # setsid moves the command out of the terminal's process group, so a
@@ -6374,14 +6488,14 @@ sys.exit(code if code >= 0 else 128 - code)
         command.write_text("#!/usr/bin/python3 -I\nimport os, time\n"
                            f"open({str(pid_file)!r}, 'w').write(str(os.getpid()))\ntime.sleep(30)\n")
         command.chmod(0o755)
-        cases = [(script, root_mode, sig, trap) for script in self.SCRIPTS for root_mode in (True, False)
+        cases = [(root_mode, sig, trap) for root_mode in (True, False)
                  for sig in (signal.SIGINT, signal.SIGQUIT) for trap in (False, True)]
-        for script, root_mode, sig, trap in cases:
-            with self.subTest(script=script, root_mode=root_mode, signal=sig.name, trap=trap):
+        for root_mode, sig, trap in cases:
+            with self.subTest(root_mode=root_mode, signal=sig.name, trap=trap):
                 pid_file.unlink(missing_ok=True)
                 program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n"
                            + (f"trap 'echo trapped >&2; exit {128 + sig}' {sig.name[3:]}\n" if trap else "")
-                           + shell_function((DEPLOY / script).read_text(), "as_account")
+                           + account_drop_source()
                            + f"as_account weaver-m1 {shlex.quote(str(command))} >/dev/null\necho AFTER\n")
                 proc = subprocess.Popen(["bash", "-c", program], env=self.env(relay_bin),
                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -6432,22 +6546,21 @@ sys.exit(code if code >= 0 else 128 - code)
         if subprocess.run(["unshare", "--map-root-user", "true"], capture_output=True).returncode != 0:
             self.skipTest("unshare --map-root-user is not available")
         marker = self.root / "ran"
-        for script in self.SCRIPTS:
-            for root_mode in (True, False):
-                with self.subTest(script=script, root_mode=root_mode):
-                    marker.unlink(missing_ok=True)
-                    command = shlex.quote("echo ran > " + shlex.quote(str(marker)))
-                    program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n"
-                               + shell_function((DEPLOY / script).read_text(), "as_account")
-                               + f'rc=0; as_account weaver-m1 /bin/sh -c {command} || rc=$?\necho "rc=$rc"\n')
-                    run = subprocess.run(["unshare", "--map-root-user", "--mount", "bash", "-c",
-                                          'mount -t tmpfs none /proc && exec bash -c "$1"', "bash", program],
-                                         env=self.env(self.bin_dir), stdin=subprocess.DEVNULL, text=True,
-                                         capture_output=True, timeout=20)
-                    self.assertEqual((run.returncode, run.stdout), (0, "rc=1\n"), run.stderr)
-                    self.assertIn("as_account: no command runs as weaver-m1, since /proc/self/fd cannot be read",
-                                  run.stderr)
-                    self.assertFalse(marker.exists(), "the command ran")
+        for root_mode in (True, False):
+            with self.subTest(root_mode=root_mode):
+                marker.unlink(missing_ok=True)
+                command = shlex.quote("echo ran > " + shlex.quote(str(marker)))
+                program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n"
+                           + account_drop_source()
+                           + f'rc=0; as_account weaver-m1 /bin/sh -c {command} || rc=$?\necho "rc=$rc"\n')
+                run = subprocess.run(["unshare", "--map-root-user", "--mount", "bash", "-c",
+                                      'mount -t tmpfs none /proc && exec bash -c "$1"', "bash", program],
+                                     env=self.env(self.bin_dir), stdin=subprocess.DEVNULL, text=True,
+                                     capture_output=True, timeout=20)
+                self.assertEqual((run.returncode, run.stdout), (0, "rc=1\n"), run.stderr)
+                self.assertIn("as_account: no command runs as weaver-m1, since /proc/self/fd cannot be read",
+                              run.stderr)
+                self.assertFalse(marker.exists(), "the command ran")
 
     def test_turn_py_reaches_the_account_on_its_named_input(self):
         # turn_as hands turn.py over through --stdin, which this shell opens.
@@ -6474,10 +6587,11 @@ sys.exit(code if code >= 0 else 128 - code)
         # as_account, in any deploy script and in any spelling, reads its
         # standard input from /dev/null or a file and sends its output to a
         # capture, /dev/null or a file. The two `set --` lines are
-        # as_account's own. decommission.sh's as_op is root becoming the
-        # operator, whose own account holds sudo, so it crosses to no account
-        # of the agent's. Perturbation: take the stdin redirect off any one,
-        # and this names it.
+        # as_account's own. Since #590 no such drop is left but
+        # decommission.sh's as_op, which is root becoming the operator, whose
+        # own account holds sudo, so it crosses to no account of the agent's.
+        # Perturbation: write a drop outside the helper again, with no stdin
+        # redirect, and this names it.
         drop = re.compile(r"\bsudo\b[^#]*\s(-[A-Za-z]*u|--user)\b|\brunuser\b[^#]*\s-u\b")
         exempt = {"decommission.sh": 'as_op() { sudo -u "$OPERATOR" -H "$@"; }'}
         found = []
@@ -6491,20 +6605,49 @@ sys.exit(code if code >= 0 else 128 - code)
                 found.append(f"{script.name}:{n}")
                 self.assertRegex(line, r'<\s*(/dev/null|"\$)', f"{script.name}:{n} names no standard input")
                 self.assertRegex(line, r'\$\(|>\s*/dev/null', f"{script.name}:{n} may hold a terminal on its output")
-        self.assertEqual(len(found), 5, found)
+        self.assertEqual(len(found), 1, found)
         self.assertEqual(sum(f.endswith("(exempt)") for f in found), 1, found)
 
-    def test_both_scripts_carry_the_same_function_path_and_rule(self):
-        # The copies stand alone on a box (the Planner's ruling of
-        # 2026-11-17) and are held equal here, with the PATH they hand on and
-        # the VAR=value rule the double reads by. Perturbation: change either
-        # in one script, and this fails.
-        texts = [(DEPLOY / s).read_text() for s in self.SCRIPTS]
-        self.assertEqual(shell_function(texts[0], "as_account"), shell_function(texts[1], "as_account"))
-        for text in texts:
-            self.assertEqual([l for l in text.splitlines() if l.startswith("DROP_PATH=")], [f"DROP_PATH={DROP_PATH}"])
-            self.assertIn(f'while [[ "${{1:-}}" =~ {DROP_NAMED} ]]; do named+=("$1"); shift; done',
-                          shell_function(text, "as_account"))
+    def test_verify_load_refuses_without_runuser_or_setsid(self):
+        # **#590**: verify-load.sh's reads as the agent's accounts go through
+        # runuser and discard their own refusal, so the script refuses by name
+        # where runuser or setsid is not on PATH. Perturbation: test for one
+        # of the two alone, and a case below runs on.
+        text = (DEPLOY / "verify-load.sh").read_text()
+        start = text.index("command -v runuser >/dev/null && command -v setsid >/dev/null")
+        check = text[start:text.index("\n", text.index("|| die", start)) + 1]
+        for present in ((), ("runuser",), ("setsid",), ("runuser", "setsid")):
+            with self.subTest(present=present):
+                path = self.root / ("path-" + "-".join(present))
+                path.mkdir()
+                if "runuser" in present:
+                    (path / "runuser").symlink_to(self.bin_dir / "runuser")
+                if "setsid" in present:
+                    (path / "setsid").symlink_to(shutil.which("setsid", path=BOX_PATH))
+                program = 'die() { echo "REFUSED: $*" >&2; exit 1; }\n' + check + "echo RUNS-ON\n"
+                run = subprocess.run([_GUARD_BASH, "-c", program], env={"PATH": str(path)}, text=True,
+                                     capture_output=True, timeout=20)
+                if len(present) == 2:
+                    self.assertEqual((run.returncode, run.stdout), (0, "RUNS-ON\n"), run.stderr)
+                else:
+                    self.assertEqual(run.returncode, 1, run.stdout)
+                    self.assertIn("REFUSED: runuser or setsid is not on PATH", run.stderr)
+
+    def test_every_script_that_drops_sources_the_one_helper(self):
+        # **One helper** (#590, in place of two copies held equal): each
+        # script that runs a command as an agent's account sources
+        # account-drop.sh once and defines neither as_account nor DROP_PATH of
+        # its own, and the helper's PATH and VAR=value rule are the ones the
+        # double reads by. Perturbation: define either in one script, or
+        # change either in the helper, and this fails.
+        helper = (DEPLOY / "account-drop.sh").read_text()
+        self.assertEqual([l for l in helper.splitlines() if l.startswith("DROP_PATH=")], [f"DROP_PATH={DROP_PATH}"])
+        self.assertIn(f'while [[ "${{1:-}}" =~ {DROP_NAMED} ]]; do named+=("$1"); shift; done',
+                      shell_function(helper, "as_account"))
+        for name in ("create-agent.sh", "verify-lifecycle.sh", "verify-load.sh", "update-stack.sh"):
+            text = (DEPLOY / name).read_text()
+            self.assertEqual(len(re.findall(r'^source ".*/account-drop\.sh"$', text, re.M)), 1, name)
+            self.assertNotRegex(text, r"(?m)^\s*(as_account\(\)|DROP_PATH=)", name)
 
 
 class StandInGuardTests(unittest.TestCase):
@@ -6622,7 +6765,7 @@ class LifecycleAccountLookTests(unittest.TestCase):
         self.bin_dir.mkdir()
         for name, body in (
             ("sudo", '[ "$1" = "-n" ] && shift\n'
-                     'if [ "$1" = "-u" ]; then [ -z "$DROP_REFUSED" ] || exit 1; shift 2; fi\n'
+                     'if [ "$1" = "-u" ]; then [ ! -e "${0%/*}/drop-refused" ] || exit 1; shift 2; fi\n'
                      'exec env "$@"\n'),
             ("test", "exit 1\n"),
         ):
@@ -6630,9 +6773,9 @@ class LifecycleAccountLookTests(unittest.TestCase):
             stand_in.write_text("#!/bin/sh\n" + body)
             stand_in.chmod(0o755)
         # The drop's PATH is this directory (B3): the stand-in `test` first,
-        # beside the box's sh, and the timeout and setsid the operator's drop
-        # runs under.
-        for tool in ("sh", "timeout", "setsid"):
+        # beside the box's sh, and the timeout, setsid and env the operator's
+        # drop runs under.
+        for tool in ("sh", "timeout", "setsid", "env"):
             (self.bin_dir / tool).symlink_to(shutil.which(tool, path=BOX_PATH))
         self.file = root / "agent.toml"
         self.file.write_text("declared\n")
@@ -6640,9 +6783,16 @@ class LifecycleAccountLookTests(unittest.TestCase):
         self.functions = ("set -euo pipefail\n" + 'STEP_LABEL="step 2 (test)"\n'
                           + lifecycle_functions(script, "fail", "pass", "expect_eq", "as_look"))
 
-    def run_program(self, body, **env):
+    def run_program(self, body, refused=False):
+        # The drop clears the environment (#590), so a refused drop is a file
+        # beside the stand-in.
+        flag = self.bin_dir / "drop-refused"
+        if refused:
+            flag.touch()
+        else:
+            flag.unlink(missing_ok=True)
         full = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"],
-                "DROP_PATH": str(self.bin_dir), **env}
+                "DROP_PATH": str(self.bin_dir)}
         full.pop("BASH_ENV", None)
         return subprocess.run(["bash", "-c", self.functions + body], env=full, text=True,
                               capture_output=True, timeout=20)
@@ -6658,7 +6808,7 @@ class LifecycleAccountLookTests(unittest.TestCase):
     def test_an_expected_no_fails_on_a_refused_drop(self):
         result = self.run_program(
             f'expect_eq "the member cannot read it" no "$(as_look weaver-m1-state -e {shlex.quote(str(self.file.with_name("none")))})"\n'
-            'echo GOES-ON\n', DROP_REFUSED="1")
+            'echo GOES-ON\n', refused=True)
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("found:    refused", result.stderr)
         self.assertNotIn("GOES-ON", result.stdout)
@@ -8868,7 +9018,7 @@ class RoundOneOf79Tests(unittest.TestCase):
         sudo = self.dir / "sudo"
         sudo.write_text(f'#!/bin/sh\nIFS= read -r a < {shlex.quote(str(answer_file))}\nprintf "%s\\n" "$a"\n')
         sudo.chmod(0o755)
-        program = shell_function(script, "as_account") + shell_function(script, "probe_connector") + 'probe_connector "$1"'
+        program = account_drop_source() + shell_function(script, "probe_connector") + 'probe_connector "$1"'
         # **The drop's PATH is this directory alone** (B3), so the account's
         # `sudo -n` is the stand-in, never one found on the box's PATH.
         env = {**os.environ, "PATH": f"{self.dir}{os.pathsep}{os.environ['PATH']}",
@@ -8894,11 +9044,13 @@ class RoundOneOf79Tests(unittest.TestCase):
         # sudo in root mode, and the runuser log is empty.
         drops = self.dir / "drops"
         runuser = self.dir / "runuser"
-        runuser.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$DROPS"\nshift 3\nexec "$@"\n')
+        # It starts under `env -i` (#590), so it names its log and env by path.
+        runuser.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> {shlex.quote(str(drops))}\nshift 4\n'
+                           f'exec {shutil.which("env", path=BOX_PATH)} "$@"\n')
         runuser.chmod(0o755)
         answer_file.write_text('{"kind":"validated"}\n')
         run = subprocess.run(["bash", "-c", program, "x", "validate"],
-                             env={**env, "ROOT_OPERATOR": "1", "DROPS": str(drops)},
+                             env={**env, "ROOT_OPERATOR": "1"},
                              text=True, capture_output=True, timeout=20)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertEqual(drops.read_text(), f"-u weaver-admincon -- env -i PATH={self.dir} "

@@ -72,6 +72,11 @@ die() { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 source "$REPO/deploy/retired-python.sh"
 source "$REPO/deploy/engine-libraries.sh"
 source "$REPO/deploy/install-tuple.sh"
+# **Every drop to an agent's account is the operator's sudo** (#590): this
+# script has no root mode, and nothing of the operator's environment reaches
+# the account (account-drop.sh).
+ROOT_OPERATOR=0
+source "$REPO/deploy/account-drop.sh"
 
 read_key() { cat "$STACK/$1" 2>/dev/null || true; }
 
@@ -1626,7 +1631,7 @@ sink_lines() {
 # read the member is refused prints nothing.
 member_said() {
   local said
-  said=$(sudo -n -u "weaver-$AGENT-state" tail -n 3 "$(dirname "$1")/state/state.log" </dev/null 2>/dev/null || true)
+  said=$(as_account "weaver-$AGENT-state" tail -n 3 "$(dirname "$1")/state/state.log" 2>/dev/null || true)
   [ -n "$said" ] && printf '  the state member last said:\n%s\n' "$said" >&2
   return 0
 }
