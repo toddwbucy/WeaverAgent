@@ -696,90 +696,9 @@ root() {
     sudo "$@"
   fi
 }
-# DROP_PATH: the PATH a command run as another account starts with, sudo's
-# default secure_path (as_account).
-DROP_PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-# **as_account [--stdin FILE] ACCOUNT [VAR=value...] CMD...: CMD run as
-# ACCOUNT, with that account's supplementary groups** (#576): `sudo -n -u`
-# where the operator runs this script, and `runuser -u` where root does, so
-# root needs no sudoers line of its own. **CMD is handed nothing of this
-# shell's but what the call names**, since while it runs any process of the
-# account's uid can read its environment and open its descriptors through
-# /proc. In both modes its standard input is /dev/null, or FILE, which this
-# shell opens. Its standard output and standard error are pipes this shell
-# holds, one pipe where the caller gave both the same file, so a caller's
-# `2>&1` keeps its order, and cat copies them on. Every other descriptor this
-# shell holds is closed first, as sudo's closefrom does and runuser does not,
-# and where /proc/self/fd cannot be read, nothing runs and the call fails.
-# It runs under `setsid -w`, in a session of its own with no controlling
-# terminal: before runuser in root mode, and inside sudo in the operator's,
-# since sudo looks up the operator's cached credential by terminal. It starts
-# under `env -i` with DROP_PATH and the leading VAR=value pairs alone, since
-# runuser keeps the caller's environment and sudo keeps what the box's
-# env_keep names. **An interrupt still reaches it**: setsid has moved it out
-# of the terminal's process group, so the drop runs as a job of this shell,
-# whose traps, set before it starts, pass INT, QUIT, TERM and HUP on to it
-# as SIGTERM, and which then takes the signal itself, so the script's own
-# traps run as they would have. runuser's parent passes SIGTERM on to its
-# child. Under sudo, `timeout 0`, which never times out, passes on what sudo
-# relays: under sudo's use_pty the command sudo starts leads its own process
-# group, so a setsid started there would fork and its parent alone would
-# take the signal, while timeout's child leads none, and setsid runs in it.
-# That timeout is coreutils': BusyBox's counts 0 down, and the stack puts no
-# BusyBox applet on any PATH.
-# The status is CMD's, else the standard output relay's, else the standard
-# error relay's. **Not covered** (#590): the env that runuser or sudo starts
-# holds the caller's environment, or what env_keep passes, until it replaces
-# it, and under sudo, env and timeout hold the terminal sudo hands them,
-# while CMD holds none.
-# DROP names which, for a refusal. verify-lifecycle.sh carries the same function.
-as_account() {
-  local account input=/dev/null named=()
-  if [ "${1:-}" = --stdin ]; then input=$2; shift 2; fi
-  account=$1
-  shift
-  while [[ "${1:-}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do named+=("$1"); shift; done
-  if [ "$ROOT_OPERATOR" -eq 1 ]; then
-    set -- setsid -w runuser -u "$account" -- env -i PATH="$DROP_PATH" "${named[@]}" "$@"
-  else
-    set -- sudo -n -u "$account" env -i PATH="$DROP_PATH" "${named[@]}" timeout 0 setsid -w "$@"
-  fi
-  (
-    set +e
-    [ -d /proc/self/fd ] && [ -r /proc/self/fd ] || {
-      echo "as_account: no command runs as $account, since /proc/self/fd cannot be read" \
-           "to close the descriptors this shell holds" >&2
-      exit 1
-    }
-    exec <"$input" || exit 1
-    for fd in /proc/self/fd/*; do
-      fd=${fd##*/}
-      case $fd in 0|1|2|*[!0-9]*) ;; *) eval "exec $fd>&-" ;; esac
-    done
-    first_failure() { local s; for s; do [ "$s" -eq 0 ] || exit "$s"; done; exit 0; }
-    err=4
-    [ ! /proc/self/fd/1 -ef /proc/self/fd/2 ] || err=1
-    {
-      {
-        {
-          drop= sig=
-          trap 'sig=INT; [ -z "$drop" ] || kill -TERM "$drop"' INT
-          trap 'sig=QUIT; [ -z "$drop" ] || kill -TERM "$drop"' QUIT
-          trap 'sig=TERM; [ -z "$drop" ] || kill -TERM "$drop"' TERM
-          trap 'sig=HUP; [ -z "$drop" ] || kill -TERM "$drop"' HUP
-          "$@" <&0 2>&"$err" 4>&- &
-          drop=$!
-          [ -z "$sig" ] || kill -TERM "$drop"
-          until wait "$drop"; rc=$?; ! kill -0 "$drop" 2>/dev/null; do :; done
-          [ -z "$sig" ] || { trap - "$sig"; kill -s "$sig" "$BASHPID"; }
-          exit "$rc"
-        } | cat 4>&-
-        first_failure "${PIPESTATUS[@]}"
-      } 4>&1 1>&3 3>&- | cat >&2
-      first_failure "${PIPESTATUS[@]}"
-    } 3>&1
-  )
-}
+# as_account and DROP_PATH: every drop to another account (#590), as root by
+# runuser or as the operator by sudo, by ROOT_OPERATOR.
+source "$(dirname "${BASH_SOURCE[0]}")/account-drop.sh"
 if [ "$ROOT_OPERATOR" -eq 1 ]; then
   DROP="runuser"
   DROP_NEEDS="runuser must run commands as the agent's accounts"

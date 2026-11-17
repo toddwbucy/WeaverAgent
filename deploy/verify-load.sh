@@ -56,6 +56,16 @@ held_closed() {
 }
 
 [ "$(id -u)" -eq 0 ] || die "run under sudo: admin's verbs are root's"
+# **Every drop to the agent's accounts is runuser's** (#590): this script is
+# root's, so root's own sudo is never asked, and nothing of root's
+# environment reaches the account (account-drop.sh). Each read as an account
+# discards its own refusal, so a box without util-linux's runuser and setsid
+# is refused here, by name, and one whose runuser cannot drop before the
+# first unload.
+ROOT_OPERATOR=1
+source "$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")/account-drop.sh"
+command -v runuser >/dev/null && command -v setsid >/dev/null \
+  || die "runuser or setsid is not on PATH, and the reads as the agent's accounts go through them: install util-linux's"
 AGENT=${1:-}; [ -n "$AGENT" ] || die "name the agent"
 KEEP=0; [ "${2:-}" = --keep ] && KEEP=1
 
@@ -147,10 +157,16 @@ plan "validate    $VERDICT"
 member_said() {
   local st said
   st="$(dirname "$SINK")/state/state.log"
-  said=$(sudo -n -u "weaver-$AGENT-state" tail -n 3 "$st" </dev/null 2>/dev/null || true)
+  said=$(as_account "weaver-$AGENT-state" tail -n 3 "$st" 2>/dev/null || true)
   [ -n "$said" ] && { plan "the state member last said:"; printf '%s\n' "$said" | sed 's/^/     /'; }
   return 0
 }
+# **The drop is probed before anything acts** (#590): the reads as the
+# agent's accounts discard their own refusal, so a runuser that cannot drop
+# is named here rather than read as an empty log or a refused header.
+as_account nobody true >/dev/null 2>&1 \
+  || die "runuser would not run a command as nobody, with env and true on $DROP_PATH and /proc mounted," \
+         "so the reads as the agent's accounts could not be made"
 # **The first unload is read from its answer** (#99 area 2 review, K8, the
 # sibling of S22): a refused unload leaves a run standing, whose state and
 # constituents the checks below would then read as this load's. The count is
@@ -246,7 +262,8 @@ fi
 # file, as the count above reads it.
 TUPLE_HELPER="$(dirname -- "$(realpath -e -- "${BASH_SOURCE[0]}")")/agent_tuple.py"
 [ -f "$TUPLE_HELPER" ] || { admin unload "$AGENT" >/dev/null; die "$AGENT: no tuple helper at $TUPLE_HELPER, so the run is unloaded"; }
-TUPLE_HEADER=$(sudo -n -u "weaver-$AGENT" python3 -I - header "$(sed -n 1p <<<"$BINDING")" <"$TUPLE_HELPER" 2>/dev/null || true)
+TUPLE_HEADER=$(as_account --stdin "$TUPLE_HELPER" "weaver-$AGENT" python3 -I - header "$(sed -n 1p <<<"$BINDING")" \
+  2>/dev/null || true)
 [ -n "$TUPLE_HEADER" ] || TUPLE_HEADER='{"refused": "the agent account ran no header read"}'
 TUPLE_ARGS=(--declaration "$DECL" --header-json "$TUPLE_HEADER"
   --live-gpus-csv "$(nvidia-smi --query-gpu=pci.bus_id,name,memory.total --format=csv,noheader 2>/dev/null || true)")
