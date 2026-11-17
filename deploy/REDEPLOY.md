@@ -166,7 +166,11 @@ operator's home (the stack record's `agent-directory` defaulted there from 2026-
 to 2026-10-07) is said in the plan and skipped. No base is archived or purged whole,
 nor any path above a base or an agent's folder, whatever its name (`/var/lib/weaver`, a
 log directory): the agents' folders inside it are archived and purged on their own, and
-the rest of it is named in the plan as left.
+the rest of it is named in the plan as left. **A legacy log path** (a box from before
+#50) gives up its directory whole only where the directory is named `weaver-<agent>` for
+an agent the discovery found and holds nothing but the log and its rotations. Any other
+directory, `/var/log` included, gives up the log and its rotations one by one, and the
+plan names everything else in it as left (#593).
 
 ## 2. Purge
 

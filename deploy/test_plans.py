@@ -8147,6 +8147,129 @@ class DecommissionTests(unittest.TestCase):
         self.assertLess(purge, second)
 
 
+    def log_takes(self, log, agents=("m1",)):
+        """log_paths LOG with AGENTS naming AGENTS, as (kind, path) pairs."""
+        program = ("declare -A AGENTS=(" + " ".join(f"[{a}]=1" for a in agents) + ")\n"
+                   + shell_function(self.script, "log_paths") + 'log_paths "$1"')
+        run = subprocess.run(["bash", "-c", program, "x", str(log)], capture_output=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        fields = run.stdout.split(b"\0")
+        self.assertEqual(fields[-1], b"")
+        return sorted((fields[i].decode(), fields[i + 1].decode()) for i in range(0, len(fields) - 1, 2))
+
+    def test_a_legacy_log_directory_is_taken_whole_only_when_it_is_the_agents(self):
+        # **#593, the Planner's ruling of 2026-11-17**: a legacy `log-path`'s
+        # directory is taken whole only when it is an agent's own, named
+        # `weaver-<agent>` for an agent found and holding nothing but the log
+        # and its rotations. Any other directory gives up the log and its
+        # rotations one by one, each a regular file and no link, and every
+        # other entry is named as left. A name carrying a newline in a
+        # directory anyone may write to is one left entry, never a take of
+        # its writer's choosing. Perturbations: take the directory whole
+        # whatever it holds, or whatever its name, or follow a linked
+        # rotation, or split the pairs on newlines, and a read below fails.
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            shared = top / "log"
+            shared.mkdir()
+            for name in ("worker.log", "worker.log.1", "worker.log.2.gz", "worker.log-20261101",
+                         "stranger.txt", "worker.log.bak", "worker.logger"):
+                (shared / name).write_text("x\n")
+            (top / "elsewhere").write_text("another's\n")
+            (shared / "worker.log.3").symlink_to(top / "elsewhere")
+            (shared / "worker.log.4").mkdir()
+            (shared / "evil\ntake").write_text("x\n")
+            self.assertEqual(self.log_takes(shared / "worker.log"), sorted(
+                [("take", str(shared / n)) for n in ("worker.log", "worker.log.1", "worker.log.2.gz",
+                                                     "worker.log-20261101")]
+                + [("left", str(shared / n)) for n in ("stranger.txt", "worker.log.bak", "worker.logger",
+                                                       "worker.log.3", "worker.log.4", "evil\ntake")]))
+            # The agent's own directory, holding the log and its rotation
+            # alone, is taken whole.
+            own = top / "weaver-m1"
+            own.mkdir()
+            (own / "worker.log").write_text("x\n")
+            (own / "worker.log.1").write_text("x\n")
+            self.assertEqual(self.log_takes(own / "worker.log"), [("take", str(own))])
+            # Named for no agent found, it gives up its files one by one.
+            self.assertEqual(self.log_takes(own / "worker.log", agents=("m2",)),
+                             [("take", str(own / "worker.log")), ("take", str(own / "worker.log.1"))])
+            # Holding a stranger's file, it stands and the file is left.
+            (own / "notes").write_text("not the agent's\n")
+            self.assertEqual(self.log_takes(own / "worker.log"), sorted(
+                [("take", str(own / "worker.log")), ("take", str(own / "worker.log.1")),
+                 ("left", str(own / "notes"))]))
+            # A directory named for nothing at all, and a missing one, give
+            # nothing whole.
+            bare = top / "weaver-"
+            bare.mkdir()
+            (bare / "worker.log").write_text("x\n")
+            self.assertEqual(self.log_takes(bare / "worker.log"), [("take", str(bare / "worker.log"))])
+            self.assertEqual(self.log_takes(top / "absent" / "worker.log"), [])
+
+    def test_a_legacy_log_in_a_shared_directory_leaves_the_directory_and_its_strangers(self):
+        # **#593's acceptance**: a legacy log path in a shared directory beside
+        # a stranger's file. Discovery takes the log and its rotation as
+        # paths of their own and names the stranger's file as left. The
+        # purge's derivation lists the two files and never the directory,
+        # and the paths phase removes them and leaves the stranger's file and
+        # the directory. Perturbation: take the directory whole, and the
+        # directory is a purge line and the stranger's file goes. The paths
+        # phase acts only on the lines under the test's scratch directory.
+        script = self.script
+        q = shlex.quote
+        loop = script[script.index('for f in "${!LOG_FILES[@]}"; do'):]
+        loop = loop[:loop.index("\ndone\n") + len("\ndone\n")]
+        plan_loop = script[script.index('for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do'):]
+        plan_loop = plan_loop[:plan_loop.index("\ndone\n") + len("\ndone\n")]
+        paths_phase = script[script.index('say "paths"\n'):script.index('say "accounts"\n')]
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            shared = top / "var-log"
+            shared.mkdir()
+            (shared / "weaver-worker.log").write_text("the agent's\n")
+            (shared / "weaver-worker.log.1").write_text("the agent's\n")
+            (shared / "stranger.log").write_text("not the agent's\n")
+            base = top / "state"
+            (base / "m1" / "weaver-m1").mkdir(parents=True)
+            listed = top / "purge-list"
+            program = ("set -uo pipefail\n"
+                       "SUDO_RULES=(); LDSO_CONFS=(); HOMES=(); TMP_PATHS=(); WEAVER_USERS=(); WEAVER_GROUPS=()\n"
+                       "HOME_QUOTAS=(); PURGE=(); PURGE_FAILED=0; OWN_TERRITORIES=(); TERRITORY_PATHS=()\n"
+                       "declare -A PREFIXES=() COORD_ROOTS=() AGENTS=([m1]=1) LOG_PATHS=()\n"
+                       f"declare -A TERRITORY_BASES=([{q(str(base))}]=1)\n"
+                       f"declare -A LOG_FILES=([{q(str(shared / 'weaver-worker.log'))}]=1)\n"
+                       f"AGENT_FOLDERS=({q(str(base / 'm1'))})\n"
+                       "LEGACY_DIR=/nonexistent/weaver\nOP_HOME=\n"
+                       "say() { :; }\nplan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                       "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\nheld_is() { return 0; }\n"
+                       "in_operator_home() { return 1; }\n"
+                       + shell_function(script, "log_paths") + loop
+                       + shell_function(script, "spans_a_base") + shell_function(script, "candidate")
+                       + shell_function(script, "purge_candidates") + shell_function(script, "purge_lines_within")
+                       + plan_loop
+                       # Only the lines under this scratch directory reach the
+                       # paths phase: the derivation also names the box's own
+                       # /etc/weaver, which a test never acts on.
+                       + f"purge_candidates | awk -v t={q('path ' + str(top) + '/')} 'index($0, t) == 1' > {q(str(listed))}\n"
+                       + f"sed 's/^/LISTED /' {q(str(listed))}\n"
+                       + f"PURGE_ACTED=$(mktemp)\npurge_lines_within {q(str(listed))} > \"$PURGE_ACTED\"\n"
+                       + paths_phase + 'rm -f -- "$PURGE_ACTED"\n')
+            run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            got = run.stdout.splitlines()
+            self.assertIn(f"LISTED path {shared / 'weaver-worker.log'}", got)
+            self.assertIn(f"LISTED path {shared / 'weaver-worker.log.1'}", got)
+            self.assertNotIn(f"LISTED path {shared}", got)
+            self.assertIn(f"PLAN {shared / 'stranger.log'}  beside the legacy log {shared / 'weaver-worker.log'}, "
+                          "of no agent: left in place, untouched", got)
+            self.assertIn(f"PLAN removed {shared / 'weaver-worker.log'}", got)
+            self.assertIn(f"PLAN removed {shared / 'weaver-worker.log.1'}", got)
+            self.assertFalse((shared / "weaver-worker.log").exists())
+            self.assertFalse((shared / "weaver-worker.log.1").exists())
+            self.assertEqual((shared / "stranger.log").read_text(), "not the agent's\n")
+            self.assertTrue(shared.is_dir())
+
 # The account database's stand-ins for the purge (#140): getent reads the
 # model's passwd and group, userdel removes the user from both and, as the real
 # one does under USERGROUPS_ENAB, the user's private group where no other member

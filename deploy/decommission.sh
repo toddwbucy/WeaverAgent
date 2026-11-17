@@ -128,7 +128,7 @@ read_key() { cat "$1/$2" 2>/dev/null || true; }
 
 # Every path admin's configs name, so the install tree is the one the box
 # actually ran and not the one this script remembers.
-declare -A BIN_DIRS=() LOG_PATHS=() COORD_ROOTS=()
+declare -A BIN_DIRS=() LOG_FILES=() LOG_PATHS=() COORD_ROOTS=()
 ALLOWED=""
 # **The per-agent roots**: every directory under a base, named as admin's name
 # check admits it, a link never one. Each names its binaries, its territory
@@ -151,7 +151,7 @@ for root in "${CONFIG_ROOTS[@]}"; do
   for k in worker-binary spu-binary gate-binary; do
     v=$(read_key "$root" "$k"); [ -n "$v" ] && BIN_DIRS["$(dirname "$v")"]=1
   done
-  v=$(read_key "$root" log-path); [ -n "$v" ] && LOG_PATHS["$(dirname "$v")"]=1
+  v=$(read_key "$root" log-path); [ -n "$v" ] && LOG_FILES["$v"]=1
   ALLOWED="$ALLOWED $(read_key "$root" allow-list | tr '\n' ' ')"
   v=$(read_key "$root" spu-implementations)
   [ -n "$v" ] && BIN_DIRS["$(dirname "$(echo "$v" | awk '{print $2}')")"]=1
@@ -384,8 +384,52 @@ LEGACY_DIR=/var/lib/weaver
 for d in "${!TERRITORY_BASES[@]}"; do
   in_operator_home "$d" && { plan "$d  under the operator's home: not touched"; unset 'TERRITORY_BASES[$d]'; }
 done
-for d in "${!LOG_PATHS[@]}"; do
-  in_operator_home "$d" && { plan "$d  under the operator's home: not touched"; unset 'LOG_PATHS[$d]'; }
+# **log_paths FILE: what a legacy `log-path` gives up** (#593, the Planner's
+# ruling of 2026-11-17), as NUL-ended pairs: `take` and a path the purge takes
+# whole, or `left` and an entry of the log's directory left in place. **The
+# directory is taken whole only when it is an agent's own**: named
+# `weaver-<agent>` for an agent the discovery found, and holding nothing but
+# the log and its rotations. create-agent.sh writes no `log-path`, retired
+# since #50, so no log directory is one it laid. **Any other directory**,
+# `/var/log` included, gives up the log and its rotations one by one, each a
+# regular file and no link, and stands with whatever else it holds, each
+# entry named as left. A rotation is the log's name followed by `.` or `-`
+# digit groups, with an optional compression suffix (`x.log.1`,
+# `x.log.2.gz`, `x.log-20261101`). The pairs are NUL-ended because the
+# directory may be anyone's to write in, and a name carrying a newline would
+# otherwise read as a line of its writer's choosing.
+log_paths() {
+  local f=$1 d name e entry suffix owner a own=() other=()
+  d=$(dirname -- "$f") name=$(basename -- "$f")
+  [ -d "$d" ] && [ ! -L "$d" ] || return 0
+  while IFS= read -r -d '' e; do
+    entry=${e##*/}
+    if [[ "$entry" == "$name"* ]]; then
+      suffix=${entry#"$name"}
+      if [[ "$suffix" =~ ^([.-][0-9]+)*(\.(gz|xz|zst|bz2))?$ ]] && [ -f "$e" ] && [ ! -L "$e" ]; then
+        own+=("$e"); continue
+      fi
+    fi
+    other+=("$e")
+  done < <(find "$d" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
+  owner=${d##*/}
+  a=${owner#weaver-}
+  if [ "$owner" != "$a" ] && [ -n "$a" ] && [ -n "${AGENTS[$a]+given}" ] && [ ${#other[@]} -eq 0 ]; then
+    printf 'take\0%s\0' "$d"
+    return 0
+  fi
+  for e in "${own[@]}"; do printf 'take\0%s\0' "$e"; done
+  for e in "${other[@]}"; do printf 'left\0%s\0' "$e"; done
+}
+for f in "${!LOG_FILES[@]}"; do
+  d=$(dirname -- "$f")
+  in_operator_home "$d" && { plan "$d  under the operator's home: not touched"; continue; }
+  while IFS= read -r -d '' kind && IFS= read -r -d '' pth; do
+    case $kind in
+      take) LOG_PATHS["$pth"]=1 ;;
+      left) plan "$pth  beside the legacy log $f, of no agent: left in place, untouched" ;;
+    esac
+  done < <(log_paths "$f")
 done
 # **agent_folders BASE...: each discovered agent's folder in each base**, one
 # per line, canonical: `<base>/<agent>` (the operator's ruling of 2026-11-16 on
@@ -629,9 +673,10 @@ OWN_TERRITORIES=()
 [ -z "$OWN_LISTED" ] || mapfile -t OWN_TERRITORIES <<< "$OWN_LISTED"
 [ "$TERRITORIES_JUDGED" = 1 ] || plan "REFUSED: a territory a root names is not root:weaver-<agent>-state (see above); the archive and the purge refuse"
 for d in "${OWN_TERRITORIES[@]}"; do TERRITORY_PATHS+=("$d") && plan "$d  (a root's own territory, outside every agent's folder) $(du -sh "$d" 2>/dev/null | cut -f1)"; done
-# **The earlier layout's directory and each log directory are taken whole
-# only where they span no base** (CodeRabbit on #582), judged once every
-# agent's folder and every root's own territory is known.
+# **The earlier layout's directory and each path a legacy log gives up
+# (log_paths, #593) are taken whole only where they span no base** (CodeRabbit
+# on #582), judged once every agent's folder and every root's own territory is
+# known.
 for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do
   [ -e "$d" ] || continue
   if spans_a_base "$d"; then
