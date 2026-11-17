@@ -142,15 +142,15 @@ group in one shell.
   - It runs under `setsid` (util-linux), with no controlling terminal. An interrupt or a
     hangup still ends it, since the script passes the signal on.
 
-  **One window stays open, #605** (the Planner's ruling of 2026-11-17, split from #590):
-  under sudo, the `timeout` that sudo starts as the account holds the terminal sudo
-  hands it, until the `setsid` it starts takes the command out of that terminal, before
-  the command's own `env` runs. `timeout` runs no code of the account's. In root mode
-  `setsid` runs before `runuser`, so no process of the account's holds a terminal. In
-  the operator's mode these drops find the credential `sudo -v` caches by sudo's default
-  `timestamp_type`, the terminal. Under the non-default `timestamp_type=ppid` they do
-  not, since their sudo's parent is a subshell of the script, so the run is refused at
-  its first drop.
+  **One window stays open, #605**, split from #590 and taken up after the first agent
+  runs on an appliance (the operator's ruling of 2026-11-17): under sudo, the `timeout`
+  that sudo starts as the account holds the terminal sudo hands it, until the `setsid`
+  it starts takes the command out of that terminal, before the command's own `env` runs.
+  `timeout` runs no code of the account's. In root mode `setsid` runs before `runuser`,
+  so no process of the account's holds a terminal. In the operator's mode these drops
+  find the credential `sudo -v` caches by sudo's default `timestamp_type`, the terminal.
+  Under the non-default `timestamp_type=ppid` they do not, since their sudo's parent is
+  a subshell of the script, so the run is refused at its first drop.
 - `runuser` and `setsid` (util-linux) are on every box: `verify-load.sh` runs as root,
   and makes its reads as the agent's accounts through `runuser`, and refuses by name
   without them.
