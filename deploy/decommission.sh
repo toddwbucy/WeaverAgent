@@ -491,6 +491,40 @@ agent_folders() {
     done
   done | sort -u
 }
+# **folder_bases ROOT... -- USER...: the base of each agent's folder that the
+# agent's own facts name** (#594, the Planner's ruling of 2026-11-17), one per
+# line, canonical. A root's `territory` key naming `<X>/<agent>/weaver-<agent>`
+# and an account's home in passwd at `<X>/<agent>/home` each name the folder
+# `<X>/<agent>`. Both are root-held facts that stay with the agent when the
+# stack record's `agent-directory` moves after the agent was made, which the
+# bases alone miss. **X is a base only where `<X>/<agent>` passes
+# agent_folders' checks**, so a key or a home naming anything else adds none,
+# and a territory it names is judged alone by territories_outside as before.
+# The root directory is never a base.
+folder_bases() {
+  local r u v a f x i found
+  local -a pairs=()
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do
+    r=$1
+    shift
+    v=$(cat "$r/territory" 2>/dev/null || true); v=${v%%$'\n'*}
+    a=${r##*/}
+    [ "${v##*/}" = "weaver-$a" ] && pairs+=("$a" "$(dirname -- "$v")")
+  done
+  [ "${1:-}" = -- ] && shift
+  for u in "$@"; do
+    is_box_account "$u" && continue
+    v=$(getent passwd "$u" | cut -d: -f6) || v=
+    [ "${v##*/}" = home ] && pairs+=("$(strip_suffix "$u")" "$(dirname -- "$v")")
+  done
+  for ((i = 0; i < ${#pairs[@]}; i += 2)); do
+    a=${pairs[i]} f=${pairs[i + 1]}
+    [ "${f##*/}" = "$a" ] || continue
+    x=$(realpath -e -- "$(dirname -- "$f")" 2>/dev/null) && [ "$x" != / ] || continue
+    found=$(agent_folders "$x")
+    [[ $'\n'"$found"$'\n' == *$'\n'"$x/$a"$'\n'* ]] && printf '%s\n' "$x"
+  done | sort -u
+}
 # **left_in_base BASE TAKEN...: each entry directly in BASE that is none of
 # TAKEN**, one per line, which the plan names as left in place (the Planner's
 # ruling of 2026-11-16 on #578), so the operator sees what the purge leaves.
@@ -535,6 +569,20 @@ spans_a_base() {
 candidate() {
   spans_a_base "$1" || printf 'path %s\n' "$1"
 }
+# **The bases an agent's own facts name join the record's** (#594, the
+# Planner's ruling of 2026-11-17): a folder made under an agent-directory the
+# stack record no longer names is found from its root's `territory` key or
+# its account's home, and its base is guarded and its other entries named as
+# left like any base's. One under the operator's home is said and skipped.
+while IFS= read -r b; do
+  [ -n "$b" ] || continue
+  for c in "${!TERRITORY_BASES[@]}"; do
+    [ "$(realpath -e -- "$c" 2>/dev/null)" = "$b" ] && continue 2
+  done
+  in_operator_home "$b" && { plan "$b  under the operator's home: not touched"; continue; }
+  TERRITORY_BASES["$b"]=1
+  plan "$b  a base an agent's territory key or home names, beyond the stack record's"
+done < <(folder_bases "${AGENT_ROOTS[@]}" -- "${WEAVER_USERS[@]}")
 AGENT_FOLDERS=()
 AGENT_LISTED=$(agent_folders "${!TERRITORY_BASES[@]}")
 [ -z "$AGENT_LISTED" ] || mapfile -t AGENT_FOLDERS <<< "$AGENT_LISTED"
