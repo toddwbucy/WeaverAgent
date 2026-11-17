@@ -163,7 +163,10 @@ logs and published save points beside its state room and trace. A box from befor
 2026-10-07 keeps its `~/.weaveragent/` directories where they stand, the operator's
 own, neither archived nor purged: a territory base or a root's territory under the
 operator's home (the stack record's `agent-directory` defaulted there from 2026-10-02
-to 2026-10-07) is said in the plan and skipped.
+to 2026-10-07) is said in the plan and skipped. No base is archived or purged whole,
+nor any path above a base or an agent's folder, whatever its name (`/var/lib/weaver`, a
+log directory): the agents' folders inside it are archived and purged on their own, and
+the rest of it is named in the plan as left.
 
 ## 2. Purge
 
@@ -192,9 +195,10 @@ nothing but `models`.
    `HowToDeployANewAgent.md` section 7 says how to read or clear the mark before the
    rerun.
 3. Every other path on the list: the territories, the logs, the homes, the `/tmp`
-   entries, the run directories, `/var/lib/weaver`, the `ld.so` confs and each prefix's
-   `bin`, `lib`, `python-spu` and backups. (The sudo rules went before step 1.) The
-   accounts still resolve, so every owner and group still reads by name.
+   entries, the run directories, `/var/lib/weaver` where it spans no base, the `ld.so`
+   confs and each prefix's `bin`, `lib`, `python-spu` and backups. (The sudo rules went
+   before step 1.) The accounts still resolve, so every owner and group still reads by
+   name.
 4. The `weaver-*` users, then their groups, `userdel` taking no home: a home the purge
    judged went as a path in step 3, and one outside `/home` is left. A group `userdel`
    already removed with its user, as it removes a private group, is done.

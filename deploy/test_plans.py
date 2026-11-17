@@ -8930,6 +8930,8 @@ class RoundOneOf79Tests(unittest.TestCase):
                 ["bash", "-c", "SUDO_RULES=(); LDSO_CONFS=(); OWN_TERRITORIES=(); HOMES=(); TMP_PATHS=()\n"
                  "WEAVER_USERS=(); WEAVER_GROUPS=(); declare -A PREFIXES=() LOG_PATHS=() COORD_ROOTS=() AGENTS=()\n"
                  f"declare -A TERRITORY_BASES=([{shlex.quote(str(base))}]=1)\nAGENT_FOLDERS=({shlex.quote(str(base / 'm1'))})\n"
+                 "LEGACY_DIR=/nonexistent/weaver\n"
+                 + shell_function(script, "spans_a_base") + shell_function(script, "candidate")
                  + shell_function(script, "purge_candidates") + "purge_candidates"],
                 text=True, capture_output=True, timeout=20)
             self.assertEqual(candidates.returncode, 0, candidates.stderr)
@@ -8945,6 +8947,108 @@ class RoundOneOf79Tests(unittest.TestCase):
             self.assertEqual(self.run_fn_in(script, "home_within", str(elsewhere), str(folder)), "")
         self.assertIn('*) plan "$h  (home of $u): outside /home and every agent\'s folder, left in place, untouched" ;;', script)
         self.assertIn('done < <(left_in_base "$d" "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}" "${HOMES[@]}")', script)
+
+    def test_no_base_and_no_path_above_one_is_archived_or_purged_whole(self):
+        # **CodeRabbit on #582, the Planner's ruling of 2026-11-17**: a base,
+        # or a path above a base or an agent's own folder, is never archived
+        # as a path or listed for the purge, whatever fixed name it carries:
+        # `/var/lib/weaver` where the stack record names it the
+        # agent-directory, a log directory that is the base, or one above a
+        # root's own territory. The archive and the purge's derivation both
+        # drop it, so a list written before the drop refuses at the purge,
+        # and the purge takes the agent's folder and leaves the stranger's
+        # file in the base. Perturbations: drop the guard from the
+        # derivation's candidate, or list the legacy directory past it, and
+        # the stranger's file goes; drop it from archive_path, and the base
+        # is archived and listed; compare equal paths alone, or leave out the
+        # agents' own folders, and a path above one is a candidate; list a
+        # run directory past it in the archive's writer, and the sweep below
+        # fails.
+        script = (DEPLOY / "decommission.sh").read_text()
+        lines = script.splitlines()
+        start = lines.index("  archive_path() { # archive_path NAME PATH...")
+        archive_path = "\n".join(lines[start:next(i for i in range(start, len(lines)) if lines[i] == "  }") + 1])
+        paths_phase = script[script.index('say "paths"\n'):script.index('say "accounts"\n')]
+        q = shlex.quote
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            base = top / "var-lib-weaver"
+            (base / "m1" / "weaver-m1").mkdir(parents=True)
+            (base / "stranger.txt").write_text("not the agent's\n")
+            (top / "legacy" / "agents").mkdir(parents=True)
+            (top / "elsewhere" / "weaver-x").mkdir(parents=True)
+            (top / "old").mkdir()
+            (top / "dest").mkdir()
+
+            def run(legacy, bases, folders=(), own=(), logs=(), tail="purge_candidates\n"):
+                program = ("set -uo pipefail\n"
+                           "SUDO_RULES=(); LDSO_CONFS=(); HOMES=(); TMP_PATHS=(); WEAVER_USERS=(); WEAVER_GROUPS=()\n"
+                           "HOME_QUOTAS=(); PURGE=(); PURGE_FAILED=0\n"
+                           "declare -A PREFIXES=() COORD_ROOTS=() AGENTS=() LOG_PATHS=() TERRITORY_BASES=()\n"
+                           f"LEGACY_DIR={q(str(legacy))}\nDEST={q(str(top / 'dest'))}\n"
+                           + "".join(f"TERRITORY_BASES[{q(str(b))}]=1\n" for b in bases)
+                           + "".join(f"LOG_PATHS[{q(str(d))}]=1\n" for d in logs)
+                           + "AGENT_FOLDERS=(" + " ".join(q(str(f)) for f in folders) + ")\n"
+                           + "OWN_TERRITORIES=(" + " ".join(q(str(o)) for o in own) + ")\n"
+                           + "say() { :; }\nplan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                           + "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\nheld_is() { return 0; }\n"
+                           + "free_name() { printf '%s' \"$1\"; }\ntarz() { : > \"$1\"; }\nas_op() { \"$@\"; }\n"
+                           + shell_function(script, "spans_a_base") + shell_function(script, "candidate")
+                           + shell_function(script, "purge_candidates") + shell_function(script, "purge_lines_outside")
+                           + shell_function(script, "purge_lines_within") + archive_path + "\n" + tail)
+                ran = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+                self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                return ran.stdout.splitlines()
+
+            # A list written before the drop names the base and the agent's
+            # folder. The purge's judgment names the base as what it would not
+            # find, so that purge refuses, and the paths phase, acting only on
+            # the lines the derivation holds, takes the folder and leaves the
+            # stranger's file and the base. A list the archive writes now
+            # names the folder alone, and nothing of it is outside.
+            old_list, new_list = top / "old-list", top / "new-list"
+            old_list.write_text(f"path {base}\npath {base / 'm1'}\n")
+            new_list.write_text(f"path {base / 'm1'}\n")
+            got = run(base, [base], folders=[base / "m1"],
+                      tail=(f"purge_lines_outside {q(str(old_list))} | sed 's/^/OUTSIDE /'\n"
+                            f"[ -z \"$(purge_lines_outside {q(str(new_list))})\" ] || echo 'OUTSIDE new'\n"
+                            f"PURGE_ACTED=$(mktemp)\npurge_lines_within {q(str(old_list))} > \"$PURGE_ACTED\"\n"
+                            + paths_phase + 'rm -f -- "$PURGE_ACTED"\n'))
+            self.assertEqual((base / "stranger.txt").read_text(), "not the agent's\n")
+            self.assertIn(f"PLAN removed {base / 'm1'}", got)
+            self.assertFalse((base / "m1").exists())
+            self.assertEqual([g for g in got if g.startswith("OUTSIDE ")], [f"OUTSIDE path {base}"])
+            (base / "m1" / "weaver-m1").mkdir(parents=True)
+            # The record names the legacy directory as its base, and a log
+            # directory is the base: the agent's folder is a candidate, the
+            # base is not.
+            got = run(base, [base], folders=[base / "m1"], logs=[base])
+            self.assertIn(f"path {base / 'm1'}", got)
+            self.assertNotIn(f"path {base}", got)
+            # A legacy directory above a base, and a log directory above a
+            # root's own territory, are no candidates; the territory is.
+            got = run(top / "legacy", [top / "legacy" / "agents"], own=[top / "elsewhere" / "weaver-x"],
+                      logs=[top / "elsewhere"])
+            self.assertNotIn(f"path {top / 'legacy'}", got)
+            self.assertNotIn(f"path {top / 'elsewhere'}", got)
+            self.assertIn(f"path {top / 'elsewhere' / 'weaver-x'}", got)
+            # Control: a legacy directory that spans no base is taken whole.
+            self.assertIn(f"path {top / 'old'}", run(top / "old", [base], folders=[base / "m1"]))
+            # The archive lists the agent's folder and says the base is left.
+            got = run(base, [base], folders=[base / "m1"], logs=[base],
+                      tail=('archive_path var-lib-weaver "$LEGACY_DIR"\n'
+                            'for d in "${!LOG_PATHS[@]}"; do archive_path log "$d"; done\n'
+                            'archive_path agent "${AGENT_FOLDERS[0]}"\nprintf "LISTED %s\\n" "${PURGE[@]}"\n'))
+            self.assertEqual([g for g in got if g.startswith("LISTED ")], [f"LISTED {base / 'm1'}"])
+            self.assertIn(f"PLAN {base}: a base, or above a base or an agent's folder, so it is not archived whole "
+                          "or listed for the purge", got)
+        # Every purge line the derivation and the archive's list write runs
+        # through the one guard, beside the paths archive_path kept.
+        self.assertNotIn('echo "path', shell_function(script, "purge_candidates"))
+        writer = script[script.index("# What --purge may touch, and nothing else."):
+                        script.index('} | to_file "$DEST/PURGE-LIST"')]
+        self.assertEqual([w.strip() for w in writer.splitlines() if '"path ' in w],
+                         ['for pth in "${PURGE[@]}"; do echo "path $pth"; done'])
 
     def test_each_capped_homes_limit_goes_before_its_folder(self):
         # **#585**: discovery takes each home's project from its account's uid
@@ -9064,7 +9168,8 @@ class RoundOneOf79Tests(unittest.TestCase):
         # line, drop the archive's line, or drop the pass-over, and a read
         # below fails.
         script = (DEPLOY / "decommission.sh").read_text()
-        fns = "".join(shell_function(script, n) for n in ("purge_candidates", "purge_lines_outside", "purge_lines_within"))
+        fns = "".join(shell_function(script, n) for n in ("spans_a_base", "candidate", "purge_candidates",
+                                                          "purge_lines_outside", "purge_lines_within"))
         with tempfile.TemporaryDirectory() as scratch:
             listed = Path(scratch) / "PURGE-LIST"
             listed.write_text("quota 12345 /state drive\nquota 999 /gone\n")

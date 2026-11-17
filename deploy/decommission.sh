@@ -376,6 +376,9 @@ TERRITORY_PATHS=()
 # own `agent-directory`, where create-agent.sh made every territory.
 declare -A TERRITORY_BASES=([/var/lib/weaver-agent]=1)
 v=$(read_key /etc/weaver/stack agent-directory); [ -n "$v" ] && TERRITORY_BASES["$v"]=1
+# The directory where the trace sinks of a layout before the territories
+# stood, taken whole only where it spans no base (spans_a_base, below).
+LEGACY_DIR=/var/lib/weaver
 # A base or a log directory under the operator's home is the layout retired
 # on 2026-10-07: said, and never archived or purged.
 for d in "${!TERRITORY_BASES[@]}"; do
@@ -433,10 +436,36 @@ left_in_base() {
     printf '%s\n' "$e"
   done < <(find "$base" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
 }
+# **spans_a_base PATH: whether PATH is a base, or above a base or an agent's
+# own folder** (CodeRabbit on #582), compared canonical: a path that does not
+# resolve is compared as written. Such a path holds what is no agent's, a
+# stranger's file in the base among it, so whatever fixed name it carries it
+# is never archived as a path of its own or listed for the purge, in the
+# archive and in purge_candidates both. The agents' folders inside it go on
+# their own, and the plan names it as left.
+spans_a_base() {
+  local p c b
+  p=$(realpath -e -- "$1" 2>/dev/null) || p=$1
+  [ "$p" != / ] || return 0
+  for b in "${!TERRITORY_BASES[@]}"; do
+    c=$(realpath -e -- "$b" 2>/dev/null) || continue
+    case "$c" in "$p" | "$p"/*) return 0 ;; esac
+  done
+  for b in "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}"; do
+    c=$(realpath -e -- "$b" 2>/dev/null) || continue
+    case "$c" in "$p"/*) return 0 ;; esac
+  done
+  return 1
+}
+# **candidate PATH: the purge line for PATH, unless PATH spans a base**, so the
+# archive's list and the purge's derivation drop the same paths.
+candidate() {
+  spans_a_base "$1" || printf 'path %s\n' "$1"
+}
 AGENT_FOLDERS=()
 AGENT_LISTED=$(agent_folders "${!TERRITORY_BASES[@]}")
 [ -z "$AGENT_LISTED" ] || mapfile -t AGENT_FOLDERS <<< "$AGENT_LISTED"
-for d in /var/lib/weaver "${AGENT_FOLDERS[@]}" "${!LOG_PATHS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
+for d in "${AGENT_FOLDERS[@]}"; do [ -e "$d" ] && TERRITORY_PATHS+=("$d") && plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"; done
 # **home_projects FOLDER...: "<project> <seen> <mount point>" for each agent's
 # home create-agent.sh capped** (#585). The project is the agent account's uid,
 # read from passwd, the number create-agent.sh gives the home, and the mount is
@@ -577,6 +606,18 @@ OWN_TERRITORIES=()
 [ -z "$OWN_LISTED" ] || mapfile -t OWN_TERRITORIES <<< "$OWN_LISTED"
 [ "$TERRITORIES_JUDGED" = 1 ] || plan "REFUSED: a territory a root names is not root:weaver-<agent>-state (see above); the archive and the purge refuse"
 for d in "${OWN_TERRITORIES[@]}"; do TERRITORY_PATHS+=("$d") && plan "$d  (a root's own territory, outside every agent's folder) $(du -sh "$d" 2>/dev/null | cut -f1)"; done
+# **The earlier layout's directory and each log directory are taken whole
+# only where they span no base** (CodeRabbit on #582), judged once every
+# agent's folder and every root's own territory is known.
+for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do
+  [ -e "$d" ] || continue
+  if spans_a_base "$d"; then
+    plan "$d  a base, or above a base or an agent's folder: not taken whole, left in place"
+    continue
+  fi
+  TERRITORY_PATHS+=("$d")
+  plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"
+done
 # **home_within HOME FOLDER...: the folder HOME stands in**, canonical, or
 # nothing. A home in an agent's folder (#578) goes with the folder.
 home_within() {
@@ -812,7 +853,14 @@ if [ "$MODE" = archive ]; then
   archive_path() { # archive_path NAME PATH...
     local name present=()
     name=$(free_name "$1") || exit 1; shift
-    for pth in "$@"; do [ -e "$pth" ] && present+=("$pth"); done
+    for pth in "$@"; do
+      [ -e "$pth" ] || continue
+      if spans_a_base "$pth"; then
+        plan "$pth: a base, or above a base or an agent's folder, so it is not archived whole or listed for the purge"
+        continue
+      fi
+      present+=("$pth")
+    done
     [ ${#present[@]} -gt 0 ] || return 0
     tarz "$DEST/$name.tar.zst" "${present[@]}"
     # Apparent size, not blocks: on NFS the blocks are not yet accounted
@@ -830,7 +878,7 @@ if [ "$MODE" = archive ]; then
     for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && parts+=("$sub"); done
     [ ${#parts[@]} -gt 0 ] && archive_path "$(archive_name opt "$p")" "${parts[@]}"
   done
-  [ -e /var/lib/weaver ] && archive_path var-lib-weaver /var/lib/weaver
+  [ -e "$LEGACY_DIR" ] && archive_path var-lib-weaver "$LEGACY_DIR"
   # Every agent's folder, with its territory and its home, from each base
   # (Codex on #79, #578): never the base itself.
   for d in "${AGENT_FOLDERS[@]}"; do archive_path "$(archive_name agent "$d")" "$d"; done
@@ -846,8 +894,8 @@ if [ "$MODE" = archive ]; then
     for pth in "${PURGE[@]}"; do echo "path $pth"; done
     # The run directories are tmpfs state, purged without an archive.
     for c in "${!COORD_ROOTS[@]}"; do
-      [ -d "$c/weaver.run" ] && echo "path $c/weaver.run"
-      for a in "${!AGENTS[@]}"; do [ -d "$c/weaver-$a" ] && echo "path $c/weaver-$a"; done
+      [ -d "$c/weaver.run" ] && candidate "$c/weaver.run"
+      for a in "${!AGENTS[@]}"; do [ -d "$c/weaver-$a" ] && candidate "$c/weaver-$a"; done
     done
     for u in "${WEAVER_USERS[@]}";  do echo "user $u"; done
     for g in "${WEAVER_GROUPS[@]}"; do echo "group $g"; done
@@ -877,19 +925,19 @@ fi
 # derivation also finds.
 purge_candidates() {
   local p sub d c a u g
-  [ -d /etc/weaver ] && echo "path /etc/weaver"
-  for p in "${SUDO_RULES[@]}" "${LDSO_CONFS[@]}"; do echo "path $p"; done
+  [ -d /etc/weaver ] && candidate /etc/weaver
+  for p in "${SUDO_RULES[@]}" "${LDSO_CONFS[@]}"; do candidate "$p"; done
   for p in "${!PREFIXES[@]}"; do
-    for sub in bin lib python-spu; do [ -d "$p/$sub" ] && echo "path $p/$sub"; done
-    for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && echo "path $sub"; done
+    for sub in bin lib python-spu; do [ -d "$p/$sub" ] && candidate "$p/$sub"; done
+    for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && candidate "$sub"; done
   done
-  [ -e /var/lib/weaver ] && echo "path /var/lib/weaver"
+  [ -e "$LEGACY_DIR" ] && candidate "$LEGACY_DIR"
   for d in "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}" "${!LOG_PATHS[@]}" "${HOMES[@]}" "${TMP_PATHS[@]}"; do
-    echo "path $d"
+    candidate "$d"
   done
   for c in "${!COORD_ROOTS[@]}"; do
-    echo "path $c/weaver.run"
-    for a in "${!AGENTS[@]}"; do echo "path $c/weaver-$a"; done
+    candidate "$c/weaver.run"
+    for a in "${!AGENTS[@]}"; do candidate "$c/weaver-$a"; done
   done
   for u in "${WEAVER_USERS[@]}"; do echo "user $u"; done
   for g in "${WEAVER_GROUPS[@]}"; do echo "group $g"; done
