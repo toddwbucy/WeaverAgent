@@ -13,12 +13,13 @@ and this document starts where that one ends.
 
 Every command runs from the WeaverAgent tree, as the operator, never under sudo. The
 scripts ask for sudo where a step needs it. **On a single-purpose appliance root is the
-operator** (the operator's ruling of 2026-11-16, #576): there `create-agent.sh` runs as
-root with `--root-operator`, and its root steps run without sudo (section 2). On a
-workstation the operator is your own account, which can sudo. `<name>` is the agent's
-name: a unix user, a group and a directory, so `create-agent.sh` takes lowercase
-letters and digits, 2 to 16 characters. Paths below are the defaults, and a box's real
-values are in the stack record `/etc/weaver/stack/`, one file per key, which
+operator** (the operator's ruling of 2026-11-16, #576): there `create-agent.sh` and
+`verify-lifecycle.sh` run as root with `--root-operator`, and their root steps run
+without sudo, though root's own sudo still serves the admin-con account's rule (sections
+1, 2 and 4). On a workstation the operator is your own account, which can sudo. `<name>`
+is the agent's name: a unix user, a group and a directory, so `create-agent.sh` takes
+lowercase letters and digits, 2 to 16 characters. Paths below are the defaults, and a
+box's real values are in the stack record `/etc/weaver/stack/`, one file per key, which
 `bootstrap-stack.sh` wrote and the scripts read, and in each agent's own root
 `/etc/weaver/admin/<name>/`, which is all admin reads besides the territory that root
 names (`WEAVER_ADMIN_CONFIG` names another base, but a delegated invocation under sudo
@@ -525,15 +526,31 @@ A `FAULT` line unloads the run and fails the script, `--keep` included, like eve
 failed check.
 
 `deploy/verify-lifecycle.sh --agent <throwaway>`, run as the operator, verifies a whole
-lifecycle end to end
-(create with the box's accounts, load, an unseeded turn through the gate as gate-con,
-save points, restore, a measurement with the throwaway agent's rule moved to the
-operator's uid and back, in which a turn as gate-con is refused and an ordinary turn as
-the operator is answered (no seeding line is sent), force-unload, crash recovery, the
-refusal by name of a root of an older layout, the refusal of a load over an access
-entry on the trace, take-down) on a throwaway agent it creates; it plans
-unless given `--apply`, and `--keep` stops it before the take-down so the checks it
-cannot make are made against the loaded agent.
+lifecycle end to end on a throwaway agent it creates: create with the box's accounts,
+load, an unseeded turn through the gate as gate-con, save points, restore, a measurement
+with the throwaway agent's rule moved to the operator's uid and back, in which a turn as
+gate-con is refused and an ordinary turn as the operator is answered (in the operator's
+mode no seeding line is sent), force-unload, crash recovery, the refusal by name of a
+root of an older layout, the refusal of a load over an access entry on the trace, and
+take-down. It plans unless given `--apply`, and `--keep` stops it before the take-down
+so the checks it cannot make are made against the loaded agent.
+
+**On a single-purpose appliance root runs it with `--root-operator`** (#576), from
+root's own login, and passes the flag to `create-agent.sh`. Root steps run directly, the
+looks as the agent's accounts go through `runuser`, and no sudo credential is asked for.
+The admin-con rule's listing and `verify-load.sh`'s own drops still go through root's
+sudo, which the run checks before anything acts. Root reaches every file and the gate's
+socket by capability, and admin exempts uid 0 from the reach judgment, so the checks
+that capability voids are made another way. The groups check finds root in none of the
+agent's groups. The measurement moves the rule to uid 0, where root's ordinary turn and
+root's seeding line are both answered. The seed is in the save point published at the
+unload that follows, and the restore of an older save point right after leaves it
+behind. The perturbation moves the rule to the admin-con account's uid, which does not
+hold the agent's own group `weaver-<name>`, and validate refuses. The final `show` is
+asked as gate-con, a caller that is not root. At step 0 the run says that
+`update-stack.sh`'s reads through the operator's groups cannot refuse as root. Step 8's
+refusal reads the root's key and fires as root too. At step 3 the run says that a cause
+of 0 no longer tells whether admin read `SUDO_UID` or fell back to 0.
 
 `load` never ends a run that stands: it answers `agent_running` and leaves the decision
 to its caller, who reads `show` and issues `unload`.

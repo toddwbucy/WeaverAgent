@@ -88,9 +88,10 @@ with open(os.environ['CALLS'], 'a') as log:
 # as it came, then answered as the same step through sudo would be.
 if name == 'as-root':
     name = 'sudo'
-elif name == 'runuser':
+via_runuser = False
+if name == 'runuser':
     assert args[0] == '-u' and args[2] == '--', ('runuser as create-agent.sh calls it', args)
-    name, args = 'sudo', ['-n', '-u', args[1], *args[3:]]
+    name, args, via_runuser = 'sudo', ['-n', '-u', args[1], *args[3:]], True
 def mapped(value):
     if value.startswith('/home/') or value.startswith('/etc/sudoers') or value.startswith('/etc/ld.so.conf.d/'):
         return str(root / value.lstrip('/'))
@@ -343,6 +344,11 @@ elif name == 'sudo':
     # alone, so `sudo -u <account>` failed before any look was made.
     if identity and os.environ.get('DROP_FAIL') in (identity, 'all'):
         print(f'sudo: you are not permitted to run commands as {identity}', file=sys.stderr)
+        sys.exit(1)
+    # A drop root's own sudo refuses where runuser's passes (the self-check
+    # on B2): the verifier's root mode checks both.
+    if identity and not via_runuser and os.environ.get('SUDO_DROP_FAIL') == identity:
+        print('sudo: a password is required', file=sys.stderr)
         sys.exit(1)
     if op == '--version':
         print(os.environ.get('SUDO_VERSION', 'Sudo version 1.9.16'))
@@ -623,8 +629,8 @@ class PlanTests(unittest.TestCase):
                     "CARGO_TARGET_DIR": str(self.root / 'target with "quotes"'),
                     "USER": "fixture-no-home", "PROBE": str(self.root / "probe"),
                     "FIXTURE_ROOT": str(self.root)}
-        for name in ("BASH_ENV", "FIXTURE_MOUNT", "FIXTURE_REPQUOTA", "FIXTURE_REPQUOTA_FAILS", "SUDO_USER", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
-                     "VISUDO_FAIL", "DROP_FAIL", "UUTILS_TEST", "SUDO_VERSION", "TEE_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
+        for name in ("BASH_ENV", "FIXTURE_MOUNT", "FIXTURE_REPQUOTA", "FIXTURE_REPQUOTA_FAILS", "SUDO_USER", "SUDO_UID", "COLLISION", "ALLOW_APPLY_CHECKS", "TRACE_OPEN", "BUILD_FAIL", "SUDO_FAIL", "READ_FAIL", "EMPTY_PATH", "ACL_FAIL", "PATH_FAIL", "ACCOUNT_FAIL", "WALL_OPEN",
+                     "VISUDO_FAIL", "DROP_FAIL", "SUDO_DROP_FAIL", "UUTILS_TEST", "SUDO_VERSION", "TEE_FAIL", "RELAY_GROUPS", "CONNECTOR_GROUPS", "UNITS", "UNITS_FAIL", "FIXTURE_ACCOUNT_UID",
                      "COLLISION_GROUP", "KEEP_ALIVE", "TRACE_GROUP_AS", "GROUP_WRITES",
                      "LAYOUT_GROUPS", "FIXTURE_ADMIN", "ADMIN_CALLS", "UNLOAD_ANSWER", "MISPLACED",
                      "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "STAND_IN_LEAF", "ENGINE_BUILD", "NO_ENGINE_MESSAGE",
@@ -5323,7 +5329,7 @@ esac
         # commit security review of 36f1374). Perturbation: drop the umask
         # from either tar.
         script = (self.repo / "deploy" / "verify-lifecycle.sh").read_text()
-        writes = [l for l in script.splitlines() if "sudo -n" in l and " -cpf " in l]
+        writes = [l for l in script.splitlines() if "root sh -c" in l and " -cpf " in l]
         self.assertEqual(len(writes), 2, writes)
         for line in writes:
             self.assertIn("umask 077 && exec tar", line)
@@ -5336,6 +5342,120 @@ esac
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--apply needs sudo", result.stderr)
         self.assertEqual([c for c in self.calls() if c[0] == "sudo"], [["sudo", "-v"]])
+
+    def test_lifecycle_root_mode_plans_what_root_measures(self):
+        # **#576, B2**: with --root-operator, run as root, the plan passes the
+        # flag to create-agent.sh, names root the operator, and plans each
+        # check root's capability voids in its root-mode form: no group
+        # joined and none held, step 5b's rule half at uid 0 with root's
+        # seeding line and its socket half on the admin-con account's uid,
+        # step 9's show as the box's gate-con account, and update-stack.sh's
+        # group reads said to be unable to refuse. The take-down lines carry
+        # the flag. Nothing is acted on, and the operator's plan carries none
+        # of it. Perturbations: drop the flag from step 1's line, or let the
+        # plan print a gpasswd in root mode, and a read below fails.
+        self.env["FIXTURE_UID"] = "0"
+        result = self.lifecycle("--root-operator")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = result.stdout
+        # Both create-agent.sh lines, the plan's and the apply's, carry it.
+        self.assertEqual(out.count("$ deploy/create-agent.sh m1 --root-operator --artifact"), 2, out)
+        for said in ("operator        root, by --root-operator (#576)",
+                     "root holds none of weaver-m1, weaver-m1-trace, weaver-m1-state and weaver-m1-admin",
+                     "allowed-uids = [0] in", "root joins no group (#576)",
+                     "deploy/turn.py m1 --system --raw as root: the seeding line, from uid 0 (#576)",
+                     "allowed-uids = [<weaver-admincon's uid>] (the perturbation",
+                     "validated, by admin's exemption of uid 0 from the reach judgment",
+                     "root's seeding line is answered, and the record carries one turnless message.system",
+                     "weaver-admin show m1, as weaver-gatecon through runuser and as root",
+                     "unauthorized as weaver-gatecon, a caller that is not root",
+                     "as root (#576): its reads through the operator's groups pass by root's capability",
+                     "as root (#576): the refusal reads the root's key"):
+            self.assertIn(said, out)
+        self.assertNotIn("gpasswd", out)
+        self.assertNotIn("holds weaver-m1-trace, weaver-m1-state and weaver-m1-admin and not", out)
+        self.assertFalse([c for c in self.calls() if c[0] in ("sudo", "runuser", "as-root")], self.calls())
+        kept = self.lifecycle("--root-operator", "--keep")
+        self.assertEqual(kept.returncode, 0, kept.stderr)
+        self.assertIn("deploy/verify-lifecycle.sh --agent m1 --cleanup --apply --root-operator", kept.stdout)
+        self.env.pop("FIXTURE_UID")
+        plain = self.lifecycle()
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertNotIn("--root-operator", plain.stdout)
+        self.assertNotIn("as root (#576)", plain.stdout)
+        self.assertIn("gpasswd -a", plain.stdout)
+        usage = self.run_script("verify-lifecycle.sh", "--help")
+        self.assertIn("--root-operator", usage.stdout)
+        # Both create-agent.sh runs carry the flag, which is empty without it.
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        runs = [l for l in script.splitlines() if 'deploy/create-agent.sh" "$A"' in l]
+        self.assertEqual(len(runs), 2, runs)
+        self.assertTrue(all('"$A" $ROOT_FLAG --artifact' in l for l in runs), runs)
+
+    def test_lifecycle_root_mode_refuses_what_is_not_root_s_own_login(self):
+        # **#576, B2**: the flag is for root, root without the flag refuses
+        # naming it, and a run through sudo from another account refuses in
+        # root mode, by SUDO_USER or by SUDO_UID, since admin records the
+        # invoker's SUDO_UID as every cause and the operator key is 0. Root
+        # through its own sudo passes. Each refuses before anything privileged.
+        # Perturbations: drop any one check, and its case runs on.
+        cases = (
+            ("the flag under another uid", {}, ["--root-operator"], "--root-operator is for root, on a single-purpose appliance"),
+            ("root without the flag", {"FIXTURE_UID": "0"}, [], "run it as root with --root-operator"),
+            ("sudo from another account", {"FIXTURE_UID": "0", "SUDO_USER": "someone"},
+             ["--root-operator"], "not sudo from another account (SUDO_USER someone, SUDO_UID unset)"),
+            ("SUDO_UID another uid's", {"FIXTURE_UID": "0", "SUDO_USER": "root", "SUDO_UID": "1000"},
+             ["--root-operator"], "admin records the invoker's SUDO_UID as every cause"),
+            ("SUDO_UID set and empty", {"FIXTURE_UID": "0", "SUDO_UID": ""},
+             ["--root-operator"], "(SUDO_USER unset, SUDO_UID empty)"),
+        )
+        self.install_stack()
+        for name, env, args, said in cases:
+            with self.subTest(case=name):
+                self.log.unlink(missing_ok=True)
+                saved = dict(self.env)
+                self.env.update(env)
+                try:
+                    result = self.lifecycle(*args)
+                finally:
+                    self.env = saved
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn("REFUSED: ", result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertFalse([c for c in self.calls() if c[0] in ("sudo", "runuser", "as-root")], self.calls())
+        self.env.update(FIXTURE_UID="0", SUDO_USER="root", SUDO_UID="0")
+        result = self.lifecycle("--root-operator")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_lifecycle_root_mode_probes_runuser_and_root_s_sudo_and_asks_no_credential(self):
+        # **#576, B2**: --apply in root mode asks for no sudo credential. The
+        # drop probe, runuser as nobody, stands where the operator's sudo -v
+        # stands, and a runuser that cannot drop refuses before anything acts.
+        # Root's own sudo, which the admin-con rule's listing and
+        # verify-load.sh's drops go through, is checked next (the self-check
+        # on B2), and refuses before anything acts where it cannot drop
+        # without a prompt. Perturbations: keep sudo -v in root mode, and the
+        # calls name it; drop either probe, and its case runs on.
+        archive = self.root / "archive"
+        archive.mkdir()
+        self.env.update(FIXTURE_UID="0", ALLOW_APPLY_CHECKS="1", CARGO_TARGET_DIR=str(self.root / "t"))
+        for fail, said, made in (("DROP_FAIL", "runuser would not run a command as nobody",
+                                  [["runuser", "-u", "nobody", "--", "true"]]),
+                                 ("SUDO_DROP_FAIL", "root's sudo would not run a command as nobody without a prompt",
+                                  [["runuser", "-u", "nobody", "--", "true"], ["sudo", "-n", "-u", "nobody", "true"]])):
+            with self.subTest(fail=fail):
+                self.log.unlink(missing_ok=True)
+                self.env[fail] = "nobody"
+                try:
+                    result = self.lifecycle("--root-operator", "--apply", "--archive", str(archive),
+                                            "--artifact", str(self.artifact))
+                finally:
+                    self.env.pop(fail)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(said, result.stderr)
+                if fail == "SUDO_DROP_FAIL":
+                    self.assertIn("HowToDeployANewAgent.md section 1", result.stderr)
+                self.assertEqual([c for c in self.calls() if c[0] in ("sudo", "runuser", "as-root")], made)
 
     def test_lifecycle_cleanup_takes_down_only_an_agent_it_made(self):
         # --cleanup is step 9 alone, plan by default, and refuses an agent
@@ -5500,10 +5620,13 @@ def admin_retired_root_keys():
 
 def lifecycle_functions(script, *names):
     """verify-lifecycle.sh's functions as the script defines them, a
-    one-line definition as its line and any other to its closing brace."""
+    one-line definition as its line and any other to its closing brace.
+    **The root step and the drop come with them** (#576): `root` and
+    `as_account`, which every root step and every look as an account runs
+    through, in the operator's mode unless ROOT_OPERATOR says otherwise."""
     lines = script.splitlines()
-    out = []
-    for name in names:
+    out = ["ROOT_OPERATOR=${ROOT_OPERATOR:-0}"]
+    for name in [n for n in ("root", "as_account") if n not in names] + list(names):
         start = next(i for i, l in enumerate(lines) if l.startswith(f"{name}()"))
         if lines[start].rstrip().endswith("}"):
             out.append(lines[start])
@@ -5511,6 +5634,327 @@ def lifecycle_functions(script, *names):
             end = next(i for i in range(start, len(lines)) if lines[i] == "}")
             out.extend(lines[start:end + 1])
     return "\n".join(out) + "\n"
+
+
+class LifecycleRootModeHelperTests(unittest.TestCase):
+    """**#576, B2: every root step and every look as an account goes through
+    one helper each.** `root CMD...` is `sudo -n CMD...` for the operator and
+    the command itself for root, a leading VAR=value through `env`, and
+    `as_account ACCOUNT CMD...` is `sudo -n -u` for the operator and `runuser
+    -u ... --` for root, a leading VAR=value through `env`, which runuser
+    takes none of. turn.py's drop keeps sudo's own VAR=value form for the
+    operator, so the operator's mode is unchanged. Each runs alone with sudo,
+    runuser and the command as stand-ins that log their argv."""
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-lifecycle-helpers-")
+        self.addCleanup(self.scratch.cleanup)
+        root = Path(self.scratch.name)
+        self.bin_dir = root / "bin"
+        self.bin_dir.mkdir()
+        self.calls = root / "calls"
+        log = shlex.quote(str(self.calls))
+        for tool in ("sudo", "runuser", "cmd"):
+            stand_in = self.bin_dir / tool
+            stand_in.write_text(f'#!/bin/sh\nprintf "%s\\n" "{tool} $* [${{WEAVER_ADMIN_CONFIG:-unset}}]" >> {log}\n')
+            stand_in.chmod(0o755)
+        (root / "deploy").mkdir()
+        (root / "deploy" / "turn.py").write_text("")
+        self.checkout = root
+        self.script = (DEPLOY / "verify-lifecycle.sh").read_text()
+
+    def run_fns(self, root_mode, body):
+        program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}\n"
+                   + f"A=m1; ADMIN_BASE=/base; CHECKOUT={shlex.quote(str(self.checkout))}; "
+                   + f"LOGDIR={shlex.quote(str(self.checkout))}\n"
+                   + lifecycle_functions(self.script, "turn_as") + body)
+        self.calls.unlink(missing_ok=True)
+        env = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"]}
+        for name in ("BASH_ENV", "WEAVER_ADMIN_CONFIG"):
+            env.pop(name, None)
+        run = subprocess.run(["bash", "-c", program], env=env, text=True, capture_output=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        return self.calls.read_text().splitlines()
+
+    def test_a_root_step_is_sudo_for_the_operator_and_the_command_for_root(self):
+        # Perturbation: send root's step through sudo, or drop the env for a
+        # leading VAR=value, and a line below fails.
+        self.assertEqual(self.run_fns(False, 'root WEAVER_ADMIN_CONFIG=/x cmd a b\nroot cmd c\n'),
+                         ["sudo -n WEAVER_ADMIN_CONFIG=/x cmd a b [unset]", "sudo -n cmd c [unset]"])
+        self.assertEqual(self.run_fns(True, 'root WEAVER_ADMIN_CONFIG=/x cmd a b\nroot cmd c\n'),
+                         ["cmd a b [/x]", "cmd c [unset]"])
+        # A bare root step runs in this shell, so a function stands in as it
+        # would for the root-mode tests' routing.
+        self.assertEqual(self.run_fns(True, 'tee() { echo "tee in the shell $*" >> "$0"; }\nroot tee x\n'
+                                      .replace('"$0"', shlex.quote(str(self.calls)))),
+                         ["tee in the shell x"])
+
+    def test_a_look_as_an_account_is_sudo_u_for_the_operator_and_runuser_for_root(self):
+        # Perturbation: drop the env under runuser, and runuser is handed the
+        # VAR=value as its command.
+        self.assertEqual(self.run_fns(False, 'as_account weaver-m1 cmd x\nas_account weaver-m1 V=1 cmd y\n'),
+                         ["sudo -n -u weaver-m1 cmd x [unset]", "sudo -n -u weaver-m1 V=1 cmd y [unset]"])
+        self.assertEqual(self.run_fns(True, 'as_account weaver-m1 cmd x\nas_account weaver-m1 V=1 cmd y\n'),
+                         ["runuser -u weaver-m1 -- cmd x [unset]", "runuser -u weaver-m1 -- env V=1 cmd y [unset]"])
+
+    def test_turn_py_runs_as_the_account_in_either_mode(self):
+        # The operator's form is sudo's own, as before B2, and root's goes
+        # through runuser and env. Perturbation: pass the VAR=value to
+        # runuser bare, and the root line fails.
+        self.assertEqual(self.run_fns(False, 'turn_as weaver-gatecon hello there\n'),
+                         ["sudo -n -u weaver-gatecon WEAVER_ADMIN_CONFIG=/base python3 -I - m1 hello there [unset]"])
+        self.assertEqual(self.run_fns(True, 'turn_as weaver-gatecon --system --raw\n'),
+                         ["runuser -u weaver-gatecon -- env WEAVER_ADMIN_CONFIG=/base python3 -I - m1 --system --raw [unset]"])
+
+    def test_sudo_is_the_helpers_the_listing_s_and_the_credential_s_alone(self):
+        # Every other privileged call is a root step or a look as an account.
+        # Root mode's probe of root's own sudo is the one other.
+        # Perturbation: put back a bare `sudo -n` at any root step, and this
+        # names it.
+        code = [l for l in self.script.splitlines() if not l.lstrip().startswith("#")]
+        found = sorted(m.group(0) for l in code for m in re.finditer(r"\bsudo -[nv]\b[^)|;&]*", l))
+        self.assertEqual(found, ['sudo -n "$@"', 'sudo -n -l -U "$ADMINCON" 2>', 'sudo -n -u "$account" "$@"',
+                                 'sudo -n -u nobody true 2>/dev/null \\', 'sudo -v '], found)
+
+
+class LifecycleStep5bRootModeTests(unittest.TestCase):
+    """**#576, B2: step 5b in root mode.** The rule half stays at uid 0: the
+    rule moves to 0, root joins no group, gate-con's turn is refused and
+    root's is answered, then root's seeding line is answered, judged by the
+    gate's raw close. The socket half moves to the admin-con account's uid,
+    which no root's capability can stand in for, and the measurement is put
+    back byte for byte. The step runs alone over a declaration file, with a
+    stand-in gate that admits a turn only from the uid the rule names and a
+    system line only from the operator key's uid, admin answering each verb,
+    and the checks logged with what they expected and found. In the
+    operator's mode the same step joins and leaves the group and moves the
+    rule to the operator's uid, as before B2. Perturbations: let root mode
+    join the group, perturb on the operator's uid, or drop the seeding line,
+    and a read below fails."""
+
+    GATE = r"""#!/usr/bin/env python3
+import json, os, re, sys
+name, args = os.path.basename(sys.argv[0]), sys.argv[1:]
+if name == "sudo":
+    args = args[1:] if args[:1] == ["-n"] else args
+    if args[:1] != ["-u"]:
+        os.execvp("env", ["env", *args])
+    who, cmd = args[1], args[2:]
+else:
+    assert args[0] == "-u" and args[2] == "--", args
+    who, cmd = args[1], args[3:]
+with open(os.environ["CALLS"], "a") as log:
+    log.write(json.dumps([name, who, *cmd]) + "\n")
+while cmd and (cmd[0] == "env" or re.match(r"[A-Za-z_]+=", cmd[0])):
+    cmd = cmd[1:]
+assert cmd[:3] == ["python3", "-I", "-"], cmd
+uids = {"root": 0, "weaver-gatecon": 111, "weaver-admincon": 222, "op": 12345}
+rule = re.search(r"^allowed-uids = \[(\d+)\]$", open(os.environ["DECL"]).read(), re.M)
+if not rule or int(rule.group(1)) != uids[who]:
+    sys.exit(1)
+if "--system" in cmd:
+    admitted = uids[who] == int(os.environ["OPERATOR_KEY"])
+    print(json.dumps({"kind": "answered", "text": "seeded"} if admitted else
+                     {"kind": "refused", "reason": "a line of role system is admitted from the operator alone"}))
+else:
+    print("Red, yellow and blue.")
+"""
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-lifecycle-5b-root-")
+        self.addCleanup(self.scratch.cleanup)
+        root = Path(self.scratch.name)
+        self.bin_dir = root / "bin"
+        self.bin_dir.mkdir()
+        self.calls = root / "calls"
+        self.decl = root / "agent.toml"
+        self.original = 'name = "m1"\n\n[gate-instruction.access-rule]\nallowed-uids = [111]\n'
+        log = shlex.quote(str(self.calls))
+        for tool, body in (
+                ("sudo", self.GATE), ("runuser", self.GATE),
+                ("tee", f'#!/bin/sh\ncat > "$2"\nl=$(grep "^allowed-uids" "$2")\n'
+                        f'grep -q "^\\[restore\\]" "$2" && l="$l +restore"\n'
+                        f'printf \'["tee", "%s"]\\n\' "$l" >> {log}\n'),
+                ("gpasswd", f'#!/bin/sh\nprintf \'["gpasswd", "%s", "%s", "%s"]\\n\' "$1" "$2" "$3" >> {log}\n'),
+                ("id", '#!/bin/sh\ncase "$1 $2" in\n"-u weaver-gatecon") echo 111 ;;\n"-u weaver-admincon") echo 222 ;;\n'
+                       '"-Gn root") echo root ;;\n"-Gn op") echo "op weaver-m1-trace" ;;\n*) exit 1 ;;\nesac\n'),
+                ("weaver-admin", f'#!/bin/sh\nprintf \'["admin", "%s"]\\n\' "$1" >> {log}\n'
+                                 f'n=$(grep -c \'"admin", "validate"\' {log})\n'
+                                 'case "$1" in\n'
+                                 '  validate) if [ "$n" = 2 ]; then echo "cause: allowed-uids" >&2; '
+                                 'echo \'{"kind":"boundary_unverified"}\'; else echo \'{"kind":"validated"}\'; fi ;;\n'
+                                 '  unload) echo \'{"kind":"state","state":"unloaded"}\' ;;\n'
+                                 '  load) echo \'{"kind":"state","state":"idle"}\' ;;\n'
+                                 '  restore) echo \'{"kind":"restore_named","save_point":"DIGA"}\' ;;\n'
+                                 'esac\n')):
+            stand_in = self.bin_dir / tool
+            stand_in.write_text(body)
+            stand_in.chmod(0o755)
+        (root / "deploy").mkdir()
+        (root / "deploy" / "turn.py").write_text("")
+        (root / "deploy" / "agent_tuple.py").write_text("")
+        self.root = root
+        script = (DEPLOY / "verify-lifecycle.sh").read_text()
+        self.functions = lifecycle_functions(
+            script, "begin_step", "end_step", "fail", "pass", "measured", "json_at", "json_req", "expect_at",
+            "ask", "expect_kind", "answered_state", "holds_group", "restore_rule", "restore_now", "identity_recalls",
+            "turn_as", "turn", "step_5b")
+
+    def run_step(self, root_mode, operator_key=None):
+        self.decl.write_text(self.original)
+        self.calls.unlink(missing_ok=True)
+        q = lambda p: shlex.quote(str(p))
+        program = ("set -euo pipefail\n"
+                   + f"ROOT_OPERATOR={1 if root_mode else 0}; APPLY=1; A=m1; AU=weaver-m1; RESTORE=(); RUN=\"\"\n"
+                   + "GATECON=weaver-gatecon; ADMINCON=weaver-admincon; SP_A_NAME=spa; SP_A_DIG=DIGA\n"
+                   + (f"OPERATOR=root; OPERATOR_UID=0\n" if root_mode else "OPERATOR=op; OPERATOR_UID=12345\n")
+                   + f"DECL={q(self.decl)}; TRACE=/none; CHECKOUT={q(self.root)}; LOGDIR={q(self.root)}\n"
+                   + f"ADMIN={q(self.bin_dir / 'weaver-admin')}; ADMIN_BASE=/base\n"
+                   + 'say() { :; }\nplan() { :; }\nrun_line() { :; }\nwant() { :; }\n'
+                   + f'expect_eq() {{ printf \'["check", "%s", "%s", "%s"]\\n\' "$1" "$2" "$3" >> {q(self.calls)}; }}\n'
+                   + 'expect_state() { :; }\nexpect_lay() { :; }\ntrace_lines() { echo 0; }\nmanifest_field() { echo x; }\n'
+                   + "events_since() { echo '{\"kind\":\"message.system\",\"payload\":{}}'; }\n"
+                   + "last_event() { echo '{\"kind\":\"load\",\"run\":\"r1\",\"payload\":{\"declaration\":\"d\","
+                     "\"boundary\":\"b\",\"lineage\":{\"save_point\":\"x\",\"named_at_restore\":false}}}'; }\n"
+                   + self.functions + "step_5b\necho FINISHED\n")
+        env = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"], "CALLS": str(self.calls),
+               "DECL": str(self.decl),
+               "OPERATOR_KEY": operator_key or ("0" if root_mode else "12345")}
+        env.pop("BASH_ENV", None)
+        run = subprocess.run(["bash", "-c", program], env=env, text=True, capture_output=True, timeout=30)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("FINISHED", run.stdout)
+        return [json.loads(l) for l in self.calls.read_text().splitlines()]
+
+    def test_root_mode_keeps_the_rule_half_at_0_and_moves_the_socket_half(self):
+        calls = self.run_step(root_mode=True)
+        self.assertFalse([c for c in calls if c[0] == "gpasswd"], calls)
+        self.assertEqual([c[1] for c in calls if c[0] == "tee"],
+                         ["allowed-uids = [0]", "allowed-uids = [0] +restore", "allowed-uids = [222]",
+                          "allowed-uids = [111]"])
+        drops = [c[:2] + c[-2:] for c in calls if c[0] in ("runuser", "sudo")]
+        self.assertEqual(drops, [["runuser", "weaver-gatecon", "m1", "Name three primary colours."],
+                                 ["runuser", "root", "m1", "Name three primary colours."],
+                                 ["runuser", "root", "--system", "--raw"],
+                                 ["runuser", "weaver-gatecon", "m1", "Name three primary colours."]])
+        checks = {c[1]: c[2:] for c in calls if c[0] == "check"}
+        self.assertEqual(checks["root's seeding line is answered"], ["answered", "answered"])
+        self.assertEqual(checks["the record carries the seeding, one turnless message.system"], ["1", "1"])
+        self.assertEqual(checks["the rule names weaver-admincon's uid alone for the perturbation"],
+                         ["allowed-uids = [222]", "allowed-uids = [222]"])
+        self.assertEqual(checks["a turn as weaver-gatecon is refused, the rule no longer naming it"], ["refused", "refused"])
+        self.assertEqual(checks["a turn as root is answered: a rule naming the operator is admitted"],
+                         ["answered", "answered"])
+        self.assertEqual(self.decl.read_text(), self.original, "the measurement is put back byte for byte")
+
+    def test_a_refused_seeding_close_is_not_taken_for_an_answer(self):
+        # turn.py exits 0 and prints the gate's close whatever it says, so
+        # the check reads the close's kind. Here the harness's operator is
+        # another uid than the rule's. Perturbation: judge the seeding by
+        # turn.py's exit alone, and this reads answered.
+        calls = self.run_step(root_mode=True, operator_key="12345")
+        checks = {c[1]: c[2:] for c in calls if c[0] == "check"}
+        self.assertEqual(checks["root's seeding line is answered"], ["answered", "refused"])
+
+    def test_the_operator_s_mode_is_as_before(self):
+        calls = self.run_step(root_mode=False)
+        self.assertEqual([c for c in calls if c[0] == "gpasswd"],
+                         [["gpasswd", "-a", "op", "weaver-m1"], ["gpasswd", "-d", "op", "weaver-m1"]])
+        self.assertEqual([c[1] for c in calls if c[0] == "tee"],
+                         ["allowed-uids = [12345]", "allowed-uids = [12345] +restore", "allowed-uids = [12345]",
+                          "allowed-uids = [111]"])
+        self.assertFalse([c for c in calls if "--system" in c], calls)
+        self.assertEqual(self.decl.read_text(), self.original)
+
+
+class LifecycleRootModeGroupsAndShowTests(unittest.TestCase):
+    """**#576, B2: step 1's groups and step 9's show in both modes.** In
+    root mode root holds none of the agent's four groups, each read alone, and
+    step 9 asks `show` as the box's gate-con account through runuser, answered
+    unauthorized, and as root, answered no_such_agent. In the operator's mode
+    the operator holds the three groups and not the agent's, and step 9 asks as
+    the operator bare and under sudo. Each function runs alone with id, sudo,
+    runuser and admin as stand-ins: admin answers by the caller the stand-ins
+    record in AS, root's no_such_agent and anyone else's unauthorized."""
+
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(prefix="weaver-lifecycle-groups-show-")
+        self.addCleanup(self.scratch.cleanup)
+        root = Path(self.scratch.name)
+        self.bin_dir = root / "bin"
+        self.bin_dir.mkdir()
+        self.calls = root / "calls"
+        log = shlex.quote(str(self.calls))
+        for tool, body in (
+                ("id", '#!/usr/bin/env python3\nimport os, sys\n'
+                       'held = os.environ.get("GROUPS_" + sys.argv[2]) if sys.argv[1:2] == ["-Gn"] else None\n'
+                       'sys.exit(1) if held is None else print(held)\n'),
+                ("sudo", f'#!/bin/sh\necho "sudo $*" >> {log}\n[ "$1" = -n ] && shift\nAS=root exec env "$@"\n'),
+                ("runuser", f'#!/bin/sh\necho "runuser $*" >> {log}\nwho=$2\nshift 3\nAS=$who exec "$@"\n'),
+                ("weaver-admin", '#!/bin/sh\ncase $AS in root) echo \'{"kind":"no_such_agent"}\' ;; '
+                                 '*) echo \'{"kind":"unauthorized"}\' ;; esac\n')):
+            stand_in = self.bin_dir / tool
+            stand_in.write_text(body)
+            stand_in.chmod(0o755)
+        self.functions = lifecycle_functions((DEPLOY / "verify-lifecycle.sh").read_text(),
+                                             "fail", "pass", "expect_eq", "json_at", "json_req", "expect_at",
+                                             "ask", "expect_kind", "holds_group", "expect_operator_groups",
+                                             "expect_show_closed")
+        self.admin = self.bin_dir / "weaver-admin"
+
+    def run_fn(self, root_mode, body, **groups):
+        program = ("set -euo pipefail\n" + f"ROOT_OPERATOR={1 if root_mode else 0}; STEP_LABEL=test\n"
+                   + f"A=m1; AU=weaver-m1; GATECON=weaver-gatecon; ADMIN={shlex.quote(str(self.admin))}; "
+                   + "ADMIN_BASE=/base\n" + ("OPERATOR=root\n" if root_mode else "OPERATOR=op\n")
+                   + self.functions + body + "\necho FINISHED\n")
+        self.calls.unlink(missing_ok=True)
+        env = {**os.environ, "PATH": str(self.bin_dir) + os.pathsep + os.environ["PATH"],
+               "AS": "root" if root_mode else "op"}
+        env.pop("BASH_ENV", None)
+        for who, held in groups.items():
+            env[f"GROUPS_{who}"] = held
+        run = subprocess.run(["bash", "-c", program], env=env, text=True, capture_output=True, timeout=20)
+        return run, self.calls.read_text().splitlines() if self.calls.exists() else []
+
+    def test_root_holds_none_of_the_agent_s_groups(self):
+        # Perturbations: read the operator's three groups in root mode, or
+        # leave one of the four unread, and a case below fails.
+        run, _ = self.run_fn(True, "expect_operator_groups", root="root")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        for g in ("weaver-m1", "weaver-m1-trace", "weaver-m1-state", "weaver-m1-admin"):
+            self.assertIn(f"PASS test: root does not hold {g}", run.stdout)
+        for held in ("weaver-m1", "weaver-m1-trace", "weaver-m1-state", "weaver-m1-admin"):
+            with self.subTest(held=held):
+                run, _ = self.run_fn(True, "expect_operator_groups", root=f"root {held}")
+                self.assertEqual(run.returncode, 1, run.stdout)
+                self.assertIn(f"root does not hold {held}", run.stderr)
+        run, _ = self.run_fn(True, "expect_operator_groups")
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn("found:    unreadable", run.stderr)
+
+    def test_the_operator_holds_three_groups_and_not_the_agent_s(self):
+        run, _ = self.run_fn(False, "expect_operator_groups", op="op weaver-m1-trace weaver-m1-state weaver-m1-admin")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        run, _ = self.run_fn(False, "expect_operator_groups",
+                             op="op weaver-m1 weaver-m1-trace weaver-m1-state weaver-m1-admin")
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn("op does not hold weaver-m1", run.stderr)
+
+    def test_root_asks_show_as_gate_con_and_as_itself(self):
+        # Perturbation: ask the refused show as root, and it answers
+        # no_such_agent and fails.
+        run, calls = self.run_fn(True, "expect_show_closed")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("show as weaver-gatecon answers unauthorized", run.stdout)
+        self.assertIn("show as root answers no_such_agent", run.stdout)
+        self.assertEqual(calls, [f"runuser -u weaver-gatecon -- env WEAVER_ADMIN_CONFIG=/base {self.admin} show m1"])
+
+    def test_the_operator_asks_show_bare_and_under_sudo(self):
+        run, calls = self.run_fn(False, "expect_show_closed")
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("show as the operator answers unauthorized", run.stdout)
+        self.assertIn("show under sudo answers no_such_agent", run.stdout)
+        self.assertEqual(calls, [f"sudo -n WEAVER_ADMIN_CONFIG=/base {self.admin} show m1"])
 
 
 class LifecycleTeardownTests(unittest.TestCase):
