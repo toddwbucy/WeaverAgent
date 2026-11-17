@@ -119,6 +119,20 @@ group in one shell.
 - The operator's own sudo runs commands as other accounts (`(ALL)`, not `(root)` alone):
   the wall checks run as the agent's accounts, and a drop that sudo refuses stops the
   run, naming sudo.
+- A command `create-agent.sh` or `verify-lifecycle.sh` runs as another account is handed
+  nothing of yours but what the step names, in either mode, since any process of that
+  account's uid can read its environment and open its descriptors through `/proc` while
+  it runs. Its standard input is `/dev/null`, or a file the script opens for it. Its
+  standard output and standard error are pipes the script holds and copies on. Every
+  other descriptor the script holds is closed. It runs under `setsid` (util-linux), with
+  no controlling terminal, and under `env -i`, with sudo's default `secure_path` as
+  `PATH` and the variables the step names alone. An interrupt or a hangup still ends it,
+  since the script passes the signal on. Two windows stay open (#590): the `env` that
+  `runuser` or sudo starts holds the caller's environment, or what sudo's `env_keep`
+  passes, until it replaces it, and under sudo, the `env` and `timeout` that start the
+  command hold the terminal sudo hands them. The reads `verify-load.sh` and
+  `update-stack.sh` make as the agent's accounts go through sudo alone, with a named input
+  and a captured output, and are #590's too.
 - On a single-purpose appliance, where root is the operator, `runuser` (util-linux) is
   on the box: in root mode the wall checks and the closing probe run as the agent's
   accounts through it, and no sudo credential is asked for. The include and the
