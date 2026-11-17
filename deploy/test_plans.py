@@ -8305,6 +8305,17 @@ def shell_function(script, name):
     return "\n".join(lines[start:end + 1]) + "\n"
 
 
+def legacy_log_judgement(script):
+    """decommission.sh's judgment of what a legacy log leaves (CodeRabbit on
+    #598): resolved, taken_with, the loop over the directories that stand and
+    the loop over the entries left, as the script runs them once every target
+    is known."""
+    start = script.index("resolved() {\n")
+    end_line = "done < <([ ${#LOG_LEFT[@]} -eq 0 ] || printf '%s\\0' \"${!LOG_LEFT[@]}\" | sort -z)\n"
+    end = script.index(end_line, start) + len(end_line)
+    return script[start:end]
+
+
 class DecommissionTests(unittest.TestCase):
     """decommission.sh's reading of the per-agent layout, run as the script
     defines it. It needs root to run whole, so its pieces are run alone."""
@@ -9002,8 +9013,7 @@ class DecommissionTests(unittest.TestCase):
         loop = loop[:loop.index(" | sort -z)\n") + len(" | sort -z)\n")]
         plan_loop = script[script.index('for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do'):]
         plan_loop = plan_loop[:plan_loop.index("\ndone\n") + len("\ndone\n")]
-        left_loop = script[script.index("while IFS= read -r -d '' e; do\n  [ -z \"${LOG_PATHS[$e]+taken}\" ]"):]
-        left_loop = left_loop[:left_loop.index(" | sort -z)\n") + len(" | sort -z)\n")]
+        left_loop = legacy_log_judgement(script)
         paths_phase = script[script.index('say "paths"\n'):script.index('say "accounts"\n')]
         with tempfile.TemporaryDirectory() as scratch:
             top = Path(scratch).resolve()
@@ -9064,6 +9074,151 @@ class DecommissionTests(unittest.TestCase):
         refusal = script.index('[ ${#LOG_UNREAD[@]} -eq 0 ] || die ')
         self.assertLess(script.index('[ "$MODE" = plan ] && { say "plan only.'), refusal)
         self.assertLess(refusal, script.index('if [ "$MODE" = archive ]; then'))
+
+    def test_a_listing_that_fails_after_another_read_its_directory_still_refuses(self):
+        """**CodeRabbit on #598**: two legacy logs in one directory, the first
+        listing read and the second failing, as a directory that changes
+        between them would. The failure is counted whatever came before it,
+        said once, and refuses both modes. Perturbation: count a failure only
+        for a directory not yet said, as before, and the run goes on with
+        nothing refused."""
+        script = self.script
+        q = shlex.quote
+        loop = script[script.index("declare -A LOG_LEFT=() LOG_DIRS_SAID=()\n"):]
+        loop = loop[:loop.index(" | sort -z)\n") + len(" | sort -z)\n")]
+        refusal = next(line for line in script.splitlines()
+                       if line.startswith('[ ${#LOG_UNREAD[@]} -eq 0 ] || die "the directory of a legacy log'))
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            shared = top / "var-log"
+            shared.mkdir()
+            first, second = shared / "a-admin.log", shared / "b-admin.log"
+            for log in (first, second):
+                log.write_text("a log\n")
+            calls = top / "find-calls"
+            # find answers the first listing and fails every later one. Each
+            # listing runs in a subshell of its own, so the count is a file's.
+            find = (f'find() {{ local n; n=$(cat {q(str(calls))} 2>/dev/null || echo 0); '
+                    f'echo $((n + 1)) > {q(str(calls))}; [ "$n" -eq 0 ] || return 1; command find "$@"; }}\n')
+            program = (self.script_options() + self.ROOT_STAT
+                       + "declare -A AGENTS=([m1]=1) LOG_PATHS=()\n"
+                       + f"declare -A LOG_FILES=([{q(str(first))}]=1 [{q(str(second))}]=1)\n"
+                       + "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                       + "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\n"
+                       + "in_operator_home() { return 1; }\n"
+                       + find + shell_function(script, "log_paths") + loop + refusal + "\necho REACHED\n")
+            run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20,
+                                 env={**os.environ, "STRANGERS": ""})
+            got = run.stdout.splitlines()
+            self.assertEqual(calls.read_text().strip(), "2", run.stdout + run.stderr)
+            self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+            self.assertEqual([line for line in got if "cannot be listed, so" in line], [
+                f"PLAN {shared}  the directory of the legacy log {second} cannot be listed, so the archive "
+                "and the purge refuse"], run.stdout)
+            self.assertIn(f"DIE the directory of a legacy log cannot be listed: {shared}. Nothing is "
+                          "archived or purged until it reads. Look at it by hand, then rerun", got)
+            self.assertNotIn("REACHED", got)
+
+    def test_what_a_legacy_log_leaves_is_judged_by_containment_in_every_target(self):
+        """**CodeRabbit on #598**: a legacy log's directory that stands, and an
+        entry beside the log that no log takes, are judged once every target is
+        known, by containment on resolved paths past a slash, under the
+        script's own options. Under an agent's
+        folder, the entry is taken with the folder and the directory goes with
+        it. In the earlier layout's directory, taken whole, the entry is taken
+        with it and the directory is a target of its own. In a directory whose
+        name only begins with that one's, both stand and are left. Beside an
+        agent's folder, the folder is said by its own line alone. A home is
+        judged against every target the same way, itself a target included.
+        Perturbations: compare by equality alone, and the first two cases read
+        untouched. Drop the slash, and the near name is taken. Judge a
+        directory as it is read, and it stands in the first two. Say an entry
+        that is a target again, and the fourth case names the folder. Drop a home's
+        equality or its slash, or judge it against the agents' folders alone,
+        and a home line fails."""
+        script = self.script
+        q = shlex.quote
+        loop = script[script.index("declare -A LOG_LEFT=() LOG_DIRS_SAID=()\n"):]
+        loop = loop[:loop.index(" | sort -z)\n") + len(" | sort -z)\n")]
+        plan_loop = script[script.index('for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do'):]
+        plan_loop = plan_loop[:plan_loop.index("\ndone\n") + len("\ndone\n")]
+        judgement = legacy_log_judgement(script)
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            base = top / "state"
+            folder = base / "m1"
+            (folder / "weaver-m1").mkdir(parents=True)
+            under_folder = folder / "logs"
+            under_folder.mkdir()
+            legacy = top / "weaver"
+            legacy.mkdir()
+            near = top / "weaver2"
+            near.mkdir()
+            for d in (under_folder, legacy, near, base):
+                (d / "old-admin.log").write_text("a log\n")
+                (d / "keep.txt").write_text("not a log\n")
+            goes = "not the agent's own: the log and its rotations go"
+            cases = {
+                "under an agent's folder": (under_folder, [
+                    f"PLAN {under_folder}  the directory of the legacy log {under_folder / 'old-admin.log'}, "
+                    f"{goes}, and the directory goes with {folder}",
+                    f"PLAN {under_folder / 'keep.txt'}  beside the legacy log {under_folder / 'old-admin.log'}: "
+                    f"taken with {folder}"]),
+                "in the earlier layout's directory": (legacy, [
+                    f"PLAN {legacy}  the directory of the legacy log {legacy / 'old-admin.log'}, {goes}, "
+                    "and the directory is taken whole, a target of its own",
+                    f"PLAN {legacy / 'keep.txt'}  beside the legacy log {legacy / 'old-admin.log'}: "
+                    f"taken with {legacy}"]),
+                "a near name": (near, [
+                    f"PLAN {near}  the directory of the legacy log {near / 'old-admin.log'}, {goes}, "
+                    "and the directory stands",
+                    f"PLAN {near / 'keep.txt'}  beside the legacy log {near / 'old-admin.log'}, and taken by "
+                    "nothing this discovery found: left in place, untouched"]),
+                "beside an agent's folder": (base, [
+                    f"PLAN {base}  the directory of the legacy log {base / 'old-admin.log'}, {goes}, "
+                    "and the directory stands",
+                    f"PLAN {base / 'keep.txt'}  beside the legacy log {base / 'old-admin.log'}, and taken by "
+                    "nothing this discovery found: left in place, untouched"]),
+            }
+            for case, (d, said) in cases.items():
+                with self.subTest(case=case):
+                    program = (self.script_options() + self.ROOT_STAT
+                               + "OWN_TERRITORIES=()\n"
+                               + f"TERRITORY_PATHS=({q(str(folder))})\n"
+                               + "declare -A AGENTS=([m1]=1) LOG_PATHS=()\n"
+                               + f"declare -A TERRITORY_BASES=([{q(str(base))}]=1)\n"
+                               + f"declare -A LOG_FILES=([{q(str(d / 'old-admin.log'))}]=1)\n"
+                               + f"AGENT_FOLDERS=({q(str(folder))})\n"
+                               + f"LEGACY_DIR={q(str(legacy))}\nOP_HOME=\n"
+                               + "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                               + "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\n"
+                               + "in_operator_home() { return 1; }\n"
+                               + shell_function(script, "log_paths") + loop + shell_function(script, "spans_a_base")
+                               + plan_loop + judgement)
+                    run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20,
+                                         env={**os.environ, "STRANGERS": ""})
+                    self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                    got = run.stdout.splitlines()
+                    self.assertEqual([line for line in got if "the directory of the legacy log" in line
+                                      or "beside the legacy log" in line], said, run.stdout)
+            # A home is judged against every target, itself one included, and
+            # a near name is not one, by the script's own loop over the homes.
+            (legacy / "home").mkdir()
+            homes_loop = script[script.index('HOMES=()\nfor u in "${WEAVER_USERS[@]}"; do\n'):]
+            homes_loop = homes_loop[:homes_loop.index("\ndone\n") + len("\ndone\n")]
+            homes = {"weaver-m1": str(legacy / "home"), "weaver-m2": str(legacy), "weaver-m3": str(near)}
+            program = (self.script_options() + self.passwd_stub(homes)
+                       + "WEAVER_USERS=(weaver-m1 weaver-m2 weaver-m3)\nOWN_TERRITORIES=()\n"
+                       + f"AGENT_FOLDERS=({q(str(folder))})\nTERRITORY_PATHS=({q(str(folder))} {q(str(legacy))})\n"
+                       + "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
+                       + shell_function(script, "home_within") + homes_loop)
+            run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertEqual(run.stdout.splitlines(), [
+                f"PLAN {legacy / 'home'}  (home of weaver-m1, archived with {legacy})",
+                f"PLAN {legacy}  (home of weaver-m2, archived with {legacy})",
+                f"PLAN {near}  (home of weaver-m3): outside /home and everything the purge takes, left in place, "
+                "untouched"], run.stdout)
 
     # agent_folders and territories_outside look as root: every fixture path
     # is root's but those STRANGERS names, a territory `weaver-<a>` carries
@@ -10199,7 +10354,7 @@ class RoundOneOf79Tests(unittest.TestCase):
             elsewhere.mkdir(parents=True)
             self.assertEqual(self.run_fn_in(script, "home_within", str(folder / "home"), str(folder)), str(folder))
             self.assertEqual(self.run_fn_in(script, "home_within", str(elsewhere), str(folder)), "")
-        self.assertIn('*) plan "$h  (home of $u): outside /home and every agent\'s folder, left in place, untouched" ;;', script)
+        self.assertIn('*) plan "$h  (home of $u): outside /home and everything the purge takes, left in place, untouched" ;;', script)
         self.assertIn('done < <(left_in_base "$d" "${TERRITORY_PATHS[@]}" "${HOMES[@]}")', script)
 
     def test_no_base_and_no_path_above_one_is_archived_or_purged_whole(self):

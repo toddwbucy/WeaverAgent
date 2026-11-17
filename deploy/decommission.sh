@@ -442,12 +442,16 @@ log_paths() {
   printf 'stands\0%s\0' "$d"
 }
 # The logs are read in order, and a directory or an entry two logs share is
-# said once, by the first. **Every answer ends with its directory's verdict**
+# said once, by the first. **A listing that fails is counted whatever came
+# before it** (CodeRabbit on #598): a second log's failed listing of a
+# directory the first read refuses both modes all the same, said once. A
+# directory that stands is judged once every target is known, below.
+# **Every answer ends with its directory's verdict**
 # (`stands`, `unread`, `passed`, or the directory taken whole), so one that
 # ends without it, cut off by an error inside log_paths, is read as unread
 # rather than as a shorter answer (Codex on #599).
 declare -A LOG_LEFT=() LOG_DIRS_SAID=()
-LOG_UNREAD=()
+declare -A LOG_UNREAD=() LOG_STANDS=()
 while IFS= read -r -d '' f; do
   d=$(dirname -- "$f")
   in_operator_home "$d" && { plan "$d  under the operator's home: not touched"; continue; }
@@ -458,19 +462,21 @@ while IFS= read -r -d '' f; do
       left) [ -n "${LOG_LEFT[$pth]+named}" ] || LOG_LEFT["$pth"]=$f; continue ;;
     esac
     judged=1
+    if [ "$kind" = unread ] && [ -z "${LOG_UNREAD[$pth]+counted}" ]; then
+      plan "$pth  the directory of the legacy log $f cannot be listed, so the archive and the purge refuse"
+      LOG_UNREAD["$pth"]=1
+    fi
     [ -z "${LOG_DIRS_SAID[$pth]+said}" ] || continue
     LOG_DIRS_SAID["$pth"]=1
     case $kind in
-      stands) plan "$pth  the directory of the legacy log $f, not the agent's own: the log and its rotations go, and the directory stands" ;;
-      unread) plan "$pth  the directory of the legacy log $f cannot be listed, so the archive and the purge refuse"
-              LOG_UNREAD+=("$pth") ;;
+      stands) LOG_STANDS["$pth"]=$f ;;
       passed) plan "$pth  the directory of the legacy log $f is gone or a link: nothing in it is taken" ;;
     esac
   done < <(log_paths "$f")
   if [ -z "$judged" ]; then
     plan "$d  the directory of the legacy log $f was not read to its end, so the archive and the purge refuse"
     LOG_DIRS_SAID["$d"]=1
-    LOG_UNREAD+=("$d")
+    LOG_UNREAD["$d"]=1
   fi
 done < <([ ${#LOG_FILES[@]} -eq 0 ] || printf '%s\0' "${!LOG_FILES[@]}" | sort -z)
 # **agent_folders BASE...: each discovered agent's folder in each base**, one
@@ -791,43 +797,82 @@ for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do
   TERRITORY_PATHS+=("$d")
   plan "$d  $(du -sh "$d" 2>/dev/null | cut -f1)"
 done
-# **An entry beside a legacy log is named as left only when nothing takes
-# it**, judged once every log's takes and every agent's folder are known (the
-# self-check on #593): another legacy log in the same directory, or an agent's
-# folder, is taken, not left. A name's newline or tab prints as `?`, so a name
-# chosen in a shared directory cannot write a plan line of its own.
+# **resolved PATH: PATH with its directory resolved and its last name kept**,
+# or PATH as written where its directory does not resolve. A link is compared
+# as the link, since the purge's `rm -rf` removes a link and never what it
+# points to.
+resolved() {
+  local d
+  d=$(realpath -e -- "$(dirname -- "$1")" 2>/dev/null) || { printf '%s' "$1"; return 0; }
+  printf '%s/%s' "${d%/}" "$(basename -- "$1")"
+}
+# **taken_with PATH: the first target PATH is or lies under, or nothing**
+# (CodeRabbit on #598). The targets are TERRITORY_PATHS: every agent's folder,
+# every root's own territory, the earlier layout's directory and each legacy
+# log path that the archive and the purge take. Both sides are compared
+# resolved and past a slash, so `/var/lib/weaver2` is not under
+# `/var/lib/weaver`. It answers only once TERRITORY_PATHS is complete.
+taken_with() {
+  local p t c
+  p=$(resolved "$1")
+  for t in "${TERRITORY_PATHS[@]}"; do
+    c=$(resolved "$t")
+    case "$p" in "$c" | "$c"/*) printf '%s' "$t"; return 0 ;; esac
+  done
+  return 1
+}
+# **What a legacy log leaves is judged once every target is known** (the
+# self-check on #593, CodeRabbit on #598), by containment: a directory that
+# stands for its log, and an entry beside a log that no log takes, are said to
+# stand or to be left in place only where no target takes them. An entry that
+# is a target is said by that target's own line, a directory that is one is
+# said to be taken whole, and one under a target goes with it. A name's
+# newline or tab prints as `?`, so a name chosen in a shared directory cannot
+# write a plan line of its own.
+while IFS= read -r -d '' d; do
+  if t=$(taken_with "$d") && [ "$(resolved "$t")" = "$(resolved "$d")" ]; then
+    plan "$d  the directory of the legacy log ${LOG_STANDS[$d]}, not the agent's own: the log and its rotations go, and the directory is taken whole, a target of its own"
+  elif [ -n "$t" ]; then
+    plan "$d  the directory of the legacy log ${LOG_STANDS[$d]}, not the agent's own: the log and its rotations go, and the directory goes with $t"
+  else
+    plan "$d  the directory of the legacy log ${LOG_STANDS[$d]}, not the agent's own: the log and its rotations go, and the directory stands"
+  fi
+done < <([ ${#LOG_STANDS[@]} -eq 0 ] || printf '%s\0' "${!LOG_STANDS[@]}" | sort -z)
 while IFS= read -r -d '' e; do
   [ -z "${LOG_PATHS[$e]+taken}" ] || continue
-  c=$(realpath -e -- "$e" 2>/dev/null) || c=$e
-  for t in "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}"; do
-    [ "$(realpath -e -- "$t" 2>/dev/null)" = "$c" ] && continue 2
-  done
+  if t=$(taken_with "$e"); then
+    [ "$(resolved "$t")" = "$(resolved "$e")" ] && continue
+    plan "${e//[$'\n\t']/?}  beside the legacy log ${LOG_LEFT[$e]}: taken with $t"
+    continue
+  fi
   plan "${e//[$'\n\t']/?}  beside the legacy log ${LOG_LEFT[$e]}, and taken by nothing this discovery found: left in place, untouched"
 done < <([ ${#LOG_LEFT[@]} -eq 0 ] || printf '%s\0' "${!LOG_LEFT[@]}" | sort -z)
-# **home_within HOME FOLDER...: the folder HOME stands in**, canonical, or
-# nothing. A home in an agent's folder (#578) goes with the folder.
+# **home_within HOME FOLDER...: the folder HOME is or stands in**, canonical,
+# or nothing. A home in an agent's folder (#578) goes with the folder.
 home_within() {
   local h f c
   h=$(realpath -e -- "$1" 2>/dev/null) || return 0
   shift
   for f in "$@"; do
     c=$(realpath -e -- "$f" 2>/dev/null) || continue
-    case "$h" in "$c"/*) printf '%s' "$f"; return 0 ;; esac
+    case "$h" in "$c" | "$c"/*) printf '%s' "$f"; return 0 ;; esac
   done
 }
-# **A home is read from its account wherever it stands** (#578): one in an
-# agent's folder goes with the folder, one under /home is taken as before, and
-# one anywhere else is said and left in place.
+# **A home is read from its account wherever it stands** (#578): one in a
+# target the archive and the purge take, an agent's folder, a root's own
+# territory or the earlier layout's directory among them (CodeRabbit on #598),
+# goes with it, one under /home is taken as before, and one anywhere else is
+# said and left in place.
 HOMES=()
 for u in "${WEAVER_USERS[@]}"; do
   h=$(getent passwd "$u" | cut -d: -f6)
   [ -n "$h" ] && [ -d "$h" ] || continue
-  within=$(home_within "$h" "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}")
+  within=$(home_within "$h" "${TERRITORY_PATHS[@]}")
   if [ -n "$within" ]; then plan "$h  (home of $u, archived with $within)"
   else
     case "$h" in
       /home/*) HOMES+=("$h"); plan "$h  (home of $u)" ;;
-      *) plan "$h  (home of $u): outside /home and every agent's folder, left in place, untouched" ;;
+      *) plan "$h  (home of $u): outside /home and everything the purge takes, left in place, untouched" ;;
     esac
   fi
 done
@@ -866,7 +911,7 @@ mapfile -t TMP_PATHS < <(tmp_paths /tmp)
 # **A legacy log's directory that cannot be listed refuses** (the self-check
 # on #593): what it holds beside the log is unknown, so whether it is the
 # agent's own, and what a take of it would remove, cannot be told.
-[ ${#LOG_UNREAD[@]} -eq 0 ] || die "the directory of a legacy log cannot be listed: ${LOG_UNREAD[*]}. Nothing is archived or purged until it reads. Look at it by hand, then rerun"
+[ ${#LOG_UNREAD[@]} -eq 0 ] || die "the directory of a legacy log cannot be listed: ${!LOG_UNREAD[*]}. Nothing is archived or purged until it reads. Look at it by hand, then rerun"
 # **A capped home's limit never outlives what names it** (Codex on #588): the
 # folder's mark and the account's uid are all that tell create-agent.sh's
 # limit from a stranger's, so where any folder's mount or mark cannot be read,
