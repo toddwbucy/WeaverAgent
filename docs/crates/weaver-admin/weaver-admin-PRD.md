@@ -42,11 +42,14 @@ a resident: it runs when the operator runs a verb, exits when the verb answers, 
 nothing between verbs, and what persists across invocations is what the filesystem and
 the kernel already hold: the run lock the run's processes hold, released by the kernel
 when the last of them is gone. No init system supervises the agent, on the operator's
-ruling of 2026-10-03 on #50: the agent starts like an appliance, when someone wants it,
-and supervision, restart and hardening belong to whoever packages and deploys it. The
-init system's only part is the transient scope admin asks it for at each operation that
-stands the agent's containment, the load's scope bounding the agent's lifetime (the
-operator's ruling of 2026-11-07 on #166, section 7).
+ruling of 2026-10-03 on #50: nothing restarts it after a crash, and hardening beyond the
+start step's floor belongs to whoever packages and deploys it. The init system holds two
+things of the agent's. One is the transient scope admin asks it for at each operation
+that stands the agent's containment, the load's scope bounding the agent's lifetime (the
+operator's ruling of 2026-11-07 on #166, section 7). The other is the agent's unit,
+whose start runs admin's `load` and whose stop runs admin's `unload`, and which restarts
+nothing, on the operator's rulings of 2026-11-16 on the agent's unit (#579), per section
+7.1.
 
 ```graph
 node: weaver-admin
@@ -858,22 +861,22 @@ delegation to a lesser principal was machinery for an occupant that no longer
 exists. Every ownership clause in this corpus that named the `weaver-admin`
 account now names root, and `weaver-<n>` continues to name the agent.
 
-**`weaver-admin-role` is what a human assumes, and the human is the operator
-holding root.** The role is assumed at install, when the operator sets up
-WeaverTools on a machine they administer, and it is the seat: the acts the
-supervisor may perform, taken on and later dropped. **The lifecycle is the operator's,
-and an automated caller acts only through the operator's sudo rule**, on the operator's
-rulings of 2026-10-03 on #50, which settle the line this paragraph held, that scripted
-management is a new role with its own ruling. The operator holds sudo and starts the
-agent as root so that its permissions can be established, its user, its runtime
-directory and its sink, and everything else is downhill from that. Where WeaverWeb's
-admin-con issues the lifecycle for the operator, it does so through a rule the operator
-installs, which grants the box's admin-con account fixed `weaver-admin` command lines
-for this agent and reads nothing else from the caller, per the Spec's section 2. That is
-a statement about what this program is designed for and **not a guarantee about
-conduct** - holding the seat does not make its holder careful. An agent driving its own
-admin stays excluded: its uid is named by no rule and no boundary file, and a boundary
-naming it is a misconfiguration the inventory refuses.
+**`weaver-admin-role` is what a human assumes, and the human is the operator holding
+root.** The role is assumed at install, when the operator sets up WeaverTools on a
+machine they administer, and it is the seat: the acts the supervisor may perform, taken
+on and later dropped. **The lifecycle is the operator's, and an automated caller acts
+only through the operator's sudo rule**, on the operator's rulings of 2026-10-03 on #50,
+which settle the line this paragraph held, that scripted management is a new role with
+its own ruling. The operator holds sudo and starts the agent as root so that its
+permissions can be established, its user, its runtime directory and its sink, and
+everything else is downhill from that. Where WeaverWeb's admin-con issues the lifecycle
+for the operator, it does so through a rule the operator installs, which grants the
+box's admin-con account fixed command lines for this agent and reads nothing else from
+the caller, per the Spec's section 2. That is a statement about what this program is
+designed for and **not a guarantee about conduct** - holding the seat does not make its
+holder careful. An agent driving its own admin stays excluded: its uid is named by no
+rule and no boundary file, and a boundary naming it is a misconfiguration the inventory
+refuses.
 
 **The crate is the lifecycle tool the role runs.** One binary run with root, one
 invocation per verb, beside the trace relay its start step launches under the relay's
@@ -915,25 +918,17 @@ sink's three shapes are a file, a pipe, and a socket, so an operator names `/dev
 a FIFO their own loader drains, or a listener they hold. This program opens what was
 declared, passes the handle, implements no transport, and elects no destination.
 
-**One worker per agent is not a fleet, and the distinction is the one this program keeps
-getting wrong.** The smell this corpus rejected was a shared service accepting many
-agents and routing commands among them. A worker running one statically provisioned
-agent identity is the opposite of that: it is the wall drawn around exactly one agent,
-built from OS primitives rather than from a supervisor's bookkeeping. **Keep-alive is
-the agent's own scope's, and keep-alive past a crash or a reboot is the packaging's**,
+**Keep-alive is the agent's own scope's, and nothing restarts the agent after a crash**,
 on the operator's rulings of 2026-10-03 on #50 and of 2026-11-07 on #166: the worker
 takes its own session and outlives the invocation that started it and its invoker's
 containment, living as long as the root-owned delegated scope the start step asks PID1
-for, and restarting it on a crash or a reboot is for whoever packages and deploys the
-agent, with systemd, a container or anything else, and not this framework's. **Nothing
-of this framework starts the agent after a reboot, and the image of section 7.2 adds
-nothing that does**, on the operator's rulings of 2026-11-14 and 2026-11-15. Starting
-and stopping the agent are its load and unload through admin, which are the console's
-verbs and need no management of the machine. So after a reboot an appliance's agent
-stays unloaded until the console loads it. How the connectors come up after a reboot,
-and what the console sees then, is the console's side, per section 7.4. An operator's
-own packaging that starts the agent is the operator's business, as the keep-alive above
-is.
+for. **The agent's unit starts it at boot once the agent is made, and that is its only
+automatic start**, on the operator's rulings of 2026-11-16 on the agent's unit (#579).
+`deploy/create-agent.sh` lays the unit and enables it at boot without loading the agent.
+The unit's start runs admin's `load` and its stop admin's `unload`, and it carries no
+restart, so it supervises nothing and the no-supervisor rulings stand (section 7.1). The
+console's Start and Stop are the unit's start and stop. How the connectors come up after
+a reboot, and what the console sees then, is the console's side, per section 7.4.
 
 **The agent's uid is statically provisioned, and a dynamic identity is excluded for two
 reasons that are independent and are recorded as independent.** The first is durability:
@@ -1126,20 +1121,31 @@ else on it, and the agent stays bounded inside that machine by its accounts and
 permissions, as on any install. A privilege that an operator gives the agent beyond what
 the WeaverAgent system needs is the operator's choice, and it is outside this charter.
 
-**Starting and stopping the agent is its load and unload through admin, inside a running
-appliance.** The machine's own lifecycle, creating, cloning, starting, stopping,
-snapshotting, networking or destroying it, is the operator's and their hypervisor's, and
-the suite holds no opinion about it. **The console's stop of the agent service is
-admin's `unload`, which writes the unload's save point, and its start is `load`**, on a
-VM and on a host alike, on the operator's rulings of 2026-11-16 (setup pages).
-Admin-con's strict sudo rule already grants both lines, so admin's grant does not grow,
-and the console powers nothing off. The operator powers the machine from the hypervisor.
-A hard power-off loses the state since the last published save point, and avoiding it is
-the operator's, on the same rulings. As built, a graceful shut down from the hypervisor
-loses it the same way, because the agent's processes end on the stop signal and only the
-unload writes a save point. That Weaver Web never touches a hypervisor is
-`weaver-web-PRD`'s to carry, in `toddwbucy/WeaverWeb`. Nothing of the image starts the
-agent, per section 7.
+**Starting and stopping the agent are its unit's start and stop, which run admin's
+`load` and `unload`**, on a VM and on a host alike, on the operator's rulings of
+2026-11-16 on the agent's unit (#579). They reverse the setup-page ruling that the
+console's start and stop are admin's `load` and `unload` called directly. The machine's
+own lifecycle, creating, cloning, starting, stopping, snapshotting, networking or
+destroying it, is the operator's and their hypervisor's, and the suite holds no opinion
+about it. **Each agent has a systemd unit, laid by `deploy/create-agent.sh`**: its start
+runs `weaver-admin load <agent>`, its stop runs `weaver-admin unload <agent>`, and it
+restarts nothing. **The console's Start and Stop are `systemctl start` and `systemctl
+stop` of that unit**, through admin-con's strict sudo rule, so systemd always knows
+whether the agent is up and a shut down always unloads it. In admin-con's grant the
+unit's start and stop take the place of admin's `load` and `unload`, and the console
+powers nothing off. **The unit's stop is a graceful unload, which finishes the turn in
+progress, for a bound the act measures, then a forced unload**, which still writes the
+leave save point and holds at most 232 seconds, and the unit's stop timeout covers the
+sum. A hypervisor's shut down wait must outlast that timeout. **Creating an agent
+enables its unit at boot and does not load the agent**: the first load is the console's
+Start, and every boot after it starts the unit. The operator powers the machine from the
+hypervisor. A hard power-off loses the state since the last published save point, and
+avoiding it is the operator's, on the setup-page rulings. Until the unit is laid
+(section 11), a graceful shut down from the hypervisor loses it the same way, because
+the agent's processes end on the stop signal and only the unload writes a save point.
+That Weaver Web never touches a hypervisor is `weaver-web-PRD`'s to carry, in
+`toddwbucy/WeaverWeb`. The unit is the deployment's, laid by the scripts, and the image
+adds no start of its own, per section 7.
 
 **Nothing is installed into an appliance after its image is sealed.** No site hook
 exists. A site condition is a unit that the operator adds to their own machines, and the
@@ -1634,10 +1640,10 @@ own table. **Settled by:** the act that adds the declaration's port member, in
 `weaver-admin-Spec` and the Spec of the image's build together.
 
 **A stopped agent against a machine that is down.** On an appliance the console stops
-the agent by its unload, per section 7, and a machine that is down answers nothing.
-What the operator reads to tell the two apart is not stated. **Settled by:** the act
-that adds the console's stop of an appliance's agent, in `weaver-web-PRD` and
-`weaver-admin-operator-contract` together.
+the agent by its unit's stop, which runs its unload, per section 7.1, and a machine that
+is down answers nothing. What the operator reads to tell the two apart is not stated.
+**Settled by:** the act that adds the console's stop of an appliance's agent, in
+`weaver-web-PRD` and `weaver-admin-operator-contract` together.
 
 **What the run card is.** The run card is the operator's term, and the paper of the
 operator's that defines it is in no repository as of 2026-11-15. The rulings of
@@ -1693,12 +1699,13 @@ both `open-items` entries as that list shrank. The last entry, the
 the human's ruling, and the register stood empty from that date until the act of
 2026-08-05 filled it.
 
-**What this register holds, as of 2026-11-16.** Eight entries. Seven come from the
+**What this register holds, as of 2026-11-16.** Nine entries. Seven come from the
 amendment of 2026-11-15, which takes the operator's rulings of 2026-11-14 and 2026-11-15
 on the VM environment: the firewall table and its declared ports, the data-mount check,
 the refusal of state a version cannot read, the guest's processor in the tuple, and the
 trace's destination. One comes from the operator's rulings of 2026-11-16 (setup pages):
-the agent's folder on the state drive, with its territory and its home inside.
+the agent's folder on the state drive, with its territory and its home inside. One comes
+from the operator's rulings of 2026-11-16 on the agent's unit (#579): the agent's unit.
 
 - **`weaver-admin-Spec`, the load additions.** The firewall table of section 2: its
   name, the shape of its rules, its place in the load and the unload with its rollback,
@@ -1753,6 +1760,23 @@ the agent's folder on the state drive, with its territory and its home inside.
   `weaver-admin-Spec` sections 3.0, 4, 6 and 9, with `deploy/create-agent.sh`,
   `deploy/bootstrap-stack.sh`, `deploy/decommission.sh` and the runbooks. **Settled
   by:** the act that lays the agent's folder.
+- **The agent's unit**, on the operator's rulings of 2026-11-16 on the agent's unit
+  (#579), per sections 2, 6 and 7.1. Its form: a template, or a unit per agent with a
+  drop-in directory, so the image can add its own dependencies. Its start runs
+  `weaver-admin load <agent>` and its stop `weaver-admin unload <agent>`, with no
+  restart. `deploy/create-agent.sh` lays it and enables it at boot, and never starts it.
+  Its ordering against the agent's mounts, the network and the agent's scope, so a
+  missing drive keeps the agent down and the unload finishes before the drives unmount.
+  Its stop: a graceful unload for a bound the act measures, then a forced unload, with a
+  stop timeout covering the sum. A state table of the unit against admin's states,
+  `show`, `force-unload` and a crash, before any code. Admin-con's sudo rule and verb
+  map, with the unit's start and stop in place of admin's `load` and `unload`. Every
+  text that says the agent has no unit: `weaver-admin-Spec` sections 2, 3.0, 6 and 6.1,
+  `weaver-admin-operator-contract` section 2, `deploy/create-agent.sh`,
+  `deploy/decommission.sh`, `deploy/HowToDeployANewAgent.md` sections 5 and 7, and this
+  repository's `CLAUDE.md`. WeaverWeb's connector follows, in `toddwbucy/WeaverWeb`.
+  **Settled by:** the act that writes the unit's Spec and its state table, then the act
+  that lays it.
 
 ## 12. Children
 

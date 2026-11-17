@@ -117,26 +117,31 @@ document does not write that admin's table opens a declared port on an appliance
 
 Per `weaver-admin-PRD` sections 7 and 7.1.
 
-**Starting and stopping the agent are its load and unload through admin.** The console
-asks for either through admin-con, per `weaver-admin-operator-contract`.
+**Starting and stopping the agent are its unit's start and stop, which run admin's
+`load` and `unload`.** Each agent has a systemd unit, laid by `deploy/create-agent.sh`,
+whose start runs `weaver-admin load <agent>` and whose stop runs `weaver-admin unload
+<agent>`, on a VM and on a host alike, on the operator's rulings of 2026-11-16 on the
+agent's unit (#579), per the charter's section 7.1. The unit restarts nothing, and admin
+stays an invocation per verb.
 
-**The console's stop of the agent service is that unload, which writes the unload's save
-point, and its start again is that load**, on a VM and on a host alike, on the
-operator's rulings of 2026-11-16 (setup pages), per the charter's section 7.1. Both
-lines are already granted to admin-con, so admin's grant does not grow, and the console
-powers nothing off. The operator powers the machine from the hypervisor. A machine
-stopped with the agent loaded loses the state since the last published save point,
-because the agent's processes end on the stop signal and only the unload writes one.
+**The console's Start and Stop are `systemctl start` and `systemctl stop` of the unit**,
+asked through admin-con, per `weaver-admin-operator-contract`, and the console powers
+nothing off. The operator powers the machine from the hypervisor. **The unit's stop is a
+graceful unload for a bound the act measures, then a forced unload**, which still writes
+the leave save point, and the unit's stop timeout covers the sum. A graceful shut down
+of the machine stops the unit, so the unload writes its save point. A machine powered
+off hard with the agent loaded loses the state since the last published save point.
 
-**Nothing of this framework starts the agent after a reboot.** Admin runs per verb and
-is not resident, and it lays no persistent unit, timer or other start of its own. An
-operator's own packaging that starts the agent is the operator's, per the charter's
-section 7.
+**Creating an agent enables its unit at boot and does not load the agent.** The first
+load is the console's Start, and every boot after it starts the unit. The image adds no
+start of its own.
 
-**After a restart the agent stays unloaded until the console loads it**, per the
-charter's section 7, and that load restores the automatic save point the last unload
-wrote on the state mount, per the charter's section 7.5. The first agent's test
-exercises that path, on the operator's rulings of 2026-11-16 (setup pages).
+**After a restart the unit loads the agent**, and that load restores the automatic save
+point the last unload wrote on the state mount, per the charter's section 7.5. The first
+agent's test exercises that path, on the operator's rulings of 2026-11-16 (setup pages).
+The unit's form, its ordering against the mounts, the network and the agent's scope, its
+stop's bound and its state against admin's `show` are settled by the act the charter's
+section 11 registers.
 
 ## 5. The trace's handoff
 
