@@ -6128,8 +6128,18 @@ while select.select([0], [], [], 1.0)[0]:
 r["stdin"] = data.decode(errors="replace")
 with open(sys.argv[1], "w") as report:
     json.dump(r, report)
+# A case that makes a relay fail (/dev/full) can see it close its pipe before
+# these writes end. That broken pipe is the relay's failure, which the case
+# reads in the status, so the reporter still exits with the status it was
+# asked for, its outputs on /dev/null for the flush at exit.
 for stream, word in ((sys.stdout, "out-a"), (sys.stderr, "err-b"), (sys.stdout, "out-c")):
-    print(word, file=stream, flush=True)
+    try:
+        print(word, file=stream, flush=True)
+    except BrokenPipeError:
+        pass
+devnull = os.open(os.devnull, os.O_WRONLY)
+os.dup2(devnull, 1)
+os.dup2(devnull, 2)
 sys.exit(int(sys.argv[2]))
 """
     # A stand-in for the drop's privileged parent, as it treats signals:
