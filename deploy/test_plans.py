@@ -870,11 +870,13 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         # devices in their given order as the shard order, and turn-context
         # as a top-level key. Absent, each keeps what the script wrote before:
         # device 0, 32768 tokens, and no turn-context, which reads as
-        # continuous. The plan says all three. Perturbations: write the
+        # continuous. The plan says all three. A TURN_CONTEXT the caller's
+        # environment carries is not the flag. Perturbations: write the
         # devices sorted, a fixed capacity, or turn-context inside the
-        # decoder's table, and a read below fails.
+        # decoder's table, or keep the inherited variable, and a read below
+        # fails.
         import tomllib
-        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        self.env.update(ALLOW_APPLY_CHECKS="1", TURN_CONTEXT="independent")
         for given, devices, capacity, turn, shown in (
                 ((), [0], 32768, None, "devices [0], context-capacity 32768, turn-context continuous (absent, so not written)"),
                 (("--devices", "1,0", "--context-capacity", "131072", "--turn-context", "independent"),

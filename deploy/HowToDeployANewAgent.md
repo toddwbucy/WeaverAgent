@@ -154,10 +154,11 @@ ordinals in the box's PCI bus order, the given order kept as the shard order, de
 `0`. `--context-capacity n` sets the session's context in tokens, default 32768.
 `--turn-context continuous|independent` writes the top-level election, and without it
 nothing is written and the agent reads `continuous`. Each refuses before anything is
-made where a load would refuse it: an empty device set, an ordinal named twice, a
-capacity that is not a count from 1 to 4294967295, or a third turn-context word. Whether
-the model spans the devices and each card has room is the SPU's to judge at the load,
-which `verify-load.sh` shows.
+made what a load refuses without the model or the cards: an empty device set, an ordinal
+named twice, a capacity that is not a count from 1 to 4294967295, or a third
+turn-context word. An ordinal the box has no card for, whether the model spans the
+devices, and whether each card has room are the SPU's to judge at the load, which
+`verify-load.sh` shows.
 
 Apply first checks that `/etc/sudoers` includes `/etc/sudoers.d` and that visudo accepts
 the rendered rule, and refuses before it makes anything otherwise. It then lays the

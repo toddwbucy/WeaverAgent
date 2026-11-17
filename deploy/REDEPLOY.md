@@ -461,9 +461,10 @@ thing the next box will hit first.
 
 ## 6. Olympus, where it differs
 
-- Three cards. A declaration's `devices = [0]` binds whichever card CUDA numbers 0, so
-  record `serving_device` from the first load and change the declaration's device if it
-  is the wrong one. The two-card tests only olympus can run are the SPU gate's
+- Three cards. A declaration's `devices` names cards in the box's PCI bus order, which
+  the harness sets as CUDA's order for the SPU, and `create-agent.sh --devices` chooses
+  them (default `0`). Record `serving_device` from the first load and check it is the
+  card intended. The two-card tests only olympus can run are the SPU gate's
   business, not this runbook's.
 - `CARGO_TARGET_DIR` is set there and shared. Export a fresh one for the install so
   the members are built from this tree and not compared against another project's

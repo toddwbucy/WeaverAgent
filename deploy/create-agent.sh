@@ -157,15 +157,13 @@ ADAPTER_SHA256=""
 ADAPTER_SCALE=""
 BASE_BLAKE3=""
 # **The decoder's placement and context are the operator's choice at setup**
-# (#580): on an appliance the setup pages choose all three, and nobody edits
-# the declaration by hand after this script writes it. Absent, each keeps the
-# value this script wrote before: device 0, a context of 32768 tokens, and no
-# turn-context, which the agent reads as continuous. A value given empty is
-# judged as given, so `--devices ""` refuses as the empty set a load refuses,
-# never becoming the default.
+# (#580), so nobody edits the declaration by hand after this script writes it.
+# The defaults are the header's. A value given empty is judged as given, so
+# `--devices ""` refuses as the empty set rather than becoming the default, and
+# TURN_CONTEXT stays unset until the flag gives it.
 DEVICES=0
 CONTEXT_CAPACITY=32768
-TURN_CONTEXT="" TURN_CONTEXT_GIVEN=0
+unset TURN_CONTEXT
 while [ $# -gt 0 ]; do
   case "$1" in
     --apply)    APPLY=1 ;;
@@ -192,7 +190,7 @@ while [ $# -gt 0 ]; do
     --base-blake3)    [ $# -ge 2 ] || die "--base-blake3 needs a digest"; BASE_BLAKE3=$2; shift ;;
     --devices)          [ $# -ge 2 ] || die "--devices needs device ordinals, such as 0 or 0,1"; DEVICES=$2; shift ;;
     --context-capacity) [ $# -ge 2 ] || die "--context-capacity needs a count of tokens"; CONTEXT_CAPACITY=$2; shift ;;
-    --turn-context)     [ $# -ge 2 ] || die "--turn-context needs continuous or independent"; TURN_CONTEXT=$2; TURN_CONTEXT_GIVEN=1; shift ;;
+    --turn-context)     [ $# -ge 2 ] || die "--turn-context needs continuous or independent"; TURN_CONTEXT=$2; shift ;;
     *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
   esac
   shift
@@ -269,14 +267,15 @@ case "$CONNECTOR_ROLE" in
   observer) VERBS="show" ;;
   *) die "--connector-role is operator or observer: '$CONNECTOR_ROLE'" ;;
 esac
-# **The decoder's three values refuse here what a load would refuse**, before
-# anything is made (#580). The parse refuses an empty device set and a
-# turn-context outside its two words (weaver-types-Spec section 2). The SPU
-# refuses a repeated ordinal and a capacity that is not a count below 2^32 at
-# its admission, and either engine refuses a capacity of zero. Each value is
-# written as a TOML integer, which takes no leading zero. Whether the family
-# spans the devices and each card has room is the SPU's to judge at the load,
-# and verify-load.sh's to show.
+# **The decoder's three values refuse here what a load refuses without the
+# model or the cards**, before anything is made (#580). The parse refuses an
+# empty device set and a turn-context outside its two words (weaver-types-Spec
+# section 2). The SPU's admission refuses a repeated ordinal and a capacity
+# that is not a count below 2^32, and either engine refuses a capacity of zero.
+# Each value is written as a TOML integer, which takes no leading zero. An
+# ordinal the box has no card for, whether the family spans the devices, and
+# whether each card has room are the SPU's to judge at the load, and
+# verify-load.sh's to show.
 U32_MAX=4294967295
 [[ "$DEVICES" =~ ^(0|[1-9][0-9]{0,9})(,(0|[1-9][0-9]{0,9}))*$ ]] \
   || die "--devices is a comma-separated list of device ordinals in the box's PCI bus order, such as 0 or 0,1, with no spaces or leading zeros: '$DEVICES'"
@@ -290,12 +289,15 @@ done
 DEVICES_TOML=${DEVICES//,/, }
 [[ "$CONTEXT_CAPACITY" =~ ^[1-9][0-9]{0,9}$ ]] && (( CONTEXT_CAPACITY <= U32_MAX )) \
   || die "--context-capacity is a count of tokens from 1 to $U32_MAX, with no leading zero: '$CONTEXT_CAPACITY'"
-case "$TURN_CONTEXT_GIVEN:$TURN_CONTEXT" in
-  0:) TURN_CONTEXT_LINE="" TURN_CONTEXT_SHOWN="continuous (absent, so not written)" ;;
-  1:continuous|1:independent) TURN_CONTEXT_LINE="
+if [ -z "${TURN_CONTEXT+given}" ]; then
+  TURN_CONTEXT_LINE="" TURN_CONTEXT_SHOWN="continuous (absent, so not written)"
+else
+  case "$TURN_CONTEXT" in
+    continuous|independent) TURN_CONTEXT_LINE="
 turn-context = \"$TURN_CONTEXT\"" TURN_CONTEXT_SHOWN=$TURN_CONTEXT ;;
-  *) die "--turn-context is continuous or independent: '$TURN_CONTEXT'" ;;
-esac
+    *) die "--turn-context is continuous or independent: '$TURN_CONTEXT'" ;;
+  esac
+fi
 # **The operator is the account running this script, or root where root is the
 # operator.** On a workstation the operator is the user's own account, which
 # can sudo: the root's `operator` key names their uid, and every root step below
