@@ -366,8 +366,8 @@ def refusing_copy(where, name, record):
     renamed into place, so a write that fails leaves no file under NAME."""
     fd, part = tempfile.mkstemp(dir=where, prefix=".part-")
     try:
-        with os.fdopen(fd, "w") as f:
-            f.write(refusing_text(record))
+        os.close(fd)
+        Path(part).write_bytes(refusing_text(record).encode())
         os.chmod(part, 0o755)
         os.replace(part, where / name)
     finally:
@@ -7870,8 +7870,8 @@ sys.exit(code if code >= 0 else 128 - code)
 def _guard_copies():
     """The refusing copies in the guard's directory, read by their text, and
     the entries that could not be read. A name that starts with a dot, as a
-    copy's temporary name does, is never a copy, and a file is read only
-    when its size is a copy's."""
+    copy's temporary name does, is never a copy, a file is read only when
+    its size is a copy's, and an entry gone before it is read is absent."""
     text = refusing_text(REACH_RECORD).encode()
     copies, unread = set(), set()
     for entry in os.scandir(STAND_IN_GUARD):
@@ -7881,6 +7881,8 @@ def _guard_copies():
             if (entry.is_file(follow_symlinks=False) and entry.stat(follow_symlinks=False).st_size == len(text)
                     and Path(entry.path).read_bytes() == text):
                 copies.add(entry.name)
+        except FileNotFoundError:
+            pass
         except OSError:
             unread.add(entry.name)
     return copies, unread
@@ -7921,8 +7923,9 @@ def files_held(files):
         except OSError as e:
             failed.append(f"{STAND_IN_GUARD} not read ({e.strerror or e})")
             now, unread_now = before, set()
+        failed += [f"{STAND_IN_GUARD / name} not read at the block's start" for name in sorted(unread)]
+        failed += [f"{STAND_IN_GUARD / name} not read at its end" for name in sorted(unread_now)]
         unread |= unread_now
-        failed += [f"{STAND_IN_GUARD / name} not read" for name in sorted(unread)]
         now, before = now - unread, before - unread
         for name in sorted(now - before):
             try:
@@ -8387,8 +8390,8 @@ class StandInGuardTests(unittest.TestCase):
         cannot be set back leaves the rest set back and is named, in
         GuardCopiesLeft or in a note on the block's own exception, also when
         the guard's directory cannot be read at the end, or the generator is
-        closed. An entry that could not be read at the start is left and
-        named, and another writer's temporary copy is never read as a copy.
+        closed. An entry that could not be read at the start or at the end is
+        left and named, and another writer's temporary copy is never read as a copy.
         Made-up names stand for the programs. Perturbations: keep the copies
         made, read a temporary copy as one, leave a removed copy removed, remove every new file,
         skip a raised block, stop at the first failure, let the cleanup's
@@ -8402,6 +8405,7 @@ class StandInGuardTests(unittest.TestCase):
         start = _guard_copies()[0]
         stuck, new, old, after, other = (STAND_IN_GUARD / f"virt-held-{n}"
                                          for n in ("0-stuck", "new", "old", "after", "other"))
+        part = STAND_IN_GUARD / ".part-another-writers"
         real_unlink = path_type.unlink
 
         def unlink_but(path):
@@ -8420,7 +8424,6 @@ class StandInGuardTests(unittest.TestCase):
             return mock.patch.object(path_type, "read_bytes", read_bytes)
         try:
             guard_copy(old.name)
-            part = STAND_IN_GUARD / ".part-another-writers"
             with files_held(held_files):
                 guard_copy(new.name)
                 other.write_text("{}")
@@ -8493,15 +8496,30 @@ class StandInGuardTests(unittest.TestCase):
             finally:
                 for patch in started:
                     patch.stop()
-            self.assertIn(f"{new} not read", str(unreadable.exception))
+            self.assertIn(f"{new} not read at the block's start", str(unreadable.exception))
             self.assertTrue(new.exists(), "an entry that could not be read at the start is left")
+            try:
+                with self.assertRaises(GuardCopiesLeft) as unreadable, files_held(held_files):
+                    old.unlink()
+                    guard_copy(old.name)
+                    reading = read_but(old)
+                    reading.start()
+                    started.append(reading)
+            finally:
+                for patch in started:
+                    patch.stop()
+                started.clear()
+            self.assertIn(f"{old} not read at its end", str(unreadable.exception))
+            self.assertTrue(old.exists(), "an entry that could not be read at the end is left")
             new.unlink()
             held = files_held(held_files)
             with unlink_but(stuck):
                 held.__enter__()
-                guard_copy(stuck.name)
-                with self.assertRaises(GuardCopiesLeft):
-                    held.gen.close()
+                try:
+                    guard_copy(stuck.name)
+                finally:
+                    with self.assertRaises(GuardCopiesLeft):
+                        held.__exit__(GeneratorExit, GeneratorExit(), None)
             stuck.unlink()
             self.assertEqual(_guard_copies(), (start | {old.name}, set()))
         finally:
@@ -8510,18 +8528,25 @@ class StandInGuardTests(unittest.TestCase):
 
     def test_a_refusing_copy_whose_write_fails_leaves_no_file(self):
         """refusing_copy writes under a temporary name and renames it into
-        place, so a write that fails, here at its mode, leaves no file under
-        the name for guard_copy to take as the guard's copy, and no
-        temporary one. Perturbation: write in place, and this fails."""
+        place, so a write that fails at any step, its text, its mode or its
+        rename, leaves no file under the name for guard_copy to take as the
+        guard's copy, and no temporary one. Perturbations: write in place,
+        or remove the temporary file only when one step fails, and this
+        fails."""
         from unittest import mock
         name = "virt-half-written"
+        steps = {"text": (type(STAND_IN_GUARD), "write_bytes", OSError(28, "No space left on device")),
+                 "mode": (os, "chmod", OSError(30, "Read-only file system")),
+                 "rename": (os, "replace", IsADirectoryError(21, "Is a directory"))}
         try:
-            with mock.patch.object(os, "chmod", side_effect=OSError(30, "Read-only file system")):
-                with self.assertRaises(OSError):
-                    refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
-            self.assertEqual([e for e in os.listdir(STAND_IN_GUARD) if e == name or e.startswith(".part-")], [])
+            for step, (owner, attribute, error) in steps.items():
+                with self.subTest(step=step):
+                    with mock.patch.object(owner, attribute, side_effect=error), self.assertRaises(OSError):
+                        refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
+                    self.assertEqual([e for e in os.listdir(STAND_IN_GUARD) if e == name or e.startswith(".part-")],
+                                     [])
             copy = guard_copy(name)
-            self.assertEqual(copy.read_text(), refusing_text(REACH_RECORD))
+            self.assertEqual(copy.read_bytes(), refusing_text(REACH_RECORD).encode())
             self.assertTrue(os.access(copy, os.X_OK), "the copy is executable")
         finally:
             (STAND_IN_GUARD / name).unlink(missing_ok=True)
