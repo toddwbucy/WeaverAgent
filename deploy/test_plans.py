@@ -183,6 +183,10 @@ def _refresh_files():
     # replaced within one tick of the clock is never missed. Every
     # directory's reading is dropped when a start directory changes, since a
     # directory of links into one keeps its own time when a target changes.
+    # The key covers the start directories alone: a named program whose file
+    # lies outside them and is replaced during the run keeps its old identity
+    # until one changes, a class the namespace act (#601) closes, and no named
+    # program on the box resolves outside them (CodeRabbit on #623).
     global PRIVILEGED_FILES
     key = tuple(_mtime(d) for d in _START_DIRS)
     if key != _FILES_READ[0]:
@@ -199,8 +203,15 @@ def _refresh_files():
 # seconds old, so a change within one tick of the clock is never missed. A
 # time ahead of the clock (a skewed file server, a clock stepped back) is
 # not kept until the clock has passed it by two seconds, and is read on
-# each child until then.
+# each child until then. **A directory that cannot be listed refuses the
+# child** and is never kept: a child may search it and run a program in it by
+# name, so it is never read as empty (CodeRabbit on #623), and a later child
+# reads it again.
 _MEMBERS_READ = {}
+
+
+class StandInGuardError(AssertionError):
+    pass
 
 
 def _members_of(directory):
@@ -213,11 +224,22 @@ def _members_of(directory):
         return held[1]
     try:
         names = tuple(sorted(e.name for e in os.scandir(real) if privileged(e.name, e.path)))
-    except OSError:
-        names = ()
+    except (FileNotFoundError, NotADirectoryError):
+        return ()
+    except OSError as e:
+        raise StandInGuardError(f"the directory {real} cannot be listed ({e.strerror or e}), so the privileged "
+                                "programs a child could run from it cannot be read: refused before it runs") from e
     if time.time_ns() - changed > 2_000_000_000:
         _MEMBERS_READ[real] = (changed, names)
     return names
+
+
+def _base(cwd):
+    """**Where a child starts, as the kernel reads it**: CWD with its links
+    resolved before its `..`, as a child's chdir resolves it, so a relative
+    entry or path is read in the directory the child reads it in (CodeRabbit
+    on #623). The suite's own directory where CWD is None."""
+    return os.path.realpath(cwd) if cwd is not None else os.getcwd()
 
 
 def privileged_in(directories, cwd=None, guard_follows=False):
@@ -227,7 +249,7 @@ def privileged_in(directories, cwd=None, guard_follows=False):
     it. With GUARD_FOLLOWS, each found in a directory outside the temporary
     root gets the guard's copy (guard_path)."""
     _refresh_files()
-    base = os.path.abspath(cwd) if cwd is not None else os.getcwd()
+    base = _base(cwd)
     found = list(PRIVILEGED)
     for d in directories:
         members = _members_of(os.path.join(base, d or "."))
@@ -243,13 +265,18 @@ _IMAGE_LISTED = tuple(n.strip() for n in (DEPLOY / "image-programs.txt").read_te
 # The programs the guard refuses beside sudo and runuser, read at the start:
 # each privileged program in a box bin directory or the suite's PATH, and each
 # the image's list names, which the image view links to the guard's copy.
-PRIVILEGED_NAMES = privileged_in(_START_DIRS)
+try:
+    PRIVILEGED_NAMES = privileged_in(_START_DIRS)
+except StandInGuardError as unread:
+    sys.exit(f"test_plans: {unread}, and no test runs")
 # **A multi-call binary that is also a shell or a stand-in** (busybox, toybox)
 # would make sh or env a privileged program by its file, so the guard could
-# refuse neither without the other: the run stops at its start, named.
+# refuse neither without the other: the run stops at its start, named. Every
+# directory's entry is read, not the first found alone, since a later one is
+# read into PRIVILEGED_NAMES too (CodeRabbit on #623).
 def shared_with_privileged(directories):
     return [n for n in ("sh", "bash") + STAND_IN_NAMES
-            if privileged(n, shutil.which(n, path=os.pathsep.join(directories)))]
+            if any(privileged(n, os.path.join(d, n)) for d in directories)]
 
 
 _SHARED = shared_with_privileged(_START_DIRS)
@@ -404,10 +431,6 @@ _GUARD_BASH = shutil.which("bash", path=BOX_PATH)
 _REAL_POPEN = subprocess.Popen
 
 
-class StandInGuardError(AssertionError):
-    pass
-
-
 def _resolved(path, names=STAND_IN_NAMES, cwd=None):
     # Read where the child starts, so a relative or empty entry finds what
     # the child finds, and each answer is made absolute against that place.
@@ -415,7 +438,7 @@ def _resolved(path, names=STAND_IN_NAMES, cwd=None):
                          'for n in "$@"; do command -v -- "$n" || echo; done', "guard", *names],
                         env={"PATH": path}, cwd=cwd, stdout=subprocess.PIPE, text=True)
     out, _ = probe.communicate(timeout=20)
-    base = os.path.abspath(cwd) if cwd is not None else os.getcwd()
+    base = _base(cwd)
     return tuple((n, os.path.join(base, f) if f else f) for n, f in zip(names, out.split("\n")))
 
 
@@ -446,7 +469,7 @@ def guard_argv(argv, cwd=None, executable=None):
     hands its command, the default PATH where it clears the environment or
     PATH and assigns none, is read by guard_path."""
     _refresh_files()
-    base = os.path.abspath(cwd) if cwd is not None else os.getcwd()
+    base = _base(cwd)
     words = [os.fsdecode(a) for a in argv]
     if executable is not None:
         _guard_paths(words[:1], base)
@@ -716,16 +739,22 @@ class _GuardedPopen(_REAL_POPEN):
             kwargs["stdin"] = subprocess.DEVNULL
         if _runs_a_script(args):
             args, kwargs = _image_view(args, kwargs)
+        # **The env is read as the child gets it**: each key and value decoded
+        # as Popen encodes it, so a bytes PATH or DROP_PATH is read as a str
+        # one is, and a name given twice, once in each, is read both times
+        # (CodeRabbit on #623). The env handed to Popen is unchanged.
+        handed = os.environ if kwargs.get("env") is None else kwargs["env"]
+        pairs = [(os.fsdecode(k), os.fsdecode(v)) for k, v in handed.items()]
+        env = dict(pairs)
         if kwargs.get("env") is not None:
-            _hand_settings(kwargs["env"])
+            _hand_settings(env)
         # **Every child's PATH is read**, a shell's or not: a child that runs
         # code (python3 -c, make) starts its own children on the PATH it is
         # handed, out of this process's sight. A shell=True child is a shell.
-        env = os.environ if kwargs.get("env") is None else kwargs["env"]
         cwd = None if kwargs.get("cwd") is None else os.fsdecode(kwargs["cwd"])
-        guard_path(env.get("PATH", os.defpath), "PATH", cwd)
-        if "DROP_PATH" in env:
-            guard_path(env["DROP_PATH"], "DROP_PATH", cwd)
+        for name in ("PATH", "DROP_PATH"):
+            for value in [v for k, v in pairs if k == name] or ([os.defpath] if name == "PATH" else []):
+                guard_path(value, name, cwd)
         # A PATH an `env` wrapper hands on in the command line itself.
         for a in ([] if isinstance(args, (str, bytes, os.PathLike)) else args):
             if os.fsdecode(a).startswith("PATH="):
@@ -1824,7 +1853,9 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         entry on the box's PATH but TOOL, the first of a name winning as the
         PATH lookup would. A privileged program from outside the tests'
         temporary root is linked as the guard's refusing copy, never the
-        box's."""
+        box's, by the named programs' files as they stand now, as box_view
+        reads them (CodeRabbit on #623)."""
+        _refresh_files()
         farm = self.root / f"path-without-{tool}"
         if not farm.exists():
             farm.mkdir()
@@ -1850,6 +1881,24 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
             if e.name != "hostname" and privileged(e.name, e.path):
                 with self.subTest(name=e.name):
                     self.assertEqual(os.readlink(farm / e.name), str(STAND_IN_GUARD / e.name))
+
+    def test_the_farm_reads_the_named_programs_files_before_it_is_built(self):
+        """path_without reads the named programs' files again before it
+        builds its farm, as box_view does, so a name whose file became a
+        named program's since the last reading is linked as the guard's
+        copy, never the box's (CodeRabbit on #623). The reading is stood in
+        for by one that names true's file. Perturbation: build without
+        reading, and the farm links the box's true."""
+        from unittest import mock
+        module = sys.modules[__name__]
+        true = shutil.which("true", path="/usr/bin")
+
+        def reading():
+            module.PRIVILEGED_FILES = frozenset({_file_of(true)})
+
+        with files_held(frozenset()), mock.patch.object(module, "_refresh_files", reading):
+            farm = Path(self.path_without("hostname", "/usr/bin").split(os.pathsep)[1])
+            self.assertEqual(os.readlink(farm / "true"), str(STAND_IN_GUARD / "true"))
 
     def test_the_home_is_capped_by_an_ext4_project_quota_when_asked(self):
         # **#585, the operator's ruling of 2026-11-16**: once the agent's
@@ -7873,18 +7922,21 @@ sys.exit(code if code >= 0 else 128 - code)
 
 
 def _guard_copies():
-    """The refusing copies in the guard's directory, read by their text, and
-    the entries that could not be read. A name that starts with a dot, as a
-    copy's temporary name does, is never a copy, a file is read only when
-    its size is a copy's, and an entry gone before it is read is absent. The
-    directory gone during the reading fails it."""
+    """The refusing copies in the guard's directory, read by their text and
+    their mode, and the entries that could not be read. A name that starts
+    with a dot, as a copy's temporary name does, is never a copy, a file is
+    read only when its size is a copy's and its mode 0755, so a copy no
+    longer executable is not one (CodeRabbit on #623), and an entry gone
+    before it is read is absent. The directory gone during the reading fails
+    it."""
     text = refusing_text(REACH_RECORD).encode()
     copies, unread = set(), set()
     for entry in os.scandir(STAND_IN_GUARD):
         if entry.name.startswith("."):
             continue
         try:
-            if (entry.is_file(follow_symlinks=False) and entry.stat(follow_symlinks=False).st_size == len(text)
+            st = entry.stat(follow_symlinks=False)
+            if (stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o755 and st.st_size == len(text)
                     and Path(entry.path).read_bytes() == text):
                 copies.add(entry.name)
         except FileNotFoundError:
@@ -7902,15 +7954,16 @@ def files_held(files):
     reading from before the block or during it is kept. At its end the
     block sets the guard's refusing copies back as they stood at its
     start: each copy made during it is removed, so a box program FILES
-    names never stays refused, and each copy removed during it is made
-    again, whatever the block left under its name. Any other file in the
-    guard's directory is left as it is, and so is an entry that cannot be
-    read, at the start or the end, which is named. Blocks nest, each
-    setting back its own start, and a block that raises sets them back too.
-    What cannot be set back is named, after the rest is, in a
-    GuardCopiesLeft, or in a note on the block's own exception, which it
-    never replaces. Each block holds the guard's directory of its start: a
-    test that patches STAND_IN_GUARD does so outside every held block."""
+    names never stays refused, and each copy removed during it, or left
+    with another mode, is made again, whatever the block left under its
+    name. Any other file in the guard's directory is left as it is, and so
+    is an entry that cannot be read, at the start or the end, which is
+    named. Blocks nest, each setting back its own start, and a block that
+    raises sets them back too. What cannot be set back is named, after the
+    rest is, in a GuardCopiesLeft, or in a note on the block's own
+    exception, which it never replaces. Each block holds the guard's
+    directory of its start: a test that patches STAND_IN_GUARD does so
+    outside every held block."""
     from unittest import mock
     module = sys.modules[__name__]
     (before, unread), raised = _guard_copies(), None
@@ -8552,6 +8605,97 @@ class StandInGuardTests(unittest.TestCase):
             for name in (stuck, new, old, after, other, part):
                 name.unlink(missing_ok=True)
 
+    def test_a_directory_that_cannot_be_listed_refuses_its_child(self):
+        """A directory on a child's PATH that this process can search but not
+        list may hold a program the child runs by its name, so it refuses the
+        child, naming the directory, and is never kept as an empty reading:
+        once it can be listed, it is read (CodeRabbit on #623). Root lists
+        any directory, so this needs an unprivileged runner. Perturbation:
+        read a failed listing as empty, and the child runs and the empty
+        reading is kept."""
+        if os.geteuid() == 0:
+            self.skipTest("root lists a directory whatever its mode")
+        run = lambda path: subprocess.run([sys.executable, "-c", "pass"], env={"PATH": path}, timeout=20)
+        with tempfile.TemporaryDirectory() as scratch:
+            box = Path(scratch) / "unlisted"
+            box.mkdir()
+            real = os.path.realpath(box)
+            path = os.pathsep.join([str(STAND_IN_GUARD), str(box)])
+            old = time.time_ns() - 10_000_000_000
+            try:
+                box.chmod(0o311)
+                os.utime(box, ns=(old, old))
+                with self.assertRaises(StandInGuardError) as raised:
+                    run(path)
+                self.assertIn(f"the directory {real} cannot be listed", str(raised.exception))
+                self.assertNotIn(real, _MEMBERS_READ, "a failed listing is not kept")
+                box.chmod(0o755)
+                self.assertEqual(run(path).returncode, 0)
+            finally:
+                box.chmod(0o755)
+
+    def test_the_env_is_read_as_the_child_gets_it(self):
+        """A PATH or DROP_PATH given as bytes is read as a str one is, as
+        Popen encodes both: a bytes PATH of the guard's directory alone lets
+        the child run, where a PATH read as missing would read the default
+        one and refuse it, and a bytes DROP_PATH of the box's directories
+        refuses it. A name given twice, once as str and once as bytes, is
+        read both times (CodeRabbit on #623). Perturbation: read the str
+        keys alone, and the bytes PATH is refused and the bytes DROP_PATH
+        missed."""
+        guard, box = str(STAND_IN_GUARD), os.fsencode(os.pathsep.join(_BOX_BINS))
+        run = lambda env: subprocess.run([sys.executable, "-c", "pass"], env=env, timeout=20)
+        self.assertEqual(run({b"PATH": os.fsencode(guard)}).returncode, 0)
+        for env in ({"PATH": guard, b"DROP_PATH": box}, {"PATH": guard, b"PATH": box},
+                    {b"PATH": box, "PATH": guard}):
+            with self.subTest(env=env):
+                with self.assertRaises(StandInGuardError) as raised:
+                    run(env)
+                self.assertIn("outside the stand-ins", str(raised.exception))
+
+    def test_a_child_is_read_where_it_starts_with_its_links_resolved(self):
+        """A start directory with a link followed by `..` is read as a
+        child's chdir reads it, the link first and then its parent, at each
+        of the three reads that anchor to where the child starts: its PATH's
+        directories (privileged_in), the probe's answers (_resolved), and
+        its command line's paths (guard_argv) (CodeRabbit on #623).
+        Perturbation: anchor any of them without resolving the link, and
+        that read lands in another directory."""
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(os.path.realpath(scratch))
+            (top / "real" / "deep").mkdir(parents=True)
+            (top / "real" / "bin").mkdir()
+            (top / "link").symlink_to(top / "real" / "deep")
+            program = top / "real" / "bin" / "virt-anchored"
+            program.write_text("#!/bin/sh\nexit 0\n")
+            program.chmod(0o755)
+            cwd = os.path.join(top, "link", "..")
+            self.assertIn("virt-anchored", privileged_in(["bin"], cwd))
+            (_, found), = _resolved("bin", ("virt-anchored",), cwd)
+            self.assertEqual(os.path.realpath(found), str(program))
+            seen = []
+            with mock.patch.object(sys.modules[__name__], "_guard_paths", lambda words, base: seen.append(base)):
+                guard_argv(["bin/virt-anchored"], cwd)
+            self.assertEqual(seen, [str(top / "real")])
+
+    def test_a_held_block_makes_again_a_copy_left_with_another_mode(self):
+        """A copy a held block leaves no longer executable is not a copy at
+        its end, so it is made again, 0755 with its text, and a reach of it
+        is still recorded rather than met with a refusal to run it
+        (CodeRabbit on #623). Perturbation: read a copy by its text alone,
+        and the copy stays 0644."""
+        copy = STAND_IN_GUARD / "virt-held-mode"
+        self.assertFalse(copy.exists())
+        try:
+            guard_copy("virt-held-mode")
+            with files_held(frozenset()):
+                copy.chmod(0o644)
+            self.assertEqual(stat.S_IMODE(copy.stat().st_mode), 0o755)
+            self.assertEqual(copy.read_bytes(), refusing_text(REACH_RECORD).encode())
+        finally:
+            copy.unlink(missing_ok=True)
+
     def test_a_refusing_copy_whose_write_fails_leaves_no_file(self):
         """refusing_copy writes under a temporary name and renames it into
         place, so a write that fails at any step, its text part way through,
@@ -8705,11 +8849,15 @@ class StandInGuardTests(unittest.TestCase):
 
     def test_envs_table_holds_every_option_the_boxs_env_names(self):
         """The table env_hands reads holds every option the box's env names in
-        its --help, long and short, each with whether it takes an argument,
-        and no other, so an option a later env adds is named here before a
-        line meets the guard's refusal of it. Perturbations: drop -a from
-        the table, or add a short option the box's env lacks, and this
-        fails."""
+        its --help, long and short, each with whether it takes an argument
+        as the table reads it, so an option a later env adds is named here
+        before a line meets the guard's refusal of it. An option the table
+        holds and an older env lacks (coreutils 9.4 has no --argv0 or
+        --env0-from) is no gap, since that env refuses it and runs nothing,
+        so the table may hold more than the box's env (Codex on #623). The
+        options every GNU env has are read, so a help this parse cannot read
+        fails rather than passes empty. Perturbations: drop -a from the
+        table, or read -u as taking no argument, and this fails."""
         env_program = shutil.which("env", path=os.pathsep.join(_BOX_BINS))
         text = subprocess.run([env_program, "--help"], capture_output=True, text=True, timeout=20,
                               env={"LC_ALL": "C", "PATH": str(STAND_IN_GUARD)}, check=True).stdout
@@ -8723,24 +8871,35 @@ class StandInGuardTests(unittest.TestCase):
                 longs[long] = (short or long, {None: False, "=": True, "[=": "="}[argument])
             if short:
                 shorts.add(short)
-        self.assertIn("--argv0", longs, "the help reads as the table expects")
-        self.assertEqual(longs, _ENV_LONG)
-        self.assertEqual(shorts, set(_ENV_SHORT))
+        for always in ("--ignore-environment", "--unset", "--null", "--help", "--version"):
+            self.assertIn(always, longs, "the help reads as the table expects")
+        self.assertEqual({k: v for k, v in _ENV_LONG.items() if k in longs}, longs)
+        self.assertLessEqual(shorts, set(_ENV_SHORT))
 
     def test_a_multi_call_binary_that_is_a_shell_or_a_stand_in_is_named(self):
         """A file that is both a named program's and env's (a multi-call
         binary such as busybox) is named at the start, where the run stops,
         so the guard never refuses env or sh by its file. A file under the
-        scratch stands for the binary. Perturbation: name nothing, and this
-        fails."""
+        scratch stands for the binary. One in a later directory is named
+        too, behind an ordinary env in an earlier one, since the start reads
+        every directory's (CodeRabbit on #623). Perturbations: name nothing,
+        or read the first directory's env alone, and this fails."""
         from unittest import mock
         with tempfile.TemporaryDirectory() as scratch:
             binary = Path(scratch) / "multi"
             binary.write_text("#!/bin/sh\nexit 0\n")
             binary.chmod(0o755)
             (Path(scratch) / "env").symlink_to(binary)
+            first, later = Path(scratch) / "first", Path(scratch) / "later"
+            first.mkdir()
+            later.mkdir()
+            (first / "env").write_text("#!/bin/sh\nexit 0\n")
+            (first / "env").chmod(0o755)
+            (later / "env").symlink_to(binary)
             with mock.patch.object(sys.modules[__name__], "PRIVILEGED_FILES", frozenset({_file_of(binary)})):
                 self.assertEqual(shared_with_privileged((scratch,)), ["env"])
+                self.assertEqual(shared_with_privileged((str(first), str(later))), ["env"])
+                self.assertEqual(shared_with_privileged((str(first),)), [])
             self.assertEqual(shared_with_privileged((scratch,)), [])
 
     def test_a_view_makes_the_guards_copy_of_a_program_the_start_did_not_read(self):
