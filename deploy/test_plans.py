@@ -256,6 +256,15 @@ if (name == 'mktemp' and args or name == 'as-root' and args[:1] == ['mktemp']) a
     # under TMPDIR in either mode, root mode's routing included: made as the
     # helper makes it, and not logged, since it is no root step.
     os.execv('/usr/bin/mktemp', ['mktemp', *args[args.index('mktemp') + 1:]] if name == 'as-root' else ['mktemp', *args])
+if (name == 'as-root' and args[:3] == ['rm', '-rf', '--'] and len(args) == 4
+        and os.path.normpath(os.path.dirname(args[3])) == os.path.normpath(os.environ.get('TMPDIR') or '/tmp')
+        and os.path.basename(args[3]).startswith('weaver-drop.')):
+    # **And removed as it came** (the clean-up after #598): the helper
+    # removes the directory once its pipes are open, which in root mode
+    # reaches the double as `as-root rm -rf -- DIR`. Removed as the helper
+    # removes it, and not logged, since it is no root step. Without this the
+    # double's own rm refused it, and every root-mode drop left one in /tmp.
+    os.execv('/usr/bin/rm', ['rm', *args])
 with open(os.environ['CALLS'], 'a') as log:
     log.write(json.dumps([name, *args]) + '\n')
 # **Root mode** (#576): a root step root runs directly reaches the double as
@@ -2029,11 +2038,18 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         # account's rule, which root may read. Perturbations: run root steps
         # through sudo in root mode, and sudo install appears; join root to
         # the groups, and a usermod names root; look through sudo, and no
-        # runuser look is made.
+        # runuser look is made. **No drop's relay directory outlives the run**
+        # (the clean-up after #598): each drop removes its own, root mode's
+        # routing included, under a TMPDIR written with a trailing slash.
+        # Perturbations: drop the double's pass-through for that removal, or
+        # compare its directory as written, and the directories stand.
         self.root_mode()
-        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        relays = self.root / "relays"
+        relays.mkdir()
+        self.env.update(ALLOW_APPLY_CHECKS="1", TMPDIR=f"{relays}/")
         result = self.create("--root-operator", "--apply")
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(p.name for p in relays.glob("weaver-drop.*")), [])
         self.assertIn("== made", result.stdout)
         self.assertIn("operator        root (--root-operator), which reads everything already", result.stdout)
         calls = self.calls()
