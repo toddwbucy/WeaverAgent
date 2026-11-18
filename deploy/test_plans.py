@@ -122,25 +122,26 @@ def view_link(name, path):
     return guard_copy(name)
 
 
-# The copies guard_copy makes while a block is held (files_held), and the
-# index in it at which each held block began, innermost last. Outside every
-# block both are empty.
+# The copies guard_copy makes while a block is held (files_held), and one
+# entry for each block held, innermost last. Outside every block both are
+# empty.
 _COPIES_MADE = []
-_HELD_FROM = []
+_HELD = []
 
 
 def guard_copy(name):
     """The guard's refusing copy of NAME, made now if the guard holds none.
     Whether a file stands under the name is read each time, since a test may
     remove a copy it made, and each copy made while a block is held is kept
-    in _COPIES_MADE (files_held). A stand-in's name never comes here:
+    in _COPIES_MADE (files_held), before it is written, so a block drops a
+    copy a failed write leaves too. A stand-in's name never comes here:
     a stand-in that is a privileged program's file stops the run at its
     start."""
     copy = STAND_IN_GUARD / name
     if not copy.exists():
-        refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
-        if _HELD_FROM:
+        if _HELD:
             _COPIES_MADE.append(copy)
+        refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
     return copy
 
 
@@ -7867,34 +7868,46 @@ def files_held(files):
     from before the block or during it is kept, and no copy guard_copy
     makes during the block outlives it, so a box program FILES names never
     stays refused. A copy that stood before the block stays, and any other
-    file in the guard's directory is left as it is. Blocks nest, each
-    dropping its own copies at its end, a raised one's too, and each holds
-    the guard's directory of its start: a test that patches STAND_IN_GUARD
-    does so outside every held block."""
+    file in the guard's directory is left as it is. Blocks nest: each drops
+    its own copies at its end, a raised one's too, and hands those it keeps
+    to the block around it, which reads them against its own start. Each
+    block holds the guard's directory of its start: a test that patches
+    STAND_IN_GUARD does so outside every held block. A copy that cannot be
+    removed is named, after the rest are removed, in a StandInGuardError,
+    or in a note on the block's own exception, which it never replaces."""
     from unittest import mock
     module = sys.modules[__name__]
     before = {STAND_IN_GUARD / name for name in os.listdir(STAND_IN_GUARD)}
-    start = len(_COPIES_MADE)
-    _HELD_FROM.append(start)
-    _MEMBERS_READ.clear()
+    depth, start, raised = len(_HELD), len(_COPIES_MADE), None
     try:
+        _HELD.append(start)
+        _MEMBERS_READ.clear()
         with mock.patch.object(module, "PRIVILEGED_FILES", files), \
                 mock.patch.object(module, "_refresh_files", lambda: None):
             yield
+    except BaseException as e:
+        raised = e
+        raise
     finally:
-        _HELD_FROM.pop()
+        del _HELD[depth:]
         made = _COPIES_MADE[start:]
         del _COPIES_MADE[start:]
         _MEMBERS_READ.clear()
         failed = []
         for copy in made:
-            if copy not in before:
-                try:
-                    copy.unlink(missing_ok=True)
-                except OSError as e:
-                    failed.append(e)
+            if copy in before:
+                if _HELD:
+                    _COPIES_MADE.append(copy)
+                continue
+            try:
+                copy.unlink(missing_ok=True)
+            except OSError as e:
+                failed.append(f"{copy} ({e.strerror})")
         if failed:
-            raise failed[0]
+            note = "a held block could not remove the guard's copies " + ", ".join(failed)
+            if raised is None:
+                raise StandInGuardError(note)
+            raised.add_note(note)
 
 
 class StandInGuardTests(unittest.TestCase):
@@ -8339,17 +8352,25 @@ class StandInGuardTests(unittest.TestCase):
         when the block removed it and the guard made it again. Blocks nest:
         the inner one drops its own copies and leaves the outer one's, and
         the outer one drops those made after the inner one ended. A block
-        that raises drops its copies, and one copy that cannot be removed
-        leaves the rest removed. Made-up names stand for the programs.
-        Perturbations: keep the copies, drop every new file, drop every copy
-        made during the block, read the copy's file once, let the inner
-        block drop the outer one's copies, keep a raised block's copies, or
-        stop at the first copy that cannot be removed, and this fails."""
+        that raises drops its copies, and a copy a failed write leaves. A copy
+        the inner block makes of a file
+        the outer one wrote is the outer one's to drop. A copy that cannot be
+        removed leaves the rest removed and is named, in the guard's error or
+        in a note on the block's own exception. Made-up names stand for the
+        programs. Perturbations: keep the copies, drop every new file, drop
+        every copy made during the block, read the copy's file once, let the
+        inner block take the outer one's entries, keep what the inner block
+        keeps from the outer one, keep a raised block's copies, stop at the
+        first copy that cannot be removed, let the cleanup's error replace
+        the block's, or keep a copy only once it is written, and this
+        fails."""
+        from unittest import mock
         true = shutil.which("true", path=os.pathsep.join(_BOX_BINS))
         held_files = PRIVILEGED_FILES | {_file_of(true)}
         copy = STAND_IN_GUARD / "virt-held-during-a-block"
         other = STAND_IN_GUARD / "a-file-the-block-writes"
-        outer, inner, after = (STAND_IN_GUARD / f"virt-held-{n}" for n in ("outer", "inner", "after-inner"))
+        outer, inner, after, written = (STAND_IN_GUARD / f"virt-held-{n}"
+                                        for n in ("outer", "inner", "after-inner", "written"))
         try:
             with files_held(held_files):
                 guard_copy(copy.name)
@@ -8365,27 +8386,51 @@ class StandInGuardTests(unittest.TestCase):
             self.assertTrue(copy.exists(), "a copy that stood before the block stays")
             with files_held(held_files):
                 guard_copy(outer.name)
+                written.write_text("a file the outer block writes")
                 with files_held(held_files):
                     guard_copy(inner.name)
+                    written.unlink()
+                    guard_copy(written.name)
                 self.assertFalse(inner.exists(), "the inner block drops its own copy")
                 self.assertTrue(outer.exists(), "the inner block leaves the outer one's copy")
+                self.assertTrue(written.exists(), "the inner block keeps a copy under a name that stood before it")
                 guard_copy(after.name)
-            self.assertFalse(outer.exists() or after.exists(), "the outer block drops its copies")
+            self.assertFalse(outer.exists(), "the outer block drops its copy")
+            self.assertFalse(after.exists(), "the outer block drops a copy made after the inner one ended")
+            self.assertFalse(written.exists(), "the outer block drops the copy the inner one made of its file")
             with self.assertRaises(RuntimeError), files_held(held_files):
                 guard_copy(inner.name)
                 raise RuntimeError("a block that raises")
             self.assertFalse(inner.exists(), "a block that raises drops its copies")
-            with self.assertRaises(OSError), files_held(held_files):
+            with self.assertRaises(StandInGuardError) as cleanup, files_held(held_files):
                 guard_copy(inner.name)
                 guard_copy(after.name)
                 inner.unlink()
                 inner.mkdir()
+            self.assertIn(f"{inner} (", str(cleanup.exception))
+            self.assertNotIn(str(after), str(cleanup.exception))
             self.assertFalse(after.exists(), "a copy that cannot be removed leaves the rest removed")
-            self.assertEqual((_COPIES_MADE, _HELD_FROM), ([], []), "no block stays held")
+            inner.rmdir()
+            with self.assertRaises(RuntimeError) as body, files_held(held_files):
+                guard_copy(inner.name)
+                inner.unlink()
+                inner.mkdir()
+                raise RuntimeError("the block's own failure")
+            self.assertIn(f"{inner} (", "".join(getattr(body.exception, "__notes__", [])))
+            inner.rmdir()
+
+            def half_written(where, name, record):
+                (where / name).write_text("a copy whose write failed")
+                raise OSError("a write that fails")
+            with self.assertRaises(OSError), files_held(held_files), \
+                    mock.patch.object(sys.modules[__name__], "refusing_copy", half_written):
+                guard_copy(inner.name)
+            self.assertFalse(inner.exists(), "a block drops a copy a failed write leaves")
+            self.assertEqual((_COPIES_MADE, _HELD), ([], []), "no block stays held")
         finally:
             other.unlink(missing_ok=True)
             copy.unlink(missing_ok=True)
-            for name in (outer, after):
+            for name in (outer, after, written):
                 name.unlink(missing_ok=True)
             if inner.is_dir():
                 inner.rmdir()
