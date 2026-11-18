@@ -1,4 +1,4 @@
-# seal 09778ef8
+# seal 68c570cc
 # The program names of the sealed appliance image above: every file and link
 # under its bin directories, which is the image root's PATH. One name per
 # line, sorted in C order (LC_ALL=C sort -u). The image seat replaces this
