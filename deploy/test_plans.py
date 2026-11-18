@@ -119,8 +119,10 @@ REACH_RECORD.touch()
 
 def reaches_in(record):
     """**The record's reaches**, as (name, test, arguments): one NUL-ended
-    record each, so an argument's newline or tab stays inside its own."""
-    return [tuple((r.split("\t", 2) + ["", ""])[:3]) for r in record.read_text().split("\0") if r]
+    record each, so an argument's newline or tab stays inside its own. Bytes
+    that are not text are shown escaped, so a reach is always counted."""
+    return [tuple((r.split("\t", 2) + ["", ""])[:3])
+            for r in record.read_text(errors="backslashreplace").split("\0") if r]
 
 
 def say_reaches(reaches):
@@ -7765,8 +7767,9 @@ class SuiteGuardTests(unittest.TestCase):
     def test_a_reach_after_the_runs_end_or_a_record_gone_fails_the_process(self):
         """A reach after the run's end read the record (a test's atexit
         callback) fails the process at exit, named, and so does a record a
-        test removed or made unreadable (a directory in its place), under
-        run_suite and under unittest's own main, said once. Perturbations: let
+        test removed or made unreadable (a directory in its place), said
+        once: by the run's end under run_suite, and by the exit under
+        unittest's own main. Perturbations: let
         the exit pass a gone record, catch only a missing one, or read only
         whether finish() ran, and a case exits 0."""
         late = ("class Planted(unittest.TestCase):\n"
@@ -7785,14 +7788,33 @@ class SuiteGuardTests(unittest.TestCase):
             gone = ("class Planted(unittest.TestCase):\n"
                     "    def test_gone(self):\n"
                     f"        {undo}\n")
-            for end in ("sys.exit(t.run_suite(argv=['planted']))\n", "unittest.main(argv=['planted'])\n"):
+            # The run's end says it under run_suite, and the exit under
+            # unittest's own main, which has no end of its own.
+            for end, who in (("sys.exit(t.run_suite(argv=['planted']))\n", "run"),
+                             ("unittest.main(argv=['planted'])\n", "process")):
                 with self.subTest(undo=undo, end=end):
                     run, record_dir = self.suite_child(gone, end=end)
                     self.assertEqual(run.returncode, 1, run.stderr)
                     self.assertIn("\nOK\n", run.stderr)
                     self.assertIn(f"guard: the reach record {record_dir / 'reach-record'} cannot be read ({error}), "
-                                  "so this ", run.stderr)
+                                  f"so this {who} cannot show", run.stderr)
                     self.assertEqual(run.stderr.count("guard: the reach record"), 1, run.stderr)
+                    self.assertNotIn("Traceback", run.stderr)
+
+    def test_a_reach_whose_arguments_are_not_text_is_counted_and_named(self):
+        """A reach whose argument is not valid text (a 0xff byte) is counted
+        and named, escaped, in a test and after the run's end, so the run
+        fails. Perturbation: read the record as strict text, and the run
+        crashes before naming the reach, or the exit passes it."""
+        reach = "subprocess.run([str(t.STAND_IN_GUARD / 'sudo'), '-n', os.fsdecode(b'\\xff')], capture_output=True)"
+        for body, who in (("    def test_bytes(self):\n        " + reach + "\n", "test_bytes"),
+                          ("    def test_late(self):\n        import atexit, functools\n"
+                           "        atexit.register(functools.partial(lambda: " + reach + "))\n", "unknown")):
+            with self.subTest(who=who):
+                run, _ = self.suite_child("import os\nclass Planted(unittest.TestCase):\n" + body)
+                self.assertEqual(run.returncode, 1, run.stderr)
+                self.assertRegex(run.stderr, r"guard: \S*" + who + r"\S* reached sudo -n \\+xff\n")
+                self.assertNotIn("Traceback", run.stderr)
 
     def test_a_run_with_no_reach_ends_on_its_tests_and_leaves_no_record(self):
         """A run with no reach exits on its tests' verdict, 0 when they pass,
@@ -7919,20 +7941,27 @@ class ProgramCheckTests(unittest.TestCase):
         read from their man pages): a group whose letter takes an argument
         (`sudo -iu USER`, `stdbuf -oL`), long options with = and without, `--`,
         a shell's -c as a flag with -o's argument before the code (`bash -euo
-        pipefail -c`), every -exec of a find, `tar -I` joined, a function's
-        own local array, and an array in each state its appends can leave (an
-        append later than the run, or skipped by its condition). hostname is
+        pipefail -c`), every -exec of a find, `tar -I` joined, runuser's and
+        flock's code options in every form (`--session-command`, `--command=`,
+        `-lc`, after the user, and a -u given as `--user=` or `-uroot`), a
+        function's own local array, and an array in each state its appends can
+        leave (an append later than the run, or skipped by its condition). hostname is
         named at each planted line, and the same shapes running true name
         nothing. An array is refused, by its reason, where it is not one
         assignment and at most six appends, where its name is written in any
         other form or mentioned beside the script, where its entries stand in
-        another scope or a loop, and where it runs inside another array's
-        run. A code string joined to its flag is named. Perturbations: read a
+        another scope or a loop, where it runs inside another array's run or
+        in a new shell's code, and where its assignment is not established
+        before the run (under a condition, in $( ), chained, piped, in the
+        background, in a case branch or a group, or later in the text). A code
+        string joined to its flag is named. Perturbations: read a
         group as one flag, a shell's code after its -c, a find's first -exec
         alone, an array with all its appends alone, its entries across
         scopes or in a loop, its name's other mentions, an array inside
-        another's run, no limit on its appends, or its elements as
-        assignments, and a line goes unnamed or misnamed."""
+        another's run or in a new shell, no limit on its appends, its
+        elements as assignments, an assignment that may not have run, or
+        runuser's and flock's joined code options, and a line goes unnamed or
+        misnamed."""
         h = self.PLANT
         named = [f"bash -euo pipefail -c '{h}'", f"bash -c -e '{h}'", f"bash -o pipefail -ec '{h}'",
                  f"sh -ec '{h}' name", "bash -euo pipefail <<'X'", h, "X",
@@ -7946,7 +7975,10 @@ class ProgramCheckTests(unittest.TestCase):
                  'f_true() { local -a F_TRUE_RUN=(true); "${F_TRUE_RUN[@]}"; }',
                  f'f_plant() {{ local -a F_PLANT_RUN=({h}); "${{F_PLANT_RUN[@]}}"; }}',
                  "STATE1_RUN=(env)", f'"${{STATE1_RUN[@]}}" {h}', "STATE1_RUN+=(-u)",
-                 "STATE2_RUN=(env)", "if false; then STATE2_RUN+=(-u); fi", f'"${{STATE2_RUN[@]}}" {h}']
+                 "STATE2_RUN=(env)", "if false; then STATE2_RUN+=(-u); fi", f'"${{STATE2_RUN[@]}}" {h}',
+                 f"runuser --session-command {h} root", f"runuser --command={h} root", f"runuser -lc {h} root",
+                 f"runuser root -c {h}", f"runuser -u root --command={h}", f"runuser --user=root {h}",
+                 f"runuser -uroot {h}", f"flock -w 5 /tmp/l --command={h}"]
         quiet = ["sudo -iu nobody true", "stdbuf -oL true", "timeout -sKILL 5 true", "command -pv true >/dev/null",
                  "find . -exec true {} \\; -exec true {} +", "bash -euo pipefail -c 'true'"]
         with tempfile.TemporaryDirectory() as scratch:
@@ -7967,6 +7999,8 @@ class ProgramCheckTests(unittest.TestCase):
 
             count, scope = "not one assignment and at most 6 appends", \
                 "assigned nowhere, or outside the run's function, or in more than one scope"
+            unset = ("assigned where it may not run before the run: not a statement of its own at the top of its "
+                     "scope, or later in the text")
             pc = program_check()
             for planted, why in (
                     ('TWICE_RUN=(true)\nTWICE_RUN=(hostname)\n"${TWICE_RUN[@]}"', unread("TWICE_RUN", count)),
@@ -7990,6 +8024,21 @@ class ProgramCheckTests(unittest.TestCase):
                      unread("BRACE_RUN", "assigned or appended in a loop")),
                     ('NESTED_RUN=(nice)\n"${NESTED_RUN[@]}" "${NESTED_RUN[@]}" hostname',
                      unread("NESTED_RUN", "run inside another array's run")),
+                    ("CHILD_RUN=(true)\nbash -c '\"${CHILD_RUN[@]}\" hostname'",
+                     unread("CHILD_RUN", "run in a new shell's code, which inherits none of the script's arrays")),
+                    *[(text, unread(n, unset)) for n, text in (
+                        ("OPTIONAL_RUN", 'if false; then OPTIONAL_RUN=(true); fi\n"${OPTIONAL_RUN[@]}" hostname'),
+                        ("SUB_RUN", 'y=$(SUB_RUN=(true))\n"${SUB_RUN[@]}" hostname'),
+                        ("GROUP_RUN", '( GROUP_RUN=(true) )\n"${GROUP_RUN[@]}" hostname'),
+                        ("AND_RUN", 'false && AND_RUN=(true)\n"${AND_RUN[@]}" hostname'),
+                        ("NEWLINE_RUN", 'false &&\n  NEWLINE_RUN=(true)\n"${NEWLINE_RUN[@]}" hostname'),
+                        ("BACK_RUN", 'BACK_RUN=(true) &\n"${BACK_RUN[@]}" hostname'),
+                        ("PIPED_RUN", 'PIPED_RUN=(true) | cat\n"${PIPED_RUN[@]}" hostname'),
+                        ("LATE_RUN", '"${LATE_RUN[@]}" hostname\nLATE_RUN=(true)'),
+                        ("CASE_RUN", 'case x in\n  a)\n    CASE_RUN=(true)\n    ;;\nesac\n"${CASE_RUN[@]}" hostname'),
+                        ("LINES_SUB_RUN", 'y=$(\nLINES_SUB_RUN=(true)\n)\n"${LINES_SUB_RUN[@]}" hostname'),
+                        ("LINES_GROUP_RUN", '(\nLINES_GROUP_RUN=(true)\n)\n"${LINES_GROUP_RUN[@]}" hostname'))],
+                    ("runuser -cfoo root", "runuser -cfoo with its code string joined or missing"),
                     ("runuser -u nobody -lcfoo", "runuser -lcfoo with its code string joined or missing")):
                 with self.subTest(planted=planted):
                     target.write_text(text + "\n" + planted + "\n")
@@ -8004,6 +8053,11 @@ class ProgramCheckTests(unittest.TestCase):
             self.assertEqual([(w, why_) for _, w, why_ in self.findings(copy)["verify-load.sh"]],
                              [("-", f"this reader does not follow {elsewhere('BESIDE_RUN')}")])
             other.write_text(kept)
+            # An established assignment past an unrelated chained line, and a
+            # multi-line function's local array, pass.
+            target.write_text(text + '\nPAST_RUN=(env -i)\ntrue && echo x\nPAST_RUN+=(A=1)\n"${PAST_RUN[@]}" hostname\n'
+                              'f_lines() {\n  local -a LINES_RUN=(true)\n  "${LINES_RUN[@]}" x\n}\n')
+            self.assertEqual([w for _, w, _ in self.findings(copy)["verify-load.sh"]], ["hostname"])
             # An array's elements are never assignments: bash runs A=1 as a program.
             target.write_text(text + '\nELEMENTS_RUN=(A=1 true)\n"${ELEMENTS_RUN[@]}"\n')
             self.assertEqual([w for _, w, _ in self.findings(copy)["verify-load.sh"]], ["A=1"])
@@ -8226,8 +8280,8 @@ class ProgramCheckTests(unittest.TestCase):
         array stop the reading and are named, so a file is never passed
         unread. So is each way a leaf on the list runs a program (tar's
         commands, sort's and install's programs, visudo's editor, pacman's
-        hooks, awk's system() and pipes, sed's e, and a program or script in
-        a file), each builtin that changes what a name runs (enable, alias,
+        hooks, awk's system(), pipes and options past -F and -v, sed's e, and a
+        program or script in a file), each builtin that changes what a name runs (enable, alias,
         hash -p, shopt expand_aliases) and each variable bash runs as code (a
         prompt, BASH_ENV, ENV, an exported function), while the leaves' plain
         forms pass. Each refusal has its remedy. A case inside $( ), whose
@@ -8254,7 +8308,14 @@ class ProgramCheckTests(unittest.TestCase):
                                                              "program"),
                                  ("awk '{ print | \"x\" }' f", "awk with system() or a pipe in its program, which runs a "
                                                             "program"),
-                                 ("awk -f p.awk f", "awk -f, whose program this reader does not read"),
+                                 ("awk -f p.awk f", "awk -f, past -F and -v, which can hand it a program this "
+                                                    "reader does not read"),
+                                 ("awk '--source=BEGIN { system(\"x\") }'", "awk --source, past -F and -v, which can "
+                                                                         "hand it a program this reader does not read"),
+                                 ("awk -eBEGIN f", "awk -eBEGIN, past -F and -v, which can hand it a program this "
+                                                   "reader does not read"),
+                                 ("awk -E p.awk f", "awk -E, past -F and -v, which can hand it a program this reader "
+                                                    "does not read"),
                                  ("sed 's/a/b/e' f", "sed past its s, p, d and q commands, whose e runs a program"),
                                  ("sed -n '1e x' f", "sed past its s, p, d and q commands, whose e runs a program"),
                                  ("sed -f s.sed f", "sed -f, whose script this reader does not read"),

@@ -156,12 +156,14 @@ REMEDIES = (
     ("this reader does not follow install ", "install without --strip-program"),
     ("this reader does not follow visudo ", "check the file with visudo -c"),
     ("this reader does not follow pacman ", "query with pacman -Q, and change packages outside the copied scripts"),
-    ("this reader does not follow awk ", "write the awk program without system(), a pipe, or -f"),
+    ("this reader does not follow awk ", "write the awk program as one word, with only -F and -v, and without "
+                                         "system() or a pipe"),
     ("this reader does not follow sed ", "write the sed script as s, p, d and q commands, in a word of its own"),
     (r"this reader does not follow (?:sh|bash|dash) reading", "hand the shell its code with -c, or with its own "
                                                                "heredoc"),
-    (r'this reader does not follow "\$\{', "write the array as one NAME=( ) and at most MAX_APPENDS NAME+=( ), all in "
-                                         "one scope and outside loops, with no other write to the name"),
+    (r'this reader does not follow "\$\{', "write the array as one NAME=( ), a statement of its own at the top of its "
+                                         "scope before the run, and at most MAX_APPENDS NAME+=( ) outside loops, with "
+                                         "no other write to the name, and run it in the shell that assigned it"),
     ("this reader does not follow", "give its code string a word of its own, or rewrite the line in a form the "
                                     "copied scripts already use"),
     ("this reader does not know whether", "add it to LEAVES with the reason it runs nothing it is handed, or read "
@@ -272,6 +274,10 @@ class Reader:
         self.depth = depth
         self.loops = loops          # the loops this reading stands in, from for, select, while or until to done
         self.fresh = fresh          # a new shell's code, which inherits none of the script's functions
+        self.conds = 0              # the ifs this reading stands in
+        self.continued = False      # the last operator was &&, ||, | or |&, so a newline continues the list
+        self.chained = False        # after &&, ||, | or |&, before the list ends
+        self.at_start = True        # the command being read starts a list
         self.in_array = False       # reading an array's elements
         self.s, self.t = script, script.text
         self.i, self.end = start, end
@@ -323,6 +329,24 @@ class Reader:
             start, end = word.pos, word.pos + len(raw)
         Reader(self.s, start, end, self.scope, self.functions, self.current_function(), arrays=self.arrays,
                depth=self.depth + 1, loops=self.loops, fresh=fresh or self.fresh).read()
+
+    def established(self):
+        """Whether the array just read is assigned on every path that reaches
+        what follows it: read by the script's own reading (not in $( ), a
+        code string or a heredoc), outside any if, case, loop, group or
+        subshell but its own function's body, starting its list, and ending
+        its statement (a newline, a ; or a comment next), so no condition,
+        pipe or background can skip it or take it into a subshell."""
+        frames = [f for f in self.frames if not (isinstance(f, tuple) and len(f) == 2)]
+        own = [f for f in self.frames if isinstance(f, tuple) and len(f) == 2]
+        if self.depth or self.fresh or self.stop or self.loops or self.conds or frames or len(own) > 1:
+            return False
+        if not self.at_start or self.chained:
+            return False
+        j = self.i
+        while j < self.end and self.t[j] in " \t":
+            j += 1
+        return j >= self.end or self.t[j] in "\n#" or self.t[j] == ";" and self.t[j + 1:j + 2] not in (";", "&")
 
     def past(self, word, n):
         """WORD from its Nth character on, as a word of its own."""
@@ -435,7 +459,7 @@ class Reader:
                     finally:
                         self.in_array = False
                     self.s.arrays.setdefault((self.current_function(), name), []).append(
-                        (appended, elements, self.loops != 0))
+                        (appended, elements, self.loops != 0, self.established(), start))
                     dynamic = True
                     continue
                 break
@@ -593,6 +617,13 @@ class Reader:
                 tok = self.case_pattern(tok)
                 continue
             if tok.kind == "op":
+                if tok.text in ("&&", "||", "|", "|&"):
+                    self.chained = True
+                elif tok.text != "\n":
+                    self.chained = False
+                elif not self.continued:
+                    self.chained = False
+                self.continued = tok.text in ("&&", "||", "|", "|&")
                 if tok.text == ")":
                     if self.frames and self.kind_of(self.frames[-1]) == "(":
                         self.frames.pop()
@@ -616,6 +647,7 @@ class Reader:
             if tok.kind == "arith":
                 tok = self.after_compound()
                 continue
+            self.at_start, self.continued = not self.chained, False
             tok = self.command(tok)
 
     def open_frame(self, kind):
@@ -700,6 +732,8 @@ class Reader:
             if w in ("fi", "done"):
                 if w == "done":
                     self.loops -= 1
+                else:
+                    self.conds -= 1
                 return self.after_compound()
             if w == "esac":
                 # The last branch's ;; is optional.
@@ -710,6 +744,8 @@ class Reader:
             if w in ("then", "do", "else", "elif", "if", "while", "until", "!"):
                 if w in ("while", "until"):
                     self.loops += 1
+                elif w == "if":
+                    self.conds += 1
                 return None
             if w == "time":
                 nxt = self.token()
@@ -945,7 +981,9 @@ class Reader:
         the run. There is one assignment and at most MAX_APPENDS appends, all
         in the run's own function or all at the top level, since bash's local
         reaches the functions a function calls, and none in a loop, which can
-        repeat it. An append may stand under a condition that skips it, or
+        repeat it. The assignment is established (see established()) and
+        stands earlier in the text than the run, and the run is not in a new
+        shell's code, which inherits no array. An append may stand under a condition that skips it, or
         later in the text than the run, so the command is read in every
         subset of the appends, in their order. An array run inside another's
         run is refused, which bounds the reading."""
@@ -955,7 +993,9 @@ class Reader:
         assigned = [entry for _, entry in entries]
         mention = r"(?<![A-Za-z0-9_])" + name + r"(?![A-Za-z0-9_])"
         known = r"(?<![A-Za-z0-9_])" + name + r"\+?=\(|\$\{[#!]?" + name + r"\["
-        if expanded:
+        if self.fresh:
+            why = "run in a new shell's code, which inherits none of the script's arrays"
+        elif expanded:
             why = "run inside another array's run"
         elif len(re.findall(mention, self.s.text)) != len(re.findall(known, self.s.text)) \
                 or re.search(mention, beside(self.s.path, tuple(n for n, _ in self.s.sources))):
@@ -966,6 +1006,9 @@ class Reader:
             why = f"not one assignment and at most {MAX_APPENDS} appends"
         elif any(e[2] for e in assigned):
             why = "assigned or appended in a loop"
+        elif not assigned[0][3] or assigned[0][4] > w.pos:
+            why = ("assigned where it may not run before the run: not a statement of its own at the top of its "
+                   "scope, or later in the text")
         if why is not None:
             self.s.refusals.append((line, f"this reader does not follow {w.raw} run as a command, since it is {why}"))
             return
@@ -1009,6 +1052,9 @@ class Reader:
                 if v == "--":
                     j += 1
                     break
+                if v.startswith("--") and v.split("=", 1)[0] in code and "=" in v:
+                    self.code_string(self.past(rest[j], rest[j].raw.index("=") + 1))
+                    return None
                 if v.startswith("-") and v != "-":
                     if v.startswith("--") or len(v) == 2:
                         taker = v if v in with_arg or v in code else None
@@ -1078,12 +1124,32 @@ class Reader:
                             "--close-from", "--chdir", "--host", "--prompt", "--chroot", "--role", "--type",
                             "--command-timeout", "--other-user"})
         if name == "runuser":
-            if any(a.value in ("-u", "--user") for a in rest):
+            # As getopt reads it: -c, --command and --session-command hand the
+            # shell a code string, apart or joined by =. In a group, the first
+            # letter that takes an argument takes the rest of it.
+            code = ("-c", "--command", "--session-command")
+
+            def taker(v):
+                if not re.fullmatch(r"-[A-Za-z][^=]*", v) or v.startswith("--"):
+                    return None
+                return next((c for c in v[1:] if c in "cgGsuw"), None)
+
+            if any(a.value in ("-u", "--user") or a.value.startswith("--user=") or taker(a.value) == "u"
+                   for a in rest):
                 return options({"-u", "-g", "-G", "-s", "-w", "--user", "--group", "--supp-group",
-                                "--shell", "--whitelist-environment"}, code=("-c", "--command"))
+                                "--shell", "--whitelist-environment"}, code=code)
             for j, a in enumerate(rest):
-                if a.value in ("-c", "--command") and j + 1 < len(rest):
+                v = a.value
+                if v in code or taker(v) == "c" and v.endswith("c"):
+                    if j + 1 >= len(rest):
+                        raise Refused(f"runuser {v} with its code string joined or missing")
                     self.code_string(rest[j + 1])
+                    return None
+                if "=" in v and v.split("=", 1)[0] in code[1:]:
+                    self.code_string(self.past(a, a.raw.index("=") + 1))
+                    return None
+                if taker(v) == "c":
+                    raise Refused(f"runuser {v} with its code string joined or missing")
             return None
         if name == "env":
             if any((a.value.startswith("-S") and a.value != "-S") or a.value.startswith("--split-string=")
@@ -1113,10 +1179,13 @@ class Reader:
         if name == "pacman" and not (rest and re.match(r"-Q|--query", rest[0].value)):
             return refuse("pacman past a query (-Q), which runs hooks")
         if name == "awk":
+            # Only -F and -v, apart or joined: gawk's other options can hand it
+            # program text or a file of it (-f, -e, -E, -i, --source, ...).
             j = 0
             while j < len(rest) and rest[j].value.startswith("-") and rest[j].value != "--":
-                if rest[j].value.startswith("-f") or rest[j].value.startswith("--file"):
-                    return refuse("awk -f, whose program this reader does not read")
+                if not re.match(r"-[Fv]", rest[j].value):
+                    return refuse(f"awk {rest[j].value.split('=')[0]}, past -F and -v, which can hand it a program "
+                                  "this reader does not read")
                 j += 2 if rest[j].value in ("-F", "-v") else 1
             j += j < len(rest) and rest[j].value == "--"
             if j < len(rest) and re.search(r"system|(?<!\|)\|(?!\|)", rest[j].value):
@@ -1160,6 +1229,9 @@ class Reader:
                 if j + 1 >= len(rest):
                     raise Refused("flock -c with no code string")
                 self.code_string(rest[j + 1])
+                return None
+            if j is not None and rest[j].value.startswith("--command="):
+                self.code_string(self.past(rest[j], rest[j].raw.index("=") + 1))
                 return None
             return j
         if name == "xargs":
