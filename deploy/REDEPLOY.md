@@ -29,7 +29,7 @@ sections 1 to 4; an agent of an older form is recreated after its take-down by
 Record in the run log, from the box, not from memory:
 
 ```sh
-hostname; uname -r
+uname -n; uname -r
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 nvcc --version | tail -1
 pacman -Q cuda cccl

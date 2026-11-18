@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pwd
 import shlex
 import re
 import resource
@@ -44,6 +45,19 @@ ROOT_STEPS = ("useradd", "groupadd", "usermod", "install", "chown", "chgrp", "ch
 # read it.
 DROP_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 DROP_NAMED = r"^[A-Za-z_][A-Za-z0-9_]*="
+# **The box half of a PATH, as an image gives it** (#610): a directory of
+# links to every program in /usr/bin but those named, and never one that
+# grants root, so a test sees what a deployed script does on a base that lacks
+# a program the box has.
+ROOT_GRANTING = ("sudo", "sudoedit", "sudo-rs", "su", "runuser", "pkexec", "doas", "run0")
+def box_view(where, without=()):
+    where.mkdir()
+    for entry in os.scandir("/usr/bin"):
+        if entry.name not in without and entry.name not in ROOT_GRANTING:
+            os.symlink(entry.path, where / entry.name)
+    return where
+
+
 def look_as(account, flag, path):
     return ["sudo", "-n", "-u", account, "timeout", "0", "setsid", "-w", "env", "-i", "PATH=" + DROP_PATH,
             "sh", "-c", ACCESS_LOOK, "sh", flag, path]
@@ -472,7 +486,6 @@ elif name == 'git':
     # `git branch --show-current` answers with an empty line.
     elif args[0] == 'branch': print(os.environ.get('FIXTURE_BRANCH', 'fixture-branch'))
     elif args[0] == 'ls-tree': print('160000 commit e21cdc11fixturevendoredcommit\tllama.cpp')
-elif name == 'hostname': print('fixture-box')
 elif name == 'nvidia-smi':
     # A box with no card: nvidia-smi's failure sentence on stdout, as it
     # prints it, and a failing status.
@@ -925,7 +938,7 @@ class PlanTests(unittest.TestCase):
         self.artifact.touch()
         self.bin = self.root / "bin"
         self.bin.mkdir()
-        for name in ("sudo", "systemctl", "psql", "mktemp", "setfacl", "getent", "git", "cargo", "hostname", "nvidia-smi", "pacman", "sh", "id", "stat", "ldd", "nvcc",
+        for name in ("sudo", "systemctl", "psql", "mktemp", "setfacl", "getent", "git", "cargo", "nvidia-smi", "pacman", "sh", "id", "stat", "ldd", "nvcc",
                      "runuser", "as-root", "findmnt", "setquota", "chattr", "repquota"):
             command = self.bin / name
             command.write_text(DOUBLE)
@@ -9786,6 +9799,34 @@ class DecommissionTests(unittest.TestCase):
             run = subprocess.run(["bash", "-c", program2, "x", str(base / "m1")], text=True, capture_output=True,
                                  timeout=20)
             self.assertEqual(run.stdout, f"0|0|holds the agent's folder {base / 'm1' / 'weaver-m1'}\n", run.stderr)
+
+    def test_the_plan_names_the_host_without_a_hostname_program(self):
+        """**#610**: the appliance image carries no hostname program, and the
+        first live take-down stopped at the plan's `HOST=$(hostname)` with
+        exit 127, under `set -euo pipefail`. The plan's head, from the
+        operator through the box's lines, runs here under a PATH whose box
+        half is /usr/bin without hostname, and names the host uname names.
+        No deployed script calls hostname. Perturbation: put back
+        `HOST=$(hostname)`, and the head exits 127."""
+        script = self.script
+        head = script[script.index("OPERATOR=${SUDO_USER:-"):script.index('plan "date      $(date -Iseconds)"\n')]
+        with tempfile.TemporaryDirectory() as scratch:
+            view = box_view(Path(scratch) / "view", without=("hostname",))
+            path = str(STAND_IN_GUARD) + os.pathsep + str(view)
+            self.assertIsNone(shutil.which("hostname", path=path))
+            program = (self.script_options() + "plan() { printf 'PLAN %s\\n' \"$*\"; }\nsay() { :; }\n"
+                       + "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\n" + head)
+            operator = pwd.getpwuid(os.getuid()).pw_name
+            run = subprocess.run(["bash", "-c", program], env={**os.environ, "PATH": path, "SUDO_USER": operator},
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertIn(f"PLAN host      {os.uname().nodename}\n", run.stdout)
+            self.assertIn(f"PLAN operator  {operator}\n", run.stdout)
+        for deployed in sorted(DEPLOY.glob("*.sh")):
+            with self.subTest(script=deployed.name):
+                calls = [n for n, line in enumerate(deployed.read_text().splitlines(), 1)
+                         if not line.lstrip().startswith("#") and re.search(r"(?<![\w.-])hostname(?![\w.-])", line)]
+                self.assertEqual(calls, [], f"{deployed.name} calls hostname")
 
     def test_a_base_under_the_operators_home_is_said_once(self):
         # **The self-check on #594**: a base the record names under the

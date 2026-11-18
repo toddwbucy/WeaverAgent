@@ -742,7 +742,7 @@ FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
 say "box"
 # **The shell's build needs its tools before the long build, not after** (#29).
 "$REPO/deploy/build-busybox.sh" --preflight || exit 1
-printf '  host          %s\n' "$(hostname)"
+printf '  host          %s\n' "$(uname -n)"
 printf '  stack record  %s\n' "$STACK"
 printf '  admin base    %s\n' "$ADMIN_BASE"
 printf '  agents        %s\n' "${AGENTS:-(none: nothing to unload, reconcile or verify)}"

@@ -89,7 +89,7 @@ FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
 
 # ---------------------------------------------------------------- 1. box facts
 say "box"
-plan "host          $(hostname)"
+plan "host          $(uname -n)"
 plan "operator      $OPERATOR"
 plan "prefix        $PREFIX"
 plan "admin base    $ADMIN_BASE"

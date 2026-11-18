@@ -98,7 +98,9 @@ esac
 # The operator is whoever invoked sudo, and the agent config directory is
 # read out of admin's config rather than derived from the operator's home.
 OPERATOR=${SUDO_USER:-$(logname 2>/dev/null || echo root)}
-HOST=$(hostname)
+# The node name from uname, in coreutils: the appliance image carries no
+# hostname program (#610).
+HOST=$(uname -n)
 # **The operator's home, never touched** (the operator's ruling of 2026-10-07
 # on #1), canonical, or empty where it does not resolve.
 OP_HOME=$(getent passwd "$OPERATOR" | cut -d: -f6)
