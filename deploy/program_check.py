@@ -15,11 +15,13 @@ usage: program_check.py --programs LIST [--dynamic] (--copy LIST | FILE...)
 For a shell script it reads every command position: a line's start, after
 `;`, `&`, `|`, `&&`, `||`, `(`, `{`, `!` and the shell's keywords, inside
 `$( )`, `<( )`, arithmetic, `${ }` and double quotes, the code strings
-`sh -c`, `bash -c`, `flock -c`, `env -S`, `trap` and `eval` run, a heredoc a
-shell reads, and the substitutions in an unquoted heredoc. Through each
-wrapper (sudo, runuser, env, timeout, setsid, nice, nohup, stdbuf, ionice,
-flock, xargs, exec, command, time, find -exec, tar -I, and the scripts' own
-wrapper functions in OWN_WRAPPERS) it reads the command the wrapper runs. A
+`sh -c`, `tar -I`, `trap` and `eval` run, a heredoc a shell reads, and the
+substitutions in an unquoted heredoc. Through each wrapper (sudo, env, xargs,
+exec, command, find -exec, and the scripts' own wrapper functions in
+OWN_WRAPPERS) it reads the command the wrapper runs. Each wrapper, and each
+leaf whose options can run a program (awk, sed, sort, install, visudo,
+pacman), passes an option only by its row in OPTIONS: the spellings the
+copied scripts use, each with its reading and a line that uses it. A
 program named by its path in a bin directory is read by its name, as a
 program. An array run as a command it reads from its one assignment in each
 state its appends can leave, when all of them stand in the run's own
@@ -33,7 +35,9 @@ OWN_WRAPPERS, so a new wrapper cannot hide the commands handed to it. A
 Python file, and the Python a shell script carries, passes only when it
 starts no program. What a wrapper execs must be a program, never a builtin
 or a function, and a program that runs a command this reader does not read
-(UNREAD_RUNNERS: unshare, chroot, su, watch, perl, ...) is named.
+(UNREAD_RUNNERS: unshare, chroot, su, watch, perl, ..., and the wrappers no
+copied script names as a command: runuser, timeout, flock, bash, ...) is
+named.
 
 Prints one line per finding, `FILE:LINE: WORD: why`, and exits 1 when any
 stands, 0 when none does, 2 when a file cannot be read.
@@ -51,9 +55,11 @@ before its body) is a finding, never a pass.
 recognise what a line runs, it refuses the line, and the command line prints
 what the script's author does: rewrite to a form it reads, or stand the
 line in a stated allowance with its reason. The allowances are LEAVES (a
-program on the list that runs nothing it is handed), DYNAMIC (a command
-word it cannot name), GUARDED and OWN_WRAPPERS. A shape none of the copied
-scripts uses is answered by such a fence, never by reading more of bash.
+program on the list that runs nothing it is handed), OPTIONS (an option
+spelling a copied script uses, with its reading), DYNAMIC (a command word it
+cannot name), GUARDED and OWN_WRAPPERS, and an entry no line uses is named.
+It never reads a tool's whole grammar: a spelling OPTIONS does not hold is
+refused, so a shape none of the copied scripts uses is refused, never read.
 """
 import argparse
 import bisect
@@ -89,18 +95,23 @@ UNREAD_RUNNERS = frozenset(
     "unshare setpriv chroot nsenter su sg newgrp watch systemd-run systemd-inhibit chrt taskset prlimit "
     "numactl doas pkexec runcon capsh bwrap firejail strace ltrace valgrind gdb script ssh cgexec "
     "start-stop-daemon dbus-run-session xvfb-run parallel fakeroot faketime unbuffer busybox toybox perf "
-    "perl ruby node lua tclsh expect php".split())
+    "perl ruby node lua tclsh expect php".split()
+    # and the wrappers no copied script names as a command, so OPTIONS holds
+    # no shape of them and this reader reads none (account-drop.sh runs setsid,
+    # runuser and timeout as words of `set --`, through its own wrapper
+    # as_account, whose OWN_WRAPPERS entry states it)
+    + "bash dash runuser timeout setsid nohup nice stdbuf ionice flock time".split())
 
 # **The wrappers wrapped() reads**: the command each runs is read in its
-# place.
-WRAPPERS = frozenset("sh bash dash sudo runuser env timeout setsid nohup nice stdbuf ionice flock xargs find tar "
-                     "time".split())
+# place, and each takes its options by OPTIONS.
+WRAPPERS = frozenset("sh sudo env xargs find tar".split())
 
 # **The programs on the list this reader knows run nothing they are handed**,
 # by their reason. A call to a program on the list that stands neither here,
 # nor in WRAPPERS, is refused, so a wrapper this reader has not met cannot
 # pass the command behind it. Where a program can run one through an option
-# or a mode, wrapped() refuses that option or mode.
+# or a mode, it takes its options by OPTIONS, which holds no such option, and
+# wrapped() refuses the mode.
 LEAVES = {
     "reads or writes files and text": "basename cat chattr chmod chown cp cut date dirname du getfacl grep lsattr "
                                       "ls mkdir mkfifo mktemp mv numfmt realpath rm rmdir setfacl sha256sum stat "
@@ -110,15 +121,82 @@ LEAVES = {
                                                 "uname",
     "the program a shell builtin stands for, where a wrapper runs it": "echo false kill printf pwd test [ true",
     "loads its argument with the dynamic loader in trace mode": "ldd",
-    "runs a program only by --compress-program, which wrapped() refuses": "sort",
-    "runs a program only by --strip-program, which wrapped() refuses": "install",
+    "runs a program only by --compress-program, which OPTIONS does not hold": "sort",
+    "runs a program only by --strip-program, which OPTIONS does not hold": "install",
     "opens an editor unless it checks (-c), and wrapped() refuses it without": "visudo",
-    "runs hooks only when it changes packages, and wrapped() refuses it past a query (-Q)": "pacman",
-    "starts a program only by system() or a pipe, which wrapped() refuses in its program": "awk",
+    "runs hooks only when it changes packages, and wrapped() refuses it without -Q first": "pacman",
+    "starts a program only by system() or a pipe, which wrapped() refuses in its program, or by a program "
+    "file or text an option OPTIONS does not hold hands it": "awk",
     "starts a program only by its e command or s///e, and wrapped() passes s, p, d and q alone": "sed",
     "runs Python, which the Python scan reads for every way it starts a program": "python3",
 }
 LEAF_NAMES = frozenset(n for names in LEAVES.values() for n in names.split())
+
+# **The option spellings the copied scripts use**, as (program, spelling):
+# (reading, the script and line it was read at). A program wrapped() reads,
+# and the builtins command and exec, pass an option only by its row, and any
+# other spelling or option is refused, so this reader never reads a tool's
+# whole grammar, only the shapes the scripts hold. A row no line of its
+# script uses is named, as a DYNAMIC entry is, so an edit that moves a line
+# names nothing. The readings: a flag stands alone. An argument takes
+# the next word, which runs nothing. code takes the next word as a code
+# string (tar -I). code flag makes the first word past the options a code
+# string (sh -c). lookup makes the words past the options names it looks up
+# (command -v). command runs the words to the next ; or + (find -exec).
+# leading stands before find's starting points.
+OPTIONS = {
+    ("command", "-v"): ("lookup", "create-agent.sh:260"),
+    ("sudo", "-v"): ("flag", "create-agent.sh:742"),
+    ("sudo", "--version"): ("flag", "create-agent.sh:1048"),
+    ("sudo", "-n"): ("flag", "create-agent.sh:1443"),
+    ("sudo", "-l"): ("flag", "create-agent.sh:1443"),
+    ("sudo", "-U"): ("argument", "create-agent.sh:1443"),
+    ("sudo", "-u"): ("argument", "decommission.sh:1018"),
+    ("sudo", "-H"): ("flag", "decommission.sh:1018"),
+    ("sh", "-c"): ("code flag", "create-agent.sh:771"),
+    ("env", "-u"): ("argument", "verify-load.sh:289"),
+    ("awk", "-F:"): ("flag", "create-agent.sh:878"),
+    ("awk", "-v"): ("argument", "create-agent.sh:878"),
+    ("find", "-P"): ("leading", "create-agent.sh:1255"),
+    ("find", "-maxdepth"): ("argument", "decommission.sh:215"),
+    ("find", "-mindepth"): ("argument", "decommission.sh:420"),
+    ("find", "-type"): ("argument", "create-agent.sh:1255"),
+    ("find", "-name"): ("argument", "decommission.sh:215"),
+    ("find", "-o"): ("flag", "create-agent.sh:1255"),
+    ("find", "("): ("flag", "create-agent.sh:1255"),
+    ("find", ")"): ("flag", "create-agent.sh:1255"),
+    ("find", "-print0"): ("flag", "decommission.sh:420"),
+    ("find", "-printf"): ("argument", "decommission.sh:927"),
+    ("find", "-exec"): ("command", "create-agent.sh:1255"),
+    ("find", "-size"): ("argument", "decommission.sh:1144"),
+    ("find", "-not"): ("flag", "decommission.sh:1148"),
+    ("find", "-path"): ("argument", "decommission.sh:1148"),
+    ("sort", "-z"): ("flag", "decommission.sh:483"),
+    ("sort", "-u"): ("flag", "decommission.sh:517"),
+    ("tar", "--numeric-owner"): ("flag", "decommission.sh:1068"),
+    ("tar", "--acls"): ("flag", "decommission.sh:1068"),
+    ("tar", "--xattrs"): ("flag", "decommission.sh:1068"),
+    ("tar", "-I"): ("code", "decommission.sh:1068"),
+    ("tar", "-cf"): ("argument", "decommission.sh:1068"),
+    ("tar", "-tf"): ("argument", "decommission.sh:1220"),
+    ("install", "-d"): ("flag", "create-agent.sh:1162"),
+    ("install", "-o"): ("argument", "create-agent.sh:1162"),
+    ("install", "-g"): ("argument", "create-agent.sh:1162"),
+    ("install", "-m"): ("argument", "create-agent.sh:1162"),
+    ("visudo", "-cqf"): ("argument", "create-agent.sh:1072"),
+    ("pacman", "-Q"): ("flag", "decommission.sh:1127"),
+    ("sed", "-n"): ("flag", "create-agent.sh:1443"),
+}
+
+# **The programs whose options stand anywhere**, as GNU getopt permutes
+# them, and the rest take theirs before their first operand. tar's first
+# word is its options whatever its dash, and find's expression is all rows.
+ANYWHERE = frozenset("tar sed sort install visudo pacman".split())
+
+# **The leaves whose options or modes can run a program**: each takes its
+# options by OPTIONS, as a wrapper does. Every other leaf runs nothing
+# whatever its options, so its options are not read.
+FENCED = frozenset("awk sed sort install visudo pacman".split())
 
 # **Command words this reader cannot name**, each with what it runs: (script,
 # the word as written). Any other such word is refused, and an entry no line
@@ -147,30 +225,33 @@ REMEDIES = (
     ("this reader does not follow a heredoc", "close the heredoc on a line of its own"),
     ("this reader does not follow code nested", "flatten the nesting"),
     ("this reader does not follow an array inside an array", "write the array's elements as words"),
-    ("this reader does not follow what ", "run the command without it, or read its grammar in wrapped()"),
+    ("this reader does not follow what ", "run the command without it, or read it in wrapped() with its "
+                                          "spellings in OPTIONS"),
+    (r"this reader does not follow .*, a spelling OPTIONS does not hold", "add this spelling to OPTIONS with its "
+                                                                          "reading, or rewrite to one OPTIONS holds"),
+    (r"this reader does not follow .* with its argument missing", "give the option its argument, as the copied "
+                                                                  "scripts do"),
     (r"this reader does not follow \w+, which changes what a name runs", "remove it, so each name runs as bash's "
                                                                           "defaults run it"),
     ("this reader does not follow a variable bash runs as code", "remove it, or run the code as a command"),
-    ("this reader does not follow tar ", "compress or extract outside tar, or with -I"),
-    ("this reader does not follow sort ", "sort without --compress-program"),
-    ("this reader does not follow install ", "install without --strip-program"),
     ("this reader does not follow visudo ", "check the file with visudo -c"),
-    ("this reader does not follow pacman ", "query with pacman -Q, and change packages outside the copied scripts"),
-    ("this reader does not follow awk ", "write the awk program as one word, with only -F and -v, and without "
-                                         "system() or a pipe"),
-    ("this reader does not follow sed ", "write the sed script as s, p, d and q commands, in a word of its own"),
-    (r"this reader does not follow (?:sh|bash|dash) reading", "hand the shell its code with -c, or with its own "
-                                                               "heredoc"),
+    ("this reader does not follow pacman ", "query with pacman -Q first, and change packages outside the copied "
+                                            "scripts"),
+    ("this reader does not follow awk ", "write the awk program as one literal word, without system() or a "
+                                         "pipe"),
+    ("this reader does not follow sed ", "write the sed script as s, p, d and q commands, in one literal word"),
+    ("this reader does not follow sh reading", "hand the shell its code with -c, or with its own heredoc"),
     (r'this reader does not follow "\$\{', "write the array as one NAME=( ), a statement of its own at the top of its "
                                          "scope before the run, and at most MAX_APPENDS NAME+=( ) outside loops, with "
                                          "no other write to the name, and run it in the shell that assigned it"),
     ("this reader does not follow", "give its code string a word of its own, or rewrite the line in a form the "
                                     "copied scripts already use"),
     ("this reader does not know whether", "add it to LEAVES with the reason it runs nothing it is handed, or read "
-                                          "its grammar in wrapped()"),
+                                          "it in wrapped() with its spellings in OPTIONS"),
     ("this reader cannot name the program", "name the program, or add (script, word) to DYNAMIC with what it runs"),
     ("a function that runs its arguments", "add it to OWN_WRAPPERS with what comes before its command"),
     ("DYNAMIC allows", "remove the entry"),
+    ("OPTIONS holds", "cite a line that uses the spelling, or remove the row"),
     ("GUARDED allows", "remove the entry"),
     (r"(?:called|looked up) here, and not a program", "carry the program in the image's list, or stand the call "
                                                       "inside a guard in GUARDED"),
@@ -206,7 +287,6 @@ MAX_DEPTH = 32
 
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=")
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-SEPARATORS = frozenset(("\n", ";", "&", "&&", "||", "|", "|&"))
 CASE_ENDS = frozenset((";;", ";&", ";;&"))
 REDIRECT = re.compile(r"(\d+|\{[A-Za-z_][A-Za-z0-9_]*\})?(<<<|<<-|<<|<>|<&|>>|>&|>\||<|>)")
 # A parameter a function was handed: $1 to $9, $@, $*, and their ${ } forms.
@@ -259,6 +339,7 @@ class Script:
         self.arrays = {}           # (function, NAME) -> [(appended, elements, in a loop)], each NAME=( ) or NAME+=( )
         self.refs = []             # (kind, word, line, pos): kind call, lookup, dynamic
         self.refusals = []         # (line, why)
+        self.options_used = set()  # (program, spelling, line) for each row of OPTIONS a line uses
 
     def line(self, pos):
         return bisect.bisect_right(self.lines, pos)
@@ -347,10 +428,6 @@ class Reader:
         while j < self.end and self.t[j] in " \t":
             j += 1
         return j >= self.end or self.t[j] in "\n#" or self.t[j] == ";" and self.t[j + 1:j + 2] not in (";", "&")
-
-    def past(self, word, n):
-        """WORD from its Nth character on, as a word of its own."""
-        return Word(word.raw[n:], word.pos + n, word.dynamic, word.value[n:])
 
     def parameter(self):
         """Skip ${ ... } from just past its brace, reading any $( ) inside."""
@@ -623,7 +700,9 @@ class Reader:
                     self.chained = False
                 elif not self.continued:
                     self.chained = False
-                self.continued = tok.text in ("&&", "||", "|", "|&")
+                # Bash lets blank lines follow &&, ||, | and |&: the list goes
+                # on to the next command, so the newlines keep it pending.
+                self.continued = tok.text in ("&&", "||", "|", "|&") or tok.text == "\n" and self.continued
                 if tok.text == ")":
                     if self.frames and self.kind_of(self.frames[-1]) == "(":
                         self.frames.pop()
@@ -645,6 +724,7 @@ class Reader:
                 tok = None
                 continue
             if tok.kind == "arith":
+                self.continued = False
                 tok = self.after_compound()
                 continue
             self.at_start, self.continued = not self.chained, False
@@ -883,15 +963,13 @@ class Reader:
                 # **The program time**: command() reads the keyword at a
                 # command's start, so a time here (after an assignment or a
                 # redirect, quoted, escaped, behind command, a wrapper or an
-                # array) is the program, which runs a command of its own.
+                # array) is the program, which runs a command of its own and
+                # which no copied script names (UNREAD_RUNNERS).
                 self.s.refs.append(("call", name, line, w.pos))
-                j = self.wrapped(name, rest)
-                if j is None:
-                    return
-                k, external, skip_functions = k + 1 + j, True, True
-                continue
+                self.s.refusals.append((line, f"this reader does not follow what {name} runs"))
+                return
             if external and (name in BUILTINS or name in KEYWORDS):
-                # **What a wrapper execs is a program** (`timeout 5 printf`,
+                # **What a wrapper execs is a program** (`xargs printf`,
                 # `sudo cd`): looked for on the list, as any program is.
                 self.s.refs.append(("call", name, line, w.pos))
                 return
@@ -900,20 +978,17 @@ class Reader:
                 external = skip_functions = True
                 continue
             if name in ("command",) and not external:
-                # command skips functions, never builtins.
+                # command skips functions, never builtins. Its options pass by
+                # OPTIONS, and -v looks the words past them up.
                 skip_functions = True
-                j = 0
-                while j < len(rest) and rest[j].value.startswith("-") and len(rest[j].value) > 1:
-                    if rest[j].value == "--":
-                        j += 1
-                        break
-                    if set(rest[j].value[1:]) & {"v", "V"}:
-                        for looked in rest[j + 1:]:
-                            if not looked.value.startswith("-"):
-                                self.lookup(looked)
-                        return
-                    j += 1
-                k = k + 1 + j
+                read = self.tabled(name, rest)
+                if read is None:
+                    return
+                if "lookup" in read[2]:
+                    for looked in rest[read[0]:]:
+                        self.lookup(looked)
+                    return
+                k = k + 1 + read[0]
                 continue
             if name in ("enable", "alias") or name == "hash" and any(re.fullmatch(r"-[A-Za-z]*p[A-Za-z]*", a.value)
                                                                      for a in rest) \
@@ -930,13 +1005,10 @@ class Reader:
                 k, skip_functions = k + 1, True
                 continue
             if name == "exec":
-                j = 0
-                while j < len(rest) and rest[j].value.startswith("-") and len(rest[j].value) > 1:
-                    if rest[j].value == "--":
-                        j += 1
-                        break
-                    j += 2 if rest[j].value.endswith("a") else 1
-                k = k + 1 + j
+                read = self.tabled(name, rest)
+                if read is None:
+                    return
+                k = k + 1 + read[0]
                 external = skip_functions = True
                 continue
             if name in ("eval",):
@@ -1042,71 +1114,106 @@ class Reader:
                     j += 1 + len(arg)
         return j
 
+    def row(self, name, w):
+        """The reading OPTIONS gives NAME's word W, its use noted by line, or
+        None, with the line refused, where no row holds it. A word the shell
+        expands is never a row, since its value is not the word as written
+        (`-u$X` reads as -u here)."""
+        line = self.s.line(w.pos)
+        found = None if w.dynamic else OPTIONS.get((name, w.value))
+        if found is None:
+            self.s.refusals.append((line, f"this reader does not follow {name} {w.raw}, a spelling OPTIONS does "
+                                          "not hold"))
+            return None
+        self.s.options_used.add((name, w.value, line))
+        return found[0]
+
+    def tabled(self, name, rest):
+        """NAME's options in REST, each read by its row in OPTIONS: before
+        its first operand, or anywhere for a program in ANYWHERE, where tar's
+        first word is always options. Returns (the index past the options,
+        the operands' indexes, the readings met), or None where a spelling
+        has no row or lacks its argument, refused by its line."""
+        anywhere = name in ANYWHERE
+        j, operands, marks = 0, [], set()
+        while j < len(rest):
+            w = rest[j]
+            if not (w.value.startswith("-") or name == "tar" and j == 0):
+                if not anywhere:
+                    break
+                operands.append(j)
+                j += 1
+                continue
+            reading = self.row(name, w)
+            if reading is None:
+                return None
+            if reading in ("argument", "code"):
+                if j + 1 >= len(rest):
+                    self.s.refusals.append((self.s.line(w.pos), f"this reader does not follow {name} {w.raw} "
+                                                                "with its argument missing"))
+                    return None
+                if reading == "code":
+                    self.code_string(rest[j + 1])
+                j += 2
+                continue
+            marks.add(reading)
+            j += 1
+        if not anywhere:
+            operands = list(range(j, len(rest)))
+        return j, operands, marks
+
     def wrapped(self, name, rest):
         """The index in REST of the command NAME runs, or None when NAME runs
-        none this reader can name (code strings it reads itself)."""
-        def options(with_arg, positionals=0, code=()):
-            j = 0
-            while j < len(rest):
-                v = rest[j].value
-                if v == "--":
-                    j += 1
-                    break
-                if v.startswith("--") and v.split("=", 1)[0] in code and "=" in v:
-                    self.code_string(self.past(rest[j], rest[j].raw.index("=") + 1))
-                    return None
-                if v.startswith("-") and v != "-":
-                    if v.startswith("--") or len(v) == 2:
-                        taker = v if v in with_arg or v in code else None
-                        last = True
-                    else:
-                        # **A group** (`-iu USER`): its first letter that takes an
-                        # argument takes the rest of the group, or the next word.
-                        at = next((i for i, c in enumerate(v[1:]) if f"-{c}" in with_arg or f"-{c}" in code), None)
-                        taker = None if at is None else f"-{v[1 + at]}"
-                        last = at == len(v) - 2
-                    if taker in code:
-                        if not last or j + 1 >= len(rest):
-                            raise Refused(f"{name} {v} with its code string joined or missing")
-                        self.code_string(rest[j + 1])
-                        return None
-                    j += 2 if taker is not None and last else 1
-                    continue
-                if name in ("env", "sudo") and ASSIGNMENT.match(rest[j].value):
-                    j += 1
-                    continue
-                break
-            if name == "env" and j < len(rest) and rest[j].value == "-":
-                j += 1
-            j += positionals
-            return j if j < len(rest) else None
+        none this reader can name (code strings it reads itself). Its options
+        pass only by OPTIONS, and a leaf outside FENCED runs nothing whatever
+        its options."""
+        if name not in WRAPPERS and name not in FENCED:
+            return None
+        here = rest[0].pos if rest else self.i
 
-        if name in ("sh", "bash", "dash"):
-            # As bash reads them: -c and -s are flags, each o or O in a group
-            # takes the next word, and the code string is the first word after
-            # the options.
-            j, code, stdin = 0, False, False
+        def refuse(why):
+            self.s.refusals.append((self.s.line(here), f"this reader does not follow {why}"))
+            return None
+
+        if name == "find":
+            # find's own options stand before its one starting point, as
+            # every copied script gives it, and every word past it is a row:
+            # each -exec runs the words to its ; or +.
+            j = 0
+            while j < len(rest) and OPTIONS.get((name, rest[j].value), ("",))[0] == "leading":
+                self.row(name, rest[j])
+                j += 1
+            if j < len(rest) and not (rest[j].value.startswith("-") or rest[j].value in ("(", "!")):
+                j += 1
             while j < len(rest):
-                v = rest[j].value
-                if v in ("--", "-"):
-                    j += 1
-                    break
-                if v in ("--rcfile", "--init-file"):
+                reading = self.row(name, rest[j])
+                if reading in (None, "leading"):
+                    return None if reading is None else refuse(f"find {rest[j].value} past its starting points")
+                if reading == "argument":
+                    if j + 1 >= len(rest):
+                        return refuse(f"find {rest[j].raw} with its argument missing")
                     j += 2
-                elif v.startswith("--"):
-                    j += 1
-                elif len(v) > 1 and v[0] in "-+":
-                    code = code or "c" in v[1:]
-                    stdin = stdin or "s" in v[1:]
-                    j += 1 + v.count("o") + v.count("O")
+                elif reading == "command":
+                    end = next((e for e in range(j + 1, len(rest)) if rest[e].value in (";", "+")), len(rest))
+                    run = Command()
+                    run.words = rest[j + 1:end]
+                    self.resolve(run, external=True)
+                    j = end + 1
                 else:
-                    break
-            if code:
+                    j += 1
+            return None
+        read = self.tabled(name, rest)
+        if read is None:
+            return None
+        j, operands, marks = read
+        if name == "sh":
+            # The code string is the first word past the options.
+            if "code flag" in marks:
                 if j >= len(rest):
-                    raise Refused(f"{name} -c with no code string")
+                    raise Refused("sh -c with no code string")
                 self.code_string(rest[j])
                 return None
-            if j < len(rest) and not stdin:
+            if j < len(rest):
                 return None  # a script, run by its path
             # **The shell reads its standard input**: its own heredoc, read
             # now or when its body comes, or nothing this reader can follow.
@@ -1119,151 +1226,32 @@ class Reader:
                 self.cur.shell_reads = True
                 return None
             raise Refused(f"{name} reading a standard input that is not its own heredoc")
-        if name == "sudo":
-            return options({"-u", "-g", "-C", "-D", "-h", "-p", "-R", "-r", "-t", "-T", "-U", "--user", "--group",
-                            "--close-from", "--chdir", "--host", "--prompt", "--chroot", "--role", "--type",
-                            "--command-timeout", "--other-user"})
-        if name == "runuser":
-            # As getopt reads it: -c, --command and --session-command hand the
-            # shell a code string, apart or joined by =. In a group, the first
-            # letter that takes an argument takes the rest of it.
-            code = ("-c", "--command", "--session-command")
-
-            def taker(v):
-                if not re.fullmatch(r"-[A-Za-z][^=]*", v) or v.startswith("--"):
-                    return None
-                return next((c for c in v[1:] if c in "cgGsuw"), None)
-
-            if any(a.value in ("-u", "--user") or a.value.startswith("--user=") or taker(a.value) == "u"
-                   for a in rest):
-                return options({"-u", "-g", "-G", "-s", "-w", "--user", "--group", "--supp-group",
-                                "--shell", "--whitelist-environment"}, code=code)
-            for j, a in enumerate(rest):
-                v = a.value
-                if v in code or taker(v) == "c" and v.endswith("c"):
-                    if j + 1 >= len(rest):
-                        raise Refused(f"runuser {v} with its code string joined or missing")
-                    self.code_string(rest[j + 1])
-                    return None
-                if "=" in v and v.split("=", 1)[0] in code[1:]:
-                    self.code_string(self.past(a, a.raw.index("=") + 1))
-                    return None
-                if taker(v) == "c":
-                    raise Refused(f"runuser {v} with its code string joined or missing")
-            return None
-        if name == "env":
-            if any((a.value.startswith("-S") and a.value != "-S") or a.value.startswith("--split-string=")
-                   for a in rest):
-                raise Refused("env -S joined to its string")
-            return options({"-u", "-C", "--unset", "--chdir"}, code=("-S", "--split-string"))
-        if name == "timeout":
-            return options({"-k", "-s", "--kill-after", "--signal"}, positionals=1)
-        if name in ("setsid", "nohup"):
-            return options(set())
-        if name == "time":
-            # The program (GNU time), never the keyword.
-            return options({"-f", "-o", "--format", "--output"})
-        here = rest[0].pos if rest else self.i
-
-        def refuse(why):
-            self.s.refusals.append((self.s.line(here), f"this reader does not follow {why}"))
-            return None
-
-        if name == "sort" and any(a.value.startswith("--compress-program") for a in rest):
-            return refuse("sort --compress-program, which runs a program")
-        if name == "install" and any(a.value.startswith("--strip-program") for a in rest):
-            return refuse("install --strip-program, which runs a program")
-        if name == "visudo" and not any(a.value == "--check" or re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a.value)
-                                        for a in rest):
-            return refuse("visudo without -c, which opens an editor")
-        if name == "pacman" and not (rest and re.match(r"-Q|--query", rest[0].value)):
-            return refuse("pacman past a query (-Q), which runs hooks")
-        if name == "awk":
-            # Only -F and -v, apart or joined: gawk's other options can hand it
-            # program text or a file of it (-f, -e, -E, -i, --source, ...).
-            j = 0
-            while j < len(rest) and rest[j].value.startswith("-") and rest[j].value != "--":
-                if not re.match(r"-[Fv]", rest[j].value):
-                    return refuse(f"awk {rest[j].value.split('=')[0]}, past -F and -v, which can hand it a program "
-                                  "this reader does not read")
-                j += 2 if rest[j].value in ("-F", "-v") else 1
-            j += j < len(rest) and rest[j].value == "--"
-            if j < len(rest) and re.search(r"system|(?<!\|)\|(?!\|)", rest[j].value):
-                return refuse("awk with system() or a pipe in its program, which runs a program")
-            return None
-        if name == "sed":
-            scripts, j = [], 0
-            while j < len(rest) and rest[j].value.startswith("-") and rest[j].value != "--":
-                v = rest[j].value
-                if v.startswith("-f") or v.startswith("--file"):
-                    return refuse("sed -f, whose script this reader does not read")
-                if v in ("-e", "--expression"):
-                    scripts.append(rest[j + 1].value if j + 1 < len(rest) else "")
-                    j += 2
-                    continue
-                if v.startswith("--expression="):
-                    scripts.append(v.split("=", 1)[1])
-                elif v.startswith("-e"):
-                    scripts.append(v[2:])
+        if name in ("sudo", "env"):
+            while j < len(rest) and ASSIGNMENT.match(rest[j].value):
                 j += 1
-            if not scripts and j < len(rest):
-                scripts.append(rest[j].value)
+        if name in ("sudo", "env", "xargs"):
+            return j if j < len(rest) else None
+        if name == "visudo" and not any(re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a.value) for a in rest):
+            return refuse("visudo without -c, which opens an editor")
+        if name == "pacman" and not (rest and not rest[0].dynamic and rest[0].value == "-Q"):
+            return refuse("pacman without -Q first, the query, which runs no hooks")
+        if name == "awk" and operands:
+            program = rest[operands[0]]
+            if program.dynamic:
+                return refuse("awk with a program the shell expands (a variable or a substitution in it), whose "
+                              "text this reader does not see")
+            if re.search(r"system|(?<!\|)\|(?!\|)", program.value):
+                return refuse("awk with system() or a pipe in its program, which runs a program")
+        if name == "sed" and operands and rest[operands[0]].dynamic:
+            return refuse("sed with a script the shell expands (a variable or a substitution in it), whose text this "
+                          "reader does not see")
+        if name == "sed" and operands:
             addr = r"(?:\d+|\$|/(?:\\.|[^/\\])*/)"
             plain = re.compile(r"(?:" + addr + r"(?:," + addr + r")?)?[pdq]"
                                r"|(?:" + addr + r"(?:," + addr + r")?)?s(?P<d>[^\\\n])(?:\\.|(?!(?P=d)).)*(?P=d)"
                                r"(?:\\.|(?!(?P=d)).)*(?P=d)[gpI0-9]*")
-            if not all(plain.fullmatch(x) for x in scripts):
+            if not plain.fullmatch(rest[operands[0]].value):
                 return refuse("sed past its s, p, d and q commands, whose e runs a program")
-            return None
-        if name == "nice":
-            return options({"-n", "--adjustment"})
-        if name == "stdbuf":
-            return options({"-i", "-o", "-e", "--input", "--output", "--error"})
-        if name == "ionice":
-            return options({"-c", "-n", "-p", "-P", "-u", "--class", "--classdata", "--pid", "--pgid", "--uid"})
-        if name == "flock":
-            # flock [options] FILE -c CODE, or flock [options] FILE COMMAND...
-            j = options({"-w", "-E", "--wait", "--timeout", "--conflict-exit-code"}, positionals=1,
-                        code=("-c", "--command"))
-            if j is not None and rest[j].value in ("-c", "--command"):
-                if j + 1 >= len(rest):
-                    raise Refused("flock -c with no code string")
-                self.code_string(rest[j + 1])
-                return None
-            if j is not None and rest[j].value.startswith("--command="):
-                self.code_string(self.past(rest[j], rest[j].raw.index("=") + 1))
-                return None
-            return j
-        if name == "xargs":
-            return options({"-n", "-I", "-P", "-d", "-L", "-s", "-a", "-E", "--max-args", "--max-procs",
-                            "--delimiter", "--max-lines", "--max-chars", "--arg-file", "--eof"})
-        if name == "find":
-            # Every -exec, -execdir, -ok and -okdir, each to its ; or +.
-            j = 0
-            while j < len(rest):
-                if rest[j].value in ("-exec", "-execdir", "-ok", "-okdir"):
-                    end = next((e for e in range(j + 1, len(rest)) if rest[e].value in (";", "+")), len(rest))
-                    run = Command()
-                    run.words = rest[j + 1:end]
-                    self.resolve(run, external=True)
-                    j = end
-                j += 1
-            return None
-        if name == "tar":
-            # **tar runs -I and --to-command through a shell**: each is a code
-            # string. Its other ways to run a command are refused.
-            for j, a in enumerate(rest):
-                v = a.value
-                if v in ("-I", "--use-compress-program", "--to-command") and j + 1 < len(rest):
-                    self.code_string(rest[j + 1])
-                elif v.startswith(("--use-compress-program=", "--to-command=")):
-                    self.code_string(self.past(a, a.raw.index("=") + 1))
-                elif v.startswith("-I"):
-                    self.code_string(self.past(a, 2))
-                elif v == "-F" or v.startswith(("--checkpoint-action", "--info-script", "--new-volume-script",
-                                                "--rsh-command", "--rmt-command")):
-                    refuse(f"tar {v.split('=')[0]}, which runs a command")
-            return None
         return None
 
 
@@ -1306,8 +1294,35 @@ def siblings(path):
         if len(more) + 1 == len(anchors):
             break
         anchors = [HERE] + more
+    for line in lines:
+        if moves_to_itself(line, anchor, str(path).endswith(".py")):
+            raise ValueError(f"{path}: a change to the script's own directory, after which a relative path "
+                             f"reaches a sibling this reader cannot name (name it through the directory "
+                             f"instead): {line.strip()}")
     found = re.compile(anchor + r"[^\n]*?" + SIBLING_NAME)
     return sorted({n for line in lines for n in found.findall(line)} - {os.path.basename(path)})
+
+
+def moves_to_itself(line, anchor, python):
+    """Whether LINE changes directory to the script's own: a cd or pushd, or
+    os.chdir in Python, whose argument holds the anchor, outside a $( ) (the
+    `HERE=$(cd "$(dirname "$0")" && pwd)` idiom changes only the
+    substitution's directory)."""
+    for m in re.finditer(r"\bos\.chdir\(" if python else r"(?<![\w.-])(?:cd|pushd)\s", line):
+        stack, k = [], 0
+        while k < m.start():
+            if line.startswith("$(", k):
+                stack.append("$")
+                k += 2
+                continue
+            if line[k] == "(":
+                stack.append("(")
+            elif line[k] == ")" and stack:
+                stack.pop()
+            k += 1
+        if "$" not in stack and re.search(anchor, re.split(r"[;&|]", line[m.end():], maxsplit=1)[0]):
+            return True
+    return False
 
 
 def read_names(path):
@@ -1412,7 +1427,20 @@ def check_shell(path, programs, funcs=None):
     for s_, word in DYNAMIC:
         if s_ == script.name and word not in dynamic_used:
             findings.append((0, word, "DYNAMIC allows it, and no line of the script runs that"))
+    spelled = {(p, sp) for p, sp, _ in script.options_used}
+    for (program, spelling), (_, cited) in OPTIONS.items():
+        s_, at = cited.rsplit(":", 1)
+        if s_ == script.name and (program, spelling) not in spelled:
+            findings.append((int(at), spelling, f"OPTIONS holds {program} {spelling} for this script, and no line of "
+                                                f"it uses that spelling"))
     return script, sorted(set(findings))
+
+
+def unheld_rows(names):
+    """The rows of OPTIONS that cite a script outside NAMES, the copy's
+    files, which no check of the copy would read."""
+    return [(0, spelling, f"OPTIONS holds {program} {spelling} for {cited}, a script the copy does not hold")
+            for (program, spelling), (_, cited) in OPTIONS.items() if cited.rsplit(":", 1)[0] not in names]
 
 
 def python_runs(lines):
@@ -1459,6 +1487,10 @@ def main(argv=None):
                 for kind, word, line, _ in script.refs:
                     if kind in ("dynamic", "handed"):
                         print(f"{path}:{line}: {kind}: {word}")
+        if args.copy:
+            for line, word, why in unheld_rows({os.path.basename(p) for p in files}):
+                print(f"{args.copy}:{line}: {word}: {why} (to pass: {remedy(why)})")
+                bad += 1
     except OSError as e:
         print(f"program_check: {e}", file=sys.stderr)
         return 2
