@@ -1336,6 +1336,33 @@ fn enter_against_a_member_leaving(
     Option<weaver_types::Payload>,
     bool,
 ) {
+    enter_against_a_member_seating(restore, diagnostic, restored_answer, KARL_IDENTITY, mode)
+}
+
+/// The member double's identity answer for every enter but the seated
+/// digests' tests: one seeded prompt, `You are Karl.`, one text block.
+const KARL_IDENTITY: &str = concat!(
+    r#"{"answer":{"identity":{"messages":[{"envelope":{"session":"s-0","#,
+    r#""run":"r-0","kind":"message.system","sequence":"3"},"#,
+    r#""pairs":{"role":"system","content":[{"type":"text","#,
+    r#""text":"You are Karl."}]}}]}}}"#
+);
+
+/// [`enter_against_a_member_leaving`] with the member's identity answer
+/// chosen by the caller.
+fn enter_against_a_member_seating(
+    restore: Option<weaver_types::Lineage>,
+    diagnostic: bool,
+    restored_answer: &'static str,
+    identity_answer: &'static str,
+    mode: LeaveMode,
+) -> (
+    Vec<serde_json::Value>,
+    Option<LifecycleRefusal>,
+    Vec<String>,
+    Option<weaver_types::Payload>,
+    bool,
+) {
     use std::io::{BufRead, BufReader, Write};
     let finished_answered = !matches!(
         mode,
@@ -1433,12 +1460,7 @@ fn enter_against_a_member_leaving(
             let answer = if line.starts_with(r#"{"ask":{"grants""#) {
                 r#"{"answer":{"grants":{"surface":[]}}}"#
             } else if line.starts_with(r#"{"ask":{"identity""#) {
-                concat!(
-                    r#"{"answer":{"identity":{"messages":[{"envelope":{"session":"s-0","#,
-                    r#""run":"r-0","kind":"message.system","sequence":"3"},"#,
-                    r#""pairs":{"role":"system","content":[{"type":"text","#,
-                    r#""text":"You are Karl."}]}}]}}}"#
-                )
+                identity_answer
             } else if line.starts_with(r#"{"ask":{"restored""#) {
                 restored_answer
             } else if line.starts_with(r#"{"ask":{"snapshot""#) {
@@ -1863,6 +1885,134 @@ fn a_serving_enter_asks_restored_before_load_records_the_recall_and_writes_no_pr
         events[0]["payload"].get("lineage").is_none(),
         "a load from nothing names no lineage: {}",
         events[0]
+    );
+}
+
+/// **The identity recall names what the load seated, by digest** (#617),
+/// per `weaver-harness-Spec` section 6.1 and `weaver-trace-Spec` sections 3
+/// and 10: two enters whose members answer different prompts record
+/// different `seated` beside identical `load` members, a one-block prompt's
+/// entry is the sha256 of its text, two seedings are named in seating order,
+/// and an empty answer records no recall while the load still names its
+/// member. Perturbations: skip `seated`'s serialization, and the seatings
+/// read absent; digest the message's rendering rather than its text, and the
+/// entries stop being the prompts' sha256; author the recall before the
+/// messages are parsed with no digests, and the member is absent.
+#[test]
+fn the_identity_recall_names_the_seated_prompts_by_digest() {
+    use sha2::{Digest, Sha256};
+    const ADA: &str = concat!(
+        r#"{"answer":{"identity":{"messages":[{"envelope":{"session":"s-0","#,
+        r#""run":"r-0","kind":"message.system","sequence":"3"},"#,
+        r#""pairs":{"role":"system","content":[{"type":"text","#,
+        r#""text":"You are Ada."}]}}]}}}"#
+    );
+    const TWO: &str = concat!(
+        r#"{"answer":{"identity":{"messages":[{"envelope":{"session":"s-0","#,
+        r#""run":"r-0","kind":"message.system","sequence":"3"},"#,
+        r#""pairs":{"role":"system","content":[{"type":"text","#,
+        r#""text":"You are Karl."}]}},{"envelope":{"session":"s-0","#,
+        r#""run":"r-0","kind":"message.system","sequence":"9"},"#,
+        r#""pairs":{"role":"system","content":[{"type":"text","#,
+        r#""text":"Answer briefly."}]}}]}}}"#
+    );
+    const NONE: &str = r#"{"answer":{"identity":{"messages":[]}}}"#;
+    let sha = |text: &str| format!("{:x}", Sha256::digest(text.as_bytes()));
+    let enter = |identity: &'static str| {
+        let (events, refusal, _, _, _) = enter_against_a_member_seating(
+            None,
+            false,
+            EMPTY_RESTORED,
+            identity,
+            LeaveMode::SelfUnwind,
+        );
+        assert!(refusal.is_none(), "{refusal:?}");
+        events
+    };
+    let seated = |events: &[serde_json::Value]| {
+        events
+            .iter()
+            .find(|e| e["kind"] == "recall" && e["payload"]["ask"]["verb"] == "identity")
+            .map(|e| e["payload"]["seated"].clone())
+    };
+    let load = |events: &[serde_json::Value]| {
+        events
+            .iter()
+            .find(|e| e["kind"] == "load")
+            .expect("the load opens the run")["payload"]
+            .clone()
+    };
+
+    let karl = enter(KARL_IDENTITY);
+    let ada = enter(ADA);
+    assert_eq!(
+        seated(&karl),
+        Some(serde_json::json!([sha("You are Karl.")])),
+        "a one-block prompt is named by the sha256 of its text: {karl:?}"
+    );
+    assert_eq!(seated(&ada), Some(serde_json::json!([sha("You are Ada.")])));
+    assert_ne!(seated(&karl), seated(&ada), "two prompts are told apart");
+    assert_eq!(
+        load(&karl),
+        load(&ada),
+        "the load's members do not name the prompt, the recall does"
+    );
+
+    let two = enter(TWO);
+    assert_eq!(
+        seated(&two),
+        Some(serde_json::json!([
+            sha("You are Karl."),
+            sha("Answer briefly.")
+        ])),
+        "two seedings are named in seating order"
+    );
+
+    let unseeded = enter(NONE);
+    assert_eq!(
+        seated(&unseeded),
+        None,
+        "nothing seated writes no identity recall: {unseeded:?}"
+    );
+    assert_eq!(
+        load(&unseeded)["state_member"],
+        true,
+        "the load names its member, so no recall reads as nothing seated"
+    );
+}
+
+/// **An identity answer that does not parse records its recall without
+/// `seated`** (#617), per `weaver-trace-Spec` section 3: the recall is
+/// authored before the open would be built, so the answer's events are
+/// named, and no digest is, nothing being seated. The enter then refuses
+/// through the after-load failure of a missed ask, by `identity_material`'s
+/// rule (`state::tests`). Perturbation: digest an answer that does not parse
+/// as no messages, and `seated` reads `[]`.
+#[test]
+fn an_identity_answer_that_does_not_parse_records_its_recall_without_seated() {
+    const HALF: &str = concat!(
+        r#"{"answer":{"identity":{"messages":[{"envelope":{"session":"s-0","#,
+        r#""run":"r-0","kind":"message.system","sequence":"3"},"#,
+        r#""pairs":{"role":"system"}}]}}}"#
+    );
+    let (events, refusal, _, _, _) =
+        enter_against_a_member_seating(None, false, EMPTY_RESTORED, HALF, LeaveMode::SelfUnwind);
+    assert!(
+        refusal.is_none(),
+        "the refusal is after the load: {refusal:?}"
+    );
+    let recall = events
+        .iter()
+        .find(|e| e["kind"] == "recall" && e["payload"]["ask"]["verb"] == "identity")
+        .expect("the answered ask is recorded");
+    assert_eq!(
+        recall["payload"]["returned"],
+        serde_json::json!([{"kind": "message.system", "run": "r-0", "sequence": "3"}]),
+        "{recall}"
+    );
+    assert!(
+        recall["payload"].get("seated").is_none(),
+        "no digest names an answer that did not parse: {recall}"
     );
 }
 
@@ -6109,7 +6259,12 @@ fn the_spu_dying_at_rest_authors_a_fault_and_the_run_stands_with_no_model() {
 /// gate's channel and then the SPU's decode channel close at their far
 /// ends; the loop authors a `fault` for each and serves on, the record
 /// carrying no `unload`. The loop stays in its wait, which ends with the
-/// test process. Perturbation: unwind on a closed gate or decode wake as
+/// test process, so **the test and not the loop's thread holds the
+/// listener's scratch guard** (#609): a thread still waiting when the
+/// process exits runs no drops, and the guard it held would leave its
+/// folder in the temporary directory on every run. The folder goes when the
+/// test ends, passing or failing, its listener still bound in the loop and
+/// never dialled. Perturbation: unwind on a closed gate or decode wake as
 /// before, and the record closes with an `unload`.
 #[test]
 fn the_serve_loop_serves_on_past_an_organs_death_at_rest() {
@@ -6125,9 +6280,8 @@ fn the_serve_loop_serves_on_past_an_organs_death_at_rest() {
     if let Some(spu) = run.spu.as_mut() {
         spu.decode = decode;
     }
-    let (harness, dir) = harness_entered(run);
+    let (harness, _dir) = harness_entered(run);
     std::thread::spawn(move || {
-        let _dir = dir;
         let _ = harness.serve(weaver_trace::LoopIdentity::compiled("test"), |_, _| {
             unreachable!("no frame arrives")
         });
@@ -8614,16 +8768,17 @@ fn a_leave_over_a_latched_record_refuses_descriptors_unusable() {
 
 /// **The serve loop does not wait over a latched record** (#116, the
 /// backstop before each wait): an authoring that announced nothing, such as
-/// `grant_seat`'s hole fault or a replay's, is still not served past.
+/// `grant_seat`'s hole fault or a replay's, is still not served past. The
+/// test holds the listener's scratch guard (#609), so a loop that waits on
+/// leaves no folder behind when the test fails.
 /// Perturbation: drop the read before the wait, and the loop waits on.
 #[test]
 fn the_serve_loop_does_not_wait_over_a_latched_record() {
     let (mut run, _spare, _sink) = entered_run(None);
     latch_by_refusal(&mut run);
-    let (harness, dir) = harness_entered(run);
+    let (harness, _dir) = harness_entered(run);
     let (sent, served) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _dir = dir;
         let outcome = harness.serve(weaver_trace::LoopIdentity::compiled("test"), |_, _| {
             unreachable!("no frame arrives")
         });

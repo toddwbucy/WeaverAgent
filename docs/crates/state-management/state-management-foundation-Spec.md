@@ -2,7 +2,7 @@
 
 **Status:** MERGED.
 
-**Landing PR:** #439
+**Landing PR:** #619
 
 **Version:** 0.29 **Date filed:** 2026-10-20 **Document ID:**
 `state-management-foundation-Spec` **Parent:** state-management-primitives-PRD
@@ -757,10 +757,10 @@ configuration or a caller path. [PERSIST-2, PERSIST-3, R2]
 The boot read is the first content read after open and structural load checks. The load
 metadata and template checks are not content reads. No message.system is recorded or
 tapped. recall is forbidden by the partition and carries the exact boot Message so
-replay sees it. This explicitly replaces the merged rule that a load records none of
-what it seats. Subsequent argument records remain FLOW-3's duty. The mandatory boot read
-occurs once per load, while later explicit span retrieval is legal and never refiles the
-prompt. [PERSIST-6, PROMPT-1, FLOW-3, STORE-8]
+replay sees it. This explicitly replaces the merged rule that a load records only the
+digests of what it seats (#617). Subsequent argument records remain FLOW-3's duty. The
+mandatory boot read occurs once per load, while later explicit span retrieval is legal
+and never refiles the prompt. [PERSIST-6, PROMPT-1, FLOW-3, STORE-8]
 
 **PERSIST-SEED.** The root-shell-only admin verb `seed` takes the agent name already
 used by admin and no prompt/path argument. It reads the fixed root-owned prompt draft

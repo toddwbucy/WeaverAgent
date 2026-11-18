@@ -5,7 +5,7 @@
 **Date filed:** 2026-08-18
 **Document ID:** `weaver-harness-state-contract`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #58
+**Landing PR:** #619
 
 ---
 
@@ -316,8 +316,8 @@ stands, after `restored` at a serving enter, and before the decode session opens
 seats what custody answers, the prompt the seeding turn entered and a save point
 carried, per `weaver-harness-Spec` section 6.1. The ask carries no members. The answer carries one member, `messages`, the turnless
 `message.system` events of the declared session's most recent run that holds any, in
-landing order, because the seeding turn writes the prefix and a load writes none, on
-the operator's ruling of 2026-10-06 (later, #1), so the newest run holding any is the
+landing order, because the seeding turn writes the prefix and a load writes no prefix,
+on the operator's ruling of 2026-10-06 (later, #1), so the newest run holding any is the
 last residency that seeded and its prefix is the one in force, a later residency's
 seeding replacing it and two seedings in one residency served both, each served as the
 distillate's own shape, envelope and pairs, the pairs being the prefix's
