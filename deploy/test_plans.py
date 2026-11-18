@@ -8490,7 +8490,10 @@ class StandInGuardTests(unittest.TestCase):
             with files_held(held_files):
                 guard_copy(new.name)
                 other.write_text("{}")
+                # As a copy's temporary file stands just before its rename:
+                # the copy's text and mode, so its name alone keeps it out.
                 part.write_text(refusing_text(REACH_RECORD))
+                part.chmod(0o755)
                 old.unlink()
             self.assertFalse(new.exists(), "a copy made during the block is removed")
             self.assertTrue(other.exists(), "a file that is not a copy stays")
