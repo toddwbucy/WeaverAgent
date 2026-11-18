@@ -7922,29 +7922,32 @@ sys.exit(code if code >= 0 else 128 - code)
 
 
 def _guard_copies():
-    """The refusing copies in the guard's directory, read by their text and
-    their mode, and the entries that could not be read. A name that starts
-    with a dot, as a copy's temporary name does, is never a copy, a file is
-    read only when its size is a copy's and its mode 0755, so a copy no
-    longer executable is not one (CodeRabbit on #623), and an entry gone
-    before it is read is absent. The directory gone during the reading fails
-    it."""
+    """The refusing copies in the guard's directory, read by their text, the
+    entries that could not be read, and the copies whose mode is not 0755,
+    which no longer run as a copy. A name that starts with a dot, as a
+    copy's temporary name does, is never a copy, a file is read only when
+    its size is a copy's, and an entry gone before it is read is absent. A
+    copy is one by its text whatever its mode, so a held block removes a
+    copy it made whatever mode it left, and makes again one that stood at
+    its start and was left with another (CodeRabbit on #623). The directory
+    gone during the reading fails it."""
     text = refusing_text(REACH_RECORD).encode()
-    copies, unread = set(), set()
+    copies, unread, unrunnable = set(), set(), set()
     for entry in os.scandir(STAND_IN_GUARD):
         if entry.name.startswith("."):
             continue
         try:
             st = entry.stat(follow_symlinks=False)
-            if (stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o755 and st.st_size == len(text)
-                    and Path(entry.path).read_bytes() == text):
+            if stat.S_ISREG(st.st_mode) and st.st_size == len(text) and Path(entry.path).read_bytes() == text:
                 copies.add(entry.name)
+                if stat.S_IMODE(st.st_mode) != 0o755:
+                    unrunnable.add(entry.name)
         except FileNotFoundError:
             if not os.path.isdir(STAND_IN_GUARD):
                 raise
         except OSError:
             unread.add(entry.name)
-    return copies, unread
+    return copies, unread, unrunnable
 
 
 @contextlib.contextmanager
@@ -7953,10 +7956,10 @@ def files_held(files):
     directory's change does not read them again, and no directory's
     reading from before the block or during it is kept. At its end the
     block sets the guard's refusing copies back as they stood at its
-    start: each copy made during it is removed, so a box program FILES
-    names never stays refused, and each copy removed during it, or left
-    with another mode, is made again, whatever the block left under its
-    name. Any other file in the guard's directory is left as it is, and so
+    start: each copy made during it is removed, whatever its mode, so a box
+    program FILES names never stays refused, and each copy removed during
+    it, or left with another mode, is made again, whatever the block left
+    under its name. Any other file in the guard's directory is left as it is, and so
     is an entry that cannot be read, at the start or the end, which is
     named. Blocks nest, each setting back its own start, and a block that
     raises sets them back too. What cannot be set back is named, after the
@@ -7966,7 +7969,7 @@ def files_held(files):
     outside every held block."""
     from unittest import mock
     module = sys.modules[__name__]
-    (before, unread), raised = _guard_copies(), None
+    (before, unread, _), raised = _guard_copies(), None
     _MEMBERS_READ.clear()
     try:
         with mock.patch.object(module, "PRIVILEGED_FILES", files), \
@@ -7979,10 +7982,10 @@ def files_held(files):
         _MEMBERS_READ.clear()
         failed = []
         try:
-            now, unread_now = _guard_copies()
+            now, unread_now, unrunnable = _guard_copies()
         except OSError as e:
             failed.append(f"{STAND_IN_GUARD} not read ({e.strerror or e})")
-            now, unread_now = before, set()
+            now, unread_now, unrunnable = before, set(), set()
         for name in sorted(unread | unread_now):
             when = ("start and end" if name in unread and name in unread_now
                     else "start" if name in unread else "end")
@@ -7994,7 +7997,7 @@ def files_held(files):
                 (STAND_IN_GUARD / name).unlink(missing_ok=True)
             except OSError as e:
                 failed.append(f"{STAND_IN_GUARD / name} not removed ({e.strerror or e})")
-        for name in sorted(before - now):
+        for name in sorted((before - now) | (before & unrunnable)):
             try:
                 refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
             except OSError as e:
@@ -8603,7 +8606,7 @@ class StandInGuardTests(unittest.TestCase):
                     with self.assertRaises(GuardCopiesLeft):
                         held.__exit__(GeneratorExit, GeneratorExit(), None)
             stuck.unlink()
-            self.assertEqual(_guard_copies(), (start | {old.name}, set()))
+            self.assertEqual(_guard_copies(), (start | {old.name}, set(), set()))
         finally:
             for name in (stuck, new, old, after, other, part):
                 name.unlink(missing_ok=True)
@@ -8682,22 +8685,29 @@ class StandInGuardTests(unittest.TestCase):
                 guard_argv(["bin/virt-anchored"], cwd)
             self.assertEqual(seen, [str(top / "real")])
 
-    def test_a_held_block_makes_again_a_copy_left_with_another_mode(self):
-        """A copy a held block leaves no longer executable is not a copy at
-        its end, so it is made again, 0755 with its text, and a reach of it
-        is still recorded rather than met with a refusal to run it
-        (CodeRabbit on #623). Perturbation: read a copy by its text alone,
-        and the copy stays 0644."""
-        copy = STAND_IN_GUARD / "virt-held-mode"
+    def test_a_held_block_sets_back_a_copy_left_with_another_mode(self):
+        """A copy a held block leaves no longer executable is set back all
+        the same: one that stood at the block's start is made again, 0755
+        with its text, so a reach of it is still recorded rather than met
+        with a refusal to run it, and one made during the block is removed
+        whatever mode it was left with (CodeRabbit on #623, twice).
+        Perturbations: make again only the copies removed, or read a copy by
+        its mode as well as its text, and a copy stays 0644."""
+        copy, new = STAND_IN_GUARD / "virt-held-mode", STAND_IN_GUARD / "virt-held-new-mode"
         self.assertFalse(copy.exists())
+        self.assertFalse(new.exists())
         try:
-            guard_copy("virt-held-mode")
+            guard_copy(copy.name)
             with files_held(frozenset()):
                 copy.chmod(0o644)
+                guard_copy(new.name)
+                new.chmod(0o644)
             self.assertEqual(stat.S_IMODE(copy.stat().st_mode), 0o755)
             self.assertEqual(copy.read_bytes(), refusing_text(REACH_RECORD).encode())
+            self.assertFalse(new.exists(), "a copy made during the block is removed whatever its mode")
         finally:
             copy.unlink(missing_ok=True)
+            new.unlink(missing_ok=True)
 
     def test_a_refusing_copy_whose_write_fails_leaves_no_file(self):
         """refusing_copy writes under a temporary name and renames it into
