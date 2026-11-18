@@ -11997,7 +11997,8 @@ exit "${CARGO_EXIT:-0}"
         failed test still refuses. A summary counts only with its five counts
         present (through `filtered out`; libtest adds the duration only when
         it measured one), so output holding nothing but a summary cut short
-        is a run of no tests, and refuses.
+        is a run of no tests, and refuses. The child's whole line, 6 filtered
+        out, counts for nothing either (#611).
         Perturbation: restore the unanchored `awk '/^test result/ ...'` and
         the clean case exits 1 at the `%d` printf, or, with `%s`, prints a
         failed count of 0.29; anchor on the first two counts alone and the
@@ -12013,17 +12014,55 @@ exit "${CARGO_EXIT:-0}"
             with self.subTest(script=script):
                 ran = self.step(script, "run_tests", stdout=garbled)
                 self.assertEqual(ran.returncode, 0, ran.stderr)
-                self.assertIn("5 passed, 0 failed", ran.stdout)
+                self.assertIn("4 passed, 0 failed", ran.stdout)
                 self.assertEqual(self.kept_logs(), [], "a clean run keeps no log")
                 ran = self.step(script, "run_tests", stdout=failed, status=101)
                 self.assertNotEqual(ran.returncode, 0)
-                self.assertIn("7 passed, 1 failed", ran.stdout)
+                self.assertIn("6 passed, 1 failed", ran.stdout)
                 self.assertIn("cargo exited 101", ran.stderr)
                 for log in self.kept_logs():
                     log.unlink()
                 ran = self.step(script, "run_tests", stdout="test result: ok. 1 passed; 0 failed\n")
                 self.assertNotEqual(ran.returncode, 0, "a summary cut short is no count")
                 self.assertIn("0 passed", ran.stderr)
+                for log in self.kept_logs():
+                    log.unlink()
+
+    def test_the_count_is_the_suites_cargo_ran_never_a_childs_summary(self):
+        """**Only a suite's own summary counts** (#611). Many tests re-run
+        their own binary as a child filtered to one test, and the child's
+        summary line, reporting the rest as filtered out, shares cargo's
+        standard output. Counted, they moved the step's count between two
+        runs of one commit, by how many survived whole. The step passes no
+        filter, so every suite cargo runs reports 0 filtered out, and the
+        count is the suites' sum: here 120, 0 and 6 passed, the last with one
+        failed, beside child lines whole, interleaved with each other and
+        garbled, a child's failure among them. Perturbation: count every
+        complete summary line, and the children's whole lines count too."""
+        first = "test result: ok. 120 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 1.20s\n"
+        empty = "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+        children = ("test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.01s\n"
+                    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out\n"
+                    "test result: ok. 1 passed; 0 faitest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
+                    "9 filtered out; finished in 0.00s\n"
+                    "led; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s\n"
+                    "test result: ; finished in 0.29sok\n"
+                    ". 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.29s\n")
+        clean = first + children + empty
+        failed = clean + ("test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 41 filtered out; "
+                          "finished in 0.02s\n"
+                          "test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; "
+                          "finished in 0.30s\n")
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script):
+                ran = self.step(script, "run_tests", stdout=clean)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertIn(" 120 passed, 0 failed\n", ran.stdout)
+                self.assertEqual(self.kept_logs(), [], "a clean run keeps no log")
+                ran = self.step(script, "run_tests", stdout=failed, status=101)
+                self.assertNotEqual(ran.returncode, 0)
+                self.assertIn(" 126 passed, 1 failed\n", ran.stdout)
+                self.assertIn("cargo exited 101, 126 passed, 1 failed", ran.stderr)
                 for log in self.kept_logs():
                     log.unlink()
 
