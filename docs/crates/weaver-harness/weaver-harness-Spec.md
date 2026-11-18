@@ -2567,9 +2567,10 @@ every residency, as its first turn, and the seeding turn is admitted there as an
 since it is the one way the prompt enters. The declaration carries no identity and the
 enter no prompt, per `weaver-types-Spec` sections 2 and 4, so this crate holds no file,
 no path and no handle into the territory's declaration or draft. **The load writes none
-of what it seats to the record**, on
+of the text it seats to the record**, on
 the operator's ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are not tied together once the agent is unloaded: the `load` event's lineage names the save point the session started from, the
-`recall` of the identity ask names the events the member handed back for seating, and
+`recall` of the identity ask names the events the member handed back for seating and,
+since the operator's ruling of 2026-11-18 (#617), the digest of each message seated, and
 the prompt's text is on the trace where it was entered, at the seeding turn, and
 nowhere else. This retires the rule of 2026-09-04 that each run's record carries its own
 prefix text; a reader of one run reaches the prefix through the save point its lineage
@@ -2591,6 +2592,29 @@ long-range direction, and this ruling is its first step; the semantic-graph stor
 sleep-cycle consolidation keeps current is the memory leg, out of scope per
 `weaver-agent-PRD` section 9 and not built here. The run's session identity is the
 open's `session` in every case.
+
+**The identity ask's `recall` is the load's record of what it seated**, on the
+operator's ruling of 2026-11-18 (#617) that what a load writes names the prompt it
+seated, which brings forward in digest form the boot read of
+`state-management-foundation-Spec` section 5.3. A reader looking for the prompt's digest
+at a load finds it there, in `seated`, per `weaver-trace-Spec` section 3: one sha256 hex
+per message the open seats, in seating order, each taken over the UTF-8 bytes of that
+message's text blocks joined in order. **A prompt the seeding turn entered is one
+message of one text block, so its entry is the sha256 of the prompt's text**, which the
+console holds and can compute for itself. This crate takes the digests from the messages
+the open is built from, after the answer is parsed and before the recall is authored, so
+the record names the bytes seated and not a claim about them. The digest rides the
+recall and not the `load` event because the load is authored before the ask: the member
+takes the load's distillate before it answers, and that order stands. **A reader tells
+nothing seated from a recall lost by the load's members and the turn that follows.**
+Where the `load` event's `state_member` is false, nothing was asked and nothing seated.
+Where it is true and a turn follows with no identity recall before it, the member's
+answer was empty, an agent not yet seeded: a recall the recorder would not take latches
+the record, and a latched record ends service before the enter is answered (section 4,
+#116), so no turn follows a lost recall. Where the recorder still takes the fault, the
+loss also stands as the `identity_prefix_unrecorded` fault with the miss
+`recall-unrecorded`, per `weaver-trace-Spec` section 3. An agent with nothing seated
+writes no identity recall, since only an answered ask that returns events is a recall.
 
 **The seeding turn enters the prompt**, on the same ruling. A request line of
 `weaver-gate-world-contract` section 2 may carry `role` with the one value `"system"`
@@ -2614,7 +2638,7 @@ the model's answer closes the turn, so the seeding exercises the whole loop (gat
 harness, model, trace, tee, state) with the one prompt that matters, which is the
 operator's last test before the agent goes into production. **The prefix the next load
 seats is the member's `identity` answer**, every turnless `message.system` of the
-newest run that holds any, in order, and the load writes none: a seeding in a later
+newest run that holds any, in order, and the load writes no prefix: a seeding in a later
 residency therefore replaces the prefix, the newest run's being served, and two seedings
 in one residency are served both, in order. **The residency's seedings are bounded by
 the state seam's answer bound, spent here at the sender**: this crate keeps the
@@ -2881,14 +2905,19 @@ and never constitution, per `weaver-trace-Spec` section 3, which this crate copi
 does not compute. **No prompt digest joins them**, on the operator's ruling of
 2026-10-06 (#1): the prompt is state, and the record of it is the turnless
 `message.system` event the seeding turn authors, the `recall` of the identity ask at
-each load, and the lineage the `load` event names.
+each load, and the lineage the `load` event names. **The seated prompt's digest is the
+identity recall's `seated`**, on the operator's ruling of 2026-11-18 (#617), and not a
+member of this declaration: every member here is copied from the enter before the
+member is asked what to seat, and the digest is this crate's own, taken from the bytes
+the open seats, per section 6.1.
 
 **The seeding turn's prefix is authored through the identity door, one turnless
 `message.system` of the line's text**, per section 6.1 and `weaver-trace-PRD` section
 5, before the turn that appends it, so the record and the tee carry the prompt where it
 entered. **A load authors no prefix**, on the operator's ruling of 2026-10-06 (later, #1) that a session's trace and the state it loaded from are not tied together once the agent is unloaded: what it seats it was
-handed by the member, the `recall` names that answer by its events' identities, and
-the prompt's text stands on the trace at its seeding turn and in the save point the
+handed by the member, the `recall` names that answer by its events' identities and the
+digests of the messages seated (#617), and the prompt's text stands on the trace at its
+seeding turn and in the save point the
 load's lineage names. The event carries no turn, a prefix preceding every turn of the
 residency it seeds.
 
