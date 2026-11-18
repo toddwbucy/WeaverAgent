@@ -373,7 +373,7 @@ def refusing_copy(where, name, record):
             raise
         with written:
             written.write(refusing_text(record).encode())
-        os.chmod(part, 0o755)
+            os.fchmod(written.fileno(), 0o755)
         os.replace(part, where / name)
     finally:
         Path(part).unlink(missing_ok=True)
@@ -7931,7 +7931,8 @@ def files_held(files):
             failed.append(f"{STAND_IN_GUARD} not read ({e.strerror or e})")
             now, unread_now = before, set()
         for name in sorted(unread | unread_now):
-            when = " and ".join(w for w, names in (("start", unread), ("end", unread_now)) if name in names)
+            when = ("start and end" if name in unread and name in unread_now
+                    else "start" if name in unread else "end")
             failed.append(f"{STAND_IN_GUARD / name} not read at the block's {when}")
         unread |= unread_now
         now, before = now - unread, before - unread
@@ -8397,15 +8398,16 @@ class StandInGuardTests(unittest.TestCase):
         sets the copies back too. What cannot be set back leaves the rest set
         back and is named, in GuardCopiesLeft or in a note on the block's own
         exception, also when the guard's directory cannot be read at the end, or
-        GeneratorExit ends the block. An entry that could not be read at the start or
-        at the end is left and named, an entry gone before it is read is absent,
-        and another writer's temporary copy is never read as a copy. Made-up
-        names stand for the programs. Perturbations: keep the copies made, read
-        a temporary copy as one, leave a removed copy removed, remove every new
-        file, skip a raised block, stop at the first failure, let the cleanup's
-        error replace the block's, let the end reading's error replace it, take
-        an unread entry as absent, read an entry unread at the end as gone, take
-        a gone entry as unread, or note on a closed generator, and this fails."""
+        GeneratorExit ends the block. An entry that could not be read at the
+        start or at the end is left and named, an entry gone before it is read
+        is absent, and another writer's temporary copy is never read as a copy.
+        Made-up names stand for the programs. Perturbations: keep the copies
+        made, read a temporary copy as one, leave a removed copy removed, remove
+        every new file, skip a raised block, stop at the first failure, let the
+        cleanup's error replace the block's, let the end reading's error replace
+        it, take an unread entry as absent, read an entry unread at the end as
+        gone, take a gone entry as unread, or note on a block GeneratorExit
+        ends, and this fails."""
         from unittest import mock
         true = shutil.which("true", path=os.pathsep.join(_BOX_BINS))
         held_files = PRIVILEGED_FILES | {_file_of(true)}
@@ -8553,8 +8555,9 @@ class StandInGuardTests(unittest.TestCase):
     def test_a_refusing_copy_whose_write_fails_leaves_no_file(self):
         """refusing_copy writes under a temporary name and renames it into
         place, so a write that fails at any step, its text part way through,
-        its mode or its rename, leaves no file under the name for guard_copy
-        to take as the guard's copy, and no temporary one. Perturbations:
+        its flush on close, as a full disk fails it, its mode or its rename,
+        leaves no file under the name for guard_copy to take as the guard's
+        copy, and no temporary one. Perturbations:
         write in place, or remove the temporary file only when one step
         fails, and this fails."""
         from unittest import mock
@@ -8562,6 +8565,8 @@ class StandInGuardTests(unittest.TestCase):
         real_fdopen = os.fdopen
 
         class PartWritten:
+            fails = "write"
+
             def __init__(self, fd, *args, **kwargs):
                 self.file = real_fdopen(fd, *args, **kwargs)
 
@@ -8570,12 +8575,22 @@ class StandInGuardTests(unittest.TestCase):
 
             def __exit__(self, *raised):
                 self.file.close()
+                if self.fails == "close" and not raised[0]:
+                    raise OSError(28, "No space left on device")
+
+            def fileno(self):
+                return self.file.fileno()
 
             def write(self, data):
                 self.file.write(data[:10])
-                raise OSError(28, "No space left on device")
+                if self.fails == "write":
+                    raise OSError(28, "No space left on device")
+
+        class FlushFails(PartWritten):
+            fails = "close"
         steps = {"text": (os, "fdopen", {"new": PartWritten}),
-                 "mode": (os, "chmod", {"side_effect": OSError(30, "Read-only file system")}),
+                 "flush": (os, "fdopen", {"new": FlushFails}),
+                 "mode": (os, "fchmod", {"side_effect": OSError(30, "Read-only file system")}),
                  "rename": (os, "replace", {"side_effect": IsADirectoryError(21, "Is a directory")})}
 
         def left():
