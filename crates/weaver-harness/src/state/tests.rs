@@ -295,6 +295,33 @@ fn the_identity_material_has_one_source_and_one_rule() {
     );
 }
 
+/// **A seated message's digest is over its text blocks joined in order**,
+/// per `weaver-harness-Spec` section 6.1 on the operator's ruling of
+/// 2026-11-18 (#617): the text the family renders for the message, so a
+/// prompt split across two blocks is named as the one text it renders as,
+/// and a one-block prompt by the sha256 of its text. Nothing seated is no
+/// entry. Perturbation: digest the first block alone, or each block
+/// separately, and the split prompt's entry fails.
+#[test]
+fn a_seated_message_is_named_by_the_digest_of_its_text() {
+    use sha2::{Digest, Sha256};
+    let sha = |text: &str| format!("{:x}", Sha256::digest(text.as_bytes()));
+    let text = |text: &str| weaver_traits::ContentBlock::Text { text: text.into() };
+    let system = |content| weaver_traits::Message {
+        role: weaver_traits::Role::System,
+        content,
+    };
+    assert_eq!(seated_digests(&[]), Vec::<String>::new());
+    assert_eq!(
+        seated_digests(&[
+            system(vec![text("You are Karl.")]),
+            system(vec![text("Answer "), text("briefly.")]),
+        ]),
+        vec![sha("You are Karl."), sha("Answer briefly.")],
+        "one entry per message, in seating order, each over its text joined"
+    );
+}
+
 /// An answer still unframed past the byte bound retires the seam
 /// inside the bound rather than growing the turn path's memory.
 #[test]

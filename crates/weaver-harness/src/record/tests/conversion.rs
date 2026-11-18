@@ -274,6 +274,7 @@ fn diagnostic_legacy_recall_keeps_its_own_payload_and_spelling() {
                 kind: "message.user".into(),
             }],
             count: Some(1),
+            seated: None,
         })),
     );
     event.envelope.turn = None;

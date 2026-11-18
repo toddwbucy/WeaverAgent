@@ -1336,6 +1336,33 @@ fn enter_against_a_member_leaving(
     Option<weaver_types::Payload>,
     bool,
 ) {
+    enter_against_a_member_seating(restore, diagnostic, restored_answer, KARL_IDENTITY, mode)
+}
+
+/// The member double's identity answer for every enter but the seated
+/// digests' tests: one seeded prompt, `You are Karl.`, one text block.
+const KARL_IDENTITY: &str = concat!(
+    r#"{"answer":{"identity":{"messages":[{"envelope":{"session":"s-0","#,
+    r#""run":"r-0","kind":"message.system","sequence":"3"},"#,
+    r#""pairs":{"role":"system","content":[{"type":"text","#,
+    r#""text":"You are Karl."}]}}]}}}"#
+);
+
+/// [`enter_against_a_member_leaving`] with the member's identity answer
+/// chosen by the caller.
+fn enter_against_a_member_seating(
+    restore: Option<weaver_types::Lineage>,
+    diagnostic: bool,
+    restored_answer: &'static str,
+    identity_answer: &'static str,
+    mode: LeaveMode,
+) -> (
+    Vec<serde_json::Value>,
+    Option<LifecycleRefusal>,
+    Vec<String>,
+    Option<weaver_types::Payload>,
+    bool,
+) {
     use std::io::{BufRead, BufReader, Write};
     let finished_answered = !matches!(
         mode,
@@ -1433,12 +1460,7 @@ fn enter_against_a_member_leaving(
             let answer = if line.starts_with(r#"{"ask":{"grants""#) {
                 r#"{"answer":{"grants":{"surface":[]}}}"#
             } else if line.starts_with(r#"{"ask":{"identity""#) {
-                concat!(
-                    r#"{"answer":{"identity":{"messages":[{"envelope":{"session":"s-0","#,
-                    r#""run":"r-0","kind":"message.system","sequence":"3"},"#,
-                    r#""pairs":{"role":"system","content":[{"type":"text","#,
-                    r#""text":"You are Karl."}]}}]}}}"#
-                )
+                identity_answer
             } else if line.starts_with(r#"{"ask":{"restored""#) {
                 restored_answer
             } else if line.starts_with(r#"{"ask":{"snapshot""#) {
@@ -1863,6 +1885,99 @@ fn a_serving_enter_asks_restored_before_load_records_the_recall_and_writes_no_pr
         events[0]["payload"].get("lineage").is_none(),
         "a load from nothing names no lineage: {}",
         events[0]
+    );
+}
+
+/// **The identity recall names what the load seated, by digest** (#617),
+/// per `weaver-harness-Spec` section 6.1 and `weaver-trace-Spec` sections 3
+/// and 10: two enters whose members answer different prompts record
+/// different `seated` beside identical `load` members, a one-block prompt's
+/// entry is the sha256 of its text, two seedings are named in seating order,
+/// and an empty answer records no recall while the load still names its
+/// member. Perturbations: skip `seated`'s serialization, and the seatings
+/// read absent; digest the message's rendering rather than its text, and the
+/// entries stop being the prompts' sha256; author the recall before the
+/// messages are parsed with no digests, and the member is absent.
+#[test]
+fn the_identity_recall_names_the_seated_prompts_by_digest() {
+    use sha2::{Digest, Sha256};
+    const ADA: &str = concat!(
+        r#"{"answer":{"identity":{"messages":[{"envelope":{"session":"s-0","#,
+        r#""run":"r-0","kind":"message.system","sequence":"3"},"#,
+        r#""pairs":{"role":"system","content":[{"type":"text","#,
+        r#""text":"You are Ada."}]}}]}}}"#
+    );
+    const TWO: &str = concat!(
+        r#"{"answer":{"identity":{"messages":[{"envelope":{"session":"s-0","#,
+        r#""run":"r-0","kind":"message.system","sequence":"3"},"#,
+        r#""pairs":{"role":"system","content":[{"type":"text","#,
+        r#""text":"You are Karl."}]}},{"envelope":{"session":"s-0","#,
+        r#""run":"r-0","kind":"message.system","sequence":"9"},"#,
+        r#""pairs":{"role":"system","content":[{"type":"text","#,
+        r#""text":"Answer briefly."}]}}]}}}"#
+    );
+    const NONE: &str = r#"{"answer":{"identity":{"messages":[]}}}"#;
+    let sha = |text: &str| format!("{:x}", Sha256::digest(text.as_bytes()));
+    let enter = |identity: &'static str| {
+        let (events, refusal, _, _, _) = enter_against_a_member_seating(
+            None,
+            false,
+            EMPTY_RESTORED,
+            identity,
+            LeaveMode::SelfUnwind,
+        );
+        assert!(refusal.is_none(), "{refusal:?}");
+        events
+    };
+    let seated = |events: &[serde_json::Value]| {
+        events
+            .iter()
+            .find(|e| e["kind"] == "recall" && e["payload"]["ask"]["verb"] == "identity")
+            .map(|e| e["payload"]["seated"].clone())
+    };
+    let load = |events: &[serde_json::Value]| {
+        events
+            .iter()
+            .find(|e| e["kind"] == "load")
+            .expect("the load opens the run")["payload"]
+            .clone()
+    };
+
+    let karl = enter(KARL_IDENTITY);
+    let ada = enter(ADA);
+    assert_eq!(
+        seated(&karl),
+        Some(serde_json::json!([sha("You are Karl.")])),
+        "a one-block prompt is named by the sha256 of its text: {karl:?}"
+    );
+    assert_eq!(seated(&ada), Some(serde_json::json!([sha("You are Ada.")])));
+    assert_ne!(seated(&karl), seated(&ada), "two prompts are told apart");
+    assert_eq!(
+        load(&karl),
+        load(&ada),
+        "the load's members do not name the prompt, the recall does"
+    );
+
+    let two = enter(TWO);
+    assert_eq!(
+        seated(&two),
+        Some(serde_json::json!([
+            sha("You are Karl."),
+            sha("Answer briefly.")
+        ])),
+        "two seedings are named in seating order"
+    );
+
+    let unseeded = enter(NONE);
+    assert_eq!(
+        seated(&unseeded),
+        None,
+        "nothing seated writes no identity recall: {unseeded:?}"
+    );
+    assert_eq!(
+        load(&unseeded)["state_member"],
+        true,
+        "the load names its member, so no recall reads as nothing seated"
     );
 }
 

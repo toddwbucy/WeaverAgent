@@ -259,48 +259,52 @@ impl Author {
         ))
     }
 
-    /// Authors the `recall` event for an answered state-seam ask, per
-    /// `weaver-trace-Spec` section 3's recall clause: the ask as it was sent
-    /// and the identities of the events custody answered with, never their
-    /// pairs, turnless. **Called before the answer reaches its consumer**, on
-    /// the announce-after-record rule the flush follows: a loop, or an open,
-    /// that built its input from an answer the record did not yet hold could
-    /// act on it and leave no trace of what it was given. An ask that was not
-    /// answered is never this door's, a dead seam being the refusal's or the
-    /// fault's to record.
+    /// Authors the `recall` event for an answered state-seam ask that feeds
+    /// a turn, per `weaver-trace-Spec` section 3's recall clause: the ask as
+    /// it was sent and the identities of the events custody answered with,
+    /// never their pairs, turnless. **Called before the answer reaches its
+    /// consumer**, on the announce-after-record rule the flush follows: a
+    /// loop that built its input from an answer the record did not yet hold
+    /// could act on it and leave no trace of what it was given. An ask that
+    /// was not answered is never this door's, a dead seam being the refusal's
+    /// or the fault's to record. The enter's identity ask, which feeds the
+    /// open, is [`Self::author_identity_recall`]'s, and [`TurnAsk`] has no
+    /// variant for it.
     pub fn author_recall(
         &self,
         recorder: &mut Record,
-        verb: weaver_trace::RecallVerb,
+        ask: TurnAsk,
         last_turns: Option<u64>,
         answered: &[crate::state::Recalled],
     ) -> Result<Sequence, RecordFailure> {
-        let identity = |event: &crate::state::Recalled| weaver_trace::RecalledIdentity {
-            run: event.run.clone(),
-            turn: event.turn.clone(),
-            sequence: event.sequence.clone(),
-            kind: event.kind.clone(),
-        };
-        // A whole-session answer is named by its bounds and its count, a
-        // partial one by every identity it returned.
-        let (returned, count) = match verb {
-            weaver_trace::RecallVerb::Replay => {
-                let bounds = match answered {
-                    [] => Vec::new(),
-                    [only] => vec![identity(only)],
-                    [first, .., last] => vec![identity(first), identity(last)],
-                };
-                (bounds, Some(answered.len() as u64))
-            }
-            weaver_trace::RecallVerb::Identity | weaver_trace::RecallVerb::Recall => {
-                (answered.iter().map(identity).collect(), None)
-            }
-        };
-        let account = weaver_trace::RecallAccount {
-            ask: weaver_trace::RecallAsk { verb, last_turns },
-            returned,
-            count,
-        };
+        self.author_account(recorder, recall_account(ask.verb(), last_turns, answered))
+    }
+
+    /// Authors the `recall` of the enter's identity ask, the load's record of
+    /// what it seated, per `weaver-harness-Spec` section 6.1 on the operator's
+    /// ruling of 2026-11-18 (#617): the answer's identities as
+    /// [`Self::author_recall`] names them, and beside them `seated`, the
+    /// digest of each message the open seats, taken here from those messages
+    /// ([`crate::state::seated_digests`]) so the record names the bytes seated
+    /// and no caller's claim about them. `seated` is absent only where the
+    /// answer did not parse into messages, an enter that then refuses and
+    /// seats nothing.
+    pub fn author_identity_recall(
+        &self,
+        recorder: &mut Record,
+        answered: &[crate::state::Recalled],
+        seated: Option<&[weaver_traits::Message]>,
+    ) -> Result<Sequence, RecordFailure> {
+        let mut account = recall_account(weaver_trace::RecallVerb::Identity, None, answered);
+        account.seated = seated.map(crate::state::seated_digests);
+        self.author_account(recorder, account)
+    }
+
+    fn author_account(
+        &self,
+        recorder: &mut Record,
+        account: weaver_trace::RecallAccount,
+    ) -> Result<Sequence, RecordFailure> {
         self.author(
             recorder,
             Kind::Recall,
@@ -510,4 +514,62 @@ fn wall_clock_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// The state seam's asks whose answers feed a turn and never the open, the
+/// verbs [`Author::author_recall`] records. The identity ask is not one: its
+/// recall names what the open seats (#617) and has its own door.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnAsk {
+    /// The seat's recall after a flush.
+    Recall,
+    /// The replay port's whole-session ask.
+    Replay,
+}
+
+impl TurnAsk {
+    fn verb(self) -> weaver_trace::RecallVerb {
+        match self {
+            TurnAsk::Recall => weaver_trace::RecallVerb::Recall,
+            TurnAsk::Replay => weaver_trace::RecallVerb::Replay,
+        }
+    }
+}
+
+/// The account of an answered ask, per `weaver-trace-Spec` section 3's recall
+/// clause: the ask as it was sent and the identities of the events custody
+/// answered with, a whole-session answer by its bounds and count. `seated` is
+/// the identity door's to add.
+pub(crate) fn recall_account(
+    verb: weaver_trace::RecallVerb,
+    last_turns: Option<u64>,
+    answered: &[crate::state::Recalled],
+) -> weaver_trace::RecallAccount {
+    let identity = |event: &crate::state::Recalled| weaver_trace::RecalledIdentity {
+        run: event.run.clone(),
+        turn: event.turn.clone(),
+        sequence: event.sequence.clone(),
+        kind: event.kind.clone(),
+    };
+    // A whole-session answer is named by its bounds and its count, a
+    // partial one by every identity it returned.
+    let (returned, count) = match verb {
+        weaver_trace::RecallVerb::Replay => {
+            let bounds = match answered {
+                [] => Vec::new(),
+                [only] => vec![identity(only)],
+                [first, .., last] => vec![identity(first), identity(last)],
+            };
+            (bounds, Some(answered.len() as u64))
+        }
+        weaver_trace::RecallVerb::Identity | weaver_trace::RecallVerb::Recall => {
+            (answered.iter().map(identity).collect(), None)
+        }
+    };
+    weaver_trace::RecallAccount {
+        ask: weaver_trace::RecallAsk { verb, last_turns },
+        returned,
+        count,
+        seated: None,
+    }
 }
