@@ -8,6 +8,7 @@ forward sudo, systemctl, package-manager or Cargo calls to the host.
 
 import atexit
 import base64
+import contextlib
 import ctypes
 import errno
 import fcntl
@@ -80,7 +81,10 @@ def privileged(name, path=None):
     named family, or a name whose file at PATH is a named program's file on
     the box (PRIVILEGED_FILES), as poweroff, reboot, halt and shutdown are
     systemctl's. The file is read by resolving links, and a hard link is the
-    same file, so no list of other names is kept."""
+    same file, so no list of other names is kept. Where modprobe, rmmod and
+    insmod are links to kmod, kmod's other names (kmod, lsmod, modinfo and
+    depmod) join by the same rule, the read-only lsmod and modinfo among
+    them."""
     return (name in PRIVILEGED or name.startswith(PRIVILEGED_FAMILIES)
             or (path is not None and _file_of(path) in PRIVILEGED_FILES))
 
@@ -115,9 +119,19 @@ def view_link(name, path):
     made now if the start made none, else PATH."""
     if path is not None and _inside(path) or not privileged(name, path):
         return path
+    return guard_copy(name)
+
+
+_GUARD_COPIES = set()
+
+
+def guard_copy(name):
+    """The guard's refusing copy of NAME, made now if the guard holds none."""
     copy = STAND_IN_GUARD / name
-    if not copy.exists():
-        refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
+    if str(copy) not in _GUARD_COPIES:
+        if not copy.exists():
+            refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
+        _GUARD_COPIES.add(str(copy))
     return copy
 
 
@@ -166,13 +180,19 @@ def _mtime(path):
 
 
 def _refresh_files():
+    # The key is kept only once every start directory's last change is two
+    # seconds old, as a directory's reading is (_members_of), so a file
+    # replaced within one tick of the clock is never missed.
     global PRIVILEGED_FILES
     key = tuple(_mtime(d) for d in _START_DIRS)
     if key != _FILES_READ[0]:
-        PRIVILEGED_FILES = frozenset(f for d in _START_DIRS for n in PRIVILEGED
-                                     for f in [_file_of(os.path.join(d, n))] if f)
-        _FILES_READ[0] = key
-        _MEMBERS_READ.clear()
+        files = frozenset(f for d in _START_DIRS for n in PRIVILEGED
+                          for f in [_file_of(os.path.join(d, n))] if f)
+        if files != PRIVILEGED_FILES:
+            PRIVILEGED_FILES = files
+            _MEMBERS_READ.clear()
+        now = time.time_ns()
+        _FILES_READ[0] = key if all(m is None or now - m > 2_000_000_000 for m in key) else None
 
 
 # A directory's privileged programs, by its real path, read again whenever it
@@ -199,16 +219,21 @@ def _members_of(directory):
     return names
 
 
-def privileged_in(directories, cwd=None):
+def privileged_in(directories, cwd=None, guard_follows=False):
     """The named privileged programs, then each other privileged program that
     one of DIRECTORIES carries, each once, in the order found. An empty or
     relative directory is read against CWD, as a child started there reads
-    it."""
+    it. With GUARD_FOLLOWS, each found in a directory outside the temporary
+    root gets the guard's copy (guard_path)."""
     _refresh_files()
     base = os.path.abspath(cwd) if cwd is not None else os.getcwd()
     found = list(PRIVILEGED)
     for d in directories:
-        found += [n for n in _members_of(os.path.join(base, d or ".")) if n not in found]
+        members = _members_of(os.path.join(base, d or "."))
+        if guard_follows and members and not _inside(os.path.join(base, d or ".")):
+            for n in members:
+                guard_copy(n)
+        found += [n for n in members if n not in found]
     return tuple(found)
 
 
@@ -374,8 +399,12 @@ def guard_path(path, what, cwd=None):
     # A stand-in directory may link the box's setsid, env and timeout, as the
     # guard's own does, but never its sudo or runuser, nor a privileged
     # program: any that a directory of the PATH carries, by privileged()'s
-    # test, read where the child starts.
-    names = STAND_IN_NAMES + privileged_in(path.split(os.pathsep), cwd)
+    # test, read where the child starts. **The guard follows the box**: each
+    # privileged program in a directory outside the temporary root gets the
+    # guard's copy, made now if the start made none, so a program installed
+    # during the run is refused where the guard comes first, and the PATH is
+    # refused where it does not.
+    names = STAND_IN_NAMES + privileged_in(path.split(os.pathsep), cwd, guard_follows=True)
     for name, found in _resolved(path, names, cwd):
         linked = name in ("setsid", "env", "timeout")
         if found and not (_inside(os.path.dirname(found)) and (linked or _inside(found))):
@@ -387,21 +416,96 @@ def guard_argv(argv, cwd=None):
     """**No child is started on a privileged program outside the tests'
     temporary root by its path**, whether or not it runs a shell: each
     element of its command line, and its executable, that names a file is
-    read by privileged()'s test, where the child starts. Where the line
-    clears the environment or PATH (`env -i`, `-u PATH`), each bare word is
-    resolved on the default PATH the child then runs with. Every PATH a
-    child is handed, or an `env` wrapper assigns, is read by guard_path."""
+    read by privileged()'s test, where the child starts. An `env` wrapper's
+    own options are read as env reads them (env_hands): the PATH it hands
+    its command, the default one where it clears the environment or PATH
+    and assigns none, is read by guard_path, and a path its command line
+    names, in its `-S` string or from its `-C` directory, is read here.
+    Every PATH a child is handed is read by guard_path as well."""
     _refresh_files()
     base = os.path.abspath(cwd) if cwd is not None else os.getcwd()
-    words = [os.fsdecode(a) for a in argv]
-    clears = any(w in ("-i", "--ignore-environment", "-uPATH", "--unset=PATH") or (w == "PATH" and before == "-u")
-                 for before, w in zip([""] + words, words))
-    default = os.pathsep.join(os.path.join(base, d or ".") for d in os.defpath.split(os.pathsep))
+    _guard_line([os.fsdecode(a) for a in argv], base)
+
+
+def _guard_line(words, base):
+    # The line's paths where it starts, then the first `env` wrapper's, whose
+    # command line, a nested `env` in it included, is read where it starts.
+    _guard_paths(words, base)
+    for i, w in enumerate(words):
+        if os.path.basename(w) == "env":
+            path, chdir, command = env_hands(words[i + 1:])
+            where = os.path.join(base, chdir) if chdir else base
+            if path is not None:
+                guard_path(path, "PATH (through an `env` wrapper)", where)
+            _guard_line(command, where)
+            return
+
+
+def _guard_paths(words, base):
     for a in words:
-        found = os.path.join(base, a) if "/" in a else shutil.which(a, path=default) if clears else None
+        found = os.path.join(base, a) if "/" in a else None
         if found and os.path.isfile(found) and privileged(os.path.basename(a), found) and not _inside(found):
             raise StandInGuardError(f"a child's command line names {a}, which is {found}, a privileged program "
                                     f"outside the stand-ins under {TEST_ROOT}: refused before it runs")
+
+
+# env's long options as GNU env reads them, each by the short option it
+# stands for, "" for one that bears on no PATH. A long option may be
+# shortened to any prefix that names one alone.
+_ENV_LONG = {"--ignore-environment": "i", "--null": "0", "--unset": "u", "--chdir": "C", "--split-string": "S",
+             "--debug": "v", "--default-signal": "", "--ignore-signal": "", "--block-signal": "",
+             "--list-signal-handling": "", "--help": "", "--version": ""}
+
+
+def env_hands(words):
+    """**What an `env` wrapper hands its command**, from WORDS, the words
+    after `env`, read as env reads them: the PATH its command runs with
+    (the default PATH where `-i`, `-` or `-u PATH` clears it and no PATH=
+    follows, a PATH= it assigns, or None where it keeps the one it was
+    handed), the directory `-C` starts it in, or None, and the command line
+    it runs. Short options group (`-iv`), an argument may be the option's
+    own word or the next, and `-S` splits its string into words read in
+    its place."""
+    todo, path, chdir = list(words), None, None
+
+    def argument(rest):
+        return rest if rest else todo.pop(0) if todo else ""
+
+    while todo and todo[0].startswith("-") and todo[0] != "-":
+        word = todo.pop(0)
+        if word == "--":
+            break
+        if word.startswith("--"):
+            name, eq, value = word.partition("=")
+            named = [k for k in _ENV_LONG if k.startswith(name)]
+            opt = _ENV_LONG[name] if name in _ENV_LONG else _ENV_LONG[named[0]] if len(named) == 1 else ""
+            opts = [(opt, value if eq else argument("") if opt in ("C", "S", "u") else None)]
+        else:
+            opts, rest = [], word[1:]
+            while rest:
+                opt, rest = rest[0], rest[1:]
+                if opt in ("C", "S", "u"):
+                    opts.append((opt, argument(rest)))
+                    break
+                opts.append((opt, None))
+        for opt, value in opts:
+            if opt == "i" or opt == "u" and value == "PATH":
+                path = os.defpath
+            elif opt == "C":
+                chdir = value
+            elif opt == "S":
+                try:
+                    todo[0:0] = shlex.split(value)
+                except ValueError:
+                    todo[0:0] = value.split()
+    if todo and todo[0] == "-":
+        path = os.defpath
+        todo.pop(0)
+    while todo and "=" in todo[0]:
+        word = todo.pop(0)
+        if word.startswith("PATH="):
+            path = word[len("PATH="):]
+    return path, chdir, todo
 
 
 SHELLS = ("bash", "sh", "dash", "ash", "ksh", "mksh", "zsh", "rbash", "csh", "tcsh", "fish")
@@ -7723,6 +7827,20 @@ sys.exit(code if code >= 0 else 128 - code)
             self.assertNotRegex(text, r"(?m)^\s*(as_account\(\)|DROP_PATH=)", name)
 
 
+def files_held(files):
+    """PRIVILEGED_FILES held at FILES for a test's block: a start
+    directory's change does not read them again, and no directory's reading
+    from before the block or during it is kept."""
+    from unittest import mock
+    module = sys.modules[__name__]
+    held = contextlib.ExitStack()
+    held.callback(_MEMBERS_READ.clear)
+    held.enter_context(mock.patch.object(module, "PRIVILEGED_FILES", files))
+    held.enter_context(mock.patch.object(module, "_refresh_files", lambda: None))
+    _MEMBERS_READ.clear()
+    return held
+
+
 class StandInGuardTests(unittest.TestCase):
     """**No test reaches the box's own sudo** (B3, the Planner's ruling of
     2026-11-17). Before this process starts a shell or a deploy script, the
@@ -7867,7 +7985,6 @@ class StandInGuardTests(unittest.TestCase):
         program's. Perturbations: resolve the stand-in names alone, read no
         family or no file in the handed PATH, or read it where the runner
         stands, and a case passes."""
-        from unittest import mock
         true = shutil.which("true", path=os.pathsep.join(_BOX_BINS))
         with tempfile.TemporaryDirectory(prefix="weaver-guard-") as scratch:
             marker = Path(scratch) / "ran"
@@ -7899,8 +8016,7 @@ class StandInGuardTests(unittest.TestCase):
                         subprocess.run([_GUARD_BASH, "-c", program], env={**os.environ, "PATH": path}, timeout=20)
                     self.assertIn(f"resolves {name} to {path}/{name}", str(refused.exception))
                     self.assertFalse(marker.exists(), "nothing ran")
-            with self.subTest(by_its_file="an-other-name"), \
-                    mock.patch.object(sys.modules[__name__], "PRIVILEGED_FILES", PRIVILEGED_FILES | {_file_of(true)}):
+            with self.subTest(by_its_file="an-other-name"), files_held(PRIVILEGED_FILES | {_file_of(true)}):
                 path = str(stand_ins("by-its-file", linked=("an-other-name",)))
                 with self.assertRaises(StandInGuardError) as refused:
                     subprocess.run([_GUARD_BASH, "-c", program], env={**os.environ, "PATH": path}, timeout=20)
@@ -7922,15 +8038,20 @@ class StandInGuardTests(unittest.TestCase):
         a bare name its PATH finds, alone or under a wrapper, by an absolute
         or a relative path, as its executable, by a name whose file is a
         named program's, by a PATH= its own `env` wrapper assigns, by the
-        default PATH under `env -i` or `-u PATH` (the links stand in for
-        it), as a child that runs code but no shell, and as a shell=True
-        child. Stand-ins of a test's own making, and a box program that is
-        not privileged, pass. The privileged programs here are made-up
-        family members, and `true`'s file standing for a named program's,
-        each a link to `true`, so nothing privileged runs if a check is
-        gone. Perturbations: drop the command line's read, its reading of
-        `env -i`, the read of a PATH= in the line, or the read of a PATH
-        handed to a child that is not a shell, and a case runs."""
+        default PATH an `env` wrapper leaves when it clears the environment
+        or PATH in any spelling env reads (the links stand in for that
+        PATH), by a path in a `-S` string or under a `-C` directory, through
+        a nested `env`, as a child that runs code but no shell, and as a
+        shell=True child. Stand-ins of a test's own making, a box program
+        that is not privileged, an `env -i` that assigns its own PATH, and a
+        `-i` that is another program's option pass. The privileged programs
+        here are made-up family members, and `true`'s file standing for a
+        named program's, each a link to `true`, so nothing privileged runs
+        if a check is gone. Perturbations: drop the command line's read, its
+        reading of env's options, the read of a PATH= in the line, or the
+        read of a PATH handed to a child that is not a shell, and a case
+        runs. Read a `-i` anywhere in the line, as an earlier guard did, and
+        grep's is refused."""
         from unittest import mock
         true = shutil.which("true", path=os.pathsep.join(_BOX_BINS))
         timeout = shutil.which("timeout", path=os.pathsep.join(_BOX_BINS))
@@ -7953,8 +8074,7 @@ class StandInGuardTests(unittest.TestCase):
                     with self.assertRaises(StandInGuardError) as refused:
                         subprocess.run(argv, timeout=20, **kwargs)
                     self.assertIn("refused before it runs", str(refused.exception))
-            with self.subTest(case="by-its-file"), \
-                    mock.patch.object(sys.modules[__name__], "PRIVILEGED_FILES", PRIVILEGED_FILES | {_file_of(true)}):
+            with self.subTest(case="by-its-file"), files_held(PRIVILEGED_FILES | {_file_of(true)}):
                 with self.assertRaises(StandInGuardError):
                     subprocess.run(["an-other-name"], env={"PATH": str(links)}, timeout=20)
             env_program = shutil.which("env", path=os.pathsep.join(_BOX_BINS))
@@ -7962,14 +8082,27 @@ class StandInGuardTests(unittest.TestCase):
                 "env-assigns-PATH": ([env_program, f"PATH={links}", "virt-newtool"], {}),
                 "env-clears-the-environment": ([env_program, "-i", "virt-newtool"], {}),
                 "env-unsets-PATH": ([env_program, "-u", "PATH", "virt-newtool"], {}),
+                "env-dash": ([env_program, "-", "virt-newtool"], {}),
+                "env-unsets-PATH-in-two-words": ([env_program, "--unset", "PATH", "virt-newtool"], {}),
+                "env-groups-its-options": ([env_program, "-iv", "virt-newtool"], {}),
+                "env-shortens-an-option": ([env_program, "--ignore-env", "virt-newtool"], {}),
+                "env-splits-a-string": ([env_program, "-S", "-i virt-newtool"], {}),
+                "env-splits-a-path": ([env_program, "-S", f"{links}/virt-newtool --version"], {}),
+                "env-changes-directory": ([env_program, "-C", scratch, "links/virt-newtool"], {}),
+                "env-nested": ([env_program, f"PATH={own}", env_program, "-u", "PATH", "virt-newtool"], {}),
                 "a-child-that-runs-code": ([sys.executable, "-c", "pass"], {"env": {"PATH": str(links)}}),
                 "shell-true": ("virt-newtool", {"shell": True, "env": {"PATH": str(links)}})}
+            grep = shutil.which("grep", path=os.pathsep.join(_BOX_BINS))
             with mock.patch.object(os, "defpath", str(links)):
                 for case, (argv, kwargs) in refused_lines.items():
                     with self.subTest(case=case):
                         with self.assertRaises(StandInGuardError) as refused:
                             subprocess.run(argv, timeout=20, **kwargs)
                         self.assertIn(str(links), str(refused.exception))
+                with self.subTest(passes="grep-ignores-case"):
+                    self.assertEqual(subprocess.run([grep, "-i", "virt-newtool", os.devnull], timeout=20).returncode, 1)
+                with self.subTest(passes="env-assigns-its-own-PATH"):
+                    subprocess.run([env_program, "-i", f"PATH={own}", "virt-own"], timeout=20, check=True)
             subprocess.run(["virt-own"], env={"PATH": str(own)}, timeout=20, check=True)
             subprocess.run([str(own / "virt-own")], timeout=20, check=True)
             subprocess.run([true], timeout=20, check=True)
@@ -8029,7 +8162,11 @@ class StandInGuardTests(unittest.TestCase):
         other names must stay in the set: the files are read again when a
         start directory changes. A start directory under the scratch stands
         in, with a systemctl replaced by a rename and an alias that names
-        it. Perturbation: read the files once, and the alias drops out."""
+        it. The key is kept only once the directory's last change is two
+        seconds old, so a file replaced within one tick of the clock, which
+        leaves the time as it was, is read too: shown by stamping the
+        directory's time. Perturbations: read the files once, or keep a
+        recent key, and the alias drops out."""
         from unittest import mock
         with tempfile.TemporaryDirectory() as scratch:
             box = Path(scratch) / "box"
@@ -8040,16 +8177,95 @@ class StandInGuardTests(unittest.TestCase):
             with mock.patch.object(module, "_START_DIRS", (str(box),)), \
                     mock.patch.object(module, "PRIVILEGED_FILES", frozenset()), \
                     mock.patch.object(module, "_FILES_READ", [None]):
+                old = time.time_ns() - 10_000_000_000
+                os.utime(box, ns=(old, old))
                 _refresh_files()
                 self.assertTrue(privileged("an-alias", box / "an-alias"))
+                self.assertEqual(module._FILES_READ[0], (old,), "a key two seconds old is kept")
                 (box / "systemctl.new").write_text("#!/bin/sh\nexit 1\n")
                 os.rename(box / "systemctl.new", box / "systemctl")
-                later = os.stat(box).st_mtime_ns + 1_000_000_000
-                os.utime(box, ns=(later, later))
+                os.utime(box, ns=(old + 1_000_000_000, old + 1_000_000_000))
                 _refresh_files()
                 self.assertTrue(privileged("an-alias", box / "an-alias"), "the alias of the new file")
+                now = time.time_ns()
+                os.utime(box, ns=(now, now))
+                _refresh_files()
+                self.assertIsNone(module._FILES_READ[0], "a recent key is not kept")
+                (box / "systemctl.new").write_text("#!/bin/sh\nexit 2\n")
+                os.rename(box / "systemctl.new", box / "systemctl")
+                os.utime(box, ns=(now, now))
+                _refresh_files()
+                self.assertTrue(privileged("an-alias", box / "an-alias"), "the alias of a file replaced in one tick")
             _MEMBERS_READ.clear()
             _refresh_files()
+
+    def test_the_guard_makes_its_copy_of_a_program_installed_during_the_run(self):
+        """**The guard follows the box**: a privileged program that appears
+        during a run in a directory outside the temporary root gets the
+        guard's refusing copy when a PATH that carries the directory is
+        read, so a PATH with the guard's directory first, as the suite's own
+        is, still passes and its call meets the copy, and a PATH that finds
+        the program before the guard is still refused. A scratch directory
+        stands for the box, outside a temporary root held under the scratch
+        with a guard of its own. The copy is read, never run. Perturbation:
+        make no copy, and the guard's PATH is refused."""
+        from unittest import mock
+        module = sys.modules[__name__]
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch) / "root"
+            guard = root / "guard"
+            guard.mkdir(parents=True)
+            box = Path(scratch) / "box"
+            box.mkdir()
+            try:
+                with mock.patch.object(module, "TEST_ROOT", os.path.realpath(root)), \
+                        mock.patch.object(module, "STAND_IN_GUARD", guard):
+                    path = f"{guard}{os.pathsep}{box}"
+                    guard_path(path, "PATH")
+                    self.assertFalse((guard / "virt-late").exists())
+                    (box / "virt-late").write_text("#!/bin/sh\nexit 0\n")
+                    (box / "virt-late").chmod(0o755)
+                    guard_path(path, "PATH")
+                    self.assertIn("exit 97", (guard / "virt-late").read_text())
+                    with self.assertRaises(StandInGuardError) as refused:
+                        guard_path(f"{box}{os.pathsep}{guard}", "PATH")
+                    self.assertIn(f"resolves virt-late to {box}/virt-late", str(refused.exception))
+            finally:
+                _GUARD_COPIES.discard(str(guard / "virt-late"))
+                _MEMBERS_READ.pop(os.path.realpath(box), None)
+
+    def test_env_hands_reads_envs_own_options_as_env_does(self):
+        """env_hands reads the words after `env` as GNU env does: the PATH its
+        command runs with (the default PATH where it clears the environment
+        or PATH, in any spelling, and assigns none), the directory `-C`
+        names, and the command line. An option of the command's own is not
+        env's, and an ambiguous shortening runs nothing. Perturbations: read
+        `-i` alone, drop `-`, `-S` or the grouping of short options, or take
+        a long option only in full, and a row fails."""
+        from unittest import mock
+        rows = {
+            ("-i", "a", "-i"): ("/default", None, ["a", "-i"]),
+            ("-", "a"): ("/default", None, ["a"]),
+            ("-iv", "a"): ("/default", None, ["a"]),
+            ("-viu", "PATH", "a"): ("/default", None, ["a"]),
+            ("-uPATH", "a"): ("/default", None, ["a"]),
+            ("-u", "HOME", "a"): (None, None, ["a"]),
+            ("--unset", "PATH", "a"): ("/default", None, ["a"]),
+            ("--unset=PATH", "a"): ("/default", None, ["a"]),
+            ("--ignore-env", "a"): ("/default", None, ["a"]),
+            ("--i", "a"): (None, None, ["a"]),
+            ("-i", "PATH=/p", "X=1", "a", "PATH=/q"): ("/p", None, ["a", "PATH=/q"]),
+            ("-C", "/d", "a"): (None, "/d", ["a"]),
+            ("--chdir=/d", "a"): (None, "/d", ["a"]),
+            ("-S", "-i  a 'b c'", "d"): ("/default", None, ["a", "b c", "d"]),
+            ("-vS-i a",): ("/default", None, ["a"]),
+            ("--", "-i"): (None, None, ["-i"]),
+            ("a", "-i"): (None, None, ["a", "-i"]),
+        }
+        with mock.patch.object(os, "defpath", "/default"):
+            for words, want in rows.items():
+                with self.subTest(words=words):
+                    self.assertEqual(env_hands(words), want)
 
     def test_a_multi_call_binary_that_is_a_shell_or_a_stand_in_is_named(self):
         """A file that is both a named program's and env's (a multi-call
@@ -8319,7 +8535,8 @@ class SuiteGuardTests(unittest.TestCase):
             "    def test_reach(self):\n"
             "        took = subprocess.run([str(t.STAND_IN_GUARD / 'sudo'), '-n', 'true'], capture_output=True)\n"
             "        self.assertEqual(took.returncode, 97)\n"
-            "        took = subprocess.run(['env', '-i', str(t.STAND_IN_GUARD / 'runuser'), '-u', 'nobody', 'id'],\n"
+            "        took = subprocess.run(['env', '-i', 'PATH=' + str(t.STAND_IN_GUARD),\n"
+            "                               str(t.STAND_IN_GUARD / 'runuser'), '-u', 'nobody', 'id'],\n"
             "                              capture_output=True)\n"
             "        self.assertEqual(took.returncode, 97)\n"
             "        took = subprocess.run([str(t.STAND_IN_GUARD / 'sudo'), 'bash', '-c', 'a\\nb\\tc'],\n"
