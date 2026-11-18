@@ -2574,9 +2574,9 @@ the `recall` of the identity ask names the events the member handed back for sea
 and, since the operator's ruling of 2026-11-18 (#617), the digest of each message
 seated, and the prompt's text is on the trace where it was entered, at the seeding turn,
 and nowhere else. This retires the rule of 2026-09-04 that each run's record carries its
-own prefix text; a reader of one run reaches the prefix through the save point its
+own prefix text. A reader of one run reaches the prefix through the save point its
 lineage names, which is where the operator says it lives. **The rebuild at a load is the
-prefix alone, the member's identity answer; nothing else is replayed**, on the
+prefix alone, the member's identity answer. Nothing else is replayed**, on the
 operator's clarification of 2026-10-06 (#1): state loads from the save point, the decode
 session opens on the seated prefix with its cache clear, and nothing further from the
 holdings or the record reaches the model unasked, the rest being the operator's turn by
@@ -2589,7 +2589,7 @@ bounding cannot be read is not a run with no bounding, so the enter fails closed
 the same after-load failure a refused open uses, per ruling 2 of issue #422. **This is
 the one site where the identity's source is read**, and the prefix the open seats comes
 from nowhere else. State supplying the identity was the operator's long-range direction,
-and this ruling is its first step; the semantic-graph store that sleep-cycle
+and this ruling is its first step. The semantic-graph store that sleep-cycle
 consolidation keeps current is the memory leg, out of scope per `weaver-agent-PRD`
 section 9 and not built here. The run's session identity is the open's `session` in
 every case.
