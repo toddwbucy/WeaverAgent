@@ -122,19 +122,22 @@ def view_link(name, path):
     return guard_copy(name)
 
 
-_COPIES_MADE = set()
+# The copies made during each held block (files_held), innermost last.
+_BLOCKS = []
 
 
 def guard_copy(name):
     """The guard's refusing copy of NAME, made now if the guard holds none.
     Whether a file stands under the name is read each time, since a test may
-    remove a copy it made, and each copy made is kept in _COPIES_MADE
-    (files_held). A stand-in's name never comes here: a stand-in that is a
-    privileged program's file stops the run at its start."""
+    remove a copy it made, and each copy made during a held block is kept
+    in that block's list (files_held). A stand-in's name never comes here:
+    a stand-in that is a privileged program's file stops the run at its
+    start."""
     copy = STAND_IN_GUARD / name
     if not copy.exists():
         refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
-        _COPIES_MADE.add(copy)
+        for block in _BLOCKS:
+            block.append(copy)
     return copy
 
 
@@ -7863,12 +7866,15 @@ def files_held(files):
     file in the guard's directory is left as it is."""
     from unittest import mock
     module = sys.modules[__name__]
-    before = set(os.listdir(STAND_IN_GUARD))
+    before = {STAND_IN_GUARD / name for name in os.listdir(STAND_IN_GUARD)}
+    made = []
+    _BLOCKS.append(made)
 
     def drop_copies():
-        for copy in [c for c in _COPIES_MADE if c.parent == STAND_IN_GUARD and c.name not in before]:
-            copy.unlink(missing_ok=True)
-            _COPIES_MADE.discard(copy)
+        _BLOCKS.remove(made)
+        for copy in made:
+            if copy not in before:
+                copy.unlink(missing_ok=True)
 
     held = contextlib.ExitStack()
     held.callback(_MEMBERS_READ.clear)
@@ -8341,7 +8347,6 @@ class StandInGuardTests(unittest.TestCase):
         finally:
             other.unlink(missing_ok=True)
             copy.unlink(missing_ok=True)
-            _COPIES_MADE.discard(copy)
 
     def test_the_guard_makes_its_copy_of_a_program_installed_during_the_run(self):
         """**The guard follows the box**: a privileged program that appears
@@ -8375,7 +8380,6 @@ class StandInGuardTests(unittest.TestCase):
                         guard_path(f"{box}{os.pathsep}{guard}", "PATH")
                     self.assertIn(f"resolves virt-late to {box}/virt-late", str(refused.exception))
             finally:
-                _COPIES_MADE.discard(guard / "virt-late")
                 _MEMBERS_READ.pop(os.path.realpath(box), None)
 
     def test_env_hands_reads_envs_own_options_as_env_does(self):
@@ -8390,8 +8394,9 @@ class StandInGuardTests(unittest.TestCase):
         checked against the box's env 9.12. Perturbations: read `-i` alone,
         drop `-`, `-a`'s argument or the grouping of short options, take a
         long option only in full, read an unknown option as one that takes
-        nothing, read `-S` as any option, or let a long option that takes
-        nothing take "=VALUE", and a row fails."""
+        nothing, read `-S` as any option, let a long option that takes
+        nothing take "=VALUE", or refuse "=SIG" on a signal option, and a row
+        fails."""
         from unittest import mock
         rows = {
             ("-i", "a", "-i"): ("/default", ["a", "-i"]),
@@ -8407,6 +8412,7 @@ class StandInGuardTests(unittest.TestCase):
             ("--argv0", "x", "-u", "PATH", "a"): ("/default", ["a"]),
             ("--argv0=x", "-i", "a"): ("/default", ["a"]),
             ("--default-signal", "-i", "a"): ("/default", ["a"]),
+            ("--ignore-signal=INT", "-i", "a"): ("/default", ["a"]),
             ("-i", "PATH=/p", "X=1", "a", "PATH=/q"): ("/p", ["a", "PATH=/q"]),
             ("--", "-i"): (None, ["-i"]),
             ("a", "-i"): (None, ["a", "-i"]),
@@ -8425,10 +8431,12 @@ class StandInGuardTests(unittest.TestCase):
                 with self.subTest(words=words):
                     self.assertEqual(env_hands(words), want)
             for words, reason in refused.items():
-                with self.subTest(refused=words), self.assertRaises(StandInGuardError) as raised:
-                    env_hands(words)
-                self.assertIn(reason, str(raised.exception))
-                self.assertIn("this guard does not read as env does: refused before it runs", str(raised.exception))
+                with self.subTest(refused=words):
+                    with self.assertRaises(StandInGuardError) as raised:
+                        env_hands(words)
+                    self.assertIn(reason, str(raised.exception))
+                    self.assertIn("this guard does not read as env does: refused before it runs",
+                                  str(raised.exception))
 
     def test_envs_table_holds_every_option_the_boxs_env_names(self):
         """The table env_hands reads holds every option the box's env names in
