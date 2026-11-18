@@ -531,6 +531,62 @@ case $rc in
   1) ;;
   *) die "whether the agent-directory $AGENT_DIR carries a default access entry cannot be read" ;;
 esac
+# **standing_agent_holding DIR: the standing agent DIR lies in, if any** (#606,
+# the Planner's ruling of 2026-11-17). An agent made there would sit inside
+# another agent's folder, territory or home, which decommission.sh refuses to
+# archive or purge, since what holds a base is never taken whole while the
+# accounts would go. **It sees the agents whose roots stand under this admin
+# base**, each naming its territory by its `territory` key, 0644 under a root
+# 0755, so this uid reads it in either mode. A root with no key is skipped, as
+# decommission.sh skips it. **The places of a standing agent** are its
+# territory, its folder and its account's home, each canonical. Its folder is
+# named as decommission.sh's folder_bases names it, by a key naming
+# `<X>/<agent>/weaver-<agent>` or a home at `<X>/<agent>/home`, each read
+# lexically, so a folder whose territory is gone is still seen. In the layout
+# before #578 the key's directory is the base itself, which is never one. It
+# prints "agent <name>'s <place> <path>" and answers 0 when DIR is one of them
+# or lies under one, and answers 1 when it lies in none. It prints the path and
+# answers 2 when the admin base stands and cannot be listed or searched, a root
+# cannot be searched, or a key that stands cannot be read, since which agents
+# stand, or where one stands, cannot be told. A place that does not resolve
+# holds nothing that stands.
+standing_agent_holding() {
+  local dir=$1 root agent key t f h v label place
+  if [ -d "$ADMIN_BASE" ] && { [ ! -r "$ADMIN_BASE" ] || [ ! -x "$ADMIN_BASE" ]; }; then
+    printf '%s' "$ADMIN_BASE"
+    return 2
+  fi
+  for root in "$ADMIN_BASE"/*/; do
+    root=${root%/}
+    [ -d "$root" ] && [ ! -L "$root" ] || continue
+    if [ ! -x "$root" ]; then printf '%s' "$root"; return 2; fi
+    [ -e "$root/territory" ] || [ -L "$root/territory" ] || continue
+    agent=${root##*/}
+    key=$(cat -- "$root/territory" 2>/dev/null) || { printf '%s' "$root/territory"; return 2; }
+    key=${key%%$'\n'*}
+    h=$(getent passwd "weaver-$agent" 2>/dev/null | cut -d: -f6) || h=
+    local -a places=() named=()
+    if t=$(realpath -e -- "$key" 2>/dev/null); then places+=("territory|$t"); fi
+    case $key in /*) v=$(realpath -ms -- "$key"); [ "${v##*/}" != "weaver-$agent" ] || named+=("${v%/*}") ;; esac
+    case $h in /*) v=$(realpath -ms -- "$h"); [ "${v##*/}" != home ] || named+=("${v%/*}") ;; esac
+    for f in "${named[@]}"; do
+      if [ "${f##*/}" = "$agent" ] && f=$(realpath -e -- "$f" 2>/dev/null); then places+=("folder|$f"); fi
+    done
+    if [ -n "$h" ] && h=$(realpath -e -- "$h" 2>/dev/null); then places+=("home|$h"); fi
+    for place in "${places[@]}"; do
+      label=${place%%|*} place=${place#*|}
+      case "$dir" in "$place" | "$place"/*) printf "agent %s's %s %s" "$agent" "$label" "$place"; return 0 ;; esac
+    done
+  done
+  return 1
+}
+rc=0
+held=$(standing_agent_holding "$AGENT_DIR") || rc=$?
+case $rc in
+  0) die "the stack record's agent-directory $AGENT_DIR lies in $held, so an agent made there would sit inside another agent, which decommission.sh refuses to archive or purge (#606). Set the record's agent-directory back to the base the agents were made in, then rerun" ;;
+  1) ;;
+  *) die "$held cannot be read, so whether the agent-directory $AGENT_DIR lies inside a standing agent cannot be told. Read it by hand, then rerun" ;;
+esac
 # **The agent's folder holds its territory and its home side by side** (the
 # operator's ruling of 2026-11-16 on the layout, #578). `HOME_DIR` is the
 # territory, a name older than the agent's home, which is `AGENT_HOME`.

@@ -29,7 +29,7 @@ sections 1 to 4; an agent of an older form is recreated after its take-down by
 Record in the run log, from the box, not from memory:
 
 ```sh
-hostname; uname -r
+uname -n; uname -r
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 nvcc --version | tail -1
 pacman -Q cuda cccl
@@ -46,6 +46,11 @@ Discovery is by rule, not by one layout. The agents are the roots' names, the na
 every `weaver-*` account and group with its reserved suffix stripped, and the
 allow-lists and declarations of the box-wide layout before 2026-10-01. If it lists
 something this runbook does not mention, the runbook is what gets amended.
+
+**The plan's one write is admin's own.** Each agent's `show` is one of admin's verbs,
+which admin records in that agent's `admin.log`. So the plan, which every mode makes
+first and a run that then refuses makes too, adds one entry per agent there and changes
+nothing else.
 
 **What a stack consists of**, so a reader knows what the plan is enumerating:
 
@@ -177,7 +182,14 @@ operator's home (the stack record's `agent-directory` defaulted there from 2026-
 to 2026-10-07) is said in the plan and skipped. No base is archived or purged whole,
 nor any path above a base or an agent's folder, whatever its name (`/var/lib/weaver`, a
 log directory): the agents' folders inside it are archived and purged on their own, and
-the rest of it is named in the plan as left. **A legacy log path** (a box from before
+the rest of it is named in the plan as left. **A target that holds a base refuses**
+(#606): an agent's folder, a root's own territory, a home under `/home`, a weaver entry
+in `/tmp` or `/etc/weaver` that holds a base or another agent's folder would be archived
+nowhere and purged nowhere while its accounts went, so the plan names it as `REFUSED`
+with what it holds, and the archive and the purge refuse until the layout is unpicked by
+hand (`HowToDeployANewAgent.md` section 7). A hand edit of the stack record reaches it:
+an agent made inside another's folder, or the record alone naming a path in one. **A
+legacy log path** (a box from before
 #50) gives up its directory whole only where the directory is the agent's own, as
 `create-agent.sh` laid it then (`<log-directory>/<agent>/admin.log`): named for an agent
 the discovery found, root's, and holding nothing but the log and its rotations. Any

@@ -89,7 +89,7 @@ FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
 
 # ---------------------------------------------------------------- 1. box facts
 say "box"
-plan "host          $(hostname)"
+plan "host          $(uname -n)"
 plan "operator      $OPERATOR"
 plan "prefix        $PREFIX"
 plan "admin base    $ADMIN_BASE"
@@ -246,17 +246,22 @@ run_tests() {
   cargo test --release --locked \
     -p weaver-trace -p weaver-harness -p weaver-state \
     --features "$MEMBER_FEATURES" >"$log" 2>&1 || rc=$?
-  # **Only a complete summary line counts** (#507), its five counts present
-  # through `filtered out` (libtest adds the duration only when it measured
-  # one). Child test processes share cargo's stdout, so two summary lines can
+  # **Only a suite's own complete summary line counts** (#507, #611), its
+  # five counts present through `filtered out` (libtest adds the duration
+  # only when it measured one), and 0 of them filtered out. Many tests re-run
+  # their own binary as a child filtered to one test, and the child shares
+  # cargo's stdout: its summary reports the rest as filtered out, and how
+  # many of those survive whole varies by run, so counting them moved the
+  # count between two runs of one commit. This step passes no filter, so
+  # every suite cargo runs reports 0 filtered out. Summary lines can also
   # interleave, and a garbled one read field by field once gave a failed
   # count of 0.29, which `%d` refused under errexit, ending the script on a
   # suite cargo passed. The verdict is cargo's status, which a failed test
-  # sets, and a run that counted no test at all; the counts are read from
-  # complete summary lines only and printed as text, so no total a garble
-  # could make can end the step or decide it.
+  # sets, and a run that counted no test at all. The counts are read from
+  # the suites' complete summary lines only and printed as text, so no total
+  # a garble could make can end the step or decide it.
   totals=$(awk '
-    /^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored; [0-9]+ measured; [0-9]+ filtered out/ {p+=$4; f+=$6}
+    /^test result: (ok|FAILED)\. [0-9]+ passed; [0-9]+ failed; [0-9]+ ignored; [0-9]+ measured; 0 filtered out/ {p+=$4; f+=$6}
     END {print p+0, f+0}' "$log") \
     || die "cannot read the test step's log $log"
   passed=${totals% *}
