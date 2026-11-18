@@ -6109,7 +6109,12 @@ fn the_spu_dying_at_rest_authors_a_fault_and_the_run_stands_with_no_model() {
 /// gate's channel and then the SPU's decode channel close at their far
 /// ends; the loop authors a `fault` for each and serves on, the record
 /// carrying no `unload`. The loop stays in its wait, which ends with the
-/// test process. Perturbation: unwind on a closed gate or decode wake as
+/// test process, so **the test and not the loop's thread holds the
+/// listener's scratch guard** (#609): a thread still waiting when the
+/// process exits runs no drops, and the guard it held would leave its
+/// folder in the temporary directory on every run. The folder goes when the
+/// test ends, passing or failing, its listener still bound in the loop and
+/// never dialled. Perturbation: unwind on a closed gate or decode wake as
 /// before, and the record closes with an `unload`.
 #[test]
 fn the_serve_loop_serves_on_past_an_organs_death_at_rest() {
@@ -6125,9 +6130,8 @@ fn the_serve_loop_serves_on_past_an_organs_death_at_rest() {
     if let Some(spu) = run.spu.as_mut() {
         spu.decode = decode;
     }
-    let (harness, dir) = harness_entered(run);
+    let (harness, _dir) = harness_entered(run);
     std::thread::spawn(move || {
-        let _dir = dir;
         let _ = harness.serve(weaver_trace::LoopIdentity::compiled("test"), |_, _| {
             unreachable!("no frame arrives")
         });
@@ -8614,16 +8618,17 @@ fn a_leave_over_a_latched_record_refuses_descriptors_unusable() {
 
 /// **The serve loop does not wait over a latched record** (#116, the
 /// backstop before each wait): an authoring that announced nothing, such as
-/// `grant_seat`'s hole fault or a replay's, is still not served past.
+/// `grant_seat`'s hole fault or a replay's, is still not served past. The
+/// test holds the listener's scratch guard (#609), so a loop that waits on
+/// leaves no folder behind when the test fails.
 /// Perturbation: drop the read before the wait, and the loop waits on.
 #[test]
 fn the_serve_loop_does_not_wait_over_a_latched_record() {
     let (mut run, _spare, _sink) = entered_run(None);
     latch_by_refusal(&mut run);
-    let (harness, dir) = harness_entered(run);
+    let (harness, _dir) = harness_entered(run);
     let (sent, served) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _dir = dir;
         let outcome = harness.serve(weaver_trace::LoopIdentity::compiled("test"), |_, _| {
             unreachable!("no frame arrives")
         });
