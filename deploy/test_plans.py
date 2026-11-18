@@ -47,15 +47,44 @@ ROOT_STEPS = ("useradd", "groupadd", "usermod", "install", "chown", "chgrp", "ch
 # read it.
 DROP_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 DROP_NAMED = r"^[A-Za-z_][A-Za-z0-9_]*="
+# **The programs no test reaches** (the Planner's ruling of 2026-11-18). Even
+# as this account, each acts on the box through a privileged component, so
+# the guard refuses and records each as it does sudo and runuser (make_guard),
+# and no PATH a test hands over finds one outside the tests' temporary root
+# (guard_path). Named, with what each reaches:
+PRIVILEGED = (
+    "systemctl",     # PID1's manager over the system bus, and the account's own manager
+    "busctl",        # every service on the system bus, PID1 and logind among them
+    "systemd-run",   # a transient unit, from PID1 or from the account's own manager
+    "loginctl",      # logind: sessions, seats, power off and reboot
+    "machinectl",    # machined: machines and images, through PID1
+    "virsh",         # libvirt's daemon: domains and the host's devices, a card's driver among them
+    "virt-install",  # libvirt's daemon: new domains and the devices they take
+    "nvidia-smi",    # the cards' driver: clocks, power limits, persistence and resets
+    "modprobe",      # the kernel's modules
+    "rmmod",         # the kernel's modules
+    "insmod",        # the kernel's modules
+)
+# The families are read by pattern, never named: every program whose name
+# starts with one of these, in a box bin directory or the suite's PATH at its
+# start (PRIVILEGED_NAMES) and in each directory of a PATH a test hands over
+# (guard_path), so a new libvirt or qemu program is covered without an edit.
+PRIVILEGED_FAMILIES = ("qemu-", "virt-")
+
+
+def privileged(name):
+    return name in PRIVILEGED or name.startswith(PRIVILEGED_FAMILIES)
+
+
 # **The box half of a PATH, as an image gives it** (#610): a directory of
 # links to every program in /usr/bin but those named, and never one that
-# grants root, so a test sees what a deployed script does on a base that lacks
-# a program the box has.
+# grants root or one the guard refuses, so a test sees what a deployed script
+# does on a base that lacks a program the box has.
 ROOT_GRANTING = ("sudo", "sudoedit", "sudo-rs", "su", "runuser", "pkexec", "doas", "run0")
 def box_view(where, without=()):
     where.mkdir()
     for entry in os.scandir("/usr/bin"):
-        if entry.name not in without and entry.name not in ROOT_GRANTING:
+        if entry.name not in without and entry.name not in ROOT_GRANTING and not privileged(entry.name):
             os.symlink(entry.path, where / entry.name)
     return where
 
@@ -73,10 +102,48 @@ def look_as(account, flag, path):
 # anything runs otherwise. The suite's own PATH carries a guard directory
 # ahead of the box's, whose sudo and runuser refuse and whose setsid, env and
 # timeout are the box's, so a test that stands in neither meets the guard's
-# first. A literal box tail is written GUARDED_USR_BIN.
+# first. A literal box tail is written GUARDED_USR_BIN. The privileged
+# programs are held the same way: the guard refuses each, and each must
+# resolve inside the temporary root, by its real path, or not at all.
 BOX_PATH = os.environ.get("PATH", os.defpath)
 STAND_IN_NAMES = ("sudo", "runuser", "setsid", "env", "timeout")
 TEST_ROOT = os.path.realpath(tempfile.gettempdir())
+_BOX_BINS = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin")
+
+
+def _inside(path):
+    return os.path.commonpath([os.path.realpath(path), TEST_ROOT]) == TEST_ROOT
+
+
+# A box directory's family programs, read once: the box's do not change
+# during a run, and a directory under the temporary root is read each time.
+_FAMILY_READ = {}
+
+
+def _family_programs(directory):
+    if directory in _FAMILY_READ:
+        return _FAMILY_READ[directory]
+    try:
+        names = tuple(sorted(e.name for e in os.scandir(directory) if e.name.startswith(PRIVILEGED_FAMILIES)))
+    except OSError:
+        names = ()
+    if not _inside(directory):
+        _FAMILY_READ[directory] = names
+    return names
+
+
+def privileged_in(directories):
+    """The named privileged programs, then each program of a family that one
+    of DIRECTORIES carries, each once, in the order found."""
+    found = list(PRIVILEGED)
+    for d in directories:
+        if d:
+            found += [n for n in _family_programs(d) if n not in found]
+    return tuple(found)
+
+
+# The programs the guard refuses beside sudo and runuser, read at the start.
+PRIVILEGED_NAMES = privileged_in(_BOX_BINS + tuple(BOX_PATH.split(os.pathsep)))
 # **A stranger's uid is never the runner's** (Codex on #599): a stand-in that
 # answers a path the tests made as not root's answers this uid, held by no
 # fixture account, rather than the file's own owner, which is 0 when the suite
@@ -105,8 +172,8 @@ def no_new_privs_held(status="/proc/self/status"):
 
 
 _no_new_privs()
-# **The suite keeps a record of every reach of the guard's sudo and runuser**,
-# under the tests' temporary root. Each appends its name, the running test's
+# **The suite keeps a record of every reach of a program the guard refuses**
+# (sudo, runuser and PRIVILEGED_NAMES), under the tests' temporary root. Each appends its name, the running test's
 # id and its arguments at a path written into its own text, so a drop that
 # clears the environment still writes its line, with the test unknown. After
 # the last test a line that stands fails the run even when every test
@@ -155,7 +222,7 @@ def _drop_an_empty_record():
     except OSError as e:
         if _FINISHED[-1:] != [None]:
             _fail_at_exit(f"guard: the reach record {REACH_RECORD} cannot be read ({type(e).__name__}), so this "
-                          "process cannot show that no test reached the guard's sudo or runuser")
+                          "process cannot show that no test reached a program the guard refuses")
         return
     read = (_FINISHED[-1] or 0) if _FINISHED else 0
     if not reaches:
@@ -170,10 +237,10 @@ atexit.register(_drop_an_empty_record)
 
 
 def make_guard(where, record):
-    """**A guard directory** in WHERE: a sudo and a runuser that append the
-    reach to RECORD and refuse with 97, and the box's setsid, env and
-    timeout."""
-    for name in ("sudo", "runuser"):
+    """**A guard directory** in WHERE: a sudo, a runuser and each of
+    PRIVILEGED_NAMES that append the reach to RECORD and refuse with 97, and
+    the box's setsid, env and timeout."""
+    for name in ("sudo", "runuser") + PRIVILEGED_NAMES:
         (where / name).write_text(
             "#!/bin/sh\n"
             '{ printf "%s\\t%s\\t" "${0##*/}" "${WEAVER_TEST_ID:-unknown}"; sep=; '
@@ -200,23 +267,23 @@ class StandInGuardError(AssertionError):
     pass
 
 
-def _resolved(path):
+def _resolved(path, names=STAND_IN_NAMES):
     probe = _REAL_POPEN([_GUARD_BASH, "--norc", "--noprofile", "-c",
-                         'for n in "$@"; do printf "%s\\n" "$(command -v "$n")"; done', "guard", *STAND_IN_NAMES],
+                         'for n in "$@"; do printf "%s\\n" "$(command -v "$n")"; done', "guard", *names],
                         env={"PATH": path}, stdout=subprocess.PIPE, text=True)
     out, _ = probe.communicate(timeout=20)
-    return tuple(zip(STAND_IN_NAMES, out.split("\n")))
-
-
-def _inside(path):
-    return os.path.commonpath([os.path.realpath(path), TEST_ROOT]) == TEST_ROOT
+    return tuple(zip(names, out.split("\n")))
 
 
 def guard_path(path, what):
     # A stand-in directory may link the box's setsid, env and timeout, as the
-    # guard's own does, but never its sudo or runuser.
-    for name, found in _resolved(path):
-        if found and not (_inside(os.path.dirname(found)) and (name not in ("sudo", "runuser") or _inside(found))):
+    # guard's own does, but never its sudo or runuser, nor a privileged
+    # program: PRIVILEGED, and each program of a family that a directory of
+    # the PATH carries, whatever its name.
+    names = STAND_IN_NAMES + privileged_in(path.split(os.pathsep))
+    for name, found in _resolved(path, names):
+        linked = name in ("setsid", "env", "timeout")
+        if found and not (_inside(os.path.dirname(found)) and (linked or _inside(found))):
             raise StandInGuardError(f"the {what} a test hands over resolves {name} to {found}, outside the "
                                     f"stand-ins under {TEST_ROOT}: refused before it runs")
 
@@ -289,7 +356,9 @@ def _hand_settings(env):
 # or as an excerpt of its text, has each box bin directory of its PATH, and
 # of a DROP_PATH handed to it, replaced by IMAGE_VIEW: a link to each
 # program deploy/image-programs.txt names that the box carries, never a
-# root-granting one. Any other directory outside the tests' temporary root
+# root-granting one, and the guard's copy of each privileged one, so
+# `command -v` finds it as on the image and a call is refused and recorded.
+# Any other directory outside the tests' temporary root
 # goes, and a stand-in directory stays where the test put it. A child
 # drawing on any other deploy script, which runs on a build box, keeps its
 # PATH. A call to a program the image lacks then fails as it would there, on
@@ -303,13 +372,12 @@ IMAGE_VIEW = STAND_IN_GUARD / "image-view"
 IMAGE_VIEW.mkdir()
 _NO_PROGRAMS = STAND_IN_GUARD / "no-programs"
 _NO_PROGRAMS.mkdir()
-_BOX_BINS = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin")
 for _name in (DEPLOY / "image-programs.txt").read_text().splitlines():
     _name = _name.strip()
     if _name and not _name.startswith("#") and _name not in ROOT_GRANTING:
         _found = shutil.which(_name, path=os.pathsep.join(_BOX_BINS))
         if _found:
-            (IMAGE_VIEW / _name).symlink_to(_found)
+            (IMAGE_VIEW / _name).symlink_to(STAND_IN_GUARD / _name if privileged(_name) else _found)
 _BOX_BIN_REAL = frozenset(os.path.realpath(d) for d in _BOX_BINS)
 _DEPLOY_FILES = sorted(p.name for p in DEPLOY.iterdir()
                        if p.suffix in (".sh", ".py") and p.name not in ("test_plans.py", "program_check.py"))
@@ -1478,7 +1546,8 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
     def path_without(self, tool, box_path):
         """The stand-ins' directory, then one directory of links to every
         entry on the box's PATH but TOOL, the first of a name winning as the
-        PATH lookup would."""
+        PATH lookup would. A privileged program is linked only from inside
+        the tests' temporary root, the guard's copy, never the box's."""
         farm = self.root / f"path-without-{tool}"
         if not farm.exists():
             farm.mkdir()
@@ -1487,9 +1556,22 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                     continue
                 for e in os.scandir(d):
                     link = farm / e.name
+                    if privileged(e.name) and not _inside(e.path):
+                        continue
                     if e.name != tool and not link.is_symlink():
                         link.symlink_to(e.path)
         return os.pathsep.join([str(self.bin), str(farm)])
+
+    def test_the_farm_links_no_privileged_program_from_the_box(self):
+        """path_without's farm links a privileged program only from inside the
+        tests' temporary root: with a box directory ahead of the guard, each
+        link is still the guard's copy, never the box's. Read by the links
+        alone, so nothing runs. Perturbation: drop the farm's rule, and the
+        box's systemctl is linked."""
+        farm = Path(self.path_without("hostname", "/usr/bin" + os.pathsep + str(STAND_IN_GUARD)).split(os.pathsep)[1])
+        for name in PRIVILEGED_NAMES:
+            with self.subTest(name=name):
+                self.assertEqual(os.path.realpath(farm / name), os.path.realpath(STAND_IN_GUARD / name))
 
     def test_the_home_is_capped_by_an_ext4_project_quota_when_asked(self):
         # **#585, the operator's ruling of 2026-11-16**: once the agent's
@@ -7609,6 +7691,89 @@ class StandInGuardTests(unittest.TestCase):
             test = os.environ.get("WEAVER_TEST_ID", "unknown")
             self.assertEqual(record.read_text(), f"sudo\t{test}\t-n true\0runuser\t{test}\t-n true\0")
 
+    def test_the_guard_refuses_and_records_each_privileged_program(self):
+        """**The programs no test reaches** (the Planner's ruling of
+        2026-11-18): the guard holds a refusing copy of each named program
+        and of each qemu-* and virt-* program the box carries, read by
+        pattern at the start, and the suite's own PATH finds the guard's
+        first. Each copy refuses with 97 and records its reach. A copy is
+        run by its own path, never by a name a PATH resolves, so a copy
+        missing fails here and reaches nothing. Perturbations: drop the set
+        from make_guard, or read the families from no directory, and this
+        fails."""
+        families = {e.name for d in _BOX_BINS if os.path.isdir(d) for e in os.scandir(d)
+                    if e.name.startswith(("qemu-", "virt-"))}
+        self.assertLessEqual(set(PRIVILEGED) | families, set(PRIVILEGED_NAMES))
+        for name in PRIVILEGED_NAMES:
+            self.assertEqual(shutil.which(name, path=os.environ["PATH"]), str(STAND_IN_GUARD / name), name)
+        with tempfile.TemporaryDirectory() as scratch:
+            guard = Path(scratch) / "guard"
+            guard.mkdir()
+            record = Path(scratch) / "record"
+            make_guard(guard, record)
+            for name in PRIVILEGED_NAMES:
+                with self.subTest(name=name):
+                    run = subprocess.run([str(guard / name), "--probe", name], text=True, capture_output=True,
+                                         timeout=20)
+                    self.assertEqual(run.returncode, 97, run.stderr)
+                    self.assertIn(f"a test reached {name} outside its stand-ins", run.stderr)
+            test = os.environ.get("WEAVER_TEST_ID", "unknown")
+            self.assertEqual(reaches_in(record), [(name, test, f"--probe {name}") for name in PRIVILEGED_NAMES])
+
+    def test_a_path_that_finds_a_privileged_program_outside_is_refused_before_anything_runs(self):
+        """A PATH a test hands over that finds a privileged program outside
+        the tests' temporary root is refused before anything runs: one whose
+        box tail carries the program, a stand-in directory that links one to
+        a program outside, and a made-up virt-newtool or qemu-newtool that no
+        list names, caught by its family's pattern. A stand-in of a test's
+        own making passes. The box cases are read with `command -v` alone,
+        and the made-up programs link `true`, so nothing privileged runs if
+        the check is gone. Perturbations: resolve the stand-in names alone,
+        or read no family in the handed PATH, and a case passes."""
+        true = shutil.which("true", path=os.pathsep.join(_BOX_BINS))
+        with tempfile.TemporaryDirectory(prefix="weaver-guard-") as scratch:
+            marker = Path(scratch) / "ran"
+            program = f"echo ran > {shlex.quote(str(marker))}"
+
+            def stand_ins(name, without=(), linked=()):
+                where = Path(scratch) / name
+                where.mkdir()
+                for n in STAND_IN_NAMES + PRIVILEGED:
+                    if n not in without and n not in linked:
+                        (where / n).write_text("#!/bin/sh\nexit 0\n")
+                        (where / n).chmod(0o755)
+                for n in linked:
+                    (where / n).symlink_to(true)
+                return where
+
+            box = "/usr/bin" + os.pathsep + "/bin"
+            for name in PRIVILEGED:
+                if shutil.which(name, path=box):
+                    with self.subTest(box=name):
+                        path = str(stand_ins(f"without-{name}", without=(name,))) + os.pathsep + box
+                        with self.assertRaises(StandInGuardError) as refused:
+                            guard_path(path, "PATH")
+                        self.assertIn(f"resolves {name} to /", str(refused.exception))
+            for name in ("systemctl", "virt-newtool", "qemu-newtool"):
+                with self.subTest(linked=name):
+                    path = str(stand_ins(f"linked-{name}", linked=(name,)))
+                    with self.assertRaises(StandInGuardError) as refused:
+                        subprocess.run([_GUARD_BASH, "-c", program], env={**os.environ, "PATH": path}, timeout=20)
+                    self.assertIn(f"resolves {name} to {path}/{name}", str(refused.exception))
+                    self.assertFalse(marker.exists(), "nothing ran")
+            path = str(stand_ins("own"))
+            subprocess.run([_GUARD_BASH, "-c", program], env={**os.environ, "PATH": path}, timeout=20, check=True)
+            self.assertTrue(marker.exists(), "a test's own stand-ins pass")
+
+    def test_box_view_links_no_privileged_program(self):
+        """box_view (#610) links neither a root-granting program nor a
+        privileged one. Perturbation: drop its check of the privileged
+        programs, and the box's systemctl is linked."""
+        with tempfile.TemporaryDirectory() as scratch:
+            view = box_view(Path(scratch) / "view")
+            self.assertEqual([n for n in os.listdir(view) if privileged(n) or n in ROOT_GRANTING], [])
+            self.assertTrue((view / "sh").exists())
+
 
 def program_check():
     """deploy/program_check.py, imported."""
@@ -7623,7 +7788,7 @@ def program_check():
 
 class SuiteGuardTests(unittest.TestCase):
     """**The suite's guard holds for the whole run**: no test gains a
-    privilege, and a reach of the guard's sudo or runuser fails the run
+    privilege, and a reach of a program the guard refuses fails the run
     whatever its tests said. A run's own end is shown in a child, which
     imports this file and runs one planted test class through run_suite."""
 
@@ -7662,7 +7827,8 @@ class SuiteGuardTests(unittest.TestCase):
         helper draw the build script, and the box's program is found."""
         programs = set(program_check().read_names(DEPLOY / "image-programs.txt"))
         extra = next((n for n in sorted(os.listdir("/usr/bin")) if n not in programs and n not in ROOT_GRANTING
-                      and re.fullmatch(r"[a-z][a-z0-9_-]*", n) and os.access(f"/usr/bin/{n}", os.X_OK)), None)
+                      and not privileged(n) and re.fullmatch(r"[a-z][a-z0-9_-]*", n)
+                      and os.access(f"/usr/bin/{n}", os.X_OK)), None)
         if extra is None:
             self.skipTest("this box carries no program the image lacks")
         probe = ('for n in "$@"; do printf "%s=%s\\n" "$n" "$(command -v "$n")"; done\n'
@@ -7725,13 +7891,62 @@ class SuiteGuardTests(unittest.TestCase):
         """The view reads the checker's copy list, program list and bin
         directories, so neither drifts from the other: IMAGE_VIEW holds a
         link to each listed program the box carries, never a root-granting
-        one, and nothing else."""
+        one, and nothing else. A privileged program's link is the guard's
+        refusing copy, so `command -v` finds it as on the image. Perturbation:
+        link the box's privileged program, and this fails."""
         pc = program_check()
         self.assertEqual(DEPLOYED_COPY, frozenset(pc.read_names(DEPLOY / "deployed-copy.txt")))
         self.assertEqual(frozenset(_BOX_BINS), pc.BIN_DIRS)
         carried = {n for n in pc.read_names(DEPLOY / "image-programs.txt")
                    if n not in ROOT_GRANTING and shutil.which(n, path=os.pathsep.join(_BOX_BINS))}
         self.assertEqual(set(os.listdir(IMAGE_VIEW)), carried)
+        self.assertLessEqual({"systemctl", "nvidia-smi"}, {n for n in carried if privileged(n)})
+        for name in sorted(carried):
+            with self.subTest(name=name):
+                want = STAND_IN_GUARD / name if privileged(name) else shutil.which(name, path=os.pathsep.join(_BOX_BINS))
+                self.assertEqual(os.readlink(IMAGE_VIEW / name), str(want))
+
+    def test_a_test_that_omits_a_privileged_stand_in_meets_the_guard(self):
+        """**An omission is named, not silent** (the Planner's ruling of
+        2026-11-18): a test whose stand-ins omit systemctl, running a copied
+        script's line (the image view) or a line of no deploy script (the
+        suite's PATH), meets the guard's refusing copy and never the box's
+        program. The call is refused with 97, the reach names the test, and
+        the run fails though the test passed. The planted test reads where
+        systemctl resolves before it runs anything, so a view or a guard
+        without the copy fails there and reaches nothing. Perturbations: link
+        the box's program in the view, or drop the set from the guard, and no
+        reach is recorded."""
+        line = next(l.strip() for l in (DEPLOY / "decommission.sh").read_text().splitlines()
+                    if l.strip().startswith("mapfile -t UNITS < <(systemctl list-units"))
+        run, record_dir = self.suite_child(
+            f"line = {line!r}\n"
+            "import shutil, tempfile\n"
+            "class Planted(unittest.TestCase):\n"
+            "    def test_omitted(self):\n"
+            "        with tempfile.TemporaryDirectory() as stand_ins:\n"
+            "            copied = line + '\\nprintf %s ${#UNITS[@]}'\n"
+            "            box = stand_ins + os.pathsep + '/usr/bin' + os.pathsep + '/bin'\n"
+            "            inherited = stand_ins + os.pathsep + os.environ['PATH']\n"
+            "            self.assertEqual(t.drawn_from(['bash', '-c', copied]), {'decommission.sh'})\n"
+            "            guard = os.path.realpath(t.STAND_IN_GUARD / 'systemctl')\n"
+            "            for path in (t.image_path(box), inherited):\n"
+            "                found = shutil.which('systemctl', path=path)\n"
+            "                self.assertEqual(found and os.path.realpath(found), guard, path)\n"
+            "            took = subprocess.run(['bash', '-c', copied], env={**os.environ, 'PATH': box},\n"
+            "                                  capture_output=True, text=True, timeout=20)\n"
+            "            self.assertEqual((took.returncode, took.stdout), (0, '0'), took.stderr)\n"
+            "            took = subprocess.run(['bash', '-c', 'systemctl is-active weaver-planted'],\n"
+            "                                  env={**os.environ, 'PATH': inherited}, capture_output=True, text=True,\n"
+            "                                  timeout=20)\n"
+            "            self.assertEqual(took.returncode, 97, took.stderr)\n")
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertIn("\nOK\n", run.stderr)
+        self.assertIn("guard: no_new_privs held, 2 reaches of a program the guard refuses\n", run.stderr)
+        self.assertIn("guard: __main__.Planted.test_omitted reached systemctl list-units weaver-worker@* --all "
+                      "--no-legend --plain\n", run.stderr)
+        self.assertIn("guard: __main__.Planted.test_omitted reached systemctl is-active weaver-planted\n", run.stderr)
+        self.assertIn(f"guard: the record stays at {record_dir / 'reach-record'}\n", run.stderr)
 
     def test_a_reach_fails_a_run_whose_tests_all_passed(self):
         """**A reach fails the run**, even when every test passed: a test that
@@ -7757,7 +7972,7 @@ class SuiteGuardTests(unittest.TestCase):
             "        subprocess.run([str(t.STAND_IN_GUARD / 'sudo'), '-n', 'after'], capture_output=True)\n")
         self.assertEqual(run.returncode, 1, run.stderr)
         self.assertIn("\nOK\n", run.stderr)
-        self.assertIn("guard: no_new_privs held, 4 reaches of the guard's sudo or runuser\n", run.stderr)
+        self.assertIn("guard: no_new_privs held, 4 reaches of a program the guard refuses\n", run.stderr)
         self.assertIn("guard: __main__.Planted.test_reach reached sudo bash -c a\\nb\\tc\n", run.stderr)
         self.assertIn("guard: unknown reached sudo -n after\n", run.stderr)
         self.assertIn("guard: __main__.Planted.test_reach reached sudo -n true\n", run.stderr)
@@ -7798,7 +8013,7 @@ class SuiteGuardTests(unittest.TestCase):
                 "                        capture_output=True)\n")
         run, record_dir = self.suite_child(late)
         self.assertEqual(run.returncode, 1, run.stderr)
-        self.assertIn("guard: no_new_privs held, 0 reaches of the guard's sudo or runuser\n", run.stderr)
+        self.assertIn("guard: no_new_privs held, 0 reaches of a program the guard refuses\n", run.stderr)
         self.assertIn("guard: unknown reached sudo -n late\n", run.stderr)
         self.assertIn(f"guard: the record stays at {record_dir / 'reach-record'}, and the run's end read it before "
                       "these reaches\n", run.stderr)
@@ -7856,7 +8071,7 @@ class SuiteGuardTests(unittest.TestCase):
             with self.subTest(status=status):
                 run, record_dir = self.suite_child("class Planted(unittest.TestCase):\n" + body)
                 self.assertEqual(run.returncode, status, run.stderr)
-                self.assertIn("guard: no_new_privs held, 0 reaches of the guard's sudo or runuser\n", run.stderr)
+                self.assertIn("guard: no_new_privs held, 0 reaches of a program the guard refuses\n", run.stderr)
                 self.assertFalse(record_dir.exists(), "a run with no reach leaves no record")
 
 
@@ -14947,20 +15162,20 @@ class _Runner(unittest.TextTestRunner):
 
 
 def finish(passed):
-    """**The run's end**: the guard's line, then the verdict. A reach of the
-    guard's sudo or runuser, or a flag lost, fails the run whatever the tests
-    said."""
+    """**The run's end**: the guard's line, then the verdict. A reach of a
+    program the guard refuses, or a flag lost, fails the run whatever the
+    tests said."""
     try:
         reaches = reaches_in(REACH_RECORD)
     except OSError as e:
         _FINISHED.append(None)
         print(f"guard: the reach record {REACH_RECORD} cannot be read ({type(e).__name__}), so this run cannot "
-              "show that no test reached the guard's sudo or runuser", file=sys.stderr)
+              "show that no test reached a program the guard refuses", file=sys.stderr)
         return 1
     _FINISHED.append(len(reaches))
     held = no_new_privs_held()
     print(f"guard: no_new_privs {'held' if held else 'LOST'}, "
-          f"{len(reaches)} reach{'' if len(reaches) == 1 else 'es'} of the guard's sudo or runuser", file=sys.stderr)
+          f"{len(reaches)} reach{'' if len(reaches) == 1 else 'es'} of a program the guard refuses", file=sys.stderr)
     if os.geteuid() == 0:
         print("guard: the run is root, which no_new_privs withholds nothing from", file=sys.stderr)
     say_reaches(reaches)
