@@ -47,6 +47,11 @@ every `weaver-*` account and group with its reserved suffix stripped, and the
 allow-lists and declarations of the box-wide layout before 2026-10-01. If it lists
 something this runbook does not mention, the runbook is what gets amended.
 
+**The plan's one write is admin's own.** Each agent's `show` is one of admin's verbs,
+which admin records in that agent's `admin.log`. So the plan, which every mode makes
+first and a run that then refuses makes too, adds one entry per agent there and changes
+nothing else.
+
 **What a stack consists of**, so a reader knows what the plan is enumerating:
 
 | Piece | Where | Made by |
