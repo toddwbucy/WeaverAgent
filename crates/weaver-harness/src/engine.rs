@@ -761,7 +761,7 @@ impl<'a> Ports<'a> {
         self.author
             .author_recall(
                 self.recorder,
-                weaver_trace::RecallVerb::Recall,
+                crate::authorship::TurnAsk::Recall,
                 last_turns,
                 &answered,
             )
@@ -789,7 +789,7 @@ impl<'a> Ports<'a> {
         self.author
             .author_recall(
                 self.recorder,
-                weaver_trace::RecallVerb::Replay,
+                crate::authorship::TurnAsk::Replay,
                 None,
                 &answered,
             )

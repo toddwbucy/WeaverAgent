@@ -1515,6 +1515,7 @@ fn a_recall_is_turnless_and_names_what_answered() {
                 },
             ],
             count: None,
+            seated: None,
         }))
     };
     r.submit(event(Kind::Recall, None, account()))
@@ -1560,6 +1561,7 @@ fn a_recall_is_turnless_and_names_what_answered() {
                 },
             ],
             count: Some(263),
+            seated: None,
         })),
     ))
     .expect("a replay's account is the same kind");

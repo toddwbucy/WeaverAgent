@@ -937,29 +937,17 @@ impl ReplaySeat for ReplayPorts<'_, '_> {
             return None;
         }
         let events = events?;
-        let identity = |e: &crate::state::Recalled| weaver_trace::RecalledIdentity {
-            run: e.run.clone(),
-            turn: e.turn.clone(),
-            sequence: e.sequence.clone(),
-            kind: e.kind.clone(),
-        };
-        let returned = match events.as_slice() {
-            [] => Vec::new(),
-            [only] => vec![identity(only)],
-            [first, .., last] => vec![identity(first), identity(last)],
-        };
+        // The replay's account by the one builder every recall shares: the
+        // answer's bounds and its count.
         self.event(
             Kind::Recall,
             Subsystem::Harness,
             None,
-            Some(Payload::Recall(weaver_trace::RecallAccount {
-                ask: weaver_trace::RecallAsk {
-                    verb: weaver_trace::RecallVerb::Replay,
-                    last_turns: None,
-                },
-                returned,
-                count: Some(events.len() as u64),
-            })),
+            Some(Payload::Recall(crate::authorship::recall_account(
+                weaver_trace::RecallVerb::Replay,
+                None,
+                &events,
+            ))),
         )
         .ok()?;
         Some(events)
