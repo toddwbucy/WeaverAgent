@@ -974,11 +974,13 @@ no prompt**, on the operator's ruling of 2026-10-06 (#1): the system prompt is s
 not a file the load was given, so the record of which prompt was in force is the
 turnless `message.system` event the harness authors at the seeding turn from the gate's
 line, per `weaver-harness-Spec` section 6.1, the `recall` of the identity ask at each
-load, and the save point the load's `lineage` names, which carries the prefix. A load
-authors no prefix, on the operator's ruling of 2026-10-06 (later, #1) that a session's
-trace and the state it loaded from are not tied together once the agent is unloaded. The
-`identity_file` digest of #57 (2026-10-02) never reached a merged build and is not a
-member.
+load, which names the seated prompt by digest under the recall clause below (#617), and
+the save point the load's `lineage` names, which carries the prefix. The digest rides
+the recall and not this event because the harness authors the load before it asks the
+member what to seat. A load authors no prefix, on the operator's ruling of 2026-10-06
+(later, #1) that a session's trace and the state it loaded from are not tied together
+once the agent is unloaded. The `identity_file` digest of #57 (2026-10-02) never reached
+a merged build and is not a member.
 
 **`elision` carries its coordinates and `flush` does not need to.** An
 earlier draft of this section gave the elision `FlushCounts` on the reading
@@ -1011,6 +1013,23 @@ is named, and the replay port's answer is the source session from its first even
 last, so `returned` names those two and `count` says how many answered, never a list as
 long as the session. The contents are already in the record under those identities, and
 a reader grouping by turn reads the turn from the account without a second lookup.
+
+**The identity ask's recall names what the load seated, by digest**, on the operator's
+ruling of 2026-11-18 (#617) that what a load writes names the prompt it seated. Beside
+`ask` and `returned`, the `recall` of the `identity` verb carries `seated`: one sha256
+hex per message the open seats, in seating order, each taken over the UTF-8 bytes of
+that message's text blocks joined in order, which is the text the model family renders
+for the message. A prompt the seeding turn entered is one message of one text block, so
+its entry is the sha256 of the prompt's text, which a party holding the text, the
+console among them, computes without the record. **`seated` names no content**: a digest
+is not the text, so the account still never carries what custody answered. The harness
+takes it from the messages the open is built from, per `weaver-harness-Spec` section
+6.1, which says how a reader tells nothing seated from a recall lost. The `recall` and
+`replay` verbs carry no `seated`, since their answers feed a turn and never the open's
+prefix. A record older than #617 lacks the member, which reads as the digest being
+unrecoverable from the recall, never as nothing seated. `seated` crosses the tee only
+where an election names it, and the diagnostic election of `weaver-analysis-Spec`
+section 3 names `ask`, `returned` and `count`, unchanged by this clause.
 
 **The harness authors one for every answered ask that returns events, before the
 answer reaches its consumer**, per `weaver-harness-Spec` section 6: the seat's recall
@@ -2119,6 +2138,11 @@ the fact exists.
   watched to fail when the kind leaves `turn_forbidden` or its pairing row, and the
   harness authors one after a flush and at the enter's asks, watched to fail when
   the authoring is removed at either site.
+- The identity ask's recall names what the load seated, per section 3: two enters
+  whose members answer different prompts record different `seated` lists beside
+  identical `load` members, a one-block prompt's entry is the sha256 of its text, and
+  an empty answer records no recall, watched to fail when the member is dropped and
+  when it is taken from anything but the seated messages' text.
 - A restored message is recorded turnless under `message.restored` with the message
   whole, per section 3: the recorder refuses one carrying a turn or another kind's
   payload, watched to fail when the kind leaves `turn_forbidden` or the message
