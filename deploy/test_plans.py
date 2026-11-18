@@ -263,6 +263,89 @@ def _hand_settings(env):
                 json.dump(dict(env), settings)
 
 
+# **A copied script's child sees only the image's programs.** The files the
+# appliance image copies (deploy/deployed-copy.txt, #607) run there on the
+# image's PATH alone. So a child that runs one of them, by its path or name
+# or as an excerpt of its text, has each box bin directory of its PATH, and
+# of a DROP_PATH handed to it, replaced by IMAGE_VIEW: a link to each
+# program deploy/image-programs.txt names that the box carries, never a
+# root-granting one. Any other directory outside the tests' temporary root
+# goes, and a stand-in directory stays where the test put it. A child
+# drawing on any other deploy script, which runs on a build box, keeps its
+# PATH. A call to a program the image lacks then fails as it would there, on
+# a line a test runs. ProgramCheckTests
+# reads the lines no test runs, and every call through as_account, whose
+# DROP_PATH account-drop.sh assigns itself on purpose (#590), so no caller's
+# environment chooses the PATH the drop runs with.
+DEPLOYED_COPY = frozenset(n.strip() for n in (DEPLOY / "deployed-copy.txt").read_text().splitlines()
+                          if n.strip() and not n.lstrip().startswith("#"))
+IMAGE_VIEW = STAND_IN_GUARD / "image-view"
+IMAGE_VIEW.mkdir()
+_NO_PROGRAMS = STAND_IN_GUARD / "no-programs"
+_NO_PROGRAMS.mkdir()
+_BOX_BINS = ("/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin")
+for _name in (DEPLOY / "image-programs.txt").read_text().splitlines():
+    _name = _name.strip()
+    if _name and not _name.startswith("#") and _name not in ROOT_GRANTING:
+        _found = shutil.which(_name, path=os.pathsep.join(_BOX_BINS))
+        if _found:
+            (IMAGE_VIEW / _name).symlink_to(_found)
+_BOX_BIN_REAL = frozenset(os.path.realpath(d) for d in _BOX_BINS)
+_DEPLOY_FILES = sorted(p.name for p in DEPLOY.iterdir()
+                       if p.suffix in (".sh", ".py") and p.name not in ("test_plans.py", "program_check.py"))
+_DEPLOY_PATHS = re.compile(r"/(" + "|".join(map(re.escape, _DEPLOY_FILES)) + r")(?![\w.-])")
+_DEPLOY_NAMES = frozenset(_DEPLOY_FILES)
+_DEPLOY_LINES = {}
+for _name in _DEPLOY_FILES:
+    for _line in (DEPLOY / _name).read_text().splitlines():
+        if len(_line.strip()) >= 30 and not _line.lstrip().startswith("#"):
+            _DEPLOY_LINES.setdefault(_line.strip(), set()).add(_name)
+
+
+def drawn_from(args):
+    """The deploy files a command line runs: each named by a path, and each
+    whose text a code string carries a line of."""
+    names = set()
+    for a in ([args] if isinstance(args, (str, os.PathLike)) else args):
+        a = str(a)
+        names.update(_DEPLOY_PATHS.findall(a))
+        if a in _DEPLOY_NAMES:
+            names.add(a)  # run by its bare name, from deploy/ as the working directory
+        for line in a.splitlines():
+            # A line a copied script carries draws that script alone, though a
+            # build script carries it too (the helpers say, plan and die).
+            hit = _DEPLOY_LINES.get(line.strip(), set())
+            names |= (hit & DEPLOYED_COPY) or hit
+    return names
+
+
+def image_path(path):
+    out = []
+    for entry in path.split(os.pathsep):
+        if entry and os.path.realpath(entry) in _BOX_BIN_REAL:
+            if str(IMAGE_VIEW) not in out:
+                out.append(str(IMAGE_VIEW))
+        elif entry and _inside(entry):
+            out.append(entry)
+    return os.pathsep.join(out) or str(_NO_PROGRAMS)
+
+
+def _image_view(args, kwargs):
+    drawn = drawn_from(args)
+    if not drawn or not drawn <= DEPLOYED_COPY:
+        return args, kwargs
+    env = dict(os.environ if kwargs.get("env") is None else kwargs["env"])
+    for name in ("PATH", "DROP_PATH"):
+        if name in env or name == "PATH":
+            env[name] = image_path(env.get(name, os.defpath))
+    if not isinstance(args, (str, os.PathLike)):
+        # A PATH an `env` wrapper hands on: a bare assignment, never a code
+        # string that starts with one.
+        args = [f"{str(a).split('=', 1)[0]}={image_path(str(a).split('=', 1)[1])}"
+                if re.fullmatch(r"(DROP_)?PATH=\S*", str(a)) else a for a in args]
+    return args, {**kwargs, "env": env}
+
+
 class _GuardedPopen(_REAL_POPEN):
     def __init__(self, args, *rest, **kwargs):
         # **A run that names no input reads /dev/null.** bash whose standard
@@ -272,6 +355,8 @@ class _GuardedPopen(_REAL_POPEN):
         # and then, until this.
         if len(rest) < 3 and kwargs.get("stdin") is None:
             kwargs["stdin"] = subprocess.DEVNULL
+        if _runs_a_script(args):
+            args, kwargs = _image_view(args, kwargs)
         if kwargs.get("env") is not None:
             _hand_settings(kwargs["env"])
         if _runs_a_script(args):
@@ -7545,6 +7630,75 @@ class SuiteGuardTests(unittest.TestCase):
         child = subprocess.run(["bash", "--norc", "--noprofile", "-c", "cat /proc/self/status"], text=True,
                                capture_output=True, timeout=20)
         self.assertRegex(child.stdout, re.compile(r"^NoNewPrivs:\s*1$", re.M))
+
+    def test_a_copied_scripts_child_sees_only_the_images_programs(self):
+        """**The image view**: a child running a copied script, by its path or
+        name or as an excerpt of its text, finds none of the box's programs the
+        image lacks, finds the rest in IMAGE_VIEW and sudo in the guard, and
+        keeps no PATH or DROP_PATH entry outside the tests' temporary root,
+        though its excerpt starts with a helper a build script carries too. A
+        child drawing on a build box's own lines, or on none, keeps the box's.
+        Perturbations: skip the rewrite, read no bare name, or let a shared
+        helper draw the build script, and the box's program is found."""
+        programs = set(program_check().read_names(DEPLOY / "image-programs.txt"))
+        extra = next((n for n in sorted(os.listdir("/usr/bin")) if n not in programs and n not in ROOT_GRANTING
+                      and re.fullmatch(r"[a-z][a-z0-9_-]*", n) and os.access(f"/usr/bin/{n}", os.X_OK)), None)
+        if extra is None:
+            self.skipTest("this box carries no program the image lacks")
+        probe = ('for n in "$@"; do printf "%s=%s\\n" "$n" "$(command -v "$n")"; done\n'
+                 'printf "PATH=%s\\nDROP_PATH=%s\\n" "$PATH" "$DROP_PATH"\n')
+        copied_line = next(line for line in (DEPLOY / "create-agent.sh").read_text().splitlines()
+                           if re.fullmatch(r'[A-Z_]+="[a-z -]{30,}"', line))
+        build_line = next(line for line in (DEPLOY / "update-stack.sh").read_text().splitlines()
+                          if re.fullmatch(r'[A-Z_]+="[a-z -]{30,}"', line))
+        self.assertEqual((_DEPLOY_LINES[copied_line], _DEPLOY_LINES[build_line]),
+                         ({"create-agent.sh"}, {"update-stack.sh"}))
+        # A helper both kinds of script carry, which an excerpt often starts with.
+        shared_line = next(line for line in (DEPLOY / "create-agent.sh").read_text().splitlines()
+                           if re.fullmatch(r"[a-z_]+\(\) +\{.*\}", line)
+                           and _DEPLOY_LINES.get(line.strip(), set()) - DEPLOYED_COPY)
+        handed = os.pathsep.join((str(STAND_IN_GUARD), "/usr/bin", "/opt/elsewhere"))
+        env = {**os.environ, "DROP_PATH": handed}
+
+        def seen(zero, program, wrapper=()):
+            run = subprocess.run([*wrapper, "bash", "--norc", "--noprofile", "-c", program, zero, extra, "sh", "sudo"],
+                                 env=env, text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            return dict(line.split("=", 1) for line in run.stdout.splitlines())
+
+        viewed = os.pathsep.join((str(STAND_IN_GUARD), str(IMAGE_VIEW)))
+        for zero, program, wrapper in ((str(DEPLOY / "account-drop.sh"), probe, ()),
+                                       ("account-drop.sh", probe, ()),
+                                       ("probe", copied_line + "\n" + probe, ()),
+                                       ("probe", shared_line + "\n" + copied_line + "\n" + probe, ()),
+                                       (str(DEPLOY / "verify-load.sh"), probe,
+                                        ("env", f"PATH={STAND_IN_GUARD}:/usr/bin:/opt/elsewhere"))):
+            with self.subTest(zero=zero, wrapper=wrapper):
+                got = seen(zero, program, wrapper)
+                self.assertEqual(got[extra], "")
+                self.assertEqual(got["sh"], str(IMAGE_VIEW / "sh"))
+                self.assertEqual(got["sudo"], str(STAND_IN_GUARD / "sudo"))
+                self.assertEqual((got["DROP_PATH"], got["PATH"] if wrapper else viewed), (viewed, viewed))
+                self.assertEqual([e for e in got["PATH"].split(os.pathsep) if not _inside(e)], [], got["PATH"])
+        for zero, program, wrapper in (("probe", probe, ()),
+                                       ("probe", copied_line + "\n" + build_line + "\n" + probe, ()),
+                                       ("probe", probe, ("env", f"PATH={STAND_IN_GUARD}:/usr/bin"))):
+            with self.subTest(zero=zero, build=build_line in program, wrapper=wrapper):
+                got = seen(zero, program, wrapper)
+                self.assertEqual(got[extra], f"/usr/bin/{extra}")
+                self.assertEqual(got["DROP_PATH"], handed)
+
+    def test_the_view_and_the_checker_read_one_set_of_lists(self):
+        """The view reads the checker's copy list, program list and bin
+        directories, so neither drifts from the other: IMAGE_VIEW holds a
+        link to each listed program the box carries, never a root-granting
+        one, and nothing else."""
+        pc = program_check()
+        self.assertEqual(DEPLOYED_COPY, frozenset(pc.read_names(DEPLOY / "deployed-copy.txt")))
+        self.assertEqual(frozenset(_BOX_BINS), pc.BIN_DIRS)
+        carried = {n for n in pc.read_names(DEPLOY / "image-programs.txt")
+                   if n not in ROOT_GRANTING and shutil.which(n, path=os.pathsep.join(_BOX_BINS))}
+        self.assertEqual(set(os.listdir(IMAGE_VIEW)), carried)
 
     def test_a_reach_fails_a_run_whose_tests_all_passed(self):
         """**A reach fails the run**, even when every test passed: a test that
