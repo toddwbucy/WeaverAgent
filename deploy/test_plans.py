@@ -7884,6 +7884,21 @@ class ProgramCheckTests(unittest.TestCase):
             shutil.copy2(DEPLOY / name, scratch / name)
         return scratch / self.COPY.name, names
 
+    def options_used(self):
+        """(program, spelling, script) for each row of OPTIONS a line of the
+        copied scripts uses, read in process under the checker's wall-clock
+        bound, as findings() reads."""
+        pc = program_check()
+        programs = set(pc.read_names(self.PROGRAMS))
+        shells = [str(DEPLOY / n) for n in pc.read_names(self.COPY) if n.endswith(".sh")]
+        used = set()
+        with pc.bound():
+            scopes = pc.sourcer_functions(shells)
+            for path in shells:
+                script, _ = pc.check_shell(path, programs, scopes[path])
+                used |= {(p, sp, script.name) for p, sp, _ in script.options_used}
+        return used
+
     def findings(self, copy, programs=None):
         """The checker's findings over the copy's shell scripts, in process,
         as {script name: [(line, word, why)]}, under its wall-clock bound."""
@@ -8081,13 +8096,7 @@ class ProgramCheckTests(unittest.TestCase):
         cited line rather than the script, or skip the rows whose script the
         copy does not hold, and a row goes unnamed or a moved line fails."""
         pc = program_check()
-        programs = set(pc.read_names(self.PROGRAMS))
-        shells = [str(DEPLOY / n) for n in pc.read_names(self.COPY) if n.endswith(".sh")]
-        scopes = pc.sourcer_functions(shells)
-        used = set()
-        for path in shells:
-            script, _ = pc.check_shell(path, programs, scopes[path])
-            used |= {(p, sp, script.name) for p, sp, _ in script.options_used}
+        used = self.options_used()
         self.assertEqual([k for k, (_, cited) in pc.OPTIONS.items() if (*k, cited.rsplit(":", 1)[0]) not in used], [])
         self.assertEqual(pc.unheld_rows(set(pc.read_names(self.COPY))), [])
         with tempfile.TemporaryDirectory() as scratch:
@@ -8343,28 +8352,35 @@ class ProgramCheckTests(unittest.TestCase):
         deep with six appends each, code nested 200 deep, arrays inside
         arrays, an array read in its 64 states around a code string, a long
         script, a sed script holding a run of 60 backslashes, and an array
-        whose element is an operator. Each is refused by its own reason, and
-        each exits as its findings say, so a crash or a reader's failure
-        fails. Perturbations: read an array inside another's run, lift the
-        depth bound, let sed's ordinary character take a backslash, read an
-        operator as an array element, or fail the depth bound as a reader's
-        defect, and a case times out, passes unread or ends by another
-        reason."""
+        whose element is an operator. Each is refused by its own reason, with
+        its own remedy printed after it, and each exits as its findings say,
+        so a crash or a reader's failure fails. Perturbations: read an array
+        inside another's run, lift the depth bound, let sed's ordinary
+        character take a backslash, read an operator as an array element,
+        fail the depth bound as a reader's defect, or stand the operator
+        element's remedy after the catch-all, and a case times out, passes
+        unread, or ends by another reason or remedy."""
         h = self.PLANT
         no = "this reader does not follow "
+        words = "write the array's elements as words"
         cases = [("".join(f'NEST{i}=("${{NEST{i + 1}[@]}}")\n' + f"NEST{i}+=(-x)\n" * 6 for i in range(4))
                   + 'NEST4=(true)\n"${NEST0[@]}"\n', no + '"${NEST1[@]}" run as a command, since it is run inside '
-                                                          "another array's run"),
-                 ("x=" + "$(" * 200 + "true" + ")" * 200 + "\n", no + "code nested deeper than 32"),
-                 ("A1=(" * 200 + "x" + ")" * 200 + "\n", no + "an array inside an array"),
+                                                          "another array's run",
+                  "write the array as one NAME=( ), a statement of its own at the top of its scope before the run, "
+                  f"and at most {program_check().MAX_APPENDS} NAME+=( ) outside loops, with no other write to the "
+                  "name, and run it in the shell that assigned it"),
+                 ("x=" + "$(" * 200 + "true" + ")" * 200 + "\n", no + "code nested deeper than 32",
+                  "flatten the nesting"),
+                 ("A1=(" * 200 + "x" + ")" * 200 + "\n", no + "an array inside an array", words),
                  ("WIDE_RUN=(sh -c 'true')\n" + "".join(f"WIDE_RUN+=(V{i}=1)\n" for i in range(6))
-                  + f'"${{WIDE_RUN[@]}}" {h}\n', None),
-                 ("true | cat\n" * 5000, None),
+                  + f'"${{WIDE_RUN[@]}}" {h}\n', None, None),
+                 ("true | cat\n" * 5000, None, None),
                  ("sed -n 's/" + "\\" * 60 + "/x/;p' f\n",
-                  no + "sed past its s, p, d and q commands, whose e runs a program"),
-                 ("x=(;)\n", no + "an array element that starts with ;")]
+                  no + "sed past its s, p, d and q commands, whose e runs a program",
+                  "write the sed script as s, p, d and q commands, in one literal word"),
+                 ("x=(;)\n", no + "an array element that starts with ;", words + ", as bash requires")]
         with tempfile.TemporaryDirectory() as scratch:
-            for text, refused in cases:
+            for text, refused, remedy in cases:
                 with self.subTest(text=text[:40]):
                     target = Path(scratch) / "case.sh"
                     target.write_text("#!/usr/bin/env bash\n" + text)
@@ -8375,9 +8391,40 @@ class ProgramCheckTests(unittest.TestCase):
                     except subprocess.TimeoutExpired:
                         self.fail("the checker took more than ten seconds")
                     said = [tuple(line.split(": ", 2)[1:]) for line in run.stdout.splitlines()]
-                    said = [(word, why.split(" (to pass: ")[0]) for word, why in said]
-                    self.assertEqual(said, [("-", refused)] if refused else [], run.stdout + run.stderr)
+                    self.assertEqual(said, [("-", f"{refused} (to pass: {remedy})")] if refused else [],
+                                     run.stdout + run.stderr)
                     self.assertEqual(run.returncode, 1 if refused else 0, run.stdout + run.stderr)
+
+    def test_every_remedy_is_reached_by_its_own_refusal(self):
+        """**REMEDIES in order**: the first match wins, so an entry an earlier
+        one shadows is never printed. Every entry is reached by a refusal it
+        is written for: an entry whose pattern is plain text by a refusal
+        that is that text, and a pattern entry by a real refusal the checker
+        prints, one for each, so a new pattern entry needs its own. No entry
+        that starts with the catch-all's text stands after the catch-all.
+        Perturbations: stand the operator element's remedy after the
+        catch-all, where it was written first, or the heredoc-in-$( ) entry
+        after the plain heredoc entry, and it is named."""
+        pc = program_check()
+        catch_all = "this reader does not follow"
+        no = catch_all + " "
+        printed = {r"this reader does not follow a heredoc inside \$\( \)":
+                       no + "a heredoc inside $( ) whose body follows the )",
+                   r"this reader does not follow .*, a spelling OPTIONS does not hold":
+                       no + "sed -i, a spelling OPTIONS does not hold",
+                   r"this reader does not follow .* with its argument missing": no + "tar -I with its argument missing",
+                   r"this reader does not follow \w+, which changes what a name runs":
+                       no + "enable, which changes what a name runs",
+                   r'this reader does not follow "\$\{':
+                       no + '"${NEST1[@]}" run as a command, since it is run inside another array\'s run',
+                   r"(?:called|looked up) here, and not a program": "called here, and not a program the image carries"}
+        keys = [k for k, _ in pc.REMEDIES]
+        self.assertEqual(keys.count(catch_all), 1)
+        self.assertEqual([k for k in keys[keys.index(catch_all) + 1:] if k.startswith(catch_all)], [])
+        patterns = {k for k in keys if set(k) & set(".^$*+?{}[]\\|()")}
+        self.assertEqual(patterns, set(printed))
+        self.assertEqual([k for k, r in pc.REMEDIES
+                          if pc.remedy(printed.get(k, k)) != r.replace("MAX_APPENDS", str(pc.MAX_APPENDS))], [])
 
     def test_the_checker_bounds_its_own_run(self):
         """**The checker's own bound**: a run that loops past BOUND_SECONDS,
@@ -8418,28 +8465,40 @@ class ProgramCheckTests(unittest.TestCase):
                     self.assertEqual(run.stdout, f"{first}:0: -: {why} (to pass: {pc.remedy(why)})\n")
 
     def test_the_suites_own_reading_is_bounded_in_time(self):
-        """The suite reads the copy in process, where an address-space limit
-        would bind the suite and every child it starts, so findings() reads
-        under the wall-clock limit alone: a reading that runs past it raises
-        BoundReached. Perturbation: read unbounded, and the planted loop
-        runs out its three seconds and returns."""
+        """The suite runs the reader over the copy in process in two helpers,
+        findings() and options_used(), where an address-space limit would
+        bind the suite and every child it starts, so each reads under the
+        wall-clock limit alone: a reading that runs past it raises
+        BoundReached. The loop is planted in place of the first reading
+        inside each bound, and the test asserts it was entered, so the
+        refusal is the loop's and not a slow real reading's. The suite's
+        other in-process calls into the checker (check_python, siblings,
+        unheld_rows, remedy) are regex or list work over a file's lines, not
+        the reader. Perturbation: either helper reads unbounded, and the
+        planted loop runs out its three seconds and returns."""
         pc = program_check()
-        kept = pc.check_shell, pc.BOUND_SECONDS
+        kept = pc.sourcer_functions, pc.BOUND_SECONDS
+        entered = []
 
-        def loop(*args):
+        def loop(paths):
+            entered.append(len(paths))
             end = time.monotonic() + 3
             while time.monotonic() < end:
                 pass
-            return None, []
+            return kept[0](paths)
 
-        pc.check_shell, pc.BOUND_SECONDS = loop, 0.2
+        pc.sourcer_functions, pc.BOUND_SECONDS = loop, 0.3
         try:
             with tempfile.TemporaryDirectory() as scratch:
                 copy, _ = self.copied(Path(scratch))
-                with self.assertRaises(pc.BoundReached):
-                    self.findings(copy)
+                for name, read in (("findings", lambda: self.findings(copy)), ("options_used", self.options_used)):
+                    with self.subTest(read=name):
+                        entered.clear()
+                        with self.assertRaises(pc.BoundReached):
+                            read()
+                        self.assertEqual(len(entered), 1)
         finally:
-            pc.check_shell, pc.BOUND_SECONDS = kept
+            pc.sourcer_functions, pc.BOUND_SECONDS = kept
 
     def test_the_bound_leaves_its_caller_as_it_found_it(self):
         """bound() restores what its caller had: a timer the caller armed

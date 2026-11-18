@@ -233,6 +233,8 @@ REMEDIES = (
     ("this reader does not follow a heredoc", "close the heredoc on a line of its own"),
     ("this reader does not follow code nested", "flatten the nesting"),
     ("this reader does not follow an array inside an array", "write the array's elements as words"),
+    ("this reader does not follow an array element that starts with", "write the array's elements as words, as "
+                                                                       "bash requires"),
     ("this reader does not follow what ", "run the command without it, or read it in wrapped() with its "
                                           "spellings in OPTIONS"),
     (r"this reader does not follow .*, a spelling OPTIONS does not hold", "add this spelling to OPTIONS with its "
@@ -265,8 +267,6 @@ REMEDIES = (
                                                       "inside a guard in GUARDED"),
     ("starts a program, which this checker", "start the program from a copied shell script, where this checker "
                                              "reads it"),
-    ("this reader does not follow an array element that starts with", "write the array's elements as words, as "
-                                                                       "bash requires"),
     ("the checker's bound was reached", "rewrite the shape this file's latest edit added in a form the copied "
                                         "scripts already use, and report the reader's defect"),
     ("this reader failed", "rewrite the line in a form the copied scripts already use, and report the reader's "
