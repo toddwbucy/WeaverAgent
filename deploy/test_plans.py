@@ -122,22 +122,25 @@ def view_link(name, path):
     return guard_copy(name)
 
 
-# The copies made during each held block (files_held), innermost last.
-_BLOCKS = []
+# The copies guard_copy makes while a block is held (files_held), and the
+# index in it at which each held block began, innermost last. Outside every
+# block both are empty.
+_COPIES_MADE = []
+_HELD_FROM = []
 
 
 def guard_copy(name):
     """The guard's refusing copy of NAME, made now if the guard holds none.
     Whether a file stands under the name is read each time, since a test may
-    remove a copy it made, and each copy made during a held block is kept
-    in that block's list (files_held). A stand-in's name never comes here:
+    remove a copy it made, and each copy made while a block is held is kept
+    in _COPIES_MADE (files_held). A stand-in's name never comes here:
     a stand-in that is a privileged program's file stops the run at its
     start."""
     copy = STAND_IN_GUARD / name
     if not copy.exists():
         refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
-        for block in _BLOCKS:
-            block.append(copy)
+        if _HELD_FROM:
+            _COPIES_MADE.append(copy)
     return copy
 
 
@@ -7857,32 +7860,41 @@ sys.exit(code if code >= 0 else 128 - code)
             self.assertNotRegex(text, r"(?m)^\s*(as_account\(\)|DROP_PATH=)", name)
 
 
+@contextlib.contextmanager
 def files_held(files):
     """PRIVILEGED_FILES held at FILES for a test's block: a start
     directory's change does not read them again, no directory's reading
     from before the block or during it is kept, and no copy guard_copy
     makes during the block outlives it, so a box program FILES names never
     stays refused. A copy that stood before the block stays, and any other
-    file in the guard's directory is left as it is."""
+    file in the guard's directory is left as it is. Blocks nest, each
+    dropping its own copies at its end, a raised one's too, and each holds
+    the guard's directory of its start: a test that patches STAND_IN_GUARD
+    does so outside every held block."""
     from unittest import mock
     module = sys.modules[__name__]
     before = {STAND_IN_GUARD / name for name in os.listdir(STAND_IN_GUARD)}
-    made = []
-    _BLOCKS.append(made)
-
-    def drop_copies():
-        _BLOCKS.remove(made)
+    start = len(_COPIES_MADE)
+    _HELD_FROM.append(start)
+    _MEMBERS_READ.clear()
+    try:
+        with mock.patch.object(module, "PRIVILEGED_FILES", files), \
+                mock.patch.object(module, "_refresh_files", lambda: None):
+            yield
+    finally:
+        _HELD_FROM.pop()
+        made = _COPIES_MADE[start:]
+        del _COPIES_MADE[start:]
+        _MEMBERS_READ.clear()
+        failed = []
         for copy in made:
             if copy not in before:
-                copy.unlink(missing_ok=True)
-
-    held = contextlib.ExitStack()
-    held.callback(_MEMBERS_READ.clear)
-    held.callback(drop_copies)
-    held.enter_context(mock.patch.object(module, "PRIVILEGED_FILES", files))
-    held.enter_context(mock.patch.object(module, "_refresh_files", lambda: None))
-    _MEMBERS_READ.clear()
-    return held
+                try:
+                    copy.unlink(missing_ok=True)
+                except OSError as e:
+                    failed.append(e)
+        if failed:
+            raise failed[0]
 
 
 class StandInGuardTests(unittest.TestCase):
@@ -8324,15 +8336,22 @@ class StandInGuardTests(unittest.TestCase):
         leaves any other file there, as the settings a drop reads
         (FIXTURE_ENVIRON). A copy removed is made again when it is next
         asked for, and a copy that stood before a block stays after it, even
-        when the block removed it and the guard made it again. A made-up name
-        stands for the program. Perturbations: keep the copies, drop every
-        new file, drop every copy made during the block, or read the copy's
-        file once, and this fails."""
+        when the block removed it and the guard made it again. Blocks nest:
+        the inner one drops its own copies and leaves the outer one's, and
+        the outer one drops those made after the inner one ended. A block
+        that raises drops its copies, and one copy that cannot be removed
+        leaves the rest removed. Made-up names stand for the programs.
+        Perturbations: keep the copies, drop every new file, drop every copy
+        made during the block, read the copy's file once, let the inner
+        block drop the outer one's copies, keep a raised block's copies, or
+        stop at the first copy that cannot be removed, and this fails."""
         true = shutil.which("true", path=os.pathsep.join(_BOX_BINS))
+        held_files = PRIVILEGED_FILES | {_file_of(true)}
         copy = STAND_IN_GUARD / "virt-held-during-a-block"
         other = STAND_IN_GUARD / "a-file-the-block-writes"
+        outer, inner, after = (STAND_IN_GUARD / f"virt-held-{n}" for n in ("outer", "inner", "after-inner"))
         try:
-            with files_held(PRIVILEGED_FILES | {_file_of(true)}):
+            with files_held(held_files):
                 guard_copy(copy.name)
                 other.write_text("{}")
                 self.assertTrue(copy.exists())
@@ -8340,13 +8359,37 @@ class StandInGuardTests(unittest.TestCase):
             self.assertTrue(other.exists(), "a file that is not a copy stays")
             self.assertEqual(guard_copy(copy.name), copy)
             self.assertTrue(copy.exists(), "a copy removed is made again")
-            with files_held(PRIVILEGED_FILES | {_file_of(true)}):
+            with files_held(held_files):
                 copy.unlink()
                 guard_copy(copy.name)
             self.assertTrue(copy.exists(), "a copy that stood before the block stays")
+            with files_held(held_files):
+                guard_copy(outer.name)
+                with files_held(held_files):
+                    guard_copy(inner.name)
+                self.assertFalse(inner.exists(), "the inner block drops its own copy")
+                self.assertTrue(outer.exists(), "the inner block leaves the outer one's copy")
+                guard_copy(after.name)
+            self.assertFalse(outer.exists() or after.exists(), "the outer block drops its copies")
+            with self.assertRaises(RuntimeError), files_held(held_files):
+                guard_copy(inner.name)
+                raise RuntimeError("a block that raises")
+            self.assertFalse(inner.exists(), "a block that raises drops its copies")
+            with self.assertRaises(OSError), files_held(held_files):
+                guard_copy(inner.name)
+                guard_copy(after.name)
+                inner.unlink()
+                inner.mkdir()
+            self.assertFalse(after.exists(), "a copy that cannot be removed leaves the rest removed")
+            self.assertEqual((_COPIES_MADE, _HELD_FROM), ([], []), "no block stays held")
         finally:
             other.unlink(missing_ok=True)
             copy.unlink(missing_ok=True)
+            for name in (outer, after):
+                name.unlink(missing_ok=True)
+            if inner.is_dir():
+                inner.rmdir()
+            inner.unlink(missing_ok=True)
 
     def test_the_guard_makes_its_copy_of_a_program_installed_during_the_run(self):
         """**The guard follows the box**: a privileged program that appears
@@ -8395,8 +8438,8 @@ class StandInGuardTests(unittest.TestCase):
         drop `-`, `-a`'s argument or the grouping of short options, take a
         long option only in full, read an unknown option as one that takes
         nothing, read `-S` as any option, let a long option that takes
-        nothing take "=VALUE", or refuse "=SIG" on a signal option, and a row
-        fails."""
+        nothing take "=VALUE", or refuse "=SIG" on any signal option, and a
+        row fails."""
         from unittest import mock
         rows = {
             ("-i", "a", "-i"): ("/default", ["a", "-i"]),
@@ -8413,6 +8456,8 @@ class StandInGuardTests(unittest.TestCase):
             ("--argv0=x", "-i", "a"): ("/default", ["a"]),
             ("--default-signal", "-i", "a"): ("/default", ["a"]),
             ("--ignore-signal=INT", "-i", "a"): ("/default", ["a"]),
+            ("--block-signal=INT", "-i", "a"): ("/default", ["a"]),
+            ("--default-signal=TERM", "-i", "a"): ("/default", ["a"]),
             ("-i", "PATH=/p", "X=1", "a", "PATH=/q"): ("/p", ["a", "PATH=/q"]),
             ("--", "-i"): (None, ["-i"]),
             ("a", "-i"): (None, ["a", "-i"]),
