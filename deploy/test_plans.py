@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import termios
+import threading
 import time
 import unittest
 
@@ -7885,13 +7886,14 @@ class ProgramCheckTests(unittest.TestCase):
 
     def findings(self, copy, programs=None):
         """The checker's findings over the copy's shell scripts, in process,
-        as {script name: [(line, word, why)]}."""
+        as {script name: [(line, word, why)]}, under its wall-clock bound."""
         pc = program_check()
         programs = set(pc.read_names(self.PROGRAMS)) if programs is None else programs
         here = copy.parent
         shells = [str(here / n) for n in pc.read_names(copy) if n.endswith(".sh")]
-        scopes = pc.sourcer_functions(shells)
-        return {os.path.basename(p): pc.check_shell(p, programs, scopes[p])[1] for p in shells}
+        with pc.bound():
+            scopes = pc.sourcer_functions(shells)
+            return {os.path.basename(p): pc.check_shell(p, programs, scopes[p])[1] for p in shells}
 
     def test_the_deployed_copy_calls_only_the_images_programs(self):
         run = self.checker("--copy", self.COPY)
@@ -8340,19 +8342,27 @@ class ProgramCheckTests(unittest.TestCase):
         explored, so no input takes the checker past ten seconds: arrays four
         deep with six appends each, code nested 200 deep, arrays inside
         arrays, an array read in its 64 states around a code string, a long
-        script, and a sed script holding a run of 60 backslashes. Each exits
-        as its findings say, so a crash fails. Perturbations: read an array
-        inside another's run, lift the depth bound, or let sed's ordinary
-        character take a backslash, and a case times out or passes unread."""
+        script, a sed script holding a run of 60 backslashes, and an array
+        whose element is an operator. Each is refused by its own reason, and
+        each exits as its findings say, so a crash or a reader's failure
+        fails. Perturbations: read an array inside another's run, lift the
+        depth bound, let sed's ordinary character take a backslash, read an
+        operator as an array element, or fail the depth bound as a reader's
+        defect, and a case times out, passes unread or ends by another
+        reason."""
         h = self.PLANT
+        no = "this reader does not follow "
         cases = [("".join(f'NEST{i}=("${{NEST{i + 1}[@]}}")\n' + f"NEST{i}+=(-x)\n" * 6 for i in range(4))
-                  + 'NEST4=(true)\n"${NEST0[@]}"\n', "-"),
-                 ("x=" + "$(" * 200 + "true" + ")" * 200 + "\n", "-"),
-                 ("A1=(" * 200 + "x" + ")" * 200 + "\n", "-"),
+                  + 'NEST4=(true)\n"${NEST0[@]}"\n', no + '"${NEST1[@]}" run as a command, since it is run inside '
+                                                          "another array's run"),
+                 ("x=" + "$(" * 200 + "true" + ")" * 200 + "\n", no + "code nested deeper than 32"),
+                 ("A1=(" * 200 + "x" + ")" * 200 + "\n", no + "an array inside an array"),
                  ("WIDE_RUN=(sh -c 'true')\n" + "".join(f"WIDE_RUN+=(V{i}=1)\n" for i in range(6))
                   + f'"${{WIDE_RUN[@]}}" {h}\n', None),
                  ("true | cat\n" * 5000, None),
-                 ("sed -n 's/" + "\\" * 60 + "/x/;p' f\n", "-")]
+                 ("sed -n 's/" + "\\" * 60 + "/x/;p' f\n",
+                  no + "sed past its s, p, d and q commands, whose e runs a program"),
+                 ("x=(;)\n", no + "an array element that starts with ;")]
         with tempfile.TemporaryDirectory() as scratch:
             for text, refused in cases:
                 with self.subTest(text=text[:40]):
@@ -8364,9 +8374,114 @@ class ProgramCheckTests(unittest.TestCase):
                                              timeout=10)
                     except subprocess.TimeoutExpired:
                         self.fail("the checker took more than ten seconds")
-                    said = [line.split(": ", 2)[1] for line in run.stdout.splitlines()]
-                    self.assertEqual(said, [refused] if refused else [], run.stdout + run.stderr)
+                    said = [tuple(line.split(": ", 2)[1:]) for line in run.stdout.splitlines()]
+                    said = [(word, why.split(" (to pass: ")[0]) for word, why in said]
+                    self.assertEqual(said, [("-", refused)] if refused else [], run.stdout + run.stderr)
                     self.assertEqual(run.returncode, 1 if refused else 0, run.stdout + run.stderr)
+
+    def test_the_checker_bounds_its_own_run(self):
+        """**The checker's own bound**: a run that loops past BOUND_SECONDS,
+        or allocates past BOUND_BYTES of address space, ends with a refusal
+        naming the file it was checking and the limit it reached, with exit
+        1 and no traceback. The loops are planted in place of the first of
+        two files' check, after both were read for their functions, and the
+        child runs under an address-space net of its own above the bound,
+        so the box is never at risk. The wall-clock loop allocates nothing,
+        and the child's standard error holds only the line it writes after
+        main() returns. Perturbations: set no wall-clock limit, or no
+        address-space limit, or name the file last read, and the run is
+        killed by the test's timeout, names the net's limit, or names the
+        other file."""
+        pc = program_check()
+        net = 1 << 30
+        self.assertLess(pc.BOUND_BYTES, net)
+        with tempfile.TemporaryDirectory() as scratch:
+            first, second = Path(scratch) / "a.sh", Path(scratch) / "b.sh"
+            for target in (first, second):
+                target.write_text("#!/usr/bin/env bash\ntrue\n")
+            for seconds, loop, limit in ((0.5, "pass", "the wall-clock limit of 0.5 s"),
+                                         (5, "held.append(bytearray(1 << 20))",
+                                          f"the address-space limit of {pc.BOUND_BYTES >> 20} MiB")):
+                with self.subTest(limit=limit):
+                    code = (f"import sys\nsys.path.insert(0, {str(DEPLOY)!r})\nimport program_check as pc\n"
+                            f"pc.BOUND_SECONDS = {seconds}\nheld = []\ndef loop(*args):\n"
+                            f"    while True:\n        {loop}\n"
+                            f"pc.check_shell = loop\n"
+                            f"rc = pc.main(['--programs', {str(self.PROGRAMS)!r}, {str(first)!r}, {str(second)!r}])\n"
+                            "sys.stderr.write('returned')\n"
+                            "sys.exit(rc)\n")
+                    run = subprocess.run([sys.executable, "-c", code], text=True, capture_output=True, timeout=10,
+                                         preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_AS, (net, net)))
+                    why = f"the checker's bound was reached ({limit}) while reading this file, so it is refused unread"
+                    self.assertEqual(run.returncode, 1, run.stdout + run.stderr)
+                    self.assertEqual(run.stderr, "returned")
+                    self.assertEqual(run.stdout, f"{first}:0: -: {why} (to pass: {pc.remedy(why)})\n")
+
+    def test_the_suites_own_reading_is_bounded_in_time(self):
+        """The suite reads the copy in process, where an address-space limit
+        would bind the suite and every child it starts, so findings() reads
+        under the wall-clock limit alone: a reading that runs past it raises
+        BoundReached. Perturbation: read unbounded, and the planted loop
+        runs out its three seconds and returns."""
+        pc = program_check()
+        kept = pc.check_shell, pc.BOUND_SECONDS
+
+        def loop(*args):
+            end = time.monotonic() + 3
+            while time.monotonic() < end:
+                pass
+            return None, []
+
+        pc.check_shell, pc.BOUND_SECONDS = loop, 0.2
+        try:
+            with tempfile.TemporaryDirectory() as scratch:
+                copy, _ = self.copied(Path(scratch))
+                with self.assertRaises(pc.BoundReached):
+                    self.findings(copy)
+        finally:
+            pc.check_shell, pc.BOUND_SECONDS = kept
+
+    def test_the_bound_leaves_its_caller_as_it_found_it(self):
+        """bound() restores what its caller had: a timer the caller armed
+        runs on from where it stood, and the caller's SIGALRM handler and
+        address-space limit come back. Off the main thread, which alone
+        receives the signal, it refuses to run rather than read unbounded.
+        Perturbations: zero the caller's timer, or bound a thread's reading
+        by nothing, and the test goes red."""
+        pc = program_check()
+        alarms = []
+
+        def caller(signum, frame):
+            alarms.append(signum)
+
+        limits = resource.getrlimit(resource.RLIMIT_AS)
+        before = signal.signal(signal.SIGALRM, caller)
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 100)
+            with pc.bound(1, 512 << 20):
+                self.assertNotEqual(resource.getrlimit(resource.RLIMIT_AS), limits)
+            left = signal.getitimer(signal.ITIMER_REAL)[0]
+            self.assertTrue(90 < left <= 100, left)
+            self.assertIs(signal.getsignal(signal.SIGALRM), caller)
+            self.assertEqual(resource.getrlimit(resource.RLIMIT_AS), limits)
+            self.assertEqual(alarms, [])
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, before)
+        refused = []
+
+        def off_main():
+            try:
+                with pc.bound():
+                    refused.append(None)
+            except RuntimeError as e:
+                refused.append(str(e))
+
+        thread = threading.Thread(target=off_main)
+        thread.start()
+        thread.join(10)
+        self.assertEqual(refused, ["the checker's wall-clock bound needs the main thread, which alone receives its "
+                                   "signal"])
 
     def test_a_guarded_program_passes_only_by_its_allowance_and_its_guard(self):
         """nvcc and rustup, absent from the image, pass in decommission.sh only

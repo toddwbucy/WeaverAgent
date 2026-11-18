@@ -40,7 +40,10 @@ copied script names as a command: runuser, timeout, flock, bash, ...) is
 named.
 
 Prints one line per finding, `FILE:LINE: WORD: why`, and exits 1 when any
-stands, 0 when none does, 2 when a file cannot be read.
+stands, 0 when none does, 2 when a file cannot be read. A run bounds itself
+to BOUND_SECONDS of wall clock and BOUND_BYTES of address space: reaching
+either ends it with a refusal naming the file it was reading, after the
+findings already printed, with exit 1.
 
 What it cannot see: a program named through a variable or assembled with
 `set --` and run later (listed with --dynamic), a program another program
@@ -63,9 +66,14 @@ refused, so a shape none of the copied scripts uses is refused, never read.
 """
 import argparse
 import bisect
+import contextlib
 import os
 import re
+import resource
+import signal
 import sys
+import threading
+import time
 
 BUILTINS = frozenset(
     ". : [ alias bg bind break builtin caller cd command compgen complete compopt continue declare dirs "
@@ -257,6 +265,10 @@ REMEDIES = (
                                                       "inside a guard in GUARDED"),
     ("starts a program, which this checker", "start the program from a copied shell script, where this checker "
                                              "reads it"),
+    ("this reader does not follow an array element that starts with", "write the array's elements as words, as "
+                                                                       "bash requires"),
+    ("the checker's bound was reached", "rewrite the shape this file's latest edit added in a form the copied "
+                                        "scripts already use, and report the reader's defect"),
     ("this reader failed", "rewrite the line in a form the copied scripts already use, and report the reader's "
                            "defect"),
 )
@@ -604,7 +616,14 @@ class Reader:
                 j = self.t.find("\n", self.i, self.end)
                 self.i = self.end if j < 0 else j
                 continue
-            elements.append(self.word())
+            at = self.i
+            element = self.word()
+            if self.i == at:
+                # An operator where an element stands (`(;)`, `(|)`, `(()`),
+                # which bash refuses: word() reads nothing there, and reading
+                # on would append empty elements without end.
+                raise Refused(f"an array element that starts with {self.t[at]}")
+            elements.append(element)
 
     def heredoc_bodies(self):
         """At the start of a line after heredoc operators: read each body,
@@ -1334,6 +1353,8 @@ def read_names(path):
 
 
 def read_script(path, scope=None, scope_functions=frozenset(), arrays=None):
+    global READING
+    READING = path
     with open(path) as f:
         text = f.read()
     script = Script(path, text)
@@ -1459,6 +1480,66 @@ def check_python(path):
         return [(n, word, why) for n, why, word in python_runs(f.read().split("\n"))]
 
 
+# **The checker's own bound**: a run that reaches either limit ends as a
+# refusal naming the file it was reading, so a loop this reader did not
+# foresee cannot hang a suite or take the box's memory. The seven copied
+# scripts take 0.25 s and 26 MB of address space.
+BOUND_SECONDS = 5
+BOUND_BYTES = 256 << 20
+READING = None  # the file being read, which the bound's refusal names
+
+
+class BoundReached(Exception):
+    pass
+
+
+@contextlib.contextmanager
+def bound(seconds=None, address_space=None):
+    """Run the body under a wall-clock limit of SECONDS (BOUND_SECONDS by
+    default), which raises BoundReached, and, given ADDRESS_SPACE, an
+    address-space limit in bytes, past which an allocation raises
+    MemoryError. Yields the address-space limit set, or None. That limit
+    binds the whole process and every child it starts, so the program sets
+    it and a caller that imports this module does not. The wall-clock limit
+    is a signal, which only the main thread receives, so elsewhere it
+    refuses to run rather than read unbounded. A timer the caller had armed
+    runs on afterwards from where it stood."""
+    seconds = BOUND_SECONDS if seconds is None else seconds
+    if threading.current_thread() is not threading.main_thread():
+        raise RuntimeError("the checker's wall-clock bound needs the main thread, which alone receives its signal")
+
+    def reached(signum, frame):
+        raise BoundReached(f"the wall-clock limit of {seconds:g} s")
+
+    limits = resource.getrlimit(resource.RLIMIT_AS)
+    installed, before, earlier, applied = False, None, (0.0, 0.0), None
+    began = time.monotonic()
+    try:
+        before = signal.signal(signal.SIGALRM, reached)
+        installed = True
+        earlier = signal.setitimer(signal.ITIMER_REAL, seconds)
+        if address_space is not None:
+            applied = min(v for v in (address_space, *limits) if v != resource.RLIM_INFINITY)
+            resource.setrlimit(resource.RLIMIT_AS, (applied, limits[1]))
+        yield applied
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        if installed:
+            signal.signal(signal.SIGALRM, signal.SIG_DFL if before is None else before)
+        if earlier[0]:
+            signal.setitimer(signal.ITIMER_REAL, max(earlier[0] - (time.monotonic() - began), 1e-6), earlier[1])
+        if applied is not None:
+            resource.setrlimit(resource.RLIMIT_AS, limits)
+
+
+def bound_refusal(limit):
+    """The refusal a run that reached LIMIT ends with, naming the file it
+    was reading."""
+    why = f"the checker's bound was reached ({limit}) while reading this file, so it is refused unread"
+    print(f"{READING or '-'}:0: -: {why} (to pass: {remedy(why)})")
+    return 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--programs", required=True)
@@ -1467,9 +1548,30 @@ def main(argv=None):
     ap.add_argument("files", nargs="*")
     args = ap.parse_args(argv)
     try:
+        with bound(BOUND_SECONDS, BOUND_BYTES):
+            try:
+                return run(ap, args)
+            except MemoryError:
+                # The limit in force, read from the kernel, not the one asked for.
+                soft = resource.getrlimit(resource.RLIMIT_AS)[0]
+                limit = ("memory ran out with no address-space limit in force" if soft == resource.RLIM_INFINITY
+                         else f"the address-space limit of {soft >> 20} MiB")
+    except BoundReached as e:
+        limit = str(e)
+    return bound_refusal(limit)
+
+
+def run(ap, args):
+    """The checker's run, as main() bounds it. READING names the file each
+    step works on: the lists, each file read for its sourced functions,
+    each file checked, then the copy list for its unheld rows."""
+    global READING
+    try:
+        READING = args.programs
         programs = set(read_names(args.programs))
         files = list(args.files)
         if args.copy:
+            READING = args.copy
             here = os.path.dirname(os.path.abspath(args.copy))
             files += [os.path.join(here, n) for n in read_names(args.copy)]
         if not files:
@@ -1477,6 +1579,7 @@ def main(argv=None):
         bad = 0
         scopes = sourcer_functions([p for p in files if not p.endswith(".py")])
         for path in files:
+            READING = path
             if path.endswith(".py"):
                 findings = check_python(path)
                 script = None
@@ -1491,6 +1594,7 @@ def main(argv=None):
                     if kind in ("dynamic", "handed"):
                         print(f"{path}:{line}: {kind}: {word}")
         if args.copy:
+            READING = args.copy
             for line, word, why in unheld_rows({os.path.basename(p) for p in files}):
                 print(f"{args.copy}:{line}: {word}: {why} (to pass: {remedy(why)})")
                 bad += 1
