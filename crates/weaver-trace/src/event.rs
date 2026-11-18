@@ -450,6 +450,15 @@ pub struct RecallAccount {
     /// answer is identified by its first and last events and this count.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub count: Option<u64>,
+    /// The digest of each message the open seated, in seating order: sha256
+    /// hex over the UTF-8 bytes of the message's text blocks joined in order,
+    /// so a prompt the seeding turn entered, one message of one text block, is
+    /// named by the sha256 of its text. Carried on the identity ask's recall
+    /// alone, the load's record of what it seated, per section 3's recall
+    /// clause on the operator's ruling of 2026-11-18 (#617). Absent on the
+    /// other verbs, whose answers feed a turn and never the open.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seated: Option<Vec<String>>,
 }
 
 /// The ask as the harness sent it: which of the state seam's asks, and the

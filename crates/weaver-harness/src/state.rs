@@ -808,6 +808,33 @@ pub(crate) fn identity_material(held: &[Recalled]) -> Option<Vec<weaver_traits::
     held.iter().map(prefix_message).collect()
 }
 
+/// **The digest of each message the open seats**, in seating order, for the
+/// identity recall's `seated`, per `weaver-harness-Spec` section 6.1 on the
+/// operator's ruling of 2026-11-18 (#617): sha256 hex over the UTF-8 bytes of
+/// the message's text blocks joined in order, the text the model family
+/// renders for it. A seated message is a system message, the identity door
+/// refusing every other role and the member answering `message.system` events
+/// alone, and the family renders a system message's text blocks and nothing
+/// else (an unrecovered call's fragment renders in an assistant's turn only).
+/// Taken from the messages the open is built from, so the record names the
+/// bytes seated. A prompt the seeding turn entered is one message of one text
+/// block, so its entry is the sha256 of the prompt's text.
+pub(crate) fn seated_digests(seated: &[weaver_traits::Message]) -> Vec<String> {
+    use sha2::{Digest, Sha256};
+    seated
+        .iter()
+        .map(|message| {
+            let mut hasher = Sha256::new();
+            for block in &message.content {
+                if let weaver_traits::ContentBlock::Text { text } = block {
+                    hasher.update(text.as_bytes());
+                }
+            }
+            format!("{:x}", hasher.finalize())
+        })
+        .collect()
+}
+
 fn prefix_message(event: &Recalled) -> Option<weaver_traits::Message> {
     let role = event
         .pairs

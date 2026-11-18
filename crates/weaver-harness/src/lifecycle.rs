@@ -2487,27 +2487,34 @@ impl Harness {
             } {
                 None => after_load!(run, LifecycleRefusal::DescriptorsUnusable),
                 Some(answered) => {
+                    // **The recall names what the open seats, by digest**
+                    // (#617): the messages are parsed first and handed to the
+                    // recall's door, which digests them, so `seated` is taken
+                    // from the bytes the open is built from, and the recall is
+                    // still authored before the open is.
+                    let material = crate::state::identity_material(&answered);
                     if !diagnostic && !answered.is_empty() {
                         record_enter_ask(
                             &run.author,
                             &mut run.recorder,
-                            weaver_trace::RecallVerb::Identity,
                             &answered,
+                            material.as_deref(),
                         );
                     }
-                    match crate::state::identity_material(&answered) {
+                    match material {
                         Some(material) => material,
                         None => after_load!(run, LifecycleRefusal::DescriptorsUnusable),
                     }
                 }
             },
         };
-        // **The load authors none of what it seats**, on the operator's
+        // **The load authors none of the text it seats**, on the operator's
         // ruling of 2026-10-06 (later, #1) that a session's trace and the
         // state it loaded from are not tied together once the agent is
         // unloaded: the load event's lineage names the save point, the
-        // recall above names the member's answer, and the prompt's text is
-        // on the trace at its seeding turn. The open's messages are the
+        // recall above names the member's answer and, on the ruling of
+        // 2026-11-18 (#617), the digest of each message seated, and the
+        // prompt's text is on the trace at its seeding turn. The open's messages are the
         // identity, prefix material permanent for the residency, per Spec
         // section 6.1.
         // **The seated fact is the answer's, held here at admission**
@@ -4550,18 +4557,21 @@ fn initial_turn_ordinal(_restore: Option<&weaver_types::Lineage>) -> u64 {
 
 /// The enter's answered identity ask reaches the record as a `recall`
 /// event, per `weaver-trace-Spec` section 3's recall clause, before the open
-/// is built from it. **A recall the recorder will not take is named in a
-/// fault rather than refusing the enter**, the miss accounting the seated
-/// prefix already runs on: the answer is good and the load can stand, and
-/// what went unrecorded is the provenance of the prefix the run opens under,
-/// which is the case that fault names.
+/// is built from it, naming beside the answer's identities the digest of each
+/// message the open seats (#617), the load's record of what it seated.
+/// **A recall the recorder will not take is named in a fault rather than
+/// refusing the enter**, the miss accounting the seated prefix already runs
+/// on: what went unrecorded is the provenance of the prefix the run opens
+/// under, which is the case that fault names. The failed authoring latches
+/// the record (#116), and the answer to admin reads the latch first, so no
+/// turn is served over a lost recall.
 fn record_enter_ask(
     author: &crate::authorship::Author,
     recorder: &mut crate::record::Record,
-    verb: weaver_trace::RecallVerb,
     answered: &[crate::state::Recalled],
+    seated: Option<&[weaver_traits::Message]>,
 ) {
-    if let Err(failure) = author.author_recall(recorder, verb, None, answered) {
+    if let Err(failure) = author.author_identity_recall(recorder, answered, seated) {
         let account = serde_json::json!({
             "organ": "harness",
             "miss": "recall-unrecorded",
