@@ -8,6 +8,7 @@ forward sudo, systemctl, package-manager or Cargo calls to the host.
 
 import atexit
 import base64
+import ctypes
 import errno
 import fcntl
 import fnmatch
@@ -80,15 +81,99 @@ TEST_ROOT = os.path.realpath(tempfile.gettempdir())
 # fixture account, rather than the file's own owner, which is 0 when the suite
 # runs as root.
 STRANGER_UID = 54321
-STAND_IN_GUARD = Path(tempfile.mkdtemp(prefix="weaver-test-guard-"))
+
+
+# **No test gains a privilege**: no_new_privs on this process before any
+# test, which every child inherits and no exec clears. A setuid, setgid or
+# file-capability program a test reaches, by PATH or by an absolute path,
+# then runs with the runner's own credentials, so the box's sudo refuses at
+# its start and acts as no one. No test needs such a program's privilege:
+# the one setuid program a test runs is mount, in AccountDropTests, as root
+# of its own user namespace already. Root holds every privilege before the
+# flag is set, so a run as root gains nothing from it, and its end says so.
+def _no_new_privs():
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(38, 1, 0, 0, 0) != 0:  # PR_SET_NO_NEW_PRIVS
+        sys.exit(f"test_plans: prctl(PR_SET_NO_NEW_PRIVS) failed: {os.strerror(ctypes.get_errno())}, so no test runs")
+    if not no_new_privs_held():
+        sys.exit("test_plans: /proc/self/status does not read NoNewPrivs 1, so no test runs")
+
+
+def no_new_privs_held(status="/proc/self/status"):
+    return re.search(r"^NoNewPrivs:\s*1$", Path(status).read_text(), re.M) is not None
+
+
+_no_new_privs()
+# **The suite keeps a record of every reach of the guard's sudo and runuser**,
+# under the tests' temporary root. Each appends its name, the running test's
+# id and its arguments at a path written into its own text, so a drop that
+# clears the environment still writes its line, with the test unknown. After
+# the last test a line that stands fails the run even when every test
+# passed, so no test can take exit 97 and hide a reach. The record's
+# directory goes at exit when it holds no reach, and stays, named, when it
+# holds one.
+REACH_DIR = Path(tempfile.mkdtemp(prefix="weaver-test-reach-"))
+REACH_RECORD = REACH_DIR / "reach-record"
+REACH_RECORD.touch()
+
+
+def reaches_in(record):
+    """**The record's reaches**, as (name, test, arguments): one NUL-ended
+    record each, so an argument's newline or tab stays inside its own."""
+    return [tuple((r.split("\t", 2) + ["", ""])[:3]) for r in record.read_text().split("\0") if r]
+
+
+def say_reaches(reaches):
+    for name, test, args in reaches:
+        args = args.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t")
+        print(f"guard: {test} reached {name} {args}".rstrip(), file=sys.stderr)
+
+
+_FINISHED = []
+
+
+def _drop_an_empty_record():
+    """At exit: the record's directory goes when it holds no reach. A reach
+    that finish() never read, under another runner (`python3 -m unittest`,
+    pytest), is named here and fails the process."""
+    try:
+        reaches = reaches_in(REACH_RECORD)
+    except FileNotFoundError:
+        return
+    if not reaches:
+        shutil.rmtree(REACH_DIR, True)
+    elif not _FINISHED:
+        say_reaches(reaches)
+        print(f"guard: the record stays at {REACH_RECORD}, and this runner never read it", file=sys.stderr)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)
+
+
+atexit.register(_drop_an_empty_record)
+
+
+def make_guard(where, record):
+    """**A guard directory** in WHERE: a sudo and a runuser that append the
+    reach to RECORD and refuse with 97, and the box's setsid, env and
+    timeout."""
+    for name in ("sudo", "runuser"):
+        (where / name).write_text(
+            "#!/bin/sh\n"
+            '{ printf "%s\\t%s\\t" "${0##*/}" "${WEAVER_TEST_ID:-unknown}"; sep=; '
+            'for a do printf "%s%s" "$sep" "$a"; sep=" "; done; printf "\\0"; } >> '
+            + shlex.quote(str(record)) + "\n"
+            'printf "a test reached %s outside its stand-ins\\n" "${0##*/}" >&2\n'
+            "exit 97\n")
+        (where / name).chmod(0o755)
+    for name in ("setsid", "env", "timeout"):
+        if shutil.which(name, path=BOX_PATH):
+            (where / name).symlink_to(shutil.which(name, path=BOX_PATH))
+    return where
+
+
+STAND_IN_GUARD = make_guard(Path(tempfile.mkdtemp(prefix="weaver-test-guard-")), REACH_RECORD)
 atexit.register(shutil.rmtree, STAND_IN_GUARD, True)
-for _name in ("sudo", "runuser"):
-    (STAND_IN_GUARD / _name).write_text('#!/bin/sh\nprintf "a test reached %s outside its stand-ins\\n" "${0##*/}" >&2\n'
-                                        'exit 97\n')
-    (STAND_IN_GUARD / _name).chmod(0o755)
-for _name in ("setsid", "env", "timeout"):
-    if shutil.which(_name, path=BOX_PATH):
-        (STAND_IN_GUARD / _name).symlink_to(shutil.which(_name, path=BOX_PATH))
 os.environ["PATH"] = str(STAND_IN_GUARD) + os.pathsep + BOX_PATH
 GUARDED_USR_BIN = str(STAND_IN_GUARD) + os.pathsep + "/usr/bin:/bin"
 _GUARD_BASH = shutil.which("bash", path=BOX_PATH)
@@ -7399,12 +7484,25 @@ class StandInGuardTests(unittest.TestCase):
             self.assertTrue(marker.exists(), "a run that names no input passes")
 
     def test_the_guard_s_sudo_and_runuser_refuse(self):
-        for name in ("sudo", "runuser"):
-            with self.subTest(name=name):
-                run = subprocess.run(["bash", "-c", f"{name} -n true"], env=dict(os.environ), text=True,
-                                     capture_output=True, timeout=20)
-                self.assertEqual(run.returncode, 97, run.stderr)
-                self.assertIn(f"a test reached {name} outside its stand-ins", run.stderr)
+        # **A guard of its own**, made as the suite's is, so these reaches
+        # stand in its own record and never in the suite's, which fails the
+        # run. Each reach refuses with 97 and appends its name, the running
+        # test and its arguments. Perturbation: drop the record's write, and
+        # the record stays empty.
+        with tempfile.TemporaryDirectory() as scratch:
+            guard = Path(scratch) / "guard"
+            guard.mkdir()
+            record = Path(scratch) / "record"
+            make_guard(guard, record)
+            for name in ("sudo", "runuser"):
+                with self.subTest(name=name):
+                    run = subprocess.run(["bash", "-c", f"{name} -n true"],
+                                         env={**os.environ, "PATH": str(guard) + os.pathsep + BOX_PATH}, text=True,
+                                         capture_output=True, timeout=20)
+                    self.assertEqual(run.returncode, 97, run.stderr)
+                    self.assertIn(f"a test reached {name} outside its stand-ins", run.stderr)
+            test = os.environ.get("WEAVER_TEST_ID", "unknown")
+            self.assertEqual(record.read_text(), f"sudo\t{test}\t-n true\0runuser\t{test}\t-n true\0")
 
 
 def program_check():
@@ -7416,6 +7514,102 @@ def program_check():
         finally:
             sys.path.remove(str(DEPLOY))
     return sys.modules["program_check"]
+
+
+class SuiteGuardTests(unittest.TestCase):
+    """**The suite's guard holds for the whole run**: no test gains a
+    privilege, and a reach of the guard's sudo or runuser fails the run
+    whatever its tests said. A run's own end is shown in a child, which
+    imports this file and runs one planted test class through run_suite."""
+
+    def suite_child(self, body, end="sys.exit(t.run_suite(argv=['planted']))\n"):
+        code = ("import os, subprocess, sys, unittest\n"
+                f"sys.path.insert(0, {str(DEPLOY)!r})\n"
+                "import test_plans as t\n"
+                "print(t.REACH_DIR, flush=True)\n"
+                + body
+                + end)
+        run = subprocess.run([sys.executable, "-c", code], env={**os.environ, "PATH": BOX_PATH}, text=True,
+                             capture_output=True, timeout=120)
+        record_dir = Path(run.stdout.split("\n", 1)[0])
+        self.assertEqual(record_dir.parent, Path(TEST_ROOT), run.stdout + run.stderr)
+        self.assertTrue(record_dir.name.startswith("weaver-test-reach-"), record_dir)
+        self.addCleanup(shutil.rmtree, record_dir, True)
+        return run, record_dir
+
+    def test_no_test_gains_a_privilege(self):
+        """no_new_privs holds in the runner and in a child two execs down, so
+        the box's sudo, reached by any path, acts as no one. Perturbation:
+        drop the prctl, and the flag reads 0 here and in the child."""
+        self.assertTrue(no_new_privs_held())
+        child = subprocess.run(["bash", "--norc", "--noprofile", "-c", "cat /proc/self/status"], text=True,
+                               capture_output=True, timeout=20)
+        self.assertRegex(child.stdout, re.compile(r"^NoNewPrivs:\s*1$", re.M))
+
+    def test_a_reach_fails_a_run_whose_tests_all_passed(self):
+        """**A reach fails the run**, even when every test passed: a test that
+        reaches the guard's sudo and takes its 97 leaves a line naming the
+        test and the arguments, the run exits 1, and the record stays under
+        the tests' temporary root, named. A drop that clears the environment,
+        and a reach after the test, still write theirs, as unknown, and an
+        argument's newline or tab stays inside its own reach. Perturbations: drop the record's
+        write, or the end's check of it, and the run exits 0."""
+        run, record_dir = self.suite_child(
+            "class Planted(unittest.TestCase):\n"
+            "    def test_reach(self):\n"
+            "        took = subprocess.run([str(t.STAND_IN_GUARD / 'sudo'), '-n', 'true'], capture_output=True)\n"
+            "        self.assertEqual(took.returncode, 97)\n"
+            "        took = subprocess.run(['env', '-i', str(t.STAND_IN_GUARD / 'runuser'), '-u', 'nobody', 'id'],\n"
+            "                              capture_output=True)\n"
+            "        self.assertEqual(took.returncode, 97)\n"
+            "        took = subprocess.run([str(t.STAND_IN_GUARD / 'sudo'), 'bash', '-c', 'a\\nb\\tc'],\n"
+            "                              capture_output=True)\n"
+            "        self.assertEqual(took.returncode, 97)\n"
+            "    @classmethod\n"
+            "    def tearDownClass(cls):\n"
+            "        subprocess.run([str(t.STAND_IN_GUARD / 'sudo'), '-n', 'after'], capture_output=True)\n")
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertIn("\nOK\n", run.stderr)
+        self.assertIn("guard: no_new_privs held, 4 reaches of the guard's sudo or runuser\n", run.stderr)
+        self.assertIn("guard: __main__.Planted.test_reach reached sudo bash -c a\\nb\\tc\n", run.stderr)
+        self.assertIn("guard: unknown reached sudo -n after\n", run.stderr)
+        self.assertIn("guard: __main__.Planted.test_reach reached sudo -n true\n", run.stderr)
+        self.assertIn("guard: unknown reached runuser -u nobody id\n", run.stderr)
+        self.assertIn(f"guard: the record stays at {record_dir / 'reach-record'}\n", run.stderr)
+        self.assertTrue((record_dir / "reach-record").is_file())
+
+    def test_a_reach_fails_a_run_under_another_runner(self):
+        """**Another runner** (unittest's own main, as `python3 -m unittest`
+        and pytest run it) never calls finish(), and a reach still fails the
+        process at exit, named, with the record kept. Perturbation: drop the
+        exit's check, and the run exits 0."""
+        run, record_dir = self.suite_child(
+            "class Planted(unittest.TestCase):\n"
+            "    def test_reach(self):\n"
+            "        took = subprocess.run([str(t.STAND_IN_GUARD / 'sudo'), '-n', 'true'], capture_output=True)\n"
+            "        self.assertEqual(took.returncode, 97)\n",
+            end="unittest.main(argv=['planted'])\n")
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertIn("\nOK\n", run.stderr)
+        # The child's runner names no test, so the reach carries the id it inherited.
+        self.assertRegex(run.stderr, r"\nguard: \S+ reached sudo -n true\n")
+        self.assertIn(f"guard: the record stays at {record_dir / 'reach-record'}, and this runner never read it\n",
+                      run.stderr)
+
+    def test_a_run_with_no_reach_ends_on_its_tests_and_leaves_no_record(self):
+        """A run with no reach exits on its tests' verdict, 0 when they pass,
+        1 when one fails and 5, as unittest's own main does, when none ran,
+        and removes the record's directory at exit. Perturbations: keep the
+        record at exit, and its directory stands. Read no count of the tests
+        run, and a run of none exits 0."""
+        for body, status in (("    def test_nothing(self):\n        pass\n", 0),
+                             ("    def test_failing(self):\n        self.fail('planted')\n", 1),
+                             ("    pass\n", 5)):
+            with self.subTest(status=status):
+                run, record_dir = self.suite_child("class Planted(unittest.TestCase):\n" + body)
+                self.assertEqual(run.returncode, status, run.stderr)
+                self.assertIn("guard: no_new_privs held, 0 reaches of the guard's sudo or runuser\n", run.stderr)
+                self.assertFalse(record_dir.exists(), "a run with no reach leaves no record")
 
 
 class ProgramCheckTests(unittest.TestCase):
@@ -13915,5 +14109,55 @@ class AgentTupleInstallTests(unittest.TestCase):
         self.assertIn("[absent: no install tuple was named; the box side is unstated]", box)
 
 
+class _NamingResult(unittest.TextTestResult):
+    """Names the running test to every child it starts, for the reach record."""
+
+    def startTest(self, test):
+        os.environ["WEAVER_TEST_ID"] = test.id()
+        super().startTest(test)
+
+    def stopTest(self, test):
+        # A reach after the test (tearDownClass, a module's teardown) is
+        # unknown, never the last test's.
+        super().stopTest(test)
+        os.environ.pop("WEAVER_TEST_ID", None)
+
+
+class _Runner(unittest.TextTestRunner):
+    resultclass = _NamingResult
+
+
+def finish(passed):
+    """**The run's end**: the guard's line, then the verdict. A reach of the
+    guard's sudo or runuser, or a flag lost, fails the run whatever the tests
+    said."""
+    _FINISHED.append(True)
+    if not REACH_RECORD.is_file():
+        print(f"guard: the reach record {REACH_RECORD} is gone, so this run cannot show that no test reached "
+              "the guard's sudo or runuser", file=sys.stderr)
+        return 1
+    reaches = reaches_in(REACH_RECORD)
+    held = no_new_privs_held()
+    print(f"guard: no_new_privs {'held' if held else 'LOST'}, "
+          f"{len(reaches)} reach{'' if len(reaches) == 1 else 'es'} of the guard's sudo or runuser", file=sys.stderr)
+    if os.geteuid() == 0:
+        print("guard: the run is root, which no_new_privs withholds nothing from", file=sys.stderr)
+    say_reaches(reaches)
+    if reaches:
+        print(f"guard: the record stays at {REACH_RECORD}", file=sys.stderr)
+    return 0 if passed and held and not reaches else 1
+
+
+def run_suite(argv=None, module="__main__"):
+    program = unittest.main(module=module, argv=argv, testRunner=_Runner, exit=False)
+    result = program.result
+    status = finish(result.wasSuccessful())
+    # unittest's own main exits 5 when no test ran, so a filter that matches
+    # nothing never reads as a pass.
+    if status == 0 and result.testsRun == 0 and not result.skipped:
+        return 5
+    return status
+
+
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(run_suite())
