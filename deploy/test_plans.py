@@ -122,16 +122,17 @@ def view_link(name, path):
     return guard_copy(name)
 
 
-_GUARD_COPIES = set()
+_COPIES_MADE = []
 
 
 def guard_copy(name):
-    """The guard's refusing copy of NAME, made now if the guard holds none."""
+    """The guard's refusing copy of NAME, made now if the guard holds none.
+    The file is read each time, since a test may remove a copy it made, and
+    each copy made is kept in _COPIES_MADE (files_held)."""
     copy = STAND_IN_GUARD / name
-    if str(copy) not in _GUARD_COPIES:
-        if not copy.exists():
-            refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
-        _GUARD_COPIES.add(str(copy))
+    if not copy.exists():
+        refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
+        _COPIES_MADE.append(copy)
     return copy
 
 
@@ -181,8 +182,9 @@ def _mtime(path):
 
 def _refresh_files():
     # The key is kept only once every start directory's last change is two
-    # seconds old, as a directory's reading is (_members_of), so a file
-    # replaced within one tick of the clock is never missed. Every
+    # seconds old, or two seconds ahead of the clock, as a directory's
+    # reading is (_members_of), so a file replaced within one tick of the
+    # clock is never missed. Every
     # directory's reading is dropped when a start directory changes, since a
     # directory of links into one keeps its own time when a target changes.
     global PRIVILEGED_FILES
@@ -192,13 +194,15 @@ def _refresh_files():
                                      for f in [_file_of(os.path.join(d, n))] if f)
         _MEMBERS_READ.clear()
         now = time.time_ns()
-        _FILES_READ[0] = key if all(m is None or now - m > 2_000_000_000 for m in key) else None
+        _FILES_READ[0] = key if all(m is None or abs(now - m) > 2_000_000_000 for m in key) else None
 
 
 # A directory's privileged programs, by its real path, read again whenever it
 # changes, so a program installed during a run, or a stand-in a test adds, is
 # covered. A reading is kept only once the directory's last change is two
-# seconds old, so a change within one tick of the clock is never missed.
+# seconds old, so a change within one tick of the clock is never missed. A
+# time two seconds ahead of the clock (a clock stepped back) is kept as
+# well, since a later change writes a time before it.
 _MEMBERS_READ = {}
 
 
@@ -214,7 +218,7 @@ def _members_of(directory):
         names = tuple(sorted(e.name for e in os.scandir(real) if privileged(e.name, e.path)))
     except OSError:
         names = ()
-    if time.time_ns() - changed > 2_000_000_000:
+    if abs(time.time_ns() - changed) > 2_000_000_000:
         _MEMBERS_READ[real] = (changed, names)
     return names
 
@@ -412,43 +416,36 @@ def guard_path(path, what, cwd=None):
                                     f"stand-ins under {TEST_ROOT}: refused before it runs")
 
 
-def guard_argv(argv, cwd=None, executable=None, path=None):
+def guard_argv(argv, cwd=None, executable=None):
     """**No child is started on a privileged program outside the tests'
     temporary root by its path**, whether or not it runs a shell: each
     element of its command line, and its executable, that names a file is
     read by privileged()'s test, where the child starts. The executable is
     the program run, so it is read in argv[0]'s place. An `env` wrapper's
-    own options are read as env reads them (env_hands): the PATH it hands
-    its command is read by guard_path where its command starts, the default
-    PATH where it clears the environment or PATH and assigns none, and the
-    PATH in force (PATH, else this process's) where `-C` moves it alone. A
-    path its command line names, in its `-S` string or from its `-C`
-    directory, is read here."""
+    own options are read as env reads them (env_hands), and the PATH it
+    hands its command, the default PATH where it clears the environment or
+    PATH and assigns none, is read by guard_path."""
     _refresh_files()
     base = os.path.abspath(cwd) if cwd is not None else os.getcwd()
     words = [os.fsdecode(a) for a in argv]
     if executable is not None:
         _guard_paths(words[:1], base)
         words = [os.fsdecode(executable)] + words[1:]
-    _guard_line(words, base, os.environ.get("PATH", os.defpath) if path is None else path)
+    _guard_line(words, base)
 
 
-def _guard_line(words, base, in_force):
-    # The line's paths where it starts, then the first `env` wrapper's, whose
-    # command line, a nested `env` in it included, is read where it starts,
-    # with the PATH it runs on.
+def _guard_line(words, base):
+    # The line's paths, then the first `env` wrapper's, whose command line, a
+    # nested `env` in it included, is read in turn.
     _guard_paths(words, base)
     for i, w in enumerate(words):
         if os.path.basename(w) == "env":
-            path, chdir, command = env_hands(words[i + 1:])
-            where = os.path.join(base, chdir) if chdir else base
+            path, command = env_hands(words[i + 1:])
             if path == os.defpath:
-                guard_path(path, "PATH, the default one an `env` wrapper's -i, - or -u PATH leaves,", where)
+                guard_path(path, "PATH, the default one an `env` wrapper's -i, - or -u PATH leaves,", base)
             elif path is not None:
-                guard_path(path, "PATH an `env` wrapper assigns", where)
-            elif chdir:
-                guard_path(in_force, "PATH, read at an `env` wrapper's -C directory,", where)
-            _guard_line(command, where, in_force if path is None else path)
+                guard_path(path, "PATH an `env` wrapper assigns", base)
+            _guard_line(command, base)
             return
 
 
@@ -460,21 +457,25 @@ def _guard_paths(words, base):
                                     f"outside the stand-ins under {TEST_ROOT}: refused before it runs")
 
 
-# **env's options as GNU env 9.12 reads them** (its --help): each short
-# option by whether it takes an argument, and each long one by its short
-# option, or its own name where it has none, and whether it takes an
-# argument (True), takes none (False) or takes one only after "=" ("=").
-# A long option may be shortened to any prefix that names one alone. An
-# option outside the table, an ambiguous shortening, and --env0-from, which
-# reads the environment from a file, refuse the line, so an option a later
-# env adds fails closed rather than moving the reading by a word.
-_ENV_SHORT = {"a": True, "i": False, "0": False, "u": True, "C": True, "S": True, "v": False}
+# **env's options as GNU env 9.12 reads them** (its --help), each long one
+# by its short option, or its own name where it has none, and whether it
+# takes an argument (True), takes none (False) or takes one only after "="
+# ("="). A long option may be shortened to any prefix that names one
+# alone. An option outside the table, or an ambiguous shortening, refuses
+# the line, so an option a later env adds fails closed rather than moving
+# the reading by a word, and a test holds the table to the box's env.
 _ENV_LONG = {"--argv0": ("a", True), "--ignore-environment": ("i", False), "--env0-from": ("--env0-from", True),
              "--null": ("0", False), "--unset": ("u", True), "--chdir": ("C", True),
              "--split-string": ("S", True), "--block-signal": ("--block-signal", "="),
              "--default-signal": ("--default-signal", "="), "--ignore-signal": ("--ignore-signal", "="),
              "--list-signal-handling": ("--list-signal-handling", False), "--debug": ("v", False),
              "--help": ("--help", False), "--version": ("--version", False)}
+_ENV_SHORT = {opt: takes for opt, takes in _ENV_LONG.values() if len(opt) == 1}
+# The options no line may hand env, which this guard does not read: each
+# would need env's own grammar or a file read, and no test hands one.
+_ENV_REFUSED = {"S": "-S, which splits its string into words by env's own grammar",
+                "C": "-C, which starts its command in another directory",
+                "--env0-from": "--env0-from, which reads its environment from a file"}
 
 
 def env_hands(words):
@@ -482,13 +483,11 @@ def env_hands(words):
     after `env`, read as env reads them: the PATH its command runs with
     (the default PATH where `-i`, `-` or `-u PATH` clears it and no PATH=
     follows, a PATH= it assigns, or None where it keeps the one it was
-    handed), the directory `-C` starts it in, or None, and the command line
-    it runs. Short options group (`-iv`), an argument may be the option's
-    own word or the next, and `-S` splits its string into words read in
-    its place. A `-S` string that carries a backslash, a `$` or a `#`,
-    which env reads by its own grammar (escapes, variables, comments), or
-    whose quotes do not close, refuses the line."""
-    todo, path, chdir = list(words), None, None
+    handed), and the command line it runs. Short options group (`-iv`),
+    and an argument may be the option's own word or the next. An option of
+    _ENV_REFUSED, one outside the table, and an ambiguous shortening refuse
+    the line."""
+    todo, path = list(words), None
 
     def refuse(what):
         raise StandInGuardError(f"a child's command line hands env {what}, which this guard does not read as env "
@@ -519,19 +518,10 @@ def env_hands(words):
                     break
                 opts.append((opt, None))
         for opt, value in opts:
+            if opt in _ENV_REFUSED:
+                refuse(_ENV_REFUSED[opt])
             if opt == "i" or opt == "u" and value == "PATH":
                 path = os.defpath
-            elif opt == "C":
-                chdir = value
-            elif opt == "--env0-from":
-                refuse("--env0-from, which reads its environment from a file")
-            elif opt == "S":
-                if any(c in value for c in "\\$#"):
-                    refuse(f"the -S string {value!r}, with a backslash, a $ or a #")
-                try:
-                    todo[0:0] = shlex.split(value)
-                except ValueError:
-                    refuse(f"the -S string {value!r}, whose quotes do not close")
     if todo and todo[0] == "-":
         path = os.defpath
         todo.pop(0)
@@ -539,7 +529,7 @@ def env_hands(words):
         word = todo.pop(0)
         if word.startswith("PATH="):
             path = word[len("PATH="):]
-    return path, chdir, todo
+    return path, todo
 
 
 SHELLS = ("bash", "sh", "dash", "ash", "ksh", "mksh", "zsh", "rbash", "csh", "tcsh", "fish")
@@ -721,8 +711,7 @@ class _GuardedPopen(_REAL_POPEN):
         if _runs_a_script(args) or kwargs.get("shell", len(rest) > 7 and rest[7]):
             guard_shell_files(rest[2] if len(rest) > 2 else kwargs.get("stdin"), env)
         executable = kwargs.get("executable", rest[1] if len(rest) > 1 else None)
-        guard_argv([args] if isinstance(args, (str, bytes, os.PathLike)) else list(args), cwd, executable,
-                   env.get("PATH", os.defpath))
+        guard_argv([args] if isinstance(args, (str, bytes, os.PathLike)) else list(args), cwd, executable)
         super().__init__(args, *rest, **kwargs)
 
 
@@ -7864,17 +7853,18 @@ sys.exit(code if code >= 0 else 128 - code)
 def files_held(files):
     """PRIVILEGED_FILES held at FILES for a test's block: a start
     directory's change does not read them again, no directory's reading
-    from before the block or during it is kept, and no copy the guard makes
-    during the block outlives it, so a box program FILES names never stays
-    refused."""
+    from before the block or during it is kept, and no copy guard_copy
+    makes during the block outlives it, so a box program FILES names never
+    stays refused. Any other file in the guard's directory is left as it
+    is."""
     from unittest import mock
     module = sys.modules[__name__]
-    before = set(os.listdir(STAND_IN_GUARD))
+    made = len(_COPIES_MADE)
 
     def drop_copies():
-        for name in set(os.listdir(STAND_IN_GUARD)) - before:
-            (STAND_IN_GUARD / name).unlink()
-            _GUARD_COPIES.discard(str(STAND_IN_GUARD / name))
+        for copy in _COPIES_MADE[made:]:
+            copy.unlink(missing_ok=True)
+        del _COPIES_MADE[made:]
 
     held = contextlib.ExitStack()
     held.callback(_MEMBERS_READ.clear)
@@ -8086,11 +8076,11 @@ class StandInGuardTests(unittest.TestCase):
         in), by the default PATH an `env` wrapper leaves when it clears the
         environment or PATH in any spelling env reads, after an option that
         takes an argument too (the links stand in for that PATH, and the
-        refusal names it), by a path in a `-S` string or under a `-C`
-        directory, by a relative PATH env keeps at its `-C` directory,
-        through a nested `env`, through `env` as the executable under
-        another argv[0], as a child that runs code but no shell, and as a
-        shell=True child. Stand-ins of a test's own making, a box program
+        refusal names it), through a nested `env`, through `env` as the
+        executable under another argv[0], as a child that runs code but no
+        shell, and as a shell=True child. An `env` option this guard does
+        not read (`-S`, `-C`, `--env0-from`, or one env lacks) refuses the
+        line. Stand-ins of a test's own making, a box program
         that is not privileged, an `env -i` that assigns its own PATH, and a
         `-i` that is another program's option pass. The privileged programs
         here are made-up family members, and `true`'s file standing for a
@@ -8098,8 +8088,8 @@ class StandInGuardTests(unittest.TestCase):
         if a check is gone. Perturbations: drop the command line's read, its
         reading of env's options, the read of a PATH= in the line, the read
         of a PATH handed to a child that is not a shell, the executable's
-        read in argv[0]'s place, or the PATH's read at a `-C` directory, and
-        a case runs. Read a `-i` anywhere in the line, as an earlier guard
+        read in argv[0]'s place, or the refusal of an option, and a case
+        runs. Read a `-i` anywhere in the line, as an earlier guard
         did, and grep's is refused."""
         from unittest import mock
         true = shutil.which("true", path=os.pathsep.join(_BOX_BINS))
@@ -8135,14 +8125,9 @@ class StandInGuardTests(unittest.TestCase):
                 "env-unsets-PATH-in-two-words": ([env_program, "--unset", "PATH", "virt-newtool"], {}),
                 "env-groups-its-options": ([env_program, "-iv", "virt-newtool"], {}),
                 "env-shortens-an-option": ([env_program, "--ignore-env", "virt-newtool"], {}),
-                "env-splits-a-string": ([env_program, "-S", "-i virt-newtool"], {}),
-                "env-splits-a-path": ([env_program, "-S", f"{links}/virt-newtool --version"], {}),
-                "env-changes-directory": ([env_program, "-C", scratch, "links/virt-newtool"], {}),
                 "env-nested": ([env_program, f"PATH={own}", env_program, "-u", "PATH", "virt-newtool"], {}),
                 "env-takes-an-argument": ([env_program, "-a", "x", "-i", "virt-newtool"], {}),
                 "env-as-the-executable": (["x", "-i", "virt-newtool"], {"executable": env_program}),
-                "env-keeps-a-relative-PATH-at-its-directory": ([env_program, "-C", scratch, "virt-newtool"],
-                                                               {"env": {"PATH": "links"}}),
                 "a-wrapper-assigns-PATH": ([true, f"PATH={links}", "virt-newtool"], {}),
                 "a-child-that-runs-code": ([sys.executable, "-c", "pass"], {"env": {"PATH": str(links)}}),
                 "shell-true": ("virt-newtool", {"shell": True, "env": {"PATH": str(links)}})}
@@ -8155,6 +8140,17 @@ class StandInGuardTests(unittest.TestCase):
                         self.assertIn(str(links), str(refused.exception))
                         if case == "env-clears-the-environment":
                             self.assertIn("the default one an `env` wrapper's -i", str(refused.exception))
+                refused_options = {
+                    "env-splits-a-string": [env_program, "-S", "-i virt-newtool"],
+                    "env-splits-on-a-vertical-tab": [env_program, "-S", "\x0b-i\x0bvirt-newtool"],
+                    "env-changes-directory": [env_program, "-C", scratch, "links/virt-newtool"],
+                    "env-reads-a-file": [env_program, "--env0-from", os.devnull, "virt-newtool"],
+                    "env-lacks-the-option": [env_program, "--no-such-option", "-i", "virt-newtool"]}
+                for case, argv in refused_options.items():
+                    with self.subTest(case=case):
+                        with self.assertRaises(StandInGuardError) as refused:
+                            subprocess.run(argv, timeout=20)
+                        self.assertIn("which this guard does not read as env does", str(refused.exception))
                 with self.subTest(passes="grep-ignores-case"):
                     self.assertEqual(subprocess.run([grep, "-i", "virt-newtool", os.devnull], timeout=20).returncode, 1)
                 with self.subTest(passes="env-assigns-its-own-PATH"):
@@ -8188,8 +8184,11 @@ class StandInGuardTests(unittest.TestCase):
         program installed during a run joins the set. A change within one
         tick of the clock leaves the time as it was, which is why a recent
         reading is never kept: both are shown by stamping the directory's
-        time. Perturbations: keep the first reading, or keep a recent one,
-        and the new program is missed."""
+        time. A directory dated ahead of the clock (a clock stepped back) is
+        kept too, since a later change writes a time before it, so it is not
+        read again on every child. Perturbations: keep the first reading, or
+        keep a recent one, and the new program is missed. Keep none dated
+        ahead, and that reading is not kept."""
         with tempfile.TemporaryDirectory() as scratch:
             box = Path(scratch) / "box"
             box.mkdir()
@@ -8210,6 +8209,10 @@ class StandInGuardTests(unittest.TestCase):
                 (box / "qemu-same-tick").write_text("#!/bin/sh\nexit 0\n")
                 os.utime(box, ns=(now, now))
                 self.assertEqual(_members_of(str(box)), ("qemu-same-tick", "virt-late"))
+                ahead = time.time_ns() + 3_600_000_000_000
+                os.utime(box, ns=(ahead, ahead))
+                self.assertEqual(_members_of(str(box)), ("qemu-same-tick", "virt-late"))
+                self.assertIn(real, _MEMBERS_READ, "a reading dated ahead of the clock is kept")
             finally:
                 _MEMBERS_READ.pop(real, None)
 
@@ -8221,8 +8224,10 @@ class StandInGuardTests(unittest.TestCase):
         it. The key is kept only once the directory's last change is two
         seconds old, so a file replaced within one tick of the clock, which
         leaves the time as it was, is read too: shown by stamping the
-        directory's time. Perturbations: read the files once, or keep a
-        recent key, and the alias drops out."""
+        directory's time. A key dated ahead of the clock is kept, since a
+        later change writes a time before it. Perturbations: read the files
+        once, or keep a recent key, and the alias drops out. Keep none dated
+        ahead, and that key is not kept."""
         from unittest import mock
         with tempfile.TemporaryDirectory() as scratch:
             box = Path(scratch) / "box"
@@ -8252,6 +8257,10 @@ class StandInGuardTests(unittest.TestCase):
                 os.utime(box, ns=(now, now))
                 _refresh_files()
                 self.assertTrue(privileged("an-alias", box / "an-alias"), "the alias of a file replaced in one tick")
+                ahead = time.time_ns() + 3_600_000_000_000
+                os.utime(box, ns=(ahead, ahead))
+                _refresh_files()
+                self.assertEqual(module._FILES_READ[0], (ahead,), "a key dated ahead of the clock is kept")
             _MEMBERS_READ.clear()
             _refresh_files()
 
@@ -8293,16 +8302,27 @@ class StandInGuardTests(unittest.TestCase):
     def test_a_held_file_set_leaves_no_copy_behind(self):
         """files_held, which may hold a box program's file as a named
         program's, removes every copy the guard makes during its block, so
-        that program is never left refused for the rest of the run. A made-up
-        name stands for the program. Perturbation: keep the copies, and this
-        fails."""
+        that program is never left refused for the rest of the run, and
+        leaves any other file there, as the settings a drop reads
+        (FIXTURE_ENVIRON). A copy removed is made again when it is next
+        asked for. A made-up name stands for the program. Perturbations:
+        keep the copies, drop every new file, or read the copy's file once,
+        and this fails."""
         true = shutil.which("true", path=os.pathsep.join(_BOX_BINS))
         copy = STAND_IN_GUARD / "virt-held-during-a-block"
-        with files_held(PRIVILEGED_FILES | {_file_of(true)}):
-            guard_copy(copy.name)
-            self.assertTrue(copy.exists())
-        self.assertFalse(copy.exists())
-        self.assertNotIn(str(copy), _GUARD_COPIES)
+        other = STAND_IN_GUARD / "a-file-the-block-writes"
+        try:
+            with files_held(PRIVILEGED_FILES | {_file_of(true)}):
+                guard_copy(copy.name)
+                other.write_text("{}")
+                self.assertTrue(copy.exists())
+            self.assertFalse(copy.exists())
+            self.assertTrue(other.exists(), "a file that is not a copy stays")
+            self.assertEqual(guard_copy(copy.name), copy)
+            self.assertTrue(copy.exists(), "a copy removed is made again")
+        finally:
+            other.unlink(missing_ok=True)
+            copy.unlink(missing_ok=True)
 
     def test_the_guard_makes_its_copy_of_a_program_installed_during_the_run(self):
         """**The guard follows the box**: a privileged program that appears
@@ -8336,47 +8356,43 @@ class StandInGuardTests(unittest.TestCase):
                         guard_path(f"{box}{os.pathsep}{guard}", "PATH")
                     self.assertIn(f"resolves virt-late to {box}/virt-late", str(refused.exception))
             finally:
-                _GUARD_COPIES.discard(str(guard / "virt-late"))
+                _COPIES_MADE[:] = [c for c in _COPIES_MADE if c != guard / "virt-late"]
                 _MEMBERS_READ.pop(os.path.realpath(box), None)
 
     def test_env_hands_reads_envs_own_options_as_env_does(self):
         """env_hands reads the words after `env` as GNU env does: the PATH its
         command runs with (the default PATH where it clears the environment
-        or PATH, in any spelling, and assigns none), the directory `-C`
-        names, and the command line. An option that takes an argument takes
-        it, an option of the command's own is not env's, and an option the
-        table lacks, an ambiguous shortening, --env0-from, and a `-S` string
-        read by env's own grammar or with an open quote are refused. Each
-        row was checked against the box's env 9.12. Perturbations: read
-        `-i` alone, drop `-`, `-S`, `-a`'s argument or the grouping of short
-        options, take a long option only in full, read an unknown option as
-        one that takes nothing, or split a `-S` string with a `$`, and a
-        row fails."""
+        or PATH, in any spelling, and assigns none) and the command line. An
+        option that takes an argument takes it, and an option of the
+        command's own is not env's. An option the table lacks, an ambiguous
+        shortening, and the options no line may hand env (`-S`, `-C`,
+        `--env0-from`, each in any spelling) are refused. Each row was
+        checked against the box's env 9.12. Perturbations: read `-i` alone,
+        drop `-`, `-a`'s argument or the grouping of short options, take a
+        long option only in full, read an unknown option as one that takes
+        nothing, or read `-S` as any option, and a row fails."""
         from unittest import mock
         rows = {
-            ("-i", "a", "-i"): ("/default", None, ["a", "-i"]),
-            ("-", "a"): ("/default", None, ["a"]),
-            ("-iv", "a"): ("/default", None, ["a"]),
-            ("-viu", "PATH", "a"): ("/default", None, ["a"]),
-            ("-uPATH", "a"): ("/default", None, ["a"]),
-            ("-u", "HOME", "a"): (None, None, ["a"]),
-            ("--unset", "PATH", "a"): ("/default", None, ["a"]),
-            ("--unset=PATH", "a"): ("/default", None, ["a"]),
-            ("--ignore-env", "a"): ("/default", None, ["a"]),
-            ("-a", "x", "-i", "a"): ("/default", None, ["a"]),
-            ("--argv0", "x", "-u", "PATH", "a"): ("/default", None, ["a"]),
-            ("--argv0=x", "-i", "a"): ("/default", None, ["a"]),
-            ("--default-signal", "-i", "a"): ("/default", None, ["a"]),
-            ("-i", "PATH=/p", "X=1", "a", "PATH=/q"): ("/p", None, ["a", "PATH=/q"]),
-            ("-C", "/d", "a"): (None, "/d", ["a"]),
-            ("--chdir=/d", "a"): (None, "/d", ["a"]),
-            ("-S", "-i  a 'b c'", "d"): ("/default", None, ["a", "b c", "d"]),
-            ("-vS-i a",): ("/default", None, ["a"]),
-            ("--", "-i"): (None, None, ["-i"]),
-            ("a", "-i"): (None, None, ["a", "-i"]),
+            ("-i", "a", "-i"): ("/default", ["a", "-i"]),
+            ("-", "a"): ("/default", ["a"]),
+            ("-iv", "a"): ("/default", ["a"]),
+            ("-viu", "PATH", "a"): ("/default", ["a"]),
+            ("-uPATH", "a"): ("/default", ["a"]),
+            ("-u", "HOME", "a"): (None, ["a"]),
+            ("--unset", "PATH", "a"): ("/default", ["a"]),
+            ("--unset=PATH", "a"): ("/default", ["a"]),
+            ("--ignore-env", "a"): ("/default", ["a"]),
+            ("-a", "x", "-i", "a"): ("/default", ["a"]),
+            ("--argv0", "x", "-u", "PATH", "a"): ("/default", ["a"]),
+            ("--argv0=x", "-i", "a"): ("/default", ["a"]),
+            ("--default-signal", "-i", "a"): ("/default", ["a"]),
+            ("-i", "PATH=/p", "X=1", "a", "PATH=/q"): ("/p", ["a", "PATH=/q"]),
+            ("--", "-i"): (None, ["-i"]),
+            ("a", "-i"): (None, ["a", "-i"]),
         }
         refused = (("--i", "a"), ("-x", "a"), ("--no-such-option", "a"), ("--env0-from", "f", "a"),
-                   ("--env0-from=f", "a"), ("-S", "${D}/a"), ("-S", "a\\_b"), ("-S", "a #c"), ("-S", "'a b"))
+                   ("--env0-from=f", "a"), ("-S", "-i a"), ("-vS-i a",), ("--split-string=a",),
+                   ("-S", "\x0b-i\x0ba"), ("-C", "/d", "a"), ("--chdir=/d", "a"), ("-iC/d", "a"))
         with mock.patch.object(os, "defpath", "/default"):
             for words, want in rows.items():
                 with self.subTest(words=words):
@@ -8388,24 +8404,27 @@ class StandInGuardTests(unittest.TestCase):
 
     def test_envs_table_holds_every_option_the_boxs_env_names(self):
         """The table env_hands reads holds every option the box's env names in
-        its --help, each with its short form and whether it takes an
-        argument, so an option a later env adds is named here before a line
-        meets the guard's refusal of it. Perturbation: drop -a from the
-        table, and this fails."""
+        its --help, long and short, each with whether it takes an argument,
+        and no other, so an option a later env adds is named here before a
+        line meets the guard's refusal of it. Perturbations: drop -a from
+        the table, or add a short option the box's env lacks, and this
+        fails."""
         env_program = shutil.which("env", path=os.pathsep.join(_BOX_BINS))
         text = subprocess.run([env_program, "--help"], capture_output=True, text=True, timeout=20,
                               env={"LC_ALL": "C", "PATH": str(STAND_IN_GUARD)}, check=True).stdout
         text = re.sub(r"\x1b\]8;;[^\x1b]*\x1b\\|\x1b\[[0-9;]*m", "", text)
-        named = re.findall(r"^\s+(?:-(\w), )?(--[\w-]+)(\[=|=)?", text, re.M)
-        self.assertIn(("a", "--argv0", "="), named, "the help reads as the table expects")
-        for short, long, argument in named:
-            with self.subTest(option=long):
-                self.assertIn(long, _ENV_LONG)
-                takes = {"": False, "=": True, "[=": "="}[argument]
-                self.assertEqual(_ENV_LONG[long], (short or long, takes))
-                if short:
-                    self.assertEqual(_ENV_SHORT.get(short), takes)
-        self.assertEqual(len(named), len(_ENV_LONG), "the table holds no option the box's env lacks")
+        longs, shorts = {}, set()
+        for line in text.splitlines():
+            if not re.match(r"\s+-", line):
+                continue
+            short, long, argument = re.match(r"\s+(?:-(\w)(?:,\s+|\s|$))?(?:(--[\w-]+)(\[=|=)?)?", line).groups()
+            if long:
+                longs[long] = (short or long, {None: False, "=": True, "[=": "="}[argument])
+            if short:
+                shorts.add(short)
+        self.assertIn("--argv0", longs, "the help reads as the table expects")
+        self.assertEqual(longs, _ENV_LONG)
+        self.assertEqual(shorts, set(_ENV_SHORT))
 
     def test_a_multi_call_binary_that_is_a_shell_or_a_stand_in_is_named(self):
         """A file that is both a named program's and env's (a multi-call
