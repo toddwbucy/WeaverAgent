@@ -546,13 +546,16 @@ esac
 # before #578 the key's directory is the base itself, which is never one. It
 # prints "agent <name>'s <place> <path>" and answers 0 when DIR is one of them
 # or lies under one, and answers 1 when it lies in none. It prints the path and
-# answers 2 when the admin base stands and cannot be listed, a root cannot be
-# searched, or a key that stands cannot be read, since which agents stand, or
-# where one stands, cannot be told. A place that does not resolve holds
-# nothing that stands.
+# answers 2 when the admin base stands and cannot be listed or searched, a root
+# cannot be searched, or a key that stands cannot be read, since which agents
+# stand, or where one stands, cannot be told. A place that does not resolve
+# holds nothing that stands.
 standing_agent_holding() {
   local dir=$1 root agent key t f h v label place
-  if [ -d "$ADMIN_BASE" ] && [ ! -r "$ADMIN_BASE" ]; then printf '%s' "$ADMIN_BASE"; return 2; fi
+  if [ -d "$ADMIN_BASE" ] && { [ ! -r "$ADMIN_BASE" ] || [ ! -x "$ADMIN_BASE" ]; }; then
+    printf '%s' "$ADMIN_BASE"
+    return 2
+  fi
   for root in "$ADMIN_BASE"/*/; do
     root=${root%/}
     [ -d "$root" ] && [ ! -L "$root" ] || continue

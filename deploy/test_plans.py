@@ -264,7 +264,7 @@ if (name == 'as-root' and args[:3] == ['rm', '-rf', '--'] and len(args) == 4
     # reaches the double as `as-root rm -rf -- DIR`. Removed as the helper
     # removes it, and not logged, since it is no root step. Without this the
     # double's own rm refused it, and every root-mode drop left one in /tmp.
-    os.execv('/usr/bin/rm', ['rm', *args])
+    os.execv('/usr/bin/rm', ['rm', *args[1:]])
 with open(os.environ['CALLS'], 'a') as log:
     log.write(json.dumps([name, *args]) + '\n')
 # **Root mode** (#576): a root step root runs directly reaches the double as
@@ -2046,16 +2046,25 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         # the groups, and a usermod names root; look through sudo, and no
         # runuser look is made. **No drop's relay directory outlives the run**
         # (the clean-up after #598): each drop removes its own, root mode's
-        # routing included, under a TMPDIR written with a trailing slash.
-        # Perturbations: drop the double's pass-through for that removal, or
-        # compare its directory as written, and the directories stand.
+        # routing included, under a TMPDIR written with a trailing slash, and
+        # nothing else is removed: a file named rm in the run's own directory
+        # stands (CodeRabbit on #608). Perturbations: drop the double's
+        # pass-through for that removal, or compare its directory as written,
+        # and the directories stand. Hand rm its own name as an operand, and
+        # the file named rm goes.
         self.root_mode()
         relays = self.root / "relays"
         relays.mkdir()
+        decoy = self.root / "cwd"
+        decoy.mkdir()
+        (decoy / "rm").write_text("not the relay\n")
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(decoy)
         self.env.update(ALLOW_APPLY_CHECKS="1", TMPDIR=f"{relays}/")
         result = self.create("--root-operator", "--apply")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(sorted(p.name for p in relays.glob("weaver-drop.*")), [])
+        self.assertTrue((decoy / "rm").exists(), "a file named rm in the run's directory stands")
         self.assertIn("== made", result.stdout)
         self.assertIn("operator        root (--root-operator), which reads everything already", result.stdout)
         calls = self.calls()
@@ -2701,8 +2710,8 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         or its home read lexically, so a folder whose territory is gone, and
         one only its home names, refuse too (the self-check on #606). A
         territory key that stands and cannot be read refuses, as do a root
-        that cannot be searched and an admin base that cannot be listed. (A
-        base in
+        that cannot be searched and an admin base that cannot be listed or
+        searched (CodeRabbit on #608). (A base in
         a weaver entry in /tmp is the agent's account's, which the base's own
         check refuses first, as it refuses any home on a box.) Perturbations:
         drop the territory, or the home, from a standing agent's places, and
@@ -2749,7 +2758,8 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         for label, unread, mode, back, needs in (
                 ("a territory key that cannot be read", key, 0, 0o644, os.R_OK),
                 ("a root that cannot be searched", self.config / "m6", 0o644, 0o755, os.X_OK),
-                ("an admin base that cannot be listed", self.config, 0o311, 0o755, os.R_OK)):
+                ("an admin base that cannot be listed", self.config, 0o311, 0o755, os.R_OK),
+                ("an admin base that cannot be searched", self.config, 0o644, 0o755, os.X_OK)):
             with self.subTest(label):
                 unread.chmod(mode)
                 try:
