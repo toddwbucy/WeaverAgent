@@ -8377,27 +8377,27 @@ class StandInGuardTests(unittest.TestCase):
                 _MEMBERS_READ.clear()
 
     def test_a_held_block_sets_the_guards_copies_back(self):
-        """files_held, which may hold a box program's file as a named
-        program's, sets the guard's refusing copies back at its end as they
-        stood at its start, so that program is never left refused for the
-        rest of the run: a copy made during the block is removed, and a copy
-        removed during it is made again. Any other file there is left, as the
-        settings a drop reads (FIXTURE_ENVIRON). Outside a block, a copy
-        removed is made again when it is next asked for. Blocks nest, each
-        setting back its own start, even where the outer one removed a copy
-        the inner one made again, and the outer one sets back what the inner
-        one could not. A block that raises sets the copies back too. What
-        cannot be set back leaves the rest set back and is named, in
-        GuardCopiesLeft or in a note on the block's own exception, also when
-        the guard's directory cannot be read at the end, or the generator is
-        closed. An entry that could not be read at the start or at the end is
-        left and named, and another writer's temporary copy is never read as a copy.
-        Made-up names stand for the programs. Perturbations: keep the copies
-        made, read a temporary copy as one, leave a removed copy removed, remove every new file,
-        skip a raised block, stop at the first failure, let the cleanup's
-        error replace the block's, let the end reading's error replace it,
-        take an unread entry as absent, or note on a closed generator, and
-        this fails."""
+        """files_held, which may hold a box program's file as a named program's,
+        sets the guard's refusing copies back at its end as they stood at its
+        start, so that program is never left refused for the rest of the run: a
+        copy made during the block is removed, and a copy removed during it is
+        made again. Any other file there is left, as the settings a drop reads
+        (FIXTURE_ENVIRON). Outside a block, a copy removed is made again when it
+        is next asked for. Blocks nest, each setting back its own start, even
+        where the outer one removed a copy the inner one made again, and the
+        outer one sets back what the inner one could not. A block that raises
+        sets the copies back too. What cannot be set back leaves the rest set
+        back and is named, in GuardCopiesLeft or in a note on the block's own
+        exception, also when the guard's directory cannot be read at the end, or
+        the generator is closed. An entry that could not be read at the start or
+        at the end is left and named, an entry gone before it is read is absent,
+        and another writer's temporary copy is never read as a copy. Made-up
+        names stand for the programs. Perturbations: keep the copies made, read
+        a temporary copy as one, leave a removed copy removed, remove every new
+        file, skip a raised block, stop at the first failure, let the cleanup's
+        error replace the block's, let the end reading's error replace it, take
+        an unread entry as absent, read an entry unread at the end as gone, take
+        a gone entry as unread, or note on a closed generator, and this fails."""
         from unittest import mock
         true = shutil.which("true", path=os.pathsep.join(_BOX_BINS))
         held_files = PRIVILEGED_FILES | {_file_of(true)}
@@ -8416,10 +8416,10 @@ class StandInGuardTests(unittest.TestCase):
             return mock.patch.object(path_type, "unlink", unlink)
         real_read = path_type.read_bytes
 
-        def read_but(path):
+        def read_but(path, error=None):
             def read_bytes(self):
                 if self == path:
-                    raise PermissionError(13, "Permission denied", str(self))
+                    raise error or PermissionError(13, "Permission denied", str(self))
                 return real_read(self)
             return mock.patch.object(path_type, "read_bytes", read_bytes)
         try:
@@ -8498,10 +8498,10 @@ class StandInGuardTests(unittest.TestCase):
                     patch.stop()
             self.assertIn(f"{new} not read at the block's start", str(unreadable.exception))
             self.assertTrue(new.exists(), "an entry that could not be read at the start is left")
+            unlike_a_copy = b"#" * len(refusing_text(REACH_RECORD).encode())
             try:
                 with self.assertRaises(GuardCopiesLeft) as unreadable, files_held(held_files):
-                    old.unlink()
-                    guard_copy(old.name)
+                    old.write_bytes(unlike_a_copy)
                     reading = read_but(old)
                     reading.start()
                     started.append(reading)
@@ -8510,7 +8510,20 @@ class StandInGuardTests(unittest.TestCase):
                     patch.stop()
                 started.clear()
             self.assertIn(f"{old} not read at its end", str(unreadable.exception))
-            self.assertTrue(old.exists(), "an entry that could not be read at the end is left")
+            self.assertEqual(old.read_bytes(), unlike_a_copy, "an entry that could not be read at the end is left")
+            old.unlink()
+            guard_copy(old.name)
+            try:
+                with files_held(held_files):
+                    reading = read_but(old, FileNotFoundError(2, "No such file or directory"))
+                    reading.start()
+                    started.append(reading)
+            finally:
+                for patch in started:
+                    patch.stop()
+                started.clear()
+            self.assertEqual(old.read_bytes(), refusing_text(REACH_RECORD).encode(),
+                             "an entry gone before it is read is absent, and made again")
             new.unlink()
             held = files_held(held_files)
             with unlink_but(stuck):
