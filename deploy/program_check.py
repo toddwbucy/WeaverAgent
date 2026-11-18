@@ -1246,10 +1246,13 @@ class Reader:
             return refuse("sed with a script the shell expands (a variable or a substitution in it), whose text this "
                           "reader does not see")
         if name == "sed" and operands:
+            # A backslash is read only with the character it escapes, as sed
+            # reads it, so no run of backslashes can be split two ways and the
+            # match stays linear.
             addr = r"(?:\d+|\$|/(?:\\.|[^/\\])*/)"
             plain = re.compile(r"(?:" + addr + r"(?:," + addr + r")?)?[pdq]"
-                               r"|(?:" + addr + r"(?:," + addr + r")?)?s(?P<d>[^\\\n])(?:\\.|(?!(?P=d)).)*(?P=d)"
-                               r"(?:\\.|(?!(?P=d)).)*(?P=d)[gpI0-9]*")
+                               r"|(?:" + addr + r"(?:," + addr + r")?)?s(?P<d>[^\\\n])(?:\\.|(?!(?P=d))[^\\\n])*(?P=d)"
+                               r"(?:\\.|(?!(?P=d))[^\\\n])*(?P=d)[gpI0-9]*")
             if not plain.fullmatch(rest[operands[0]].value):
                 return refuse("sed past its s, p, d and q commands, whose e runs a program")
         return None

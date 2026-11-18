@@ -7838,7 +7838,8 @@ class SuiteGuardTests(unittest.TestCase):
                 self.assertNotIn("Traceback", run.stderr)
         accent = "subprocess.run([str(t.STAND_IN_GUARD / 'sudo'), '-n', os.fsdecode(b'\\xc3\\xa9')], capture_output=True)"
         run, _ = self.suite_child("import os\nclass Planted(unittest.TestCase):\n    def test_accent(self):\n        "
-                                  + accent + "\n", env={"LC_ALL": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"})
+                                  + accent + "\n", env={"LC_ALL": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0",
+                                                   "PYTHONIOENCODING": "ascii:backslashreplace"})
         self.assertEqual(run.returncode, 1, run.stderr)
         self.assertRegex(run.stderr, r"guard: \S*test_accent\S* reached sudo -n \\xe9\n")
 
@@ -8109,8 +8110,8 @@ class ProgramCheckTests(unittest.TestCase):
             target.write_text("# a line above\n" + text)
             self.assertEqual(self.findings(copy)["verify-load.sh"], [])
             lines = text.split("\n")
-            self.assertTrue(lines[at - 1].startswith("LDD_ENV=(env -u "), lines[at - 1])
-            lines[at - 1] = "LDD_ENV=(env)"
+            (use,) = [n for n, line in enumerate(lines) if line.startswith("LDD_ENV=(env -u ")]
+            lines[use] = "LDD_ENV=(env)"
             target.write_text("\n".join(lines))
             self.assertEqual(self.findings(copy)["verify-load.sh"],
                              [(at, "-u", "OPTIONS holds env -u for this script, and no line of it uses that "
@@ -8338,9 +8339,11 @@ class ProgramCheckTests(unittest.TestCase):
         """**A bound on cost**: a nested or pathological shape is refused, not
         explored, so no input takes the checker past ten seconds: arrays four
         deep with six appends each, code nested 200 deep, arrays inside
-        arrays, an array read in its 64 states around a code string, and a
-        long script. Perturbations: read an array inside another's run, or
-        lift the depth bound, and a case times out or passes unread."""
+        arrays, an array read in its 64 states around a code string, a long
+        script, and a sed script holding a run of 60 backslashes. Each exits
+        as its findings say, so a crash fails. Perturbations: read an array
+        inside another's run, lift the depth bound, or let sed's ordinary
+        character take a backslash, and a case times out or passes unread."""
         h = self.PLANT
         cases = [("".join(f'NEST{i}=("${{NEST{i + 1}[@]}}")\n' + f"NEST{i}+=(-x)\n" * 6 for i in range(4))
                   + 'NEST4=(true)\n"${NEST0[@]}"\n', "-"),
@@ -8348,7 +8351,8 @@ class ProgramCheckTests(unittest.TestCase):
                  ("A1=(" * 200 + "x" + ")" * 200 + "\n", "-"),
                  ("WIDE_RUN=(sh -c 'true')\n" + "".join(f"WIDE_RUN+=(V{i}=1)\n" for i in range(6))
                   + f'"${{WIDE_RUN[@]}}" {h}\n', None),
-                 ("true | cat\n" * 5000, None)]
+                 ("true | cat\n" * 5000, None),
+                 ("sed -n 's/" + "\\" * 60 + "/x/;p' f\n", "-")]
         with tempfile.TemporaryDirectory() as scratch:
             for text, refused in cases:
                 with self.subTest(text=text[:40]):
@@ -8362,6 +8366,7 @@ class ProgramCheckTests(unittest.TestCase):
                         self.fail("the checker took more than ten seconds")
                     said = [line.split(": ", 2)[1] for line in run.stdout.splitlines()]
                     self.assertEqual(said, [refused] if refused else [], run.stdout + run.stderr)
+                    self.assertEqual(run.returncode, 1 if refused else 0, run.stdout + run.stderr)
 
     def test_a_guarded_program_passes_only_by_its_allowance_and_its_guard(self):
         """nvcc and rustup, absent from the image, pass in decommission.sh only
@@ -8493,6 +8498,7 @@ class ProgramCheckTests(unittest.TestCase):
             target.write_text(text + "\nx=$(case a in a) hostname ;; b) true ;; esac)\n"
                               "case b in a) true ;; b) hostname\nesac\nSELF_RUN=(\"${SELF_RUN[@]}\")\n\"${SELF_RUN[@]}\"\n"
                               "awk -F: '$1 == 1 || $2 == 2 { print }' f\nsed -n 's/a/b/p' f\nsed 2d f\nvisudo -cqf x\n"
+                              "sed -n 's/a\\/b/c\\\\/p' f\n"
                               "pacman -Q x\nsort -u x\n")
             found = self.findings(copy)["retired-python.sh"]
             self.assertEqual([(w, why) for _, w, why in found],
