@@ -874,6 +874,20 @@ would leave the limit with nothing to name it. Read the mark by hand as above, a
 once it reads. Or, where it carries the account's uid, set the limit to none by hand as
 above, clear the mark with `sudo chattr -p 0 <agent-directory>/<name>`, and rerun.
 
+**Where `decommission.sh` refuses over a target that holds a base** (#606), it has
+archived and removed nothing. The plan's `REFUSED` lines name each target and what it
+holds: an agent's folder, a root's own territory, a home, a weaver entry in `/tmp` or
+`/etc/weaver` that is or holds a base, another agent's folder or another root's
+territory. The archive skips such a path, so a purge would remove the accounts and leave
+what they own with no archive copy. The layout comes from a hand edit: the stack
+record's `agent-directory` moved into an agent's folder, its territory or its home, with
+or without an agent made there since, or a root's `territory` key naming a path in
+another root's territory. Unpick it by hand: take down by this section any agent made
+inside another, set `/etc/weaver/stack/agent-directory` back to the base the agents were
+made in (`sudoedit`), put back any `territory` key that was moved, and rerun.
+`create-agent.sh` refuses a base inside an agent whose root stands under the admin base
+it reads, so it does not make the nested layout while the outer agent stands.
+
 **Where a rerun of the purge refuses over a home quota's limit**, the project's number
 names an account the purge did not judge, or `repquota` shows the project with a limit
 while no account the purge judged holds the number, or the quotas cannot be read. The

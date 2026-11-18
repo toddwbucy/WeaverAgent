@@ -429,6 +429,12 @@ elif name == 'getent':
         print(line); sys.exit(0)
     if args[:1] == ['group'] and box_group(args[-1]) and (args[-1] not in BOX_ACCOUNTS or args[-1] in box_passwd()):
         print(box_group(args[-1])); sys.exit(0)
+    # **A standing agent's account** (#606): STANDING_PASSWD, a JSON map of
+    # name to passwd line, which create-agent.sh's guard reads for a standing
+    # agent's home.
+    standing = json.loads(os.environ.get('STANDING_PASSWD', '{}'))
+    if args[:1] == ['passwd'] and args[-1] in standing:
+        print(standing[args[-1]]); sys.exit(0)
     if os.environ.get('ACCOUNT_FAIL'): sys.exit(1)
     if args[:1] == ['group'] and os.environ.get('COLLISION_GROUP') == args[-1]: sys.exit(0)
     sys.exit(0 if os.environ.get('COLLISION') == args[-1] else 2)
@@ -938,7 +944,7 @@ class PlanTests(unittest.TestCase):
                      "KEEP_CGROUP", "FIXTURE_ACCOUNT_FOR", "FIXTURE_SKEL_LINK", "SETQUOTA_FAIL", "SETQUOTA_HOLD", "USERADD_FAIL", "STAND_IN_LEAF", "ENGINE_BUILD", "NO_ENGINE_MESSAGE",
                      "LDD_MISSING", "CUDA_LIB_DIR", "DECOY_ENGINE", "LDD_ELSEWHERE", "LDD_STATIC",
                      "CMAKE_DISABLE_FIND_PACKAGE_OpenSSL", "STALE_ENGINE",
-                     "BOX_PASSWD", "BOX_GROUP", "EXTRA_PASSWD", "GATECON_GROUPS", "ADMINCON_GROUPS",
+                     "BOX_PASSWD", "BOX_GROUP", "EXTRA_PASSWD", "STANDING_PASSWD", "GATECON_GROUPS", "ADMINCON_GROUPS",
                      "GATECON_JOINED", "ADMINCON_JOINED",
                      "LD_LIBRARY_PATH", "LD_PRELOAD", "NO_NVIDIA", "LDD_RUNTIME", "FIXTURE_DRIVERS",
                      "NVCC_PREPEND_FLAGS", "NVCC_APPEND_FLAGS", "FIXTURE_DPKG"):
@@ -2655,6 +2661,128 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                         if c[0] in ("psql", "systemctl", "mktemp", "setfacl")
                         or (c[0] == "sudo" and c[1:2] != ["-v"] and c[1:3] != ["-n", "sh"])]
                 self.assertEqual(made, [], self.calls())
+
+    def standing_agents(self):
+        """Five standing agents beside the fixture's base, as their roots and
+        accounts name them: m9 of the layout of #578 (`<agents>/m9/weaver-m9`
+        and its home beside it), m8 with a custom territory outside any folder,
+        m7 of the layout before #578 (`<agents>/weaver-m7`) with its home
+        under a home directory, m5 whose key names `<agents>/m5/weaver-m5`
+        where only the folder stands, and m4 with a custom territory and its
+        home in `<agents>/m4`."""
+        agents = self.root / "agents"
+        places = {"m9 folder": agents / "m9", "m9 territory": agents / "m9" / "weaver-m9",
+                  "m9 home": agents / "m9" / "home", "m8 territory": self.root / "srv" / "weaver-m8",
+                  "m7 territory": agents / "weaver-m7", "m7 home": self.root / "homes" / "weaver-m7",
+                  "m5 folder": agents / "m5", "m4 territory": self.root / "srv" / "weaver-m4",
+                  "m4 folder": agents / "m4", "m4 home": agents / "m4" / "home"}
+        for path in places.values():
+            path.mkdir(parents=True, exist_ok=True)
+        for agent, territory in (("m9", places["m9 territory"]), ("m8", places["m8 territory"]),
+                                 ("m7", places["m7 territory"]), ("m5", agents / "m5" / "weaver-m5"),
+                                 ("m4", places["m4 territory"])):
+            (self.config / agent).mkdir()
+            (self.config / agent / "territory").write_text(f"{territory}\n")
+        self.env["STANDING_PASSWD"] = json.dumps({
+            "weaver-m9": f"weaver-m9:x:2009:2009::{places['m9 home']}:/usr/sbin/nologin",
+            "weaver-m7": f"weaver-m7:x:2007:2007::{places['m7 home']}:/usr/sbin/nologin",
+            "weaver-m4": f"weaver-m4:x:2004:2004::{places['m4 home']}:/usr/sbin/nologin"})
+        return places
+
+    def test_create_agent_refuses_a_base_inside_a_standing_agent(self):
+        """**#606, the Planner's ruling of 2026-11-17**: an agent made inside
+        another's folder, territory or home sits in what decommission.sh
+        refuses to archive or purge, so a stack record whose agent-directory
+        lies in a standing agent refuses before anything is made, in either
+        mode, naming the agent and the place. The five shapes it can meet: the
+        agent's folder, its territory there, its home there, a custom
+        territory outside any folder, and a home outside its folder. The
+        folder is seen as decommission.sh's folder_bases sees it, by its key
+        or its home read lexically, so a folder whose territory is gone, and
+        one only its home names, refuse too (the self-check on #606). A
+        territory key that stands and cannot be read refuses, as do a root
+        that cannot be searched and an admin base that cannot be listed. (A
+        base in
+        a weaver entry in /tmp is the agent's account's, which the base's own
+        check refuses first, as it refuses any home on a box.) Perturbations:
+        drop the territory, or the home, from a standing agent's places, and
+        the custom territory, or the home outside the folder, is taken. Read
+        an unreadable key as no agent, or skip the root's or the admin base's
+        check, and that case is taken. Drop the folder the key names, or the
+        one the home names, and the folder whose territory is gone, or the one
+        only its home names, is taken."""
+        places = self.standing_agents()
+        cases = [("the agent's folder", places["m9 folder"], "agent m9's folder " + str(places["m9 folder"])),
+                 ("its territory there", places["m9 territory"],
+                  "agent m9's territory " + str(places["m9 territory"])),
+                 ("its home there", places["m9 home"], "agent m9's folder " + str(places["m9 folder"])),
+                 ("a custom territory outside any folder", places["m8 territory"] / "agents",
+                  "agent m8's territory " + str(places["m8 territory"])),
+                 ("a home outside its folder", places["m7 home"] / "agents",
+                  "agent m7's home " + str(places["m7 home"])),
+                 ("a folder whose territory is gone", places["m5 folder"] / "agents",
+                  "agent m5's folder " + str(places["m5 folder"])),
+                 ("a folder its home names, its territory elsewhere", places["m4 folder"] / "agents",
+                  "agent m4's folder " + str(places["m4 folder"]))]
+        for label, base, held in cases:
+            base.mkdir(exist_ok=True)
+            (self.stack / "agent-directory").write_text(f"{base}\n")
+            for mode in ((), ("--apply",)):
+                with self.subTest(label, mode=mode):
+                    self.log.unlink(missing_ok=True)
+                    self.env["ALLOW_APPLY_CHECKS"] = "1" if mode else ""
+                    result = self.create(*mode)
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn(f"the stack record's agent-directory {base} lies in {held}, so an agent made "
+                                  "there would sit inside another agent, which decommission.sh refuses to archive "
+                                  "or purge (#606). Set the record's agent-directory back to the base the agents "
+                                  "were made in, then rerun", result.stderr)
+                    made = [c for c in self.calls()
+                            if c[0] in ("psql", "systemctl", "mktemp", "setfacl", "as-root")
+                            or (c[0] == "sudo" and c[1:2] != ["-v"] and c[1:3] != ["-n", "sh"])]
+                    self.assertEqual(made, [], self.calls())
+                    self.assertFalse((self.config / ".m1.partial").exists())
+        (self.stack / "agent-directory").write_text(f"{self.root / 'agents'}\n")
+        (self.config / "m6").mkdir()
+        key = self.config / "m6" / "territory"
+        key.write_text(f"{self.root / 'agents' / 'm6' / 'weaver-m6'}\n")
+        for label, unread, mode, back, needs in (
+                ("a territory key that cannot be read", key, 0, 0o644, os.R_OK),
+                ("a root that cannot be searched", self.config / "m6", 0o644, 0o755, os.X_OK),
+                ("an admin base that cannot be listed", self.config, 0o311, 0o755, os.R_OK)):
+            with self.subTest(label):
+                unread.chmod(mode)
+                try:
+                    if os.access(unread, needs):
+                        self.skipTest("this uid passes what its mode refuses")
+                    result = self.create()
+                finally:
+                    unread.chmod(back)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(f"{unread} cannot be read, so whether the agent-directory {self.root / 'agents'} "
+                              "lies inside a standing agent cannot be told. Read it by hand, then rerun",
+                              result.stderr)
+
+    def test_create_agent_takes_a_base_beside_or_above_a_standing_agent(self):
+        """**#606**: the guard refuses only a base in a standing agent. The
+        ruled layout (the base holding m9's folder and m7's territory of the
+        layout before #578, whose directory is the base itself), and a base
+        whose name only begins like m9's folder, plan as before.
+        Perturbations: count any territory's directory as its agent's folder,
+        and the layout before #578 refuses. Drop the slash, and the near name
+        refuses."""
+        self.standing_agents()
+        near = self.root / "agents" / "m90"
+        near.mkdir()
+        for label, base in (("the ruled layout, with the layout before #578 beside it", self.root / "agents"),
+                            ("a near name", near)):
+            with self.subTest(label):
+                (self.stack / "agent-directory").write_text(f"{base}\n")
+                self.log.unlink(missing_ok=True)
+                result = self.create()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("lies in agent", result.stderr)
+                self.assertIn(f"folder          {base / 'm1'}", result.stdout)
 
     def test_verify_load_runs_only_the_records_admin_held_closed(self):
         # Codex on #45, round 10: verify-load ran `$(dirname worker-binary)/
@@ -9055,6 +9183,7 @@ class DecommissionTests(unittest.TestCase):
                        "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\nheld_is() { return 0; }\n"
                        "in_operator_home() { return 1; }\n"
                        + shell_function(script, "log_paths") + loop
+                       + shell_function(script, "spanned")
                        + shell_function(script, "spans_a_base") + shell_function(script, "candidate")
                        + shell_function(script, "purge_candidates") + shell_function(script, "purge_lines_within")
                        + plan_loop + left_loop
@@ -9210,7 +9339,8 @@ class DecommissionTests(unittest.TestCase):
                                + "plan() { printf 'PLAN %s\\n' \"$*\"; }\n"
                                + "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\n"
                                + "in_operator_home() { return 1; }\n"
-                               + shell_function(script, "log_paths") + loop + shell_function(script, "spans_a_base")
+                               + shell_function(script, "log_paths") + loop + shell_function(script, "spanned")
+                               + shell_function(script, "spans_a_base")
                                + plan_loop + judgement)
                     run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20,
                                          env={**os.environ, "STRANGERS": ""})
@@ -9334,8 +9464,9 @@ class DecommissionTests(unittest.TestCase):
                        + f"declare -A TERRITORY_BASES=([{q(str(base_b))}]=1)\n"
                        + "".join(shell_function(script, fn) for fn in (
                            "in_operator_home", "is_box_account", "strip_suffix", "agent_folders", "folder_bases",
-                           "resolved", "left_in_base", "spans_a_base", "candidate", "home_projects", "plan_home_quotas",
-                           "remove_home_quotas", "territories_outside", "home_within", "purge_candidates"))
+                           "resolved", "left_in_base", "spanned", "spans_a_base", "candidate", "home_projects",
+                           "plan_home_quotas", "remove_home_quotas", "territories_outside", "home_within",
+                           "purge_candidates"))
                        + segment("# **The bases an agent's own facts name join the record's**", "# **home_projects FOLDER...")
                        + through_line("HOME_PROJECTS=()\n", 'plan_home_quotas "${HOME_PROJECTS[@]}"')
                        + segment("TERRITORIES_JUDGED=1\n", "# **The earlier layout's directory and each path")
@@ -9426,6 +9557,225 @@ class DecommissionTests(unittest.TestCase):
                                  text=True, capture_output=True, timeout=20)
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertEqual(run.stdout.splitlines(), [str(outer / "stuff")])
+
+    def spanning_run(self, mode, top, bases, folders=(), own=(), homes=(), tmp=(), etc=None, op_home="",
+                     legacy=None):
+        """decommission.sh's judgment of what holds a base and its refusal
+        (#606), run as the script runs them in MODE, with the targets given:
+        spanned, then the earlier layout's loop where LEGACY is given, then
+        the judgment through the refusal. /etc/weaver is ETC, or a path that
+        does not stand. It prints REACHED where the archive or the purge
+        would go on."""
+        script = self.script
+        q = shlex.quote
+        start = script.index("# **What holds a base refuses the archive and the purge**")
+        end = script.index("\nfi\n", script.index("# **A target that holds a base refuses** (#606)")) + 4
+        judgement = script[start:end]
+        call = "judge_spanning \"the agents' roots and the stack record\" /etc/weaver\n"
+        self.assertEqual(judgement.count(call), 1)
+        judgement = judgement.replace(call, call.replace("/etc/weaver", q(str(etc or top / "no-etc-weaver"))))
+        legacy_loop = ""
+        if legacy is not None:
+            i = script.index('for d in "$LEGACY_DIR" "${!LOG_PATHS[@]}"; do\n')
+            legacy_loop = script[i:script.index("\ndone\n", i) + 6]
+
+        def arr(name, paths):
+            return f"{name}=(" + " ".join(q(str(p)) for p in paths) + ")\n"
+        program = (self.script_options()
+                   + "plan() { printf 'PLAN %s\\n' \"$*\"; }\nsay() { :; }\n"
+                   + "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\n"
+                   + f"MODE={mode}\nOP_HOME={q(str(op_home))}\nTERRITORIES_JUDGED=1\nTERRITORY_PATHS=()\n"
+                   + f"LEGACY_DIR={q(str(legacy or top / 'no-legacy'))}\n"
+                   + "declare -A LOG_UNREAD=() LOG_PATHS=() TERRITORY_BASES=()\n"
+                   + "".join(f"TERRITORY_BASES[{q(str(b))}]=1\n" for b in bases)
+                   + arr("AGENT_FOLDERS", folders) + arr("OWN_TERRITORIES", own) + arr("HOMES", homes)
+                   + arr("TMP_PATHS", tmp)
+                   + shell_function(script, "spanned") + shell_function(script, "spans_a_base")
+                   + legacy_loop + judgement + 'echo "REACHED $MODE"\n')
+        return subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+
+    def test_a_target_that_holds_a_base_refuses_the_archive_and_the_purge(self):
+        """**#606, the Planner's ruling of 2026-11-17**: the archive and the
+        purge drop every path that holds a base, so a target that holds one
+        was planned as taken, archived nowhere and purged nowhere, while the
+        purge removed its accounts. Each shape is judged once every target is
+        known, named in the plan with what it holds, and the archive and the
+        purge refuse, naming it and pointing at the take-down section. The
+        shapes: an agent made inside another's folder, the record naming a
+        territory with nothing made inside, a root's own territory holding a
+        base, a territory key inside another's custom territory, a home under
+        /home, a weaver entry in /tmp, and /etc/weaver. Perturbations: drop the
+        refusal's die, or run it in the archive alone, and a mode goes on.
+        Leave the homes, the /tmp entries or /etc/weaver out of the judgment,
+        or the own territories out of spanned, and that shape passes. Judge
+        before the own territories, the homes and the /tmp entries are known,
+        and the placement fails."""
+        script = self.script
+        # **Judged once every target is known, and refused before either
+        # mode acts.**
+        calls = [m.start() for m in re.finditer(r'^judge_spanning "', script, re.M)]
+        self.assertTrue(calls)
+        for known in ("mapfile -t TMP_PATHS < <(tmp_paths /tmp)", "HOMES+=(\"$h\")",
+                      '[ -z "$OWN_LISTED" ] || mapfile -t OWN_TERRITORIES <<< "$OWN_LISTED"',
+                      '[ -z "$AGENT_LISTED" ] || mapfile -t AGENT_FOLDERS <<< "$AGENT_LISTED"'):
+            self.assertLess(script.index(known), min(calls), known)
+        self.assertLess(max(calls), script.index('[ "$MODE" = plan ] && {'))
+        refused = script.index("# **A target that holds a base refuses** (#606)")
+        self.assertLess(script.index('[ "$MODE" = plan ] && {'), refused)
+        self.assertLess(refused, script.index('if [ "$MODE" = archive ]; then'))
+        self.assertLess(refused, script.index(" 3. purge\n"))
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            agents = top / "agents"
+            m1 = agents / "m1"
+            (m1 / "weaver-m1").mkdir(parents=True)
+            (m1 / "home").mkdir()
+            (m1 / "m2" / "weaver-m2").mkdir(parents=True)
+            custom = top / "srv" / "weaver-m3"
+            (custom / "agents").mkdir(parents=True)
+            (custom / "weaver-m4").mkdir()
+            home = top / "home" / "weaver-m5"
+            (home / "agents").mkdir(parents=True)
+            entry = top / "tmp" / "weaver-m6"
+            (entry / "agents").mkdir(parents=True)
+            etc = top / "etc-weaver"
+            (etc / "agents").mkdir(parents=True)
+            cases = [
+                ("an agent made inside another's folder",
+                 dict(bases=(agents, m1), folders=(m1, m1 / "m2")),
+                 m1, "an agent's folder", f"is the base {m1}"),
+                ("the record naming a territory, nothing made inside",
+                 dict(bases=(agents, m1 / "weaver-m1"), folders=(m1,)),
+                 m1, "an agent's folder", f"holds the base {m1 / 'weaver-m1'}"),
+                ("a root's own territory holding a base",
+                 dict(bases=(agents, custom / "agents"), own=(custom,)),
+                 custom, "a root's own territory", f"holds the base {custom / 'agents'}"),
+                ("a territory key inside another's custom territory",
+                 dict(bases=(agents,), own=(custom, custom / "weaver-m4")),
+                 custom, "a root's own territory", f"holds the root's own territory {custom / 'weaver-m4'}"),
+                ("a home under /home",
+                 dict(bases=(agents, home / "agents"), homes=(home,)),
+                 home, "a home under /home", f"holds the base {home / 'agents'}"),
+                ("a weaver entry in /tmp",
+                 dict(bases=(agents, entry / "agents"), tmp=(entry,)),
+                 entry, "a weaver entry in /tmp", f"holds the base {entry / 'agents'}"),
+                ("/etc/weaver",
+                 dict(bases=(agents, etc / "agents"), etc=etc),
+                 etc, "the agents' roots and the stack record", f"holds the base {etc / 'agents'}"),
+            ]
+            for label, given, target, kind, what in cases:
+                with self.subTest(label):
+                    planned = self.spanning_run("plan", top, **given)
+                    self.assertEqual(planned.returncode, 0, planned.stderr)
+                    refused_lines = [l for l in planned.stdout.splitlines() if l.startswith("PLAN REFUSED:")]
+                    self.assertEqual(refused_lines, [f"PLAN REFUSED: {target}  {kind} that {what}: it is neither "
+                                                     "archived nor purged, and the purge would remove the accounts"])
+                    self.assertNotIn("REACHED", planned.stdout)
+                    for mode in ("archive", "purge"):
+                        ran = self.spanning_run(mode, top, **given)
+                        self.assertEqual(ran.returncode, 1, mode)
+                        self.assertNotIn("REACHED", ran.stdout, mode)
+                        said = [l for l in ran.stdout.splitlines() if l.startswith("DIE ")]
+                        self.assertEqual(len(said), 1, ran.stdout)
+                        self.assertTrue(said[0].startswith(f"DIE this run archives and purges nothing: {target} "
+                                                           f"({kind}) {what}. "), said[0])
+                        self.assertIn("Take down by hand any agent made inside another, by "
+                                      "deploy/HowToDeployANewAgent.md section 7, set the stack record's "
+                                      "agent-directory back to the base the agents were made in, put back any "
+                                      "territory key that was moved, then rerun", said[0])
+
+    def test_a_layout_with_no_base_inside_a_target_does_not_refuse(self):
+        """**#606**: the ruled layout, a base beside an agent's folder whose
+        name only begins like the folder's, a base above every folder, and
+        the earlier layout's directory holding a base refuse nothing, and the
+        archive and the purge go on. The earlier layout's directory is said
+        to be left in place, which is true, and is never judged. **A link
+        holds nothing** (the self-check on #606): an agent's link in /tmp to
+        a base, or to /, is never judged, since the purge removes the link and
+        never what it points to, so an agent cannot block its own take-down
+        with one. Perturbations: drop spanned's slash after a base, and the
+        near name refuses. Judge a link, and the links refuse."""
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            agents = top / "agents"
+            for a in ("m1", "m2"):
+                (agents / a / f"weaver-{a}").mkdir(parents=True)
+            (agents / "m10").mkdir()
+            legacy = top / "legacy"
+            (legacy / "agents").mkdir(parents=True)
+            (top / "etc-weaver" / "admin").mkdir(parents=True)
+            (top / "home" / "weaver-m1").mkdir(parents=True)
+            (top / "tmp" / "weaver-m1").mkdir(parents=True)
+            (top / "tmp" / "weaver-m2").symlink_to(agents)
+            (top / "tmp" / "weaver-m3").symlink_to("/")
+            folders = (agents / "m1", agents / "m2")
+            common = dict(folders=folders, homes=(top / "home" / "weaver-m1",), tmp=(top / "tmp" / "weaver-m1",),
+                          etc=top / "etc-weaver", op_home=top / "users" / "op")
+            cases = [("the ruled layout", dict(bases=(agents,))),
+                     ("a near name", dict(bases=(agents, agents / "m10"))),
+                     ("a base above every folder", dict(bases=(agents, top))),
+                     ("the earlier layout's directory holding a base",
+                      dict(bases=(agents, legacy / "agents"), legacy=legacy)),
+                     ("an agent's link in /tmp to a base, and one to /",
+                      dict(bases=(agents,), tmp=(top / "tmp" / "weaver-m1", top / "tmp" / "weaver-m2",
+                                                 top / "tmp" / "weaver-m3")))]
+            for label, given in cases:
+                with self.subTest(label):
+                    for mode in ("plan", "archive", "purge"):
+                        ran = self.spanning_run(mode, top, **{**common, **given})
+                        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                        self.assertNotIn("REFUSED", ran.stdout)
+                        self.assertEqual("REACHED" in ran.stdout, mode != "plan", ran.stdout)
+                        if "legacy" in given:
+                            self.assertIn(f"PLAN {legacy}  a base, or above a base or an agent's folder: not taken "
+                                          "whole, left in place", ran.stdout)
+
+    def test_spanned_names_what_a_path_spans_and_spans_a_base_agrees(self):
+        """**#606**: spanned holds the comparison spans_a_base held, and says
+        what a path is or holds: a base, an agent's folder, a root's own
+        territory, the operator's home, the root directory, or nothing,
+        canonical, past a slash, a path that does not resolve compared as
+        written. spans_a_base answers as spanned does on every case, so the
+        refusal and the archive's drop read one comparison. Perturbations:
+        keep spans_a_base its own copy and drop the folder check from
+        spanned, and they disagree. Drop a slash, and a near name spans."""
+        with tempfile.TemporaryDirectory() as scratch:
+            top = Path(scratch).resolve()
+            base = top / "state" / "agents"
+            (base / "m1" / "weaver-m1").mkdir(parents=True)
+            (base / "m10").mkdir()
+            own = top / "srv" / "weaver-m3"
+            own.mkdir(parents=True)
+            op = top / "users" / "op"
+            op.mkdir(parents=True)
+            (top / "link").symlink_to(base)
+            q = shlex.quote
+            program = (self.script_options()
+                       + f"OP_HOME={q(str(op))}\ndeclare -A TERRITORY_BASES=([{q(str(base))}]=1)\n"
+                       + f"AGENT_FOLDERS=({q(str(base / 'm1'))})\nOWN_TERRITORIES=({q(str(own))})\n"
+                       + shell_function(self.script, "spanned") + shell_function(self.script, "spans_a_base")
+                       + 'for p in "$@"; do\n  s=0; what=$(spanned "$p") || s=$?\n  a=0; spans_a_base "$p" || a=$?\n'
+                       + '  printf "%s|%s|%s\\n" "$s" "$a" "$what"\ndone\n')
+            cases = [(base, f"is the base {base}"), (top / "link", f"is the base {base}"),
+                     (top / "state", f"holds the base {base}"), (top / "state" / "agent", None),
+                     (top, f"holds the operator's home {op}"), (base / "m1", None), (base / "m10", None),
+                     (base / "m1" / "weaver-m1", None), (top / "srv", f"holds the root's own territory {own}"),
+                     (own, None), (op, "is the operator's home"), (top / "users", f"holds the operator's home {op}"),
+                     (Path("/"), "is the root directory"), (top / "gone", None), (top / "gone" / "..", None)]
+            run = subprocess.run(["bash", "-c", program, "x", *[str(p) for p, _ in cases]],
+                                 text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            for (path, what), line in zip(cases, run.stdout.splitlines(), strict=True):
+                with self.subTest(str(path)):
+                    s, a, said = line.split("|", 2)
+                    self.assertEqual(s, a, line)
+                    self.assertEqual((s, said), ("0", what) if what else ("1", ""), line)
+            # A folder above an agent's folder is named as holding it.
+            program2 = program.replace(f"AGENT_FOLDERS=({q(str(base / 'm1'))})",
+                                       f"AGENT_FOLDERS=({q(str(base / 'm1' / 'weaver-m1'))})")
+            run = subprocess.run(["bash", "-c", program2, "x", str(base / "m1")], text=True, capture_output=True,
+                                 timeout=20)
+            self.assertEqual(run.stdout, f"0|0|holds the agent's folder {base / 'm1' / 'weaver-m1'}\n", run.stderr)
 
     def test_a_base_under_the_operators_home_is_said_once(self):
         # **The self-check on #594**: a base the record names under the
@@ -10396,6 +10746,7 @@ class RoundOneOf79Tests(unittest.TestCase):
                  "WEAVER_USERS=(); WEAVER_GROUPS=(); declare -A PREFIXES=() LOG_PATHS=() COORD_ROOTS=() AGENTS=()\n"
                  f"declare -A TERRITORY_BASES=([{shlex.quote(str(base))}]=1)\nAGENT_FOLDERS=({shlex.quote(str(base / 'm1'))})\n"
                  "LEGACY_DIR=/nonexistent/weaver\n"
+                 + shell_function(script, "spanned")
                  + shell_function(script, "spans_a_base") + shell_function(script, "candidate")
                  + shell_function(script, "purge_candidates") + "purge_candidates"],
                 text=True, capture_output=True, timeout=20)
@@ -10466,6 +10817,7 @@ class RoundOneOf79Tests(unittest.TestCase):
                            + "say() { :; }\nplan() { printf 'PLAN %s\\n' \"$*\"; }\n"
                            + "die() { printf 'DIE %s\\n' \"$*\"; exit 1; }\nheld_is() { return 0; }\n"
                            + "free_name() { printf '%s' \"$1\"; }\ntarz() { : > \"$1\"; }\nas_op() { \"$@\"; }\n"
+                           + shell_function(script, "spanned")
                            + shell_function(script, "spans_a_base") + shell_function(script, "candidate")
                            + shell_function(script, "purge_candidates") + shell_function(script, "purge_lines_outside")
                            + shell_function(script, "purge_lines_within") + shell_function(script, "resolved")
@@ -10667,7 +11019,7 @@ class RoundOneOf79Tests(unittest.TestCase):
         # line, drop the archive's line, or drop the pass-over, and a read
         # below fails.
         script = (DEPLOY / "decommission.sh").read_text()
-        fns = "".join(shell_function(script, n) for n in ("spans_a_base", "candidate", "purge_candidates",
+        fns = "".join(shell_function(script, n) for n in ("spanned", "spans_a_base", "candidate", "purge_candidates",
                                                           "purge_lines_outside", "purge_lines_within"))
         with tempfile.TemporaryDirectory() as scratch:
             listed = Path(scratch) / "PURGE-LIST"

@@ -588,30 +588,49 @@ left_in_base() {
     printf '%s\n' "$e"
   done < <(find "$base" -mindepth 1 -maxdepth 1 -print0 2>/dev/null)
 }
-# **spans_a_base PATH: whether PATH is a base, or above a base or an agent's
-# own folder** (CodeRabbit on #582), or the operator's home or above it, which
-# is never touched, compared canonical: a path that does not resolve is
-# compared as written. Such a path holds what is no agent's, a
-# stranger's file in the base among it, so whatever fixed name it carries it
-# is never archived as a path of its own or listed for the purge, in the
-# archive and in purge_candidates both. The agents' folders inside it go on
-# their own, and the plan names it as left.
-spans_a_base() {
+# **spanned PATH: what PATH is or holds that it never takes whole**
+# (CodeRabbit on #582, #606): a base, or a path above a base, an agent's own
+# folder or a root's own territory, or the operator's home or a path above it,
+# which is never touched. Compared canonical: a path that does not resolve is
+# compared as written. It prints the first it finds ("is the base B", "holds
+# the agent's folder F") and answers 0, or prints nothing and answers 1.
+# **spans_a_base PATH asks it and drops the answer.** Such a path holds what
+# is no agent's, a stranger's file in the base among it, so whatever fixed
+# name it carries it is never archived as a path of its own or listed for the
+# purge, in the archive and in purge_candidates both. The agents' folders
+# inside it go on their own, and the plan names it as left. **One comparison
+# stands behind both** (the Planner's ruling of 2026-11-17): the judgment that
+# refuses a target holding a base, after the plan, reads spanned, so what the
+# plan refuses and what the archive drops never disagree.
+spanned() {
   local p c b
   p=$(realpath -e -- "$1" 2>/dev/null) || p=$1
-  [ "$p" != / ] || return 0
+  [ "$p" != / ] || { printf 'is the root directory'; return 0; }
   if [ -n "${OP_HOME:-}" ]; then
-    case "$OP_HOME" in "$p" | "$p"/*) return 0 ;; esac
+    case "$OP_HOME" in
+      "$p") printf "is the operator's home"; return 0 ;;
+      "$p"/*) printf "holds the operator's home %s" "$OP_HOME"; return 0 ;;
+    esac
   fi
   for b in "${!TERRITORY_BASES[@]}"; do
     c=$(realpath -e -- "$b" 2>/dev/null) || continue
-    case "$c" in "$p" | "$p"/*) return 0 ;; esac
+    case "$c" in
+      "$p") printf 'is the base %s' "$c"; return 0 ;;
+      "$p"/*) printf 'holds the base %s' "$c"; return 0 ;;
+    esac
   done
-  for b in "${AGENT_FOLDERS[@]}" "${OWN_TERRITORIES[@]}"; do
+  for b in "${AGENT_FOLDERS[@]}"; do
     c=$(realpath -e -- "$b" 2>/dev/null) || continue
-    case "$c" in "$p"/*) return 0 ;; esac
+    case "$c" in "$p"/*) printf "holds the agent's folder %s" "$c"; return 0 ;; esac
+  done
+  for b in "${OWN_TERRITORIES[@]}"; do
+    c=$(realpath -e -- "$b" 2>/dev/null) || continue
+    case "$c" in "$p"/*) printf "holds the root's own territory %s" "$c"; return 0 ;; esac
   done
   return 1
+}
+spans_a_base() {
+  spanned "$1" >/dev/null
 }
 # **candidate PATH: the purge line for PATH, unless PATH spans a base**, so the
 # archive's list and the purge's derivation drop the same paths.
@@ -912,6 +931,44 @@ tmp_paths() {
 }
 mapfile -t TMP_PATHS < <(tmp_paths /tmp)
 [ ${#TMP_PATHS[@]} -gt 0 ] && plan "/tmp: ${#TMP_PATHS[@]} weaver-* entries"
+# **What holds a base refuses the archive and the purge** (#606, the Planner's
+# ruling of 2026-11-17). The archive and the purge drop every path that
+# spans_a_base answers for, so a target that holds a base or another agent's
+# folder is neither archived nor purged, while the purge removes the accounts
+# that own what it holds: an agent made inside another's folder after a hand
+# edit of the stack record, or the record alone naming a path in an agent's
+# folder, its territory or its home, leaves that agent's data with no archive
+# copy. **Each target is judged here, once every target is known, through
+# spanned**, the comparison the archive and the purge read: /etc/weaver, which
+# holds the agents' roots, each agent's folder, each root's own territory, each
+# home under /home and each weaver entry in /tmp. One that holds anything is
+# named in the plan with what it holds, and the archive and the purge refuse
+# below. **A link holds nothing**: the archive stores a link as a link and the
+# purge's `rm -rf` removes the link, never what it points to, so a link is not
+# judged, and an agent's link in /tmp to a base or to / refuses nothing. The
+# earlier layout's directory and each legacy log path were judged above and
+# said to be left in place, which is true, and never joined the targets. **A
+# prefix's parts and the run directories are not judged**: they are derived
+# inside the archive's purge list, and again in purge_candidates, never before
+# the plan, so judging them here would be a third derivation. A prefix's part
+# skipped for holding a base is neither archived nor removed, and no account
+# owns it. A run directory is state on a tmpfs, purged without an archive.
+SPANNING=()
+judge_spanning() { # judge_spanning KIND PATH...
+  local kind=$1 d what
+  shift
+  for d in "$@"; do
+    [ -e "$d" ] && [ ! -L "$d" ] || continue
+    what=$(spanned "$d") || continue
+    plan "REFUSED: $d  $kind that $what: it is neither archived nor purged, and the purge would remove the accounts"
+    SPANNING+=("$d ($kind) $what")
+  done
+}
+judge_spanning "the agents' roots and the stack record" /etc/weaver
+judge_spanning "an agent's folder" "${AGENT_FOLDERS[@]}"
+judge_spanning "a root's own territory" "${OWN_TERRITORIES[@]}"
+judge_spanning "a home under /home" "${HOMES[@]}"
+judge_spanning "a weaver entry in /tmp" "${TMP_PATHS[@]}"
 
 
 [ "$MODE" = plan ] && { say "plan only. rerun with --archive DIR, then --purge DIR"; exit 0; }
@@ -920,6 +977,12 @@ mapfile -t TMP_PATHS < <(tmp_paths /tmp)
 # on #593): what it holds beside the log is unknown, so whether it is the
 # agent's own, and what a take of it would remove, cannot be told.
 [ ${#LOG_UNREAD[@]} -eq 0 ] || die "the directory of a legacy log cannot be listed: ${!LOG_UNREAD[*]}. Nothing is archived or purged until it reads. Look at it by hand, then rerun"
+# **A target that holds a base refuses** (#606), as judged above, first run or
+# rerun, before the archive directory is made or a purge list is read.
+if [ ${#SPANNING[@]} -gt 0 ]; then
+  spanning_said=$(printf '%s, ' "${SPANNING[@]}")
+  die "this run archives and purges nothing: ${spanning_said%, }. What holds a base, another agent's folder or another root's territory is never archived or purged whole, and the purge would still remove the accounts, leaving what they own with no archive. Take down by hand any agent made inside another, by deploy/HowToDeployANewAgent.md section 7, set the stack record's agent-directory back to the base the agents were made in, put back any territory key that was moved, then rerun"
+fi
 # **A capped home's limit never outlives what names it** (Codex on #588): the
 # folder's mark and the account's uid are all that tell create-agent.sh's
 # limit from a stranger's, so where any folder's mount or mark cannot be read,
