@@ -5,7 +5,7 @@
 **Date filed:** 2026-08-18
 **Document ID:** `weaver-harness-state-contract`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #58
+**Landing PR:** #619
 
 ---
 

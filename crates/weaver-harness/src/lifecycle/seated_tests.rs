@@ -38,6 +38,18 @@ const SEEDED: &str = concat!(
     r#""text":"You are Karl."}]}}]}}}"#
 );
 
+/// The member's identity answer for an agent seeded twice, in seeding
+/// order.
+const SEEDED_TWICE: &str = concat!(
+    r#"{"answer":{"identity":{"messages":[{"envelope":{"session":"s-0","#,
+    r#""run":"r-0","kind":"message.system","sequence":"3"},"#,
+    r#""pairs":{"role":"system","content":[{"type":"text","#,
+    r#""text":"You are Karl."}]}},{"envelope":{"session":"s-0","#,
+    r#""run":"r-0","kind":"message.system","sequence":"9"},"#,
+    r#""pairs":{"role":"system","content":[{"type":"text","#,
+    r#""text":"Answer briefly."}]}}]}}}"#
+);
+
 /// The member's identity answer for an agent before its seeding turn.
 const UNSEEDED: &str = r#"{"answer":{"identity":{"messages":[]}}}"#;
 
@@ -216,6 +228,20 @@ impl Entered {
         let deltas = std::fs::read_to_string(self.root.0.join("deltas.ndjson")).unwrap();
         let last = deltas.lines().last().expect("the SPU was handed a delta");
         serde_json::from_str(last).unwrap()
+    }
+
+    /// The `seated` member of the record's identity recall, the record
+    /// drained first, or `None` where the record holds no identity recall.
+    fn identity_seated(&mut self) -> Option<serde_json::Value> {
+        if let ChannelState::Entered(run) = &mut self.harness.state {
+            run.recorder.drain().expect("the record drains");
+        }
+        std::fs::read_to_string(self.root.0.join("trace.ndjson"))
+            .expect("the sink reads back")
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("each line parses"))
+            .find(|e| e["kind"] == "recall" && e["payload"]["ask"]["verb"] == "identity")
+            .map(|e| e["payload"]["seated"].clone())
     }
 
     /// The seat's read, through the seam a loop crosses.
@@ -492,6 +518,42 @@ fn an_unseeded_open_with_a_bos_prefix_carries_the_compiled_prompt() {
     assert!(!storeless.seated(), "no member, nothing seated");
     let first = texts(&storeless.turn(1, "hello"));
     assert!(first[0].1.starts_with(dev_loop::SYSTEM_PROMPT), "{first:?}");
+}
+
+/// **The identity recall names the messages the Open carried, by digest**
+/// (#617), per `weaver-harness-Spec` section 6.1 and `weaver-trace-Spec`
+/// sections 3 and 10: with the stand-in recording the Open, the recall's
+/// `seated` holds one sha256 per message the Open carried, over that
+/// message's text blocks joined, in the Open's order, for an agent seeded
+/// once and one seeded twice. An unseeded Open carries nothing and the
+/// record holds no identity recall.
+///
+/// Perturbation: open with the identity's messages reversed after the recall
+/// is authored, and the seeded-twice lists differ.
+#[test]
+fn the_identity_recall_names_the_messages_the_open_carried() {
+    use sha2::{Digest, Sha256};
+    let digest =
+        |message: &weaver_traits::Message| format!("{:x}", Sha256::digest(texts_of(message)));
+    for (identity, count) in [(SEEDED, 1), (SEEDED_TWICE, 2)] {
+        let mut entered = enter_seated(Some(identity));
+        let opened = entered.opened_with();
+        assert_eq!(opened.len(), count, "the Open carried every seeding");
+        assert_eq!(
+            entered.identity_seated(),
+            Some(serde_json::json!(
+                opened.iter().map(digest).collect::<Vec<_>>()
+            )),
+            "seated names the messages the Open carried, in its order"
+        );
+    }
+    let mut unseeded = enter_seated(Some(UNSEEDED));
+    assert!(unseeded.opened_with().is_empty());
+    assert_eq!(
+        unseeded.identity_seated(),
+        None,
+        "nothing seated writes no identity recall"
+    );
 }
 
 fn texts_of(message: &weaver_traits::Message) -> String {

@@ -7,7 +7,7 @@ build order. Code is written against it under the gates of Working Process secti
 **Document ID:** `weaver-trace-Spec`
 **Parent:** `weaver-trace-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #181
+**Landing PR:** #619
 
 ---
 
@@ -1026,10 +1026,13 @@ is not the text, so the account still never carries what custody answered. The h
 takes it from the messages the open is built from, per `weaver-harness-Spec` section
 6.1, which says how a reader tells nothing seated from a recall lost. The `recall` and
 `replay` verbs carry no `seated`, since their answers feed a turn and never the open's
-prefix. A record older than #617 lacks the member, which reads as the digest being
-unrecoverable from the recall, never as nothing seated. `seated` crosses the tee only
-where an election names it, and the diagnostic election of `weaver-analysis-Spec`
-section 3 names `ask`, `returned` and `count`, unchanged by this clause.
+prefix. **On a current record the member is absent only where the answer did not parse
+into messages**, and the enter's `refusal` follows the recall, nothing having been
+seated. A record older than #617 lacks the member with no such refusal, which reads as
+the digest being unrecoverable from the recall, never as nothing seated. `seated`
+crosses the tee only where an election names it, and the diagnostic election of
+`weaver-analysis-Spec` section 3 names `ask`, `returned` and `count`, unchanged by this
+clause.
 
 **The harness authors one for every answered ask that returns events, before the
 answer reaches its consumer**, per `weaver-harness-Spec` section 6: the seat's recall
@@ -2138,11 +2141,14 @@ the fact exists.
   watched to fail when the kind leaves `turn_forbidden` or its pairing row, and the
   harness authors one after a flush and at the enter's asks, watched to fail when
   the authoring is removed at either site.
-- The identity ask's recall names what the load seated, per section 3: two enters
-  whose members answer different prompts record different `seated` lists beside
-  identical `load` members, a one-block prompt's entry is the sha256 of its text, and
-  an empty answer records no recall, watched to fail when the member is dropped and
-  when it is taken from anything but the seated messages' text.
+- The identity ask's recall names what the load seated, per section 3. Against the
+  member double, two enters whose members answer different prompts record different
+  `seated` lists beside identical `load` members, a one-block prompt's entry is the
+  sha256 of its text, an empty answer records no recall, and an answer that does not
+  parse records its recall without `seated`, watched to fail when the member is dropped
+  and when it is taken from anything but the parsed messages' text. With a stand-in SPU
+  recording the Open, each entry is the sha256 of one message the Open carried, in the
+  Open's order, watched to fail when the open seats anything but the messages digested.
 - A restored message is recorded turnless under `message.restored` with the message
   whole, per section 3: the recorder refuses one carrying a turn or another kind's
   payload, watched to fail when the kind leaves `turn_forbidden` or the message

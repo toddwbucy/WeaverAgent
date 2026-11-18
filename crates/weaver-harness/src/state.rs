@@ -812,10 +812,12 @@ pub(crate) fn identity_material(held: &[Recalled]) -> Option<Vec<weaver_traits::
 /// identity recall's `seated`, per `weaver-harness-Spec` section 6.1 on the
 /// operator's ruling of 2026-11-18 (#617): sha256 hex over the UTF-8 bytes of
 /// the message's text blocks joined in order, the text the model family
-/// renders for it. A seated message is a system message, the identity door
-/// refusing every other role and the member answering `message.system` events
-/// alone, and the family renders a system message's text blocks and nothing
-/// else (an unrecovered call's fragment renders in an assistant's turn only).
+/// renders for it. A seated message is a system message, the member answering
+/// the identity ask with the turnless `message.system` events alone
+/// (`weaver-state`'s store, the ask of 2026-09-04), and the family renders a
+/// system message's text blocks and nothing else (an unrecovered call's
+/// fragment renders in an assistant's turn only). This crate does not check
+/// the role again.
 /// Taken from the messages the open is built from, so the record names the
 /// bytes seated. A prompt the seeding turn entered is one message of one text
 /// block, so its entry is the sha256 of the prompt's text.

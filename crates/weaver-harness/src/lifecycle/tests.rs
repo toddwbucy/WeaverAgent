@@ -1981,6 +1981,41 @@ fn the_identity_recall_names_the_seated_prompts_by_digest() {
     );
 }
 
+/// **An identity answer that does not parse records its recall without
+/// `seated`** (#617), per `weaver-trace-Spec` section 3: the recall is
+/// authored before the open would be built, so the answer's events are
+/// named, and no digest is, nothing being seated. The enter then refuses
+/// through the after-load failure of a missed ask, by `identity_material`'s
+/// rule (`state::tests`). Perturbation: digest an answer that does not parse
+/// as no messages, and `seated` reads `[]`.
+#[test]
+fn an_identity_answer_that_does_not_parse_records_its_recall_without_seated() {
+    const HALF: &str = concat!(
+        r#"{"answer":{"identity":{"messages":[{"envelope":{"session":"s-0","#,
+        r#""run":"r-0","kind":"message.system","sequence":"3"},"#,
+        r#""pairs":{"role":"system"}}]}}}"#
+    );
+    let (events, refusal, _, _, _) =
+        enter_against_a_member_seating(None, false, EMPTY_RESTORED, HALF, LeaveMode::SelfUnwind);
+    assert!(
+        refusal.is_none(),
+        "the refusal is after the load: {refusal:?}"
+    );
+    let recall = events
+        .iter()
+        .find(|e| e["kind"] == "recall" && e["payload"]["ask"]["verb"] == "identity")
+        .expect("the answered ask is recorded");
+    assert_eq!(
+        recall["payload"]["returned"],
+        serde_json::json!([{"kind": "message.system", "run": "r-0", "sequence": "3"}]),
+        "{recall}"
+    );
+    assert!(
+        recall["payload"].get("seated").is_none(),
+        "no digest names an answer that did not parse: {recall}"
+    );
+}
+
 /// **A restored answer that disagrees refuses the enter before the load,
 /// and one that agrees lands the lineage on the load event**, per
 /// `weaver-harness-Spec` section 6.1: a miss, a refusal, an empty answer
