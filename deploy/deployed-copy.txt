@@ -1,0 +1,12 @@
+# The files a deployed copy of deploy/ needs (#607), one per line, each beside
+# this list. A consumer that installs the deploy scripts elsewhere copies these
+# and keeps no list of its own. DeployedCopyTests holds it true: every file a
+# listed script sources or runs from its own directory is listed, and every
+# listed file exists.
+create-agent.sh
+decommission.sh
+verify-load.sh
+account-drop.sh
+retired-python.sh
+agent_tuple.py
+turn.py
