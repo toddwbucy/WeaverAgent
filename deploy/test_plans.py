@@ -129,25 +129,37 @@ def say_reaches(reaches):
         print(f"guard: {test} reached {name} {args}".rstrip(), file=sys.stderr)
 
 
+# The count of reaches each finish() read, or None where the record was gone.
 _FINISHED = []
+
+
+def _fail_at_exit(said):
+    print(said, file=sys.stderr)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(1)
 
 
 def _drop_an_empty_record():
     """At exit: the record's directory goes when it holds no reach. A reach
-    that finish() never read, under another runner (`python3 -m unittest`,
-    pytest), is named here and fails the process."""
+    finish() never read fails the process, named: under another runner
+    (`python3 -m unittest`, pytest), which never calls it, or after it ran (an
+    atexit callback). So does a record gone or unreadable that finish() did
+    not report."""
     try:
         reaches = reaches_in(REACH_RECORD)
-    except FileNotFoundError:
+    except OSError as e:
+        if _FINISHED[-1:] != [None]:
+            _fail_at_exit(f"guard: the reach record {REACH_RECORD} cannot be read ({type(e).__name__}), so this "
+                          "process cannot show that no test reached the guard's sudo or runuser")
         return
+    read = (_FINISHED[-1] or 0) if _FINISHED else 0
     if not reaches:
         shutil.rmtree(REACH_DIR, True)
-    elif not _FINISHED:
-        say_reaches(reaches)
-        print(f"guard: the record stays at {REACH_RECORD}, and this runner never read it", file=sys.stderr)
-        sys.stdout.flush()
-        sys.stderr.flush()
-        os._exit(1)
+    elif len(reaches) > read:
+        say_reaches(reaches[read:])
+        _fail_at_exit(f"guard: the record stays at {REACH_RECORD}, and "
+                      + ("the run's end read it before these reaches" if _FINISHED else "this runner never read it"))
 
 
 atexit.register(_drop_an_empty_record)
@@ -7750,6 +7762,38 @@ class SuiteGuardTests(unittest.TestCase):
         self.assertIn(f"guard: the record stays at {record_dir / 'reach-record'}, and this runner never read it\n",
                       run.stderr)
 
+    def test_a_reach_after_the_runs_end_or_a_record_gone_fails_the_process(self):
+        """A reach after the run's end read the record (a test's atexit
+        callback) fails the process at exit, named, and so does a record a
+        test removed or made unreadable (a directory in its place), under
+        run_suite and under unittest's own main, said once. Perturbations: let
+        the exit pass a gone record, catch only a missing one, or read only
+        whether finish() ran, and a case exits 0."""
+        late = ("class Planted(unittest.TestCase):\n"
+                "    def test_late(self):\n"
+                "        import atexit\n"
+                "        atexit.register(subprocess.run, [str(t.STAND_IN_GUARD / 'sudo'), '-n', 'late'],\n"
+                "                        capture_output=True)\n")
+        run, record_dir = self.suite_child(late)
+        self.assertEqual(run.returncode, 1, run.stderr)
+        self.assertIn("guard: no_new_privs held, 0 reaches of the guard's sudo or runuser\n", run.stderr)
+        self.assertIn("guard: unknown reached sudo -n late\n", run.stderr)
+        self.assertIn(f"guard: the record stays at {record_dir / 'reach-record'}, and the run's end read it before "
+                      "these reaches\n", run.stderr)
+        for undo, error in (("t.REACH_RECORD.unlink()", "FileNotFoundError"),
+                            ("t.REACH_RECORD.unlink(); t.REACH_RECORD.mkdir()", "IsADirectoryError")):
+            gone = ("class Planted(unittest.TestCase):\n"
+                    "    def test_gone(self):\n"
+                    f"        {undo}\n")
+            for end in ("sys.exit(t.run_suite(argv=['planted']))\n", "unittest.main(argv=['planted'])\n"):
+                with self.subTest(undo=undo, end=end):
+                    run, record_dir = self.suite_child(gone, end=end)
+                    self.assertEqual(run.returncode, 1, run.stderr)
+                    self.assertIn("\nOK\n", run.stderr)
+                    self.assertIn(f"guard: the reach record {record_dir / 'reach-record'} cannot be read ({error}), "
+                                  "so this ", run.stderr)
+                    self.assertEqual(run.stderr.count("guard: the reach record"), 1, run.stderr)
+
     def test_a_run_with_no_reach_ends_on_its_tests_and_leaves_no_record(self):
         """A run with no reach exits on its tests' verdict, 0 when they pass,
         1 when one fails and 5, as unittest's own main does, when none ran,
@@ -7809,7 +7853,8 @@ class ProgramCheckTests(unittest.TestCase):
         shell script in each shape a script calls a program, at the top level
         and inside a function, is named with its script and line, and nothing
         else is: no wrapper's option (`flock FILE -c`, `time -p`) reads as a
-        program. Perturbation: drop the reading of a shape (the wrappers, the
+        program, and a wrapper named by its path (`/usr/bin/env`) is read as
+        by its name. Perturbation: drop the reading of a shape (the wrappers, the
         code strings, the substitutions, a shell's option arguments, a
         heredoc a shell reads past a pipe), and its lines go unnamed."""
         pc = program_check()
@@ -7821,9 +7866,10 @@ class ProgramCheckTests(unittest.TestCase):
                   [f"find . -maxdepth 0 -exec {h} {{}} \\;"], [f"trap '{h}' EXIT"], [f"while {h}; do break; done"],
                   [f"case x in x) {h} ;; esac"], [f"/usr/bin/{h}"], [f"command -v {h} >/dev/null"],
                   [f"nice -n 5 {h}"], [f"xargs -r {h} </dev/null"], [f"x=$(( 1 + $({h} | wc -c) ))"],
-                  ["cat <<EOF", f"$({h})", "EOF"], [f"y=$(sh -c 'echo $({h})')"], [f"diff <({h}) /dev/null"],
+                  ["cat <<EOF", f"$({h})", "EOF"], [f"y=$(sh -c 'echo $({h})')"], [f"cat <({h}) /dev/null"],
                   [f"bash -o pipefail -c '{h}'"], [f"trap -- '{h}' EXIT"], [f"env -S '{h} -s'"],
-                  [f"flock /tmp/l -c '{h}'"], [f"time -p {h}"], ["bash <<'X' | cat", h, "X"]]
+                  [f"flock /tmp/l -c '{h}'"], [f"time -p {h}"], ["bash <<'X' | cat", h, "X"],
+                  [f"/usr/bin/env {h}"], [f"tar -I /usr/bin/{h} -cf /dev/null ."]]
         own = {"create-agent.sh": [f"root {h}", f"root -n {h}", f"read_as_owner {h}",
                                    f"as_account --stdin /dev/null nobody A=1 {h}"],
                "decommission.sh": [f"as_op {h}", f"as_op sh -c '{h}'"],
@@ -7842,8 +7888,11 @@ class ProgramCheckTests(unittest.TestCase):
                 body = [line for plant in plants for line in plant]
                 lines[head + 1:head + 1] = body
                 lines += body
-                # An array run as a command, assigned once, so planted once.
-                lines += ["PLANTED_RUN=(env -i)", "PLANTED_RUN+=(A=1)", f'"${{PLANTED_RUN[@]}}" {h}']
+                # An array run as a command, assigned once, so planted once,
+                # under a name of each script's own (the fence refuses a name
+                # another script beside it mentions).
+                run = "PLANTED_" + name.split(".")[0].replace("-", "_").upper()
+                lines += [f"{run}=(env -i)", f"{run}+=(A=1)", f'"${{{run}[@]}}" {h}']
                 (Path(scratch) / name).write_text("\n".join(lines))
                 want, at = [len(lines)], head + 2
                 for start in (head + 2, len(lines) - 3 - len(body) + 1):
@@ -7861,7 +7910,8 @@ class ProgramCheckTests(unittest.TestCase):
             run = self.checker("--copy", copy)
             self.assertEqual(run.returncode, 1)
             self.assertIn(f"{Path(scratch) / 'decommission.sh'}:{planted['decommission.sh'][0]}: {h}: called here, "
-                          "and not a program the image carries\n", run.stdout)
+                          "and not a program the image carries (to pass: carry the program in the image's list, or stand "
+                          "the call inside a guard in GUARDED)\n", run.stdout)
 
     def test_each_wrappers_options_are_read_as_the_tool_reads_them(self):
         """**Each wrapper's grammar**, as the tools read it (each shape run
@@ -7869,13 +7919,20 @@ class ProgramCheckTests(unittest.TestCase):
         read from their man pages): a group whose letter takes an argument
         (`sudo -iu USER`, `stdbuf -oL`), long options with = and without, `--`,
         a shell's -c as a flag with -o's argument before the code (`bash -euo
-        pipefail -c`), every -exec of a find, `tar -I` joined, and a
-        function's own local array. hostname is named at each planted line,
-        and the same shapes running true name nothing. An array that is not
-        one assignment and its appends, and a code string joined to its flag,
-        are named. Perturbations: read a group as one flag, a shell's code
-        after its -c, a find's first -exec alone, or arrays by name across the
-        script, and a line goes unnamed or misnamed."""
+        pipefail -c`), every -exec of a find, `tar -I` joined, a function's
+        own local array, and an array in each state its appends can leave (an
+        append later than the run, or skipped by its condition). hostname is
+        named at each planted line, and the same shapes running true name
+        nothing. An array is refused, by its reason, where it is not one
+        assignment and at most six appends, where its name is written in any
+        other form or mentioned beside the script, where its entries stand in
+        another scope or a loop, and where it runs inside another array's
+        run. A code string joined to its flag is named. Perturbations: read a
+        group as one flag, a shell's code after its -c, a find's first -exec
+        alone, an array with all its appends alone, its entries across
+        scopes or in a loop, its name's other mentions, an array inside
+        another's run, no limit on its appends, or its elements as
+        assignments, and a line goes unnamed or misnamed."""
         h = self.PLANT
         named = [f"bash -euo pipefail -c '{h}'", f"bash -c -e '{h}'", f"bash -o pipefail -ec '{h}'",
                  f"sh -ec '{h}' name", "bash -euo pipefail <<'X'", h, "X",
@@ -7886,7 +7943,10 @@ class ProgramCheckTests(unittest.TestCase):
                  f"ionice -c3 {h}", f"flock -w 1 /tmp/l {h}", f"flock -n /tmp/l --command '{h}'",
                  f"xargs -I{{}} {h} {{}} </dev/null", f"command -p {h}", f"command -- {h}",
                  f"command -pv {h} >/dev/null", f"exec -a nm {h}", f"nohup -- {h}", f"tar -I'{h} -9' -cf /dev/null .",
-                 'f_true() { local -a C=(true); "${C[@]}"; }', f'f_plant() {{ local -a C=({h}); "${{C[@]}}"; }}']
+                 'f_true() { local -a F_TRUE_RUN=(true); "${F_TRUE_RUN[@]}"; }',
+                 f'f_plant() {{ local -a F_PLANT_RUN=({h}); "${{F_PLANT_RUN[@]}}"; }}',
+                 "STATE1_RUN=(env)", f'"${{STATE1_RUN[@]}}" {h}', "STATE1_RUN+=(-u)",
+                 "STATE2_RUN=(env)", "if false; then STATE2_RUN+=(-u); fi", f'"${{STATE2_RUN[@]}}" {h}']
         quiet = ["sudo -iu nobody true", "stdbuf -oL true", "timeout -sKILL 5 true", "command -pv true >/dev/null",
                  "find . -exec true {} \\; -exec true {} +", "bash -euo pipefail -c 'true'"]
         with tempfile.TemporaryDirectory() as scratch:
@@ -7899,30 +7959,75 @@ class ProgramCheckTests(unittest.TestCase):
                     if h in line and not line.startswith("bash -euo pipefail <<")]
             found = self.findings(copy)["verify-load.sh"]
             self.assertEqual([(line, w) for line, w, _ in found], [(n, h) for n in want], found)
-            for planted, why in (('A=(true)\nA=(hostname)\n"${A[@]}"', '"${A[@]}" run as a command, since it is '
-                                                                          'not one assignment and its appends'),
-                                 ('mapfile -t R </dev/null\n"${R[@]}"', '"${R[@]}" run as a command, since it is '
-                                                                        'not one assignment and its appends'),
-                                 ("runuser -u nobody -lcfoo", "runuser -lcfoo with its code string joined or missing")):
+            def unread(n, why):
+                return f'"${{{n}[@]}}" run as a command, since it is {why}'
+
+            def elsewhere(n):
+                return unread(n, f"written elsewhere than {n}=( ), {n}+=( ) and ${{{n}[...]}}, or beside this script")
+
+            count, scope = "not one assignment and at most 6 appends", \
+                "assigned nowhere, or outside the run's function, or in more than one scope"
+            pc = program_check()
+            for planted, why in (
+                    ('TWICE_RUN=(true)\nTWICE_RUN=(hostname)\n"${TWICE_RUN[@]}"', unread("TWICE_RUN", count)),
+                    ("SEVEN_RUN=(env)\n" + "SEVEN_RUN+=(A=1)\n" * 7 + '"${SEVEN_RUN[@]}" true', unread("SEVEN_RUN", count)),
+                    ('mapfile -t MAPPED_RUN </dev/null\n"${MAPPED_RUN[@]}"', elsewhere("MAPPED_RUN")),
+                    ('ELEMENT_RUN=(true)\nELEMENT_RUN[0]=hostname\n"${ELEMENT_RUN[@]}"', elsewhere("ELEMENT_RUN")),
+                    ('SCALAR_RUN=(env)\nSCALAR_RUN=hostname\n"${SCALAR_RUN[@]}" true', elsewhere("SCALAR_RUN")),
+                    ('UNSET_RUN=(true)\nunset UNSET_RUN\nUNSET_RUN+=(hostname)\n"${UNSET_RUN[@]}"', elsewhere("UNSET_RUN")),
+                    ('g_set() { local LOCAL_RUN=hostname; f_run; }\nf_run() { "${LOCAL_RUN[@]}" true; }\nLOCAL_RUN=(env)',
+                     elsewhere("LOCAL_RUN")),
+                    ('ADDED_RUN=(env)\nadd_to() { ADDED_RUN+=(-u); }\nadd_to\n"${ADDED_RUN[@]}" echo X',
+                     unread("ADDED_RUN", scope)),
+                    ('f_one() { local -a TWO_RUN=(true); "${TWO_RUN[@]}"; }\nf_two() { local -a TWO_RUN=(env); }',
+                     unread("TWO_RUN", scope)),
+                    ('"${NEVER_RUN[@]}" true', unread("NEVER_RUN", scope)),
+                    ('LOOP_RUN=(env)\nfor i in 1 2; do LOOP_RUN+=(-u); done\n"${LOOP_RUN[@]}" true',
+                     unread("LOOP_RUN", "assigned or appended in a loop")),
+                    ('WHILE_RUN=(env)\nwhile false; do WHILE_RUN+=(-u); done\n"${WHILE_RUN[@]}" true',
+                     unread("WHILE_RUN", "assigned or appended in a loop")),
+                    ('BRACE_RUN=(env)\nfor i in a; { BRACE_RUN+=(-u); }\n"${BRACE_RUN[@]}" true',
+                     unread("BRACE_RUN", "assigned or appended in a loop")),
+                    ('NESTED_RUN=(nice)\n"${NESTED_RUN[@]}" "${NESTED_RUN[@]}" hostname',
+                     unread("NESTED_RUN", "run inside another array's run")),
+                    ("runuser -u nobody -lcfoo", "runuser -lcfoo with its code string joined or missing")):
                 with self.subTest(planted=planted):
                     target.write_text(text + "\n" + planted + "\n")
                     found = self.findings(copy)["verify-load.sh"]
                     self.assertEqual([(w, why_) for _, w, why_ in found], [("-", f"this reader does not follow {why}")])
+                    self.assertIsNotNone(pc.remedy(found[0][2]))
+            # A name another script beside it mentions is fenced too.
+            other = Path(scratch) / "create-agent.sh"
+            kept = other.read_text()
+            other.write_text(kept + "\nBESIDE_RUN+=(-u)\n")
+            target.write_text(text + '\nBESIDE_RUN=(env)\n"${BESIDE_RUN[@]}" true\n')
+            self.assertEqual([(w, why_) for _, w, why_ in self.findings(copy)["verify-load.sh"]],
+                             [("-", f"this reader does not follow {elsewhere('BESIDE_RUN')}")])
+            other.write_text(kept)
+            # An array's elements are never assignments: bash runs A=1 as a program.
+            target.write_text(text + '\nELEMENTS_RUN=(A=1 true)\n"${ELEMENTS_RUN[@]}"\n')
+            self.assertEqual([w for _, w, _ in self.findings(copy)["verify-load.sh"]], ["A=1"])
 
     def test_what_a_wrapper_execs_is_a_program_and_an_unread_runner_is_named(self):
         """**What a wrapper execs is a program**: a builtin, keyword or
         function after sudo, env, timeout, find -exec or an own wrapper is
         looked for on the list, so `timeout 5 time` and `sudo cd` are named,
-        and a quoted assignment after env, sudo or as_account is read as
-        theirs, as they read it. Each program in UNREAD_RUNNERS, which runs a
-        command this reader does not read, is named. Perturbations: let a
-        wrapper run a builtin, read quoted assignments as commands, or pass
-        the unread runners, and a line goes unnamed."""
+        and the program time's own command is read. A quoted assignment after
+        env, sudo or as_account is read as theirs, as they read it. A program
+        by its path in a bin directory (`/usr/bin/env`, `/usr/bin/time`) is
+        read as by its name. Each program in UNREAD_RUNNERS, which runs a
+        command this reader does not read, is named, by its name or its path.
+        Perturbations: let a wrapper run a builtin, read quoted assignments as
+        commands, pass the unread runners, stop at a wrapper's path, or leave
+        the program time's command unread, and a line goes unnamed."""
         pc = program_check()
         h = self.PLANT
         calls = ["timeout 5 time hostname", "sudo -u x cd /d", "env wait", "as_account u read v",
                  f'env "PATH=$p" {h}', f'sudo "A=$x" {h}', f'as_account nobody "A=$x" {h}',
-                 "env -i true", "timeout 5 printf x", "find . -exec test -d {} \\;"]
+                 f"/usr/bin/env {h}", "/usr/bin/env cd /d", f"/usr/bin/time -f %e {h}", f"/bin/timeout 5 {h}",
+                 "env -i true", "timeout 5 printf x", "find . -exec test -d {} \\;", "/usr/bin/echo x"]
+        named = [("hostname", "time"), ("cd",), ("wait",), ("read",), (h,), (h,), (h,), (h,), ("cd",),
+                 (h, "time"), (h,)]
         with tempfile.TemporaryDirectory() as scratch:
             copy, _ = self.copied(Path(scratch))
             target = Path(scratch) / "verify-load.sh"
@@ -7931,12 +8036,110 @@ class ProgramCheckTests(unittest.TestCase):
             target.write_text(text + "\n" + "\n".join(calls) + "\n")
             found = self.findings(copy)["verify-load.sh"]
             self.assertEqual([(line, w) for line, w, _ in found],
-                             [(start + i, w) for i, w in enumerate(("time", "cd", "wait", "read", h, h, h))], found)
+                             [(start + i, w) for i, ws in enumerate(named) for w in ws], found)
             runners = sorted(pc.UNREAD_RUNNERS)
-            target.write_text(text + "\n" + "\n".join(f"{r} true" for r in runners) + "\n")
+            target.write_text(text + "\n" + "\n".join(f"{r} true" for r in runners) + "\n/usr/bin/unshare true\n")
             found = self.findings(copy)["verify-load.sh"]
             self.assertEqual(sorted((line, why) for line, w, why in found if w == "-"),
-                             [(start + i, f"this reader does not follow what {r} runs") for i, r in enumerate(runners)])
+                             [(start + i, f"this reader does not follow what {r} runs") for i, r in enumerate(runners)]
+                             + [(start + len(runners), "this reader does not follow what unshare runs")])
+
+    def test_a_program_a_function_or_keyword_stands_for_is_read_as_the_program(self):
+        """**What bash runs as a program**, though a function or the keyword
+        time has its name: `time` past a command's start (after an assignment
+        or a redirect, escaped, behind command, from an array) is the program
+        time, whose command is read, and `command`, `exec`, a wrapper and a
+        path skip functions, while the keyword time at a command's start runs
+        the function. A new shell's code (sh -c, tar's -I and --to-command,
+        joined or apart) inherits no function, while eval and trap run in
+        this shell, and builtin reads the builtin it names. Perturbations:
+        read a later time as the keyword, let command, a path or a new shell
+        reach a function, read eval in a new shell, pass builtin or tar's
+        joined forms unread, and a line goes unnamed."""
+        h = self.PLANT
+        lines = [("hostname() { command hostname -s; }", [h]), ("myf() { :; }", []), ("X=1 time true", ["time"]),
+                 (f">/dev/null time {h}", [h, "time"]), (f"\\time {h}", [h, "time"]),
+                 (f"command -p time {h}", [h, "time"]), (f"TIME_RUN=(time {h})", [h, "time"]),
+                 ('"${TIME_RUN[@]}"', []), ("exec myf", ["myf"]), ("/usr/bin/env myf", ["myf"]),
+                 ("timeout 5 myf", ["myf"]), ("myf", []), ("time -p no_such_tool", ["no_such_tool"]),
+                 (f"time -p {h}", []), (f"bash -c {h}", [h]), (f"sudo sh -c '{h} -s'", [h]), (f"eval {h}", []),
+                 (f"trap '{h}' EXIT", []), ("builtin eval no_such_tool", ["no_such_tool"]), (f"/usr/bin/{h}", [h]),
+                 (f"tar -I'{h} -9' -cf /dev/null .", [h]), (f"tar --use-compress-program={h} -cf x .", [h]),
+                 (f"tar --to-command='{h} -s' -xf x", [h])]
+        with tempfile.TemporaryDirectory() as scratch:
+            copy, _ = self.copied(Path(scratch))
+            target = Path(scratch) / "retired-python.sh"
+            text = target.read_text()
+            start = text.count("\n") + 2
+            target.write_text(text + "\n" + "\n".join(line for line, _ in lines) + "\n")
+            found = self.findings(copy)["retired-python.sh"]
+            self.assertEqual([(line, w) for line, w, _ in found],
+                             [(start + i, w) for i, (_, ws) in enumerate(lines) for w in ws], found)
+
+    def test_a_program_or_word_it_cannot_place_is_refused_with_its_remedy(self):
+        """**The fences**: a program on the list that is neither in LEAVES nor
+        a wrapper wrapped() reads, and a command word this reader cannot name
+        outside DYNAMIC, are refused, and a DYNAMIC entry no line uses is
+        named. The command line prints each finding's remedy after it.
+        Perturbations: pass an unplaced program, pass an unnamed word, keep an
+        unused entry, or print no remedy, and a case goes unnamed."""
+        pc = program_check()
+        lines = [("gzip -9 f", "gzip", "this reader does not know whether it runs a command it is handed"),
+                 ('"$PROG" x', '"$PROG"', "this reader cannot name the program this runs"),
+                 ("/opt/tool/bin/run x", "/opt/tool/bin/run", "this reader cannot name the program this runs"),
+                 (f"{self.PLANT} -s", self.PLANT, "called here, and not a program the image carries")]
+        with tempfile.TemporaryDirectory() as scratch:
+            copy, _ = self.copied(Path(scratch))
+            target = Path(scratch) / "verify-load.sh"
+            text = target.read_text()
+            start = text.count("\n") + 2
+            target.write_text(text + "\n" + "\n".join(line for line, _, _ in lines) + "\n")
+            found = self.findings(copy)["verify-load.sh"]
+            self.assertEqual(found, [(start + i, w, why) for i, (_, w, why) in enumerate(lines)])
+            run = self.checker("--copy", copy)
+            self.assertEqual(run.returncode, 1)
+            self.assertIn(f"{target}:{start}: gzip: this reader does not know whether it runs a command it is handed "
+                          "(to pass: add it to LEAVES with the reason it runs nothing it is handed, or read its grammar "
+                          "in wrapped())\n", run.stdout)
+            self.assertIn(f"{target}:{start + 1}: \"$PROG\": this reader cannot name the program this runs (to pass: "
+                          "name the program, or add (script, word) to DYNAMIC with what it runs)\n", run.stdout)
+            self.assertEqual([line for line in run.stdout.splitlines() if " (to pass: " not in line], [])
+            target.write_text(text)
+            pc.DYNAMIC[("verify-load.sh", '"$GONE"')] = "planted"
+            try:
+                found = self.findings(copy)["verify-load.sh"]
+            finally:
+                del pc.DYNAMIC[("verify-load.sh", '"$GONE"')]
+            self.assertEqual(found, [(0, '"$GONE"', "DYNAMIC allows it, and no line of the script runs that")])
+
+    def test_no_input_takes_the_checker_more_than_a_few_seconds(self):
+        """**A bound on cost**: a nested or pathological shape is refused, not
+        explored, so no input takes the checker past ten seconds: arrays four
+        deep with six appends each, code nested 200 deep, arrays inside
+        arrays, an array read in its 64 states around a code string, and a
+        long script. Perturbations: read an array inside another's run, or
+        lift the depth bound, and a case times out or passes unread."""
+        h = self.PLANT
+        cases = [("".join(f'NEST{i}=("${{NEST{i + 1}[@]}}")\n' + f"NEST{i}+=(-x)\n" * 6 for i in range(4))
+                  + 'NEST4=(true)\n"${NEST0[@]}"\n', "-"),
+                 ("x=" + "$(" * 200 + "true" + ")" * 200 + "\n", "-"),
+                 ("A1=(" * 200 + "x" + ")" * 200 + "\n", "-"),
+                 ("WIDE_RUN=(sh -c 'true')\n" + "".join(f"WIDE_RUN+=(V{i}=1)\n" for i in range(6))
+                  + f'"${{WIDE_RUN[@]}}" {h}\n', None),
+                 ("true | cat\n" * 5000, None)]
+        with tempfile.TemporaryDirectory() as scratch:
+            for text, refused in cases:
+                with self.subTest(text=text[:40]):
+                    target = Path(scratch) / "case.sh"
+                    target.write_text("#!/usr/bin/env bash\n" + text)
+                    try:
+                        run = subprocess.run([sys.executable, str(DEPLOY / "program_check.py"), "--programs",
+                                              str(self.PROGRAMS), str(target)], text=True, capture_output=True,
+                                             timeout=10)
+                    except subprocess.TimeoutExpired:
+                        self.fail("the checker took more than ten seconds")
+                    said = [line.split(": ", 2)[1] for line in run.stdout.splitlines()]
+                    self.assertEqual(said, [refused] if refused else [], run.stdout + run.stderr)
 
     def test_a_guarded_program_passes_only_by_its_allowance_and_its_guard(self):
         """nvcc and rustup, absent from the image, pass in decommission.sh only
@@ -8018,9 +8221,16 @@ class ProgramCheckTests(unittest.TestCase):
 
     def test_a_construct_the_reader_does_not_follow_is_named_never_passed(self):
         """A backtick, coproc, an unclosed quote ($' included), a shell reading
-        a pipe, an `env -S` joined to its string and a heredoc whose $( )
-        closes before its body stop the reading and are named, so a file is
-        never passed unread. A case inside $( ), whose
+        a pipe, an `env -S` joined to its string, a heredoc whose $( ) closes
+        before its body, code nested deeper than 32 and an array inside an
+        array stop the reading and are named, so a file is never passed
+        unread. So is each way a leaf on the list runs a program (tar's
+        commands, sort's and install's programs, visudo's editor, pacman's
+        hooks, awk's system() and pipes, sed's e, and a program or script in
+        a file), each builtin that changes what a name runs (enable, alias,
+        hash -p, shopt expand_aliases) and each variable bash runs as code (a
+        prompt, BASH_ENV, ENV, an exported function), while the leaves' plain
+        forms pass. Each refusal has its remedy. A case inside $( ), whose
         pattern's ) a parenthesis count would take for the close, is read."""
         with tempfile.TemporaryDirectory() as scratch:
             copy, _ = self.copied(Path(scratch))
@@ -8032,23 +8242,50 @@ class ProgramCheckTests(unittest.TestCase):
                                   "bash reading a standard input that is not its own heredoc"),
                                  ("env -Shostname", "env -S joined to its string"),
                                  ("x=$'abc\nhostname", "an unclosed $' quote"),
-                                 ("x=$(cat <<EOF)\nbody\nEOF", "a heredoc inside $( ) whose body follows the )")):
+                                 ("x=$(cat <<EOF)\nbody\nEOF", "a heredoc inside $( ) whose body follows the )"),
+                                 ("x=" + "$(" * 40 + "true" + ")" * 40, "code nested deeper than 32"),
+                                 ("A9=(B9=(x))", "an array inside an array"),
+                                 ("tar --checkpoint-action=exec=x -cf y .", "tar --checkpoint-action, which runs a command"),
+                                 ("sort --compress-program=gzip x", "sort --compress-program, which runs a program"),
+                                 ("install --strip-program=x -s a b", "install --strip-program, which runs a program"),
+                                 ("visudo -f x", "visudo without -c, which opens an editor"),
+                                 ("pacman -S x", "pacman past a query (-Q), which runs hooks"),
+                                 ("awk '{ system(\"x\") }' f", "awk with system() or a pipe in its program, which runs a "
+                                                             "program"),
+                                 ("awk '{ print | \"x\" }' f", "awk with system() or a pipe in its program, which runs a "
+                                                            "program"),
+                                 ("awk -f p.awk f", "awk -f, whose program this reader does not read"),
+                                 ("sed 's/a/b/e' f", "sed past its s, p, d and q commands, whose e runs a program"),
+                                 ("sed -n '1e x' f", "sed past its s, p, d and q commands, whose e runs a program"),
+                                 ("sed -f s.sed f", "sed -f, whose script this reader does not read"),
+                                 ("enable -n echo", "enable, which changes what a name runs"),
+                                 ("alias ls=x", "alias, which changes what a name runs"),
+                                 ("hash -p /opt/x ls", "hash, which changes what a name runs"),
+                                 ("shopt -s expand_aliases", "shopt, which changes what a name runs"),
+                                 ("PS4='$(x) '", "a variable bash runs as code: PS4"),
+                                 ("env BASH_ENV=/opt/x bash s", "a variable bash runs as code: BASH_ENV")):
                 with self.subTest(planted=planted):
                     target.write_text(text + "\n" + planted + "\n")
                     found = self.findings(copy)["retired-python.sh"]
                     self.assertEqual([why_ for _, _, why_ in found], [f"this reader does not follow {why}"])
+                    self.assertIsNotNone(program_check().remedy(found[0][2]))
             target.write_text(text + "\nx=$(case a in a) hostname ;; b) true ;; esac)\n"
-                              "case b in a) true ;; b) hostname\nesac\nA=(\"${A[@]}\")\n\"${A[@]}\"\n")
+                              "case b in a) true ;; b) hostname\nesac\nSELF_RUN=(\"${SELF_RUN[@]}\")\n\"${SELF_RUN[@]}\"\n"
+                              "awk '$1 == 1 || $2 == 2 { print }' f\nsed -e 's/a/b/' -e 2d f\nvisudo -cqf x\n"
+                              "pacman -Q x\nsort -u x\n")
             found = self.findings(copy)["retired-python.sh"]
             self.assertEqual([(w, why) for _, w, why in found],
-                             [("hostname", "called here, and not a program the image carries")] * 2)
+                             [("hostname", "called here, and not a program the image carries")] * 2
+                             + [("-", 'this reader does not follow "${SELF_RUN[@]}" run as a command, since it is run '
+                                      "inside another array's run")])
 
     def test_a_python_file_that_starts_a_program_is_named(self):
         """The checker reads no Python, so a copied Python file, and the Python
         a copied shell script carries, passes only while it starts no
         program, by any spelling the scan knows (an attribute, a from-import,
-        an alias, pty, multiprocessing). Perturbations: drop either check, or
-        the from-import spelling, and a call passes."""
+        an alias anywhere in an import list, pty, multiprocessing).
+        Perturbations: drop either check, the from-import spelling, or the
+        alias after another import, and a call passes."""
         with tempfile.TemporaryDirectory() as scratch:
             copy, _ = self.copied(Path(scratch))
             target = Path(scratch) / "turn.py"
@@ -8063,7 +8300,8 @@ class ProgramCheckTests(unittest.TestCase):
             pc = program_check()
             text = (DEPLOY / "turn.py").read_text()
             for spelling in ("from os import system, execv", "from os import *", "from os import (\n    system,\n)",
-                             "import os as o", "import pty", "posix.posix_spawn(p, a, e)", "import multiprocessing"):
+                             "import os as o", "import sys, os as o", "import sys as s, os.path, os as o",
+                             "import pty", "posix.posix_spawn(p, a, e)", "import multiprocessing"):
                 with self.subTest(spelling=spelling):
                     target.write_text(text + "\n" + spelling + "\n")
                     self.assertEqual([n for n, _, _ in pc.check_python(target)], [text.count("\n") + 2])
@@ -14285,12 +14523,14 @@ def finish(passed):
     """**The run's end**: the guard's line, then the verdict. A reach of the
     guard's sudo or runuser, or a flag lost, fails the run whatever the tests
     said."""
-    _FINISHED.append(True)
-    if not REACH_RECORD.is_file():
-        print(f"guard: the reach record {REACH_RECORD} is gone, so this run cannot show that no test reached "
-              "the guard's sudo or runuser", file=sys.stderr)
+    try:
+        reaches = reaches_in(REACH_RECORD)
+    except OSError as e:
+        _FINISHED.append(None)
+        print(f"guard: the reach record {REACH_RECORD} cannot be read ({type(e).__name__}), so this run cannot "
+              "show that no test reached the guard's sudo or runuser", file=sys.stderr)
         return 1
-    reaches = reaches_in(REACH_RECORD)
+    _FINISHED.append(len(reaches))
     held = no_new_privs_held()
     print(f"guard: no_new_privs {'held' if held else 'LOST'}, "
           f"{len(reaches)} reach{'' if len(reaches) == 1 else 'es'} of the guard's sudo or runuser", file=sys.stderr)

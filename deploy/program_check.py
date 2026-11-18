@@ -19,8 +19,11 @@ For a shell script it reads every command position: a line's start, after
 shell reads, and the substitutions in an unquoted heredoc. Through each
 wrapper (sudo, runuser, env, timeout, setsid, nice, nohup, stdbuf, ionice,
 flock, xargs, exec, command, time, find -exec, tar -I, and the scripts' own
-wrapper functions in OWN_WRAPPERS) it reads the command the wrapper runs, and
-an array run as a command it reads from its one assignment and its appends.
+wrapper functions in OWN_WRAPPERS) it reads the command the wrapper runs. A
+program named by its path in a bin directory is read by its name, as a
+program. An array run as a command it reads from its one assignment in each
+state its appends can leave, when all of them stand in the run's own
+function or all at the top level.
 Each command word, and each program a `command -v`, `type` or `hash` looks
 up, is a builtin or keyword, a function the script or a sibling it sources
 defines, or a program, and a program must be on LIST or stand in GUARDED,
@@ -37,11 +40,20 @@ stands, 0 when none does, 2 when a file cannot be read.
 
 What it cannot see: a program named through a variable or assembled with
 `set --` and run later (listed with --dynamic), a program another program
-starts on its own (awk's system(), sed's e), an option or a behaviour the
-image's build of a program lacks, and anything about the image that is not
-a program. A construct this reader does not follow (a backtick substitution,
-coproc, a shell reading a standard input that is not its own heredoc, a
-heredoc whose $( ) closes before its body) is a finding, never a pass.
+starts on its own, a variable that holds code at run time (arithmetic that
+evaluates a string), an option or a behaviour the image's build of a program
+lacks, and anything about the image that is not a program. A construct this
+reader does not follow (a backtick substitution, coproc, a shell reading a
+standard input that is not its own heredoc, a heredoc whose $( ) closes
+before its body) is a finding, never a pass.
+
+**It reads the copied scripts, not bash.** Where it cannot positively
+recognise what a line runs, it refuses the line, and the command line prints
+what the script's author does: rewrite to a form it reads, or stand the
+line in a stated allowance with its reason. The allowances are LEAVES (a
+program on the list that runs nothing it is handed), DYNAMIC (a command
+word it cannot name), GUARDED and OWN_WRAPPERS. A shape none of the copied
+scripts uses is answered by such a fence, never by reading more of bash.
 """
 import argparse
 import bisect
@@ -79,6 +91,99 @@ UNREAD_RUNNERS = frozenset(
     "start-stop-daemon dbus-run-session xvfb-run parallel fakeroot faketime unbuffer busybox toybox perf "
     "perl ruby node lua tclsh expect php".split())
 
+# **The wrappers wrapped() reads**: the command each runs is read in its
+# place.
+WRAPPERS = frozenset("sh bash dash sudo runuser env timeout setsid nohup nice stdbuf ionice flock xargs find tar "
+                     "time".split())
+
+# **The programs on the list this reader knows run nothing they are handed**,
+# by their reason. A call to a program on the list that stands neither here,
+# nor in WRAPPERS, is refused, so a wrapper this reader has not met cannot
+# pass the command behind it. Where a program can run one through an option
+# or a mode, wrapped() refuses that option or mode.
+LEAVES = {
+    "reads or writes files and text": "basename cat chattr chmod chown cp cut date dirname du getfacl grep lsattr "
+                                      "ls mkdir mkfifo mktemp mv numfmt realpath rm rmdir setfacl sha256sum stat "
+                                      "tail tee tr wc zstd",
+    "reads or sets accounts and groups": "getent groupadd groupdel id logname useradd userdel usermod",
+    "reads or sets the system's state by name": "findmnt ldconfig nvidia-smi pgrep repquota setquota systemctl "
+                                                "uname",
+    "the program a shell builtin stands for, where a wrapper runs it": "echo false kill printf pwd test [ true",
+    "loads its argument with the dynamic loader in trace mode": "ldd",
+    "runs a program only by --compress-program, which wrapped() refuses": "sort",
+    "runs a program only by --strip-program, which wrapped() refuses": "install",
+    "opens an editor unless it checks (-c), and wrapped() refuses it without": "visudo",
+    "runs hooks only when it changes packages, and wrapped() refuses it past a query (-Q)": "pacman",
+    "starts a program only by system() or a pipe, which wrapped() refuses in its program": "awk",
+    "starts a program only by its e command or s///e, and wrapped() passes s, p, d and q alone": "sed",
+    "runs Python, which the Python scan reads for every way it starts a program": "python3",
+}
+LEAF_NAMES = frozenset(n for names in LEAVES.values() for n in names.split())
+
+# **Command words this reader cannot name**, each with what it runs: (script,
+# the word as written). Any other such word is refused, and an entry no line
+# of its script uses is named.
+DYNAMIC = {
+    ("create-agent.sh", '"$ADMIN_BINARY"'): "weaver-admin, the stack's own binary, which the image does not carry",
+    ("decommission.sh", '"$ADMIN_BIN"'): "weaver-admin, the stack's own binary, which the image does not carry",
+    ("verify-load.sh", '"$ADMIN"'): "weaver-admin, the stack's own binary, which the image does not carry",
+    ("decommission.sh", '"$NVCC"'): "nvcc as `command -v nvcc` found it, run only when found (GUARDED)",
+    ("account-drop.sh", "$fd"): "eval's `exec $fd>&-` closes a descriptor the case above it admits as a number, "
+                                "and runs nothing",
+}
+
+# **The variables bash runs as code** (a prompt, or a file a new bash
+# sources, or a function a new bash defines), refused wherever the script
+# names one, since this reader does not read their values as code.
+CODE_VARIABLES = r"(?<![A-Za-z0-9_])(?:PS[0-4]|PROMPT_COMMAND|BASH_ENV|ENV|BASH_FUNC_\w*)(?![A-Za-z0-9_])"
+
+# **What the author does about each refusal**, by a pattern its reason starts
+# with, printed after it. The first match wins.
+REMEDIES = (
+    ("this reader does not follow a backtick", "write it as $( )"),
+    ("this reader does not follow coproc", "run it without coproc"),
+    (r"this reader does not follow a heredoc inside \$\( \)", "end the $( ) after the heredoc's body"),
+    ("this reader does not follow an unclosed", "close it"),
+    ("this reader does not follow a heredoc", "close the heredoc on a line of its own"),
+    ("this reader does not follow code nested", "flatten the nesting"),
+    ("this reader does not follow an array inside an array", "write the array's elements as words"),
+    ("this reader does not follow what ", "run the command without it, or read its grammar in wrapped()"),
+    (r"this reader does not follow \w+, which changes what a name runs", "remove it, so each name runs as bash's "
+                                                                          "defaults run it"),
+    ("this reader does not follow a variable bash runs as code", "remove it, or run the code as a command"),
+    ("this reader does not follow tar ", "compress or extract outside tar, or with -I"),
+    ("this reader does not follow sort ", "sort without --compress-program"),
+    ("this reader does not follow install ", "install without --strip-program"),
+    ("this reader does not follow visudo ", "check the file with visudo -c"),
+    ("this reader does not follow pacman ", "query with pacman -Q, and change packages outside the copied scripts"),
+    ("this reader does not follow awk ", "write the awk program without system(), a pipe, or -f"),
+    ("this reader does not follow sed ", "write the sed script as s, p, d and q commands, in a word of its own"),
+    (r"this reader does not follow (?:sh|bash|dash) reading", "hand the shell its code with -c, or with its own "
+                                                               "heredoc"),
+    (r'this reader does not follow "\$\{', "write the array as one NAME=( ) and at most MAX_APPENDS NAME+=( ), all in "
+                                         "one scope and outside loops, with no other write to the name"),
+    ("this reader does not follow", "give its code string a word of its own, or rewrite the line in a form the "
+                                    "copied scripts already use"),
+    ("this reader does not know whether", "add it to LEAVES with the reason it runs nothing it is handed, or read "
+                                          "its grammar in wrapped()"),
+    ("this reader cannot name the program", "name the program, or add (script, word) to DYNAMIC with what it runs"),
+    ("a function that runs its arguments", "add it to OWN_WRAPPERS with what comes before its command"),
+    ("DYNAMIC allows", "remove the entry"),
+    ("GUARDED allows", "remove the entry"),
+    (r"(?:called|looked up) here, and not a program", "carry the program in the image's list, or stand the call "
+                                                      "inside a guard in GUARDED"),
+    ("starts a program, which this checker", "start the program from a copied shell script, where this checker "
+                                             "reads it"),
+    ("this reader failed", "rewrite the line in a form the copied scripts already use, and report the reader's "
+                           "defect"),
+)
+
+
+def remedy(why):
+    return next((r.replace("MAX_APPENDS", str(MAX_APPENDS)) for start, r in REMEDIES if re.match(start, why)),
+                None)
+
+
 # **The scripts' own wrapper functions**, each a function that runs its own
 # arguments as a command, with what comes before that command:
 # "-x" an optional flag, "-x ARG" an optional flag and its argument, "ARG" one
@@ -90,6 +195,13 @@ OWN_WRAPPERS = {
     "as_account": ("--stdin ARG", "ARG", "NAME="),
 }
 
+# An array run as a command is read in each subset of its appends, so the
+# appends it may carry are few.
+MAX_APPENDS = 6
+# Code inside code ($( ), a code string, a heredoc a shell reads) past this
+# depth is refused, never explored.
+MAX_DEPTH = 32
+
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=")
 NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SEPARATORS = frozenset(("\n", ";", "&", "&&", "||", "|", "|&"))
@@ -100,7 +212,8 @@ POSITIONAL = re.compile(r"\$(?:[1-9@*]|\{[!#]?(?:[1-9]|@|\*)[^}]*\})")
 _STARTS = r"(?:system|popen|exec\w*|spawn\w*|posix_spawn\w*|fork\w*)"
 PYTHON_RUNS = re.compile(r"\bsubprocess\b|\b(?:os|posix|nt)\." + _STARTS + r"\b"
                          r"|\bfrom\s+(?:os|posix|nt)\s+import\b[^\n]*(?:\b" + _STARTS + r"\b|\*|\()"
-                         r"|\bimport\s+(?:os|posix|nt)\s+as\b|\bpty\b|\bcreate_subprocess_\w+|\bmultiprocessing\b")
+                         r"|\bimport\s+(?:[\w.]+(?:\s+as\s+\w+)?\s*,\s*)*(?:os|posix|nt)\s+as\b"
+                         r"|\bpty\b|\bcreate_subprocess_\w+|\bmultiprocessing\b")
 
 
 class Refused(Exception):
@@ -141,7 +254,7 @@ class Script:
         self.sources = []          # (sibling name, line)
         self.runs_args = {}        # function name -> line where it runs a command it was handed
         self.arg_names = {}        # function name -> the names it assigns from its arguments
-        self.arrays = {}           # (function, NAME) -> [(appended, elements)], each NAME=( ) or NAME+=( )
+        self.arrays = {}           # (function, NAME) -> [(appended, elements, in a loop)], each NAME=( ) or NAME+=( )
         self.refs = []             # (kind, word, line, pos): kind call, lookup, dynamic
         self.refusals = []         # (line, why)
 
@@ -152,7 +265,14 @@ class Script:
 class Reader:
     """Reads one stretch of a script's text, [start, end), as shell code."""
 
-    def __init__(self, script, start, end, scope, functions, function=None, stop=None, arrays=None):
+    def __init__(self, script, start, end, scope, functions, function=None, stop=None, arrays=None, depth=0,
+                 loops=0, fresh=False):
+        if depth > MAX_DEPTH:
+            raise Refused(f"code nested deeper than {MAX_DEPTH}")
+        self.depth = depth
+        self.loops = loops          # the loops this reading stands in, from for, select, while or until to done
+        self.fresh = fresh          # a new shell's code, which inherits none of the script's functions
+        self.in_array = False       # reading an array's elements
         self.s, self.t = script, script.text
         self.i, self.end = start, end
         self.scope = scope          # the own wrappers in scope, by name
@@ -189,17 +309,24 @@ class Reader:
         """Read $( ... ) from START, the first character inside, and return
         the position just past its closing parenthesis."""
         sub = Reader(self.s, start, self.end, self.scope, self.functions, self.current_function(), stop=")",
-                     arrays=self.arrays)
+                     arrays=self.arrays, depth=self.depth + 1, loops=self.loops, fresh=self.fresh)
         return sub.read()
 
-    def code_string(self, word):
-        """Read a code string a command hands a shell (sh -c, trap, eval)."""
+    def code_string(self, word, fresh=True):
+        """Read a code string a command hands a shell (sh -c, tar -I), or this
+        shell (eval and trap, not FRESH). A new shell inherits none of the
+        script's functions, so each name in its code is a program."""
         raw = word.raw
         if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "'\"":
             start, end = word.pos + 1, word.pos + len(raw) - 1
         else:
             start, end = word.pos, word.pos + len(raw)
-        Reader(self.s, start, end, self.scope, self.functions, self.current_function(), arrays=self.arrays).read()
+        Reader(self.s, start, end, self.scope, self.functions, self.current_function(), arrays=self.arrays,
+               depth=self.depth + 1, loops=self.loops, fresh=fresh or self.fresh).read()
+
+    def past(self, word, n):
+        """WORD from its Nth character on, as a word of its own."""
+        return Word(word.raw[n:], word.pos + n, word.dynamic, word.value[n:])
 
     def parameter(self):
         """Skip ${ ... } from just past its brace, reading any $( ) inside."""
@@ -298,10 +425,17 @@ class Reader:
                     dynamic = True
                     continue
                 if c == "(" and ASSIGNMENT.match(self.t[start:self.i]) and self.t[self.i - 1] == "=":
+                    if self.in_array:
+                        raise Refused("an array inside an array")
                     name = re.match(r"[A-Za-z_][A-Za-z0-9_]*", self.t[start:self.i]).group(0)
                     appended = self.t[self.i - 2] == "+"
-                    elements = self.array()
-                    self.s.arrays.setdefault((self.current_function(), name), []).append((appended, elements))
+                    self.in_array = True
+                    try:
+                        elements = self.array()
+                    finally:
+                        self.in_array = False
+                    self.s.arrays.setdefault((self.current_function(), name), []).append(
+                        (appended, elements, self.loops != 0))
                     dynamic = True
                     continue
                 break
@@ -390,7 +524,7 @@ class Reader:
             command.heredocs.append((start, body_end, quoted))
             if command.shell_reads:
                 Reader(self.s, start, body_end, self.scope, self.functions, self.current_function(),
-                       arrays=self.arrays).read()
+                       arrays=self.arrays, depth=self.depth + 1, loops=self.loops, fresh=True).read()
             if not quoted:
                 keep = self.i
                 self.i = start
@@ -564,6 +698,8 @@ class Reader:
                 self.close_frame("{")
                 return self.after_compound()
             if w in ("fi", "done"):
+                if w == "done":
+                    self.loops -= 1
                 return self.after_compound()
             if w == "esac":
                 # The last branch's ;; is optional.
@@ -572,6 +708,8 @@ class Reader:
                 self.frames.pop()
                 return self.after_compound()
             if w in ("then", "do", "else", "elif", "if", "while", "until", "!"):
+                if w in ("while", "until"):
+                    self.loops += 1
                 return None
             if w == "time":
                 nxt = self.token()
@@ -587,6 +725,7 @@ class Reader:
                 self.pattern = True
                 return None
             if w in ("for", "select"):
+                self.loops += 1
                 nxt = self.token()
                 if nxt is not None and nxt.kind == "arith":
                     return None
@@ -659,61 +798,74 @@ class Reader:
             name = re.match(r"[A-Za-z_][A-Za-z0-9_]*", word.raw).group(0)
             self.s.arg_names.setdefault(self.current_function(), set()).add(name)
 
-    def resolve(self, command, external=False):
+    def resolve(self, command, external=False, expanded=frozenset()):
         """Read what COMMAND runs. EXTERNAL: a wrapper execs it, so it is a
-        program, which no builtin, keyword or function can be."""
+        program, which no builtin, keyword or function can be. EXPANDED: the
+        arrays already read in place, which are not read again, and whose
+        elements are never assignments, as bash reads them."""
         words = command.words
         k = 0
-        while k < len(words) and ASSIGNMENT.match(words[k].raw):
+        while not expanded and k < len(words) and ASSIGNMENT.match(words[k].raw):
             self.note_assignment(words[k])
             k += 1
         if k >= len(words):
             return
-        expanded = set()
+        # What runs here is never a function: behind command, a wrapper or a
+        # path, or in a new shell's code.
+        skip_functions = external or self.fresh
         while k < len(words):
             w = words[k]
             line = self.s.line(w.pos)
             m = re.match(r'^"?\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\]\}"?$', w.raw)
-            if m and m.group(1) not in expanded:
-                # **An array run as a command** (verify-load's LDD_ENV): the
-                # function's own, else the script's, read in its place from
-                # one assignment and any appends after it, or named.
-                assigned = (self.arrays.get((self.current_function(), m.group(1)))
-                            or self.arrays.get((None, m.group(1))))
-                if assigned and not assigned[0][0] and all(appended for appended, _ in assigned[1:]):
-                    expanded.add(m.group(1))
-                    words = [e for _, elements in assigned for e in elements] + words[k + 1:]
-                    k = 0
-                    continue
-                self.s.refusals.append((line, f"this reader does not follow {w.raw} run as a command, since it "
-                                              "is not one assignment and its appends"))
+            if m:
+                self.array_run(m.group(1), w, line, words[k + 1:], external, expanded)
                 return
             if w.dynamic:
                 # **A command it was handed**: "$@", "$1", or a name it took
-                # from them, as `"$c" "$@"` runs after `local c=$1`.
+                # from them, as `"$c" "$@"` runs after `local c=$1`, which
+                # OWN_WRAPPERS fences. Any other word it cannot name is fenced
+                # by DYNAMIC.
                 if self.handed(w.raw):
                     self.s.runs_args.setdefault(self.current_function(), line)
-                self.s.refs.append(("dynamic", w.raw, line, w.pos))
-                return
-            name = w.value
-            if "/" in name:
-                if os.path.dirname(name) in BIN_DIRS:
-                    self.s.refs.append(("call", os.path.basename(name), line, w.pos))
+                    self.s.refs.append(("handed", w.raw, line, w.pos))
                 else:
                     self.s.refs.append(("dynamic", w.raw, line, w.pos))
                 return
+            name = w.value
+            if "/" in name:
+                if os.path.dirname(name) not in BIN_DIRS:
+                    self.s.refs.append(("dynamic", w.raw, line, w.pos))
+                    return
+                # **A program by its path in a bin directory** (`/usr/bin/env
+                # hostname`): read by its name, and always a program, so the
+                # command a wrapper runs, and an unread runner, are read as
+                # they are by name.
+                name = os.path.basename(name)
+                external = skip_functions = True
             rest = words[k + 1:]
-            if external and (name in BUILTINS or name in KEYWORDS or name in self.s.functions
-                             or name in self.functions or name in self.scope):
-                # **What a wrapper execs is a program** (`timeout 5 time`,
+            if name == "time":
+                # **The program time**: command() reads the keyword at a
+                # command's start, so a time here (after an assignment or a
+                # redirect, quoted, escaped, behind command, a wrapper or an
+                # array) is the program, which runs a command of its own.
+                self.s.refs.append(("call", name, line, w.pos))
+                j = self.wrapped(name, rest)
+                if j is None:
+                    return
+                k, external, skip_functions = k + 1 + j, True, True
+                continue
+            if external and (name in BUILTINS or name in KEYWORDS):
+                # **What a wrapper execs is a program** (`timeout 5 printf`,
                 # `sudo cd`): looked for on the list, as any program is.
                 self.s.refs.append(("call", name, line, w.pos))
                 return
-            if name in self.scope:
+            if name in self.scope and not skip_functions:
                 k = k + 1 + self.own_skip(self.scope[name], rest)
-                external = True
+                external = skip_functions = True
                 continue
-            if name in ("command",):
+            if name in ("command",) and not external:
+                # command skips functions, never builtins.
+                skip_functions = True
                 j = 0
                 while j < len(rest) and rest[j].value.startswith("-") and len(rest[j].value) > 1:
                     if rest[j].value == "--":
@@ -727,13 +879,20 @@ class Reader:
                     j += 1
                 k = k + 1 + j
                 continue
+            if name in ("enable", "alias") or name == "hash" and any(re.fullmatch(r"-[A-Za-z]*p[A-Za-z]*", a.value)
+                                                                     for a in rest) \
+                    or name == "shopt" and any(a.value == "expand_aliases" for a in rest):
+                self.s.refusals.append((line, f"this reader does not follow {name}, which changes what a name runs"))
+                return
             if name in ("type", "hash"):
                 for looked in rest:
                     if not looked.value.startswith("-"):
                         self.lookup(looked)
                 return
             if name == "builtin":
-                return
+                # The builtin it names, never a function.
+                k, skip_functions = k + 1, True
+                continue
             if name == "exec":
                 j = 0
                 while j < len(rest) and rest[j].value.startswith("-") and len(rest[j].value) > 1:
@@ -742,17 +901,17 @@ class Reader:
                         break
                     j += 2 if rest[j].value.endswith("a") else 1
                 k = k + 1 + j
-                external = True
+                external = skip_functions = True
                 continue
             if name in ("eval",):
                 for arg in rest:
-                    self.code_string(arg)
+                    self.code_string(arg, fresh=False)
                 return
             if name == "trap":
                 if rest and rest[0].value == "--":
                     rest = rest[1:]
                 if rest and rest[0].value not in ("-", "") and not rest[0].value.startswith("-"):
-                    self.code_string(rest[0])
+                    self.code_string(rest[0], fresh=False)
                 return
             if name in ("source", "."):
                 if rest:
@@ -765,7 +924,7 @@ class Reader:
                     self.note_assignment(arg)
             if name in BUILTINS or name in KEYWORDS:
                 return
-            if name in self.s.functions or name in self.functions:
+            if not skip_functions and (name in self.s.functions or name in self.functions):
                 return
             self.s.refs.append(("call", name, line, w.pos))
             if name in UNREAD_RUNNERS:
@@ -775,7 +934,46 @@ class Reader:
             if j is None:
                 return
             k = k + 1 + j
-            external = True
+            external = skip_functions = True
+
+    def array_run(self, name, w, line, rest, external, expanded):
+        """**An array run as a command** (verify-load's LDD_ENV), read in each
+        state its appends can leave, or refused. Fenced: every mention of the
+        name in the script is NAME=( ), NAME+=( ) or ${NAME[...]}, and none
+        stands in another shell file beside it or a file it sources, so no
+        other write (an element, a scalar, unset, mapfile, read -a) can reach
+        the run. There is one assignment and at most MAX_APPENDS appends, all
+        in the run's own function or all at the top level, since bash's local
+        reaches the functions a function calls, and none in a loop, which can
+        repeat it. An append may stand under a condition that skips it, or
+        later in the text than the run, so the command is read in every
+        subset of the appends, in their order. An array run inside another's
+        run is refused, which bounds the reading."""
+        why = None
+        entries = [(scope, entry) for (scope, n), recorded in self.arrays.items() if n == name for entry in recorded]
+        scopes = {scope for scope, _ in entries}
+        assigned = [entry for _, entry in entries]
+        mention = r"(?<![A-Za-z0-9_])" + name + r"(?![A-Za-z0-9_])"
+        known = r"(?<![A-Za-z0-9_])" + name + r"\+?=\(|\$\{[#!]?" + name + r"\["
+        if expanded:
+            why = "run inside another array's run"
+        elif len(re.findall(mention, self.s.text)) != len(re.findall(known, self.s.text)) \
+                or re.search(mention, beside(self.s.path, tuple(n for n, _ in self.s.sources))):
+            why = f"written elsewhere than {name}=( ), {name}+=( ) and ${{{name}[...]}}, or beside this script"
+        elif not (len(scopes) == 1 and scopes <= {self.current_function(), None}):
+            why = "assigned nowhere, or outside the run's function, or in more than one scope"
+        elif assigned[0][0] or not all(e[0] for e in assigned[1:]) or len(assigned) - 1 > MAX_APPENDS:
+            why = f"not one assignment and at most {MAX_APPENDS} appends"
+        elif any(e[2] for e in assigned):
+            why = "assigned or appended in a loop"
+        if why is not None:
+            self.s.refusals.append((line, f"this reader does not follow {w.raw} run as a command, since it is {why}"))
+            return
+        first, appends = assigned[0][1], [e[1] for e in assigned[1:]]
+        for mask in range(1 << len(appends)):
+            run = Command()
+            run.words = first + [e for i, elements in enumerate(appends) if mask >> i & 1 for e in elements] + rest
+            self.resolve(run, external, expanded | {name})
 
     def lookup(self, word):
         if word.dynamic:
@@ -869,7 +1067,7 @@ class Reader:
             if self.cur is not None and self.cur.heredocs:
                 for start, end, _ in self.cur.heredocs:
                     Reader(self.s, start, end, self.scope, self.functions, self.current_function(),
-                           arrays=self.arrays).read()
+                           arrays=self.arrays, depth=self.depth + 1, loops=self.loops, fresh=True).read()
                 return None
             if self.cur is not None and any(c is self.cur for c, _, _, _ in self.heredocs):
                 self.cur.shell_reads = True
@@ -896,6 +1094,58 @@ class Reader:
             return options({"-k", "-s", "--kill-after", "--signal"}, positionals=1)
         if name in ("setsid", "nohup"):
             return options(set())
+        if name == "time":
+            # The program (GNU time), never the keyword.
+            return options({"-f", "-o", "--format", "--output"})
+        here = rest[0].pos if rest else self.i
+
+        def refuse(why):
+            self.s.refusals.append((self.s.line(here), f"this reader does not follow {why}"))
+            return None
+
+        if name == "sort" and any(a.value.startswith("--compress-program") for a in rest):
+            return refuse("sort --compress-program, which runs a program")
+        if name == "install" and any(a.value.startswith("--strip-program") for a in rest):
+            return refuse("install --strip-program, which runs a program")
+        if name == "visudo" and not any(a.value == "--check" or re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", a.value)
+                                        for a in rest):
+            return refuse("visudo without -c, which opens an editor")
+        if name == "pacman" and not (rest and re.match(r"-Q|--query", rest[0].value)):
+            return refuse("pacman past a query (-Q), which runs hooks")
+        if name == "awk":
+            j = 0
+            while j < len(rest) and rest[j].value.startswith("-") and rest[j].value != "--":
+                if rest[j].value.startswith("-f") or rest[j].value.startswith("--file"):
+                    return refuse("awk -f, whose program this reader does not read")
+                j += 2 if rest[j].value in ("-F", "-v") else 1
+            j += j < len(rest) and rest[j].value == "--"
+            if j < len(rest) and re.search(r"system|(?<!\|)\|(?!\|)", rest[j].value):
+                return refuse("awk with system() or a pipe in its program, which runs a program")
+            return None
+        if name == "sed":
+            scripts, j = [], 0
+            while j < len(rest) and rest[j].value.startswith("-") and rest[j].value != "--":
+                v = rest[j].value
+                if v.startswith("-f") or v.startswith("--file"):
+                    return refuse("sed -f, whose script this reader does not read")
+                if v in ("-e", "--expression"):
+                    scripts.append(rest[j + 1].value if j + 1 < len(rest) else "")
+                    j += 2
+                    continue
+                if v.startswith("--expression="):
+                    scripts.append(v.split("=", 1)[1])
+                elif v.startswith("-e"):
+                    scripts.append(v[2:])
+                j += 1
+            if not scripts and j < len(rest):
+                scripts.append(rest[j].value)
+            addr = r"(?:\d+|\$|/(?:\\.|[^/\\])*/)"
+            plain = re.compile(r"(?:" + addr + r"(?:," + addr + r")?)?[pdq]"
+                               r"|(?:" + addr + r"(?:," + addr + r")?)?s(?P<d>[^\\\n])(?:\\.|(?!(?P=d)).)*(?P=d)"
+                               r"(?:\\.|(?!(?P=d)).)*(?P=d)[gpI0-9]*")
+            if not all(plain.fullmatch(x) for x in scripts):
+                return refuse("sed past its s, p, d and q commands, whose e runs a program")
+            return None
         if name == "nice":
             return options({"-n", "--adjustment"})
         if name == "stdbuf":
@@ -928,18 +1178,37 @@ class Reader:
                 j += 1
             return None
         if name == "tar":
+            # **tar runs -I and --to-command through a shell**: each is a code
+            # string. Its other ways to run a command are refused.
             for j, a in enumerate(rest):
-                v = None
-                if a.value in ("-I", "--use-compress-program") and j + 1 < len(rest):
-                    v = rest[j + 1]
-                elif a.value.startswith("--use-compress-program=") or (a.value.startswith("-I") and a.value != "-I"):
-                    v = a
-                if v is not None and not v.dynamic:
-                    prog = (v.value[2:] if v.value.startswith("-I") else v.value.split("=", 1)[-1]).split()
-                    if prog:
-                        self.s.refs.append(("call", prog[0], self.s.line(v.pos), v.pos))
+                v = a.value
+                if v in ("-I", "--use-compress-program", "--to-command") and j + 1 < len(rest):
+                    self.code_string(rest[j + 1])
+                elif v.startswith(("--use-compress-program=", "--to-command=")):
+                    self.code_string(self.past(a, a.raw.index("=") + 1))
+                elif v.startswith("-I"):
+                    self.code_string(self.past(a, 2))
+                elif v == "-F" or v.startswith(("--checkpoint-action", "--info-script", "--new-volume-script",
+                                                "--rsh-command", "--rmt-command")):
+                    refuse(f"tar {v.split('=')[0]}, which runs a command")
             return None
         return None
+
+
+def beside(path, sourced):
+    """The text of every other shell file beside PATH, and of each file it
+    sources by name, for the array fence. Read at each use, since a file may
+    change between two checks in one process."""
+    here = os.path.dirname(os.path.abspath(path))
+    names = {n for n in os.listdir(here) if n.endswith(".sh")} | set(sourced)
+    texts = []
+    for n in sorted(names - {os.path.basename(path)}):
+        try:
+            with open(os.path.join(here, n)) as f:
+                texts.append(f.read())
+        except OSError:
+            pass
+    return "\n".join(texts)
 
 
 HERE = r"(?:BASH_SOURCE|\$0\b|\$\{0[^A-Za-z0-9_]|__file__)"
@@ -1026,6 +1295,9 @@ def check_shell(path, programs, funcs=None):
     scope = {f: g for f, g in OWN_WRAPPERS.items() if f in funcs}
     script = read_script(path, scope, funcs, arrays=read_script(path, scope, funcs).arrays)
     findings = [(line, "-", why) for line, why in script.refusals]
+    for m in re.finditer(CODE_VARIABLES, script.text):
+        findings.append((script.line(m.start()), "-", f"this reader does not follow a variable bash runs as code: "
+                                                      f"{m.group(0)}"))
     for fn in sorted(set(script.runs_args) - set(OWN_WRAPPERS)):
         findings.append((script.runs_args[fn], fn, "a function that runs its arguments as a command, "
                                                     "with no entry in OWN_WRAPPERS"))
@@ -1037,8 +1309,19 @@ def check_shell(path, programs, funcs=None):
         at = pos - script.lines[line - 1]
         return any(m.start() <= at < m.end() for m in re.finditer(re.escape(guard), lines[line - 1]))
 
+    dynamic_used = set()
     for kind, word, line, pos in script.refs:
-        if kind == "dynamic" or word in programs:
+        if kind == "handed" or kind == "lookup" and word in programs:
+            continue
+        if kind == "dynamic":
+            if (script.name, word) in DYNAMIC:
+                dynamic_used.add(word)
+            else:
+                findings.append((line, word, "this reader cannot name the program this runs"))
+            continue
+        if word in programs:
+            if word not in LEAF_NAMES and word not in WRAPPERS and word not in UNREAD_RUNNERS:
+                findings.append((line, word, "this reader does not know whether it runs a command it is handed"))
             continue
         guards = [g for p, g in allowed if p == word]
         if guards and any(inside(g, line, pos) for g in guards):
@@ -1054,6 +1337,9 @@ def check_shell(path, programs, funcs=None):
     for p, guard in allowed:
         if p not in used and not any(f[1] == p for f in findings):
             findings.append((0, p, f"GUARDED allows it behind {guard!r}, and no line of the script uses that"))
+    for s_, word in DYNAMIC:
+        if s_ == script.name and word not in dynamic_used:
+            findings.append((0, word, "DYNAMIC allows it, and no line of the script runs that"))
     return script, sorted(set(findings))
 
 
@@ -1094,12 +1380,13 @@ def main(argv=None):
             else:
                 script, findings = check_shell(path, programs, scopes[path])
             for line, word, why in findings:
-                print(f"{path}:{line}: {word}: {why}")
+                todo = remedy(why)
+                print(f"{path}:{line}: {word}: {why}" + (f" (to pass: {todo})" if todo else ""))
                 bad += 1
             if args.dynamic and script is not None:
                 for kind, word, line, _ in script.refs:
-                    if kind == "dynamic":
-                        print(f"{path}:{line}: dynamic: {word}")
+                    if kind in ("dynamic", "handed"):
+                        print(f"{path}:{line}: {kind}: {word}")
     except OSError as e:
         print(f"program_check: {e}", file=sys.stderr)
         return 2
