@@ -366,8 +366,13 @@ def refusing_copy(where, name, record):
     renamed into place, so a write that fails leaves no file under NAME."""
     fd, part = tempfile.mkstemp(dir=where, prefix=".part-")
     try:
-        os.close(fd)
-        Path(part).write_bytes(refusing_text(record).encode())
+        try:
+            written = os.fdopen(fd, "wb")
+        except BaseException:
+            os.close(fd)
+            raise
+        with written:
+            written.write(refusing_text(record).encode())
         os.chmod(part, 0o755)
         os.replace(part, where / name)
     finally:
@@ -7871,7 +7876,8 @@ def _guard_copies():
     """The refusing copies in the guard's directory, read by their text, and
     the entries that could not be read. A name that starts with a dot, as a
     copy's temporary name does, is never a copy, a file is read only when
-    its size is a copy's, and an entry gone before it is read is absent."""
+    its size is a copy's, and an entry gone before it is read is absent. The
+    directory gone during the reading fails it."""
     text = refusing_text(REACH_RECORD).encode()
     copies, unread = set(), set()
     for entry in os.scandir(STAND_IN_GUARD):
@@ -7882,7 +7888,8 @@ def _guard_copies():
                     and Path(entry.path).read_bytes() == text):
                 copies.add(entry.name)
         except FileNotFoundError:
-            pass
+            if not os.path.isdir(STAND_IN_GUARD):
+                raise
         except OSError:
             unread.add(entry.name)
     return copies, unread
@@ -7923,8 +7930,9 @@ def files_held(files):
         except OSError as e:
             failed.append(f"{STAND_IN_GUARD} not read ({e.strerror or e})")
             now, unread_now = before, set()
-        failed += [f"{STAND_IN_GUARD / name} not read at the block's start" for name in sorted(unread)]
-        failed += [f"{STAND_IN_GUARD / name} not read at its end" for name in sorted(unread_now)]
+        for name in sorted(unread | unread_now):
+            when = " and ".join(w for w, names in (("start", unread), ("end", unread_now)) if name in names)
+            failed.append(f"{STAND_IN_GUARD / name} not read at the block's {when}")
         unread |= unread_now
         now, before = now - unread, before - unread
         for name in sorted(now - before):
@@ -8389,7 +8397,7 @@ class StandInGuardTests(unittest.TestCase):
         sets the copies back too. What cannot be set back leaves the rest set
         back and is named, in GuardCopiesLeft or in a note on the block's own
         exception, also when the guard's directory cannot be read at the end, or
-        the generator is closed. An entry that could not be read at the start or
+        GeneratorExit ends the block. An entry that could not be read at the start or
         at the end is left and named, an entry gone before it is read is absent,
         and another writer's temporary copy is never read as a copy. Made-up
         names stand for the programs. Perturbations: keep the copies made, read
@@ -8497,6 +8505,7 @@ class StandInGuardTests(unittest.TestCase):
                 for patch in started:
                     patch.stop()
             self.assertIn(f"{new} not read at the block's start", str(unreadable.exception))
+            self.assertNotIn("at the block's start and end", str(unreadable.exception))
             self.assertTrue(new.exists(), "an entry that could not be read at the start is left")
             unlike_a_copy = b"#" * len(refusing_text(REACH_RECORD).encode())
             try:
@@ -8509,10 +8518,12 @@ class StandInGuardTests(unittest.TestCase):
                 for patch in started:
                     patch.stop()
                 started.clear()
-            self.assertIn(f"{old} not read at its end", str(unreadable.exception))
+            self.assertIn(f"{old} not read at the block's end", str(unreadable.exception))
+            self.assertNotIn("at the block's start", str(unreadable.exception))
             self.assertEqual(old.read_bytes(), unlike_a_copy, "an entry that could not be read at the end is left")
             old.unlink()
             guard_copy(old.name)
+            first = old.stat().st_ino
             try:
                 with files_held(held_files):
                     reading = read_but(old, FileNotFoundError(2, "No such file or directory"))
@@ -8522,8 +8533,8 @@ class StandInGuardTests(unittest.TestCase):
                 for patch in started:
                     patch.stop()
                 started.clear()
-            self.assertEqual(old.read_bytes(), refusing_text(REACH_RECORD).encode(),
-                             "an entry gone before it is read is absent, and made again")
+            self.assertNotEqual(old.stat().st_ino, first, "an entry gone before it is read is absent, and made again")
+            self.assertEqual(old.read_bytes(), refusing_text(REACH_RECORD).encode())
             new.unlink()
             held = files_held(held_files)
             with unlink_but(stuck):
@@ -8541,23 +8552,44 @@ class StandInGuardTests(unittest.TestCase):
 
     def test_a_refusing_copy_whose_write_fails_leaves_no_file(self):
         """refusing_copy writes under a temporary name and renames it into
-        place, so a write that fails at any step, its text, its mode or its
-        rename, leaves no file under the name for guard_copy to take as the
-        guard's copy, and no temporary one. Perturbations: write in place,
-        or remove the temporary file only when one step fails, and this
-        fails."""
+        place, so a write that fails at any step, its text part way through,
+        its mode or its rename, leaves no file under the name for guard_copy
+        to take as the guard's copy, and no temporary one. Perturbations:
+        write in place, or remove the temporary file only when one step
+        fails, and this fails."""
         from unittest import mock
         name = "virt-half-written"
-        steps = {"text": (type(STAND_IN_GUARD), "write_bytes", OSError(28, "No space left on device")),
-                 "mode": (os, "chmod", OSError(30, "Read-only file system")),
-                 "rename": (os, "replace", IsADirectoryError(21, "Is a directory"))}
+        real_fdopen = os.fdopen
+
+        class PartWritten:
+            def __init__(self, fd, *args, **kwargs):
+                self.file = real_fdopen(fd, *args, **kwargs)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *raised):
+                self.file.close()
+
+            def write(self, data):
+                self.file.write(data[:10])
+                raise OSError(28, "No space left on device")
+        steps = {"text": (os, "fdopen", {"new": PartWritten}),
+                 "mode": (os, "chmod", {"side_effect": OSError(30, "Read-only file system")}),
+                 "rename": (os, "replace", {"side_effect": IsADirectoryError(21, "Is a directory")})}
+
+        def left():
+            return [e for e in os.listdir(STAND_IN_GUARD) if e == name or e.startswith(".part-")]
         try:
-            for step, (owner, attribute, error) in steps.items():
+            for step, (owner, attribute, how) in steps.items():
                 with self.subTest(step=step):
-                    with mock.patch.object(owner, attribute, side_effect=error), self.assertRaises(OSError):
-                        refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
-                    self.assertEqual([e for e in os.listdir(STAND_IN_GUARD) if e == name or e.startswith(".part-")],
-                                     [])
+                    try:
+                        with mock.patch.object(owner, attribute, **how), self.assertRaises(OSError):
+                            refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
+                        self.assertEqual(left(), [])
+                    finally:
+                        for entry in left():
+                            (STAND_IN_GUARD / entry).unlink()
             copy = guard_copy(name)
             self.assertEqual(copy.read_bytes(), refusing_text(REACH_RECORD).encode())
             self.assertTrue(os.access(copy, os.X_OK), "the copy is executable")
