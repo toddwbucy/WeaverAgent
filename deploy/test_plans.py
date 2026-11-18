@@ -101,14 +101,24 @@ def _file_of(path):
 ROOT_GRANTING = ("sudo", "sudoedit", "sudo-rs", "su", "runuser", "pkexec", "doas", "run0")
 def box_view(where, without=()):
     where.mkdir()
+    _refresh_files()
     for entry in os.scandir("/usr/bin"):
-        if entry.name in without or entry.name in ROOT_GRANTING:
-            continue
-        if not privileged(entry.name, entry.path):
-            os.symlink(entry.path, where / entry.name)
-        elif (STAND_IN_GUARD / entry.name).exists():
-            os.symlink(STAND_IN_GUARD / entry.name, where / entry.name)
+        if entry.name not in without and entry.name not in ROOT_GRANTING:
+            os.symlink(view_link(entry.name, entry.path), where / entry.name)
     return where
+
+
+def view_link(name, path):
+    """**What a view links NAME to**, the one rule box_view, path_without's
+    farm and IMAGE_VIEW share: the guard's refusing copy where NAME is
+    privileged and PATH, if any, lies outside the tests' temporary root,
+    made now if the start made none, else PATH."""
+    if path is not None and _inside(path) or not privileged(name, path):
+        return path
+    copy = STAND_IN_GUARD / name
+    if not copy.exists():
+        refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
+    return copy
 
 
 def look_as(account, flag, path):
@@ -137,31 +147,55 @@ def _inside(path):
     return os.path.commonpath([os.path.realpath(path), TEST_ROOT]) == TEST_ROOT
 
 
-_START_DIRS = tuple(d for d in _BOX_BINS + tuple(BOX_PATH.split(os.pathsep)) if d and not _inside(d))
-# Each named program's file on the box, as device and inode, in a box bin
-# directory or the suite's PATH at its start.
-PRIVILEGED_FILES = frozenset(f for d in _START_DIRS for n in PRIVILEGED
-                             for f in [_file_of(os.path.join(d, n))] if f)
-# A directory's privileged programs. One outside the temporary root is read
-# again whenever it changes, so a program installed during a run is covered.
-# One under it, where a test makes its stand-ins, is read at each call.
+# The box's bin directories and the suite's PATH at its start, each once by
+# its real path (/bin, /sbin and /usr/sbin are often /usr/bin).
+_START_DIRS = tuple(dict.fromkeys(os.path.realpath(d) for d in _BOX_BINS + tuple(BOX_PATH.split(os.pathsep))
+                                  if d and not _inside(d)))
+# Each named program's file on the box, as device and inode, read again when
+# a start directory changes, so an upgrade during a run that replaces one
+# keeps its other names in the set.
+PRIVILEGED_FILES = frozenset()
+_FILES_READ = [None]
+
+
+def _mtime(path):
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return None
+
+
+def _refresh_files():
+    global PRIVILEGED_FILES
+    key = tuple(_mtime(d) for d in _START_DIRS)
+    if key != _FILES_READ[0]:
+        PRIVILEGED_FILES = frozenset(f for d in _START_DIRS for n in PRIVILEGED
+                                     for f in [_file_of(os.path.join(d, n))] if f)
+        _FILES_READ[0] = key
+        _MEMBERS_READ.clear()
+
+
+# A directory's privileged programs, by its real path, read again whenever it
+# changes, so a program installed during a run, or a stand-in a test adds, is
+# covered. A reading is kept only once the directory's last change is two
+# seconds old, so a change within one tick of the clock is never missed.
 _MEMBERS_READ = {}
 
 
 def _members_of(directory):
-    try:
-        changed = os.stat(directory).st_mtime_ns
-    except OSError:
+    real = os.path.realpath(directory)
+    changed = _mtime(real)
+    if changed is None:
         return ()
-    held = _MEMBERS_READ.get(directory)
+    held = _MEMBERS_READ.get(real)
     if held and held[0] == changed:
         return held[1]
     try:
-        names = tuple(sorted(e.name for e in os.scandir(directory) if privileged(e.name, e.path)))
+        names = tuple(sorted(e.name for e in os.scandir(real) if privileged(e.name, e.path)))
     except OSError:
         names = ()
-    if not _inside(directory):
-        _MEMBERS_READ[directory] = (changed, names)
+    if time.time_ns() - changed > 2_000_000_000:
+        _MEMBERS_READ[real] = (changed, names)
     return names
 
 
@@ -170,6 +204,7 @@ def privileged_in(directories, cwd=None):
     one of DIRECTORIES carries, each once, in the order found. An empty or
     relative directory is read against CWD, as a child started there reads
     it."""
+    _refresh_files()
     base = os.path.abspath(cwd) if cwd is not None else os.getcwd()
     found = list(PRIVILEGED)
     for d in directories:
@@ -183,6 +218,18 @@ _IMAGE_LISTED = tuple(n.strip() for n in (DEPLOY / "image-programs.txt").read_te
 # each privileged program in a box bin directory or the suite's PATH, and each
 # the image's list names, which the image view links to the guard's copy.
 PRIVILEGED_NAMES = privileged_in(_START_DIRS)
+# **A multi-call binary that is also a shell or a stand-in** (busybox, toybox)
+# would make sh or env a privileged program by its file, so the guard could
+# refuse neither without the other: the run stops at its start, named.
+def shared_with_privileged(directories):
+    return [n for n in ("sh", "bash") + STAND_IN_NAMES
+            if privileged(n, shutil.which(n, path=os.pathsep.join(directories)))]
+
+
+_SHARED = shared_with_privileged(_START_DIRS)
+if _SHARED:
+    sys.exit(f"test_plans: the box's {', '.join(_SHARED)} share a file with a named privileged program, so the "
+             "guard cannot refuse one without the other, and no test runs")
 PRIVILEGED_NAMES += tuple(n for n in _IMAGE_LISTED if privileged(n) and n not in PRIVILEGED_NAMES)
 # **A stranger's uid is never the runner's** (Codex on #599): a stand-in that
 # answers a path the tests made as not root's answers this uid, held by no
@@ -276,19 +323,24 @@ def _drop_an_empty_record():
 atexit.register(_drop_an_empty_record)
 
 
+def refusing_copy(where, name, record):
+    """NAME in WHERE: it appends its reach to RECORD and refuses with 97."""
+    (where / name).write_text(
+        "#!/bin/sh\n"
+        '{ printf "%s\\t%s\\t" "${0##*/}" "${WEAVER_TEST_ID:-unknown}"; sep=; '
+        'for a do printf "%s%s" "$sep" "$a"; sep=" "; done; printf "\\0"; } >> '
+        + shlex.quote(str(record)) + "\n"
+        'printf "a test reached %s outside its stand-ins\\n" "${0##*/}" >&2\n'
+        "exit 97\n")
+    (where / name).chmod(0o755)
+
+
 def make_guard(where, record):
     """**A guard directory** in WHERE: a sudo, a runuser and each of
     PRIVILEGED_NAMES that append the reach to RECORD and refuse with 97, and
     the box's setsid, env and timeout."""
     for name in ("sudo", "runuser") + PRIVILEGED_NAMES:
-        (where / name).write_text(
-            "#!/bin/sh\n"
-            '{ printf "%s\\t%s\\t" "${0##*/}" "${WEAVER_TEST_ID:-unknown}"; sep=; '
-            'for a do printf "%s%s" "$sep" "$a"; sep=" "; done; printf "\\0"; } >> '
-            + shlex.quote(str(record)) + "\n"
-            'printf "a test reached %s outside its stand-ins\\n" "${0##*/}" >&2\n'
-            "exit 97\n")
-        (where / name).chmod(0o755)
+        refusing_copy(where, name, record)
     for name in ("setsid", "env", "timeout"):
         if shutil.which(name, path=BOX_PATH):
             (where / name).symlink_to(shutil.which(name, path=BOX_PATH))
@@ -331,18 +383,22 @@ def guard_path(path, what, cwd=None):
                                     f"stand-ins under {TEST_ROOT}: refused before it runs")
 
 
-def guard_argv(argv, env, cwd=None):
+def guard_argv(argv, cwd=None):
     """**No child is started on a privileged program outside the tests'
-    temporary root**, whether or not it runs a shell: each element of its
-    command line, and its executable, that names a file is read by
-    privileged()'s test, and each bare word is resolved on the child's PATH
-    where the child starts, so a direct call, or one under a wrapper, is
-    refused before it runs."""
+    temporary root by its path**, whether or not it runs a shell: each
+    element of its command line, and its executable, that names a file is
+    read by privileged()'s test, where the child starts. Where the line
+    clears the environment or PATH (`env -i`, `-u PATH`), each bare word is
+    resolved on the default PATH the child then runs with. Every PATH a
+    child is handed, or an `env` wrapper assigns, is read by guard_path."""
+    _refresh_files()
     base = os.path.abspath(cwd) if cwd is not None else os.getcwd()
-    path = os.pathsep.join(os.path.join(base, d or ".") for d in env.get("PATH", os.defpath).split(os.pathsep))
-    for a in argv:
-        a = os.fsdecode(a)
-        found = os.path.join(base, a) if "/" in a else shutil.which(a, path=path)
+    words = [os.fsdecode(a) for a in argv]
+    clears = any(w in ("-i", "--ignore-environment", "-uPATH", "--unset=PATH") or (w == "PATH" and before == "-u")
+                 for before, w in zip([""] + words, words))
+    default = os.pathsep.join(os.path.join(base, d or ".") for d in os.defpath.split(os.pathsep))
+    for a in words:
+        found = os.path.join(base, a) if "/" in a else shutil.which(a, path=default) if clears else None
         if found and os.path.isfile(found) and privileged(os.path.basename(a), found) and not _inside(found):
             raise StandInGuardError(f"a child's command line names {a}, which is {found}, a privileged program "
                                     f"outside the stand-ins under {TEST_ROOT}: refused before it runs")
@@ -437,8 +493,7 @@ def image_link(name, bins=_BOX_BINS):
     """What IMAGE_VIEW links a listed program to: the guard's copy of a
     privileged one, whether BINS carry it or not, else the program BINS
     carry, else nothing."""
-    found = shutil.which(name, path=os.pathsep.join(bins))
-    return STAND_IN_GUARD / name if privileged(name, found) else found
+    return view_link(name, shutil.which(name, path=os.pathsep.join(bins)))
 
 
 for _name in _IMAGE_LISTED:
@@ -513,24 +568,23 @@ class _GuardedPopen(_REAL_POPEN):
             args, kwargs = _image_view(args, kwargs)
         if kwargs.get("env") is not None:
             _hand_settings(kwargs["env"])
-        if _runs_a_script(args):
-            env = kwargs.get("env")
-            env = os.environ if env is None else env
-            cwd = kwargs.get("cwd")
-            cwd = None if cwd is None else os.fsdecode(cwd)
-            guard_path(env.get("PATH", os.defpath), "PATH", cwd)
-            if "DROP_PATH" in env:
-                guard_path(env["DROP_PATH"], "DROP_PATH", cwd)
+        # **Every child's PATH is read**, a shell's or not: a child that runs
+        # code (python3 -c, make) starts its own children on the PATH it is
+        # handed, out of this process's sight. A shell=True child is a shell.
+        env = os.environ if kwargs.get("env") is None else kwargs["env"]
+        cwd = None if kwargs.get("cwd") is None else os.fsdecode(kwargs["cwd"])
+        guard_path(env.get("PATH", os.defpath), "PATH", cwd)
+        if "DROP_PATH" in env:
+            guard_path(env["DROP_PATH"], "DROP_PATH", cwd)
+        # A PATH an `env` wrapper hands on in the command line itself.
+        for a in ([] if isinstance(args, (str, bytes, os.PathLike)) else args):
+            if os.fsdecode(a).startswith("PATH="):
+                guard_path(os.fsdecode(a)[5:], "PATH", cwd)
+        if _runs_a_script(args) or kwargs.get("shell", len(rest) > 7 and rest[7]):
             guard_shell_files(rest[2] if len(rest) > 2 else kwargs.get("stdin"), env)
-            # A PATH an `env` wrapper hands on in the command line itself.
-            for a in ([] if isinstance(args, (str, os.PathLike)) else args):
-                if str(a).startswith("PATH="):
-                    guard_path(str(a)[5:], "PATH", cwd)
         executable = kwargs.get("executable", rest[1] if len(rest) > 1 else None)
         guard_argv(([args] if isinstance(args, (str, bytes, os.PathLike)) else list(args))
-                   + ([executable] if executable is not None else []),
-                   os.environ if kwargs.get("env") is None else kwargs["env"],
-                   None if kwargs.get("cwd") is None else os.fsdecode(kwargs["cwd"]))
+                   + ([executable] if executable is not None else []), cwd)
         super().__init__(args, *rest, **kwargs)
 
 
@@ -1630,12 +1684,8 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                     continue
                 for e in os.scandir(d):
                     link = farm / e.name
-                    if e.name == tool or link.is_symlink():
-                        continue
-                    if not privileged(e.name, e.path) or _inside(e.path):
-                        link.symlink_to(e.path)
-                    elif (STAND_IN_GUARD / e.name).exists():
-                        link.symlink_to(STAND_IN_GUARD / e.name)
+                    if e.name != tool and not link.is_symlink():
+                        link.symlink_to(view_link(e.name, e.path))
         return os.pathsep.join([str(self.bin), str(farm)])
 
     def test_the_farm_links_the_guards_copy_of_each_privileged_program(self):
@@ -7867,15 +7917,20 @@ class StandInGuardTests(unittest.TestCase):
             self.assertTrue(marker.exists(), "a test's own stand-ins pass")
 
     def test_a_child_that_names_a_privileged_program_is_refused_before_it_runs(self):
-        """A child that runs no shell is refused before it starts when its
-        command line names a privileged program outside the tests' temporary
-        root: by a bare name its PATH finds, by an absolute or a relative
-        path, under a wrapper, as its executable, and by a name whose file
-        is a named program's. Stand-ins of a test's own making, and a box
-        program that is not privileged, pass. The privileged programs here
-        are made-up family members, and `true`'s file standing for a named
-        program's, each a link to `true`, so nothing privileged runs if the
-        check is gone. Perturbation: drop the check, and each case runs."""
+        """A child that runs no shell is refused before it starts when it
+        would run a privileged program outside the tests' temporary root: by
+        a bare name its PATH finds, alone or under a wrapper, by an absolute
+        or a relative path, as its executable, by a name whose file is a
+        named program's, by a PATH= its own `env` wrapper assigns, by the
+        default PATH under `env -i` or `-u PATH` (the links stand in for
+        it), as a child that runs code but no shell, and as a shell=True
+        child. Stand-ins of a test's own making, and a box program that is
+        not privileged, pass. The privileged programs here are made-up
+        family members, and `true`'s file standing for a named program's,
+        each a link to `true`, so nothing privileged runs if a check is
+        gone. Perturbations: drop the command line's read, its reading of
+        `env -i`, the read of a PATH= in the line, or the read of a PATH
+        handed to a child that is not a shell, and a case runs."""
         from unittest import mock
         true = shutil.which("true", path=os.pathsep.join(_BOX_BINS))
         timeout = shutil.which("timeout", path=os.pathsep.join(_BOX_BINS))
@@ -7897,11 +7952,24 @@ class StandInGuardTests(unittest.TestCase):
                 with self.subTest(case=case):
                     with self.assertRaises(StandInGuardError) as refused:
                         subprocess.run(argv, timeout=20, **kwargs)
-                    self.assertIn("a privileged program outside the stand-ins", str(refused.exception))
+                    self.assertIn("refused before it runs", str(refused.exception))
             with self.subTest(case="by-its-file"), \
                     mock.patch.object(sys.modules[__name__], "PRIVILEGED_FILES", PRIVILEGED_FILES | {_file_of(true)}):
                 with self.assertRaises(StandInGuardError):
                     subprocess.run(["an-other-name"], env={"PATH": str(links)}, timeout=20)
+            env_program = shutil.which("env", path=os.pathsep.join(_BOX_BINS))
+            refused_lines = {
+                "env-assigns-PATH": ([env_program, f"PATH={links}", "virt-newtool"], {}),
+                "env-clears-the-environment": ([env_program, "-i", "virt-newtool"], {}),
+                "env-unsets-PATH": ([env_program, "-u", "PATH", "virt-newtool"], {}),
+                "a-child-that-runs-code": ([sys.executable, "-c", "pass"], {"env": {"PATH": str(links)}}),
+                "shell-true": ("virt-newtool", {"shell": True, "env": {"PATH": str(links)}})}
+            with mock.patch.object(os, "defpath", str(links)):
+                for case, (argv, kwargs) in refused_lines.items():
+                    with self.subTest(case=case):
+                        with self.assertRaises(StandInGuardError) as refused:
+                            subprocess.run(argv, timeout=20, **kwargs)
+                        self.assertIn(str(links), str(refused.exception))
             subprocess.run(["virt-own"], env={"PATH": str(own)}, timeout=20, check=True)
             subprocess.run([str(own / "virt-own")], timeout=20, check=True)
             subprocess.run([true], timeout=20, check=True)
@@ -7926,26 +7994,103 @@ class StandInGuardTests(unittest.TestCase):
                 self.assertFalse(privileged("by-symlink"), "without a path, the name alone decides")
 
     def test_a_program_installed_during_the_run_is_covered(self):
-        """A directory outside the tests' temporary root is read once and
-        again whenever it changes, so a program installed there during a run
-        joins the set. The directory stands outside by moving the root, and
-        its change is stamped a second on, so a coarse clock cannot hide it.
-        Perturbation: keep the first reading, and the new program is
-        missed."""
-        from unittest import mock
-        with tempfile.TemporaryDirectory() as scratch, \
-                mock.patch.object(sys.modules[__name__], "TEST_ROOT", os.path.join(scratch, "elsewhere")):
+        """A directory's reading is kept once its last change is two seconds
+        old, and the directory is read again whenever it changes, so a
+        program installed during a run joins the set. A change within one
+        tick of the clock leaves the time as it was, which is why a recent
+        reading is never kept: both are shown by stamping the directory's
+        time. Perturbations: keep the first reading, or keep a recent one,
+        and the new program is missed."""
+        with tempfile.TemporaryDirectory() as scratch:
             box = Path(scratch) / "box"
             box.mkdir()
+            real = os.path.realpath(box)
             try:
+                old = time.time_ns() - 10_000_000_000
+                os.utime(box, ns=(old, old))
                 self.assertEqual(_members_of(str(box)), ())
-                self.assertIn(str(box), _MEMBERS_READ, "a directory outside is held")
+                self.assertIn(real, _MEMBERS_READ, "a reading two seconds old is kept")
                 (box / "virt-late").write_text("#!/bin/sh\nexit 0\n")
-                before = os.stat(box)
-                os.utime(box, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
+                os.utime(box, ns=(old, old + 1_000_000_000))
                 self.assertEqual(_members_of(str(box)), ("virt-late",))
+                _MEMBERS_READ.pop(real, None)
+                now = time.time_ns()
+                os.utime(box, ns=(now, now))
+                self.assertEqual(_members_of(str(box)), ("virt-late",))
+                self.assertNotIn(real, _MEMBERS_READ, "a recent reading is not kept")
+                (box / "qemu-same-tick").write_text("#!/bin/sh\nexit 0\n")
+                os.utime(box, ns=(now, now))
+                self.assertEqual(_members_of(str(box)), ("qemu-same-tick", "virt-late"))
             finally:
-                _MEMBERS_READ.pop(str(box), None)
+                _MEMBERS_READ.pop(real, None)
+
+    def test_a_named_programs_files_are_read_again_when_a_start_directory_changes(self):
+        """An upgrade during a run replaces a named program's file, and its
+        other names must stay in the set: the files are read again when a
+        start directory changes. A start directory under the scratch stands
+        in, with a systemctl replaced by a rename and an alias that names
+        it. Perturbation: read the files once, and the alias drops out."""
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as scratch:
+            box = Path(scratch) / "box"
+            box.mkdir()
+            (box / "systemctl").write_text("#!/bin/sh\nexit 0\n")
+            (box / "an-alias").symlink_to("systemctl")
+            module = sys.modules[__name__]
+            with mock.patch.object(module, "_START_DIRS", (str(box),)), \
+                    mock.patch.object(module, "PRIVILEGED_FILES", frozenset()), \
+                    mock.patch.object(module, "_FILES_READ", [None]):
+                _refresh_files()
+                self.assertTrue(privileged("an-alias", box / "an-alias"))
+                (box / "systemctl.new").write_text("#!/bin/sh\nexit 1\n")
+                os.rename(box / "systemctl.new", box / "systemctl")
+                later = os.stat(box).st_mtime_ns + 1_000_000_000
+                os.utime(box, ns=(later, later))
+                _refresh_files()
+                self.assertTrue(privileged("an-alias", box / "an-alias"), "the alias of the new file")
+            _MEMBERS_READ.clear()
+            _refresh_files()
+
+    def test_a_multi_call_binary_that_is_a_shell_or_a_stand_in_is_named(self):
+        """A file that is both a named program's and env's (a multi-call
+        binary such as busybox) is named at the start, where the run stops,
+        so the guard never refuses env or sh by its file. A file under the
+        scratch stands for the binary. Perturbation: name nothing, and this
+        fails."""
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as scratch:
+            binary = Path(scratch) / "multi"
+            binary.write_text("#!/bin/sh\nexit 0\n")
+            binary.chmod(0o755)
+            (Path(scratch) / "env").symlink_to(binary)
+            with mock.patch.object(sys.modules[__name__], "PRIVILEGED_FILES", frozenset({_file_of(binary)})):
+                self.assertEqual(shared_with_privileged((scratch,)), ["env"])
+            self.assertEqual(shared_with_privileged((scratch,)), [])
+
+    def test_a_view_makes_the_guards_copy_of_a_program_the_start_did_not_read(self):
+        """view_link, the rule every view uses, makes the guard's refusing
+        copy of a privileged program the start made none of (one installed
+        since, or in a directory the start did not read), so a view never
+        skips a name, which would hand the next directory's program the name
+        or lose the call with 127. The copy is read, never run, since a run
+        would record a reach. Perturbation: make no copy, and the view links
+        a file that is not there."""
+        true = shutil.which("true", path=os.pathsep.join(_BOX_BINS))
+        copy = STAND_IN_GUARD / "virt-made-on-demand"
+        self.assertFalse(copy.exists())
+        try:
+            with tempfile.TemporaryDirectory() as scratch:
+                (Path(scratch) / "virt-made-on-demand").symlink_to(true)
+                self.assertEqual(view_link("virt-made-on-demand", str(Path(scratch) / "virt-made-on-demand")), copy)
+                text = copy.read_text()
+                self.assertIn(shlex.quote(str(REACH_RECORD)), text)
+                self.assertIn("exit 97", text)
+                self.assertTrue(os.access(copy, os.X_OK))
+                self.assertEqual(view_link("sh", "/usr/bin/sh"), "/usr/bin/sh")
+                inside = Path(scratch) / "systemctl"
+                self.assertEqual(view_link("systemctl", inside), inside, "a stand-in inside stays")
+        finally:
+            copy.unlink(missing_ok=True)
 
     def test_box_view_links_the_guards_copy_of_each_privileged_program(self):
         """box_view (#610) links no root-granting program, and for a
@@ -7981,13 +8126,19 @@ class SuiteGuardTests(unittest.TestCase):
     imports this file and runs one planted test class through run_suite."""
 
     def suite_child(self, body, end="sys.exit(t.run_suite(argv=['planted']))\n", env=None):
+        # The child is this suite, which puts its own guard ahead of the box's
+        # PATH as it starts. It is handed the guarded PATH, which every child
+        # is read by, and the box's beside it, which it takes back before the
+        # suite starts.
         code = ("import os, subprocess, sys, unittest\n"
+                "os.environ['PATH'] = os.environ.pop('WEAVER_TEST_BOX_PATH')\n"
                 f"sys.path.insert(0, {str(DEPLOY)!r})\n"
                 "import test_plans as t\n"
                 "print(t.REACH_DIR, flush=True)\n"
                 + body
                 + end)
-        run = subprocess.run([sys.executable, "-c", code], env={**os.environ, "PATH": BOX_PATH, **(env or {})},
+        run = subprocess.run([sys.executable, "-c", code], env={**os.environ, "WEAVER_TEST_BOX_PATH": BOX_PATH,
+                                                             **(env or {})},
                              text=True, capture_output=True, timeout=120)
         record_dir = Path(run.stdout.split("\n", 1)[0])
         self.assertEqual(record_dir.parent, Path(TEST_ROOT), run.stdout + run.stderr)
