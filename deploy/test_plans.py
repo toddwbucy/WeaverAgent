@@ -122,17 +122,19 @@ def view_link(name, path):
     return guard_copy(name)
 
 
-_COPIES_MADE = []
+_COPIES_MADE = set()
 
 
 def guard_copy(name):
     """The guard's refusing copy of NAME, made now if the guard holds none.
-    The file is read each time, since a test may remove a copy it made, and
-    each copy made is kept in _COPIES_MADE (files_held)."""
+    Whether a file stands under the name is read each time, since a test may
+    remove a copy it made, and each copy made is kept in _COPIES_MADE
+    (files_held). A stand-in's name never comes here: a stand-in that is a
+    privileged program's file stops the run at its start."""
     copy = STAND_IN_GUARD / name
     if not copy.exists():
         refusing_copy(STAND_IN_GUARD, name, REACH_RECORD)
-        _COPIES_MADE.append(copy)
+        _COPIES_MADE.add(copy)
     return copy
 
 
@@ -182,9 +184,8 @@ def _mtime(path):
 
 def _refresh_files():
     # The key is kept only once every start directory's last change is two
-    # seconds old, or two seconds ahead of the clock, as a directory's
-    # reading is (_members_of), so a file replaced within one tick of the
-    # clock is never missed. Every
+    # seconds old, as a directory's reading is (_members_of), so a file
+    # replaced within one tick of the clock is never missed. Every
     # directory's reading is dropped when a start directory changes, since a
     # directory of links into one keeps its own time when a target changes.
     global PRIVILEGED_FILES
@@ -194,15 +195,16 @@ def _refresh_files():
                                      for f in [_file_of(os.path.join(d, n))] if f)
         _MEMBERS_READ.clear()
         now = time.time_ns()
-        _FILES_READ[0] = key if all(m is None or abs(now - m) > 2_000_000_000 for m in key) else None
+        _FILES_READ[0] = key if all(m is None or now - m > 2_000_000_000 for m in key) else None
 
 
 # A directory's privileged programs, by its real path, read again whenever it
 # changes, so a program installed during a run, or a stand-in a test adds, is
 # covered. A reading is kept only once the directory's last change is two
 # seconds old, so a change within one tick of the clock is never missed. A
-# time two seconds ahead of the clock (a clock stepped back) is kept as
-# well, since a later change writes a time before it.
+# time ahead of the clock (a skewed file server, a clock stepped back) is
+# not kept until the clock has passed it by two seconds, and is read on
+# each child until then.
 _MEMBERS_READ = {}
 
 
@@ -218,7 +220,7 @@ def _members_of(directory):
         names = tuple(sorted(e.name for e in os.scandir(real) if privileged(e.name, e.path)))
     except OSError:
         names = ()
-    if abs(time.time_ns() - changed) > 2_000_000_000:
+    if time.time_ns() - changed > 2_000_000_000:
         _MEMBERS_READ[real] = (changed, names)
     return names
 
@@ -506,6 +508,8 @@ def env_hands(words):
             if len(named) != 1:
                 refuse(f"the option {name}, {'an ambiguous shortening' if named else 'not one of its options'}")
             opt, takes = _ENV_LONG[named[0]]
+            if eq and takes is False:
+                refuse(f"the option {named[0]} with an argument it does not take")
             opts = [(opt, value if eq else argument("") if takes is True else None)]
         else:
             opts, rest = [], word[1:]
@@ -7855,16 +7859,16 @@ def files_held(files):
     directory's change does not read them again, no directory's reading
     from before the block or during it is kept, and no copy guard_copy
     makes during the block outlives it, so a box program FILES names never
-    stays refused. Any other file in the guard's directory is left as it
-    is."""
+    stays refused. A copy that stood before the block stays, and any other
+    file in the guard's directory is left as it is."""
     from unittest import mock
     module = sys.modules[__name__]
-    made = len(_COPIES_MADE)
+    before = set(os.listdir(STAND_IN_GUARD))
 
     def drop_copies():
-        for copy in _COPIES_MADE[made:]:
+        for copy in [c for c in _COPIES_MADE if c.parent == STAND_IN_GUARD and c.name not in before]:
             copy.unlink(missing_ok=True)
-        del _COPIES_MADE[made:]
+            _COPIES_MADE.discard(copy)
 
     held = contextlib.ExitStack()
     held.callback(_MEMBERS_READ.clear)
@@ -8141,16 +8145,18 @@ class StandInGuardTests(unittest.TestCase):
                         if case == "env-clears-the-environment":
                             self.assertIn("the default one an `env` wrapper's -i", str(refused.exception))
                 refused_options = {
-                    "env-splits-a-string": [env_program, "-S", "-i virt-newtool"],
-                    "env-splits-on-a-vertical-tab": [env_program, "-S", "\x0b-i\x0bvirt-newtool"],
-                    "env-changes-directory": [env_program, "-C", scratch, "links/virt-newtool"],
-                    "env-reads-a-file": [env_program, "--env0-from", os.devnull, "virt-newtool"],
-                    "env-lacks-the-option": [env_program, "--no-such-option", "-i", "virt-newtool"]}
-                for case, argv in refused_options.items():
+                    "env-splits-a-string": ([env_program, "-S", "-i virt-newtool"], "-S, which splits"),
+                    "env-splits-a-string-shortened": ([env_program, "--split", "-i virt-newtool"], "-S, which splits"),
+                    "env-changes-directory": ([env_program, "-C", scratch, "links/virt-newtool"], "-C, which starts"),
+                    "env-reads-a-file": ([env_program, "--env0-from", os.devnull, "virt-newtool"],
+                                         "--env0-from, which reads"),
+                    "env-lacks-the-option": ([env_program, "--no-such-option", "-i", "virt-newtool"],
+                                             "--no-such-option, not one of its options")}
+                for case, (argv, reason) in refused_options.items():
                     with self.subTest(case=case):
                         with self.assertRaises(StandInGuardError) as refused:
                             subprocess.run(argv, timeout=20)
-                        self.assertIn("which this guard does not read as env does", str(refused.exception))
+                        self.assertIn(reason, str(refused.exception))
                 with self.subTest(passes="grep-ignores-case"):
                     self.assertEqual(subprocess.run([grep, "-i", "virt-newtool", os.devnull], timeout=20).returncode, 1)
                 with self.subTest(passes="env-assigns-its-own-PATH"):
@@ -8184,11 +8190,10 @@ class StandInGuardTests(unittest.TestCase):
         program installed during a run joins the set. A change within one
         tick of the clock leaves the time as it was, which is why a recent
         reading is never kept: both are shown by stamping the directory's
-        time. A directory dated ahead of the clock (a clock stepped back) is
-        kept too, since a later change writes a time before it, so it is not
-        read again on every child. Perturbations: keep the first reading, or
-        keep a recent one, and the new program is missed. Keep none dated
-        ahead, and that reading is not kept."""
+        time. A directory dated ahead of the clock (a skewed file server) is
+        not kept either, so a program installed in the same tick of that
+        clock is read. Perturbations: keep the first reading, keep a recent
+        one, or keep one dated ahead, and the new program is missed."""
         with tempfile.TemporaryDirectory() as scratch:
             box = Path(scratch) / "box"
             box.mkdir()
@@ -8212,7 +8217,10 @@ class StandInGuardTests(unittest.TestCase):
                 ahead = time.time_ns() + 3_600_000_000_000
                 os.utime(box, ns=(ahead, ahead))
                 self.assertEqual(_members_of(str(box)), ("qemu-same-tick", "virt-late"))
-                self.assertIn(real, _MEMBERS_READ, "a reading dated ahead of the clock is kept")
+                self.assertNotIn(real, _MEMBERS_READ, "a reading dated ahead of the clock is not kept")
+                (box / "nvidia-ahead").write_text("#!/bin/sh\nexit 0\n")
+                os.utime(box, ns=(ahead, ahead))
+                self.assertEqual(_members_of(str(box)), ("nvidia-ahead", "qemu-same-tick", "virt-late"))
             finally:
                 _MEMBERS_READ.pop(real, None)
 
@@ -8224,10 +8232,9 @@ class StandInGuardTests(unittest.TestCase):
         it. The key is kept only once the directory's last change is two
         seconds old, so a file replaced within one tick of the clock, which
         leaves the time as it was, is read too: shown by stamping the
-        directory's time. A key dated ahead of the clock is kept, since a
-        later change writes a time before it. Perturbations: read the files
-        once, or keep a recent key, and the alias drops out. Keep none dated
-        ahead, and that key is not kept."""
+        directory's time. A key dated ahead of the clock is not kept either.
+        Perturbations: read the files once, keep a recent key, or keep one
+        dated ahead, and the alias drops out."""
         from unittest import mock
         with tempfile.TemporaryDirectory() as scratch:
             box = Path(scratch) / "box"
@@ -8260,7 +8267,12 @@ class StandInGuardTests(unittest.TestCase):
                 ahead = time.time_ns() + 3_600_000_000_000
                 os.utime(box, ns=(ahead, ahead))
                 _refresh_files()
-                self.assertEqual(module._FILES_READ[0], (ahead,), "a key dated ahead of the clock is kept")
+                self.assertIsNone(module._FILES_READ[0], "a key dated ahead of the clock is not kept")
+                (box / "systemctl.new").write_text("#!/bin/sh\nexit 3\n")
+                os.rename(box / "systemctl.new", box / "systemctl")
+                os.utime(box, ns=(ahead, ahead))
+                _refresh_files()
+                self.assertTrue(privileged("an-alias", box / "an-alias"), "the alias of a file replaced ahead")
             _MEMBERS_READ.clear()
             _refresh_files()
 
@@ -8305,9 +8317,11 @@ class StandInGuardTests(unittest.TestCase):
         that program is never left refused for the rest of the run, and
         leaves any other file there, as the settings a drop reads
         (FIXTURE_ENVIRON). A copy removed is made again when it is next
-        asked for. A made-up name stands for the program. Perturbations:
-        keep the copies, drop every new file, or read the copy's file once,
-        and this fails."""
+        asked for, and a copy that stood before a block stays after it, even
+        when the block removed it and the guard made it again. A made-up name
+        stands for the program. Perturbations: keep the copies, drop every
+        new file, drop every copy made during the block, or read the copy's
+        file once, and this fails."""
         true = shutil.which("true", path=os.pathsep.join(_BOX_BINS))
         copy = STAND_IN_GUARD / "virt-held-during-a-block"
         other = STAND_IN_GUARD / "a-file-the-block-writes"
@@ -8320,9 +8334,14 @@ class StandInGuardTests(unittest.TestCase):
             self.assertTrue(other.exists(), "a file that is not a copy stays")
             self.assertEqual(guard_copy(copy.name), copy)
             self.assertTrue(copy.exists(), "a copy removed is made again")
+            with files_held(PRIVILEGED_FILES | {_file_of(true)}):
+                copy.unlink()
+                guard_copy(copy.name)
+            self.assertTrue(copy.exists(), "a copy that stood before the block stays")
         finally:
             other.unlink(missing_ok=True)
             copy.unlink(missing_ok=True)
+            _COPIES_MADE.discard(copy)
 
     def test_the_guard_makes_its_copy_of_a_program_installed_during_the_run(self):
         """**The guard follows the box**: a privileged program that appears
@@ -8356,7 +8375,7 @@ class StandInGuardTests(unittest.TestCase):
                         guard_path(f"{box}{os.pathsep}{guard}", "PATH")
                     self.assertIn(f"resolves virt-late to {box}/virt-late", str(refused.exception))
             finally:
-                _COPIES_MADE[:] = [c for c in _COPIES_MADE if c != guard / "virt-late"]
+                _COPIES_MADE.discard(guard / "virt-late")
                 _MEMBERS_READ.pop(os.path.realpath(box), None)
 
     def test_env_hands_reads_envs_own_options_as_env_does(self):
@@ -8365,12 +8384,14 @@ class StandInGuardTests(unittest.TestCase):
         or PATH, in any spelling, and assigns none) and the command line. An
         option that takes an argument takes it, and an option of the
         command's own is not env's. An option the table lacks, an ambiguous
-        shortening, and the options no line may hand env (`-S`, `-C`,
-        `--env0-from`, each in any spelling) are refused. Each row was
+        shortening, an argument handed to a long option that takes none, and
+        the options no line may hand env (`-S`, `-C`, `--env0-from`, each in
+        any spelling), are refused, each by its own reason. Each row was
         checked against the box's env 9.12. Perturbations: read `-i` alone,
         drop `-`, `-a`'s argument or the grouping of short options, take a
         long option only in full, read an unknown option as one that takes
-        nothing, or read `-S` as any option, and a row fails."""
+        nothing, read `-S` as any option, or let a long option that takes
+        nothing take "=VALUE", and a row fails."""
         from unittest import mock
         rows = {
             ("-i", "a", "-i"): ("/default", ["a", "-i"]),
@@ -8390,16 +8411,23 @@ class StandInGuardTests(unittest.TestCase):
             ("--", "-i"): (None, ["-i"]),
             ("a", "-i"): (None, ["a", "-i"]),
         }
-        refused = (("--i", "a"), ("-x", "a"), ("--no-such-option", "a"), ("--env0-from", "f", "a"),
-                   ("--env0-from=f", "a"), ("-S", "-i a"), ("-vS-i a",), ("--split-string=a",),
-                   ("-S", "\x0b-i\x0ba"), ("-C", "/d", "a"), ("--chdir=/d", "a"), ("-iC/d", "a"))
+        refused = {("--i", "a"): "--i, an ambiguous shortening", ("-x", "a"): "-x, not one of its options",
+                   ("--no-such-option", "a"): "--no-such-option, not one of its options",
+                   ("--env0-from", "f", "a"): "--env0-from, which reads",
+                   ("--env0-f=f", "a"): "--env0-from, which reads", ("-S", "-i a"): "-S, which splits",
+                   ("-vS-i a",): "-S, which splits", ("-0S", "-i a"): "-S, which splits",
+                   ("--split-string=a",): "-S, which splits", ("-C", "/d", "a"): "-C, which starts",
+                   ("--ch=/d", "a"): "-C, which starts", ("-iC/d", "a"): "-C, which starts",
+                   ("--ignore-environment=x", "a"): "--ignore-environment with an argument it does not take",
+                   ("--debug=1", "a"): "--debug with an argument it does not take"}
         with mock.patch.object(os, "defpath", "/default"):
             for words, want in rows.items():
                 with self.subTest(words=words):
                     self.assertEqual(env_hands(words), want)
-            for words in refused:
+            for words, reason in refused.items():
                 with self.subTest(refused=words), self.assertRaises(StandInGuardError) as raised:
                     env_hands(words)
+                self.assertIn(reason, str(raised.exception))
                 self.assertIn("this guard does not read as env does: refused before it runs", str(raised.exception))
 
     def test_envs_table_holds_every_option_the_boxs_env_names(self):
