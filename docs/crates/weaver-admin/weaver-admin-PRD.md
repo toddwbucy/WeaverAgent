@@ -9,7 +9,7 @@
 **External boundary:** `weaver-admin-operator-contract`, for the granted command lines,
 the record's exit and the trace door, its party outside the program
 **Editorial:** Per the Working Rules.
-**Landing PR:** #561
+**Landing PR:** #575
 
 ---
 
@@ -42,11 +42,14 @@ a resident: it runs when the operator runs a verb, exits when the verb answers, 
 nothing between verbs, and what persists across invocations is what the filesystem and
 the kernel already hold: the run lock the run's processes hold, released by the kernel
 when the last of them is gone. No init system supervises the agent, on the operator's
-ruling of 2026-10-03 on #50: the agent starts like an appliance, when someone wants it,
-and supervision, restart and hardening belong to whoever packages and deploys it. The
-init system's only part is the transient scope admin asks it for at each operation that
-stands the agent's containment, the load's scope bounding the agent's lifetime (the
-operator's ruling of 2026-11-07 on #166, section 7).
+ruling of 2026-10-03 on #50: nothing restarts it after a crash, and hardening beyond the
+start step's floor belongs to whoever packages and deploys it. The init system holds two
+things of the agent's. One is the transient scope admin asks it for at each operation
+that stands the agent's containment, the load's scope bounding the agent's lifetime (the
+operator's ruling of 2026-11-07 on #166, section 7). The other is the agent's unit,
+whose start runs admin's `load` and whose stop runs admin's `unload`, and which restarts
+nothing, on the operator's rulings of 2026-11-16 on the agent's unit (#579), per section
+7.1.
 
 ```graph
 node: weaver-admin
@@ -513,19 +516,24 @@ conflict discovered at model admission is such a refusal, named by the SPU insid
 the aggregate, and admin holds no earlier check to catch it, per ruling C.
 
 **On an appliance the load checks its data mounts between steps 3 and 4, and the check
-takes no step number of its own.** That place is this charter's. **The model mount is
-required, and a model mount point that is not a separate filesystem refuses the load.
-The state mount is required only where the declaration elects state, and then it refuses
-on the same test**, on the operator's rulings of 2026-11-14 and 2026-11-15 (section
-7.5). An agent whose declaration elects no state runs on the model mount alone. The
-sizes are reported. The check stands before step 4, so a refusal comes before the load
-opens or starts anything, and it reads the declaration's election of state from step 2.
-It takes no number because it starts nothing and opens nothing, so section 5's rollback
-has nothing to discriminate by it. It judges the filesystem and not what lies on it,
-whether the model resolves staying the SPU's to answer at admission, per section 4.3,
-and nothing here mounts or repairs, the mounts being the operator's act. Where the
-territory stands against the state mount is a later item, per section 7.5, and the
-check's place may move with it, since step 2 reads the declaration from the territory.
+takes no step number of its own.** That place is this charter's. **The model mount and
+the state mount are both required for every agent, and a mount point that is not a
+separate filesystem refuses the load**, per section 7.5, on the operator's ruling of
+2026-11-14 and the operator's rulings of 2026-11-16 (setup pages). The sizes are
+reported. The check stands before step 4, so a refusal comes before the load opens or
+starts anything. It takes no number because it starts nothing and opens nothing, so
+section 5's rollback has nothing to discriminate by it. It judges the filesystem and not
+what lies on it, whether the model resolves staying the SPU's to answer at admission,
+per section 4.3, and nothing here mounts or repairs, the mounts being the operator's
+act. **The agent's territory stands in the agent's folder on the state mount** (section
+7.5), so step 2 reads the declaration from the state mount before this check, and the
+check's place may move ahead of step 2. That is settled by the act section 11 registers.
+
+**On a host the load checks its two directories, and requires no separate disk**, on the
+operator's rulings of 2026-11-16 (setup pages): the state directory and the models
+directory both exist, the state directory is writable with at least 10 GiB free, and the
+models directory is readable. The check stands where the appliance's does, and it mounts
+and repairs nothing.
 
 **A load refuses state this version cannot read, and the refusal says why**, on the
 operator's rulings of 2026-11-14. A load never starts fresh silently. State an earlier
@@ -853,22 +861,22 @@ delegation to a lesser principal was machinery for an occupant that no longer
 exists. Every ownership clause in this corpus that named the `weaver-admin`
 account now names root, and `weaver-<n>` continues to name the agent.
 
-**`weaver-admin-role` is what a human assumes, and the human is the operator
-holding root.** The role is assumed at install, when the operator sets up
-WeaverTools on a machine they administer, and it is the seat: the acts the
-supervisor may perform, taken on and later dropped. **The lifecycle is the operator's,
-and an automated caller acts only through the operator's sudo rule**, on the operator's
-rulings of 2026-10-03 on #50, which settle the line this paragraph held, that scripted
-management is a new role with its own ruling. The operator holds sudo and starts the
-agent as root so that its permissions can be established, its user, its runtime
-directory and its sink, and everything else is downhill from that. Where WeaverWeb's
-admin-con issues the lifecycle for the operator, it does so through a rule the operator
-installs, which grants the box's admin-con account fixed `weaver-admin` command lines
-for this agent and reads nothing else from the caller, per the Spec's section 2. That is
-a statement about what this program is designed for and **not a guarantee about
-conduct** - holding the seat does not make its holder careful. An agent driving its own
-admin stays excluded: its uid is named by no rule and no boundary file, and a boundary
-naming it is a misconfiguration the inventory refuses.
+**`weaver-admin-role` is what a human assumes, and the human is the operator holding
+root.** The role is assumed at install, when the operator sets up WeaverTools on a
+machine they administer, and it is the seat: the acts the supervisor may perform, taken
+on and later dropped. **The lifecycle is the operator's, and an automated caller acts
+only through the operator's sudo rule**, on the operator's rulings of 2026-10-03 on #50,
+which settle the line this paragraph held, that scripted management is a new role with
+its own ruling. The operator holds sudo and starts the agent as root so that its
+permissions can be established, its user, its runtime directory and its sink, and
+everything else is downhill from that. Where WeaverWeb's admin-con issues the lifecycle
+for the operator, it does so through a rule the operator installs, which grants the
+box's admin-con account fixed command lines for this agent and reads nothing else from
+the caller, per the Spec's section 2. That is a statement about what this program is
+designed for and **not a guarantee about conduct** - holding the seat does not make its
+holder careful. An agent driving its own admin stays excluded: its uid is named by no
+rule and no boundary file, and a boundary naming it is a misconfiguration the inventory
+refuses.
 
 **The crate is the lifecycle tool the role runs.** One binary run with root, one
 invocation per verb, beside the trace relay its start step launches under the relay's
@@ -910,25 +918,17 @@ sink's three shapes are a file, a pipe, and a socket, so an operator names `/dev
 a FIFO their own loader drains, or a listener they hold. This program opens what was
 declared, passes the handle, implements no transport, and elects no destination.
 
-**One worker per agent is not a fleet, and the distinction is the one this program keeps
-getting wrong.** The smell this corpus rejected was a shared service accepting many
-agents and routing commands among them. A worker running one statically provisioned
-agent identity is the opposite of that: it is the wall drawn around exactly one agent,
-built from OS primitives rather than from a supervisor's bookkeeping. **Keep-alive is
-the agent's own scope's, and keep-alive past a crash or a reboot is the packaging's**,
+**Keep-alive is the agent's own scope's, and nothing restarts the agent after a crash**,
 on the operator's rulings of 2026-10-03 on #50 and of 2026-11-07 on #166: the worker
 takes its own session and outlives the invocation that started it and its invoker's
 containment, living as long as the root-owned delegated scope the start step asks PID1
-for, and restarting it on a crash or a reboot is for whoever packages and deploys the
-agent, with systemd, a container or anything else, and not this framework's. **Nothing
-of this framework starts the agent after a reboot, and the image of section 7.2 adds
-nothing that does**, on the operator's rulings of 2026-11-14 and 2026-11-15. Starting
-and stopping the agent are its load and unload through admin, which are the console's
-verbs and need no management of the machine. So after a reboot an appliance's agent
-stays unloaded until the console loads it. How the connectors come up after a reboot,
-and what the console sees then, is the console's side, per section 7.4. An operator's
-own packaging that starts the agent is the operator's business, as the keep-alive above
-is.
+for. **The agent's unit starts it at boot once the agent is made, and that is its only
+automatic start**, on the operator's rulings of 2026-11-16 on the agent's unit (#579).
+`deploy/create-agent.sh` lays the unit and enables it at boot without loading the agent.
+The unit's start runs admin's `load` and its stop admin's `unload`, and it carries no
+restart, so it supervises nothing and the no-supervisor rulings stand (section 7.1). The
+console's Start and Stop are the unit's start and stop. How the connectors come up after
+a reboot, and what the console sees then, is the console's side, per section 7.4.
 
 **The agent's uid is statically provisioned, and a dynamic identity is excluded for two
 reasons that are independent and are recorded as independent.** The first is durability:
@@ -1048,18 +1048,22 @@ a constraint rather than rediscovered.
 **The appliance is one deployment profile of a Weaver agent, beside the host install and
 the Spark-class machine**, on the operator's ruling of 2026-11-15. How the host install
 and the Spark-class machine relate is out of scope as of 2026-11-15, on the operator's
-ruling of that date, and it is carried as a later item. A profile is a description in
-`toddwbucy/WeaverTools`. It decides nothing about any component and binds no Spec, and
-what it asks of a component lands in that component's charter. Sections 7.1 to 7.5 carry
-the environment an agent runs in when it runs in a virtual machine made from the image
-of section 7.2. Admin's own share of it is the table of section 2, the data-mount check
-of section 4.1, the refusal of state a version cannot read, the load and the unload that
-start and stop the agent (section 7), and the trace's handoff (section 7.5).
-`weaver-admin-Spec-vm-environment` says how admin represents that share. The rest binds
-the image's build, which this crate does not perform, and the connectors, which are
-WeaverWeb's. Every requirement of sections 7.1 to 7.5 is the operator's ruling of
-2026-11-14 unless the sentence says otherwise, and the operator's rulings of 2026-11-15
-amend them where a sentence says so.
+ruling of that date, and it is carried as a later item. The operator's rulings of
+2026-11-16 (setup pages) settle three facts of the host install that this charter
+carries: the console's stop and start (below), the host's load check (section 4.1) and
+the agent's folder (section 7.5). A profile is a description in `toddwbucy/WeaverTools`.
+It decides nothing about any component and binds no Spec, and what it asks of a
+component lands in that component's charter. Sections 7.1 to 7.5 carry the environment
+an agent runs in when it runs in a virtual machine made from the image of section 7.2.
+Admin's own share of it is the table of section 2, the data-mount check of section 4.1,
+the refusal of state a version cannot read, the load and the unload that start and stop
+the agent (section 7), the unload's save point on the state mount and the trace's
+handoff (section 7.5). `weaver-admin-Spec-vm-environment` says how admin represents that
+share. The rest binds the image's build, which this crate does not perform, and the
+connectors, which are WeaverWeb's. Every requirement of sections 7.1 to 7.5 is the
+operator's ruling of 2026-11-14 unless the sentence says otherwise, and the operator's
+rulings of 2026-11-15 and the operator's rulings of 2026-11-16 (setup pages) amend them
+where a sentence says so.
 
 **The stance, on the operator's ruling of 2026-11-15.**
 
@@ -1117,12 +1121,31 @@ else on it, and the agent stays bounded inside that machine by its accounts and
 permissions, as on any install. A privilege that an operator gives the agent beyond what
 the WeaverAgent system needs is the operator's choice, and it is outside this charter.
 
-**Starting and stopping the agent is its load and unload through admin, inside a running
-appliance.** The machine's own lifecycle, creating, cloning, starting, stopping,
-snapshotting, networking or destroying it, is the operator's and their hypervisor's, and
-the suite holds no opinion about it. That Weaver Web never touches a hypervisor is
-`weaver-web-PRD`'s to carry, in `toddwbucy/WeaverWeb`. Nothing of the image starts the
-agent, per section 7.
+**Starting and stopping the agent are its unit's start and stop, which run admin's
+`load` and `unload`**, on a VM and on a host alike, on the operator's rulings of
+2026-11-16 on the agent's unit (#579). They reverse the setup-page ruling that the
+console's start and stop are admin's `load` and `unload` called directly. The machine's
+own lifecycle, creating, cloning, starting, stopping, snapshotting, networking or
+destroying it, is the operator's and their hypervisor's, and the suite holds no opinion
+about it. **Each agent has a systemd unit, laid by `deploy/create-agent.sh`**: its start
+runs `weaver-admin load <agent>`, its stop runs `weaver-admin unload <agent>`, and it
+restarts nothing. **The console's Start and Stop are `systemctl start` and `systemctl
+stop` of that unit**, through admin-con's strict sudo rule, so systemd always knows
+whether the agent is up and a shut down always unloads it. In admin-con's grant the
+unit's start and stop take the place of admin's `load` and `unload`, and the console
+powers nothing off. **The unit's stop is a graceful unload, which finishes the turn in
+progress, for a bound the act measures, then a forced unload**, which still writes the
+leave save point and holds at most 232 seconds, and the unit's stop timeout covers the
+sum. A hypervisor's shut down wait must outlast that timeout. **Creating an agent
+enables its unit at boot and does not load the agent**: the first load is the console's
+Start, and every boot after it starts the unit. The operator powers the machine from the
+hypervisor. A hard power-off loses the state since the last published save point, and
+avoiding it is the operator's, on the setup-page rulings. Until the unit is laid
+(section 11), a graceful shut down from the hypervisor loses it the same way, because
+the agent's processes end on the stop signal and only the unload writes a save point.
+That Weaver Web never touches a hypervisor is `weaver-web-PRD`'s to carry, in
+`toddwbucy/WeaverWeb`. The unit is the deployment's, laid by the scripts, and the image
+adds no start of its own, per section 7.
 
 **Nothing is installed into an appliance after its image is sealed.** No site hook
 exists. A site condition is a unit that the operator adds to their own machines, and the
@@ -1170,8 +1193,12 @@ updates are off.
 **The time source is the image's default, and the operator may name a server**, on the
 operator's ruling of 2026-11-15. Any accurate source serves.
 
-**No shared key or secret ships in the image.** The pairing line and the console's
-fingerprint begin trust without a secret that every copy of the image carries.
+**No shared key or secret ships in the image.** Root ships expired and empty, with no
+default password, on the operator's rulings of 2026-11-16 (setup pages), and the
+operator sets root's password at the setup script's first question (section 7.3). The
+one-time code the box shows and the console's fingerprint, which the operator compares
+in Weaver Web, begin trust without a secret that every copy of the image carries
+(section 7.4).
 
 **One image exists for each version, and a security fix is a new version.** A version
 is `<release>.<respin>`, on the operator's ruling of 2026-11-15. The release moves when
@@ -1190,8 +1217,20 @@ version of the harness. Reproducibility is claimed within one version on one set
 hardware, and nothing is claimed across versions.
 
 **The image carries no model and no state.** The model lives on a disk that the operator
-attaches, per section 7.5. Where state lives, against the agent's territory, is a later
-item, per section 7.5.
+attaches, per section 7.5. The unload's automatic save point, which carries state across
+an unload and a restart, lands on a second disk, the state mount, on the operator's
+rulings of 2026-11-16 (setup pages). The agent's territory stands in the agent's folder
+on that mount, beside the agent's home (section 7.5).
+
+**The image ships the connectors' two accounts, and an agent's own accounts are named
+after the agent**, on the operator's ruling of 2026-11-16 on the layout (#578). The
+image ships `weaver-gatecon` and `weaver-admincon`, laid as `deploy/create-agent.sh`
+lays them, and the script judges each by its shape before it uses it, as it judges any
+standing account. **The agent's own accounts are laid by `deploy/create-agent.sh` when
+the agent is made**, under the names admin derives from the agent's name:
+`weaver-<agent>`, its member `weaver-<agent>-state` and its relay
+`weaver-<agent>-relay`. No fixed agent account exists, and no name admin derives
+changes.
 
 **One image comes first, for KVM.** Proxmox is the first format named as later, and
 `toddwbucy/WeaverTools` issue 29 records one Proxmox condition to settle then. Other
@@ -1204,6 +1243,10 @@ on SSH alone.** The VM's console is the operator's and the hypervisor's. No othe
 is open unless a declaration names it, per section 2, on the operator's rule that a port
 which does not have to be open is not open.
 
+**SSH is the operator's own admin door, separate from Weaver Web, and setup never uses
+it**, on the operator's rulings of 2026-11-16 (setup pages) and the operator's words of
+2026-11-16.
+
 **The image's own boot rules carry the base policy, input dropped but SSH**, on the
 operator's ruling of 2026-11-15, and admin's table of section 2 does not carry it. How a
 port that a declaration names gets through those rules is open in section 10.
@@ -1211,17 +1254,36 @@ port that a declaration names gets through those rules is open in section 10.
 **Cloud-init is not among the requirements at this stage**, on the operator's ruling of
 2026-11-15, and it is carried as a later item.
 
-**On first boot the operator logs in at the VM's console, places their key and sets the
-network by hand**, on the same ruling. How the operator authenticates at the VM's
-console is not written here. It follows from that ruling that the operator is at the
-VM's console before the first SSH and can read the host key's fingerprints there.
+**On first boot the VM's console goes straight to the appliance's setup script, which
+runs as root**, with no login prompt, in the operator's words of 2026-11-16: the person
+at the console is root and the administrator. The operator sets the network there by
+hand, on the operator's ruling of 2026-11-15. **Root ships expired and empty, with no
+default password**, on the operator's rulings of 2026-11-16 (setup pages), as
+`toddwbucy/WeaverTools` #33 builds the image. **The setup script's first question sets
+root's password**, in the operator's words of 2026-11-16. **The operator's SSH public
+key reaches the box through Weaver Web over TLS after pairing, and SSH takes that key
+and never a password**, in the operator's words of 2026-11-16. Both are the image's to
+build. The appliance's setup script writes the key during its drive-setup run at the
+VM's console, fetching it from Weaver Web over the paired link, and a changed key is
+written by running the setup command again at the console, as the Planner's notes to
+the operator's rulings of 2026-11-16 (setup pages) brief it. Root acts stay at a screen
+the operator sits at. It follows that the operator is at the VM's console before the
+first SSH and can read the host key's fingerprints there.
 
 ### 7.4 Pairing and models: the environment's half
 
-**The appliance listens for no console.** The console begins pairing, and the
-appliance's connectors dial the console's link port, since the console is the network
-service whose work is to listen. The console fetches models, and the appliance dials the
-console for them.
+**The appliance listens for no console.** The box begins pairing, and the appliance's
+connectors dial the console's link port, for pairing and always after, since the console
+is the network service whose work is to listen, on the operator's ruling of 2026-11-14,
+the operator's rulings of 2026-11-16 (setup pages) and the operator's words of
+2026-11-16. The console fetches models, and the appliance dials the console for them.
+
+**Pairing is entered at the appliance's setup script**, on the operator's rulings of
+2026-11-16 (setup pages) and the operator's words of 2026-11-16. The script asks for
+Weaver Web's address and port, dials it over TLS, and shows a short one-time code and
+Weaver Web's fingerprint. In Weaver Web the operator compares the fingerprint and enters
+the code. The connectors send the public halves of keys made in the box, and mutual TLS
+comes up. The box's survey runs locally, and its report crosses to the console over TLS.
 
 **What an appliance reaches outbound is the operator's**, on the operator's ruling of
 2026-11-15. The image carries no egress limit.
@@ -1233,42 +1295,74 @@ with a clone is the console's documents'. **The connectors' keys and
 certificates live on the root disk**, on the operator's ruling of 2026-11-15, so a new
 image is a new enrollment.
 
-**The one-time secret of the pairing line is the only secret that travels on a command
-line.** It is the exception because no other way to begin exists. It is single-use,
-short-lived, and bound to one pending enrollment that the operator opened.
+**The one-time code is the only secret that pairing carries.** The box shows it and the
+operator enters it in Weaver Web, never on a command line, on the operator's rulings of
+2026-11-16 (setup pages). It is the exception because no other way to begin exists. It
+is single-use and bound to the one pending enrollment the box's dial opened.
 
 **Access tokens live in the console and never in an appliance.** An appliance pulls a
 model from the console's cache over the same mutual TLS trust and checks its digest, so
 the model's pull, too, is a dial from the appliance to the console.
 
-What crosses at pairing and at a model's pull is WeaverWeb's: the line, the secret's
-form and lifetime, the link port, the certificates, what the console does with a clone,
-the model store with its sources, and the image download with its hash check.
-They are `weaver-web-PRD`'s, its Spec's and the connectors' contracts', in
-`toddwbucy/WeaverWeb`. The enrollment connection is the link's one unauthenticated
+What crosses at pairing and at a model's pull is WeaverWeb's: the code, its form and
+lifetime, the link port, the certificates, what the console does with a clone, the
+survey's report as it crosses, the model store with its sources, and the image download
+with its hash check. They are `weaver-web-PRD`'s, its Spec's and the connectors'
+contracts', in `toddwbucy/WeaverWeb`. The appliance's setup script is the image's, in
+`toddwbucy/WeaverTools`. The enrollment connection is the link's one unauthenticated
 surface, and the console's documents name it.
 
 ### 7.5 Storage
 
-**Two mount points are fixed, the model's and the state's.** The model mount is
-required. The state mount is required only where the declaration elects state, on the
-operator's ruling of 2026-11-15, and an agent whose declaration elects no state runs on
-the model mount alone. The mounts carry what the agent keeps, per section 7.1. **The
-agent's territory stays at `/var/lib/weaver-agent/weaver-<agent>/`**, on the operator's
-rulings of 2026-10-07 and 2026-11-15.
+**Two mount points are fixed, the model's and the state's, and both are required for
+every agent**, on the operator's rulings of 2026-11-16 (setup pages), which supersede
+the ruling of 2026-11-15 that the state mount is required only where the declaration
+elects state. **The state mount is at least 10 GiB**, because the system prompt lives in
+state and the unload's automatic save point lands there. The mounts carry what the agent
+keeps, per section 7.1.
 
-**The first production agent declares no state**, on the operator's ruling of
-2026-11-15, and state and save points on an appliance are out of scope until that agent
-runs from the console. How the state mount meets the territory, which holds the save
-points and the state member's room, is a later item on that ruling. So is where the
-member's room stands when the trace's sink stands outside the territory, since
-`weaver-admin-Spec` section 9 derives the room from the sink's directory.
+**The agent is a real user, and its folder lives on the state drive**, on the operator's
+rulings of 2026-11-16 (setup pages) and the same day's ruling on the layout (#578).
+**Each agent gets one folder named after it and held by root,
+`/mnt/weaver/state/<agent-name>/` on an appliance, and inside it, side by side, stand
+the agent's territory, `weaver-<agent-name>/`, and the agent's home, `home/`, which the
+agent's own account owns.** The territory holds the declaration, the prompt draft, the
+logs, the trace, the save points and the state member's room. It stands beside the home
+and never inside it, since the agent could rename a folder inside a home it owns. This
+supersedes the territory at `/var/lib/weaver-agent/weaver-<agent>/` of the operator's
+rulings of 2026-10-07 and 2026-11-15, and the whole agent still lives in its territory,
+as the ruling of 2026-10-07 has it. The territory's custody does not change: root's,
+grouped to the state group, `0710`, the agent's own uid denied passage, and every
+directory above it root's and closed to other writers (`weaver-admin-Spec` section 9).
+The folder held by root meets that rule, and the home is no directory above the
+territory. **On a host the same layout follows from the rule** under the directory the
+host names for its agents, so a host that names `/home` gives `/home/<agent-name>/` with
+the territory and `home/` inside it. That case is unmeasured, and this charter claims
+nothing more for it. The scripts that lay the folder and the texts that place the
+territory are settled by the act section 11 registers.
 
-**The operator attaches the disks in the hypervisor and mounts them, and the WeaverAgent
-system checks, refuses and reports.** A required mount point that is not a separate
-filesystem refuses the load, per section 4.1, and the sizes are reported. The check runs
-at every load and not once at enrollment, because a mount can go missing between two
-loads. What the console does with the report is WeaverWeb's.
+**The first production agent declares a store and keeps the system prompt**, in the
+operator's words of 2026-11-16. **The automatic save point the unload writes is in scope
+on an appliance, and it lands on the state mount**, on the operator's rulings of
+2026-11-16 (setup pages): no new persistent store, the existing save point path placed
+on the state mount. The first agent's test exercises it: the prompt entered into state,
+a load, an unload, the VM shut down and restarted, a reload, and the prompt restored.
+Operator-managed save points stay out of scope. The save points and the state member's
+room stand in the territory, and so on the state mount. Where the member's room stands
+when the trace's sink stands outside the territory stays a later item, on the operator's
+ruling of 2026-11-15, since `weaver-admin-Spec` section 9 derives the room from the
+sink's directory.
+
+**The operator attaches the disks in the hypervisor, the appliance's setup script
+formats and mounts them, and the WeaverAgent system checks, refuses and reports.** On
+the operator's rulings of 2026-11-16 (setup pages), Weaver Web shows a command to run at
+the VM's console, which starts the script's drive setup: the state drive, at least 10
+GiB, and the models drive, sized from the model, each shown and confirmed before it is
+formatted. Every root act of setup runs in that script at the VM's console, so admin's
+grant does not grow. A required mount point that is not a separate filesystem refuses
+the load, per section 4.1, and the sizes are reported. The check runs at every load and
+not once at enrollment, because a mount can go missing between two loads. What the
+console does with the report is WeaverWeb's.
 
 **The trace is not a disk matter of the agent's**, on the operator's ruling of
 2026-11-15. The agent hands its trace off. **The trace goes where it is declared**, on
@@ -1277,9 +1371,7 @@ Web's declaration page when the agent is created, and the suite sends the trace 
 is told. The destination may be `/dev/null`, a file on a local store, or a sink off the
 machine, and "nowhere" is the sink `/dev/null`. A null sink is legitimate, and the run
 card records the choice. What stands behind the destination, and whether anything can
-read it, is the operator's. A trace path on the state mount of an agent whose
-declaration elects no state stands on a mount that no check judges, and that too is the
-operator's declaration. The suite's duty is to make the trace available.
+read it, is the operator's. The suite's duty is to make the trace available.
 
 **One safety property stays.** Admin opens the sink as root, so a file sink's directory
 must be one that no principal of the agent can write or replace, and the open follows no
@@ -1352,14 +1444,15 @@ whose entry condition resolves to no work is closed rather than carried. The tra
 of 2026-10-03 (#50) is a second binary of this crate for a different reason, a process
 under another account holding the trace door, and separates no authority of admin's.
 
-**The load additions of the VM environment are staged, as of 2026-11-15**: the table of
-section 2, the data-mount check of section 4.1 with its report, and the refusal of state
-this version cannot read wherever the save points' representation does not already
-hold it. The entry condition is the merge of the amendment of 2026-11-15 and the
-`weaver-admin-Spec` act
-of section 11 that represents them before any code. The GID-mask item this section
-carried was written against admin owning the record's file, and it left with the record
-on 2026-08-01, the write path now ending at a sink the operator declares.
+**The VM environment's additions to the load and the unload are staged, as of
+2026-11-16**: the table of section 2, the data-mount check of section 4.1 with its
+report, the refusal of state this version cannot read wherever the save points'
+representation does not already hold it, and, on the operator's rulings of 2026-11-16
+(setup pages), the unload's save point on the state mount (section 7.5). The amendment
+of 2026-11-15 merged in #561, so the entry condition is the `weaver-admin-Spec` act of
+section 11 that represents them before any code. The GID-mask item this section carried
+was written against admin owning the record's file, and it left with the record on
+2026-08-01, the write path now ending at a sink the operator declares.
 
 ## 10. Open rulings
 
@@ -1547,10 +1640,10 @@ own table. **Settled by:** the act that adds the declaration's port member, in
 `weaver-admin-Spec` and the Spec of the image's build together.
 
 **A stopped agent against a machine that is down.** On an appliance the console stops
-the agent by its unload, per section 7, and a machine that is down answers nothing.
-What the operator reads to tell the two apart is not stated. **Settled by:** the act
-that adds the console's stop of an appliance's agent, in `weaver-web-PRD` and
-`weaver-admin-operator-contract` together.
+the agent by its unit's stop, which runs its unload, per section 7.1, and a machine that
+is down answers nothing. What the operator reads to tell the two apart is not stated.
+**Settled by:** the act that adds the console's stop of an appliance's agent, in
+`weaver-web-PRD` and `weaver-admin-operator-contract` together.
 
 **What the run card is.** The run card is the operator's term, and the paper of the
 operator's that defines it is in no repository as of 2026-11-15. The rulings of
@@ -1606,19 +1699,20 @@ both `open-items` entries as that list shrank. The last entry, the
 the human's ruling, and the register stood empty from that date until the act of
 2026-08-05 filled it.
 
-**What this register holds, as of 2026-11-15.** Seven entries, all from the amendment of
-that date, which takes the operator's rulings of 2026-11-14 and 2026-11-15 on the VM
-environment: the firewall table and its declared ports, the data-mount check, the
-refusal of state a version cannot read, the guest's processor in the tuple, and the
-trace's destination.
+**What this register holds, as of 2026-11-16.** Nine entries. Seven come from the
+amendment of 2026-11-15, which takes the operator's rulings of 2026-11-14 and 2026-11-15
+on the VM environment: the firewall table and its declared ports, the data-mount check,
+the refusal of state a version cannot read, the guest's processor in the tuple, and the
+trace's destination. One comes from the operator's rulings of 2026-11-16 (setup pages):
+the agent's folder on the state drive, with its territory and its home inside. One comes
+from the operator's rulings of 2026-11-16 on the agent's unit (#579): the agent's unit.
 
 - **`weaver-admin-Spec`, the load additions.** The firewall table of section 2: its
   name, the shape of its rules, its place in the load and the unload with its rollback,
   and what the run records of it. The data-mount check of section 4.1 with its report.
   The refusal of state this version cannot read, which that Spec's section 4 already
   holds for save points. Each act owes walks and perturbation tests in the manner of
-  that Spec's section 10 before any code. **Settled by:** the act that adds them, once
-  the amendment of 2026-11-15 merges.
+  that Spec's section 10 before any code. **Settled by:** the act that adds them.
 - **`weaver-types-Spec` section 2, the declaration's ports.** How a declaration names
   the ports of a tool or of the gate. **Settled by:** the act that adds the
   declaration's ports member, per section 2.
@@ -1652,6 +1746,37 @@ trace's destination.
   property section 7.5 keeps. **Settled by:** the act "the trace goes where it is
   declared". Where the member's room stands when the sink stands outside the territory
   is the later item of section 7.5.
+- **The agent's folder on the state drive**, on the operator's rulings of 2026-11-16
+  (setup pages) and the same day's ruling on the layout (#578), per sections 4.1, 7.2
+  and 7.5. `deploy/create-agent.sh` makes the folder held by root, lays the territory
+  and the home inside it and lays the agent's accounts under the names admin derives,
+  `deploy/decommission.sh` takes an agent's home from its account wherever it stands,
+  and `deploy/verify-lifecycle.sh` follows the layout. The config root's `territory` key
+  names the territory in the folder. The data-mount check's place against step 2, which
+  reads the declaration from the territory. Every text that places the territory or its
+  save points under `/var/lib/weaver-agent/`: `weaver-agent-PRD` section 2,
+  `weaver-state-PRD` sections 2 and 4, `weaver-state-Spec` sections 2 and 5,
+  `weaver-types-Spec` section 2, `weaver-admin-operator-contract` section 5 and
+  `weaver-admin-Spec` sections 3.0, 4, 6 and 9, with `deploy/create-agent.sh`,
+  `deploy/bootstrap-stack.sh`, `deploy/decommission.sh` and the runbooks. **Settled
+  by:** the act that lays the agent's folder.
+- **The agent's unit**, on the operator's rulings of 2026-11-16 on the agent's unit
+  (#579), per sections 2, 6 and 7.1. Its form: a template, or a unit per agent with a
+  drop-in directory, so the image can add its own dependencies. Its start runs
+  `weaver-admin load <agent>` and its stop `weaver-admin unload <agent>`, with no
+  restart. `deploy/create-agent.sh` lays it and enables it at boot, and never starts it.
+  Its ordering against the agent's mounts, the network and the agent's scope, so a
+  missing drive keeps the agent down and the unload finishes before the drives unmount.
+  Its stop: a graceful unload for a bound the act measures, then a forced unload, with a
+  stop timeout covering the sum. A state table of the unit against admin's states,
+  `show`, `force-unload` and a crash, before any code. Admin-con's sudo rule and verb
+  map, with the unit's start and stop in place of admin's `load` and `unload`. Every
+  text that says the agent has no unit: `weaver-admin-Spec` sections 2, 3.0, 6 and 6.1,
+  `weaver-admin-operator-contract` section 2, `deploy/create-agent.sh`,
+  `deploy/decommission.sh`, `deploy/HowToDeployANewAgent.md` sections 5 and 7, and this
+  repository's `CLAUDE.md`. WeaverWeb's connector follows, in `toddwbucy/WeaverWeb`.
+  **Settled by:** the act that writes the unit's Spec and its state table, then the act
+  that lays it.
 
 ## 12. Children
 

@@ -1,11 +1,11 @@
 # weaver-admin - Spec: the VM environment
 
-**Status:** DRAFT. Not merged. It authorizes no code until the operator merges it.
+**Status:** MERGED. In `main` and the source of truth.
 **Date filed:** 2026-11-15
 **Document ID:** `weaver-admin-Spec-vm-environment`
 **Parent:** `weaver-admin-PRD`
 **Editorial:** Per the Working Rules.
-**Landing PR:** #561
+**Landing PR:** #575
 
 ---
 
@@ -16,8 +16,8 @@ The specification of how admin represents its own share of the environment of
 runs in a virtual machine made from the image of that charter's section 7.2. Admin's
 share is the one the charter's section 7.1 names: the firewall table of its section 2,
 the data-mount check of its section 4.1, the refusal of state a version cannot read, the
-load and the unload as the agent's start and stop, and the trace's handoff. It is a
-child of `weaver-admin-PRD`.
+load and the unload as the agent's start and stop, the unload's save point on the state
+mount, and the trace's handoff. It is a child of `weaver-admin-PRD`.
 
 Level discipline. The charter carries each requirement and its reason. This document
 elects how admin represents each, against the ground the charter's section states, and
@@ -38,29 +38,35 @@ console, enrollment, the WeaverAgent system and the agent.
 
 Per `weaver-admin-PRD` sections 7.5 and 4.1.
 
-**The two mount points are `/mnt/weaver/model` and `/mnt/weaver/state`**, fixed by the
-operator's ruling of 2026-11-14.
+**The two mount points are `/mnt/weaver/models` and `/mnt/weaver/state`**, fixed by the
+operator's ruling of 2026-11-14, with the models mount's name made plural by the
+operator's rulings of 2026-11-16 (setup pages).
 
 **The check is made in the load**, between load steps 3 and 4 as the charter's section
 4.1 places it, and `validate` runs it with the rest of the inventory, per the charter's
-section 4.3. It reads the declaration's election of state from step 2.
+section 4.3.
 
-**What refuses**, on the operator's ruling of 2026-11-15:
+**What refuses**, on the operator's rulings of 2026-11-16 (setup pages):
 
 | Mount | Required | Refuses the load where |
 |---|---|---|
-| `/mnt/weaver/model` | always | the mount point is not a separate filesystem |
-| `/mnt/weaver/state` | where the declaration elects state | the declaration elects state and the mount point is not a separate filesystem |
+| `/mnt/weaver/models` | always | the mount point is not a separate filesystem |
+| `/mnt/weaver/state` | always | the mount point is not a separate filesystem |
 
-An agent whose declaration elects no state runs on the model mount alone, and its load
-does not judge the state mount. The check judges the filesystem and not what lies on it,
-and it mounts and repairs nothing. The sizes of the required mounts are reported.
+Every agent's load judges both mounts, whatever its declaration elects, because the
+system prompt lives in state and the unload's automatic save point lands on the state
+mount. The state mount is at least 10 GiB. The check judges the filesystem and not what
+lies on it, and it mounts and repairs nothing: the appliance's setup script formats and
+mounts the drives at the VM's console, per the charter's section 7.5. The sizes of the
+required mounts are reported.
 
 How admin knows it runs on an appliance, how it represents a separate filesystem, the
 refusal's case and what it names, and the form of the report with the surface it crosses
 are cells of section 9. The judgment of a size is the console's, per the charter's
-section 7.5. How the state mount meets the agent's territory is a later item, per the
-charter's section 7.5.
+section 7.5. Each agent has a folder named after it and held by root on the state mount,
+`/mnt/weaver/state/<agent-name>/`, and the agent's territory and its home stand inside
+it side by side, on the operator's rulings of 2026-11-16 (setup pages) and the same
+day's ruling on the layout (#578), per the charter's section 7.5.
 
 ## 2. State a version cannot read
 
@@ -111,13 +117,31 @@ document does not write that admin's table opens a declared port on an appliance
 
 Per `weaver-admin-PRD` sections 7 and 7.1.
 
-**Starting and stopping the agent are its load and unload through admin.** The console
-asks for either through admin-con, per `weaver-admin-operator-contract`.
+**Starting and stopping the agent are its unit's start and stop, which run admin's
+`load` and `unload`.** Each agent has a systemd unit, laid by `deploy/create-agent.sh`,
+whose start runs `weaver-admin load <agent>` and whose stop runs `weaver-admin unload
+<agent>`, on a VM and on a host alike, on the operator's rulings of 2026-11-16 on the
+agent's unit (#579), per the charter's section 7.1. The unit restarts nothing, and admin
+stays an invocation per verb.
 
-**Nothing of this framework starts the agent after a reboot.** Admin runs per verb and
-is not resident, and it lays no persistent unit, timer or other start of its own. An
-operator's own packaging that starts the agent is the operator's, per the charter's
-section 7.
+**The console's Start and Stop are `systemctl start` and `systemctl stop` of the unit**,
+asked through admin-con, per `weaver-admin-operator-contract`, and the console powers
+nothing off. The operator powers the machine from the hypervisor. **The unit's stop is a
+graceful unload for a bound the act measures, then a forced unload**, which still writes
+the leave save point, and the unit's stop timeout covers the sum. A graceful shut down
+of the machine stops the unit, so the unload writes its save point. A machine powered
+off hard with the agent loaded loses the state since the last published save point.
+
+**Creating an agent enables its unit at boot and does not load the agent.** The first
+load is the console's Start, and every boot after it starts the unit. The image adds no
+start of its own.
+
+**After a restart the unit loads the agent**, and that load restores the automatic save
+point the last unload wrote on the state mount, per the charter's section 7.5. The first
+agent's test exercises that path, on the operator's rulings of 2026-11-16 (setup pages).
+The unit's form, its ordering against the mounts, the network and the agent's scope, its
+stop's bound and its state against admin's `show` are settled by the act the charter's
+section 11 registers.
 
 ## 5. The trace's handoff
 
@@ -148,6 +172,8 @@ Per apex section 11. Each election above is listed with what catches its failure
   as of 2026-11-15.
 - **Admin's table, its replacement at every load and its absence after a reboot**
   (section 3): no instrument exists as of 2026-11-15.
+- **The save point on the state mount** (sections 1 and 4): no instrument exists as of
+  2026-11-16.
 - The act that adds the check and the act that adds the table each owe walks and
   perturbation tests in the manner of `weaver-admin-Spec` section 10, before any code,
   per `weaver-admin-PRD` section 11's entry for the load additions.
@@ -155,15 +181,20 @@ Per apex section 11. Each election above is listed with what catches its failure
 ## 7. Held elsewhere
 
 - **The image**: its operating system, its build from named commits, its identity and
-  stamp, its driver, its seal, its boot rules, its time source, its versions and
-  formats, and what it lays at the two mount points. Its build's documents in
-  `toddwbucy/WeaverTools` represent it. The requirements are `weaver-admin-PRD` section
-  7.2's and 7.3's.
+  stamp, its driver, its seal, its boot rules, the connectors' two accounts (an agent's
+  own are laid when it is made, per the charter's section 7.2), its root account with
+  the password the setup's first question sets, its SSH taking the operator's key, which
+  its setup script writes at the VM's console from Weaver Web, and never a password, its
+  setup script at the VM's console with the pairing's entry and the drive setup, its
+  time source, its versions and formats, and what it lays at the two mount points. Its
+  build's documents in `toddwbucy/WeaverTools` represent it. The requirements are
+  `weaver-admin-PRD` sections 7.2 to 7.5.
 - **The console's side**, in `weaver-web-PRD` and its Spec in `toddwbucy/WeaverWeb`:
-  enrollment's console half, the connectors' keys and certificates, the one-time secret,
-  what the console does with a clone, the connectors' units and how they come up after a
-  reboot, the model store and the model's pull, the image download, and the display of
-  the storage report.
+  enrollment's console half, the one-time code and its confirmation, the connectors'
+  keys and certificates, the operator's SSH public key carried to the box over TLS after
+  pairing, what the console does with a clone, the connectors' units and
+  how they come up after a reboot, the survey's report, the model store and the model's
+  pull, the image download, and the display of the storage report.
 - **The build's two settings and the image's seal**: the compiler's flag and the list
   of architectures that are the two settings of `weaver-admin-PRD` section 7.2, and the
   compaction that ends the seal, the published digest being of the compacted file. The
@@ -180,9 +211,11 @@ Per apex section 11. Each election above is listed with what catches its failure
 
 None of this document's own. The operator's one open ruling that bears on it, what the
 run card is, is carried in `weaver-admin-PRD` section 10. A stopped agent against a
-machine that is down is a cell of the charter's section 10, settled by an act. State and
-save points on an appliance, with how the state mount meets the agent's territory, are a
-later item, per the charter's section 7.5.
+machine that is down is a cell of the charter's section 10, settled by an act. The
+unload's automatic save point on the state mount is in scope and operator-managed save
+points stay out, on the operator's rulings of 2026-11-16 (setup pages), and the agent's
+territory stands beside the agent's home in the agent's folder on the state mount, on
+the operator's ruling of 2026-11-16 on the layout (#578).
 
 ## 9. Open cells, each with what settles it
 
@@ -204,3 +237,6 @@ later item, per the charter's section 7.5.
 - **The record of an upgrade.** Which record carries an upgrade, and how state made
   under an older version is marked as used under the newer one. Settled by the act that
   writes it, per `weaver-admin-PRD` section 11.
+- **The scripts that lay the agent's folder on the state mount, and the config root's
+  `territory` key that names the territory in it.** Settled by the act that lays the
+  agent's folder, per `weaver-admin-PRD` section 11.
