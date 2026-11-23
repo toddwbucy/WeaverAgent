@@ -189,6 +189,8 @@ plan "install -d $ADMIN_BASE and $AGENT_DIR (root:root 0755)"
 # ---------------------------------------------------------------- 3. install
 say "install"
 sudo -v || die "--install needs sudo"
+# Every variable undo reads is set before any trap is, since undo runs
+# under set -u.
 STAGING=""
 RECORD=""
 PLACED=0
@@ -196,9 +198,11 @@ MADE=()
 # **What a refused install placed is removed**, with the copy root checked,
 # the record it was filling, and each directory this run made, deepest
 # first and only if empty: none of the prefix's three directories and no
-# stack record stood before (section 1).
+# stack record stood before (section 1). A further signal during the undo
+# is ignored, so the undo always finishes.
 undo() {
   local i
+  trap '' INT TERM HUP
   if [ "$PLACED" -eq 1 ]; then
     sudo rm -rf -- "${PREFIX:?}/bin" "${PREFIX:?}/lib" "${PREFIX:?}/deploy" || true
   fi
@@ -309,7 +313,12 @@ make_dir "$AGENT_DIR"
 # over a record that came to stand meanwhile (rename(2) replaces an empty
 # directory, so no-clobber), the filled directory still standing meaning the
 # rename did not happen.
+# Signals are held from the rename until the run's state says the install
+# stands, so no undo removes a stack the record already names. `mv -n` exits
+# 0 whether or not it renamed, so the filled directory still standing is
+# what says the rename did not happen.
 sudo chmod 0755 "$RECORD"
+trap '' INT TERM HUP
 sudo mv -T -n -- "$RECORD" "$STACK" || true
 [ ! -e "$RECORD" ] || die "the stack record could not be renamed to $STACK, which may have come to stand meanwhile; what was placed is removed"
 RECORD=""

@@ -1277,11 +1277,14 @@ elif name == 'sudo':
         target = pathlib.Path(mapped(rest[-1]))
         assert target.is_relative_to(root), target
         privileged([target], lambda: target.unlink(missing_ok=True))
-    elif op == 'python3' and rest[:1] == ['-I'] and (rest[1] == '-c' or rest[1].endswith('/carry_set.py')):
+    elif op == 'python3' and len(rest) > 1 and rest[0] == '-I' and (rest[1] == '-c' or rest[1].endswith('/carry_set.py')):
         # Root's digest check and root's copy of the set's check
-        # (install-carry.sh), on files under the fixture.
-        paths = [pathlib.Path(a) for a in rest[2:] if a.startswith('/')]
+        # (install-carry.sh), on files under the fixture; the checker root
+        # runs is root's own copy, in the directory root made under the
+        # prefix, never the operator's set.
+        paths = [pathlib.Path(a) for a in rest[1:] if a.startswith('/')]
         assert all(p.is_relative_to(root) for p in paths), paths
+        assert rest[1] == '-c' or '/.carry-' in rest[1], ('root runs a checker outside its copy', rest[1])
         sys.exit(privileged(paths, lambda: subprocess.run([sys.executable, *rest]).returncode))
     elif op == 'rmdir':
         target = pathlib.Path(mapped(rest[-1]))

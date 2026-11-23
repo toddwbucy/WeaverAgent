@@ -1138,6 +1138,8 @@ if [ "$MODE" = archive ]; then
     echo
     echo "## libraries"; for p in "${!PREFIXES[@]}"; do sha_all "$p/lib"; done
     echo
+    echo "## deploy copy"; for p in "${!PREFIXES[@]}"; do sha_all "$p/deploy"; done
+    echo
     echo "## ld.so.conf"; for c in "${LDSO_CONFS[@]}"; do echo "$c:"; cat "$c"; done
     echo
     echo "## models (kept in place, not copied)"

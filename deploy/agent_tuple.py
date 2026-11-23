@@ -899,7 +899,9 @@ def runtime_rows(install, resolved, unread, failed=None, unbound=None):
     that moved, changed or no longer resolves is a FAULT: the box has
     drifted from its install, which a sealed image must never show, and
     which a box updated since its install clears by rewriting its record
-    (update-stack.sh --install).
+    (update-stack.sh --install), or, on a box installed from a carry set,
+    by decommission.sh and a fresh install-carry.sh. On a carried box each
+    file must also equal the build's digest (`build-runtime.<key>`).
 
     **Fail closed**: `failed` is why the loader's read cannot be trusted or
     bound (an SPU or library path another principal could write, an SPU or
