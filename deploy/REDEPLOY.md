@@ -541,9 +541,12 @@ On a carried box, the deploy scripts are run from `<prefix>/deploy/`
 
 **A newer set on a box that holds one.** `install-carry.sh` is a first install only, and
 `update-stack.sh` refuses a box whose install tuple names a carry set. To put a newer
-set on such a box, run `decommission.sh` (section 1), which archives and removes every
-agent on the box and the stack, `<prefix>/deploy/` included, and then install the new
-set. The agents are made again with `create-agent.sh` after the install.
+set on such a box, run the new set's own `deploy/decommission.sh` (section 1), which
+archives and removes every agent on the box and the stack, `<prefix>/deploy/` included,
+and then install the new set. Run the new set's copy, not
+`<prefix>/deploy/decommission.sh`: the purge removes `<prefix>/deploy/`, so a rerun
+after a removal that failed would find no script there. The agents are made again with
+`create-agent.sh` after the install.
 
 ## 4. Agents
 

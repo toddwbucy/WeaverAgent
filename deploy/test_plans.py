@@ -6382,6 +6382,27 @@ esac
         self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
         self.assertFalse(self.run_prefix.exists())
 
+    def test_install_carry_refuses_a_prefix_part_left_with_no_stack_record(self):
+        """**What a take-down leaves under the prefix blocks the next
+        install**: with no stack record and an empty admin base, a
+        `<prefix>/bin`, `lib` or `deploy` that stands refuses at the plan,
+        before any sudo, naming decommission.sh. This is why decommission.sh
+        must take them on a box where no agent was made
+        (`test_a_box_with_no_agent_names_its_prefix_from_the_stack_record`).
+        Perturbation: drop the check and the plan goes on to sudo."""
+        carried, sha = self.carried()
+        prefix = self.root / "run-prefix"  # install_carry's prefix
+        for part in ("bin", "lib", "deploy"):
+            with self.subTest(part=part):
+                (prefix / part).mkdir(parents=True)
+                self.log.unlink(missing_ok=True)
+                result = self.install_carry(carried, sha, "--install")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(f"{prefix / part} already stands. Decommission first.", result.stderr)
+                self.assertFalse(self.run_stack.exists())
+                self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
+                (prefix / part).rmdir()
+
     def test_install_carry_judges_roots_copy_not_the_operators(self):
         """**Digests are judged in the copy root holds**: a file that differs
         in root's copy (a file changed under the copy) refuses after the
@@ -6483,22 +6504,30 @@ esac
     def test_a_carried_box_takes_a_newer_set_only_after_decommission(self):
         """**A second set on a box that holds one** is refused by
         install-carry.sh, and update-stack.sh refuses the carried box, each
-        naming decommission.sh, what it costs, and then the install.
+        naming the new set's own decommission.sh, what it costs, then the
+        install, and why the copy under the prefix is not the one to run.
         Perturbations: drop either refusal and its run proceeds."""
         carried, sha = self.carried()
         result = self.install_carry(carried, sha, "--install")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         cost = "decommission.sh, which archives and removes every agent on the box and the stack"
+        own = "the new set's own deploy/decommission.sh"
+        why = "the purge removes {}, so a rerun after a removal that failed would find no script there"
         result = self.install_carry(carried, sha)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("already stands, so this box holds a stack", result.stderr)
         self.assertIn(cost, result.stderr)
+        self.assertIn(own, result.stderr)
+        self.assertIn(f"not {self.run_prefix}/deploy/decommission.sh: " + why.format(f"{self.run_prefix}/deploy"),
+                      result.stderr)
         self.log.unlink(missing_ok=True)
         self.env["WEAVER_STACK_RECORD"] = str(self.run_stack)
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn(f"installed from the carry set {sha}", result.stderr)
         self.assertIn(cost, result.stderr)
+        self.assertIn(own, result.stderr)
+        self.assertIn("not the one under the prefix: " + why.format("<prefix>/deploy"), result.stderr)
         (self.run_stack / "install-tuple").chmod(0o000)
         try:
             if not os.access(self.run_stack / "install-tuple", os.R_OK):
@@ -12503,6 +12532,67 @@ class DecommissionTests(unittest.TestCase):
                 self.assertIn(said, run.stderr)
         self.assertNotIn("bulk-store/dev-archive", self.script)
         self.assertIn("#   sudo deploy/decommission.sh --archive DIR ", self.script)
+
+    def test_a_box_with_no_agent_names_its_prefix_from_the_stack_record(self):
+        """**A carried box taken down before any agent was made loses its
+        prefix too**: install-carry.sh leaves a stack record, an empty admin
+        base and `<prefix>/{bin,lib,deploy}`, and install-carry.sh refuses
+        while any of the three stands, so decommission.sh must plan, archive
+        and purge them with no agent root to name them, and keep `models`.
+        The script runs whole only as root, so its discovery, the plan's
+        prefix lines, the archive's prefix parts and `purge_candidates` run
+        here as it defines them, against a fixture whose `/etc/weaver` is
+        the box's. Perturbation: read no stack record, and none of the three
+        is planned, archived or purged."""
+        script = self.script
+        def cut(start, end):
+            i = script.index(start)
+            return script[i:script.index(end, i) + len(end)]
+        discovery = cut("CONFIG_ROOTS=()\n",
+                        'for b in "${!BIN_DIRS[@]}"; do PREFIXES["$(dirname "$b")"]=1; done\n')
+        plan_lines = cut('say "install prefixes (models excluded from every mode)"\n',
+                         '  [ -d "$p/models" ] && plan "$p/models  $(du -sh "$p/models" | cut -f1)  KEPT"\ndone\n')
+        archive_parts = cut('  for p in "${!PREFIXES[@]}"; do\n    parts=()\n',
+                            '    [ ${#parts[@]} -gt 0 ] && archive_path "$(archive_name opt "$p")" "${parts[@]}"\n  done\n')
+        with tempfile.TemporaryDirectory(prefix="weaver-no-agent-") as scratch:
+            box = Path(scratch).resolve()
+            prefix = box / "opt" / "weaver"
+            for sub in ("bin", "lib", "deploy", "models"):
+                (prefix / sub).mkdir(parents=True)
+                (prefix / sub / "f").write_text("x\n")
+            (box / "etc" / "weaver" / "admin").mkdir(parents=True)
+            record = box / "etc" / "weaver" / "stack"
+            record.mkdir()
+            for key, value in (("worker-binary", prefix / "bin" / "worker"),
+                               ("spu-binary", prefix / "bin" / "weaver-spu"),
+                               ("gate-binary", prefix / "bin" / "weaver-gate"),
+                               ("shell-binary", prefix / "bin" / "weaver-shell"),
+                               ("coordination-root", "/run"), ("library-path", prefix / "lib"),
+                               ("prefix", prefix), ("agent-directory", box / "var-lib")):
+                (record / key).write_text(f"{value}\n")
+            program = ("say() { :; }\nplan() { printf 'plan %s\\n' \"$1\"; }\n"
+                       "candidate() { printf 'candidate %s\\n' \"$1\"; }\n"
+                       "archive_name() { printf '%s' \"$1\"; }\n"
+                       "archive_path() { shift; printf 'archive %s\\n' \"$@\"; }\n"
+                       "SUDO_RULES=() LDSO_CONFS=() AGENT_FOLDERS=() OWN_TERRITORIES=() HOMES=() TMP_PATHS=()\n"
+                       "WEAVER_USERS=() WEAVER_GROUPS=() HOME_QUOTAS=()\ndeclare -A AGENTS=()\n"
+                       f"LEGACY_DIR={shlex.quote(str(box / 'legacy'))}\n"
+                       + discovery + plan_lines + archive_parts
+                       + shell_function(script, "purge_candidates") + "purge_candidates\n")
+            program = program.replace("/etc/weaver", f"{box}/etc/weaver")
+            env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+            run = subprocess.run(["bash", "-c", program], env=env, text=True, capture_output=True, timeout=20)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            lines = run.stdout.splitlines()
+            for sub in ("bin", "lib", "deploy"):
+                with self.subTest(sub=sub):
+                    self.assertTrue(any(l.startswith(f"plan {prefix / sub}  ") for l in lines), run.stdout)
+                    self.assertIn(f"archive {prefix / sub}", lines)
+                    self.assertIn(f"candidate {prefix / sub}", lines)
+            self.assertTrue(any(l.startswith(f"plan {prefix / 'models'}  ") and l.endswith("KEPT") for l in lines),
+                            run.stdout)
+            self.assertNotIn(f"candidate {prefix / 'models'}", lines)
+            self.assertNotIn(f"archive {prefix / 'models'}", lines)
 
     def one_line_function(self, name):
         """A function the script defines on one line, read out of its text."""
