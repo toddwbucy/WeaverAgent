@@ -32,7 +32,7 @@ Record in the run log, from the box, not from memory:
 uname -n; uname -r
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 nvcc --version | tail -1
-pacman -Q cuda cccl
+grep -rhE --include=version.h '^#define CCCL_VERSION ' "$(dirname "$(dirname "$(readlink -f "$(command -v nvcc)")")")"/targets/*/include
 rustup show active-toolchain
 sudo deploy/decommission.sh            # the plan: what stands, discovered
 ```
@@ -330,8 +330,9 @@ deploy/bootstrap-stack.sh --install    # then install under sudo
 
 What it does, so the log can say which step a failure was at:
 
-1. Prints the box facts and refuses if `cccl` is outside the 3.1.4-3.3.4 window, if
-   there is no `nvcc`, if the stack record `/etc/weaver/stack` or `<prefix>/bin`
+1. Prints the box facts and refuses if there is no `nvcc`, if the CCCL version nvcc
+   reads cannot be read or lies outside the 3.1.4-3.3.4 window, if `NVCC_CCBIN` is not
+   an executable file, if the stack record `/etc/weaver/stack` or `<prefix>/bin`
    already stands, or if `/etc/weaver/admin` holds anything. It refuses too where the
    shell's build lacks a tool (`build-busybox.sh --preflight`: tar with bzip2, make, a C
    compiler that links statically, python3, and curl unless `BUSYBOX_TARBALL` names
@@ -350,8 +351,7 @@ What it does, so the log can say which step a failure was at:
 4. `cargo build --release --locked --workspace --features
    weaver-spu/cuda,weaver-state/sqlite`. The engine is named,
    though it is the default, or the member refuses an agent electing it at load
-   (measured 2026-09-11). The CUDA host compiler is `NVCC_CCBIN`, defaulted as
-   `update-stack.sh` defaults it. A build that fails refuses with the first lines cargo
+   (measured 2026-09-11). The CUDA host compiler is `NVCC_CCBIN`, judged in step 1. A build that fails refuses with the first lines cargo
    names as the cause and the log's last 60, naming the log, and never goes on
    to install what an earlier build left in the target directory (#128). The engine is
    built with its OpenSSL lookup off (`CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON`,
@@ -404,10 +404,11 @@ What it does, so the log can say which step a failure was at:
    engine-source = git+<fork url>?rev=<40 hex>#<40 hex>
    engine-vendored = <40 hex>
    nvcc = <release>, V<version>
+   ccbin = <path> <its --version line>   (NVCC_CCBIN, the host compiler)
    member.<name> = <64 hex>              (one per installed member, the shell's two files among them)
    library.<versioned file> = <64 hex>   (one per engine library)
    runtime.cudart = <64 hex> <file>      (and cublas, cublaslt, curand)
-   cccl = <package version>               (pacman's, or with no pacman <package>=<version> from dpkg)
+   cccl = <major>.<minor>.<patch>         (CCCL_VERSION in the CCCL header nvcc reads first)
    ```
 
    Each `runtime.` line is the file the installed SPU's library name leads to, as

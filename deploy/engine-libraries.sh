@@ -15,7 +15,66 @@
 ENGINE_CRATE=llama-cpp-sys-2
 LIB_GLOBS='libggml*.so* libllama*.so*'
 LDSO_CONF=/etc/ld.so.conf.d/weaver.conf
-CUDA_LIB_DIR=${CUDA_LIB_DIR:-/opt/cuda/lib64}
+# **The CUDA directory and the host compiler are named, or derived from the
+# toolkit the build uses, never one distribution's path taken on trust.**
+# CUDA_LIB_DIR, where the operator sets it, is the CUDA directory the loader's
+# entry names; unset, `cuda_lib_dir` derives it from the toolkit the nvcc on
+# PATH belongs to. NVCC_CCBIN is the host compiler nvcc builds the kernels
+# with; unset, it is NVCC_CCBIN_DEFAULT, and `host_compiler` refuses either
+# where it is not an executable file on this box, before the long build.
+NVCC_CCBIN_DEFAULT=/usr/bin/g++-15
+
+# toolkit_top: the CUDA toolkit the build's nvcc belongs to. The nvcc on PATH,
+# followed through its links, is `<top>/bin/nvcc`. Sets TOOLKIT_TOP and
+# answers 0; else sets TOOLKIT_WHY, one clause, and answers 1. Called in the
+# caller's shell, never in a substitution, so what it sets stays set.
+toolkit_top() {
+  local path
+  TOOLKIT_TOP="" TOOLKIT_WHY=""
+  path=$(command -v nvcc 2>/dev/null) || { TOOLKIT_WHY="no nvcc is on PATH"; return 1; }
+  path=$(readlink -f -- "$path" 2>/dev/null) || { TOOLKIT_WHY="the nvcc on PATH does not resolve"; return 1; }
+  if [[ "$path" != /*/bin/nvcc || "$path" == *$'\n'* ]]; then
+    TOOLKIT_WHY="the nvcc on PATH resolves to $path, which is not <toolkit>/bin/nvcc"
+    return 1
+  fi
+  TOOLKIT_TOP=${path%/bin/nvcc}
+}
+
+# toolkit_lib_dir: the library directory of that toolkit, its one
+# `targets/<target>/lib`. Sets TOOLKIT_LIB and answers 0; else sets
+# TOOLKIT_WHY and answers 1.
+toolkit_lib_dir() {
+  local -a libs
+  TOOLKIT_LIB=""
+  toolkit_top || return 1
+  libs=("$TOOLKIT_TOP"/targets/*/lib)
+  if [ "${#libs[@]}" -ne 1 ] || [ ! -d "${libs[0]}" ]; then
+    TOOLKIT_WHY="the toolkit at $TOOLKIT_TOP holds no single targets/*/lib"
+    return 1
+  fi
+  TOOLKIT_LIB=${libs[0]}
+}
+
+# cuda_lib_dir: sets CUDA_LIB_DIR, the CUDA directory the loader's entry names
+# beside the library directory: the operator's value where it is set, else
+# the toolkit's library directory. Refuses, through the sourcing script's
+# `die`, where neither answers. The directory is judged by `loader_dir`.
+cuda_lib_dir() {
+  [ -z "${CUDA_LIB_DIR:-}" ] || return 0
+  toolkit_lib_dir \
+    || die "CUDA_LIB_DIR is unset and $TOOLKIT_WHY, so the CUDA directory the loader's entry names is unknown: set CUDA_LIB_DIR"
+  CUDA_LIB_DIR=$TOOLKIT_LIB
+}
+
+# host_compiler: sets and exports NVCC_CCBIN, the operator's value or the
+# default, and refuses, through the sourcing script's `die`, unless it is an
+# executable file on this box.
+host_compiler() {
+  NVCC_CCBIN=${NVCC_CCBIN:-$NVCC_CCBIN_DEFAULT}
+  [ -f "$NVCC_CCBIN" ] && [ -x "$NVCC_CCBIN" ] \
+    || die "NVCC_CCBIN names the host compiler nvcc builds the kernels with, and $NVCC_CCBIN is not an executable file on this box (the default, $NVCC_CCBIN_DEFAULT, is one distribution's path): set NVCC_CCBIN to a compiler this toolkit accepts"
+  export NVCC_CCBIN
+}
 
 # **The engine is built without HTTPS** (weaver-spu-Spec section 1.1). Nothing
 # in the agent downloads a model, and the only user of OpenSSL in the engine's
@@ -126,14 +185,20 @@ spu_ldd() {
 # is read whole, from the arrow to the last load address, since a library
 # directory may hold a space; a line with no arrow (the vDSO, the loader)
 # names no engine library, and only `=> not found` at a line's end is a
-# library not found.
+# library not found. **A symbol version not found fails too**: ldd exits 0
+# for it and prints `<program>: <library>: version 'X' not found (required
+# by <program>)` (measured on 2026-11-23 with a library built without the
+# version its program was linked against), which is how a box whose C or C++
+# runtime is older than the build's meets the stack, and the program then
+# fails at exec.
 engine_resolved() {
   python3 -c 'import os, re, sys
 lib = os.path.realpath(sys.argv[2])
 resolved = re.compile(r"\s*(\S+)\s+=>\s+(.+)\s+\(0x[0-9a-fA-F]+\)\s*")
+version = re.compile(r":\s+version\s+[`\x27][^`\x27]*\x27\s+not found\s+\(required by\s")
 bad, engine = [], 0
 for line in sys.argv[1].splitlines():
-    if re.search(r"=>\s*not found\s*$", line):
+    if re.search(r"=>\s*not found\s*$", line) or version.search(line):
         bad.append(line.strip())
         continue
     name = (line.split() or [""])[0]
