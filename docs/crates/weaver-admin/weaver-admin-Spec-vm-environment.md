@@ -27,11 +27,12 @@ This document states no requirement of its own and invents no value. Its grounds
 from charters, contracts and the operator's rulings, and other documents are named only
 for where a representation already stands.
 
-**Only admin's share is here.** The image, its build, its boot rules and its first boot
-are the image's, and the connectors are WeaverWeb's. Each is represented by its owner's
-documents, which section 7 names, and this document restates none of them.
+**Only admin's share is here.** The carry set, its build and its install are the
+deploy scripts', the machine the operator presents is the operator's, and the connectors
+are WeaverWeb's. Section 7 names where each is represented, and this document restates
+none of them.
 
-The terms of `weaver-admin-PRD` section 7.1 hold here: the image, an appliance, the
+The terms of `weaver-admin-PRD` section 7.1 hold here: the carry set, an appliance, the
 console, enrollment, the WeaverAgent system and the agent.
 
 ## 1. The data mounts
@@ -86,8 +87,8 @@ Per `weaver-admin-PRD` sections 2 and 7.3.
 **Admin writes one named table and nothing else of the firewall.** **Each agent's table
 is its own**, one table per agent on the operator's ruling of 2026-11-15, per the
 charter's section 2. The table never carries the machine's whole policy. On an appliance
-the image's own boot rules carry the base policy, input dropped but SSH, per the
-charter's section 7.3.
+the base policy, input dropped but SSH, stands outside admin's table, and what carries
+it is a later item of the charter's section 7.3.
 
 **Every load replaces the table before it opens anything, and the table is not
 persisted**, on the operator's ruling of 2026-11-15. Admin writes the table to the
@@ -102,7 +103,7 @@ declaration names a port, the table's place in the load and the unload, what the
 rollback does with a table that a refused load opened, and how the run card records the
 open ports are fixed by no ruling or measurement as of 2026-11-15. `weaver-admin-PRD`
 section 11 names the documents that settle them, and section 9 carries each. **How a
-port that a declaration names gets through the image's boot rules** is open in the
+port that a declaration names gets through the appliance's base policy** is open in the
 charter's section 10. In nftables each base chain gives its own verdict and a drop in
 any one is final, so an accept in admin's table alone does not open a port there. This
 document does not write that admin's table opens a declared port on an appliance.
@@ -154,21 +155,19 @@ Per apex section 11. Each election above is listed with what catches its failure
 
 ## 7. Held elsewhere
 
-- **The image**: its operating system, its build from named commits, its identity and
-  stamp, its driver, its seal, its boot rules, its time source, its versions and
-  formats, and what it lays at the two mount points. Its build's documents in
-  `toddwbucy/WeaverTools` represent it. The requirements are `weaver-admin-PRD` section
-  7.2's and 7.3's.
+- **The carry set**: its build from a named commit, its manifest and identity, and its
+  install. `deploy/REDEPLOY.md` section 3a and the deploy scripts represent it, and the
+  requirements are `weaver-admin-PRD` section 7.2's. The operating system and the driver
+  are the run box's, per that section, and what carries section 7.3's base policy is a
+  later item there.
 - **The console's side**, in `weaver-web-PRD` and its Spec in `toddwbucy/WeaverWeb`:
   enrollment's console half, the connectors' keys and certificates, the one-time secret,
   what the console does with a clone, the connectors' units and how they come up after a
-  reboot, the model store and the model's pull, the image download, and the display of
+  reboot, the model store and the model's pull, and the display of
   the storage report.
-- **The build's two settings and the image's seal**: the compiler's flag and the list
-  of architectures that are the two settings of `weaver-admin-PRD` section 7.2, and the
-  compaction that ends the seal, the published digest being of the compacted file. The
-  image build's Spec in `toddwbucy/WeaverTools` holds them, and so do the deploy scripts
-  (`deploy/bootstrap-stack.sh`, `deploy/update-stack.sh`) as #570 sets them.
+- **The build's two settings**: the compiler's flag and the list of architectures that
+  are the two settings of `weaver-admin-PRD` section 7.2. The deploy scripts
+  (`deploy/bootstrap-stack.sh`, `deploy/update-stack.sh`) hold them as #570 sets them.
 - **The install record and the hardware read at each load**, per `deploy/REDEPLOY.md`
   section 3 and `deploy/verify-load.sh`. The guest's processor joining that read is an
   edit owed, per `weaver-admin-PRD` section 11.
@@ -198,9 +197,10 @@ later item, per the charter's section 7.5.
   refused load opened, and the run card's record of the open ports.** Settled by the
   act that adds the table and the act that adds the declaration's port member, per
   `weaver-admin-PRD` sections 10 and 11.
-- **How a port that a declaration names gets through the image's boot rules.** Settled
-  by the act that adds the declaration's port member, in `weaver-admin-Spec` and the
-  Spec of the image's build together, per `weaver-admin-PRD` section 10.
+- **How a port that a declaration names gets through the appliance's base policy.**
+  Settled by the act that adds the declaration's port member, in `weaver-admin-Spec` and
+  the document of whatever carries the base policy together, per `weaver-admin-PRD`
+  section 10.
 - **The record of an upgrade.** Which record carries an upgrade, and how state made
   under an older version is marked as used under the newer one. Settled by the act that
   writes it, per `weaver-admin-PRD` section 11.

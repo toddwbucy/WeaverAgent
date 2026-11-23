@@ -416,7 +416,7 @@ What it does, so the log can say which step a failure was at:
    Each `runtime.` line is the file the installed SPU's library name leads to, as
    admin's start step resolves it, and that file's sha256. **Build facts only** (the
    operator's rulings of 2026-11-14): nothing in the record reads the hardware, so one
-   image built with no card serves any host's cards. The driver, `libcuda` and the
+   stack built with no card serves any host's cards. The driver, `libcuda` and the
    cards are read at each load by `verify-load.sh` and never stored
    (`HowToDeployANewAgent.md` section 4), which also binds each runtime file to the
    file the loader resolves then. A record of the earlier form, which carries

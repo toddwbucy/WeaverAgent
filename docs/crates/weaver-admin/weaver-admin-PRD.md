@@ -230,13 +230,13 @@ opened, on the operator's rule that a port which does not have to be open is not
 gives its own verdict, and a drop in any one is final. So an accept in admin's table
 opens nothing that another table drops, and on a machine where the operator runs rules
 of their own, those rules must also allow the port, which is the operator's act. On an
-appliance the image's own boot rules carry the base policy (section 7.3), and how a port
-that a declaration names gets through them is open in section 10. **No declaration
-member names a port as of 2026-11-15**, and the amendment of 2026-11-15 adds none, for
-the reason section 4.3 gives for the boundary member: a field whose only reader is
-unbuilt is the reserved slot apex section 7 refuses. Where the table opens in a load and
-closes in an unload is also open in section 10. `weaver-admin-Spec-vm-environment`
-section 3 carries the environment's half.
+appliance the base policy, input dropped but SSH, stands outside admin's table (section
+7.3), and how a port that a declaration names gets through it is open in section 10.
+**No declaration member names a port as of 2026-11-15**, and the amendment of 2026-11-15
+adds none, for the reason section 4.3 gives for the boundary member: a field whose only
+reader is unbuilt is the reserved slot apex section 7 refuses. Where the table opens in
+a load and closes in an unload is also open in section 10.
+`weaver-admin-Spec-vm-environment` section 3 carries the environment's half.
 
 **Custody of the stream's sink, and the agent reaches none of it.** The program
 owns no record, per the ruling of 2026-08-01, restated here as the authority since
@@ -1056,15 +1056,17 @@ set, per section 7.2. Admin's own share of it is the table of section 2, the dat
 of section 4.1, the refusal of state a version cannot read, the load and the unload that
 start and stop the agent (section 7), and the trace's handoff (section 7.5).
 `weaver-admin-Spec-vm-environment` says how admin represents that share. The rest binds
-the image's build, which this crate does not perform, and the connectors, which are
-WeaverWeb's. Every requirement of sections 7.1 to 7.5 is the operator's ruling of
+the carry set's build and install, which the deploy scripts perform (section 7.2), and
+the connectors, which are WeaverWeb's. What carries the base policy of section 7.3 is a
+later item there. Every requirement of sections 7.1 to 7.5 is the operator's ruling of
 2026-11-14 unless the sentence says otherwise, and the operator's rulings of 2026-11-15
 amend them where a sentence says so.
 
 **The stance, on the operator's ruling of 2026-11-15.**
 
 - The suite ships a tuple, and each operator produces their own.
-- The image is disposable and carries what runs. The mounts carry what the agent keeps.
+- The carry set is disposable and carries what runs. The mounts carry what the agent
+  keeps.
 - What the operator adds or changes after boot is theirs to account for, and the suite
   offers no guarantee about a changed machine.
 - Inbound is the suite's, and outbound is the operator's.
@@ -1073,10 +1075,10 @@ amend them where a sentence says so.
 
 **Six terms carry one meaning each in sections 7.1 to 7.5 and in that Spec.**
 
-- The **image** is the sealed disk image. One image exists for each version, and it is
-  published with its hash.
-- An **appliance** is a virtual machine that an operator made from the image. Section
-  1's "starts like an appliance" is a simile and not this term.
+- The **carry set** is the stack that a build box writes and a run box installs, named
+  by its manifest's sha256, per section 7.2.
+- An **appliance** is a virtual machine that the operator presents and that installed a
+  carry set. Section 1's "starts like an appliance" is a simile and not this term.
 - The **console** is the Weaver Web server, the operator's management surface for many
   agents.
 - **Enrollment** is the pairing by which the console comes to know an appliance.
@@ -1088,45 +1090,47 @@ amend them where a sentence says so.
   holds root, so these sections name admin, or whichever component it is, wherever a
   privilege is meant.
 
-**An image carries the WeaverAgent system for one agent and nothing else.** An operator
-installs Weaver Web, loads the image into a hypervisor they already run, and makes a
-virtual machine from it. From then on the operator manages the agent through the console
+**An appliance holds the WeaverAgent system for one agent.** An operator installs Weaver
+Web, presents a virtual machine on a hypervisor they already run, and installs a carry
+set in it, per section 7.2. How the connectors reach a presented machine is a later
+item. From then on the operator manages the agent through the console
 and the machine through the hypervisor. The console knows the agent. The hypervisor
 knows the machine. Neither reaches into the side of the other.
 
-**The image exists to hand an operator a held deployment tuple.** The output of a turn
+**The carry set exists to hand an operator a held deployment tuple.** The output of a turn
 depends on what computes it: the binaries, the libraries they load, the driver, the
 card, the guest's processor, the model bytes and the declaration. **The guest's
 processor joins the tuple beside the card**, on the operator's ruling of 2026-11-15,
-because the math library selects its code paths from the processor's features. An
-image holds the binaries, the libraries and the driver as one hashed object, so an
-operator who runs a version of the image runs the same bytes as every other operator who
-runs that version. That the held tuple also holds a turn's output is a claim and not a
+because the math library selects its code paths from the processor's features. A
+carry set holds the binaries and the libraries they load, the CUDA runtime among them, as
+one object named by its manifest's sha256, so every box that installs one set runs the
+same binaries and libraries. The driver is the run box's, read at each load, per section
+7.2. That the held tuple also holds a turn's output is a claim and not a
 measurement. What is measured and what is owed are `toddwbucy/WeaverTools` issue 28's,
 and those measurements come before a Spec relies on the claim.
 
 **The run card records the tuple as shipped**, on the operator's ruling of 2026-11-15,
-and the suite makes no guarantee about the tuple as running. The image's manifest of its
-files and links stays a tool the operator may run, and nothing runs it automatically.
+and the suite makes no guarantee about the tuple as running. A carry set's
+manifest is checked when the set is installed, per section 7.2, and `verify-load.sh`
+reads the installed stack against the install tuple when the operator runs it.
 The run card is the operator's term, which no repository defines as of 2026-11-15, and
 section 10 carries it.
 
-**The agent is bounded by the operating system under a UID.** The image does not give
-the agent an operating system. It gives the WeaverAgent system a machine with nothing
-else on it, and the agent stays bounded inside that machine by its accounts and
-permissions, as on any install. A privilege that an operator gives the agent beyond what
-the WeaverAgent system needs is the operator's choice, and it is outside this charter.
+**The agent is bounded by the operating system under a UID.** A carry set does not give
+the agent an operating system, which is the operator's, per section 7.2. The agent stays
+bounded inside the machine by its accounts and permissions, as on any install. A
+privilege that an operator gives the agent beyond what the WeaverAgent system needs is
+the operator's choice, and it is outside this charter.
 
 **Starting and stopping the agent is its load and unload through admin, inside a running
 appliance.** The machine's own lifecycle, creating, cloning, starting, stopping,
 snapshotting, networking or destroying it, is the operator's and their hypervisor's, and
 the suite holds no opinion about it. That Weaver Web never touches a hypervisor is
-`weaver-web-PRD`'s to carry, in `toddwbucy/WeaverWeb`. Nothing of the image starts the
+`weaver-web-PRD`'s to carry, in `toddwbucy/WeaverWeb`. Nothing of the carry set starts the
 agent, per section 7.
 
-**Nothing is installed into an appliance after its image is sealed.** No site hook
-exists. A site condition is a unit that the operator adds to their own machines, and the
-image never learns of it.
+**No site hook exists.** A site condition is a unit that the operator adds to their own
+machines, and no carry set learns of it.
 
 **The entry condition is a hypervisor with GPU passthrough already working.** It is a
 condition, and the suite does not teach it.
@@ -1196,9 +1200,10 @@ on SSH alone.** The VM's console is the operator's and the hypervisor's. No othe
 is open unless a declaration names it, per section 2, on the operator's rule that a port
 which does not have to be open is not open.
 
-**The image's own boot rules carry the base policy, input dropped but SSH**, on the
-operator's ruling of 2026-11-15, and admin's table of section 2 does not carry it. How a
-port that a declaration names gets through those rules is open in section 10.
+**The base policy is input dropped but SSH**, on the operator's ruling of 2026-11-15,
+and admin's table of section 2 does not carry it. What carries it on a machine the
+operator presents is a later item. How a port that a declaration names gets through it
+is open in section 10.
 
 **Cloud-init is not among the requirements at this stage**, on the operator's ruling of
 2026-11-15, and it is carried as a later item.
@@ -1216,14 +1221,15 @@ service whose work is to listen. The console fetches models, and the appliance d
 console for them.
 
 **What an appliance reaches outbound is the operator's**, on the operator's ruling of
-2026-11-15. The image carries no egress limit.
+2026-11-15. A carry set carries no egress limit.
 
 **Each connector makes its own private key inside the appliance, and the key never
 leaves it.** The console signs the public half, so each appliance holds its own
 certificate. A machine cloned after enrollment breaks this, and what the console does
 with a clone is the console's documents'. **The connectors' keys and
-certificates live on the root disk**, on the operator's ruling of 2026-11-15, so a new
-image is a new enrollment.
+certificates live on the root disk**, on the operator's ruling of 2026-11-15. Whether a
+box that takes a newer carry set, by `decommission.sh` and a fresh install, is enrolled
+again is a later item.
 
 **The one-time secret of the pairing line is the only secret that travels on a command
 line.** It is the exception because no other way to begin exists. It is single-use,
@@ -1235,7 +1241,7 @@ the model's pull, too, is a dial from the appliance to the console.
 
 What crosses at pairing and at a model's pull is WeaverWeb's: the line, the secret's
 form and lifetime, the link port, the certificates, what the console does with a clone,
-the model store with its sources, and the image download with its hash check.
+and the model store with its sources.
 They are `weaver-web-PRD`'s, its Spec's and the connectors' contracts', in
 `toddwbucy/WeaverWeb`. The enrollment connection is the link's one unauthenticated
 surface, and the console's documents name it.
@@ -1529,14 +1535,15 @@ section 4, elects in `weaver-admin-Spec` what the rollback does with that table 
 section 5's rule that a rollback is admin's own reap, and writes their states into the
 table of `weaver-admin-Spec` section 3.0 before any code.
 
-**How a port that a declaration names gets through an appliance image's own rules.** On
-an appliance the image's boot rules carry the base policy, input dropped but SSH
-(section 7.3). In nftables each base chain gives its own verdict and a drop in any one
-is final, so an accept in admin's table does not open a port through those rules. One
-candidate exists and is only a candidate: admin's table, at an earlier priority, marks
-the packet, and the image's static rule accepts the mark, so admin still writes only its
-own table. **Settled by:** the act that adds the declaration's port member, in
-`weaver-admin-Spec` and the Spec of the image's build together.
+**How a port that a declaration names gets through an appliance's base policy.** On an
+appliance the base policy, input dropped but SSH, stands outside admin's table, and what
+carries it is a later item (section 7.3). In nftables each base chain gives its own
+verdict and a drop in any one is final, so an accept in admin's table does not open a
+port through that policy. One candidate exists and is only a candidate: admin's table,
+at an earlier priority, marks the packet, and the base policy's static rule accepts the
+mark, so admin still writes only its own table. **Settled by:** the act that adds the
+declaration's port member, in `weaver-admin-Spec` and the document of whatever carries
+the base policy together.
 
 **A stopped agent against a machine that is down.** On an appliance the console stops
 the agent by its unload, per section 7, and a machine that is down answers nothing.

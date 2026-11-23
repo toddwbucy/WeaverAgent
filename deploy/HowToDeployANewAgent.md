@@ -522,10 +522,10 @@ Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
   `nvidia-smi --query-gpu=pci.bus_id,name,memory.total --format=csv,noheader` and put in
   bus order. That order is the one the SPU sees, under PAIR-1's
   `CUDA_DEVICE_ORDER=PCI_BUS_ID` mask. The cards are read at each load and never stored
-  (the operator's rulings of 2026-11-14: one image serves any host's cards), so they are
-  judged against what the declaration elected and nothing else. An ordinal past the
-  list is a `FAULT`. No list, as on a box where nvidia-smi reaches no card, reads
-  `absent`, and nvidia-smi's failure sentence is never taken for a card.
+  (the operator's rulings of 2026-11-14: one stack built with no card serves any host's
+  cards), so they are judged against what the declaration elected and nothing else. An
+  ordinal past the list is a `FAULT`. No list, as on a box where nvidia-smi reaches no
+  card, reads `absent`, and nvidia-smi's failure sentence is never taken for a card.
 - **The live rows, the driver and its library.** The driver's version, read with
   `nvidia-smi --query-gpu=driver_version --format=csv,noheader`, and `libcuda` as the
   loader resolves it for the agent's SPU, by the file its name leads to and that file's
@@ -555,9 +555,10 @@ Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
     and only on an SPU and a library directory admin's rule holds closed. Where it
     cannot be read, each runtime file the install recorded is a `FAULT` naming why,
     never passed unbound. A file that changed, moved or no longer resolves is a
-    `FAULT`: the box has drifted from its install. A sealed image never shows one, and
-    a box updated since its install rewrites its record with
-    `update-stack.sh --install`. An agent made with `create-agent.sh --spu`, or whose
+    `FAULT`: the box has drifted from its install. A box updated since its install
+    rewrites its record with `update-stack.sh --install`, and a box installed from a
+    carry set takes a newer set by `decommission.sh` and a fresh `install-carry.sh`
+    (`REDEPLOY.md` section 3a). An agent made with `create-agent.sh --spu`, or whose
     config root names a library path other than the stack record's, runs something
     the install did not read, so its runtime rows are absent and say which.
 
