@@ -1060,18 +1060,22 @@ the carry set's build and install, which the deploy scripts perform (section 7.2
 the connectors, which are WeaverWeb's. What carries the base policy of section 7.3 is a
 later item there. Every requirement of sections 7.1 to 7.5 is the operator's ruling of
 2026-11-14 unless the sentence says otherwise, and the operator's rulings of 2026-11-15
-amend them where a sentence says so.
+amend them where a sentence says so. A sentence that names a carry set stands on the
+operator's rulings of 2026-11-23 that the binaries are carried and that the suite ships
+no sealed image for now.
 
 **The stance, on the operator's ruling of 2026-11-15.**
 
 - The suite ships a tuple, and each operator produces their own.
-- The carry set is disposable and carries what runs. The mounts carry what the agent
-  keeps.
+- The mounts carry what the agent keeps.
 - What the operator adds or changes after boot is theirs to account for, and the suite
   offers no guarantee about a changed machine.
 - Inbound is the suite's, and outbound is the operator's.
 - The machine and the service are built as simply as will work, and machinery for a
   later need is a later item.
+
+What "after boot" covers on a machine the operator presents, where the carry set itself
+is installed after boot, is a later item.
 
 **Six terms carry one meaning each in sections 7.1 to 7.5 and in that Spec.**
 
@@ -1102,10 +1106,11 @@ depends on what computes it: the binaries, the libraries they load, the driver, 
 card, the guest's processor, the model bytes and the declaration. **The guest's
 processor joins the tuple beside the card**, on the operator's ruling of 2026-11-15,
 because the math library selects its code paths from the processor's features. A
-carry set holds the binaries and the libraries they load, the CUDA runtime among them, as
-one object named by its manifest's sha256, so every box that installs one set runs the
-same binaries and libraries. The driver is the run box's, read at each load, per section
-7.2. That the held tuple also holds a turn's output is a claim and not a
+carry set holds the binaries, the engine's libraries and the CUDA runtime files the SPU
+resolves as one object named by its manifest's sha256, so every box that installs one
+set runs the same binaries against the same engine and runtime files. The C library,
+the C++ runtime and the driver are the run box's, per section 7.2, and the driver is
+read at each load. That the held tuple also holds a turn's output is a claim and not a
 measurement. What is measured and what is owed are `toddwbucy/WeaverTools` issue 28's,
 and those measurements come before a Spec relies on the claim.
 

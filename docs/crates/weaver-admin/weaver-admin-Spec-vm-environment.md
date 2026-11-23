@@ -158,7 +158,8 @@ Per apex section 11. Each election above is listed with what catches its failure
 - **The carry set**: its build from a named commit, its manifest and identity, and its
   install. `deploy/REDEPLOY.md` section 3a and the deploy scripts represent it, and the
   requirements are `weaver-admin-PRD` section 7.2's. The operating system and the driver
-  are the run box's, per that section, and what carries section 7.3's base policy is a
+  are the run box's, per that section, the operator attaches and mounts the disks at the
+  two mount points, per its section 7.5, and what carries section 7.3's base policy is a
   later item there.
 - **The console's side**, in `weaver-web-PRD` and its Spec in `toddwbucy/WeaverWeb`:
   enrollment's console half, the connectors' keys and certificates, the one-time secret,

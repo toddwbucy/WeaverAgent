@@ -522,9 +522,9 @@ Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
   `nvidia-smi --query-gpu=pci.bus_id,name,memory.total --format=csv,noheader` and put in
   bus order. That order is the one the SPU sees, under PAIR-1's
   `CUDA_DEVICE_ORDER=PCI_BUS_ID` mask. The cards are read at each load and never stored
-  (the operator's rulings of 2026-11-14: one stack built with no card serves any host's
-  cards), so they are judged against what the declaration elected and nothing else. An
-  ordinal past the list is a `FAULT`. No list, as on a box where nvidia-smi reaches no
+  (the operator's rulings of 2026-11-14: the install records build facts only), so they
+  are judged against what the declaration elected and nothing else. An ordinal past the
+  list is a `FAULT`. No list, as on a box where nvidia-smi reaches no
   card, reads `absent`, and nvidia-smi's failure sentence is never taken for a card.
 - **The live rows, the driver and its library.** The driver's version, read with
   `nvidia-smi --query-gpu=driver_version --format=csv,noheader`, and `libcuda` as the
