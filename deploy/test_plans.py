@@ -825,8 +825,9 @@ if name == 'findmnt':
     fstype, options, target = os.environ.get('FIXTURE_MOUNT', 'xfs|rw,noquota|/').split('|')
     print({'FSTYPE': fstype, 'OPTIONS': options, 'TARGET': target}[args[args.index('-o') + 1]])
     sys.exit(0)
-if name == 'mktemp' and args and '/weaver-deploy-messages-' in args[-1]:
-    # The build's messages file, made as the scripts make it; not logged.
+if name == 'mktemp' and args and ('/weaver-deploy-messages-' in args[-1] or '/.carry-' in args[-1]):
+    # The build's messages file, and the directory --carry fills, made as
+    # the scripts make them; not logged.
     os.execv('/usr/bin/mktemp', ['mktemp', *args])
 if (name == 'mktemp' and args or name == 'as-root' and args[:1] == ['mktemp']) and '/weaver-drop.' in args[-1]:
     # **A drop's relays' directory** (#590), which account-drop.sh makes
@@ -1044,6 +1045,16 @@ elif name == 'systemctl':
         sys.exit(0)
     sys.exit(99)
 elif name == 'git':
+    # FIXTURE_COMMIT stands for a checkout at that commit, read as the
+    # scripts read it, through `git -C <tree>`; "nogit" for a tree that is
+    # not a checkout. FIXTURE_STATUS is what `git status` lists.
+    commit = os.environ.get('FIXTURE_COMMIT')
+    if commit and args[:1] == ['-C']:
+        if commit == 'nogit': sys.exit(128)
+        args = args[2:]
+        if args[:1] == ['rev-parse']: print(commit[:7] if '--short' in args else commit)
+        elif args[:1] == ['status']: print(os.environ.get('FIXTURE_STATUS', ''), end='')
+        sys.exit(0)
     if args[0] == 'rev-parse': print('abcdef0')
     # FIXTURE_BRANCH set empty stands for a detached checkout, which
     # `git branch --show-current` answers with an empty line.
@@ -1089,6 +1100,9 @@ elif name == 'cargo':
         target.joinpath('release').mkdir(parents=True)
         for member in ('worker', 'weaver-admin', 'weaver-trace-relay', 'weaver-gate', 'weaver-spu', 'weaver-state'):
             target.joinpath('release', member).write_text('fixture artifact ' + member)
+            # CARGO_EXECUTABLE stands for a build whose members are programs,
+            # as a real build's are.
+            if os.environ.get('CARGO_EXECUTABLE'): target.joinpath('release', member).chmod(0o755)
         # The engine's out/lib as llama-cpp-sys-2 lays it out: each versioned
         # file beside its SONAME link and its bare link, and what the globs
         # leave behind. ENGINE_BUILD names the build, so a test can move it.
@@ -1342,13 +1356,18 @@ elif name == 'ldd':
     # The CUDA runtime and the driver's library resolve into the fixture's
     # CUDA directory, where setUp leaves each name a link to a versioned
     # file, or into LDD_RUNTIME.
+    # LDD_DRIVER and LDD_SYSTEM move the driver's library and the C library
+    # out of it, LDD_DRIVER=none standing for a box with no driver, and
+    # LDD_EXTRA adds its lines as ldd prints them.
     engine_dir = os.environ.get('LDD_ELSEWHERE') or os.environ.get('LD_LIBRARY_PATH', '/fixture/lib').split(':')[0]
     runtime_dir = os.environ.get('LDD_RUNTIME') or str(root / 'cuda' / 'lib64')
     for soname in ('libllama.so.0', 'libggml.so.0', 'libcudart.so.99', 'libcublas.so.99', 'libcublasLt.so.99',
                    'libcurand.so.99', 'libcuda.so.1', 'libc.so.6'):
         at = engine_dir if soname.startswith(('libllama', 'libggml')) else runtime_dir
-        if soname == os.environ.get('LDD_MISSING'): print(f'\t{soname} => not found')
+        at = {'libcuda.so.1': os.environ.get('LDD_DRIVER'), 'libc.so.6': os.environ.get('LDD_SYSTEM')}.get(soname) or at
+        if soname == os.environ.get('LDD_MISSING') or at == 'none': print(f'\t{soname} => not found')
         else: print(f'\t{soname} => {at}/{soname} (0x0000)')
+    if os.environ.get('LDD_EXTRA'): print(os.environ['LDD_EXTRA'])
 else: sys.exit(99)
 '''
 DOUBLE = DOUBLE.replace('@ACCESS_LOOK@', repr(ACCESS_LOOK)).replace('@DROP_PATH@', DROP_PATH)
@@ -5915,6 +5934,212 @@ esac
         self.assertTrue([c for c in self.calls() if c[:2] == ["cargo", "build"]], self.calls())
         self.assertIn("release/worker was not built", result.stderr)
 
+    CARRY_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+    CARRY_RUNTIME = (("libcudart.so.99", "99.1.2"), ("libcublas.so.99", "99.3.4"),
+                     ("libcublasLt.so.99", "99.3.4"), ("libcurand.so.99", "99.5.6"))
+
+    def carry(self, name="set-1", **env):
+        """bootstrap-stack.sh --carry DIR on a build box: a clean checkout at
+        a full commit, members that are programs, the CUDA runtime files in
+        the toolkit's own library directory, no driver, and the C library
+        the box's own. DIR is NAME under `sets/`, a directory the operator
+        owns, 0755. The environment is left as it was found."""
+        saved = dict(self.env)
+        try:
+            self.env.pop("CUDA_LIB_DIR", None)
+            for soname, version in self.CARRY_RUNTIME:
+                stem = soname.rsplit(".so.", 1)[0]
+                if not (self.toolkit_lib / soname).is_symlink():
+                    shutil.copy(self.cuda_lib / f"{stem}.so.{version}", self.toolkit_lib)
+                    (self.toolkit_lib / soname).symlink_to(f"{stem}.so.{version}")
+            # The operator is the tester, who owns the directory the set is
+            # written in.
+            self.env.update(FIXTURE_COMMIT=self.CARRY_COMMIT, CARGO_EXECUTABLE="1", FIXTURE_UID=str(os.getuid()),
+                            LDD_RUNTIME=str(self.toolkit_lib), LDD_DRIVER="none", LDD_SYSTEM="/fixture-system")
+            self.env.update(env)
+            self.sets = self.root / "sets"
+            self.sets.mkdir(mode=0o755, exist_ok=True)
+            return self.bootstrap("--carry", str(self.sets / name))
+        finally:
+            self.env.clear()
+            self.env.update(saved)
+
+    def carry_refusal(self, said, built, name="set-1", **env):
+        """--carry refuses with SAID, after the build where BUILT, and leaves
+        neither its directory nor a directory it filled, and calls no sudo."""
+        self.log.unlink(missing_ok=True)
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        result = self.carry(name, **env)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(said, result.stderr)
+        self.assertEqual(bool([c for c in self.calls() if c[:2] == ["cargo", "build"]]), built, self.calls())
+        self.assertFalse([c for c in self.calls() if c[0] in ("sudo", "ldconfig")], self.calls())
+        self.assertEqual([p.name for p in self.sets.iterdir() if p.name.startswith(".carry-")], [])
+        return result
+
+    def test_carry_writes_the_set_its_manifest_and_the_builds_half_of_the_tuple(self):
+        """**--carry writes a carry set and installs nothing** (weaver-admin-PRD
+        section 7.2, deploy/bootstrap-stack.sh): the members, the shell, the
+        engine libraries and the four CUDA runtime files, each versioned
+        file beside its links, the deploy copy with every file
+        deploy/deployed-copy.txt names, `build-tuple`, and a manifest that
+        names every entry, sorted, whose sha256 is the run's last line. The
+        build half carries `build-os` and a `build-runtime.` digest of each
+        carried runtime file in place of the install tuple's `runtime.`
+        lines. No sudo and no ldconfig is called, and nothing of the box's
+        stack is written. Perturbations: drop the link rows from the manifest
+        and the links are unnamed; carry the runtime file without its link
+        and the set lacks the name the SPU links."""
+        result = self.carry()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        carried = self.sets / "set-1"
+        manifest = (carried / "MANIFEST").read_text()
+        self.assertEqual(result.stdout.splitlines()[-1], hashlib.sha256(manifest.encode()).hexdigest())
+        lines = manifest.splitlines()
+        self.assertEqual(lines[:2], ["# weaver carry set 1", f"# commit {self.CARRY_COMMIT}"])
+        rows = [line.split("\t") for line in lines[2:]]
+        paths = [row[3] for row in rows]
+        self.assertEqual(paths, sorted(paths, key=lambda p: p.encode()))
+        on_disk = sorted(str(p.relative_to(carried)) for p in carried.rglob("*")
+                         if not p.is_dir() or p.is_symlink())
+        self.assertEqual(sorted(paths), sorted(p for p in on_disk if p != "MANIFEST"))
+        for kind, value, mode, path in rows:
+            at = carried / path
+            if kind == "link":
+                self.assertTrue(at.is_symlink(), path)
+                self.assertEqual((os.readlink(at), mode), (value, "-"))
+            else:
+                self.assertEqual(kind, "file")
+                self.assertFalse(at.is_symlink(), path)
+                self.assertEqual(value, hashlib.sha256(at.read_bytes()).hexdigest(), path)
+                self.assertEqual(mode, f"{at.stat().st_mode & 0o7777:04o}", path)
+        members = ["worker", "weaver-admin", "weaver-trace-relay", "weaver-gate", "weaver-spu", "weaver-state"]
+        self.assertEqual(sorted(p.name for p in (carried / "bin").iterdir()),
+                         sorted(members + ["busybox", "busybox.applets"]))
+        self.assertEqual({r[2] for r in rows if r[3].startswith("bin/")},
+                         {"0755", "0644"})
+        self.assertEqual(next(r[2] for r in rows if r[3] == "bin/busybox.applets"), "0644")
+        lib = {p.name: (os.readlink(p) if p.is_symlink() else None) for p in (carried / "lib").iterdir()}
+        for soname, version in self.CARRY_RUNTIME:
+            stem = soname.rsplit(".so.", 1)[0]
+            self.assertEqual(lib[soname], f"{stem}.so.{version}")
+            self.assertIsNone(lib[f"{stem}.so.{version}"])
+        self.assertEqual(lib["libllama.so.0"], "libllama.so.0.0.1")
+        self.assertEqual(lib["libllama.so"], "libllama.so.0")
+        self.assertNotIn("libcuda.so.1", lib)
+        listed = [line for line in (DEPLOY / "deployed-copy.txt").read_text().splitlines()
+                  if line and not line.startswith("#")]
+        self.assertEqual(sorted(p.name for p in (carried / "deploy").iterdir()),
+                         sorted(listed + ["deployed-copy.txt"]))
+        tuple_lines = (carried / "build-tuple").read_text().splitlines()
+        keys = [line.split(" = ", 1)[0] for line in tuple_lines]
+        expected = [k for k in self.TUPLE_KEYS if not k.startswith("runtime.")]
+        expected.insert(expected.index("ccbin") + 1, "build-os")
+        expected[-1:-1] = ["build-runtime.cudart", "build-runtime.cublas", "build-runtime.cublaslt",
+                           "build-runtime.curand"]
+        self.assertEqual(keys, expected)
+        facts = dict(line.split(" = ", 1) for line in tuple_lines)
+        self.assertEqual(facts["commit"], self.CARRY_COMMIT)
+        self.assertEqual(facts["build-runtime.cudart"],
+                         hashlib.sha256((carried / "lib" / "libcudart.so.99.1.2").read_bytes()).hexdigest())
+        self.assertEqual(facts["member.weaver-spu"],
+                         hashlib.sha256((carried / "bin" / "weaver-spu").read_bytes()).hexdigest())
+        self.assertNotEqual(facts["build-os"], "")
+        self.assertFalse([c for c in self.calls() if c[0] in ("sudo", "ldconfig")], self.calls())
+        for absent in ("new-prefix", "new-stack", "new-admin", "new-agents"):
+            self.assertFalse((self.root / absent).exists(), absent)
+        self.assertEqual([p.name for p in self.sets.iterdir()], ["set-1"])
+        looked = [c for c in self.calls() if c[0] == "ldd-env"]
+        self.assertTrue(looked and looked[-1][1].endswith(f":{self.toolkit_lib}"), looked)
+
+    def test_carry_writes_a_set_on_a_build_box_with_no_card(self):
+        """**A build box needs no card** (the Planner's note of 2026-11-23):
+        where nvidia-smi answers its failure sentence and the driver's own
+        library resolves nowhere, --carry plans no driver and writes the
+        set, which carries no driver library. The operator names nothing
+        for the card: the toolkit is the nvcc on PATH and the host compiler
+        NVCC_CCBIN, as on any build. A library other than the driver's that
+        resolves nowhere still refuses. Perturbation: refuse every library
+        not found and the box with no driver refuses."""
+        result = self.carry(NO_NVIDIA="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("driver        none", result.stdout)
+        self.assertFalse(list((self.sets / "set-1" / "lib").glob("libcuda.so*")))
+        self.carry_refusal("libcublas.so.99 => not found", True, name="set-2",
+                           NO_NVIDIA="1", LDD_MISSING="libcublas.so.99")
+
+    def test_carry_refuses_a_tree_that_is_not_one_clean_commit(self):
+        """**A carry set names the one commit it was built from**: --carry
+        refuses a tree git lists changes in, a tree that is not a checkout,
+        and a commit git does not name in full, before the build. The plan
+        and --install keep marking a dirty tree. Perturbation: keep the
+        `-dirty` marking in carry mode and the dirty tree builds."""
+        self.carry_refusal("is not clean, and a carry set names the one commit", False,
+                           FIXTURE_STATUS=" M deploy/bootstrap-stack.sh\n")
+        self.carry_refusal("the tree is not a git checkout", False, FIXTURE_COMMIT="nogit")
+        self.carry_refusal("git names the commit as 'abcdef0'", False, FIXTURE_COMMIT="abcdef0")
+
+    def test_carry_refuses_a_directory_that_stands_or_a_parent_another_could_write(self):
+        """**A carry set is written whole into a directory that does not stand,
+        under one only the operator can write**, refused before the build: a
+        directory that stands (an earlier set), a parent that does not
+        stand, and a parent a group can write. Perturbation: drop the parent
+        check and the group-writable parent builds."""
+        self.sets = self.root / "sets"
+        self.sets.mkdir(mode=0o755)
+        (self.sets / "set-1").mkdir()
+        self.carry_refusal("already stands. A carry set is written whole", False)
+        self.carry_refusal("does not stand", False, name="missing/set-1")
+        self.sets.chmod(0o775)
+        try:
+            self.carry_refusal("is not a directory the operator owns that no group or other can write", False,
+                               name="set-2")
+        finally:
+            self.sets.chmod(0o755)
+
+    def test_carry_refuses_a_cuda_directory_that_is_not_the_toolkits_own(self):
+        """**A carry set carries the runtime files of the toolkit whose nvcc
+        builds the kernels**: an operator's CUDA_LIB_DIR naming another
+        directory refuses before the build rather than being passed over,
+        and one naming the toolkit's own is accepted. Perturbation: drop the
+        comparison and the other directory builds."""
+        self.carry_refusal("but a carry set carries the runtime files of the toolkit", False,
+                           CUDA_LIB_DIR=str(self.cuda_lib))
+        result = self.carry(name="set-2", CUDA_LIB_DIR=str(self.toolkit_lib))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_carry_judges_what_the_built_spu_resolves(self):
+        """**The built SPU resolves as the carried one will** (deploy/engine-
+        libraries.sh, `carry_resolved`), or --carry refuses after the build
+        and before it fills a directory: a runtime file outside the
+        toolkit's library directory, a library of the toolkit that is not
+        one of the four runtime files, a symbol version not found, and an
+        engine library outside the engine's output directory. Perturbations:
+        accept a runtime file from any directory, and the first case writes
+        a set; drop the toolkit rule, and the second does."""
+        nvrtc = self.toolkit_lib / "libnvrtc.so.99"
+        nvrtc.write_text("fixture nvrtc\n")
+        for env, said in (({"LDD_RUNTIME": str(self.cuda_lib)}, f"libcudart.so.99 => {self.cuda_lib}"),
+                          ({"LDD_EXTRA": f"\tlibnvrtc.so.99 => {nvrtc} (0x0000)"}, f"libnvrtc.so.99 => {nvrtc}"),
+                          ({"LDD_EXTRA": "./weaver-spu: /usr/lib64/libstdc++.so.6: version `GLIBCXX_3.4.99' "
+                                         "not found (required by ./weaver-spu)"}, "GLIBCXX_3.4.99"),
+                          ({"LDD_ELSEWHERE": str(self.lib_dir)}, f"libllama.so.0 => {self.lib_dir}")):
+            with self.subTest(said=said):
+                result = self.carry_refusal(said, True, **env)
+                self.assertIn("does not resolve as a carry set carries it", result.stderr)
+                self.assertFalse((self.sets / "set-1").exists())
+
+    def test_a_carry_that_fails_while_filling_leaves_nothing(self):
+        """**A carry set is a whole set or does not stand**: where the fill
+        fails after its directory is made (here, the deploy list names a
+        file that is not beside it), the directory it filled is removed and
+        DIR never stands. Perturbation: drop the exit trap and the filled
+        directory is left behind."""
+        with open(self.repo / "deploy" / "deployed-copy.txt", "a") as listed:
+            listed.write("no-such-script.sh\n")
+        self.carry_refusal("names 'no-such-script.sh', which is not a file beside it", True)
+        self.assertFalse((self.sets / "set-1").exists())
+
     def library_install(self, **env):
         """An --install on a box with no agent, the engine moved to build b,
         libggml's SONAME link at another target and libllama's bare link
@@ -10287,6 +10512,106 @@ class ProgramCheckTests(unittest.TestCase):
                 self.assertEqual([n for n, line in enumerate(text.splitlines(), 1) if pattern.search(line)], [])
 
 
+class CarrySetTests(unittest.TestCase):
+    """**The carry set's manifest and the build box's distribution**
+    (deploy/carry_set.py, deploy/install-tuple.sh `tuple_os`), judged apart
+    from a build."""
+
+    COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="weaver-carry-test-")
+        self.addCleanup(self.tmp.cleanup)
+        self.set = Path(self.tmp.name) / "set"
+        for d in ("bin", "lib", "deploy"):
+            (self.set / d).mkdir(parents=True)
+        (self.set / "bin" / "worker").write_text("worker\n")
+        (self.set / "bin" / "worker").chmod(0o755)
+        (self.set / "bin" / "Zed").write_text("upper case sorts first in C order\n")
+        (self.set / "bin" / "Zed").chmod(0o644)
+        (self.set / "lib" / "libllama.so.0.0.1").write_text("llama\n")
+        (self.set / "lib" / "libllama.so.0.0.1").chmod(0o755)
+        (self.set / "lib" / "libllama.so.0").symlink_to("libllama.so.0.0.1")
+        (self.set / "deploy" / "turn.py").write_text("turn\n")
+        (self.set / "deploy" / "turn.py").chmod(0o755)
+        (self.set / "build-tuple").write_text("commit = x\n")
+        (self.set / "build-tuple").chmod(0o644)
+
+    def write(self, commit=None):
+        return subprocess.run([sys.executable, str(DEPLOY / "carry_set.py"), "write", str(self.set),
+                               commit or self.COMMIT], text=True, capture_output=True, timeout=20)
+
+    def test_the_manifest_names_every_entry_sorted_by_path_in_c_order(self):
+        """Every file by sha256 and mode, every link by its target, after the
+        two header lines, sorted by path in C order. Perturbation: sort
+        without C order and `bin/Zed` follows `bin/worker`."""
+        result = self.write()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        digest = lambda p: hashlib.sha256((self.set / p).read_bytes()).hexdigest()
+        self.assertEqual((self.set / "MANIFEST").read_text().splitlines(), [
+            "# weaver carry set 1", f"# commit {self.COMMIT}",
+            f"file\t{digest('bin/Zed')}\t0644\tbin/Zed",
+            f"file\t{digest('bin/worker')}\t0755\tbin/worker",
+            f"file\t{digest('build-tuple')}\t0644\tbuild-tuple",
+            f"file\t{digest('deploy/turn.py')}\t0755\tdeploy/turn.py",
+            "link\tlibllama.so.0.0.1\t-\tlib/libllama.so.0",
+            f"file\t{digest('lib/libllama.so.0.0.1')}\t0755\tlib/libllama.so.0.0.1"])
+        self.assertEqual((self.set / "MANIFEST").stat().st_mode & 0o7777, 0o644)
+        self.assertNotEqual(self.write().returncode, 0, "a set holding a manifest is not written again")
+
+    def test_writing_refuses_what_a_reader_would_refuse(self):
+        """Each rule refuses, naming the entry, and writes no manifest: a
+        mode other than 0755 or 0644, a link to a path, a link to a name the
+        set lacks, an entry outside the three directories, a directory
+        inside one, a name with a blank, no build-tuple, and a commit that
+        is not 40 hex digits. Perturbation: drop any rule and its case
+        writes a manifest."""
+        cases = (
+            ("bin/worker has mode 0700", lambda: (self.set / "bin" / "worker").chmod(0o700)),
+            ("is a link to '../bin/worker'", lambda: (self.set / "lib" / "up").symlink_to("../bin/worker")),
+            ("which the set does not hold", lambda: (self.set / "lib" / "gone").symlink_to("libgone.so")),
+            ("extra is not build-tuple", lambda: (self.set / "extra").write_text("x")),
+            ("lib/sub is neither a file nor a link", lambda: (self.set / "lib" / "sub").mkdir()),
+            ("is not a name of printable ASCII", lambda: (self.set / "deploy" / "a b").write_text("x")),
+            ("the set holds no build-tuple", lambda: (self.set / "build-tuple").unlink()),
+        )
+        for said, damage in cases:
+            with self.subTest(said=said):
+                self.setUp()
+                damage()
+                result = self.write()
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertFalse((self.set / "MANIFEST").exists())
+        self.setUp()
+        result = self.write("ABCDEF0")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("is not 40 hex digits", result.stderr)
+
+    def test_the_build_os_is_read_from_os_release(self):
+        """**`build-os` is the distribution's ID and VERSION_ID** as
+        os-release(5) writes them, bare or quoted; ID alone for a rolling
+        release with no VERSION_ID; `unknown` where the file is absent or a
+        value is not of the format's characters. Perturbation: keep the
+        quotes and the quoted case reads them."""
+        root = Path(self.tmp.name)
+        for text, said in (('NAME="Fedora Linux"\nID=fedora\nVERSION_ID=45\n', "fedora 45"),
+                           ("ID='ubuntu'\nVERSION_ID=\"26.04\"\n", "ubuntu 26.04"),
+                           ("ID=arch\nBUILD_ID=rolling\n", "arch"),
+                           ("ID=Fedora\nVERSION_ID=45\n", "unknown"),
+                           ("ID=fedora\nVERSION_ID=4 5\n", "unknown"),
+                           (None, "unknown")):
+            with self.subTest(said=said, text=text):
+                release = root / "os-release"
+                release.unlink(missing_ok=True)
+                if text is not None:
+                    release.write_text(text)
+                result = subprocess.run(["bash", "-c", 'source "$1"; tuple_os "$2"', "-",
+                                         str(DEPLOY / "install-tuple.sh"), str(release)],
+                                        text=True, capture_output=True, timeout=20)
+                self.assertEqual(result.stdout, said + "\n", result.stderr)
+
+
 class DeployedCopyTests(unittest.TestCase):
     """**deploy/ states its deployed copy** (#607): deploy/deployed-copy.txt
     names the files a copy of deploy/ installed elsewhere needs, so a consumer
@@ -14196,8 +14521,10 @@ class BootstrapStandingTests(unittest.TestCase):
         start = script.index("standing() {")
         end = script.index('if standing "$PREFIX/bin"', start)
         body = 'die() { printf "REFUSED: %s\\n" "$*" >&2; exit 1; }\n'
-        body += f"STACK={shlex.quote(str(stack))}; ADMIN_BASE={shlex.quote(str(base))}\n"
-        body += script[start:end] + 'echo "passed"\n'
+        body += f"STACK={shlex.quote(str(stack))}; ADMIN_BASE={shlex.quote(str(base))}; CARRY=\n"
+        # The checks stand in the branch a run that writes no carry set takes,
+        # whose block the cut leaves open.
+        body += script[start:end] + 'fi\necho "passed"\n'
         return subprocess.run(["bash", "-c", body], capture_output=True, text=True)
 
     def test_an_unreadable_base_or_path_refuses(self):

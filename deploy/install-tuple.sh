@@ -24,11 +24,15 @@
 #   ccbin                 NVCC_CCBIN, the host compiler nvcc built the engine's
 #                         kernels with, as `<path> <its --version line>` (not
 #                         weaver-spu's own kernels', deploy/engine-libraries.sh)
+#   build-os              the build half alone (build_tuple below): the build
+#                         box's distribution, `<ID> <VERSION_ID>`
 #   member.<name>         sha256 of each installed member, in full
 #   library.<file>        sha256 of each installed engine library's versioned file
 #   runtime.<name>        each CUDA runtime file the installed SPU resolves, as
 #                         `<sha256> <path>`, the path the file the loader's name
 #                         leads to: cudart, cublas, cublaslt and curand
+#   build-runtime.<name>  the build half alone, in place of runtime.<name>: the
+#                         sha256 of the runtime file the carry set carries
 #   cccl                  the CCCL version the build compiled against, as
 #                         `<major>.<minor>.<patch>`, read from the CCCL header
 #                         nvcc reads first, by no package manager (cccl_read
@@ -61,12 +65,10 @@
 # names, and test_plans.py pins the two equal.
 TUPLE_RUNTIME="cudart cublas cublasLt curand"
 
-# install_tuple REPO COMMIT BIN_DIR LIB_DIR FEATURES "MEMBER..." "LIBRARY..."
-# COMMIT is the tree the script built from, read at its tree gate, never
-# again here: the checkout may move during a long build.
-install_tuple() {
-  local repo=$1 commit=$2 bin_dir=$3 lib_dir=$4 features=$5 members=$6 libraries=$7
-  local host metadata engine ldd_said m f name path n digest
+# tuple_head REPO COMMIT FEATURES: the build's facts, `commit` to `ccbin`,
+# the lines both halves of the tuple open with.
+tuple_head() {
+  local repo=$1 commit=$2 features=$3 host metadata engine path m n
   printf 'commit = %s\n' "$commit"
   printf 'toolchain = %s\n' "$(python3 -c 'import sys, tomllib
 try:
@@ -111,6 +113,12 @@ if len(found) == 1:
     [ -z "$m" ] || n="$NVCC_CCBIN $m"
   fi
   printf 'ccbin = %s\n' "$n"
+}
+
+# tuple_digests BIN_DIR LIB_DIR "MEMBER..." "LIBRARY...": the `member.` and
+# `library.` lines, each file's sha256 in full.
+tuple_digests() {
+  local bin_dir=$1 lib_dir=$2 members=$3 libraries=$4 m f n
   for m in $members; do
     n=$(sha256sum 2>/dev/null < "$bin_dir/$m" | cut -d' ' -f1)
     printf 'member.%s = %s\n' "$m" "${n:-unknown}"
@@ -119,6 +127,16 @@ if len(found) == 1:
     n=$(sha256sum 2>/dev/null < "$lib_dir/$f" | cut -d' ' -f1)
     printf 'library.%s = %s\n' "$f" "${n:-unknown}"
   done
+}
+
+# install_tuple REPO COMMIT BIN_DIR LIB_DIR FEATURES "MEMBER..." "LIBRARY..."
+# COMMIT is the tree the script built from, read at its tree gate, never
+# again here: the checkout may move during a long build.
+install_tuple() {
+  local repo=$1 commit=$2 bin_dir=$3 lib_dir=$4 features=$5 members=$6 libraries=$7
+  local ldd_said name path n digest
+  tuple_head "$repo" "$commit" "$features"
+  tuple_digests "$bin_dir" "$lib_dir" "$members" "$libraries"
   # What the installed SPU resolves: the first line naming each library in
   # ldd's order, as agent_tuple.py's resolved_as takes it, followed to the
   # file it names, whose versioned name carries the runtime's version, and
@@ -147,6 +165,66 @@ if len(found) == 1:
   done
   n=$(tuple_cccl)
   printf 'cccl = %s\n' "${n:-unknown}"
+}
+
+# build_tuple REPO COMMIT BIN_DIR LIB_DIR FEATURES "MEMBER..." "LIBRARY..." RESOLVED
+# **The build's half of the tuple, which a carry set carries** as
+# `build-tuple` (weaver-admin-PRD section 7.2): the install tuple's lines with
+# `build-os` after `ccbin` and, in place of each `runtime.` line, a
+# `build-runtime.<name> = <sha256>` line, the digest of the runtime file the
+# set carries in LIB_DIR. RESOLVED is carry_resolved's answer, one
+# `<library name><TAB><file>` line per runtime file the built SPU resolved
+# (deploy/engine-libraries.sh); the set carries each file under its own name.
+# The build box's paths are not recorded: a run box's install reads its own.
+build_tuple() {
+  local repo=$1 commit=$2 bin_dir=$3 lib_dir=$4 features=$5 members=$6 libraries=$7 resolved=$8
+  local name file n
+  tuple_head "$repo" "$commit" "$features"
+  printf 'build-os = %s\n' "$(tuple_os)"
+  tuple_digests "$bin_dir" "$lib_dir" "$members" "$libraries"
+  for name in $TUPLE_RUNTIME; do
+    file=$(printf '%s\n' "$resolved" | awk -F '\t' -v want="lib$name.so" '!seen && (index($1, want ".") == 1 || $1 == want) {seen = 1; print $2}')
+    n=""
+    [ -z "$file" ] || n=$(sha256sum 2>/dev/null < "$lib_dir/${file##*/}" | cut -d' ' -f1)
+    printf 'build-runtime.%s = %s\n' "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" "${n:-unknown}"
+  done
+  n=$(tuple_cccl)
+  printf 'cccl = %s\n' "${n:-unknown}"
+}
+
+# tuple_os [FILE]: the build box's distribution as `<ID> <VERSION_ID>`, or
+# `<ID>` alone where the release names no version (a rolling one), read from
+# FILE, else from os-release(5)'s two places in its order, or `unknown`. Each
+# value is read as the format writes it, bare or in one pair of quotes, and
+# must be the format's own characters: ID lowercase letters, digits, `.`,
+# `_` and `-`, VERSION_ID those with uppercase letters and `~` too.
+tuple_os() {
+  python3 -c 'import os, re, sys
+paths = sys.argv[1:] or ["/etc/os-release", "/usr/lib/os-release"]
+facts = {}
+for path in paths:
+    try:
+        text = open(path, encoding="utf-8").read()
+    except (OSError, UnicodeDecodeError):
+        continue
+    for line in text.splitlines():
+        m = re.fullmatch(r"([A-Z_][A-Z0-9_]*)=(.*)", line.strip())
+        if not m:
+            continue
+        value = m.group(2)
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"\x27":
+            value = value[1:-1]
+        facts.setdefault(m.group(1), value)
+    break
+os_id, version = facts.get("ID", ""), facts.get("VERSION_ID")
+if not re.fullmatch(r"[a-z0-9._-]+", os_id):
+    print("unknown")
+elif version is None:
+    print(os_id)
+elif re.fullmatch(r"[A-Za-z0-9._~-]+", version):
+    print(os_id, version)
+else:
+    print("unknown")' "$@"
 }
 
 # CCCL's version header, under an include directory.

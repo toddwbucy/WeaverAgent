@@ -427,6 +427,63 @@ The SPU is the Rust implementation. `create-agent.sh --spu /absolute/path/to/cus
 can still select a separately installed Rust binary for one agent. The Python zipapp
 and its installation procedure are retired.
 
+## 3a. Carrying a stack to another box
+
+On the operator's ruling of 2026-11-23 **the binaries are carried** (`weaver-admin-PRD`
+section 7.2): a build box writes a carry set, and a run box installs it with no compiler
+and no CUDA toolkit. On the build box, as the operator, never under sudo:
+
+```sh
+deploy/bootstrap-stack.sh --carry <dir>
+```
+
+It makes the checks of section 3 step 1 that concern the build (nvcc, the CCCL window,
+`NVCC_CCBIN`, the shell's tools) and none that concern this box's stack, which it
+neither reads nor writes, so a build box that runs an agent writes a set beside it. It
+refuses, before the build:
+
+- a tree that is not a clean git checkout, since a set names one commit;
+- a `<dir>` that stands, or whose parent is not a directory the operator owns that no
+  group or other can write;
+- a toolkit with no library directory for this host's target, and a `CUDA_LIB_DIR` that
+  names any other directory.
+
+**A build box needs no card.** Nothing in a set reads the hardware: both kernel builds
+compile for a fixed list of architectures, and the driver's own library, `libcuda`,
+which a box with no driver lacks, belongs to the run box and is never carried. The
+operator names the toolkit by the nvcc on `PATH` and the host compiler by `NVCC_CCBIN`,
+as for any build.
+
+It then tests and builds as section 3 steps 3 and 4 do, and reads the built SPU with
+the engine's output directory and the toolkit's library directory as its library path.
+It refuses unless every engine library resolves from the engine's output directory and
+each of the four CUDA runtime files from the toolkit's library directory, no library or
+symbol version is not found but the driver's, and no other library of the toolkit is
+named. It writes the set into a directory beside `<dir>` and renames it to `<dir>` once
+the set is whole, so `<dir>` is a whole set or does not stand:
+
+```text
+<dir>/
+  MANIFEST      one row per entry, sorted by path; its sha256 names the set
+  build-tuple   the build's half of the install tuple
+  bin/          the members, busybox and busybox.applets
+  lib/          the engine libraries, and libcudart, libcublas, libcublasLt and
+                libcurand, each versioned file beside its links
+  deploy/       every file deploy/deployed-copy.txt names, the list included
+```
+
+The manifest opens with `# weaver carry set 1` and `# commit <40 hex>`, and its rows
+are `file<TAB><sha256><TAB><0755|0644><TAB><path>` and
+`link<TAB><target><TAB>-<TAB><path>` (`deploy/carry_set.py`). `build-tuple` holds the lines of section 3 step 6, with
+`build-os = <ID> <VERSION_ID>` (from os-release) after `ccbin` and a
+`build-runtime.<name> = <sha256>` line for each carried runtime file in place of the
+`runtime.` lines. The run's last line is the manifest's sha256. Record it with the set:
+the install takes it as an argument.
+
+The four CUDA runtime files, libcudart, libcublas, libcublasLt and libcurand, are
+carried unmodified, as the toolkit installed them. The licence text that governs them
+ships with the operator's CUDA toolkit, and the operator reads it there.
+
 ## 4. Agents
 
 The per-agent procedure in full is `HowToDeployANewAgent.md`, and this is the summary.

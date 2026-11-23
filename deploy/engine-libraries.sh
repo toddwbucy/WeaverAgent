@@ -255,6 +255,81 @@ if not engine:
 sys.exit(1 if bad or not engine else 0)' "$1" "$2"
 }
 
+# carry_resolved REPORT ENGINE_DIR TOOLKIT_TOP TOOLKIT_LIB RUNTIME...: the
+# build box's judgement of what a carry set carries (weaver-admin-PRD section
+# 7.2). REPORT is spu_ldd's output for the built SPU with the engine's output
+# directory and the toolkit's library directory as the library path, from a
+# run that exited 0. Answers 0 and prints one `<library name><TAB><file>` line
+# per RUNTIME name (cudart, cublas, ...), the file the name leads to, only
+# where every rule holds:
+#
+#   - no library and no symbol version is not found, as engine_resolved
+#     reads them, save the driver's own library, `libcuda.so.<n>`, which the
+#     set never carries and which a build box with no driver lacks;
+#   - every engine library resolves to a file in ENGINE_DIR;
+#   - each RUNTIME library is named once and resolves to a file in
+#     TOOLKIT_LIB, the library directory of the toolkit whose nvcc built the
+#     kernels;
+#   - no other library resolves to a file under TOOLKIT_TOP: a new runtime
+#     dependency is a change to the carried list (TUPLE_RUNTIME,
+#     deploy/install-tuple.sh), never a file left behind on the build box.
+#
+# Otherwise answers 1 and prints each line that fails, or the rule a missing
+# name breaks.
+carry_resolved() {
+  python3 -c 'import os, re, sys
+report, engine_dir, top, toolkit_lib = sys.argv[1:5]
+runtime = sys.argv[5:]
+engine_dir, top, toolkit_lib = (os.path.realpath(p) for p in (engine_dir, top, toolkit_lib))
+resolved = re.compile(r"\s*(\S+)\s+=>\s+(.+)\s+\(0x[0-9a-fA-F]+\)\s*")
+version = re.compile(r":\s+version\s+[`\x27][^`\x27]*\x27\s+not found\s+\(required by\s")
+driver = re.compile(r"libcuda\.so(\.[0-9]+)*")
+def runtime_name(name):
+    for want in runtime:
+        stem = "lib" + want + ".so"
+        if name == stem or name.startswith(stem + "."):
+            return want
+    return None
+bad, engine, found = [], 0, {}
+for line in report.splitlines():
+    name = (line.split() or [""])[0]
+    if re.search(r"=>\s*not found\s*$", line):
+        if not driver.fullmatch(name):
+            bad.append(line.strip())
+        continue
+    if version.search(line):
+        bad.append(line.strip())
+        continue
+    m = resolved.fullmatch(line)
+    if re.match(r"lib(ggml|llama)", name):
+        engine += 1
+        if not m or os.path.dirname(os.path.realpath(m.group(2))) != engine_dir:
+            bad.append(line.strip())
+        continue
+    if not m:
+        continue
+    file = os.path.realpath(m.group(2))
+    want = runtime_name(name)
+    if want is not None:
+        if os.path.dirname(file) != toolkit_lib or want in found:
+            bad.append(line.strip())
+        else:
+            found[want] = (name, file)
+    elif file.startswith(top + os.sep):
+        bad.append(line.strip())
+for line in bad:
+    print(line)
+if not engine:
+    print("no engine library is named")
+missing = [w for w in runtime if w not in found]
+for want in missing:
+    print(f"lib{want}.so is not named")
+if bad or not engine or missing:
+    sys.exit(1)
+for want in runtime:
+    print("%s\t%s" % found[want])' "$@"
+}
+
 # loader_dir NAME DIR: refuses, through the sourcing script's `die` and
 # `held_closed`, unless DIR is one absolute path held closed by root. The
 # loader's entry bootstrap writes is searched by every program on the box,
