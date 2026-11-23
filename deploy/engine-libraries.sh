@@ -19,9 +19,11 @@ LDSO_CONF=/etc/ld.so.conf.d/weaver.conf
 # toolkit the build uses, never one distribution's path taken on trust.**
 # CUDA_LIB_DIR, where the operator sets it, is the CUDA directory the loader's
 # entry names; unset, `cuda_lib_dir` derives it from the toolkit the nvcc on
-# PATH belongs to. NVCC_CCBIN is the host compiler nvcc builds the kernels
-# with; unset, it is NVCC_CCBIN_DEFAULT, and `host_compiler` refuses either
-# where it is not an executable file on this box, before the long build.
+# PATH belongs to. NVCC_CCBIN is the host compiler nvcc builds the engine's
+# kernels with; unset, it is NVCC_CCBIN_DEFAULT, and `host_compiler` refuses
+# either where it names no executable file on this box, before the long
+# build. weaver-spu's own kernels are not among them: its build script hands
+# nvcc the C++ compiler the cc crate chose (`-ccbin`), which overrides it.
 NVCC_CCBIN_DEFAULT=/usr/bin/g++-15
 
 # toolkit_top: the CUDA toolkit the build's nvcc belongs to. The nvcc on PATH,
@@ -40,19 +42,45 @@ toolkit_top() {
   TOOLKIT_TOP=${path%/bin/nvcc}
 }
 
-# toolkit_lib_dir: the library directory of that toolkit, its one
-# `targets/<target>/lib`. Sets TOOLKIT_LIB and answers 0; else sets
-# TOOLKIT_WHY and answers 1.
-toolkit_lib_dir() {
-  local -a libs
-  TOOLKIT_LIB=""
+# toolkit_target: that toolkit's directory for this host's own target, the
+# one nvcc compiles for and reads its includes and libraries from:
+# `targets/x86_64-linux` on x86_64, and on aarch64 `targets/sbsa-linux`, else
+# `targets/aarch64-linux`. A toolkit may hold other targets beside it, as a
+# cross-compiling package lays them, and those are not read. Sets
+# TOOLKIT_TARGET and answers 0; else sets TOOLKIT_WHY and answers 1.
+toolkit_target() {
+  local machine target
+  local -a targets
+  TOOLKIT_TARGET=""
   toolkit_top || return 1
-  libs=("$TOOLKIT_TOP"/targets/*/lib)
-  if [ "${#libs[@]}" -ne 1 ] || [ ! -d "${libs[0]}" ]; then
-    TOOLKIT_WHY="the toolkit at $TOOLKIT_TOP holds no single targets/*/lib"
+  machine=$(uname -m 2>/dev/null) || machine=""
+  case $machine in
+    x86_64) targets=(x86_64-linux) ;;
+    aarch64) targets=(sbsa-linux aarch64-linux) ;;
+    *) TOOLKIT_WHY="this host's machine, ${machine:-unread}, names no CUDA target this script knows"
+       return 1 ;;
+  esac
+  for target in "${targets[@]}"; do
+    if [ -d "$TOOLKIT_TOP/targets/$target" ]; then
+      TOOLKIT_TARGET=$TOOLKIT_TOP/targets/$target
+      return 0
+    fi
+  done
+  TOOLKIT_WHY="the toolkit at $TOOLKIT_TOP holds no targets/${targets[0]} for this host"
+  return 1
+}
+
+# toolkit_lib_dir: the library directory of that toolkit for this host, its
+# target's `lib`. Sets TOOLKIT_LIB and answers 0; else sets TOOLKIT_WHY and
+# answers 1.
+toolkit_lib_dir() {
+  TOOLKIT_LIB=""
+  toolkit_target || return 1
+  if [ ! -d "$TOOLKIT_TARGET/lib" ]; then
+    TOOLKIT_WHY="the toolkit's target $TOOLKIT_TARGET holds no lib directory"
     return 1
   fi
-  TOOLKIT_LIB=${libs[0]}
+  TOOLKIT_LIB=$TOOLKIT_TARGET/lib
 }
 
 # cuda_lib_dir: sets CUDA_LIB_DIR, the CUDA directory the loader's entry names
@@ -66,13 +94,26 @@ cuda_lib_dir() {
   CUDA_LIB_DIR=$TOOLKIT_LIB
 }
 
+# printable_path VALUE: answers 0 where VALUE is printable ASCII throughout,
+# spaces included, the bytes the install tuple's reader admits.
+printable_path() {
+  [ -n "$1" ] && [ "$(printf '%s' "$1" | LC_ALL=C tr -cd '\40-\176')" = "$1" ]
+}
+
 # host_compiler: sets and exports NVCC_CCBIN, the operator's value or the
-# default, and refuses, through the sourcing script's `die`, unless it is an
-# executable file on this box.
+# default, a bare name resolved on PATH as nvcc resolves one, and refuses,
+# through the sourcing script's `die`, unless it is then the absolute path of
+# an executable file, in printable ASCII. nvcc also takes a directory there,
+# and this script does not: the install tuple names the compiler's file.
 host_compiler() {
-  NVCC_CCBIN=${NVCC_CCBIN:-$NVCC_CCBIN_DEFAULT}
-  [ -f "$NVCC_CCBIN" ] && [ -x "$NVCC_CCBIN" ] \
-    || die "NVCC_CCBIN names the host compiler nvcc builds the kernels with, and $NVCC_CCBIN is not an executable file on this box (the default, $NVCC_CCBIN_DEFAULT, is one distribution's path): set NVCC_CCBIN to a compiler this toolkit accepts"
+  local named=${NVCC_CCBIN:-$NVCC_CCBIN_DEFAULT} found
+  if [[ "$named" != */* ]]; then
+    found=$(command -v -- "$named" 2>/dev/null) || found=""
+    [[ "$found" != /* ]] || named=$found
+  fi
+  [[ "$named" == /* ]] && [ -f "$named" ] && [ -x "$named" ] && printable_path "$named" \
+    || die "NVCC_CCBIN names the host compiler nvcc builds the engine's kernels with, and $named is not an executable file on this box (the default, $NVCC_CCBIN_DEFAULT, is one distribution's path): set NVCC_CCBIN to the absolute path, or a name on PATH, of a compiler this toolkit accepts"
+  NVCC_CCBIN=$named
   export NVCC_CCBIN
 }
 

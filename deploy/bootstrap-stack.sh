@@ -39,9 +39,10 @@
 #   WEAVER_OPERATOR      $SUDO_USER or $USER    named in the plan; owns nothing this makes
 #   WEAVER_AGENT_DIR     /var/lib/weaver-agent  the base of each agent's folder (#578)
 #   CUDA_LIB_DIR         the toolkit's lib      joins the ld.so.conf.d entry; held closed by root;
-#                                               unset, the toolkit's one targets/*/lib beside nvcc
-#   NVCC_CCBIN           /usr/bin/g++-15        the host compiler nvcc builds the kernels with;
-#                                               refused before the build unless an executable file
+#                                               unset, the toolkit's lib for this host's target
+#   NVCC_CCBIN           /usr/bin/g++-15        the host compiler nvcc builds the engine's kernels
+#                                               with, a path or a name on PATH; refused before the
+#                                               build unless an executable file
 #   CARGO_TARGET_DIR     honoured; give the install its own, never a gate's
 #
 # The feature set and the member list are update-stack.sh's, stated again

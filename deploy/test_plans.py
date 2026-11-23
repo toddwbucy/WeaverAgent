@@ -1363,6 +1363,12 @@ SAMPLING = ('\n[spu-instruction.decoder.tunable-values]\ntemperature = 0.7\ntop-
             'top-p = 0.95\nrepetition-penalty = 1.1\nrepetition-window = 64\nseed = 11\n')
 
 
+# The CUDA target this host's nvcc compiles for, as deploy/engine-libraries.sh
+# names it (`toolkit_target`), and another a cross-compiling package lays
+# beside it, which is never read.
+HOST_TARGET = {"aarch64": "sbsa-linux"}.get(os.uname().machine, "x86_64-linux")
+OTHER_TARGET = "sbsa-linux" if HOST_TARGET == "x86_64-linux" else "x86_64-linux"
+
 # CCCL's version header as its tags v2.8.0 to v3.3.4 write it: one decimal
 # CCCL_VERSION, major times a million plus minor times a thousand plus patch,
 # and the other version macros derived from it.
@@ -1471,13 +1477,14 @@ class PlanTests(unittest.TestCase):
         # <root>/bin/nvcc, so the toolkit's top is the root, and its one
         # target holds the CCCL header the build reads, inside #397's window,
         # and a library directory.
-        self.toolkit_include = self.root / "targets" / "x86_64-linux" / "include"
+        self.toolkit_include = self.root / "targets" / HOST_TARGET / "include"
         self.cccl_header = self.toolkit_include / "cuda" / "std" / "__cccl" / "version.h"
         self.cccl_header.parent.mkdir(parents=True)
         self.cccl_header.write_text(CCCL_HEADER.format(version=3003004))
-        self.toolkit_lib = self.root / "targets" / "x86_64-linux" / "lib"
+        self.toolkit_lib = self.root / "targets" / HOST_TARGET / "lib"
         self.toolkit_lib.mkdir()
-        # The host compiler nvcc builds the kernels with, as NVCC_CCBIN names it.
+        # The host compiler nvcc builds the engine's kernels with, as
+        # NVCC_CCBIN names it.
         self.ccbin = self.root / "fixture-g++"
         self.ccbin.write_text("#!/bin/sh\nprintf 'g++ (Fixture) 99.1.0\\nCopyright fixture\\n'\n")
         self.ccbin.chmod(0o755)
@@ -5798,8 +5805,9 @@ esac
                 self.assertFalse([c for c in self.calls() if c[0] == "pacman"], self.calls())
             with self.subTest(script=script, case="no header"):
                 self.cccl_header.unlink()
-                self.build_refusal(script, "the CCCL version nvcc reads cannot be read: the toolkit at "
-                                           f"{self.root} holds no cuda/std/__cccl/version.h. The build's CCCL "
+                self.build_refusal(script, "the CCCL version nvcc reads cannot be read: the toolkit's target "
+                                           f"{self.root}/targets/{HOST_TARGET} holds no "
+                                           "cuda/std/__cccl/version.h. The build's CCCL "
                                            "window is unchecked, so nothing is built")
             for version, shown in ((3003005, "3.3.5"), (3001003, "3.1.3"), (4000000, "4.0.0")):
                 with self.subTest(script=script, case=shown):
@@ -5811,36 +5819,50 @@ esac
         """**NVCC_CCBIN is judged before the long build** (deploy/engine-libraries.sh,
         `host_compiler`): the operator's value, or unset the default, which is
         one distribution's path, refuses before cargo builds anything unless
-        it is an executable file; the value judged is the one the build is
-        handed. Perturbations: drop either script's `host_compiler` and the
-        refused cases build; hand the build the default again and the build
-        carries a compiler the check never judged."""
+        it is then the absolute path of an executable file in printable
+        ASCII, the bytes the install tuple's reader admits. A bare name is
+        resolved on PATH, as nvcc resolves one, and the build is handed the
+        path; nvcc's directory form is refused, since the tuple names a file.
+        Perturbations: drop either script's `host_compiler` and the refused
+        cases build; resolve no bare name and the name case refuses; drop the
+        ASCII check and the non-ASCII case builds."""
         plain = self.root / "plain-g++"
         plain.write_text("not a program\n")
         plain.chmod(0o644)
+        accented = self.root / "g++-\u00e9"
+        shutil.copy2(self.ccbin, accented)
         for script in ("update-stack.sh", "bootstrap-stack.sh"):
-            for value in (str(self.root / "no-such-g++"), str(plain), str(self.root)):
+            for value in (str(self.root / "no-such-g++"), str(plain), str(self.root), str(accented),
+                          "no-such-name-g++", "relative/g++"):
                 with self.subTest(script=script, value=value):
                     self.env["NVCC_CCBIN"] = value
-                    self.build_refusal(script, f"NVCC_CCBIN names the host compiler nvcc builds the kernels with, "
-                                               f"and {value} is not an executable file on this box")
-        self.env["NVCC_CCBIN"] = str(self.ccbin)
-        result = self.run_script("update-stack.sh")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(f"ccbin         {self.ccbin}", result.stdout)
-        build = [c for c in self.calls() if c[:2] == ["cargo", "build"]]
-        self.assertEqual(len(build), 1, self.calls())
+                    self.build_refusal(script, f"NVCC_CCBIN names the host compiler nvcc builds the engine's "
+                                               f"kernels with, and {value} is not an executable file on this box")
+        named = self.bin / "fixture-cxx"
+        shutil.copy2(self.ccbin, named)
+        for value, judged in ((str(self.ccbin), self.ccbin), ("fixture-cxx", named)):
+            with self.subTest(value=value):
+                self.env["NVCC_CCBIN"] = value
+                self.log.unlink(missing_ok=True)
+                shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"ccbin         {judged}\n", result.stdout)
+                build = [c for c in self.calls() if c[:2] == ["cargo", "build"]]
+                self.assertEqual(len(build), 1, self.calls())
 
     def test_an_unset_cuda_directory_is_the_toolkits_own_or_the_plan_refuses(self):
         """**An unset CUDA_LIB_DIR is the library directory of the toolkit the
         build's nvcc belongs to** (deploy/engine-libraries.sh, `cuda_lib_dir`),
-        never one distribution's path: the toolkit's one `targets/*/lib`
-        joins the loader's entry, judged as a set value is. Where the toolkit
-        names no single one, the plan refuses before any sudo and says to set
-        it. Bootstrap, which always writes the entry, says so too.
-        Perturbations: put back the /opt/cuda/lib64 default and the derived
-        case names it; take the first of two targets and the two-target case
-        plans an entry."""
+        never one distribution's path: the `lib` of this host's own target
+        joins the loader's entry, judged as a set value is, and another
+        target beside it, as a cross-compiling package lays one, is not read.
+        Where the host's target holds no `lib`, or the toolkit holds no target
+        for this host, both scripts refuse before the build and before any
+        sudo and say to set it. Perturbations: put back the /opt/cuda/lib64
+        default and the derived case names it; take the first target in name
+        order and the other target's lib is planned; derive it after
+        update-stack's build and its refusals build first."""
         self.env.pop("CUDA_LIB_DIR")
         self.ldso_conf.unlink()
         result = self.run_script("update-stack.sh")
@@ -5849,25 +5871,33 @@ esac
         shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
         result = self.bootstrap_once()
         self.assertIn(f"cuda lib dir  {self.toolkit_lib}", result.stdout)
-        said = (f"CUDA_LIB_DIR is unset and the toolkit at {self.root} holds no single targets/*/lib, so the "
-                "CUDA directory the loader's entry names is unknown: set CUDA_LIB_DIR")
-        other = self.root / "targets" / "sbsa-linux" / "lib"
+        other = self.root / "targets" / OTHER_TARGET / "lib"
         other.mkdir(parents=True)
-        with self.subTest(script="bootstrap-stack.sh", case="two targets"):
-            self.build_refusal("bootstrap-stack.sh", said)
-        with self.subTest(script="update-stack.sh", case="two targets"):
-            # update-stack judges the entry where its plan reaches it, after
-            # the build, as it judges a set value.
+        # Named so it sorts ahead of the host's in either order.
+        early = self.root / "targets" / "aaa-linux" / "lib"
+        early.mkdir(parents=True)
+        with self.subTest(case="other targets beside the host's"):
             self.log.unlink(missing_ok=True)
             shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
             result = self.run_script("update-stack.sh")
-            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-            self.assertIn(said, result.stderr)
-            self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
-        shutil.rmtree(other.parent)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(f"NEW      {self.lib_dir} and {self.toolkit_lib}, then ldconfig", result.stdout)
         self.toolkit_lib.rmdir()
-        with self.subTest(case="no lib"):
-            self.build_refusal("bootstrap-stack.sh", said)
+        no_lib = (f"CUDA_LIB_DIR is unset and the toolkit's target {self.root}/targets/{HOST_TARGET} holds no lib "
+                  "directory, so the CUDA directory the loader's entry names is unknown: set CUDA_LIB_DIR")
+        no_target = (f"CUDA_LIB_DIR is unset and the toolkit at {self.root} holds no targets/{HOST_TARGET} for "
+                     "this host, so the CUDA directory the loader's entry names is unknown: set CUDA_LIB_DIR")
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script, case="no lib"):
+                self.build_refusal(script, no_lib)
+        host = self.root / "targets" / HOST_TARGET
+        host.rename(self.root / "targets" / "moved-linux")
+        # The CCCL header named ahead, so the CCCL read passes and the CUDA
+        # directory is the question.
+        self.env["NVCC_PREPEND_FLAGS"] = f"-I{self.root / 'targets' / 'moved-linux' / 'include'}"
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script, case="no target for this host"):
+                self.build_refusal(script, no_target)
 
     def test_bootstrap_plans_a_build_on_a_box_with_no_card(self):
         """**A build box needs no card** (the Planner's ruling of 2026-11-23):
@@ -6103,9 +6133,10 @@ esac
         box with no card, where nvidia-smi answers its failure sentence. The
         sentence is never a fact, since the tuple reads no hardware.
         No host compiler named reads `unknown` too, and so does one that is
-        not an executable file. Perturbation: print nothing for an
+        not an executable file or whose path is not printable ASCII, which
+        the reader would refuse. Perturbation: print nothing for an
         unanswered fact and the keys differ; read NVCC_CCBIN unchecked and
-        the second case prints its path."""
+        the later cases print its path."""
         self.env["NO_NVIDIA"] = "1"
         self.env.pop("NVCC_CCBIN")
         empty = self.root / "empty-repo"
@@ -6130,14 +6161,18 @@ esac
         self.assertEqual(facts["engine"], "llama-cpp-sys-2 unknown")
         self.assertEqual(facts["commit"], "fixture-commit", "the commit is the caller's, never read again")
         self.assertNotIn("NVIDIA-SMI", ran.stdout)
-        ran = subprocess.run(["bash", "-c", script], env={**env, "NVCC_CCBIN": str(self.root / "no-such-g++")},
-                             text=True, capture_output=True, timeout=20)
-        self.assertEqual(ran.returncode, 0, ran.stderr)
-        self.assertIn("ccbin = unknown\n", ran.stdout)
+        accented = self.root / "g++-\u00e9"
+        shutil.copy2(self.ccbin, accented)
+        for value in (str(self.root / "no-such-g++"), str(accented)):
+            with self.subTest(ccbin=value):
+                ran = subprocess.run(["bash", "-c", script], env={**env, "NVCC_CCBIN": value},
+                                     text=True, capture_output=True, timeout=20)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertIn("ccbin = unknown\n", ran.stdout)
 
     def toolkits(self):
         """Lay out two CUDA toolkits as NVIDIA's repository installs them, each
-        release's CCCL under `targets/x86_64-linux/include/cccl`, each
+        release's CCCL under `targets/<host target>/include/cccl`, each
         `include` a link to its target's, and `cuda` a link to the newer,
         whose nvcc is the one on PATH. The older carries CCCL 3.2.1 and the
         newer 3.3.4. Answers the CCCL directory of each release, by release."""
@@ -6145,11 +6180,11 @@ esac
         cccl = {}
         for release, version in (("99.3", 3002001), ("99.4", 3003004)):
             top = local / f"cuda-{release}"
-            include = top / "targets" / "x86_64-linux" / "include"
+            include = top / "targets" / HOST_TARGET / "include"
             (include / "cccl" / "cuda" / "std" / "__cccl").mkdir(parents=True)
             (include / "cccl" / "cuda" / "std" / "__cccl" / "version.h").write_text(
                 CCCL_HEADER.format(version=version))
-            (top / "include").symlink_to("targets/x86_64-linux/include")
+            (top / "include").symlink_to(f"targets/{HOST_TARGET}/include")
             cccl[release] = include / "cccl"
         (local / "cuda-99.4" / "bin").mkdir()
         nvcc = local / "cuda-99.4" / "bin" / "nvcc"
@@ -6169,7 +6204,7 @@ esac
         if not bin_dir.exists():
             bin_dir.mkdir()
             for tool in ("bash", "python3", "sed", "grep", "awk", "cut", "sha256sum", "tr", "readlink",
-                         "dirname", "env", "sort", "head"):
+                         "dirname", "env", "sort", "head", "uname"):
                 (bin_dir / tool).symlink_to(shutil.which(tool))
             for name, body in (("cargo", "#!/bin/sh\nexit 101\n"), ("git", "#!/bin/sh\nexit 128\n"),
                                ("ldd", "#!/bin/sh\nexit 1\n")):
@@ -6240,6 +6275,15 @@ esac
             facts = self.toolkit_tuple()
             self.assertEqual(facts["cccl"], "3.3.4")
             self.assertNotIn("why", facts)
+        with self.subTest(case="another target beside the host's"):
+            # A cross-compiling package's target, holding its own CCCL and
+            # sorting ahead of the host's, is not read.
+            for target in (OTHER_TARGET, "aaa-linux"):
+                other = self.root / "usr-local" / "cuda-99.4" / "targets" / target / "include" / "cccl"
+                (other / "cuda" / "std" / "__cccl").mkdir(parents=True)
+                (other / "cuda" / "std" / "__cccl" / "version.h").write_text(CCCL_HEADER.format(version=3001004))
+            facts = self.toolkit_tuple()
+            self.assertEqual(facts["cccl"], "3.3.4")
         with self.subTest(case="an include directory appended that holds no CCCL"):
             facts = self.toolkit_tuple(NVCC_APPEND_FLAGS=f"-I{bare}")
             self.assertEqual(facts["cccl"], "3.3.4")
@@ -6256,13 +6300,14 @@ esac
         include form the reader does not rank (a system include, options for
         the host compiler, an options file, a pre-included header, a quote),
         an SPU build include that holds a CCCL of its own (the engine's
-        compile does not read it), a toolkit of two targets, a header whose
-        CCCL_VERSION is not one decimal number or is defined twice, and no
-        nvcc at all. Perturbations: skip relative directories, drop the
-        appended flags' read, rank no other include form, rank an options
-        file or a pre-included header as no flag, drop the build include's
-        check, take the first target, take any CCCL_VERSION value or the
-        first of two, and that case reads a version."""
+        compile does not read it), a toolkit with no target for this host, a
+        header whose CCCL_VERSION is not one decimal number or is defined
+        twice, and no nvcc at all. Perturbations: skip relative directories,
+        drop the appended flags' read, rank no other include form, rank an
+        options file or a pre-included header as no flag, drop the build
+        include's check, read whatever target sorts first, take any
+        CCCL_VERSION value or the first of two, and that case reads a
+        version."""
         cccl = self.toolkits()
         header = str((cccl["99.3"] / "cuda/std/__cccl/version.h").resolve())
         # A CUDA 12 layout, its CCCL directly under include.
@@ -6313,14 +6358,13 @@ esac
                 facts = self.toolkit_tuple(**env)
                 self.assertEqual(facts["cccl"], "unknown")
                 self.assertIn(why, facts["why"])
-        with self.subTest(case="two targets"):
-            # The other target holds its own CCCL and sorts first.
-            other = self.root / "usr-local" / "cuda-99.4" / "targets" / "sbsa-linux" / "include" / "cccl"
-            (other / "cuda" / "std" / "__cccl").mkdir(parents=True)
-            (other / "cuda" / "std" / "__cccl" / "version.h").write_text(CCCL_HEADER.format(version=3001004))
+        with self.subTest(case="no target for this host"):
+            targets = self.root / "usr-local" / "cuda-99.4" / "targets"
+            (targets / HOST_TARGET).rename(targets / "moved-linux")
             facts = self.toolkit_tuple()
+            (targets / "moved-linux").rename(targets / HOST_TARGET)
             self.assertEqual(facts["cccl"], "unknown")
-            self.assertIn("holds no single targets/*/include", facts["why"])
+            self.assertIn(f"holds no targets/{HOST_TARGET} for this host", facts["why"])
         with self.subTest(case="no nvcc"):
             facts = self.toolkit_tuple(PATH=str(self.root / "toolkit-bin"))
             self.assertEqual(facts["cccl"], "unknown")

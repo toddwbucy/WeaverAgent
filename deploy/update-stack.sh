@@ -811,6 +811,11 @@ cccl_in_window "$CCCL_READ" || die "cccl $CCCL_READ is outside the 3.1.4-3.3.4 w
 # (deploy/engine-libraries.sh, `host_compiler`).
 host_compiler
 printf '  ccbin         %s\n' "$NVCC_CCBIN"
+# Where the loader's entry would be written, an unset CUDA_LIB_DIR is derived
+# here, before the build, so a toolkit that names none refuses now.
+if [ ! -e "$LDSO_CONF" ] && [ ! -L "$LDSO_CONF" ]; then
+  cuda_lib_dir
+fi
 
 # **What the agents elect is checked against what the build will carry**, on
 # the review of 2026-09-13 and for the reason the cccl gate above gives: a

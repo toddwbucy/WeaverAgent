@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Sourced by bootstrap-stack.sh and update-stack.sh, never by an agent, after
-# deploy/engine-libraries.sh, whose spu_ldd and toolkit_top it calls.
+# deploy/engine-libraries.sh, whose spu_ldd, toolkit_target and printable_path
+# it calls.
 #
 # **The install tuple: the box-side half of the deployment tuple**, stated
 # after an install so every live run's report can cite one record of what
@@ -20,8 +21,9 @@
 #   engine-source         its lock source, the fork and the commit it names
 #   engine-vendored       the llama.cpp commit that fork commit vendors
 #   nvcc                  the CUDA compiler release that built the kernels
-#   ccbin                 the host compiler nvcc built them with, NVCC_CCBIN,
-#                         as `<path> <its --version line>`
+#   ccbin                 NVCC_CCBIN, the host compiler nvcc built the engine's
+#                         kernels with, as `<path> <its --version line>` (not
+#                         weaver-spu's own kernels', deploy/engine-libraries.sh)
 #   member.<name>         sha256 of each installed member, in full
 #   library.<file>        sha256 of each installed engine library's versioned file
 #   runtime.<name>        each CUDA runtime file the installed SPU resolves, as
@@ -103,7 +105,7 @@ if len(found) == 1:
   # is ASCII and its reader refuses any other byte.
   n=unknown
   if [ -n "${NVCC_CCBIN:-}" ] && [ -f "$NVCC_CCBIN" ] && [ -x "$NVCC_CCBIN" ] &&
-    [[ "$NVCC_CCBIN" != *$'\n'* ]]; then
+    printable_path "$NVCC_CCBIN"; then
     m=$(LC_ALL=C "$NVCC_CCBIN" --version 2>/dev/null </dev/null || true)
     m=$(printf '%s\n' "$m" | sed -n 1p | LC_ALL=C tr -cd '\40-\176')
     [ -z "$m" ] || n="$NVCC_CCBIN $m"
@@ -205,8 +207,8 @@ tuple_first_header() {
 # NVCC_APPEND_FLAGS, then its toolkit's `targets/<target>/include` and that
 # directory's `cccl`, the second as a system include (its nvcc.profile). So
 # the header is the first an include directory of NVCC_PREPEND_FLAGS holds.
-# Else it is the toolkit's, beside the nvcc on PATH (`toolkit_top`,
-# deploy/engine-libraries.sh). Of the compiles' own flags, weaver-spu's build
+# Else it is the toolkit's, beside the nvcc on PATH, under this host's own
+# target (`toolkit_target`, deploy/engine-libraries.sh). Of the compiles' own flags, weaver-spu's build
 # script adds `$CUDA_PATH/include` (else `$CUDA_ROOT`, else /usr/local/cuda),
 # and a header there that is not the toolkit's file is a CCCL the engine's
 # compile does not read, so the version is not read past it. The engine's own
@@ -222,8 +224,7 @@ tuple_first_header() {
 # answers 1. Called in the caller's shell, never in a substitution, so what
 # it sets stays set.
 cccl_read() {
-  local prepend append header built top value rc=0
-  local -a targets
+  local prepend append header built include value rc=0
   CCCL_READ="" CCCL_HEADER="" CCCL_WHY=""
   if ! prepend=$(tuple_include_dirs "${NVCC_PREPEND_FLAGS:-}"); then
     CCCL_WHY="NVCC_PREPEND_FLAGS hold an include form this script does not rank"
@@ -247,15 +248,14 @@ cccl_read() {
       2) CCCL_WHY="a relative include directory stands in NVCC_APPEND_FLAGS"
          return 1 ;;
     esac
-    toolkit_top || { CCCL_WHY=$TOOLKIT_WHY; return 1; }
-    top=$TOOLKIT_TOP
-    targets=("$top"/targets/*/include)
-    if [ "${#targets[@]}" -ne 1 ] || [ ! -d "${targets[0]}" ]; then
-      CCCL_WHY="the toolkit at $top holds no single targets/*/include"
+    toolkit_target || { CCCL_WHY=$TOOLKIT_WHY; return 1; }
+    include=$TOOLKIT_TARGET/include
+    if [ ! -d "$include" ]; then
+      CCCL_WHY="the toolkit's target $TOOLKIT_TARGET holds no include directory"
       return 1
     fi
-    header=$(tuple_first_header "${targets[0]}"$'\n'"${targets[0]}/cccl") || {
-      CCCL_WHY="the toolkit at $top holds no $TUPLE_CCCL_HEADER"
+    header=$(tuple_first_header "$include"$'\n'"$include/cccl") || {
+      CCCL_WHY="the toolkit's target $TOOLKIT_TARGET holds no $TUPLE_CCCL_HEADER"
       return 1
     }
     built=${CUDA_PATH:-${CUDA_ROOT:-/usr/local/cuda}}/include

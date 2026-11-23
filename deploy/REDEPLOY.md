@@ -331,8 +331,9 @@ deploy/bootstrap-stack.sh --install    # then install under sudo
 What it does, so the log can say which step a failure was at:
 
 1. Prints the box facts and refuses if there is no `nvcc`, if the CCCL version nvcc
-   reads cannot be read or lies outside the 3.1.4-3.3.4 window, if `NVCC_CCBIN` is not
-   an executable file, if the stack record `/etc/weaver/stack` or `<prefix>/bin`
+   reads cannot be read or lies outside the 3.1.4-3.3.4 window, if `NVCC_CCBIN` (an
+   absolute path or a name on `PATH`, never nvcc's directory form) names no executable
+   file, if the stack record `/etc/weaver/stack` or `<prefix>/bin`
    already stands, or if `/etc/weaver/admin` holds anything. It refuses too where the
    shell's build lacks a tool (`build-busybox.sh --preflight`: tar with bzip2, make, a C
    compiler that links statically, python3, and curl unless `BUSYBOX_TARBALL` names
@@ -404,7 +405,7 @@ What it does, so the log can say which step a failure was at:
    engine-source = git+<fork url>?rev=<40 hex>#<40 hex>
    engine-vendored = <40 hex>
    nvcc = <release>, V<version>
-   ccbin = <path> <its --version line>   (NVCC_CCBIN, the host compiler)
+   ccbin = <path> <its --version line>   (NVCC_CCBIN, the engine kernels' host compiler)
    member.<name> = <64 hex>              (one per installed member, the shell's two files among them)
    library.<versioned file> = <64 hex>   (one per engine library)
    runtime.cudart = <64 hex> <file>      (and cublas, cublaslt, curand)
