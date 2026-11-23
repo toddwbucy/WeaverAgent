@@ -1219,7 +1219,11 @@ elif name == 'sudo':
     elif op == 'install':
         target = pathlib.Path(mapped(rest[-1]))
         assert target.is_relative_to(root), target
-        if '-d' in rest: privileged([target], lambda: target.mkdir(parents=True, exist_ok=True))
+        if '-d' in rest:
+            # Every directory named, as install makes each.
+            made = [pathlib.Path(mapped(a)) for a in rest if a.startswith('/')]
+            assert all(d.is_relative_to(root) for d in made), made
+            privileged(made, lambda: [d.mkdir(parents=True, exist_ok=True) for d in made])
         else:
             # A file installed from a source is a new file holding its bytes,
             # as `install` unlinks the name first.
@@ -1228,7 +1232,13 @@ elif name == 'sudo':
                 if source.is_relative_to(root) and source.is_file():
                     if target.exists() or target.is_symlink(): target.unlink()
                     shutil.copyfile(source, target)
+                    # CARRY_SWAP names a file whose copy root's install
+                    # writes other bytes, as a file changed under the copy.
+                    if os.environ.get('CARRY_SWAP') and target.name == os.environ['CARRY_SWAP']:
+                        target.write_text('swapped under the copy\n')
                 else: target.touch()
+                # The mode `-m` names, as install sets it.
+                if '-m' in rest: target.chmod(int(rest[rest.index('-m') + 1], 8))
             privileged([target], place)
     elif op == 'mv':
         source, destination = (pathlib.Path(mapped(a)) for a in rest[-2:])
@@ -1253,10 +1263,26 @@ elif name == 'sudo':
         # of admin fails the fixture.
         assert rest[0].endswith('/weaver-admin'), ('admin wrapped', rest)
         sys.exit(subprocess.run([os.environ['FIXTURE_ADMIN'], *rest[1:]]).returncode)
+    elif op == 'rm' and '-rf' in rest:
+        # A recursive removal of what stands under the fixture, each target
+        # its own (install-carry.sh's undo).
+        targets = [pathlib.Path(mapped(a)) for a in rest[rest.index('--') + 1:]]
+        assert targets and all(t.is_relative_to(root) and t != root for t in targets), targets
+        def remove():
+            for t in targets:
+                if t.is_dir() and not t.is_symlink(): shutil.rmtree(t)
+                elif t.exists() or t.is_symlink(): t.unlink()
+        privileged(targets, remove)
     elif op == 'rm':
         target = pathlib.Path(mapped(rest[-1]))
         assert target.is_relative_to(root), target
         privileged([target], lambda: target.unlink(missing_ok=True))
+    elif op == 'python3' and rest[:1] and rest[0].endswith('/carry_set.py'):
+        # The set's own check run as root (install-carry.sh), on files under
+        # the fixture.
+        paths = [pathlib.Path(a) for a in rest if a.startswith('/')]
+        assert all(p.is_relative_to(root) for p in paths), paths
+        sys.exit(privileged(paths, lambda: subprocess.run([sys.executable, *rest]).returncode))
     elif op == '-l':
         print('User ' + rest[-1] + ' may run the following commands on fixture-box:')
         for rule in sorted((root / 'etc' / 'sudoers.d').glob('weaver-*')):
@@ -6234,6 +6260,185 @@ esac
         self.carry_refusal("names 'no-such-script.sh', which is not a file beside it", True)
         self.assertFalse((self.sets / "set-1").exists())
 
+    def install_carry(self, carried, sha, *args, **env):
+        """<set>/deploy/install-carry.sh on a run box with no stack: its
+        prefix, record, admin base and agent directory named under the
+        fixture and absent, the image's programs its program directory, the
+        driver's library its own, and the SPU resolving its engine and
+        runtime from the placed library directory. The environment is left
+        as it was found."""
+        saved = dict(self.env)
+        try:
+            self.run_bin = self.run_bins(skip=())
+            self.run_prefix = self.root / "run-prefix"
+            self.run_stack = self.root / "run-stack"
+            self.env.update(ALLOW_APPLY_CHECKS="1", WEAVER_PREFIX=str(self.run_prefix),
+                            WEAVER_STACK_RECORD=str(self.run_stack), WEAVER_ADMIN_CONFIG=str(self.root / "run-admin"),
+                            WEAVER_AGENT_DIR=str(self.root / "run-agents"), WEAVER_PROGRAM_DIRS=str(self.run_bin),
+                            LDD_RUNTIME=str(self.run_prefix / "lib"), LDD_DRIVER=str(self.root / "run-driver"),
+                            LDD_SYSTEM="/fixture-system")
+            self.env.update(env)
+            return subprocess.run(["bash", str(carried / "deploy" / "install-carry.sh"), str(carried), sha, *args],
+                                  env=self.env, text=True, capture_output=True, timeout=60)
+        finally:
+            self.env.clear()
+            self.env.update(saved)
+
+    def run_bins(self, skip):
+        """A run box's program directory: an executable stand-in for each
+        name deploy/image-programs.txt lists, those in SKIP left out."""
+        made = self.root / ("run-bin-" + "-".join(skip) if skip else "run-bin")
+        if not made.exists():
+            made.mkdir()
+            for name in program_check().read_names(DEPLOY / "image-programs.txt"):
+                if name not in skip:
+                    (made / name).write_text("#!/bin/sh\nexit 99\n")
+                    (made / name).chmod(0o755)
+        return made
+
+    def carried(self):
+        """A carry set written in this fixture, and its manifest's sha256."""
+        result = self.carry()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return self.sets / "set-1", result.stdout.splitlines()[-1]
+
+    def test_install_carry_places_the_set_and_writes_the_record_and_the_whole_tuple(self):
+        """**A carry set installs on a box with no compiler** (weaver-admin-PRD
+        section 7.2, deploy/install-carry.sh): the plan checks the set and
+        places nothing; the install places every entry from root's checked
+        copy, writes the stack record with `library-path` the stack's library
+        directory, and writes the install tuple whole: the build half as
+        carried, each runtime file as the placed SPU resolves it, and
+        `carry = <manifest sha256>`, which agent_tuple.py reads. No loader
+        entry is written and ldconfig is never called, and root's copy is
+        removed. Perturbations: copy the tuple's member lines unread and a
+        placed file swapped after the check is not caught (the unit test);
+        leave out the carry line and update-stack.sh no longer knows the box."""
+        carried, sha = self.carried()
+        loader = self.ldso_conf.read_text()
+        self.log.unlink(missing_ok=True)
+        result = self.install_carry(carried, sha)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("plan only. rerun with --install", result.stdout)
+        self.assertIn(f"commit        {self.CARRY_COMMIT}", result.stdout)
+        self.assertFalse((self.root / "run-prefix").exists())
+        self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
+        result = self.install_carry(carried, sha, "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"installed carry set {sha[:12]} at {self.CARRY_COMMIT}", result.stdout)
+        for row in (carried / "MANIFEST").read_text().splitlines()[2:]:
+            kind, value, mode, path = row.split("\t")
+            if path == "build-tuple":
+                continue
+            placed = self.run_prefix / path
+            if kind == "link":
+                self.assertEqual(os.readlink(placed), value, path)
+            else:
+                self.assertEqual(hashlib.sha256(placed.read_bytes()).hexdigest(), value, path)
+        self.assertEqual((self.run_stack / "library-path").read_text(), f"{self.run_prefix / 'lib'}\n")
+        self.assertEqual((self.run_stack / "spu-binary").read_text(), f"{self.run_prefix / 'bin' / 'weaver-spu'}\n")
+        record = (self.run_stack / "install-tuple").read_text()
+        build = (carried / "build-tuple").read_text()
+        self.assertTrue(record.startswith(build), record)
+        tail = record[len(build):].splitlines()
+        cudart = (self.run_prefix / "lib" / "libcudart.so.99.1.2")
+        self.assertEqual(tail, [
+            f"runtime.cudart = {hashlib.sha256(cudart.read_bytes()).hexdigest()} {cudart}",
+            *[line for line in tail if line.startswith(("runtime.cublas ", "runtime.cublaslt ", "runtime.curand "))],
+            f"carry = {sha}"])
+        self.assertEqual(len(tail), 5, tail)
+        install = _agent_tuple().read_install_tuple(self.run_stack / "install-tuple")
+        self.assertEqual(install["facts"]["carry"], sha)
+        self.assertEqual(sorted(install["build_runtime"]), ["cublas", "cublaslt", "cudart", "curand"])
+        self.assertFalse([c for c in self.calls() if "ldconfig" in c], self.calls())
+        self.assertEqual(self.ldso_conf.read_text(), loader)
+        self.assertEqual([p.name for p in self.run_prefix.iterdir() if p.name.startswith(".carry-")], [])
+
+    def test_install_carry_refuses_another_set_before_anything_is_placed(self):
+        """**The manifest's sha256 names the set**: a digest that is not the
+        manifest's, and a set whose file differs from its manifest row,
+        each refuse at the plan, before any sudo. Perturbation: skip the
+        digest comparison and the other digest plans."""
+        carried, sha = self.carried()
+        self.log.unlink(missing_ok=True)
+        result = self.install_carry(carried, "0" * 64, "--install")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"not the {'0' * 64} named, so this is not that set", result.stderr)
+        (carried / "deploy" / "turn.py").write_text("changed after the set was written\n")
+        result = self.install_carry(carried, sha, "--install")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("deploy/turn.py is not as the manifest names it", result.stderr)
+        self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
+        self.assertFalse(self.run_prefix.exists())
+
+    def test_install_carry_judges_roots_copy_not_the_operators(self):
+        """**Digests are judged in the copy root holds**: a file that differs
+        in root's copy (a file changed under the copy) refuses after the
+        operator's copy passed, places nothing, and removes root's copy.
+        Perturbation: check the operator's set instead of root's copy and
+        the swapped file installs."""
+        carried, sha = self.carried()
+        result = self.install_carry(carried, sha, "--install", CARRY_SWAP="turn.py")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("root's copy of the set is not the set", result.stderr)
+        self.assertIn("deploy/turn.py is not as the manifest names it", result.stderr)
+        self.assertFalse((self.run_prefix / "bin").exists())
+        self.assertEqual([p.name for p in self.run_prefix.iterdir()], [])
+        self.assertFalse(self.run_stack.exists())
+
+    def test_install_carry_refuses_a_runtime_or_driver_that_does_not_resolve_as_carried(self):
+        """**The placed SPU resolves as the set carries it, or the install
+        refuses and removes what it placed**: a runtime file resolved from
+        outside the stack's library directory, and the driver's own library
+        not found, which a run box must have. Perturbations: compare
+        runtime paths with no directory rule and the first case installs;
+        skip the undo and the prefix keeps the placed files."""
+        carried, sha = self.carried()
+        for env, said in (({"LDD_RUNTIME": str(self.cuda_lib)}, f"resolves to {self.cuda_lib}"),
+                          ({"LDD_DRIVER": "none"}, "libcuda.so.1 => not found")):
+            with self.subTest(said=said):
+                result = self.install_carry(carried, sha, "--install", **env)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("does not resolve as the set carries it", result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertIn("what was placed is removed", result.stderr)
+                self.assertEqual([p.name for p in self.run_prefix.iterdir()], [])
+                self.assertFalse(self.run_stack.exists())
+
+    def test_install_carry_judges_the_deploy_copy_against_this_boxs_programs(self):
+        """**The deploy copy calls only programs the run box carries**
+        (#610): a program directory lacking one the copy calls refuses and
+        removes what was placed. Perturbation: judge against
+        deploy/image-programs.txt and the missing program passes."""
+        carried, sha = self.carried()
+        short = self.run_bins(skip=("useradd",))
+        result = self.install_carry(carried, sha, "--install", WEAVER_PROGRAM_DIRS=str(short))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("useradd: called here, and not a program the image carries", result.stdout)
+        self.assertIn("calls a program this box does not carry", result.stderr)
+        self.assertEqual([p.name for p in self.run_prefix.iterdir()], [])
+
+    def test_a_carried_box_takes_a_newer_set_only_after_decommission(self):
+        """**A second set on a box that holds one** is refused by
+        install-carry.sh, and update-stack.sh refuses the carried box, each
+        naming decommission.sh, what it costs, and then the install.
+        Perturbations: drop either refusal and its run proceeds."""
+        carried, sha = self.carried()
+        result = self.install_carry(carried, sha, "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        cost = "decommission.sh, which archives and removes every agent on the box and the stack"
+        result = self.install_carry(carried, sha)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("already stands, so this box holds a stack", result.stderr)
+        self.assertIn(cost, result.stderr)
+        self.log.unlink(missing_ok=True)
+        self.env["WEAVER_STACK_RECORD"] = str(self.run_stack)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"installed from the carry set {sha}", result.stderr)
+        self.assertIn(cost, result.stderr)
+        self.assertFalse([c for c in self.calls() if c[:2] == ["cargo", "build"]], self.calls())
+
     def library_install(self, **env):
         """An --install on a box with no agent, the engine moved to build b,
         libggml's SONAME link at another target and libllama's bare link
@@ -9813,7 +10018,8 @@ class ProgramCheckTests(unittest.TestCase):
                "decommission.sh": [f"as_op {h}", f"as_op sh -c '{h}'"],
                "verify-load.sh": [f"as_account nobody {h}"],
                "account-drop.sh": [f"as_account nobody {h}"],
-               "retired-python.sh": [f"root {h}"]}
+               "retired-python.sh": [f"root {h}"],
+               "install-carry.sh": []}
         with tempfile.TemporaryDirectory() as scratch:
             copy, names = self.copied(Path(scratch))
             shells = [n for n in names if n.endswith(".sh")]
@@ -10682,6 +10888,92 @@ class CarrySetTests(unittest.TestCase):
         result = self.write("ABCDEF0")
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("is not 40 hex digits", result.stderr)
+
+    def test_a_set_is_checked_against_the_manifest_its_digest_names(self):
+        """**`check` refuses a set that is not the one the digest names**: a
+        manifest of another digest, and a set with a file added, a file
+        missing, a file changed, a mode changed or a link retargeted, each
+        naming the entry. The set as written passes and prints its commit.
+        Perturbation: compare the paths alone and the changed file passes."""
+        self.assertEqual(self.write().returncode, 0)
+        sha = hashlib.sha256((self.set / "MANIFEST").read_bytes()).hexdigest()
+        result = self.run_set("check", str(self.set), sha)
+        self.assertEqual((result.returncode, result.stdout), (0, self.COMMIT + "\n"), result.stderr)
+        result = self.run_set("check", str(self.set), "1" * 64)
+        self.assertIn("not the " + "1" * 64 + " named", result.stderr)
+        damages = (
+            ("bin/extra is in the set and the manifest does not name it",
+             lambda: (self.set / "bin" / "extra").write_text("x")),
+            ("deploy/turn.py is named by the manifest and the set does not hold it",
+             lambda: (self.set / "deploy" / "turn.py").unlink()),
+            ("bin/worker is not as the manifest names it", lambda: (self.set / "bin" / "worker").write_text("y")),
+            ("bin/Zed is not as the manifest names it", lambda: (self.set / "bin" / "Zed").chmod(0o755)),
+            ("lib/libllama.so.0 is not as the manifest names it",
+             lambda: ((self.set / "lib" / "libllama.so.0").unlink(),
+                      (self.set / "lib" / "libllama.so.0").symlink_to("libllama.so.0.0.1x"),
+                      (self.set / "lib" / "libllama.so.0.0.1x").write_text("x"))),
+        )
+        for said, damage in damages:
+            with self.subTest(said=said):
+                self.setUp()
+                self.assertEqual(self.write().returncode, 0)
+                sha = hashlib.sha256((self.set / "MANIFEST").read_bytes()).hexdigest()
+                damage()
+                result = self.run_set("check", str(self.set), sha)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(said, result.stderr)
+
+    def test_the_install_tuple_binds_the_placed_stack_to_the_set(self):
+        """**`tuple` judges the placed stack against the set**: each placed
+        file equal to its row, the build half's member digests equal to the
+        rows, and each runtime file the build half names resolving in the
+        stack's library directory with the build's sha256. It prints the
+        build half, the runtime lines and the carry line. Perturbations:
+        skip the placed files' check and a swapped placed file passes; drop
+        the runtime digest comparison and a runtime file of other bytes
+        passes."""
+        cudart = self.set / "lib" / "libcudart.so.13.0.1"
+        cudart.write_text("cudart\n")
+        cudart.chmod(0o755)
+        (self.set / "lib" / "libcudart.so.13").symlink_to("libcudart.so.13.0.1")
+        digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+        build = (f"commit = {self.COMMIT}\nmember.worker = {digest(self.set / 'bin' / 'worker')}\n"
+                 f"build-runtime.cudart = {digest(cudart)}\n")
+        (self.set / "build-tuple").write_text(build)
+        self.assertEqual(self.write().returncode, 0)
+        sha = digest(self.set / "MANIFEST")
+        prefix = Path(self.tmp.name) / "prefix"
+        for d in ("bin", "lib", "deploy"):
+            shutil.copytree(self.set / d, prefix / d, symlinks=True)
+        lib = prefix / "lib"
+        report = (f"\tlibllama.so.0 => {lib}/libllama.so.0 (0x0000)\n"
+                  f"\tlibcudart.so.13 => {lib}/libcudart.so.13 (0x0000)\n"
+                  "\tlibcuda.so.1 => /fixture-driver/libcuda.so.1 (0x0000)\n")
+        result = self.run_set("tuple", str(self.set), str(prefix), report, sha)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, build + f"runtime.cudart = {digest(cudart)} {lib / 'libcudart.so.13.0.1'}\n"
+                                               f"carry = {sha}\n")
+        cases = (
+            ("is not the file the manifest names", lambda: (prefix / "bin" / "worker").write_text("swapped\n"),
+             report),
+            ("whose sha256", lambda: ((lib / "libcudart.so.13.9").write_text("other\n"),),
+             report.replace("libcudart.so.13 (", "libcudart.so.13.9 (")),
+            ("libcuda.so.1 => not found", lambda: None,
+             report.replace("/fixture-driver/libcuda.so.1 (0x0000)", "not found")),
+        )
+        for said, damage, told in cases:
+            with self.subTest(said=said):
+                shutil.rmtree(prefix)
+                for d in ("bin", "lib", "deploy"):
+                    shutil.copytree(self.set / d, prefix / d, symlinks=True)
+                damage()
+                result = self.run_set("tuple", str(self.set), str(prefix), told, sha)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(said, result.stderr)
+
+    def run_set(self, *args):
+        return subprocess.run([sys.executable, str(DEPLOY / "carry_set.py"), *args],
+                              text=True, capture_output=True, timeout=20)
 
     def test_the_build_os_is_read_from_os_release(self):
         """**`build-os` is the distribution's ID and VERSION_ID** as
@@ -16616,6 +16908,39 @@ class AgentTupleInstallTests(unittest.TestCase):
         link.symlink_to(self.write(INSTALL_TUPLE_LINES))
         with self.assertRaises(OSError):
             self.tuple.read_install_tuple(link)
+
+    def test_a_carried_tuple_binds_each_runtime_file_to_the_builds_digest_as_well(self):
+        """**A carried install binds each runtime file to the build's digest
+        as well** (deploy/install-carry.sh): a tuple carrying
+        `build-runtime.<key>` lines reads them; a runtime file equal to the
+        install's record and to the build's digest is recorded, and one equal
+        to the record but not the build's is a FAULT. A key this reader does
+        not know, or a digest that is not 64 hex digits, is refused. A tuple
+        without the lines binds as before. Perturbation: ignore the build
+        digest and the FAULT case reads recorded."""
+        keys = {key for key, _ in self.tuple.RUNTIME_LIBRARIES}
+        build = {key: value.split()[0] for key, value in self.runtime.items() if key in keys}
+        carried = INSTALL_TUPLE_LINES + [f"build-runtime.{k} = {v}" for k, v in build.items()] + ["carry = " + "e" * 64]
+        install = self.tuple.read_install_tuple(self.write(carried))
+        self.assertEqual(install["build_runtime"], build)
+        resolved = self.tuple.loader_resolved(self.ldd)
+        rows = self.tuple.runtime_rows(install, resolved, None)
+        self.assertEqual(self.statuses(rows, "runtime "), {"recorded"})
+        self.assertTrue(all("and the build's" in row for row in rows), rows)
+        other = INSTALL_TUPLE_LINES + [f"build-runtime.{k} = {'0' * 64 if k == 'cublas' else v}"
+                                       for k, v in build.items()]
+        rows = self.tuple.runtime_rows(self.tuple.read_install_tuple(self.write(other)), resolved, None)
+        mine, = [row for row in rows if "runtime cublas " in row]
+        self.assertIn("[FAULT:", mine)
+        self.assertIn(f"is not the build's {'0' * 64}", mine)
+        self.assertEqual(self.statuses([r for r in rows if r is not mine], "runtime "), {"recorded"})
+        plain = self.tuple.read_install_tuple(self.write(INSTALL_TUPLE_LINES))
+        self.assertEqual(plain["build_runtime"], {})
+        for line, said in (("build-runtime.libcuda = " + "1" * 64, "is not a runtime file this reader knows"),
+                           ("build-runtime.cudart = not-hex", "is not 64 hex digits")):
+            with self.subTest(line=line):
+                with self.assertRaisesRegex(self.tuple.InstallTupleRefused, said):
+                    self.tuple.read_install_tuple(self.write(INSTALL_TUPLE_LINES + [line]))
 
     def test_the_runtime_files_bind_to_what_the_loader_resolves_now(self):
         """**Each runtime file the install recorded is bound to the file the

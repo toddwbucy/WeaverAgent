@@ -490,6 +490,54 @@ The four CUDA runtime files, libcudart, libcublas, libcublasLt and libcurand, ar
 carried unmodified, as the toolkit installed them. The licence text that governs them
 ships with the operator's CUDA toolkit, and the operator reads it there.
 
+### Installing a carry set
+
+On the run box, as the operator, with sudo for the install step, from the set itself:
+
+```sh
+<set>/deploy/install-carry.sh <set> <manifest sha256>            # plan: checks, no sudo
+<set>/deploy/install-carry.sh <set> <manifest sha256> --install  # then install under sudo
+```
+
+It needs no compiler and no CUDA toolkit, only python3 and ldd. Like
+`bootstrap-stack.sh`, it refuses where a stack record stands, the admin base holds
+anything, `<prefix>/bin`, `<prefix>/lib` or `<prefix>/deploy` stands, or a place it
+makes is not held closed by root. It refuses a set whose manifest's sha256 is not the
+one named, and a set that holds any entry other than exactly those its manifest names.
+This script runs from the set it checks, so it answers for the set only as far as the
+operator trusts the digest given to it. The install then:
+
+1. copies the set into a directory that root makes closed under the prefix, and checks
+   that copy again, so what root places is what root checked;
+2. places `bin/`, `lib/` and `deploy/` under the prefix as root, with the manifest's
+   modes;
+3. reads the placed SPU with `<prefix>/lib` alone as its library path, and refuses
+   unless every library and symbol version resolves, the driver's own `libcuda`
+   included, the engine and each runtime file resolve from `<prefix>/lib`, and each
+   runtime file's sha256 equals the build's `build-runtime.` digest;
+4. judges the deploy copy against the programs in `WEAVER_PROGRAM_DIRS` (by default
+   `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin`);
+5. writes the stack record as section 3 step 6 does, and the install tuple: the build
+   half as carried, a `runtime.` line for each runtime file as it resolves here, and
+   `carry = <manifest sha256>`.
+
+On any refusal after step 2, it removes what it placed.
+
+**There is no loader entry and no ldconfig.** The runtime files are in `<prefix>/lib`
+beside the engine libraries. The stack record names `library-path = <prefix>/lib`,
+`create-agent.sh` copies that key into each agent's root, and admin gives it to the
+agent's processes as their library path (`weaver-admin-Spec` section 6). An agent root
+made by hand without `library-path` fails when its SPU is executed.
+
+On a carried box, the deploy scripts are run from `<prefix>/deploy/`
+(`HowToDeployANewAgent.md` section 1).
+
+**A newer set on a box that holds one.** `install-carry.sh` is a first install only,
+and `update-stack.sh` refuses a box whose install tuple names a carry set. To put a
+newer set on such a box, run `decommission.sh` (section 1), which archives and removes
+every agent on the box and the stack, and then install the new set. The agents are made
+again with `create-agent.sh` after the install.
+
 ## 4. Agents
 
 The per-agent procedure in full is `HowToDeployANewAgent.md`, and this is the summary.
