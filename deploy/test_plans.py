@@ -1049,6 +1049,8 @@ elif name == 'git':
     # scripts read it, through `git -C <tree>`; "nogit" for a tree that is
     # not a checkout. FIXTURE_STATUS is what `git status` lists.
     commit = os.environ.get('FIXTURE_COMMIT')
+    # A tree the build moved (MOVE_TREE) reads as another commit after it.
+    if commit and (root / 'tree-moved').exists(): commit = 'f' * 40
     if commit and args[:1] == ['-C']:
         if commit == 'nogit': sys.exit(128)
         args = args[2:]
@@ -1098,6 +1100,7 @@ elif name == 'cargo':
             print('fixture build refusal', file=sys.stderr)
             sys.exit(42)
         target.joinpath('release').mkdir(parents=True)
+        if os.environ.get('MOVE_TREE'): (root / 'tree-moved').touch()
         for member in ('worker', 'weaver-admin', 'weaver-trace-relay', 'weaver-gate', 'weaver-spu', 'weaver-state'):
             target.joinpath('release', member).write_text('fixture artifact ' + member)
             # CARGO_EXECUTABLE stands for a build whose members are programs,
@@ -6094,6 +6097,9 @@ esac
         try:
             self.carry_refusal("is not a directory the operator owns that no group or other can write", False,
                                name="set-2")
+            (self.sets / "mine").mkdir(mode=0o755)
+            self.carry_refusal(f"{self.sets}, above where the carry set would be written, is a directory another "
+                               "principal could rename a name in", False, name="mine/set-3")
         finally:
             self.sets.chmod(0o755)
 
@@ -6128,6 +6134,72 @@ esac
                 result = self.carry_refusal(said, True, **env)
                 self.assertIn("does not resolve as a carry set carries it", result.stderr)
                 self.assertFalse((self.sets / "set-1").exists())
+
+    def test_carry_reads_nothing_of_a_stack_this_box_holds(self):
+        """**A build box that runs an agent writes a set beside its stack**:
+        --carry makes none of the box's standing checks, so a standing stack
+        record, admin base and install do not refuse it, and it writes
+        nothing of them. Perturbation: run the standing checks in carry
+        mode and the standing record refuses."""
+        self.assertTrue(any(self.stack.iterdir()))
+        self.assertEqual(self.env["WEAVER_STACK_RECORD"], str(self.stack))
+        before = sorted(p.name for p in self.stack.iterdir())
+        result = self.carry_standing("set-2")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.sets / "set-2" / "MANIFEST").is_file())
+        self.assertEqual(sorted(p.name for p in self.stack.iterdir()), before)
+        self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
+
+    def carry_standing(self, name):
+        """--carry as `carry` runs it, with the fixture's stack record and
+        admin base, which stand."""
+        bootstrap, self.bootstrap = self.bootstrap, lambda *a: self.run_script("bootstrap-stack.sh", *a)
+        try:
+            return self.carry(name=name)
+        finally:
+            self.bootstrap = bootstrap
+
+    def test_carry_names_a_relative_directory_from_where_it_ran(self):
+        """**A relative DIR is the caller's**: the script works from the
+        repository, and a relative DIR once named a directory inside it.
+        Perturbation: resolve DIR after the script's own `cd` and the set
+        lands in the repository."""
+        self.carry(name="set-0")
+        shutil.rmtree(self.sets / "set-0")
+        saved = dict(self.env)
+        try:
+            self.env.update(FIXTURE_COMMIT=self.CARRY_COMMIT, CARGO_EXECUTABLE="1", FIXTURE_UID=str(os.getuid()),
+                            LDD_RUNTIME=str(self.toolkit_lib), LDD_DRIVER="none", LDD_SYSTEM="/fixture-system",
+                            WEAVER_STACK_RECORD=str(self.root / "new-stack"),
+                            WEAVER_ADMIN_CONFIG=str(self.root / "new-admin"),
+                            WEAVER_PREFIX=str(self.root / "new-prefix"), WEAVER_AGENT_DIR=str(self.root / "new-agents"))
+            self.env.pop("CUDA_LIB_DIR", None)
+            shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+            result = subprocess.run(["bash", str(self.repo / "deploy" / "bootstrap-stack.sh"), "--carry", "set-1"],
+                                    env=self.env, text=True, capture_output=True, timeout=60, cwd=self.sets)
+        finally:
+            self.env.clear()
+            self.env.update(saved)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.sets / "set-1" / "MANIFEST").is_file())
+        self.assertFalse((self.repo / "set-1").exists())
+
+    def test_carry_refuses_a_tree_the_build_moved(self):
+        """**The set carries the commit it names**: where HEAD reads another
+        commit after the build (a checkout during it), --carry refuses
+        before it fills a directory. Perturbation: drop the second read and
+        the set is written under the first commit."""
+        self.carry_refusal("the tree moved during the build", True, MOVE_TREE="1")
+        self.assertFalse((self.sets / "set-1").exists())
+
+    def test_carry_refuses_a_library_of_the_engines_directory_it_does_not_carry(self):
+        """**Every library the SPU takes from the engine's directory is
+        carried**: one the engine's names do not match (llama.cpp's libmtmd,
+        say) refuses, since the set would leave it behind. Perturbation:
+        pass a non-engine name from the engine's directory and the set is
+        written without it."""
+        out = self.root / 'target with "quotes"' / "release" / "build" / "llama-cpp-sys-2-fixture" / "out" / "lib"
+        self.carry_refusal(f"libmtmd.so.0 => {out}", True, LDD_EXTRA=f"\tlibmtmd.so.0 => {out}/libmtmd.so.0 (0x0000)")
 
     def test_a_carry_that_fails_while_filling_leaves_nothing(self):
         """**A carry set is a whole set or does not stand**: where the fill
@@ -10574,6 +10646,7 @@ class CarrySetTests(unittest.TestCase):
             ("lib/sub is neither a file nor a link", lambda: (self.set / "lib" / "sub").mkdir()),
             ("is not a name of printable ASCII", lambda: (self.set / "deploy" / "a b").write_text("x")),
             ("the set holds no build-tuple", lambda: (self.set / "build-tuple").unlink()),
+            ("the set holds no deploy directory", lambda: shutil.rmtree(self.set / "deploy")),
         )
         for said, damage in cases:
             with self.subTest(said=said):
@@ -10600,6 +10673,7 @@ class CarrySetTests(unittest.TestCase):
                            ("ID=arch\nBUILD_ID=rolling\n", "arch"),
                            ("ID=Fedora\nVERSION_ID=45\n", "unknown"),
                            ("ID=fedora\nVERSION_ID=4 5\n", "unknown"),
+                           ("ID=fedora\nVERSION_ID=44\nVERSION_ID=45\n", "fedora 45"),
                            (None, "unknown")):
             with self.subTest(said=said, text=text):
                 release = root / "os-release"

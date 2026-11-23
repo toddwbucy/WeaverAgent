@@ -72,6 +72,8 @@ say()  { printf '\n== %s\n' "$*"; }
 plan() { printf '   %s\n' "$*"; }
 die()  { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 
+# The directory the operator ran from, which a relative --carry DIR names.
+CALLER=$PWD
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 source "$REPO/deploy/retired-python.sh"
@@ -90,7 +92,8 @@ case "${1:-}" in
   --install) INSTALL=1 ;;
   --carry)
     [ $# -eq 2 ] && [ -n "$2" ] || die "--carry takes one argument, the directory the carry set is written to"
-    CARRY=$2 ;;
+    CARRY=$2
+    [[ "$CARRY" == /* ]] || CARRY=$CALLER/$CARRY ;;
   *) die "unknown argument $1" ;;
 esac
 
@@ -206,19 +209,33 @@ standing() { # standing PATH: 0 stands, 1 absent, refuses where it cannot tell
 # **A carry set is written whole into a directory that does not stand, under
 # one only the operator can write**, so no other principal can change a file
 # between its digest and the manifest, and a set is never written over
-# another. The runtime files it carries are the toolkit's own, the toolkit
-# whose nvcc builds the kernels: an operator's CUDA_LIB_DIR naming another
-# directory refuses rather than being silently passed over.
+# another. Every directory above that one is the operator's or root's and
+# writable by no group or other unless sticky, as admin's rule reads a path
+# (`held_closed`), so no other principal can rename it away mid-fill. The
+# runtime files it carries are the toolkit's own, the toolkit whose nvcc
+# builds the kernels: an operator's CUDA_LIB_DIR naming another directory
+# refuses rather than being silently passed over.
 carry_checks() {
-  local owner mode
+  local owner mode at me
   if standing "$CARRY"; then
     die "$CARRY already stands. A carry set is written whole into a directory that does not stand yet: name a new one"
   fi
-  CARRY_PARENT=$(dirname -- "$CARRY")
+  me=$(id -u)
+  CARRY_PARENT=$(realpath -e -- "$(dirname -- "$CARRY")" 2>/dev/null) \
+    || die "$(dirname -- "$CARRY"), where the carry set would be written, does not stand"
+  CARRY=$CARRY_PARENT/$(basename -- "$CARRY")
   read -r owner mode < <(stat -L -c '%u %a' -- "$CARRY_PARENT" 2>/dev/null) \
-    || die "$CARRY_PARENT, where the carry set would be written, does not stand"
-  { [ -d "$CARRY_PARENT" ] && [ "$owner" = "$(id -u)" ] && ! (( 8#$mode & 8#022 )); } \
+    || die "cannot read $CARRY_PARENT, where the carry set would be written"
+  { [ -d "$CARRY_PARENT" ] && [ "$owner" = "$me" ] && ! (( 8#$mode & 8#022 )); } \
     || die "$CARRY_PARENT is not a directory the operator owns that no group or other can write, so another principal could change the carry set while it is written"
+  at=$CARRY_PARENT
+  while [ "$at" != / ]; do
+    at=$(dirname -- "$at")
+    read -r owner mode < <(stat -L -c '%u %a' -- "$at" 2>/dev/null) || die "cannot read $at, above where the carry set would be written"
+    if { [ "$owner" != 0 ] && [ "$owner" != "$me" ]; } || { (( 8#$mode & 8#022 )) && ! (( 8#$mode & 8#1000 )); }; then
+      die "$at, above where the carry set would be written, is a directory another principal could rename a name in, so the set could be swapped while it is written"
+    fi
+  done
   toolkit_lib_dir || die "$TOOLKIT_WHY, so the CUDA runtime files a carry set carries cannot be read"
   if [ -n "${CUDA_LIB_DIR:-}" ] &&
     [ "$(realpath -e -- "$CUDA_LIB_DIR" 2>/dev/null)" != "$(realpath -e -- "$TOOLKIT_LIB")" ]; then
@@ -471,7 +488,14 @@ plan "libraries     $(printf '%s ' "${LIBS[@]##*/}")"
 # its own name with its mode set, 0755, or 0644 for the applet list and any
 # deploy file not executable here; a link as a link.
 write_carry() {
-  local rc=0 ldd_said resolved staging line name file target deployed
+  local rc=0 ldd_said resolved staging line name file target deployed now status
+  # **The tree is the commit the set names**, read again after the long
+  # build: the deploy copy and the build half are read from the checkout,
+  # which a checkout or an edit during the build would move.
+  now=$(git -C "$REPO" rev-parse HEAD 2>/dev/null) || now=""
+  status=$(git -C "$REPO" status --porcelain=v1 --untracked-files=all 2>/dev/null) || status="unreadable"
+  { [ "$now" = "$COMMIT" ] && [ -z "$status" ]; } \
+    || die "the tree moved during the build (HEAD reads '${now:-unread}', or git status lists changes), so a set written now would carry files of another commit than $COMMIT; nothing is written"
   [[ "$SYS_OUT" != *:* ]] || die "the engine's output directory $SYS_OUT holds a colon, so no library path can name it"
   ldd_said=$(spu_ldd "$BUILT/weaver-spu" "$SYS_OUT:$TOOLKIT_LIB") || rc=$?
   [ "$rc" -eq 0 ] || { printf '%s\n' "$ldd_said" >&2; die "ldd could not read the built weaver-spu (it exited $rc)"; }
@@ -509,7 +533,11 @@ write_carry() {
   CARRY_SHA=$(sha256sum <"$staging/MANIFEST" | cut -d' ' -f1)
   chmod 0755 -- "$staging"
   standing "$CARRY" && die "$CARRY came to stand while the set was written; the set is not written"
-  mv -T -- "$staging" "$CARRY" || die "the filled set could not be renamed to $CARRY"
+  # No-clobber, so a directory that came to stand since is never replaced
+  # (rename(2) replaces an empty one); the filled directory still standing
+  # means the rename did not happen.
+  mv -T -n -- "$staging" "$CARRY" || true
+  [ ! -e "$staging" ] || die "the filled set could not be renamed to $CARRY, which may have come to stand while it was written; the set is not written"
   trap - EXIT
   plan "written to $CARRY: $(wc -l <"$CARRY/MANIFEST") manifest lines"
   say "carry set written. Its manifest's sha256, which names it:"

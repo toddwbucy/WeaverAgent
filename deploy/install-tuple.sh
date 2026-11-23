@@ -175,7 +175,9 @@ install_tuple() {
 # set carries in LIB_DIR. RESOLVED is carry_resolved's answer, one
 # `<library name><TAB><file>` line per runtime file the built SPU resolved
 # (deploy/engine-libraries.sh); the set carries each file under its own name.
-# The build box's paths are not recorded: a run box's install reads its own.
+# The runtime files' paths on the build box are not recorded: a run box's
+# install reads its own. (`ccbin` names the build box's host compiler by its
+# path, as every install tuple does.)
 build_tuple() {
   local repo=$1 commit=$2 bin_dir=$3 lib_dir=$4 features=$5 members=$6 libraries=$7 resolved=$8
   local name file n
@@ -197,7 +199,8 @@ build_tuple() {
 # FILE, else from os-release(5)'s two places in its order, or `unknown`. Each
 # value is read as the format writes it, bare or in one pair of quotes, and
 # must be the format's own characters: ID lowercase letters, digits, `.`,
-# `_` and `-`, VERSION_ID those with uppercase letters and `~` too.
+# `_` and `-`, VERSION_ID those with uppercase letters and `~` too. A key
+# assigned twice is read as the shell reads the file, the last one kept.
 tuple_os() {
   python3 -c 'import os, re, sys
 paths = sys.argv[1:] or ["/etc/os-release", "/usr/lib/os-release"]
@@ -214,7 +217,7 @@ for path in paths:
         value = m.group(2)
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"\x27":
             value = value[1:-1]
-        facts.setdefault(m.group(1), value)
+        facts[m.group(1)] = value
     break
 os_id, version = facts.get("ID", ""), facts.get("VERSION_ID")
 if not re.fullmatch(r"[a-z0-9._-]+", os_id):

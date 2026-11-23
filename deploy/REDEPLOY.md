@@ -444,7 +444,9 @@ refuses, before the build:
 
 - a tree that is not a clean git checkout, since a set names one commit;
 - a `<dir>` that stands, or whose parent is not a directory the operator owns that no
-  group or other can write;
+  group or other can write, or with a directory above it that is neither the operator's
+  nor root's, or that a group or other can write and is not sticky (a relative `<dir>`
+  is read from the directory the operator ran the script in);
 - a toolkit with no library directory for this host's target, and a `CUDA_LIB_DIR` that
   names any other directory.
 
@@ -459,8 +461,11 @@ the engine's output directory and the toolkit's library directory as its library
 It refuses unless every engine library resolves from the engine's output directory and
 each of the four CUDA runtime files from the toolkit's library directory, no library or
 symbol version is not found but the driver's, and no other library of the toolkit is
-named. It writes the set into a directory beside `<dir>` and renames it to `<dir>` once
-the set is whole, so `<dir>` is a whole set or does not stand:
+named. Every library the SPU takes from the engine's output directory must be one of
+the engine's own, since the set carries those by name. It reads the tree again and
+refuses if HEAD or the status moved during the build. It writes the set into a
+directory beside `<dir>` and renames it to `<dir>` once the set is whole, never over a
+directory that came to stand meanwhile, so `<dir>` is a whole set or does not stand:
 
 ```text
 <dir>/
@@ -472,9 +477,9 @@ the set is whole, so `<dir>` is a whole set or does not stand:
   deploy/       every file deploy/deployed-copy.txt names, the list included
 ```
 
-The manifest opens with `# weaver carry set 1` and `# commit <40 hex>`, and its rows
-are `file<TAB><sha256><TAB><0755|0644><TAB><path>` and
-`link<TAB><target><TAB>-<TAB><path>` (`deploy/carry_set.py`). `build-tuple` holds the lines of section 3 step 6, with
+The manifest opens with `# weaver carry set 1` and `# commit <40 hex>`, and its rows are
+`file<TAB><sha256><TAB><0755|0644><TAB><path>` and `link<TAB><target><TAB>-<TAB><path>`
+(`deploy/carry_set.py`). `build-tuple` holds the lines of section 3 step 6, with
 `build-os = <ID> <VERSION_ID>` (from os-release) after `ccbin` and a
 `build-runtime.<name> = <sha256>` line for each carried runtime file in place of the
 `runtime.` lines. The run's last line is the manifest's sha256. Record it with the set:

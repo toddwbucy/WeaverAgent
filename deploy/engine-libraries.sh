@@ -266,7 +266,9 @@ sys.exit(1 if bad or not engine else 0)' "$1" "$2"
 #   - no library and no symbol version is not found, as engine_resolved
 #     reads them, save the driver's own library, `libcuda.so.<n>`, which the
 #     set never carries and which a build box with no driver lacks;
-#   - every engine library resolves to a file in ENGINE_DIR;
+#   - every engine library resolves to a file in ENGINE_DIR, and nothing else
+#     does: the set carries the engine's libraries by their names
+#     (LIB_GLOBS), so another library there would be left behind;
 #   - each RUNTIME library is named once and resolves to a file in
 #     TOOLKIT_LIB, the library directory of the toolkit whose nvcc built the
 #     kernels;
@@ -309,6 +311,9 @@ for line in report.splitlines():
     if not m:
         continue
     file = os.path.realpath(m.group(2))
+    if os.path.dirname(file) == engine_dir:
+        bad.append(line.strip())
+        continue
     want = runtime_name(name)
     if want is not None:
         if os.path.dirname(file) != toolkit_lib or want in found:
