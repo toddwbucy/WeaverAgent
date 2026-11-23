@@ -38,7 +38,11 @@
 #   WEAVER_STACK_RECORD  /etc/weaver/stack      the scripts' record of this install
 #   WEAVER_OPERATOR      $SUDO_USER or $USER    named in the plan; owns nothing this makes
 #   WEAVER_AGENT_DIR     /var/lib/weaver-agent  the base of each agent's folder (#578)
-#   CUDA_LIB_DIR         /opt/cuda/lib64        joins the ld.so.conf.d entry; held closed by root
+#   CUDA_LIB_DIR         the toolkit's lib      joins the ld.so.conf.d entry; held closed by root;
+#                                               unset, the toolkit's lib for this host's target
+#   NVCC_CCBIN           /usr/bin/g++-15        the host compiler nvcc builds the engine's kernels
+#                                               with, a path or a name on PATH; refused before the
+#                                               build unless an executable file
 #   CARGO_TARGET_DIR     honoured; give the install its own, never a gate's
 #
 # The feature set and the member list are update-stack.sh's, stated again
@@ -106,22 +110,22 @@ plan "toolchain     $(rustup show active-toolchain 2>/dev/null | cut -d' ' -f1)"
 DRIVER=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || true); DRIVER=$(grep -E ', [0-9]+(\.[0-9]+)+$' <<<"$DRIVER" || true); DRIVER=${DRIVER%%$'\n'*}
 plan "driver        ${DRIVER:-none}"
 plan "nvcc          $(nvcc --version 2>/dev/null | tail -1 | sed 's/^Build //' || echo none)"
-CCCL=$(pacman -Q cccl 2>/dev/null | awk '{print $2}' || true)
-plan "cccl          ${CCCL:-unknown}"
 plan "will build    $FEATURES"
 # The line names all three things this script installs: the members, the
 # shell and the engine libraries. It named the members alone.
 plan "will install  $MEMBERS, the shell ($SHELL_FILES), and the engine libraries ($LIB_GLOBS) built by $ENGINE_CRATE"
 
-cccl_in_window() {
-  local v=${1%%-*} lo=3.1.4 hi=3.3.4
-  [ "$(printf '%s\n%s\n' "$lo" "$v" | sort -V | head -1)" = "$lo" ] &&
-  [ "$(printf '%s\n%s\n' "$v" "$hi" | sort -V | head -1)" = "$v" ]
-}
-if [ -n "$CCCL" ] && ! cccl_in_window "$CCCL"; then
-  die "cccl $CCCL is outside the 3.1.4-3.3.4 window #397 measured. Fix the pin first."
-fi
 command -v nvcc >/dev/null || die "no nvcc on PATH and the build carries $SPU_FEATURES"
+# **The cccl window is read from the header nvcc reads, by no package
+# manager, and a version that cannot be read refuses** (deploy/install-tuple.sh,
+# `cccl_read`): on a box without pacman the check once skipped itself.
+cccl_read || die "the CCCL version nvcc reads cannot be read: $CCCL_WHY. The build's CCCL window is unchecked, so nothing is built"
+plan "cccl          $CCCL_READ ($CCCL_HEADER)"
+cccl_in_window "$CCCL_READ" || die "cccl $CCCL_READ is outside the 3.1.4-3.3.4 window #397 measured. Fix the pin first."
+# **The host compiler is an executable file before the long build**
+# (deploy/engine-libraries.sh, `host_compiler`).
+host_compiler
+plan "ccbin         $NVCC_CCBIN"
 # **The shell's build needs its tools before the long build, not after** (#29).
 "$REPO/deploy/build-busybox.sh" --preflight || exit 1
 # **What stands is asked, and a question this script cannot answer refuses.**
@@ -197,7 +201,10 @@ for placed in "$ADMIN_BASE" "$STACK" "$AGENT_DIR"; do
   fi
 done
 # The CUDA directory joins the loader's entry beside $PREFIX/lib, so it is
-# judged as admin judges the library path (deploy/engine-libraries.sh).
+# judged as admin judges the library path (deploy/engine-libraries.sh). Unset,
+# it is the toolkit's own library directory.
+cuda_lib_dir
+plan "cuda lib dir  $CUDA_LIB_DIR"
 loader_dir CUDA_LIB_DIR "$CUDA_LIB_DIR"
 
 say "tree"
@@ -333,7 +340,7 @@ run_build() {
   # removes the file.
   trap 'rm -f -- "$BUILD_MESSAGES"' EXIT
   printf '   output: %s\n' "$log"
-  NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
+  NVCC_CCBIN="$NVCC_CCBIN" \
   NVCC_APPEND_FLAGS="-objtemp${NVCC_APPEND_FLAGS:+ $NVCC_APPEND_FLAGS}" \
   CMAKE_CUDA_ARCHITECTURES="86-real;89-real;120a-real;121a-real" \
     cargo build --release --locked --workspace --message-format=json-render-diagnostics \
