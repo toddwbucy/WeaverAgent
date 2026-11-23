@@ -13,11 +13,11 @@
 
 The specification of how admin represents its own share of the environment of
 `weaver-admin-PRD` sections 7.1 to 7.5: the environment a WeaverAgent runs in when it
-runs in a virtual machine made from the image of that charter's section 7.2. Admin's
-share is the one the charter's section 7.1 names: the firewall table of its section 2,
-the data-mount check of its section 4.1, the refusal of state a version cannot read, the
-load and the unload as the agent's start and stop, and the trace's handoff. It is a
-child of `weaver-admin-PRD`.
+runs in a virtual machine that installed a carry set, per that charter's section 7.2.
+Admin's share is the one the charter's section 7.1 names: the firewall table of its
+section 2, the data-mount check of its section 4.1, the refusal of state a version cannot
+read, the load and the unload as the agent's start and stop, and the trace's handoff. It
+is a child of `weaver-admin-PRD`.
 
 Level discipline. The charter carries each requirement and its reason. This document
 elects how admin represents each, against the ground the charter's section states, and

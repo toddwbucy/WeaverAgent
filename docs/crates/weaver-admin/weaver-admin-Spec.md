@@ -1797,8 +1797,10 @@ of its own beside the operations log and never that log, since an agent holding 
 writable handle to the boundary's record could write into it. It replaces its
 environment with a fixed one, `PATH=/usr/bin:/bin`, `HOME` the agent's home,
 `LANG=C.UTF-8`, and `LD_LIBRARY_PATH` where the root's optional `library-path` names the
-engine libraries, the value `unit-properties` carried before it retired, and nothing
-else, so no variable of the caller's or of sudo's reaches the worker or the organs that
+directory of the engine libraries, and of the CUDA runtime files the SPU resolves where
+the stack carries them (`weaver-admin-PRD` section 7.2), the value `unit-properties`
+carried before it retired, and nothing else, so no variable of the caller's or of sudo's
+reaches the worker or the organs that
 inherit its environment. **`library-path` is judged and recorded**: the directory it
 names is held to the root's own judgment, root-owned and writable by no group or other,
 its ancestors closed as the root's are, because whatever it holds is loaded into the

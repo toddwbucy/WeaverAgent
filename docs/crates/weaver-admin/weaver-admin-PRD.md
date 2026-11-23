@@ -921,14 +921,14 @@ takes its own session and outlives the invocation that started it and its invoke
 containment, living as long as the root-owned delegated scope the start step asks PID1
 for, and restarting it on a crash or a reboot is for whoever packages and deploys the
 agent, with systemd, a container or anything else, and not this framework's. **Nothing
-of this framework starts the agent after a reboot, and the image of section 7.2 adds
-nothing that does**, on the operator's rulings of 2026-11-14 and 2026-11-15. Starting
-and stopping the agent are its load and unload through admin, which are the console's
-verbs and need no management of the machine. So after a reboot an appliance's agent
-stays unloaded until the console loads it. How the connectors come up after a reboot,
-and what the console sees then, is the console's side, per section 7.4. An operator's
-own packaging that starts the agent is the operator's business, as the keep-alive above
-is.
+of this framework starts the agent after a reboot, and the carried stack of section
+7.2 adds nothing that does**, on the operator's rulings of 2026-11-14 and 2026-11-15.
+Starting and stopping the agent are its load and unload through admin, which are the
+console's verbs and need no management of the machine. So after a reboot an appliance's
+agent stays unloaded until the console loads it. How the connectors come up after a
+reboot, and what the console sees then, is the console's side, per section 7.4. An
+operator's own packaging that starts the agent is the operator's business, as the
+keep-alive above is.
 
 **The agent's uid is statically provisioned, and a dynamic identity is excluded for two
 reasons that are independent and are recorded as independent.** The first is durability:
@@ -1051,8 +1051,8 @@ and the Spark-class machine relate is out of scope as of 2026-11-15, on the oper
 ruling of that date, and it is carried as a later item. A profile is a description in
 `toddwbucy/WeaverTools`. It decides nothing about any component and binds no Spec, and
 what it asks of a component lands in that component's charter. Sections 7.1 to 7.5 carry
-the environment an agent runs in when it runs in a virtual machine made from the image
-of section 7.2. Admin's own share of it is the table of section 2, the data-mount check
+the environment an agent runs in when it runs in a virtual machine that installed a carry
+set, per section 7.2. Admin's own share of it is the table of section 2, the data-mount check
 of section 4.1, the refusal of state a version cannot read, the load and the unload that
 start and stop the agent (section 7), and the trace's handoff (section 7.5).
 `weaver-admin-Spec-vm-environment` says how admin represents that share. The rest binds
@@ -1131,71 +1131,63 @@ image never learns of it.
 **The entry condition is a hypervisor with GPU passthrough already working.** It is a
 condition, and the suite does not teach it.
 
-### 7.2 The image
+### 7.2 The carried stack
 
-**The operating system is Ubuntu 26.04**, a substrate ruling.
+**The binaries are carried**, on the operator's ruling of 2026-11-23. A build box
+compiles the stack from a named commit and writes a carry set, and writing it installs
+nothing. A run box, which holds no compiler and no CUDA toolkit, receives the carry set
+and installs it. A build box that also runs the agent installs the set as a run box
+does, so nothing an install writes depends on which box built the set.
 
-**The binaries are compiled inside the image from named commits.** After the build, the
-build tooling and the source trees are removed and the image is sealed. Two reasons
-hold. The image then states by commit what code it carries. The binaries are built
-against the libraries they run with.
+**The operating system is the operator's.** A carry set installs on a box whose C
+library and C++ runtime are no older than the build box's, with systemd as PID 1 and
+cgroup v2. The suite builds and tests on Fedora 45, on the operator's ruling of
+2026-11-21, and names the build box's distribution in the carry set's build half.
 
-**The identity of an image is its own manifest and its hash.** The stack's build takes
-two settings, on the operator's ruling of 2026-11-15, under which a fresh build from one
-commit names every byte the stack ships: one fixes the compiler's names for its
-temporary files, and one compiles the engine's kernels for a fixed list of architectures
-only. Two fresh builds with both settings were equal in every shipped file on
-2026-11-15, and #570 adopts the settings. A card whose architecture is not on the list
-does not run the engine from such a build. Whether a rebuild of the whole image from the
-same inputs gives the same image is unmeasured as of 2026-11-15, so a rebuild from the
-same commits does not confirm one.
+**A carry set states by commit what code it carries.** It holds the stack's members, the
+agent's shell, the engine's libraries with their links, the CUDA runtime files that the
+SPU resolves, the deployment scripts that an install and the making of an agent need,
+and a manifest that names each file by its sha256 and each link by its target. It holds
+the build's half of the install tuple, read on the build box, which is the only box
+that can read it: the commit, the toolchain, the features, the engine and its sources,
+the CUDA compiler, the host compiler, the CCCL version, the build box's distribution, and
+the digests of the runtime files that the build resolved. **The identity of a carry set
+is its manifest's sha256**, and the install tuple of each box that installed it names
+that digest.
 
-**The image states the commits it was compiled from and its driver**, where a reader
-finds them without the build log, because the binaries and the driver version are
-members of the deployment tuple. **Each version of the image has one annotated tag**,
-named `appliance/<version>`, on the commit the version was compiled from, on the
-operator's ruling of 2026-11-15. The tag's message carries the version, the install
-record's digest and the test count. The operator pushes the tag, and a tag is keyed by
-the version and not by the commit.
+**The binaries run against the libraries they were built against, and an install proves
+it.** On the run box, each CUDA runtime file that the SPU resolves must equal, by
+sha256, the file that the build box resolved, or the install refuses. The carry set
+carries those files unmodified inside the stack's own library directory, which is the
+library path that admin gives the agent's processes, per `weaver-admin-Spec` section 6.
+The driver and its libraries belong to the run box. They are never carried, and they are
+read at each load.
 
-**The NVIDIA driver is the distribution's own prebuilt and signed kernel module of the
-615 branch, with the kernel held to match it**, a substrate ruling. No compiler runs
-near the driver. That the module loads under Secure Boot is not measured as of
-2026-11-15, since no build of the image has run with a card, and the image build's Spec
-carries the cell.
+**An install refuses unless every carried file equals its manifest line**, judged in a
+copy that root holds before anything is placed. The install then places the stack as
+root, checks that the SPU resolves its engine and its runtime from the stack's library
+directory alone, with no library or symbol version missing, writes the stack record, and
+writes the install tuple whole: the build's half as carried, each member and library
+digest read again on the run box and equal to the carried one, and the runtime files as
+the run box resolves them.
 
-**Nothing changes an image after its seal.** Automatic package updates and firmware
-updates are off.
+**A fresh build from one commit names every byte the stack ships.** The stack's build
+takes two settings, on the operator's ruling of 2026-11-15: one fixes the compiler's
+names for its temporary files, and one compiles the engine's kernels for a fixed list of
+architectures only. Two fresh builds with both settings were equal in every shipped file
+on 2026-11-15, and #570 adopts the settings. A card whose architecture is not on the
+list does not run the engine from such a build.
 
-**The time source is the image's default, and the operator may name a server**, on the
-operator's ruling of 2026-11-15. Any accurate source serves.
+**An upgrade is a change of the deployment tuple and is recorded as one.** State made
+under one carry set is recorded as made under it and, from the load onward, as used under
+the newer one. **State is transferable**, on the operator's ruling of 2026-11-15: an
+upgrade moves the state and the model to a new version of the harness. Reproducibility
+is claimed for one carry set on one set of hardware, and nothing is claimed across carry
+sets.
 
-**No shared key or secret ships in the image.** The pairing line and the console's
-fingerprint begin trust without a secret that every copy of the image carries.
-
-**One image exists for each version, and a security fix is a new version.** A version
-is `<release>.<respin>`, on the operator's ruling of 2026-11-15. The release moves when
-the binaries move, and the respin moves when only the operating system layer moves. A
-respin never recompiles, and if the binaries change for any reason, the release moves.
-Each version is tested and evaluated before its release, which is one reason the
-appliance model was chosen. **Every published version stays published with its
-hash**, because the deployment tuple of an agent names its image version and a replay
-needs that image.
-
-**An upgrade of an appliance is a change of the deployment tuple and is recorded as
-one.** State that was made under an older version is recorded as made under it and, from
-the load onward, as used under the newer version. **State is transferable**, on the
-operator's ruling of 2026-11-15: an upgrade moves the state and the model to a new
-version of the harness. Reproducibility is claimed within one version on one set of
-hardware, and nothing is claimed across versions.
-
-**The image carries no model and no state.** The model lives on a disk that the operator
-attaches, per section 7.5. Where state lives, against the agent's territory, is a later
-item, per section 7.5.
-
-**One image comes first, for KVM.** Proxmox is the first format named as later, and
-`toddwbucy/WeaverTools` issue 29 records one Proxmox condition to settle then. Other
-hypervisor formats are later and are named as later.
+**A carry set holds no model, no state, and no key or other secret**, so no two boxes
+that install one set share a credential through it (section 7.4). Where the model and
+the state stand is section 7.5's.
 
 ### 7.3 Getting in
 
@@ -1662,7 +1654,7 @@ The Specs written against this charter.
   start step, the dial and the descriptor handoff, and the operator interface of section
   8.
 - `weaver-admin-Spec-vm-environment`, admin's share of the environment of an agent that
-  runs in a virtual machine made from the image of section 7.2, per section 7.1.
+  runs in a virtual machine that installed a carry set, per sections 7.1 and 7.2.
 
 Contracts this crate is party to are written with the PRDs of their other parties,
 one per seam in section 6, and are not children of this document.
