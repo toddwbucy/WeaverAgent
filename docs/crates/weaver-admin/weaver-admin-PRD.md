@@ -1058,11 +1058,11 @@ start and stop the agent (section 7), and the trace's handoff (section 7.5).
 `weaver-admin-Spec-vm-environment` says how admin represents that share. The rest binds
 the carry set's build and install, which the deploy scripts perform (section 7.2), and
 the connectors, which are WeaverWeb's. What carries the base policy of section 7.3 is a
-later item there. Every requirement of sections 7.1 to 7.5 is the operator's ruling of
-2026-11-14 unless the sentence says otherwise, and the operator's rulings of 2026-11-15
-amend them where a sentence says so. A sentence that names a carry set stands on the
-operator's rulings of 2026-11-23 that the binaries are carried and that the suite ships
-no sealed image for now.
+later item, open in section 10. Every requirement of sections 7.1 to 7.5 is the
+operator's ruling of 2026-11-14 unless the sentence says otherwise, and the operator's
+rulings of 2026-11-15 amend them where a sentence says so. A sentence that names a carry
+set stands on the operator's rulings of 2026-11-23 that the binaries are carried and
+that the suite ships no sealed image for now.
 
 **The stance, on the operator's ruling of 2026-11-15.**
 
@@ -1075,7 +1075,7 @@ no sealed image for now.
   later need is a later item.
 
 What "after boot" covers on a machine the operator presents, where the carry set itself
-is installed after boot, is a later item.
+is installed after boot, is a later item, open in section 10.
 
 **Six terms carry one meaning each in sections 7.1 to 7.5 and in that Spec.**
 
@@ -1097,7 +1097,7 @@ is installed after boot, is a later item.
 **An appliance holds the WeaverAgent system for one agent.** An operator installs Weaver
 Web, presents a virtual machine on a hypervisor they already run, and installs a carry
 set in it, per section 7.2. How the connectors reach a presented machine is a later
-item. From then on the operator manages the agent through the console
+item, open in section 10. From then on the operator manages the agent through the console
 and the machine through the hypervisor. The console knows the agent. The hypervisor
 knows the machine. Neither reaches into the side of the other.
 
@@ -1207,8 +1207,8 @@ which does not have to be open is not open.
 
 **The base policy is input dropped but SSH**, on the operator's ruling of 2026-11-15,
 and admin's table of section 2 does not carry it. What carries it on a machine the
-operator presents is a later item. How a port that a declaration names gets through it
-is open in section 10.
+operator presents is a later item, open in section 10. How a port that a declaration
+names gets through it is open in section 10.
 
 **Cloud-init is not among the requirements at this stage**, on the operator's ruling of
 2026-11-15, and it is carried as a later item.
@@ -1234,7 +1234,7 @@ certificate. A machine cloned after enrollment breaks this, and what the console
 with a clone is the console's documents'. **The connectors' keys and
 certificates live on the root disk**, on the operator's ruling of 2026-11-15. Whether a
 box that takes a newer carry set, by `decommission.sh` and a fresh install, is enrolled
-again is a later item.
+again is a later item, open in section 10.
 
 **The one-time secret of the pairing line is the only secret that travels on a command
 line.** It is the exception because no other way to begin exists. It is single-use,
@@ -1542,13 +1542,13 @@ table of `weaver-admin-Spec` section 3.0 before any code.
 
 **How a port that a declaration names gets through an appliance's base policy.** On an
 appliance the base policy, input dropped but SSH, stands outside admin's table, and what
-carries it is a later item (section 7.3). In nftables each base chain gives its own
-verdict and a drop in any one is final, so an accept in admin's table does not open a
-port through that policy. One candidate exists and is only a candidate: admin's table,
-at an earlier priority, marks the packet, and the base policy's static rule accepts the
-mark, so admin still writes only its own table. **Settled by:** the act that adds the
-declaration's port member, in `weaver-admin-Spec` and the document of whatever carries
-the base policy together.
+carries it is a later item of this section (section 7.3). In nftables each base chain
+gives its own verdict and a drop in any one is final, so an accept in admin's table does
+not open a port through that policy. One candidate exists and is only a candidate:
+admin's table, at an earlier priority, marks the packet, and the base policy's static
+rule accepts the mark, so admin still writes only its own table. **Settled by:** the act
+that adds the declaration's port member, in `weaver-admin-Spec` and the document of
+whatever carries the base policy together.
 
 **A stopped agent against a machine that is down.** On an appliance the console stops
 the agent by its unload, per section 7, and a machine that is down answers nothing.
@@ -1562,6 +1562,41 @@ operator's that defines it is in no repository as of 2026-11-15. The rulings of
 tuple as shipped (section 7.1) and the trace's destination (section 7.5). **Settled
 by:** the act that places the operator's definition in a repository, which closes this
 cell.
+
+**What carries the base policy on a machine the operator presents.** Section 7.3 asks for
+a base policy, input dropped but SSH, that admin's table of section 2 does not carry. The
+image's boot rules carried it, and the suite ships no sealed image for now, on the
+operator's ruling of 2026-11-23. No document names what lays the policy on a machine the
+operator presents and that installed a carry set. The port cell above waits on it.
+**Settled by:** the operator's ruling of where the policy is laid, then the act that
+lays it there, with `weaver-admin-Spec-vm-environment` section 9.
+
+**How the connectors reach a presented machine.** An appliance installs a carry set, per
+section 7.1, and a carry set holds no connector, since the connectors are WeaverWeb's.
+No document says how the two connectors come to stand on a machine the operator
+presents. **Settled by:** the operator's ruling, with `weaver-web-PRD` in
+`toddwbucy/WeaverWeb`, which holds the connectors.
+
+**Whether a newer carry set is a new enrollment.** The connectors' keys and certificates
+live on the root disk, per section 7.4. A box takes a newer carry set by
+`decommission.sh`, which archives and removes every agent on the box, and a fresh
+install (`deploy/REDEPLOY.md` section 3a). No document says whether the box's enrollment
+outlives that. **Settled by:** the operator's ruling, with the enrollment of
+`weaver-web-PRD`.
+
+**What "after boot" covers on a presented machine.** The stance of section 7.1, on the
+operator's ruling of 2026-11-15, leaves to the operator what the operator adds or changes
+after boot. On a machine the operator presents, the carry set itself is installed after
+boot. **Settled by:** the operator's ruling alone.
+
+**Carry-set retention.** The image paragraphs kept every published image version
+published, because a replay needs the stack a run used. No document says that a carry
+set that an install tuple names stays retrievable by its manifest's sha256. **Settled
+by:** the operator's ruling alone, which section 7.2 then states.
+
+**The tag rule for a carried release.** The `appliance/<version>` tag left with the
+image, and no rule names a carried release. **Settled by:** the operator's ruling
+alone.
 
 ## 11. Edits owed
 

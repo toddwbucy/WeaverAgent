@@ -88,7 +88,7 @@ Per `weaver-admin-PRD` sections 2 and 7.3.
 is its own**, one table per agent on the operator's ruling of 2026-11-15, per the
 charter's section 2. The table never carries the machine's whole policy. On an appliance
 the base policy, input dropped but SSH, stands outside admin's table, and what carries
-it is a later item of the charter's section 7.3.
+it is a later item of the charter's section 7.3, open in section 9.
 
 **Every load replaces the table before it opens anything, and the table is not
 persisted**, on the operator's ruling of 2026-11-15. Admin writes the table to the
@@ -160,7 +160,7 @@ Per apex section 11. Each election above is listed with what catches its failure
   requirements are `weaver-admin-PRD` section 7.2's. The operating system and the driver
   are the run box's, per that section, the operator attaches and mounts the disks at the
   two mount points, per its section 7.5, and what carries section 7.3's base policy is a
-  later item there.
+  later item, open in section 9.
 - **The console's side**, in `weaver-web-PRD` and its Spec in `toddwbucy/WeaverWeb`:
   enrollment's console half, the connectors' keys and certificates, the one-time secret,
   what the console does with a clone, the connectors' units and how they come up after a
@@ -198,6 +198,9 @@ later item, per the charter's section 7.5.
   refused load opened, and the run card's record of the open ports.** Settled by the
   act that adds the table and the act that adds the declaration's port member, per
   `weaver-admin-PRD` sections 10 and 11.
+- **What carries the base policy, input dropped but SSH, on a machine the operator
+  presents.** Admin's table does not carry it, per section 3. Settled by the operator's
+  ruling of where the policy is laid, per `weaver-admin-PRD` section 10.
 - **How a port that a declaration names gets through the appliance's base policy.**
   Settled by the act that adds the declaration's port member, in `weaver-admin-Spec` and
   the document of whatever carries the base policy together, per `weaver-admin-PRD`
