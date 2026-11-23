@@ -559,10 +559,11 @@ Each line ends in one status word: `recorded`, `derivable`, `absent` or `FAULT`.
     never passed unbound. A file that changed, moved or no longer resolves is a
     `FAULT`: the box has drifted from its install. A box updated since its install
     rewrites its record with `update-stack.sh --install`, and a box installed from a
-    carry set takes a newer set by `decommission.sh` and a fresh `install-carry.sh`
-    (`REDEPLOY.md` section 3a). An agent made with `create-agent.sh --spu`, or whose
-    config root names a library path other than the stack record's, runs something
-    the install did not read, so its runtime rows are absent and say which.
+    carry set takes a newer set by the new set's own `deploy/decommission.sh` and a
+    fresh `install-carry.sh` (`REDEPLOY.md` section 3a). An agent made with
+    `create-agent.sh --spu`, or whose config root names a library path other than
+    the stack record's, runs something the install did not read, so its runtime rows
+    are absent and say which.
 
   A digest the install tuple reads `unknown` (the install could not resolve or hash that
   file) is printed as not bound, never as a `FAULT`. An install tuple of the earlier
