@@ -231,7 +231,7 @@ done
 
 say "install prefixes (models excluded from every mode)"
 for p in "${!PREFIXES[@]}"; do
-  for sub in bin lib python-spu; do [ -d "$p/$sub" ] && plan "$p/$sub  $(du -sh "$p/$sub" 2>/dev/null | cut -f1)"; done
+  for sub in bin lib deploy python-spu; do [ -d "$p/$sub" ] && plan "$p/$sub  $(du -sh "$p/$sub" 2>/dev/null | cut -f1)"; done
   for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && plan "$sub  $(du -sh "$sub" | cut -f1)"; done
   [ -d "$p/models" ] && plan "$p/models  $(du -sh "$p/models" | cut -f1)  KEPT"
 done
@@ -1182,7 +1182,7 @@ if [ "$MODE" = archive ]; then
   [ ${#LDSO_CONFS[@]} -gt 0 ] && archive_path ld-so-conf "${LDSO_CONFS[@]}"
   for p in "${!PREFIXES[@]}"; do
     parts=()
-    for sub in bin lib python-spu; do [ -d "$p/$sub" ] && parts+=("$p/$sub"); done
+    for sub in bin lib deploy python-spu; do [ -d "$p/$sub" ] && parts+=("$p/$sub"); done
     for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && parts+=("$sub"); done
     [ ${#parts[@]} -gt 0 ] && archive_path "$(archive_name opt "$p")" "${parts[@]}"
   done
@@ -1236,7 +1236,7 @@ purge_candidates() {
   [ -d /etc/weaver ] && candidate /etc/weaver
   for p in "${SUDO_RULES[@]}" "${LDSO_CONFS[@]}"; do candidate "$p"; done
   for p in "${!PREFIXES[@]}"; do
-    for sub in bin lib python-spu; do [ -d "$p/$sub" ] && candidate "$p/$sub"; done
+    for sub in bin lib deploy python-spu; do [ -d "$p/$sub" ] && candidate "$p/$sub"; done
     for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && candidate "$sub"; done
   done
   [ -e "$LEGACY_DIR" ] && candidate "$LEGACY_DIR"

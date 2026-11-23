@@ -978,8 +978,11 @@ def runtime_rows(install, resolved, unread, failed=None, unbound=None):
         else:
             lines.append(row("bind", field, live, "FAULT",
                              f"drift from the install: the install tuple records {recorded[0]} "
-                             f"{recorded[1]}. A sealed image never shows this; a box updated "
-                             "since its install rewrites the record with update-stack.sh --install"))
+                             f"{recorded[1]}. "
+                             + ("A carried box takes a newer carry set by decommission.sh and then "
+                                "install-carry.sh" if install.get("facts", {}).get("carry") else
+                                "A sealed image never shows this; a box updated since its install "
+                                "rewrites the record with update-stack.sh --install")))
     return lines
 
 

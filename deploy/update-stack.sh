@@ -349,7 +349,11 @@ WORKER_BINARY=$(read_key worker-binary)
 # which no carry set names. A carried box takes a newer set by
 # decommission.sh, which archives and removes every agent on the box and the
 # stack, and then install-carry.sh (deploy/REDEPLOY.md section 3a).
-CARRIED=$(sed -n 's/^carry = //p' "$STACK/install-tuple" 2>/dev/null || true)
+CARRIED=""
+if [ -e "$STACK/install-tuple" ] || [ -L "$STACK/install-tuple" ]; then
+  CARRIED=$(sed -n 's/^carry = //p' -- "$STACK/install-tuple") \
+    || die "cannot read $STACK/install-tuple to tell whether a carry set installed this box"
+fi
 if [ -n "$CARRIED" ]; then
   die "this box's stack was installed from the carry set $CARRIED, and update-stack.sh would replace it with a build that names no carry set. To put a newer set on it, take the box down with decommission.sh, which archives and removes every agent on the box and the stack, and then run install-carry.sh (deploy/REDEPLOY.md section 3a)."
 fi

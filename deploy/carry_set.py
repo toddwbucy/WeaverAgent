@@ -200,6 +200,7 @@ def check(root, sha):
                 raise Refused(f"{path} is in the set and the manifest does not name it")
             if want[path] != have[path]:
                 raise Refused(f"{path} is not as the manifest names it")
+        raise Refused("the set's rows are not the manifest's")
     return commit
 
 

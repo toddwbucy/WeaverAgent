@@ -65,6 +65,7 @@ nothing else.
 | Engine libraries `libggml*`, `libllama*` | `<prefix>/lib/`, reached by `/etc/ld.so.conf.d/weaver.conf` and named by the record's `library-path`, which admin sets as the worker's `LD_LIBRARY_PATH` | bootstrap, update-stack |
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
 | Retired Python SPU, where an older install left it | `<prefix>/python-spu/` | archive and purge only, Python retirement below |
+| The stack's own deploy copy, on a box installed from a carry set | `<prefix>/deploy/` (root 0755, files 0755 or 0644) | install-carry |
 | Accounts: the agent's `weaver-<name>` (home `<agent-directory>/<name>/home`, 2750, in the agent's folder, #578), the member's `weaver-<name>-state`, the relay's `weaver-<name>-relay`, and the groups `weaver-<name>-trace` and `weaver-<name>-admin`; an agent laid by an earlier create-agent also has its own connector `weaver-<name>-admincon` | passwd | create-agent |
 | The box's two connector accounts, one per box: `weaver-gatecon` (WeaverWeb's gate-con, in each agent's group `weaver-<name>`) and `weaver-admincon` (WeaverWeb's admin-con, in each agent's state and access groups), no home, nologin | passwd | create-agent, at the first run that finds each absent; decommission removes them after every agent's accounts |
 | Territory `weaver-<name>/` (root:weaver-<name>-state 0710, passage for the state group alone) with `agent.toml` and `system-prompt.md` (root:weaver-<name>-admin 0640), `admin.log` and `worker.log` once admin has run a verb (root:weaver-<name>-admin 0640), `save-points/` (root:weaver-<name>-admin 0750, the published save points 0640 and the manifest root 0644), `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640); the whole agent, on the operator's ruling of 2026-10-07 on #1 | the agent's folder `<agent-directory>/<name>/` (root:root 0755, beside the home, #578), the base the stack record's `agent-directory`, default `/var/lib/weaver-agent` | create-agent, admin for the logs and the save points |
@@ -147,7 +148,7 @@ the archive and the purge (#99 area 2 review, H4). The archive holds:
   facts: an old box's `weaver_*` roles, databases and authentication lines are the
   operator's to inspect and drop by hand (section 2, #35).
 - One `.tar.zst` per piece, owners, ACLs and xattrs preserved: `etc-weaver`,
-  `sudoers-weaver`, `ld-so-conf`, `opt-<prefix path>` (bin, lib, python-spu, the
+  `sudoers-weaver`, `ld-so-conf`, `opt-<prefix path>` (bin, lib, deploy, python-spu, the
   backup-* directories, never models), `agent-<folder path>` for each agent's folder,
   `territory-<path>` for each root's own territory outside them, `var-lib-weaver`,
   `legacy-logs` (every legacy log a box from before #50 names, in one archive),
@@ -230,9 +231,9 @@ nothing but `models`.
    to read or clear the mark, or a limit, by hand before the rerun.
 3. Every other path on the list: the territories, the logs, the homes, the `/tmp`
    entries, the run directories, `/var/lib/weaver` where it spans no base, the `ld.so`
-   confs and each prefix's `bin`, `lib`, `python-spu` and backups. (The sudo rules went
-   before step 1.) The accounts still resolve, so every owner and group still reads by
-   name.
+   confs and each prefix's `bin`, `lib`, `deploy`, `python-spu` and backups. (The sudo
+   rules went before step 1.) The accounts still resolve, so every owner and group still
+   reads by name.
 4. The `weaver-*` users, then their groups, `userdel` taking no home: a home the purge
    judged went as a path in step 3, and one outside `/home` is left. A group `userdel`
    already removed with its user, as it removes a private group, is done.
@@ -504,11 +505,15 @@ It needs no compiler and no CUDA toolkit, only python3 and ldd. Like
 anything, `<prefix>/bin`, `<prefix>/lib` or `<prefix>/deploy` stands, or a place it
 makes is not held closed by root. It refuses a set whose manifest's sha256 is not the
 one named, and a set that holds any entry other than exactly those its manifest names.
-This script runs from the set it checks, so it answers for the set only as far as the
-operator trusts the digest given to it. The install then:
+It refuses to run from any deploy copy but that of the set it installs. It runs as the
+operator from the set it checks, so it answers for the set only as far as the operator
+trusts the digest given to it. The install then:
 
 1. copies the set into a directory that root makes closed under the prefix, and checks
-   that copy again, so what root places is what root checked;
+   that copy again, so what root places is what root checked. Root runs no code from
+   the operator's set: it first finds by sha256 that its copy of the manifest is the
+   one named and its copy of `deploy/carry_set.py` is the file that manifest names, and
+   then runs that copy;
 2. places `bin/`, `lib/` and `deploy/` under the prefix as root, with the manifest's
    modes;
 3. reads the placed SPU with `<prefix>/lib` alone as its library path, and refuses
@@ -519,9 +524,11 @@ operator trusts the digest given to it. The install then:
    `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin`);
 5. writes the stack record as section 3 step 6 does, and the install tuple: the build
    half as carried, a `runtime.` line for each runtime file as it resolves here, and
-   `carry = <manifest sha256>`.
+   `carry = <manifest sha256>`. It fills the record in a directory beside it and renames
+   that directory into place last, so the record stands whole or not at all.
 
-On any refusal after step 2, it removes what it placed.
+On any refusal or signal after step 1, it removes what it placed, root's copy, the
+record it was filling, and each directory it made.
 
 **There is no loader entry and no ldconfig.** The runtime files are in `<prefix>/lib`
 beside the engine libraries. The stack record names `library-path = <prefix>/lib`,
@@ -532,11 +539,11 @@ made by hand without `library-path` fails when its SPU is executed.
 On a carried box, the deploy scripts are run from `<prefix>/deploy/`
 (`HowToDeployANewAgent.md` section 1).
 
-**A newer set on a box that holds one.** `install-carry.sh` is a first install only,
-and `update-stack.sh` refuses a box whose install tuple names a carry set. To put a
-newer set on such a box, run `decommission.sh` (section 1), which archives and removes
-every agent on the box and the stack, and then install the new set. The agents are made
-again with `create-agent.sh` after the install.
+**A newer set on a box that holds one.** `install-carry.sh` is a first install only, and
+`update-stack.sh` refuses a box whose install tuple names a carry set. To put a newer
+set on such a box, run `decommission.sh` (section 1), which archives and removes every
+agent on the box and the stack, `<prefix>/deploy/` included, and then install the new
+set. The agents are made again with `create-agent.sh` after the install.
 
 ## 4. Agents
 

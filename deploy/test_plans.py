@@ -1277,12 +1277,20 @@ elif name == 'sudo':
         target = pathlib.Path(mapped(rest[-1]))
         assert target.is_relative_to(root), target
         privileged([target], lambda: target.unlink(missing_ok=True))
-    elif op == 'python3' and rest[:1] and rest[0].endswith('/carry_set.py'):
-        # The set's own check run as root (install-carry.sh), on files under
-        # the fixture.
-        paths = [pathlib.Path(a) for a in rest if a.startswith('/')]
+    elif op == 'python3' and rest[:1] == ['-I'] and (rest[1] == '-c' or rest[1].endswith('/carry_set.py')):
+        # Root's digest check and root's copy of the set's check
+        # (install-carry.sh), on files under the fixture.
+        paths = [pathlib.Path(a) for a in rest[2:] if a.startswith('/')]
         assert all(p.is_relative_to(root) for p in paths), paths
         sys.exit(privileged(paths, lambda: subprocess.run([sys.executable, *rest]).returncode))
+    elif op == 'rmdir':
+        target = pathlib.Path(mapped(rest[-1]))
+        assert target.is_relative_to(root) and target != root, target
+        def remove():
+            try: target.rmdir()
+            except OSError: return 1
+            return 0
+        sys.exit(privileged([target], remove))
     elif op == '-l':
         print('User ' + rest[-1] + ' may run the following commands on fixture-box:')
         for rule in sorted((root / 'etc' / 'sudoers.d').glob('weaver-*')):
@@ -6378,13 +6386,64 @@ esac
         Perturbation: check the operator's set instead of root's copy and
         the swapped file installs."""
         carried, sha = self.carried()
-        result = self.install_carry(carried, sha, "--install", CARRY_SWAP="turn.py")
+        for swapped, said in (("turn.py", "deploy/turn.py is not as the manifest names it"),
+                              ("carry_set.py", "root's copy of deploy/carry_set.py is not the file the manifest names")):
+            with self.subTest(swapped=swapped):
+                result = self.install_carry(carried, sha, "--install", CARRY_SWAP=swapped)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("root's copy of the set is not the set", result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertFalse(self.run_prefix.exists())
+                self.assertFalse(self.run_stack.exists())
+
+    def test_install_carry_runs_only_from_the_set_it_installs(self):
+        """**The script is the set's own**: run from another set's deploy
+        copy, it refuses before any check. Perturbation: drop the comparison
+        and set A's checker judges set B."""
+        carried, sha = self.carried()
+        other = self.root / "other-set"
+        shutil.copytree(carried, other, symlinks=True)
+        saved = dict(self.env)
+        try:
+            self.env.update(WEAVER_PREFIX=str(self.root / "run-prefix"))
+            result = subprocess.run(["bash", str(other / "deploy" / "install-carry.sh"), str(carried), sha],
+                                    env=self.env, text=True, capture_output=True, timeout=60)
+        finally:
+            self.env.clear()
+            self.env.update(saved)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("root's copy of the set is not the set", result.stderr)
-        self.assertIn("deploy/turn.py is not as the manifest names it", result.stderr)
-        self.assertFalse((self.run_prefix / "bin").exists())
-        self.assertEqual([p.name for p in self.run_prefix.iterdir()], [])
+        self.assertIn(f"not from the deploy copy of the set it installs ({carried}/deploy)", result.stderr)
+
+    def test_install_carry_removes_a_record_it_could_not_finish(self):
+        """**The stack record stands whole or not at all**: where a write of
+        the record fails (here the install tuple's, after the keys), the
+        record being filled, the placed stack, root's copy and each
+        directory the run made are removed, so a rerun is a first install
+        again. Perturbations: write the record in place and its keys stay
+        behind; leave the made directories and the prefix stays."""
+        carried, sha = self.carried()
+        result = self.install_carry(carried, sha, "--install", TEE_FAIL="install-tuple")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("worker-binary = ", result.stdout)
         self.assertFalse(self.run_stack.exists())
+        self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith(".stack-")], [])
+        self.assertFalse(self.run_prefix.exists())
+        result = self.install_carry(carried, sha, "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_decommission_takes_every_part_of_a_prefix_install_carry_refuses(self):
+        """**A carried box takes a newer set after decommission.sh**: every
+        directory under the prefix whose standing install-carry.sh refuses is
+        one decommission.sh plans, archives and purges, so the documented way
+        is open. Perturbation: drop deploy from any of decommission's three
+        loops."""
+        carry = (DEPLOY / "install-carry.sh").read_text()
+        refused, = re.findall(r"^for part in ([a-z ]+); do$", carry, re.M)
+        loops = re.findall(r"for sub in ([a-z -]+); do \[ -d \"\$p/\$sub\" \]",
+                           (DEPLOY / "decommission.sh").read_text())
+        self.assertEqual(len(loops), 3, loops)
+        for loop in loops:
+            self.assertLessEqual(set(refused.split()), set(loop.split()), loop)
 
     def test_install_carry_refuses_a_runtime_or_driver_that_does_not_resolve_as_carried(self):
         """**The placed SPU resolves as the set carries it, or the install
@@ -6402,7 +6461,7 @@ esac
                 self.assertIn("does not resolve as the set carries it", result.stderr)
                 self.assertIn(said, result.stderr)
                 self.assertIn("what was placed is removed", result.stderr)
-                self.assertEqual([p.name for p in self.run_prefix.iterdir()], [])
+                self.assertFalse(self.run_prefix.exists())
                 self.assertFalse(self.run_stack.exists())
 
     def test_install_carry_judges_the_deploy_copy_against_this_boxs_programs(self):
@@ -6416,7 +6475,7 @@ esac
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("useradd: called here, and not a program the image carries", result.stdout)
         self.assertIn("calls a program this box does not carry", result.stderr)
-        self.assertEqual([p.name for p in self.run_prefix.iterdir()], [])
+        self.assertFalse(self.run_prefix.exists())
 
     def test_a_carried_box_takes_a_newer_set_only_after_decommission(self):
         """**A second set on a box that holds one** is refused by
@@ -6437,6 +6496,14 @@ esac
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn(f"installed from the carry set {sha}", result.stderr)
         self.assertIn(cost, result.stderr)
+        (self.run_stack / "install-tuple").chmod(0o000)
+        try:
+            if not os.access(self.run_stack / "install-tuple", os.R_OK):
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("to tell whether a carry set installed this box", result.stderr)
+        finally:
+            (self.run_stack / "install-tuple").chmod(0o644)
         self.assertFalse([c for c in self.calls() if c[:2] == ["cargo", "build"]], self.calls())
 
     def library_install(self, **env):
@@ -10970,6 +11037,18 @@ class CarrySetTests(unittest.TestCase):
                 result = self.run_set("tuple", str(self.set), str(prefix), told, sha)
                 self.assertEqual(result.returncode, 1, result.stdout)
                 self.assertIn(said, result.stderr)
+        shutil.rmtree(prefix)
+        for d in ("bin", "lib", "deploy"):
+            shutil.copytree(self.set / d, prefix / d, symlinks=True)
+        # A build half whose member digest is not the file its row names.
+        (self.set / "build-tuple").write_text(build.replace(f"member.worker = {digest(self.set / 'bin' / 'worker')}",
+                                                            "member.worker = " + "0" * 64))
+        (self.set / "MANIFEST").unlink()
+        self.assertEqual(self.write().returncode, 0)
+        other = digest(self.set / "MANIFEST")
+        result = self.run_set("tuple", str(self.set), str(prefix), report, other)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("build-tuple's member.worker is not the digest of the file the manifest names", result.stderr)
 
     def run_set(self, *args):
         return subprocess.run([sys.executable, str(DEPLOY / "carry_set.py"), *args],
@@ -16933,6 +17012,17 @@ class AgentTupleInstallTests(unittest.TestCase):
         mine, = [row for row in rows if "runtime cublas " in row]
         self.assertIn("[FAULT:", mine)
         self.assertIn(f"is not the build's {'0' * 64}", mine)
+        # Drift on a carried box names the carried way, not update-stack.sh.
+        cudart = self.cuda / "libcudart.so.13.0.1"
+        kept = cudart.read_bytes()
+        cudart.write_bytes(b"patched")
+        try:
+            drift = self.tuple.runtime_rows(install, resolved, None)
+        finally:
+            cudart.write_bytes(kept)
+        drifted, = [row for row in drift if "runtime cudart " in row]
+        self.assertIn("decommission.sh and then install-carry.sh", drifted)
+        self.assertNotIn("update-stack.sh", drifted)
         self.assertEqual(self.statuses([r for r in rows if r is not mine], "runtime "), {"recorded"})
         plain = self.tuple.read_install_tuple(self.write(INSTALL_TUPLE_LINES))
         self.assertEqual(plain["build_runtime"], {})

@@ -10,11 +10,14 @@
 # 7.2), and the operator names it as the build box printed it: a set whose
 # manifest has another digest is another set and is refused. The plan checks
 # the operator's copy of the set against it. The install copies the set into
-# a directory root makes closed under the prefix and checks that copy again
-# (deploy/carry_set.py `check`), so nothing the operator's account can still
-# write is what root places. This script and carry_set.py run from the set
-# itself, so the operator trusts the set's deploy copy as far as the digest
-# it names.
+# a directory root makes closed under the prefix and checks that copy again,
+# so nothing the operator's account can still write is what root places.
+# Root runs no code from the operator's set: it first checks, by sha256sum,
+# that its copy of the manifest is the one the digest names and that its copy
+# of deploy/carry_set.py is the file that manifest names, and then runs that
+# copy (`python3 -I`, so nothing beside it is imported) for its `check` and
+# its `tuple`. This script runs from the set itself, as the operator, so the
+# operator trusts the set's deploy copy as far as the digest it names.
 #
 # **An install refuses unless every carried file equals its manifest line.**
 # It then places the stack as root and reads the placed SPU with the stack's
@@ -27,10 +30,12 @@
 # `library-path` names, and create-agent.sh copies that key into each agent's
 # root, so a root made by hand without it fails at exec. The deploy copy is
 # judged against the programs this box carries (deploy/program_check.py), the
-# names in WEAVER_PROGRAM_DIRS. On any refusal after a file is placed, what
-# was placed is removed.
+# names in WEAVER_PROGRAM_DIRS. On any refusal or signal after a file is
+# placed, what was placed is removed, with each directory this run made.
 #
-# It then writes the stack record as bootstrap-stack.sh does, with
+# It then writes the stack record as bootstrap-stack.sh does, into a
+# directory root makes beside it and renames to it last, so the record stands
+# whole or not at all, with
 # `library-path` the stack's library directory, and the install tuple whole:
 # the build half as carried, each runtime file as it resolves here, and
 # `carry = <manifest sha256>`, by which update-stack.sh knows a carried box
@@ -73,6 +78,10 @@ esac
 SHA=$2
 [[ "$SHA" =~ ^[0-9a-f]{64}$ ]] || die "the manifest sha256 '$SHA' is not 64 lowercase hex digits"
 SET=$(realpath -e -- "$1" 2>/dev/null) && [ -d "$SET" ] || die "the carry set $1 is not a directory"
+[ "$HERE" = "$SET/deploy" ] \
+  || die "this script runs from $HERE, not from the deploy copy of the set it installs ($SET/deploy): run that set's own install-carry.sh"
+command -v python3 >/dev/null || die "no python3 on PATH, which the set's check needs"
+command -v ldd >/dev/null || die "no ldd on PATH, which the resolution check needs"
 
 PREFIX=${WEAVER_PREFIX:-/opt/weaver}
 ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
@@ -94,8 +103,6 @@ plan "admin base    $ADMIN_BASE"
 plan "stack record  $STACK"
 plan "agent dir     $AGENT_DIR"
 plan "programs in   $PROGRAM_DIRS"
-command -v python3 >/dev/null || die "no python3 on PATH, which the set's check needs"
-command -v ldd >/dev/null || die "no ldd on PATH, which the resolution check needs"
 
 # **held_closed PATH: admin's rule for what a root process may trust**, per
 # weaver-admin-Spec section 9 (`judge_ancestors`). PATH, resolved to its
@@ -183,17 +190,36 @@ plan "install -d $ADMIN_BASE and $AGENT_DIR (root:root 0755)"
 say "install"
 sudo -v || die "--install needs sudo"
 STAGING=""
+RECORD=""
 PLACED=0
-# **What a refused install placed is removed**, with the copy root checked:
-# none of the prefix's three directories stood before (section 1).
+MADE=()
+# **What a refused install placed is removed**, with the copy root checked,
+# the record it was filling, and each directory this run made, deepest
+# first and only if empty: none of the prefix's three directories and no
+# stack record stood before (section 1).
 undo() {
+  local i
   if [ "$PLACED" -eq 1 ]; then
     sudo rm -rf -- "${PREFIX:?}/bin" "${PREFIX:?}/lib" "${PREFIX:?}/deploy" || true
   fi
   if [ -n "$STAGING" ]; then sudo rm -rf -- "${STAGING:?}" || true; fi
+  if [ -n "$RECORD" ]; then sudo rm -rf -- "${RECORD:?}" || true; fi
+  for ((i = ${#MADE[@]} - 1; i >= 0; i--)); do sudo rmdir -- "${MADE[i]}" 2>/dev/null || true; done
 }
 trap undo EXIT
-sudo install -d -o root -g root -m 0755 "$PREFIX"
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+# **make_dir DIR: DIR and each missing directory above it, root's, 0755**,
+# each one this run made named for the undo. A directory that stands is left
+# as it is, its mode included.
+make_dir() {
+  local d=$1 missing=()
+  while ! standing "$d"; do missing=("$d" "${missing[@]}"); d=$(dirname -- "$d"); done
+  [ ${#missing[@]} -gt 0 ] || return 0
+  sudo install -d -o root -g root -m 0755 "${missing[@]}" || die "root could not make ${missing[-1]}"
+  MADE+=("${missing[@]}")
+}
+make_dir "$PREFIX"
 STAGING=$(sudo mktemp -d "$PREFIX/.carry-XXXXXX") || die "root could not make the directory to check the set in"
 sudo install -d -o root -g root -m 0755 "$STAGING/bin" "$STAGING/lib" "$STAGING/deploy"
 sudo install -o root -g root -m 0644 "$SET/MANIFEST" "$STAGING/MANIFEST"
@@ -204,7 +230,23 @@ while IFS=$'\t' read -r kind _ mode path; do
     sudo install -o root -g root -m "$mode" "$SET/$path" "$STAGING/$path"
   fi
 done <<<"$ROWS"
-sudo python3 "$HERE/carry_set.py" check "$STAGING" "$SHA" >/dev/null \
+# **Root's check runs root's copy of the checker**, once root has read, with
+# this script's own code and the box's python3, that its copy of the
+# manifest is the one SHA names and that its copy of carry_set.py is the file
+# that manifest names.
+sudo python3 -I -c 'import hashlib, sys
+manifest, sha, checker = sys.argv[1:4]
+digest = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
+if digest(manifest) != sha:
+    sys.exit(f"root'"'"'s copy of the manifest is not the one {sha} names")
+rows = [l.split("\t") for l in open(manifest, encoding="ascii").read().splitlines()[2:]]
+named = [r[1] for r in rows if len(r) == 4 and r[0] == "file" and r[3] == "deploy/carry_set.py"]
+if len(named) != 1 or digest(checker) != named[0]:
+    sys.exit("root'"'"'s copy of deploy/carry_set.py is not the file the manifest names")' \
+  "$STAGING/MANIFEST" "$SHA" "$STAGING/deploy/carry_set.py" \
+  || die "root's copy of the set is not the set $SHA names; nothing is placed"
+CHECKER=$STAGING/deploy/carry_set.py
+sudo python3 -I "$CHECKER" check "$STAGING" "$SHA" >/dev/null \
   || die "root's copy of the set is not the set $SHA names (carry_set.py said why above); nothing is placed"
 plan "checked root's copy"
 PLACED=1
@@ -225,7 +267,7 @@ rc=0
 LDD_SAID=$(env -u LD_LIBRARY_PATH -u LD_PRELOAD -u LD_AUDIT -u GLIBC_TUNABLES \
   LD_LIBRARY_PATH="$PREFIX/lib" ldd "$PREFIX/bin/weaver-spu" 2>&1) || rc=$?
 [ "$rc" -eq 0 ] || { printf '%s\n' "$LDD_SAID" >&2; die "ldd could not read the placed weaver-spu (it exited $rc); what was placed is removed"; }
-TUPLE=$(sudo python3 "$HERE/carry_set.py" tuple "$STAGING" "$PREFIX" "$LDD_SAID" "$SHA") \
+TUPLE=$(sudo python3 -I "$CHECKER" tuple "$STAGING" "$PREFIX" "$LDD_SAID" "$SHA") \
   || die "the placed stack is not the set as carried (carry_set.py said why above); what was placed is removed"
 plan "weaver-spu resolves its engine and runtime from $PREFIX/lib, each runtime file the build's"
 # **The deploy copy calls only programs this box carries** (#610): the names
@@ -244,8 +286,9 @@ python3 "$PREFIX/deploy/program_check.py" --programs <(box_programs) --copy "$PR
 plan "the deploy copy calls only programs this box carries"
 
 say "stack record"
-sudo install -d -o root -g root -m 0755 "$STACK"
-w() { printf '%s\n' "$2" | sudo tee "$STACK/$1" >/dev/null; sudo chmod 0644 "$STACK/$1"; plan "$1 = $2"; }
+make_dir "$(dirname -- "$STACK")"
+RECORD=$(sudo mktemp -d "$(dirname -- "$STACK")/.stack-XXXXXX") || die "root could not make the directory to fill the stack record in"
+w() { printf '%s\n' "$2" | sudo tee "$RECORD/$1" >/dev/null; sudo chmod 0644 "$RECORD/$1"; plan "$1 = $2"; }
 w worker-binary "$PREFIX/bin/worker"
 w spu-binary "$PREFIX/bin/weaver-spu"
 w gate-binary "$PREFIX/bin/weaver-gate"
@@ -254,15 +297,24 @@ w coordination-root /run
 w library-path "$PREFIX/lib"
 w prefix "$PREFIX"
 w agent-directory "$AGENT_DIR"
-sudo install -d -o root -g root -m 0755 "$ADMIN_BASE"
-plan "admin base $ADMIN_BASE (empty)"
-sudo install -d -o root -g root -m 0755 "$AGENT_DIR"
 
 say "tuple"
 printf '%s\n' "$TUPLE" | sed 's/^/   /'
-printf '%s\n' "$TUPLE" | sudo tee "$STACK/install-tuple" >/dev/null
-sudo chmod 0644 "$STACK/install-tuple"
+printf '%s\n' "$TUPLE" | sudo tee "$RECORD/install-tuple" >/dev/null
+sudo chmod 0644 "$RECORD/install-tuple"
+make_dir "$ADMIN_BASE"
+plan "admin base $ADMIN_BASE (empty)"
+make_dir "$AGENT_DIR"
+# **The record stands whole or not at all**: renamed into place last, never
+# over a record that came to stand meanwhile (rename(2) replaces an empty
+# directory, so no-clobber), the filled directory still standing meaning the
+# rename did not happen.
+sudo chmod 0755 "$RECORD"
+sudo mv -T -n -- "$RECORD" "$STACK" || true
+[ ! -e "$RECORD" ] || die "the stack record could not be renamed to $STACK, which may have come to stand meanwhile; what was placed is removed"
+RECORD=""
 PLACED=0
+MADE=()
 undo
-trap - EXIT
+trap - EXIT INT TERM HUP
 say "installed carry set ${SHA:0:12} at $COMMIT"
