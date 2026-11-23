@@ -350,12 +350,12 @@ What it does, so the log can say which step a failure was at:
    outside them (the log's last 20 where none stands), and naming the log, which is
    kept (#128). `update-stack.sh`'s test step does the same.
 4. `cargo build --release --locked --workspace --features
-   weaver-spu/cuda,weaver-state/sqlite`. The engine is named,
-   though it is the default, or the member refuses an agent electing it at load
-   (measured 2026-09-11). The CUDA host compiler is `NVCC_CCBIN`, judged in step 1. A build that fails refuses with the first lines cargo
-   names as the cause and the log's last 60, naming the log, and never goes on
-   to install what an earlier build left in the target directory (#128). The engine is
-   built with its OpenSSL lookup off (`CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON`,
+   weaver-spu/cuda,weaver-state/sqlite`. The engine is named, though it is the default,
+   or the member refuses an agent electing it at load (measured 2026-09-11). The CUDA
+   host compiler is `NVCC_CCBIN`, judged in step 1. A build that fails refuses with the
+   first lines cargo names as the cause and the log's last 60, naming the log, and never
+   goes on to install what an earlier build left in the target directory (#128). The
+   engine is built with its OpenSSL lookup off (`CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON`,
    weaver-spu-Spec section 1.1): nothing in the agent downloads a model, and the
    cpp-httplib bundled with llama.cpp does not compile against OpenSSL 4.1. The
    repository's `.cargo/config.toml` forces the variable for every cargo run started

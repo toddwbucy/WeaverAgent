@@ -208,11 +208,11 @@ tuple_first_header() {
 # directory's `cccl`, the second as a system include (its nvcc.profile). So
 # the header is the first an include directory of NVCC_PREPEND_FLAGS holds.
 # Else it is the toolkit's, beside the nvcc on PATH, under this host's own
-# target (`toolkit_target`, deploy/engine-libraries.sh). Of the compiles' own flags, weaver-spu's build
-# script adds `$CUDA_PATH/include` (else `$CUDA_ROOT`, else /usr/local/cuda),
-# and a header there that is not the toolkit's file is a CCCL the engine's
-# compile does not read, so the version is not read past it. The engine's own
-# flags are not read.
+# target (`toolkit_target`, deploy/engine-libraries.sh). Of the compiles' own
+# flags, weaver-spu's build script adds `$CUDA_PATH/include` (else
+# `$CUDA_ROOT`, else /usr/local/cuda), and a header there that is not the
+# toolkit's file is a CCCL the engine's compile does not read, so the version
+# is not read past it. The engine's own flags are not read.
 #
 # The header defines `CCCL_VERSION` as one decimal number, major times a
 # million, plus minor times a thousand, plus patch, and the other version
