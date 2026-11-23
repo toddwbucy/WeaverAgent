@@ -41,6 +41,12 @@ Two things were measured or read while planning:
    copy. Whether that storage is the machine's first disk or a disk that the operator
    attaches is the operator's choice. `weaver-admin-PRD` section 7.5 stands as written,
    and the models drive is out of this act.
+4. **The suite ships no sealed image for now.** The image paragraphs leave in this act
+   and return if an image does. Section 7.1's image terms and the documents that cite
+   the old section 7.2 are swept by the act's last child, which changes documents only.
+5. **The operating system sentence of section 7.2 stands as written.**
+6. **The four CUDA runtime files travel in the carry set**, unmodified. `REDEPLOY.md`
+   states facts about their licence and makes no claim about what it allows.
 
 The Planner's rulings on the plan, 2026-11-23:
 
@@ -69,6 +75,7 @@ The Planner's rulings on the plan, 2026-11-23:
 | First child: no silent pass without pacman | The cccl version is read from the header nvcc reads first, by no package manager, and an unreadable or out-of-window version refuses before the build in both build scripts. `NVCC_CCBIN` refuses before the build where it is not an executable file, and its path and version line join the install tuple as `ccbin`. An unset `CUDA_LIB_DIR` derives from the toolkit beside the `nvcc` on `PATH`, or refuses. `engine_resolved` refuses a version-not-found line. |
 | Second child: the carry set | `bootstrap-stack.sh --carry DIR` writes the members, the shell, the engine libraries and the CUDA runtime files with their links, the deploy copy, a manifest, and the build half of the install tuple with `build-runtime.<name>` and `build-os`. It installs nothing, refuses a dirty tree and works with no card. |
 | Third child: the install | `install-carry.sh <set> <manifest sha256> [--install]` checks the set in a staging copy that root holds and refuses on any difference. It installs and checks resolution through the library path alone. It refuses unless each runtime file equals the build's, judges the deploy copy against the box's own programs, and writes the stack record and the install tuple whole. `agent_tuple.py` binds the runtime to the build's digests. `update-stack.sh` refuses a carried box. |
+| Last child: the sweep | Every statement in this repository's documents that the suite ships or builds a sealed image, or that an appliance is made from one, rewritten where the carried stack gives it a true meaning and removed where it does not. "Appliance" is kept, redefined in section 7.1 as a virtual machine the operator presents that installed a carry set. |
 
 ## The carry set
 
@@ -99,3 +106,7 @@ run box with cards; where the model's storage stands; a carried update
 
 The CUDA build on a build box with a toolkit, and the install on a run box with cards.
 The stack stays in draft until both have run for real.
+
+Two questions are open for the operator: whether every carry set that an install tuple
+names stays retrievable by its manifest's sha256, as every published image version once
+stayed published, and what tag, if any, names a carried release.
