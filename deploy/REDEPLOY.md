@@ -537,7 +537,7 @@ agent's processes as their library path (`weaver-admin-Spec` section 6). An agen
 made by hand without `library-path` fails when its SPU is executed.
 
 On a carried box, the deploy scripts are run from `<prefix>/deploy/`
-(`HowToDeployANewAgent.md` section 1).
+(`HowToDeployANewAgent.md` section 1), except the take-down for a newer set, below.
 
 **A newer set on a box that holds one.** `install-carry.sh` is a first install only, and
 `update-stack.sh` refuses a box whose install tuple names a carry set. To put a newer

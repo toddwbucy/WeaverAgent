@@ -8,14 +8,13 @@
 #                                                    refuses unless DIR verifies
 #
 # Box-agnostic, and discovered rather than written: the config bases are every
-# `/etc/weaver/admin*`, each agent's root is a directory under one, the install
-# and territory paths are read out of them and out of the stack record, so a
-# box where no agent was made still names its prefix, the agents are the union of every
-# root, every allow-list of the box-wide layout before 2026-10-01, and every
-# `weaver-*` account and group. A box fact this script
-# needs and cannot find is printed
-# as unknown, never guessed, and the plan is the same reads the archive and the
-# purge make.
+# `/etc/weaver/admin*`, each agent's root is a directory under one, and the
+# install and territory paths are read out of them. The install prefix is also
+# read out of the stack record, so a box where no agent was made still names
+# it. The agents are the union of every root, every allow-list of the box-wide
+# layout before 2026-10-01, and every `weaver-*` account and group. A box fact
+# this script needs and cannot find is printed as unknown, never guessed, and
+# the plan is the same reads the archive and the purge make.
 #
 # **Its precondition, stated once** (deploy/REDEPLOY.md section 1): this is a
 # deliberate, destructive act on the whole box by the operator at a root shell.
@@ -159,18 +158,28 @@ for root in "${CONFIG_ROOTS[@]}"; do
   v=$(read_key "$root" spu-implementations)
   [ -n "$v" ] && BIN_DIRS["$(dirname "$(echo "$v" | awk '{print $2}')")"]=1
 done
-# **The stack record names its binaries' directory too**: a box where no
-# agent was made, as install-carry.sh leaves it, has an empty admin base, and
-# install-carry.sh refuses while `<prefix>/bin`, `lib` or `deploy` stands, so
-# a prefix no agent root names is still planned, archived and purged.
+# **The stack record names the prefix too**: a box where no agent was made,
+# as install-carry.sh leaves it, has an empty admin base, and install-carry.sh
+# refuses while `<prefix>/bin`, `lib` or `deploy` stands, so a prefix no agent
+# root names is still planned, archived and purged. The record's binaries name
+# their directory as a root's do, and its `prefix` key names the prefix
+# itself, so a record whose two disagree loses both. Only an absolute value is
+# taken, never one read against where the script runs, and the prefix never
+# as `/`.
+RECORD_PREFIX=""
 if [ -d /etc/weaver/stack ] && [ ! -L /etc/weaver/stack ]; then
   for k in worker-binary spu-binary gate-binary; do
-    v=$(read_key /etc/weaver/stack "$k"); [ -n "$v" ] && BIN_DIRS["$(dirname "$v")"]=1
+    v=$(read_key /etc/weaver/stack "$k")
+    case $v in /?*) BIN_DIRS["$(dirname "$v")"]=1 ;; esac
   done
+  v=$(read_key /etc/weaver/stack prefix); v=${v%/}
+  case $v in /?*) RECORD_PREFIX=$v ;; esac
 fi
-# The install prefixes: the parent of each bin dir, deduplicated.
+# The install prefixes: the parent of each bin dir, and the stack record's,
+# deduplicated.
 declare -A PREFIXES=()
 for b in "${!BIN_DIRS[@]}"; do PREFIXES["$(dirname "$b")"]=1; done
+[ -z "$RECORD_PREFIX" ] || PREFIXES["$RECORD_PREFIX"]=1
 
 # Agents: roots, allow-lists, and accounts.
 declare -A AGENTS=()

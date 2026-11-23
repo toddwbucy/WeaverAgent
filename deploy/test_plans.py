@@ -6386,7 +6386,7 @@ esac
         """**What a take-down leaves under the prefix blocks the next
         install**: with no stack record and an empty admin base, a
         `<prefix>/bin`, `lib` or `deploy` that stands refuses at the plan,
-        before any sudo, naming decommission.sh. This is why decommission.sh
+        before any sudo, naming the new set's own decommission.sh. This is why decommission.sh
         must take them on a box where no agent was made
         (`test_a_box_with_no_agent_names_its_prefix_from_the_stack_record`).
         Perturbation: drop the check and the plan goes on to sudo."""
@@ -6398,7 +6398,8 @@ esac
                 self.log.unlink(missing_ok=True)
                 result = self.install_carry(carried, sha, "--install")
                 self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-                self.assertIn(f"{prefix / part} already stands. Decommission first.", result.stderr)
+                self.assertIn(f"{prefix / part} already stands. This is a first install; take the box down "
+                              "with the new set's own deploy/decommission.sh", result.stderr)
                 self.assertFalse(self.run_stack.exists())
                 self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
                 (prefix / part).rmdir()
@@ -6513,13 +6514,17 @@ esac
         cost = "decommission.sh, which archives and removes every agent on the box and the stack"
         own = "the new set's own deploy/decommission.sh"
         why = "the purge removes {}, so a rerun after a removal that failed would find no script there"
-        result = self.install_carry(carried, sha)
+        installed = self.run_prefix
+        # Run with another prefix: the refusal names the one the box's record
+        # names, not this run's.
+        result = self.install_carry(carried, sha, WEAVER_PREFIX=str(self.root / "other-prefix"))
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("already stands, so this box holds a stack", result.stderr)
         self.assertIn(cost, result.stderr)
         self.assertIn(own, result.stderr)
-        self.assertIn(f"not {self.run_prefix}/deploy/decommission.sh: " + why.format(f"{self.run_prefix}/deploy"),
+        self.assertIn(f"not {installed}/deploy/decommission.sh: " + why.format(f"{installed}/deploy"),
                       result.stderr)
+        self.assertNotIn("other-prefix/deploy", result.stderr)
         self.log.unlink(missing_ok=True)
         self.env["WEAVER_STACK_RECORD"] = str(self.run_stack)
         result = self.run_script("update-stack.sh")
@@ -12542,14 +12547,16 @@ class DecommissionTests(unittest.TestCase):
         The script runs whole only as root, so its discovery, the plan's
         prefix lines, the archive's prefix parts and `purge_candidates` run
         here as it defines them, against a fixture whose `/etc/weaver` is
-        the box's. Perturbation: read no stack record, and none of the three
-        is planned, archived or purged."""
+        the box's. A record whose binaries are relative names its prefix by
+        its `prefix` key alone, and a record whose prefix is `/` names none.
+        Perturbations: read no stack record, and none of the three is
+        planned, archived or purged; take a relative binary, and `.` and
+        `bin` become prefixes; take `/`, and `//bin` is a candidate."""
         script = self.script
         def cut(start, end):
             i = script.index(start)
             return script[i:script.index(end, i) + len(end)]
-        discovery = cut("CONFIG_ROOTS=()\n",
-                        'for b in "${!BIN_DIRS[@]}"; do PREFIXES["$(dirname "$b")"]=1; done\n')
+        discovery = cut("CONFIG_ROOTS=()\n", '[ -z "$RECORD_PREFIX" ] || PREFIXES["$RECORD_PREFIX"]=1\n')
         plan_lines = cut('say "install prefixes (models excluded from every mode)"\n',
                          '  [ -d "$p/models" ] && plan "$p/models  $(du -sh "$p/models" | cut -f1)  KEPT"\ndone\n')
         archive_parts = cut('  for p in "${!PREFIXES[@]}"; do\n    parts=()\n',
@@ -12581,7 +12588,10 @@ class DecommissionTests(unittest.TestCase):
                        + shell_function(script, "purge_candidates") + "purge_candidates\n")
             program = program.replace("/etc/weaver", f"{box}/etc/weaver")
             env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
-            run = subprocess.run(["bash", "-c", program], env=env, text=True, capture_output=True, timeout=20)
+            def run_from(cwd):
+                return subprocess.run(["bash", "-c", program], env=env, text=True, capture_output=True,
+                                      timeout=20, cwd=cwd)
+            run = run_from(box)
             self.assertEqual(run.returncode, 0, run.stderr)
             lines = run.stdout.splitlines()
             for sub in ("bin", "lib", "deploy"):
@@ -12593,6 +12603,28 @@ class DecommissionTests(unittest.TestCase):
                             run.stdout)
             self.assertNotIn(f"candidate {prefix / 'models'}", lines)
             self.assertNotIn(f"archive {prefix / 'models'}", lines)
+            # Relative binaries, run from a directory that holds bin, lib and
+            # deploy of its own: only the record's prefix is taken.
+            here = box / "set"
+            for sub in ("bin", "lib", "deploy"):
+                (here / sub).mkdir(parents=True)
+            for key in ("worker-binary", "spu-binary", "gate-binary"):
+                (record / key).write_text(f"bin/{key}\n")
+            run = run_from(here)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            lines = run.stdout.splitlines()
+            self.assertIn(f"candidate {prefix / 'bin'}", lines)
+            for stray in ("./bin", "bin/bin", "./deploy"):
+                self.assertNotIn(f"candidate {stray}", lines)
+            self.assertFalse([l for l in lines if l.startswith("candidate ") and not l.startswith(f"candidate {box}")],
+                             run.stdout)
+            # A record whose prefix is the root names no prefix.
+            (record / "prefix").write_text("/\n")
+            run = run_from(here)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertFalse([l for l in run.stdout.splitlines()
+                              if l.startswith(("candidate ", "archive ")) and not l.startswith(
+                                  (f"candidate {box}", f"archive {box}"))], run.stdout)
 
     def one_line_function(self, name):
         """A function the script defines on one line, read out of its text."""

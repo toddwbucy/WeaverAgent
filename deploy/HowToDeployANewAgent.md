@@ -94,7 +94,9 @@ group in one shell.
 - On a box whose stack was installed from a carry set (`deploy/REDEPLOY.md` section
   3a), the deploy scripts are run from the stack's own copy, `<prefix>/deploy/`, since
   the box holds no checkout: `<prefix>/deploy/create-agent.sh`,
-  `<prefix>/deploy/verify-load.sh` and the others that copy holds.
+  `<prefix>/deploy/verify-load.sh` and the others that copy holds. The take-down for a
+  newer set is the exception: it runs the new set's own `deploy/decommission.sh`
+  (`REDEPLOY.md` section 3a).
 - The artifact is on the box, under `/opt/weaver/models`, and its hash is known. An
   agent's identity is its artifact as much as its prompt, so record the sha256 in the
   run log with the declaration's.
