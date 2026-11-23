@@ -32,7 +32,7 @@ Record in the run log, from the box, not from memory:
 uname -n; uname -r
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 nvcc --version | tail -1
-pacman -Q cuda cccl
+grep -rhE --include=version.h '^#define CCCL_VERSION ' "$(dirname "$(dirname "$(readlink -f "$(command -v nvcc)")")")"/targets/*/include
 rustup show active-toolchain
 sudo deploy/decommission.sh            # the plan: what stands, discovered
 ```
@@ -330,8 +330,10 @@ deploy/bootstrap-stack.sh --install    # then install under sudo
 
 What it does, so the log can say which step a failure was at:
 
-1. Prints the box facts and refuses if `cccl` is outside the 3.1.4-3.3.4 window, if
-   there is no `nvcc`, if the stack record `/etc/weaver/stack` or `<prefix>/bin`
+1. Prints the box facts and refuses if there is no `nvcc`, if the CCCL version nvcc
+   reads cannot be read or lies outside the 3.1.4-3.3.4 window, if `NVCC_CCBIN` (an
+   absolute path or a name on `PATH`, never nvcc's directory form) names no executable
+   file, if the stack record `/etc/weaver/stack` or `<prefix>/bin`
    already stands, or if `/etc/weaver/admin` holds anything. It refuses too where the
    shell's build lacks a tool (`build-busybox.sh --preflight`: tar with bzip2, make, a C
    compiler that links statically, python3, and curl unless `BUSYBOX_TARBALL` names
@@ -348,13 +350,12 @@ What it does, so the log can say which step a failure was at:
    outside them (the log's last 20 where none stands), and naming the log, which is
    kept (#128). `update-stack.sh`'s test step does the same.
 4. `cargo build --release --locked --workspace --features
-   weaver-spu/cuda,weaver-state/sqlite`. The engine is named,
-   though it is the default, or the member refuses an agent electing it at load
-   (measured 2026-09-11). The CUDA host compiler is `NVCC_CCBIN`, defaulted as
-   `update-stack.sh` defaults it. A build that fails refuses with the first lines cargo
-   names as the cause and the log's last 60, naming the log, and never goes on
-   to install what an earlier build left in the target directory (#128). The engine is
-   built with its OpenSSL lookup off (`CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON`,
+   weaver-spu/cuda,weaver-state/sqlite`. The engine is named, though it is the default,
+   or the member refuses an agent electing it at load (measured 2026-09-11). The CUDA
+   host compiler is `NVCC_CCBIN`, judged in step 1. A build that fails refuses with the
+   first lines cargo names as the cause and the log's last 60, naming the log, and never
+   goes on to install what an earlier build left in the target directory (#128). The
+   engine is built with its OpenSSL lookup off (`CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON`,
    weaver-spu-Spec section 1.1): nothing in the agent downloads a model, and the
    cpp-httplib bundled with llama.cpp does not compile against OpenSSL 4.1. The
    repository's `.cargo/config.toml` forces the variable for every cargo run started
@@ -404,10 +405,11 @@ What it does, so the log can say which step a failure was at:
    engine-source = git+<fork url>?rev=<40 hex>#<40 hex>
    engine-vendored = <40 hex>
    nvcc = <release>, V<version>
+   ccbin = <path> <its --version line>   (NVCC_CCBIN, the engine kernels' host compiler)
    member.<name> = <64 hex>              (one per installed member, the shell's two files among them)
    library.<versioned file> = <64 hex>   (one per engine library)
    runtime.cudart = <64 hex> <file>      (and cublas, cublaslt, curand)
-   cccl = <package version>               (pacman's, or with no pacman <package>=<version> from dpkg)
+   cccl = <major>.<minor>.<patch>         (CCCL_VERSION in the CCCL header nvcc reads first)
    ```
 
    Each `runtime.` line is the file the installed SPU's library name leads to, as
@@ -424,6 +426,69 @@ What it does, so the log can say which step a failure was at:
 The SPU is the Rust implementation. `create-agent.sh --spu /absolute/path/to/custom-spu`
 can still select a separately installed Rust binary for one agent. The Python zipapp
 and its installation procedure are retired.
+
+## 3a. Carrying a stack to another box
+
+On the operator's ruling of 2026-11-23 **the binaries are carried** (`weaver-admin-PRD`
+section 7.2): a build box writes a carry set, and a run box installs it with no compiler
+and no CUDA toolkit. On the build box, as the operator, never under sudo:
+
+```sh
+deploy/bootstrap-stack.sh --carry <dir>
+```
+
+It makes the checks of section 3 step 1 that concern the build (nvcc, the CCCL window,
+`NVCC_CCBIN`, the shell's tools) and none that concern this box's stack, which it
+neither reads nor writes, so a build box that runs an agent writes a set beside it. It
+refuses, before the build:
+
+- a tree that is not a clean git checkout, since a set names one commit;
+- a `<dir>` that stands, or whose parent is not a directory the operator owns that no
+  group or other can write, or with a directory above it that is neither the operator's
+  nor root's, or that a group or other can write and is not sticky (a relative `<dir>`
+  is read from the directory the operator ran the script in);
+- a toolkit with no library directory for this host's target, and a `CUDA_LIB_DIR` that
+  names any other directory.
+
+**A build box needs no card.** Nothing in a set reads the hardware: both kernel builds
+compile for a fixed list of architectures, and the driver's own library, `libcuda`,
+which a box with no driver lacks, belongs to the run box and is never carried. The
+operator names the toolkit by the nvcc on `PATH` and the host compiler by `NVCC_CCBIN`,
+as for any build.
+
+It then tests and builds as section 3 steps 3 and 4 do, and reads the built SPU with
+the engine's output directory and the toolkit's library directory as its library path.
+It refuses unless every engine library resolves from the engine's output directory and
+each of the four CUDA runtime files from the toolkit's library directory, no library or
+symbol version is not found but the driver's, and no other library of the toolkit is
+named. Every library the SPU takes from the engine's output directory must be one of the
+engine's own, since the set carries those by name. Before it writes the manifest, it
+reads the tree again and refuses if HEAD or a tracked file moved during the build (a
+checkout made and undone before that read is not seen). It writes the set into a
+directory beside `<dir>` and renames it to `<dir>` once the set is whole, never over a
+directory that came to stand meanwhile, so `<dir>` is a whole set or does not stand:
+
+```text
+<dir>/
+  MANIFEST      one row per entry, sorted by path; its sha256 names the set
+  build-tuple   the build's half of the install tuple
+  bin/          the members, busybox and busybox.applets
+  lib/          the engine libraries, and libcudart, libcublas, libcublasLt and
+                libcurand, each versioned file beside its links
+  deploy/       every file deploy/deployed-copy.txt names, the list included
+```
+
+The manifest opens with `# weaver carry set 1` and `# commit <40 hex>`, and its rows are
+`file<TAB><sha256><TAB><0755|0644><TAB><path>` and `link<TAB><target><TAB>-<TAB><path>`
+(`deploy/carry_set.py`). `build-tuple` holds the lines of section 3 step 6, with
+`build-os = <ID> <VERSION_ID>` (from os-release) after `ccbin` and a
+`build-runtime.<name> = <sha256>` line for each carried runtime file in place of the
+`runtime.` lines. The run's last line is the manifest's sha256. Record it with the set:
+the install takes it as an argument.
+
+The four CUDA runtime files, libcudart, libcublas, libcublasLt and libcurand, are
+carried unmodified, as the toolkit installed them. The licence text that governs them
+ships with the operator's CUDA toolkit, and the operator reads it there.
 
 ## 4. Agents
 
