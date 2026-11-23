@@ -900,7 +900,8 @@ def runtime_rows(install, resolved, unread, failed=None, unbound=None):
     drifted from its install, which a sealed image must never show, and
     which a box updated since its install clears by rewriting its record
     (update-stack.sh --install), or, on a box installed from a carry set,
-    by decommission.sh and a fresh install-carry.sh. On a carried box each
+    by the new set's own deploy/decommission.sh and a fresh install-carry.sh
+    (deploy/REDEPLOY.md section 3a). On a carried box each
     file must also equal the build's digest (`build-runtime.<key>`).
 
     **Fail closed**: `failed` is why the loader's read cannot be trusted or
@@ -981,8 +982,9 @@ def runtime_rows(install, resolved, unread, failed=None, unbound=None):
             lines.append(row("bind", field, live, "FAULT",
                              f"drift from the install: the install tuple records {recorded[0]} "
                              f"{recorded[1]}. "
-                             + ("A carried box takes a newer carry set by decommission.sh and then "
-                                "install-carry.sh" if install.get("facts", {}).get("carry") else
+                             + ("A carried box takes a newer carry set by the new set's own "
+                                "deploy/decommission.sh and then install-carry.sh (deploy/REDEPLOY.md "
+                                "section 3a)" if install.get("facts", {}).get("carry") else
                                 "A sealed image never shows this; a box updated since its install "
                                 "rewrites the record with update-stack.sh --install")))
     return lines

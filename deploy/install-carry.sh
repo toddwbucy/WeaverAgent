@@ -42,9 +42,10 @@
 # and refuses it. Nothing it writes reads this box's name or address.
 #
 # **This is a first install only.** A box whose stack record stands takes a
-# newer set after decommission.sh, which archives and removes every agent on
-# the box and the stack, and then this script (deploy/REDEPLOY.md section
-# 3a).
+# newer set after the new set's own deploy/decommission.sh, which archives and
+# removes every agent on the box and the stack, and then this script
+# (deploy/REDEPLOY.md section 3a). The copy under the prefix is not the one to
+# run, since the purge removes it.
 #
 # Box facts are environment, defaulted and printed, as bootstrap-stack.sh
 # names them:
@@ -145,15 +146,22 @@ standing() { # standing PATH: 0 stands, 1 absent, refuses where it cannot tell
 }
 # **A second set on a box that holds one** is refused: a carried update is not
 # built yet, and two writers of one record is how a box drifts.
+# The way to a newer set, named in each refusal below: the new set's own
+# decommission.sh, since the purge removes the copy under the prefix.
+TAKE_DOWN="take the box down with the new set's own deploy/decommission.sh, which archives and removes every agent on the box and the stack, and then run this script (deploy/REDEPLOY.md section 3a)"
 if standing "$STACK"; then
-  die "$STACK already stands, so this box holds a stack. To put a newer carry set on it, take the box down with decommission.sh, which archives and removes every agent on the box and the stack, and then run this script (deploy/REDEPLOY.md section 3a)."
+  # The prefix the standing record names, not this run's.
+  standing_prefix=""
+  { IFS= read -r standing_prefix < "$STACK/prefix"; } 2>/dev/null || true
+  [ -n "$standing_prefix" ] || standing_prefix="<prefix>"
+  die "$STACK already stands, so this box holds a stack. To put a newer carry set on it, $TAKE_DOWN. Run the new set's copy, not $standing_prefix/deploy/decommission.sh: the purge removes $standing_prefix/deploy, so a rerun after a removal that failed would find no script there."
 fi
 if standing "$ADMIN_BASE"; then
   listing=$(LC_ALL=C ls -A -- "$ADMIN_BASE" 2>&1) || die "cannot list $ADMIN_BASE to see whether it holds configuration: $listing"
-  [ -z "$listing" ] || die "$ADMIN_BASE already holds configuration. This is a first install; take the box down with decommission.sh first."
+  [ -z "$listing" ] || die "$ADMIN_BASE already holds configuration. This is a first install; $TAKE_DOWN."
 fi
 for part in bin lib deploy; do
-  if standing "$PREFIX/$part"; then die "$PREFIX/$part already stands. Decommission first."; fi
+  if standing "$PREFIX/$part"; then die "$PREFIX/$part already stands. This is a first install; $TAKE_DOWN."; fi
 done
 # Each place this script makes is judged as bootstrap-stack.sh judges it, the
 # prefix among them, since its library directory joins every agent's library

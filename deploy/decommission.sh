@@ -8,13 +8,13 @@
 #                                                    refuses unless DIR verifies
 #
 # Box-agnostic, and discovered rather than written: the config bases are every
-# `/etc/weaver/admin*`, each agent's root is a directory under one, the install
-# and territory paths are read out of them, the agents are the union of every
-# root, every allow-list of the box-wide layout before 2026-10-01, and every
-# `weaver-*` account and group. A box fact this script
-# needs and cannot find is printed
-# as unknown, never guessed, and the plan is the same reads the archive and the
-# purge make.
+# `/etc/weaver/admin*`, each agent's root is a directory under one, and the
+# install and territory paths are read out of them. The install prefix is also
+# read out of the stack record, so a box where no agent was made still names
+# it. The agents are the union of every root, every allow-list of the box-wide
+# layout before 2026-10-01, and every `weaver-*` account and group. A box fact
+# this script needs and cannot find is printed as unknown, never guessed, and
+# the plan is the same reads the archive and the purge make.
 #
 # **Its precondition, stated once** (deploy/REDEPLOY.md section 1): this is a
 # deliberate, destructive act on the whole box by the operator at a root shell.
@@ -127,6 +127,13 @@ CONFIG_ROOTS=()
 for d in /etc/weaver/admin*; do [ -d "$d" ] && CONFIG_ROOTS+=("$d"); done
 
 read_key() { cat "$1/$2" 2>/dev/null || true; }
+# **A prefix is an absolute path in plain form, and never `/`**: no empty, `.`
+# or `..` component. Anything else could name the box's own /bin and /lib
+# (`/`, `/.`, `/bin/..`) or a directory read against where the script runs.
+plain_prefix() {
+  case $1 in /?*) ;; *) return 1 ;; esac
+  case "$1/" in *//*|*/./*|*/../*) return 1 ;; esac
+}
 
 # Every path admin's configs name, so the install tree is the one the box
 # actually ran and not the one this script remembers.
@@ -158,9 +165,35 @@ for root in "${CONFIG_ROOTS[@]}"; do
   v=$(read_key "$root" spu-implementations)
   [ -n "$v" ] && BIN_DIRS["$(dirname "$(echo "$v" | awk '{print $2}')")"]=1
 done
-# The install prefixes: the parent of each bin dir, deduplicated.
+# **The stack record names the prefix too**: a box where no agent was made,
+# as install-carry.sh leaves it, has an empty admin base, and install-carry.sh
+# refuses while `<prefix>/bin`, `lib` or `deploy` stands, so a prefix no agent
+# root names is still planned, archived and purged. The record's binaries name
+# their directory as a root's do, and its `prefix` key names the prefix
+# itself, so where the two disagree both are taken.
+RECORD_PREFIX=""
+if [ -d /etc/weaver/stack ] && [ ! -L /etc/weaver/stack ]; then
+  for k in worker-binary spu-binary gate-binary; do
+    v=$(read_key /etc/weaver/stack "$k"); [ -n "$v" ] && BIN_DIRS["$(dirname "$v")"]=1
+  done
+  v=$(read_key /etc/weaver/stack prefix); v=${v%/}
+  ! plain_prefix "$v" || RECORD_PREFIX=$v
+fi
+# **Every source is held to plain_prefix here, where the prefixes are
+# filled**: a bin dir is kept only when it and its parent, its prefix, are
+# both plain, so a relative value, an empty field, `/bin` or `/./bin` names
+# no prefix and no candidate admin binary.
+declare -A KEPT_BIN_DIRS=()
+for b in "${!BIN_DIRS[@]}"; do
+  plain_prefix "$b" && plain_prefix "$(dirname "$b")" && KEPT_BIN_DIRS["$b"]=1
+done
+BIN_DIRS=()
+for b in "${!KEPT_BIN_DIRS[@]}"; do BIN_DIRS["$b"]=1; done
+# The install prefixes: the parent of each bin dir, and the stack record's,
+# deduplicated.
 declare -A PREFIXES=()
 for b in "${!BIN_DIRS[@]}"; do PREFIXES["$(dirname "$b")"]=1; done
+[ -z "$RECORD_PREFIX" ] || PREFIXES["$RECORD_PREFIX"]=1
 
 # Agents: roots, allow-lists, and accounts.
 declare -A AGENTS=()
