@@ -1800,7 +1800,8 @@ environment with a fixed one, `PATH=/usr/bin:/bin`, `HOME` the agent's home,
 directory of the engine libraries, and of the CUDA runtime files the SPU resolves where
 the stack carries them (`weaver-admin-PRD` section 7.2), the value `unit-properties`
 carried before it retired, and nothing else, so no variable of the caller's or of sudo's
-reaches the worker or the organs that inherit its environment. **`library-path` is judged and recorded**: the directory it
+reaches the worker or the organs that
+inherit its environment. **`library-path` is judged and recorded**: the directory it
 names is held to the root's own judgment, root-owned and writable by no group or other,
 its ancestors closed as the root's are, because whatever it holds is loaded into the
 worker and its organs, and its value rides the enter for the harness to record on the

@@ -1134,10 +1134,10 @@ condition, and the suite does not teach it.
 ### 7.2 The carried stack
 
 **The binaries are carried**, on the operator's ruling of 2026-11-23. A build box
-compiles the stack from a named commit and writes a carry set. A run box, which holds no
-compiler and no CUDA toolkit, receives the carry set and installs it. The build box
-installs a carry set the same way, so nothing an install writes depends on which box
-built the set.
+compiles the stack from a named commit and writes a carry set, and writing it installs
+nothing. A run box, which holds no compiler and no CUDA toolkit, receives the carry set
+and installs it. A build box that also runs the agent installs the set as a run box
+does, so nothing an install writes depends on which box built the set.
 
 **The operating system is the operator's.** A carry set installs on a box whose C
 library and C++ runtime are no older than the build box's, with systemd as PID 1 and
@@ -1185,8 +1185,9 @@ upgrade moves the state and the model to a new version of the harness. Reproduci
 is claimed for one carry set on one set of hardware, and nothing is claimed across carry
 sets.
 
-**A carry set holds no model and no state.** Where the model and the state stand is
-section 7.5's.
+**A carry set holds no model, no state, and no key or other secret**, so no two boxes
+that install one set share a credential through it (section 7.4). Where the model and
+the state stand is section 7.5's.
 
 ### 7.3 Getting in
 

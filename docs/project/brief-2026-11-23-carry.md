@@ -67,7 +67,7 @@ The Planner's rulings on the plan, 2026-11-23:
 |---|---|
 | Base | This brief. `weaver-admin-PRD` section 7.2 rewritten and 7.1's cross-reference to it. `weaver-admin-Spec` section 6: `library-path` names the CUDA runtime files the SPU resolves as well as the engine libraries. |
 | First child: no silent pass without pacman | The cccl version is read from the header nvcc reads first, by no package manager, and an unreadable or out-of-window version refuses before the build in both build scripts. `NVCC_CCBIN` refuses before the build where it is not an executable file, and its path and version line join the install tuple as `ccbin`. An unset `CUDA_LIB_DIR` derives from the toolkit beside the `nvcc` on `PATH`, or refuses. `engine_resolved` refuses a version-not-found line. |
-| Second child: the carry set | `bootstrap-stack.sh --carry DIR` writes the members, the shell, the engine libraries and the CUDA runtime files with their links, the deploy copy, a manifest, and the build half of the install tuple with `build-runtime.<name>` and `build-os`. It refuses a dirty tree and works with no card. |
+| Second child: the carry set | `bootstrap-stack.sh --carry DIR` writes the members, the shell, the engine libraries and the CUDA runtime files with their links, the deploy copy, a manifest, and the build half of the install tuple with `build-runtime.<name>` and `build-os`. It installs nothing, refuses a dirty tree and works with no card. |
 | Third child: the install | `install-carry.sh <set> <manifest sha256> [--install]` checks the set in a staging copy that root holds and refuses on any difference. It installs and checks resolution through the library path alone. It refuses unless each runtime file equals the build's, judges the deploy copy against the box's own programs, and writes the stack record and the install tuple whole. `agent_tuple.py` binds the runtime to the build's digests. `update-stack.sh` refuses a carried box. |
 
 ## The carry set
@@ -76,7 +76,8 @@ The Planner's rulings on the plan, 2026-11-23:
 <set>/
   MANIFEST       one row per entry; its sha256 names the set
   build-tuple    the build half of the install tuple, `key = value`
-  bin/           the six members, busybox, busybox.applets
+  bin/           the stack's members (weaver-admin-Spec section 6), busybox,
+                 busybox.applets
   lib/           the engine libraries and the CUDA runtime files the SPU resolves,
                  each versioned file with its links
   deploy/        every file deploy/deployed-copy.txt names, the list included
