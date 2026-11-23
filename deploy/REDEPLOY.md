@@ -461,9 +461,10 @@ the engine's output directory and the toolkit's library directory as its library
 It refuses unless every engine library resolves from the engine's output directory and
 each of the four CUDA runtime files from the toolkit's library directory, no library or
 symbol version is not found but the driver's, and no other library of the toolkit is
-named. Every library the SPU takes from the engine's output directory must be one of
-the engine's own, since the set carries those by name. It reads the tree again and
-refuses if HEAD or the status moved during the build. It writes the set into a
+named. Every library the SPU takes from the engine's output directory must be one of the
+engine's own, since the set carries those by name. Before it writes the manifest, it
+reads the tree again and refuses if HEAD or a tracked file moved during the build (a
+checkout made and undone before that read is not seen). It writes the set into a
 directory beside `<dir>` and renames it to `<dir>` once the set is whole, never over a
 directory that came to stand meanwhile, so `<dir>` is a whole set or does not stand:
 

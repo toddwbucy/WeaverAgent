@@ -1055,7 +1055,12 @@ elif name == 'git':
         if commit == 'nogit': sys.exit(128)
         args = args[2:]
         if args[:1] == ['rev-parse']: print(commit[:7] if '--short' in args else commit)
-        elif args[:1] == ['status']: print(os.environ.get('FIXTURE_STATUS', ''), end='')
+        elif args[:1] == ['status']:
+            print(os.environ.get('FIXTURE_STATUS', ''), end='')
+            # Files the build wrote in the tree unignored (TREE_UNTRACKED),
+            # which status lists only where untracked files are asked for.
+            if (root / 'tree-untracked').exists() and '--untracked-files=no' not in args:
+                print('?? out/weaver-deploy-build.log')
         sys.exit(0)
     if args[0] == 'rev-parse': print('abcdef0')
     # FIXTURE_BRANCH set empty stands for a detached checkout, which
@@ -1101,6 +1106,7 @@ elif name == 'cargo':
             sys.exit(42)
         target.joinpath('release').mkdir(parents=True)
         if os.environ.get('MOVE_TREE'): (root / 'tree-moved').touch()
+        if os.environ.get('TREE_UNTRACKED'): (root / 'tree-untracked').touch()
         for member in ('worker', 'weaver-admin', 'weaver-trace-relay', 'weaver-gate', 'weaver-spu', 'weaver-state'):
             target.joinpath('release', member).write_text('fixture artifact ' + member)
             # CARGO_EXECUTABLE stands for a build whose members are programs,
@@ -6100,6 +6106,7 @@ esac
             (self.sets / "mine").mkdir(mode=0o755)
             self.carry_refusal(f"{self.sets}, above where the carry set would be written, is a directory another "
                                "principal could rename a name in", False, name="mine/set-3")
+            self.assertEqual(list((self.sets / "mine").iterdir()), [])
         finally:
             self.sets.chmod(0o755)
 
@@ -6187,10 +6194,20 @@ esac
     def test_carry_refuses_a_tree_the_build_moved(self):
         """**The set carries the commit it names**: where HEAD reads another
         commit after the build (a checkout during it), --carry refuses
-        before it fills a directory. Perturbation: drop the second read and
-        the set is written under the first commit."""
+        before it writes the manifest, and leaves nothing. Perturbation:
+        drop the second read and the set is written under the first
+        commit."""
         self.carry_refusal("the tree moved during the build", True, MOVE_TREE="1")
         self.assertFalse((self.sets / "set-1").exists())
+
+    def test_carry_reads_tracked_files_alone_after_the_build(self):
+        """**The run's own files do not move the tree**: a target directory
+        and logs the build wrote inside the checkout, unignored, are not a
+        change of commit, and the set is written. Perturbation: read
+        untracked files again and the run refuses its own logs."""
+        result = self.carry(TREE_UNTRACKED="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.sets / "set-1" / "MANIFEST").is_file())
 
     def test_carry_refuses_a_library_of_the_engines_directory_it_does_not_carry(self):
         """**Every library the SPU takes from the engine's directory is
@@ -6198,8 +6215,13 @@ esac
         say) refuses, since the set would leave it behind. Perturbation:
         pass a non-engine name from the engine's directory and the set is
         written without it."""
-        out = self.root / 'target with "quotes"' / "release" / "build" / "llama-cpp-sys-2-fixture" / "out" / "lib"
-        self.carry_refusal(f"libmtmd.so.0 => {out}", True, LDD_EXTRA=f"\tlibmtmd.so.0 => {out}/libmtmd.so.0 (0x0000)")
+        # The target outside the fixture's toolkit tree, which holds the
+        # fixture root, so the toolkit rule cannot refuse the line instead.
+        target = Path(tempfile.mkdtemp(prefix="weaver-carry-target-"))
+        self.addCleanup(shutil.rmtree, target)
+        out = target / "release" / "build" / "llama-cpp-sys-2-fixture" / "out" / "lib"
+        self.carry_refusal(f"libmtmd.so.0 => {out}", True, CARGO_TARGET_DIR=str(target),
+                           LDD_EXTRA=f"\tlibmtmd.so.0 => {out}/libmtmd.so.0 (0x0000)")
 
     def test_a_carry_that_fails_while_filling_leaves_nothing(self):
         """**A carry set is a whole set or does not stand**: where the fill

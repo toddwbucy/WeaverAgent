@@ -93,7 +93,10 @@ case "${1:-}" in
   --carry)
     [ $# -eq 2 ] && [ -n "$2" ] || die "--carry takes one argument, the directory the carry set is written to"
     CARRY=$2
-    [[ "$CARRY" == /* ]] || CARRY=$CALLER/$CARRY ;;
+    [[ "$CARRY" == /* ]] || CARRY=$CALLER/$CARRY
+    # The path as the set will stand, every link above it followed, so the
+    # plan names where the set is written.
+    CARRY=$(realpath -m -- "$CARRY") ;;
   *) die "unknown argument $1" ;;
 esac
 
@@ -209,9 +212,11 @@ standing() { # standing PATH: 0 stands, 1 absent, refuses where it cannot tell
 # **A carry set is written whole into a directory that does not stand, under
 # one only the operator can write**, so no other principal can change a file
 # between its digest and the manifest, and a set is never written over
-# another. Every directory above that one is the operator's or root's and
-# writable by no group or other unless sticky, as admin's rule reads a path
-# (`held_closed`), so no other principal can rename it away mid-fill. The
+# another. Every directory above that one is owned by the operator or root
+# and writable by no group or other unless sticky, so no other principal can
+# rename it away mid-fill. (This is wider than `held_closed`, which takes
+# root's directories alone: the set is the operator's, written as the
+# operator.) The
 # runtime files it carries are the toolkit's own, the toolkit whose nvcc
 # builds the kernels: an operator's CUDA_LIB_DIR naming another directory
 # refuses rather than being silently passed over.
@@ -221,8 +226,10 @@ carry_checks() {
     die "$CARRY already stands. A carry set is written whole into a directory that does not stand yet: name a new one"
   fi
   me=$(id -u)
-  CARRY_PARENT=$(realpath -e -- "$(dirname -- "$CARRY")" 2>/dev/null) \
+  standing "$(dirname -- "$CARRY")" \
     || die "$(dirname -- "$CARRY"), where the carry set would be written, does not stand"
+  CARRY_PARENT=$(realpath -e -- "$(dirname -- "$CARRY")" 2>&1) \
+    || die "cannot resolve $(dirname -- "$CARRY"), where the carry set would be written: $CARRY_PARENT"
   CARRY=$CARRY_PARENT/$(basename -- "$CARRY")
   read -r owner mode < <(stat -L -c '%u %a' -- "$CARRY_PARENT" 2>/dev/null) \
     || die "cannot read $CARRY_PARENT, where the carry set would be written"
@@ -489,13 +496,6 @@ plan "libraries     $(printf '%s ' "${LIBS[@]##*/}")"
 # deploy file not executable here; a link as a link.
 write_carry() {
   local rc=0 ldd_said resolved staging line name file target deployed now status
-  # **The tree is the commit the set names**, read again after the long
-  # build: the deploy copy and the build half are read from the checkout,
-  # which a checkout or an edit during the build would move.
-  now=$(git -C "$REPO" rev-parse HEAD 2>/dev/null) || now=""
-  status=$(git -C "$REPO" status --porcelain=v1 --untracked-files=all 2>/dev/null) || status="unreadable"
-  { [ "$now" = "$COMMIT" ] && [ -z "$status" ]; } \
-    || die "the tree moved during the build (HEAD reads '${now:-unread}', or git status lists changes), so a set written now would carry files of another commit than $COMMIT; nothing is written"
   [[ "$SYS_OUT" != *:* ]] || die "the engine's output directory $SYS_OUT holds a colon, so no library path can name it"
   ldd_said=$(spu_ldd "$BUILT/weaver-spu" "$SYS_OUT:$TOOLKIT_LIB") || rc=$?
   [ "$rc" -eq 0 ] || { printf '%s\n' "$ldd_said" >&2; die "ldd could not read the built weaver-spu (it exited $rc)"; }
@@ -529,6 +529,15 @@ write_carry() {
     "${LIB_NAMES[*]}" "$resolved" >"$staging/build-tuple"
   chmod 0644 -- "$staging/build-tuple"
   sed 's/^/   /' "$staging/build-tuple"
+  # **The tree is still the commit the set names**, read again once the
+  # deploy copy and the build half have been read from the checkout, which a
+  # checkout or an edit during the build would move. Tracked files alone:
+  # the run writes its own target and logs, which may sit in the tree
+  # unignored. A checkout made and undone before this read is not seen.
+  now=$(git -C "$REPO" rev-parse HEAD 2>/dev/null) || now=""
+  status=$(git -C "$REPO" status --porcelain=v1 --untracked-files=no 2>/dev/null) || status="unreadable"
+  { [ "$now" = "$COMMIT" ] && [ -z "$status" ]; } \
+    || die "the tree moved during the build (HEAD reads '${now:-unread}', or git status lists changes), so a set written now would carry files of another commit than $COMMIT; nothing is written"
   python3 "$REPO/deploy/carry_set.py" write "$staging" "$COMMIT" || die "the carry set's manifest could not be written"
   CARRY_SHA=$(sha256sum <"$staging/MANIFEST" | cut -d' ' -f1)
   chmod 0755 -- "$staging"

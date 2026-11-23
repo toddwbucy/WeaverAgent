@@ -90,7 +90,7 @@ def rows(root):
     if TUPLE not in found:
         raise Refused(f"the set holds no {TUPLE}")
     for name in DIRECTORIES:
-        if not os.path.isdir(os.path.join(root, name)) or os.path.islink(os.path.join(root, name)):
+        if not os.path.isdir(os.path.join(root, name)):
             raise Refused(f"the set holds no {name} directory")
     found.sort(key=lambda p: p.encode("ascii"))
     return [entry_row(root, path) for path in found]
