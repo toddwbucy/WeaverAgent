@@ -127,6 +127,13 @@ CONFIG_ROOTS=()
 for d in /etc/weaver/admin*; do [ -d "$d" ] && CONFIG_ROOTS+=("$d"); done
 
 read_key() { cat "$1/$2" 2>/dev/null || true; }
+# **A prefix is an absolute path in plain form, and never `/`**: no empty, `.`
+# or `..` component. Anything else could name the box's own /bin and /lib
+# (`/`, `/.`, `/bin/..`) or a directory read against where the script runs.
+plain_prefix() {
+  case $1 in /?*) ;; *) return 1 ;; esac
+  case "$1/" in *//*|*/./*|*/../*) return 1 ;; esac
+}
 
 # Every path admin's configs name, so the install tree is the one the box
 # actually ran and not the one this script remembers.
@@ -163,18 +170,25 @@ done
 # refuses while `<prefix>/bin`, `lib` or `deploy` stands, so a prefix no agent
 # root names is still planned, archived and purged. The record's binaries name
 # their directory as a root's do, and its `prefix` key names the prefix
-# itself, so a record whose two disagree loses both. Only an absolute value is
-# taken, never one read against where the script runs, and the prefix never
-# as `/`.
+# itself, so where the two disagree both are taken.
 RECORD_PREFIX=""
 if [ -d /etc/weaver/stack ] && [ ! -L /etc/weaver/stack ]; then
   for k in worker-binary spu-binary gate-binary; do
-    v=$(read_key /etc/weaver/stack "$k")
-    case $v in /?*) BIN_DIRS["$(dirname "$v")"]=1 ;; esac
+    v=$(read_key /etc/weaver/stack "$k"); [ -n "$v" ] && BIN_DIRS["$(dirname "$v")"]=1
   done
   v=$(read_key /etc/weaver/stack prefix); v=${v%/}
-  case $v in /?*) RECORD_PREFIX=$v ;; esac
+  ! plain_prefix "$v" || RECORD_PREFIX=$v
 fi
+# **Every source is held to plain_prefix here, where the prefixes are
+# filled**: a bin dir is kept only when it and its parent, its prefix, are
+# both plain, so a relative value, an empty field, `/bin` or `/./bin` names
+# no prefix and no candidate admin binary.
+declare -A KEPT_BIN_DIRS=()
+for b in "${!BIN_DIRS[@]}"; do
+  plain_prefix "$b" && plain_prefix "$(dirname "$b")" && KEPT_BIN_DIRS["$b"]=1
+done
+BIN_DIRS=()
+for b in "${!KEPT_BIN_DIRS[@]}"; do BIN_DIRS["$b"]=1; done
 # The install prefixes: the parent of each bin dir, and the stack record's,
 # deduplicated.
 declare -A PREFIXES=()

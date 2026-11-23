@@ -548,6 +548,27 @@ and then install the new set. Run the new set's copy, not
 after a removal that failed would find no script there. The agents are made again with
 `create-agent.sh` after the install.
 
+**Check the new set before the take-down.** `install-carry.sh` refuses a box that holds a
+stack before it reaches the set's check, so on such a box nothing checks the set before
+its `decommission.sh` runs under sudo. The operator checks it by hand first, as the
+operator, with the manifest sha256 the set was carried with:
+
+```bash
+sha256sum <set>/MANIFEST
+awk -F'\t' '$1 == "file" && $4 == "deploy/carry_set.py" {print $2}' <set>/MANIFEST
+sha256sum <set>/deploy/carry_set.py
+python3 -I <set>/deploy/carry_set.py check <set> <manifest sha256>
+```
+
+The first line must print the manifest sha256, and the second and third one digest: the
+set's checker is then the file its manifest names, as `install-carry.sh` holds root's
+copy to it, and only then is it run. The fourth prints the set's commit when every file
+and link of the set, `deploy/decommission.sh` included, is as the manifest names it, and
+otherwise refuses, naming the first difference. Together they answer for the set as far
+as the operator trusts the digest the set was carried with, as the install does. They
+hold for the set as it stood when they ran: whoever can write the set can still change
+it before the take-down runs it.
+
 ## 4. Agents
 
 The per-agent procedure in full is `HowToDeployANewAgent.md`, and this is the summary.

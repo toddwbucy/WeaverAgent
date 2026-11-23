@@ -6404,6 +6404,52 @@ esac
                 self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
                 (prefix / part).rmdir()
 
+    def test_the_new_set_is_checked_by_hand_before_the_take_down(self):
+        """**The check REDEPLOY.md section 3a gives before the take-down
+        runs**, its four lines run as the page gives them, as the operator:
+        the manifest's sha256 is the one carried, the set's `carry_set.py`
+        is the file its manifest names before it is run, and its `check`
+        prints the set's commit. A changed `carry_set.py` shows as two
+        digests, before it runs; a changed `decommission.sh` is refused by
+        name. Perturbations: the page's row reader prints another field, and
+        the changed checker passes; drop the comparison of the set with its
+        manifest, and the changed script passes."""
+        page = (DEPLOY / "REDEPLOY.md").read_text()
+        block = page[page.index("**Check the new set before the take-down.**"):]
+        block = block[block.index("```bash\n") + len("```bash\n"):]
+        lines = block[:block.index("```")].splitlines()
+        self.assertEqual(len(lines), 4, lines)
+        self.assertTrue(lines[3].startswith("python3 -I <set>/deploy/carry_set.py check"), lines)
+        carried, sha = self.carried()
+        env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+        def line(n):
+            command = lines[n].replace("<set>", shlex.quote(str(carried))).replace("<manifest sha256>", sha)
+            return subprocess.run(["bash", "-c", command], env=env, text=True, capture_output=True, timeout=60)
+        def first_field(n):
+            result = line(n)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result.stdout.split()[0] if result.stdout.split() else ""
+        self.assertEqual(first_field(0), sha)
+        self.assertEqual(first_field(1), first_field(2))
+        result = line(3)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout.strip(), r"^[0-9a-f]{40}$")
+        for changed in ("carry_set.py", "decommission.sh"):
+            with self.subTest(changed=changed):
+                path = carried / "deploy" / changed
+                kept = path.read_bytes()
+                path.write_bytes(kept + b"# changed after the set was written\n")
+                try:
+                    if changed == "carry_set.py":
+                        self.assertNotEqual(first_field(1), first_field(2))
+                    else:
+                        result = line(3)
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                        self.assertIn("deploy/decommission.sh is not as the manifest names it",
+                                      result.stdout + result.stderr)
+                finally:
+                    path.write_bytes(kept)
+
     def test_install_carry_judges_roots_copy_not_the_operators(self):
         """**Digests are judged in the copy root holds**: a file that differs
         in root's copy (a file changed under the copy) refuses after the
@@ -12549,9 +12595,14 @@ class DecommissionTests(unittest.TestCase):
         here as it defines them, against a fixture whose `/etc/weaver` is
         the box's. A record whose binaries are relative names its prefix by
         its `prefix` key alone, and a record whose prefix is `/` names none.
+        A prefix is plain or none, whatever names it: binaries in `/bin` or
+        `/./bin`, a prefix key of `/.`, an agent root's relative binary and
+        a base's `spu-implementations` line with no path name no prefix and
+        keep no bin dir, the one an admin candidate is read from.
         Perturbations: read no stack record, and none of the three is
         planned, archived or purged; take a relative binary, and `.` and
-        `bin` become prefixes; take `/`, and `//bin` is a candidate."""
+        `bin` become prefixes; take `/` or `/.`, and `//bin` or `/./bin` is
+        a candidate; keep every bin dir, and one outside the box stands."""
         script = self.script
         def cut(start, end):
             i = script.index(start)
@@ -12585,7 +12636,8 @@ class DecommissionTests(unittest.TestCase):
                        "WEAVER_USERS=() WEAVER_GROUPS=() HOME_QUOTAS=()\ndeclare -A AGENTS=()\n"
                        f"LEGACY_DIR={shlex.quote(str(box / 'legacy'))}\n"
                        + discovery + plan_lines + archive_parts
-                       + shell_function(script, "purge_candidates") + "purge_candidates\n")
+                       + shell_function(script, "purge_candidates") + "purge_candidates\n"
+                       + "for b in \"${!BIN_DIRS[@]}\"; do printf 'bindir %s\\n' \"$b\"; done\n")
             program = program.replace("/etc/weaver", f"{box}/etc/weaver")
             env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
             def run_from(cwd):
@@ -12618,13 +12670,43 @@ class DecommissionTests(unittest.TestCase):
                 self.assertNotIn(f"candidate {stray}", lines)
             self.assertFalse([l for l in lines if l.startswith("candidate ") and not l.startswith(f"candidate {box}")],
                              run.stdout)
-            # A record whose prefix is the root names no prefix.
-            (record / "prefix").write_text("/\n")
+            # A record whose binaries sit in /bin names no prefix by them:
+            # only its prefix key's, under the box.
+            for key in ("worker-binary", "spu-binary", "gate-binary"):
+                (record / key).write_text(f"/bin/{key}\n")
             run = run_from(here)
             self.assertEqual(run.returncode, 0, run.stderr)
-            self.assertFalse([l for l in run.stdout.splitlines()
-                              if l.startswith(("candidate ", "archive ")) and not l.startswith(
-                                  (f"candidate {box}", f"archive {box}"))], run.stdout)
+            lines = run.stdout.splitlines()
+            self.assertIn(f"candidate {prefix / 'bin'}", lines)
+            self.assertFalse([l for l in lines if l.startswith(("candidate ", "archive ")) and not l.startswith(
+                (f"candidate {box}", f"archive {box}"))], run.stdout)
+            # A record whose prefix is the root, in any spelling, names no
+            # prefix; nor do binaries in /./bin or /bin/.., an agent root's
+            # relative binary, or a base's spu-implementations line with no
+            # path. No bin dir outside the box is kept either.
+            def outside(run):
+                return [l for l in run.stdout.splitlines()
+                        if l.startswith(("candidate ", "archive ", "bindir ")) and not l.startswith(
+                            (f"candidate {box}", f"archive {box}", f"bindir {box}"))]
+            root = box / "etc" / "weaver" / "admin" / "a1"
+            root.mkdir()
+            (root / "worker-binary").write_text("bin/weaver-worker\n")
+            (box / "etc" / "weaver" / "admin" / "spu-implementations").write_text("native\n")
+            for spelling in ("/", "/.", "/./", "/bin/.."):
+                (record / "prefix").write_text(f"{spelling}\n")
+                for binaries in ("/./bin", "/bin/..", "//bin"):
+                    with self.subTest(prefix=spelling, binaries=binaries):
+                        for key in ("worker-binary", "spu-binary", "gate-binary"):
+                            (record / key).write_text(f"{binaries}/{key}\n")
+                        run = run_from(here)
+                        self.assertEqual(run.returncode, 0, run.stderr)
+                        self.assertFalse(outside(run), run.stdout)
+            # The plain prefix back, the same strays beside it: only it is taken.
+            (record / "prefix").write_text(f"{prefix}\n")
+            run = run_from(here)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn(f"candidate {prefix / 'bin'}", run.stdout.splitlines())
+            self.assertFalse(outside(run), run.stdout)
 
     def one_line_function(self, name):
         """A function the script defines on one line, read out of its text."""
@@ -17146,7 +17228,7 @@ class AgentTupleInstallTests(unittest.TestCase):
         finally:
             cudart.write_bytes(kept)
         drifted, = [row for row in drift if "runtime cudart " in row]
-        self.assertIn("decommission.sh and then install-carry.sh", drifted)
+        self.assertIn("the new set's own deploy/decommission.sh and then install-carry.sh", drifted)
         self.assertNotIn("update-stack.sh", drifted)
         self.assertEqual(self.statuses([r for r in rows if r is not mine], "runtime "), {"recorded"})
         plain = self.tuple.read_install_tuple(self.write(INSTALL_TUPLE_LINES))
