@@ -127,6 +127,20 @@ CONFIG_ROOTS=()
 for d in /etc/weaver/admin*; do [ -d "$d" ] && CONFIG_ROOTS+=("$d"); done
 
 read_key() { cat "$1/$2" 2>/dev/null || true; }
+# **stack_cccl: the CCCL version the stack was built against**, as the stack
+# record's install tuple states it (`cccl`, deploy/install-tuple.sh's
+# cccl_read, from the header the build's nvcc read), or `unknown` where no
+# record states it. It asks no package manager: a carried box holds no CCCL
+# package, and a box with no pacman would refuse the deploy copy (#635).
+stack_cccl() {
+  local line v=""
+  if [ -f /etc/weaver/stack/install-tuple ] && [ ! -L /etc/weaver/stack/install-tuple ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case $line in "cccl = "*) v=${line#"cccl = "}; break ;; esac
+    done < /etc/weaver/stack/install-tuple
+  fi
+  printf '%s\n' "${v:-unknown}"
+}
 # **A prefix is an absolute path in plain form, and never `/`**: no empty, `.`
 # or `..` component. Anything else could name the box's own /bin and /lib
 # (`/`, `/.`, `/bin/..`) or a directory read against where the script runs.
@@ -1157,7 +1171,7 @@ if [ "$MODE" = archive ]; then
     driver=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || true); driver=$(grep -E ', [0-9]+(\.[0-9]+)+$' <<<"$driver" || true); driver=${driver%%$'\n'*}
     echo "driver    ${driver:-none}"
     echo "nvcc      $([ -n "$NVCC" ] && "$NVCC" --version | tail -1 || echo none)"
-    echo "cccl      $(pacman -Q cccl 2>/dev/null || echo unknown)"
+    echo "cccl      $(stack_cccl)"
     echo "toolchain $(as_op rustup show active-toolchain 2>/dev/null | cut -d' ' -f1 || echo unknown)"
     echo
     echo "## accounts"; for u in "${WEAVER_USERS[@]}"; do getent passwd "$u" || true; done

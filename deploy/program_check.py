@@ -192,7 +192,6 @@ OPTIONS = {
     ("install", "-g"): ("argument", "create-agent.sh:1162"),
     ("install", "-m"): ("argument", "create-agent.sh:1162"),
     ("visudo", "-cqf"): ("argument", "create-agent.sh:1072"),
-    ("pacman", "-Q"): ("flag", "decommission.sh:1127"),
     ("sed", "-n"): ("flag", "create-agent.sh:1443"),
 }
 
