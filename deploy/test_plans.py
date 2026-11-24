@@ -12463,11 +12463,13 @@ class DecommissionTests(unittest.TestCase):
         install tuple's `cccl` value, marked as the install tuple's and read
         by no package manager, from a line that starts with the key alone,
         and a bare `unknown` where no record states it: no tuple, a tuple
-        without the key, a link in the tuple's place, or a linked stack
-        record. A PATH that holds a pacman answering another version is
+        without the key, a stored `unknown` (install-tuple.sh writes one
+        where the build read no version), an empty value, a link in the
+        tuple's place, or a linked stack record. A PATH that holds a pacman answering another version is
         never asked. Perturbations: read it through `pacman -Q cccl` again,
-        follow either link, match the key anywhere in a line, or drop the
-        mark or put it on `unknown`, and this fails."""
+        follow either link, match the key anywhere in a line, read a stored
+        `unknown` as a value, or drop the mark or put it on `unknown`, and
+        this fails."""
         with tempfile.TemporaryDirectory() as scratch:
             box = Path(scratch)
             stack = box / "etc" / "weaver" / "stack"
@@ -12499,6 +12501,12 @@ class DecommissionTests(unittest.TestCase):
             with self.subTest(case="the key after other text on an earlier line"):
                 tuple_.write_text("note = was cccl = 9.9.9\ncommit = abc\ncccl = 3.1.4\n")
                 self.assertEqual(read(), "3.1.4 (install tuple)\n")
+            with self.subTest(case="a stored unknown"):
+                tuple_.write_text("commit = abc\ncccl = unknown\n")
+                self.assertEqual(read(), "unknown\n")
+            with self.subTest(case="an empty value"):
+                tuple_.write_text("commit = abc\ncccl = \n")
+                self.assertEqual(read(), "unknown\n")
             with self.subTest(case="no cccl key"):
                 tuple_.write_text("commit = abc\nnvcc = 13.0\n")
                 self.assertEqual(read(), "unknown\n")

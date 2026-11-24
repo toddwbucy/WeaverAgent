@@ -134,6 +134,8 @@ read_key() { cat "$1/$2" 2>/dev/null || true; }
 # package, and a box with no pacman would refuse the deploy copy (#635). The
 # record is read as the other reads of it are, never through a link, and a
 # value it gives is marked as the install tuple's, beside the live nvcc line.
+# A stored `unknown` (install-tuple.sh writes it where the build read no
+# version) is no value, so the line reads a bare `unknown`.
 stack_cccl() {
   local line v=""
   if [ -d /etc/weaver/stack ] && [ ! -L /etc/weaver/stack ] \
@@ -142,6 +144,7 @@ stack_cccl() {
       case $line in "cccl = "*) v=${line#"cccl = "}; break ;; esac
     done < /etc/weaver/stack/install-tuple
   fi
+  [ "$v" != unknown ] || v=""
   if [ -n "$v" ]; then printf '%s (install tuple)\n' "$v"; else printf 'unknown\n'; fi
 }
 # **A prefix is an absolute path in plain form, and never `/`**: no empty, `.`
