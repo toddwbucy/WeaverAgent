@@ -12460,11 +12460,14 @@ class DecommissionTests(unittest.TestCase):
 
     def test_the_archive_reads_cccl_from_the_stack_record(self):
         """**The archive's cccl line is the stack record's** (#635): the
-        install tuple's `cccl` value, read by no package manager, and
-        `unknown` where no record states it: no tuple, a tuple without the
-        key, or a link in the tuple's place. A PATH that holds a pacman
-        answering another version is never asked. Perturbations: read it
-        through `pacman -Q cccl` again, or follow a link, and this fails."""
+        install tuple's `cccl` value, marked as the install tuple's and read
+        by no package manager, from a line that starts with the key alone,
+        and a bare `unknown` where no record states it: no tuple, a tuple
+        without the key, a link in the tuple's place, or a linked stack
+        record. A PATH that holds a pacman answering another version is
+        never asked. Perturbations: read it through `pacman -Q cccl` again,
+        follow either link, match the key anywhere in a line, or drop the
+        mark or put it on `unknown`, and this fails."""
         with tempfile.TemporaryDirectory() as scratch:
             box = Path(scratch)
             stack = box / "etc" / "weaver" / "stack"
@@ -12489,10 +12492,13 @@ class DecommissionTests(unittest.TestCase):
                 self.assertEqual(read(), "unknown\n")
             with self.subTest(case="the tuple states it"):
                 tuple_.write_text("commit = abc\nnvcc = 13.0\ncccl = 3.1.4\ncarry = def\n")
-                self.assertEqual(read(), "3.1.4\n")
+                self.assertEqual(read(), "3.1.4 (install tuple)\n")
             with self.subTest(case="its last line, with no newline"):
                 tuple_.write_text("commit = abc\ncccl = 3.2.1")
-                self.assertEqual(read(), "3.2.1\n")
+                self.assertEqual(read(), "3.2.1 (install tuple)\n")
+            with self.subTest(case="the key after other text on an earlier line"):
+                tuple_.write_text("note = was cccl = 9.9.9\ncommit = abc\ncccl = 3.1.4\n")
+                self.assertEqual(read(), "3.1.4 (install tuple)\n")
             with self.subTest(case="no cccl key"):
                 tuple_.write_text("commit = abc\nnvcc = 13.0\n")
                 self.assertEqual(read(), "unknown\n")
@@ -12501,6 +12507,14 @@ class DecommissionTests(unittest.TestCase):
                 elsewhere.write_text("cccl = 3.3.4\n")
                 tuple_.unlink()
                 tuple_.symlink_to(elsewhere)
+                self.assertEqual(read(), "unknown\n")
+            with self.subTest(case="a link in the stack record's place"):
+                real = box / "real-stack"
+                real.mkdir()
+                (real / "install-tuple").write_text("cccl = 3.3.4\n")
+                tuple_.unlink()
+                stack.rmdir()
+                stack.symlink_to(real)
                 self.assertEqual(read(), "unknown\n")
         self.assertIn('    echo "cccl      $(stack_cccl)"\n', self.script)
         self.assertNotIn("pacman", "".join(l for l in self.script.splitlines(True) if not l.lstrip().startswith("#")))
