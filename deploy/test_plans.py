@@ -6548,6 +6548,36 @@ esac
         self.assertIn("calls a program this box does not carry", result.stderr)
         self.assertFalse(self.run_prefix.exists())
 
+    def test_install_carry_takes_a_box_with_rpm_and_no_pacman(self):
+        """**A Fedora box passes the deploy copy's check** (#635): a program
+        directory with rpm and no pacman, as Fedora's, takes the install,
+        since no copied script asks pacman. Perturbation: put back
+        decommission.sh's `pacman -Q cccl`, and the install refuses."""
+        carried, sha = self.carried()
+        pacman = ("pacman", "pacman-conf", "pacman-db-upgrade", "pacman-key")
+        fedora = self.run_bins(skip=pacman)
+        (fedora / "rpm").write_text("#!/bin/sh\nexit 99\n")
+        (fedora / "rpm").chmod(0o755)
+        self.assertFalse(any((fedora / n).exists() for n in pacman))
+        result = self.install_carry(carried, sha, "--install", WEAVER_PROGRAM_DIRS=str(fedora))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("not a program the image carries", result.stdout)
+        self.assertIn("the deploy copy calls only programs this box carries", result.stdout)
+        self.assertTrue((self.run_prefix / "deploy" / "decommission.sh").exists())
+
+    def test_install_carry_takes_a_box_with_pacman_as_before(self):
+        """**An Arch box passes as before** (#635): the program directory
+        deploy/image-programs.txt names, pacman in it and rpm not, takes the
+        install. Perturbation: read the cccl version through `rpm -q cccl`,
+        and the install refuses."""
+        carried, sha = self.carried()
+        arch = self.run_bins(skip=())
+        self.assertTrue((arch / "pacman").exists())
+        self.assertFalse((arch / "rpm").exists())
+        result = self.install_carry(carried, sha, "--install", WEAVER_PROGRAM_DIRS=str(arch))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.run_prefix / "deploy" / "decommission.sh").exists())
+
     def test_a_carried_box_takes_a_newer_set_only_after_decommission(self):
         """**A second set on a box that holds one** is refused by
         install-carry.sh, and update-stack.sh refuses the carried box, each
@@ -10901,7 +10931,7 @@ class ProgramCheckTests(unittest.TestCase):
                               "case b in a) true ;; b) hostname\nesac\nSELF_RUN=(\"${SELF_RUN[@]}\")\n\"${SELF_RUN[@]}\"\n"
                               "awk -F: '$1 == 1 || $2 == 2 { print }' f\nsed -n 's/a/b/p' f\nsed 2d f\nvisudo -cqf x\n"
                               "sed -n 's/a\\/b/c\\\\/p' f\n"
-                              "pacman -Q x\nsort -u x\n")
+                              "sort -u x\n")
             found = self.findings(copy)["retired-python.sh"]
             self.assertEqual([(w, why) for _, w, why in found],
                              [("hostname", "called here, and not a program the image carries")] * 2
@@ -12427,6 +12457,53 @@ class DecommissionTests(unittest.TestCase):
         self.assertEqual(agents.returncode, 0, agents.stderr)
         self.assertEqual(agents.stdout.split(), ["a"])
         self.assertIn('if is_box_account "$u"; then', self.script[self.script.index("query_runs()"):])
+
+    def test_the_archive_reads_cccl_from_the_stack_record(self):
+        """**The archive's cccl line is the stack record's** (#635): the
+        install tuple's `cccl` value, read by no package manager, and
+        `unknown` where no record states it: no tuple, a tuple without the
+        key, or a link in the tuple's place. A PATH that holds a pacman
+        answering another version is never asked. Perturbations: read it
+        through `pacman -Q cccl` again, or follow a link, and this fails."""
+        with tempfile.TemporaryDirectory() as scratch:
+            box = Path(scratch)
+            stack = box / "etc" / "weaver" / "stack"
+            stack.mkdir(parents=True)
+            bin_dir = box / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "pacman").write_text("#!/bin/sh\necho cccl 9.9.9-1\n")
+            (bin_dir / "pacman").chmod(0o755)
+            program = (shell_function(self.script, "stack_cccl") + "stack_cccl\n").replace(
+                "/etc/weaver", f"{box}/etc/weaver")
+            env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+            def read():
+                run = subprocess.run(["bash", "-c", "set -euo pipefail\n" + program], env=env, text=True,
+                                     capture_output=True, timeout=20)
+                self.assertEqual((run.returncode, run.stderr), (0, ""))
+                return run.stdout
+
+            tuple_ = stack / "install-tuple"
+            with self.subTest(case="no tuple"):
+                self.assertEqual(read(), "unknown\n")
+            with self.subTest(case="the tuple states it"):
+                tuple_.write_text("commit = abc\nnvcc = 13.0\ncccl = 3.1.4\ncarry = def\n")
+                self.assertEqual(read(), "3.1.4\n")
+            with self.subTest(case="its last line, with no newline"):
+                tuple_.write_text("commit = abc\ncccl = 3.2.1")
+                self.assertEqual(read(), "3.2.1\n")
+            with self.subTest(case="no cccl key"):
+                tuple_.write_text("commit = abc\nnvcc = 13.0\n")
+                self.assertEqual(read(), "unknown\n")
+            with self.subTest(case="a link in the tuple's place"):
+                elsewhere = box / "elsewhere"
+                elsewhere.write_text("cccl = 3.3.4\n")
+                tuple_.unlink()
+                tuple_.symlink_to(elsewhere)
+                self.assertEqual(read(), "unknown\n")
+        self.assertIn('    echo "cccl      $(stack_cccl)"\n', self.script)
+        self.assertNotIn("pacman", "".join(l for l in self.script.splitlines(True) if not l.lstrip().startswith("#")))
 
     def test_the_agent_is_archived_whole_with_its_territory_and_the_home_untouched(self):
         # The operator's ruling of 2026-10-07 on #1: the declaration, the
