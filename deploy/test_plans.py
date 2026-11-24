@@ -825,8 +825,9 @@ if name == 'findmnt':
     fstype, options, target = os.environ.get('FIXTURE_MOUNT', 'xfs|rw,noquota|/').split('|')
     print({'FSTYPE': fstype, 'OPTIONS': options, 'TARGET': target}[args[args.index('-o') + 1]])
     sys.exit(0)
-if name == 'mktemp' and args and '/weaver-deploy-messages-' in args[-1]:
-    # The build's messages file, made as the scripts make it; not logged.
+if name == 'mktemp' and args and ('/weaver-deploy-messages-' in args[-1] or '/.carry-' in args[-1]):
+    # The build's messages file, and the directory --carry fills, made as
+    # the scripts make them; not logged.
     os.execv('/usr/bin/mktemp', ['mktemp', *args])
 if (name == 'mktemp' and args or name == 'as-root' and args[:1] == ['mktemp']) and '/weaver-drop.' in args[-1]:
     # **A drop's relays' directory** (#590), which account-drop.sh makes
@@ -1044,6 +1045,23 @@ elif name == 'systemctl':
         sys.exit(0)
     sys.exit(99)
 elif name == 'git':
+    # FIXTURE_COMMIT stands for a checkout at that commit, read as the
+    # scripts read it, through `git -C <tree>`; "nogit" for a tree that is
+    # not a checkout. FIXTURE_STATUS is what `git status` lists.
+    commit = os.environ.get('FIXTURE_COMMIT')
+    # A tree the build moved (MOVE_TREE) reads as another commit after it.
+    if commit and (root / 'tree-moved').exists(): commit = 'f' * 40
+    if commit and args[:1] == ['-C']:
+        if commit == 'nogit': sys.exit(128)
+        args = args[2:]
+        if args[:1] == ['rev-parse']: print(commit[:7] if '--short' in args else commit)
+        elif args[:1] == ['status']:
+            print(os.environ.get('FIXTURE_STATUS', ''), end='')
+            # Files the build wrote in the tree unignored (TREE_UNTRACKED),
+            # which status lists only where untracked files are asked for.
+            if (root / 'tree-untracked').exists() and '--untracked-files=no' not in args:
+                print('?? out/weaver-deploy-build.log')
+        sys.exit(0)
     if args[0] == 'rev-parse': print('abcdef0')
     # FIXTURE_BRANCH set empty stands for a detached checkout, which
     # `git branch --show-current` answers with an empty line.
@@ -1068,44 +1086,6 @@ elif name == 'nvidia-smi':
     else: print('fixture-driver')
 elif name == 'nvcc': print('nvcc: fixture\nCuda compilation tools, release 99.9, V99.9.1\nBuild fixture')
 elif name == 'pacman': print('cccl 3.3.4-1')
-elif name == 'dpkg-query':
-    # The package database FIXTURE_DPKG names, as JSON: `owners` maps a path
-    # to what dpkg-query -S prints before it (one package, or two that share
-    # the file), `diverted` and `local_diverted` the paths a package's or a
-    # local diversion names, whose two lines dpkg-query prints ahead of the
-    # owner's, and `versions` each package's version. As dpkg's searchoutput
-    # does, a diverted path counts as found though no package owns it, and
-    # the diversion lines are translated: under a `de` message locale they
-    # take a form the reader does not know (not dpkg's own wording). A path
-    # or a package it does not hold is refused, as dpkg-query refuses one.
-    db = json.loads(os.environ.get('FIXTURE_DPKG', '{}'))
-    if args[:1] == ['-S'] and len(args) == 2:
-        path = args[1]
-        messages = (os.environ.get('LC_ALL') or os.environ.get('LC_MESSAGES')
-                    or os.environ.get('LANG') or 'C')
-        diverted = False
-        for by, listed in (('diversion by fixture-diverter', 'diverted'), ('local diversion', 'local_diverted')):
-            if path in db.get(listed, []):
-                diverted = True
-                if messages.startswith('de'):
-                    print(f'Umleitung ({listed}) von {path} nach {path}.distrib')
-                else:
-                    print(f'{by} from: {path}')
-                    print(f'{by} to: {path}.distrib')
-        if path not in db.get('owners', {}):
-            if diverted:
-                sys.exit(0)
-            print(f'dpkg-query: no path found matching pattern {path}', file=sys.stderr)
-            sys.exit(1)
-        print(f"{db['owners'][path]}: {path}")
-    elif args[:1] == ['-W'] and len(args) == 3 and args[1].startswith('-f='):
-        package = args[2].split(':', 1)[0]
-        if package not in db.get('versions', {}):
-            print(f'dpkg-query: no packages found matching {args[2]}', file=sys.stderr)
-            sys.exit(1)
-        print(args[1][3:].replace('${Package}', package).replace('${Version}', db['versions'][package])
-              .replace('\\n', '\n'), end='')
-    else: sys.exit(2)
 elif name == 'cargo':
     target = pathlib.Path(os.environ['CARGO_TARGET_DIR'])
     # The engine's package as the lock names it, beside another crate with a
@@ -1125,8 +1105,13 @@ elif name == 'cargo':
             print('fixture build refusal', file=sys.stderr)
             sys.exit(42)
         target.joinpath('release').mkdir(parents=True)
+        if os.environ.get('MOVE_TREE'): (root / 'tree-moved').touch()
+        if os.environ.get('TREE_UNTRACKED'): (root / 'tree-untracked').touch()
         for member in ('worker', 'weaver-admin', 'weaver-trace-relay', 'weaver-gate', 'weaver-spu', 'weaver-state'):
             target.joinpath('release', member).write_text('fixture artifact ' + member)
+            # CARGO_EXECUTABLE stands for a build whose members are programs,
+            # as a real build's are.
+            if os.environ.get('CARGO_EXECUTABLE'): target.joinpath('release', member).chmod(0o755)
         # The engine's out/lib as llama-cpp-sys-2 lays it out: each versioned
         # file beside its SONAME link and its bare link, and what the globs
         # leave behind. ENGINE_BUILD names the build, so a test can move it.
@@ -1234,7 +1219,11 @@ elif name == 'sudo':
     elif op == 'install':
         target = pathlib.Path(mapped(rest[-1]))
         assert target.is_relative_to(root), target
-        if '-d' in rest: privileged([target], lambda: target.mkdir(parents=True, exist_ok=True))
+        if '-d' in rest:
+            # Every directory named, as install makes each.
+            made = [pathlib.Path(mapped(a)) for a in rest if a.startswith('/')]
+            assert all(d.is_relative_to(root) for d in made), made
+            privileged(made, lambda: [d.mkdir(parents=True, exist_ok=True) for d in made])
         else:
             # A file installed from a source is a new file holding its bytes,
             # as `install` unlinks the name first.
@@ -1243,7 +1232,13 @@ elif name == 'sudo':
                 if source.is_relative_to(root) and source.is_file():
                     if target.exists() or target.is_symlink(): target.unlink()
                     shutil.copyfile(source, target)
+                    # CARRY_SWAP names a file whose copy root's install
+                    # writes other bytes, as a file changed under the copy.
+                    if os.environ.get('CARRY_SWAP') and target.name == os.environ['CARRY_SWAP']:
+                        target.write_text('swapped under the copy\n')
                 else: target.touch()
+                # The mode `-m` names, as install sets it.
+                if '-m' in rest: target.chmod(int(rest[rest.index('-m') + 1], 8))
             privileged([target], place)
     elif op == 'mv':
         source, destination = (pathlib.Path(mapped(a)) for a in rest[-2:])
@@ -1268,10 +1263,37 @@ elif name == 'sudo':
         # of admin fails the fixture.
         assert rest[0].endswith('/weaver-admin'), ('admin wrapped', rest)
         sys.exit(subprocess.run([os.environ['FIXTURE_ADMIN'], *rest[1:]]).returncode)
+    elif op == 'rm' and '-rf' in rest:
+        # A recursive removal of what stands under the fixture, each target
+        # its own (install-carry.sh's undo).
+        targets = [pathlib.Path(mapped(a)) for a in rest[rest.index('--') + 1:]]
+        assert targets and all(t.is_relative_to(root) and t != root for t in targets), targets
+        def remove():
+            for t in targets:
+                if t.is_dir() and not t.is_symlink(): shutil.rmtree(t)
+                elif t.exists() or t.is_symlink(): t.unlink()
+        privileged(targets, remove)
     elif op == 'rm':
         target = pathlib.Path(mapped(rest[-1]))
         assert target.is_relative_to(root), target
         privileged([target], lambda: target.unlink(missing_ok=True))
+    elif op == 'python3' and len(rest) > 1 and rest[0] == '-I' and (rest[1] == '-c' or rest[1].endswith('/carry_set.py')):
+        # Root's digest check and root's copy of the set's check
+        # (install-carry.sh), on files under the fixture; the checker root
+        # runs is root's own copy, in the directory root made under the
+        # prefix, never the operator's set.
+        paths = [pathlib.Path(a) for a in rest[1:] if a.startswith('/')]
+        assert all(p.is_relative_to(root) for p in paths), paths
+        assert rest[1] == '-c' or '/.carry-' in rest[1], ('root runs a checker outside its copy', rest[1])
+        sys.exit(privileged(paths, lambda: subprocess.run([sys.executable, *rest]).returncode))
+    elif op == 'rmdir':
+        target = pathlib.Path(mapped(rest[-1]))
+        assert target.is_relative_to(root) and target != root, target
+        def remove():
+            try: target.rmdir()
+            except OSError: return 1
+            return 0
+        sys.exit(privileged([target], remove))
     elif op == '-l':
         print('User ' + rest[-1] + ' may run the following commands on fixture-box:')
         for rule in sorted((root / 'etc' / 'sudoers.d').glob('weaver-*')):
@@ -1380,13 +1402,18 @@ elif name == 'ldd':
     # The CUDA runtime and the driver's library resolve into the fixture's
     # CUDA directory, where setUp leaves each name a link to a versioned
     # file, or into LDD_RUNTIME.
+    # LDD_DRIVER and LDD_SYSTEM move the driver's library and the C library
+    # out of it, LDD_DRIVER=none standing for a box with no driver, and
+    # LDD_EXTRA adds its lines as ldd prints them.
     engine_dir = os.environ.get('LDD_ELSEWHERE') or os.environ.get('LD_LIBRARY_PATH', '/fixture/lib').split(':')[0]
     runtime_dir = os.environ.get('LDD_RUNTIME') or str(root / 'cuda' / 'lib64')
     for soname in ('libllama.so.0', 'libggml.so.0', 'libcudart.so.99', 'libcublas.so.99', 'libcublasLt.so.99',
                    'libcurand.so.99', 'libcuda.so.1', 'libc.so.6'):
         at = engine_dir if soname.startswith(('libllama', 'libggml')) else runtime_dir
-        if soname == os.environ.get('LDD_MISSING'): print(f'\t{soname} => not found')
+        at = {'libcuda.so.1': os.environ.get('LDD_DRIVER'), 'libc.so.6': os.environ.get('LDD_SYSTEM')}.get(soname) or at
+        if soname == os.environ.get('LDD_MISSING') or at == 'none': print(f'\t{soname} => not found')
         else: print(f'\t{soname} => {at}/{soname} (0x0000)')
+    if os.environ.get('LDD_EXTRA'): print(os.environ['LDD_EXTRA'])
 else: sys.exit(99)
 '''
 DOUBLE = DOUBLE.replace('@ACCESS_LOOK@', repr(ACCESS_LOOK)).replace('@DROP_PATH@', DROP_PATH)
@@ -1399,6 +1426,27 @@ DOUBLE = DOUBLE.replace('@TEST_ROOT@', TEST_ROOT).replace('@STRANGER_UID@', str(
 # --install refuses while any agent lacks one.
 SAMPLING = ('\n[spu-instruction.decoder.tunable-values]\ntemperature = 0.7\ntop-k = 40\n'
             'top-p = 0.95\nrepetition-penalty = 1.1\nrepetition-window = 64\nseed = 11\n')
+
+
+# The CUDA target this host's nvcc compiles for, as deploy/engine-libraries.sh
+# names it (`toolkit_target`), and another a cross-compiling package lays
+# beside it, which is never read.
+HOST_TARGET = {"aarch64": "sbsa-linux"}.get(os.uname().machine, "x86_64-linux")
+OTHER_TARGET = "sbsa-linux" if HOST_TARGET == "x86_64-linux" else "x86_64-linux"
+
+# CCCL's version header as its tags v2.8.0 to v3.3.4 write it: one decimal
+# CCCL_VERSION, major times a million plus minor times a thousand plus patch,
+# and the other version macros derived from it.
+CCCL_HEADER = """#ifndef __CCCL_VERSION_H
+#define __CCCL_VERSION_H
+
+#define CCCL_VERSION {version}
+#define CCCL_MAJOR_VERSION (CCCL_VERSION / 1000000)
+#define CCCL_MINOR_VERSION (((CCCL_VERSION / 1000) % 1000))
+#define CCCL_PATCH_VERSION (CCCL_VERSION % 1000)
+
+#endif // __CCCL_VERSION_H
+"""
 
 
 class PlanTests(unittest.TestCase):
@@ -1490,6 +1538,21 @@ class PlanTests(unittest.TestCase):
             (self.cuda_lib / f"{stem}.so.{version}").write_text(f"fixture {stem}\n")
             (self.cuda_lib / name).symlink_to(f"{stem}.so.{version}")
         self.ldso_conf.write_text(f"{self.lib_dir}\n{self.cuda_lib}\n")
+        # The toolkit the nvcc double belongs to: the double stands at
+        # <root>/bin/nvcc, so the toolkit's top is the root, and its one
+        # target holds the CCCL header the build reads, inside #397's window,
+        # and a library directory.
+        self.toolkit_include = self.root / "targets" / HOST_TARGET / "include"
+        self.cccl_header = self.toolkit_include / "cuda" / "std" / "__cccl" / "version.h"
+        self.cccl_header.parent.mkdir(parents=True)
+        self.cccl_header.write_text(CCCL_HEADER.format(version=3003004))
+        self.toolkit_lib = self.root / "targets" / HOST_TARGET / "lib"
+        self.toolkit_lib.mkdir()
+        # The host compiler nvcc builds the engine's kernels with, as
+        # NVCC_CCBIN names it.
+        self.ccbin = self.root / "fixture-g++"
+        self.ccbin.write_text("#!/bin/sh\nprintf 'g++ (Fixture) 99.1.0\\nCopyright fixture\\n'\n")
+        self.ccbin.chmod(0o755)
         # The engine's checkout, where the install tuple reads the vendored
         # engine's commit from the fork's tree.
         (self.root / "checkout" / "llama-cpp-sys-2").mkdir(parents=True)
@@ -1523,9 +1586,10 @@ class PlanTests(unittest.TestCase):
                      "BOX_PASSWD", "BOX_GROUP", "EXTRA_PASSWD", "STANDING_PASSWD", "GATECON_GROUPS", "ADMINCON_GROUPS",
                      "GATECON_JOINED", "ADMINCON_JOINED",
                      "LD_LIBRARY_PATH", "LD_PRELOAD", "NO_NVIDIA", "LDD_RUNTIME", "FIXTURE_DRIVERS",
-                     "NVCC_PREPEND_FLAGS", "NVCC_APPEND_FLAGS", "FIXTURE_DPKG"):
+                     "NVCC_PREPEND_FLAGS", "NVCC_APPEND_FLAGS", "NVCC_CCBIN", "CUDA_PATH", "CUDA_ROOT"):
             self.env.pop(name, None)
         self.env["CUDA_LIB_DIR"] = str(self.cuda_lib)
+        self.env["NVCC_CCBIN"] = str(self.ccbin)
         # Redirect even shell builtin /home probes, and the cgroup mount's
         # reads, into the fixture. The
         # production scripts have no test-only path switches and never read
@@ -5763,6 +5827,798 @@ esac
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("stands; left as it is", result.stdout)
 
+    def bootstrap_once(self, *args):
+        """`bootstrap`, leaving the environment as it found it, so a later
+        update-stack run in the same test reads the standing stack."""
+        saved = dict(self.env)
+        try:
+            return self.bootstrap(*args)
+        finally:
+            self.env.clear()
+            self.env.update(saved)
+
+    def build_refusal(self, script, said):
+        """Run SCRIPT's plan (bootstrap on a box with no stack) and assert it
+        refuses with SAID before cargo builds anything and before any sudo."""
+        self.log.unlink(missing_ok=True)
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        result = self.bootstrap_once() if script == "bootstrap-stack.sh" else self.run_script(script)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(said, result.stderr)
+        self.assertFalse([c for c in self.calls() if c[:2] == ["cargo", "build"]], self.calls())
+        self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
+        return result
+
+    def test_both_build_scripts_read_the_cccl_window_from_the_header_nvcc_reads(self):
+        """**Both build scripts read the cccl version from the header nvcc
+        reads, by no package manager, and refuse before the build where it
+        cannot be read or lies outside #397's window** (deploy/install-tuple.sh,
+        `cccl_read`). On a box without pacman the check once read nothing and
+        passed. The box's pacman answers 3.3.4-1 throughout and is never
+        asked. Perturbations: put back the `pacman -Q` read with its skip and
+        the unreadable case builds; take a version that cannot be read as a
+        pass and the unreadable case builds; drop the window check and
+        3.3.5 builds."""
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script, case="inside the window"):
+                self.cccl_header.write_text(CCCL_HEADER.format(version=3001004))
+                self.log.unlink(missing_ok=True)
+                shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+                result = self.bootstrap_once() if script == "bootstrap-stack.sh" else self.run_script(script)
+                self.assertIn(f"cccl          3.1.4 ({self.cccl_header})", result.stdout)
+                self.assertTrue([c for c in self.calls() if c[:2] == ["cargo", "build"]], result.stderr)
+                self.assertFalse([c for c in self.calls() if c[0] == "pacman"], self.calls())
+            with self.subTest(script=script, case="no header"):
+                self.cccl_header.unlink()
+                self.build_refusal(script, "the CCCL version nvcc reads cannot be read: the toolkit's target "
+                                           f"{self.root}/targets/{HOST_TARGET} holds no "
+                                           "cuda/std/__cccl/version.h. The build's CCCL "
+                                           "window is unchecked, so nothing is built")
+            for version, shown in ((3003005, "3.3.5"), (3001003, "3.1.3"), (4000000, "4.0.0")):
+                with self.subTest(script=script, case=shown):
+                    self.cccl_header.write_text(CCCL_HEADER.format(version=version))
+                    self.build_refusal(script, f"cccl {shown} is outside the 3.1.4-3.3.4 window #397 measured")
+            self.cccl_header.write_text(CCCL_HEADER.format(version=3003004))
+
+    def test_both_build_scripts_refuse_a_host_compiler_that_is_not_an_executable_file(self):
+        """**NVCC_CCBIN is judged before the long build** (deploy/engine-libraries.sh,
+        `host_compiler`): the operator's value, or unset the default, which is
+        one distribution's path, refuses before cargo builds anything unless
+        it is then the absolute path of an executable file in printable
+        ASCII, the bytes the install tuple's reader admits. A bare name is
+        resolved on PATH, as nvcc resolves one, and the build is handed the
+        path; nvcc's directory form is refused, since the tuple names a file.
+        Perturbations: drop either script's `host_compiler` and the refused
+        cases build; resolve no bare name and the name case refuses; drop the
+        ASCII check and the non-ASCII case builds."""
+        plain = self.root / "plain-g++"
+        plain.write_text("not a program\n")
+        plain.chmod(0o644)
+        accented = self.root / "g++-\u00e9"
+        shutil.copy2(self.ccbin, accented)
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            for value in (str(self.root / "no-such-g++"), str(plain), str(self.root), str(accented),
+                          "no-such-name-g++", "relative/g++"):
+                with self.subTest(script=script, value=value):
+                    self.env["NVCC_CCBIN"] = value
+                    self.build_refusal(script, f"NVCC_CCBIN names the host compiler nvcc builds the engine's "
+                                               f"kernels with, and {value} is not an executable file on this box")
+        named = self.bin / "fixture-cxx"
+        shutil.copy2(self.ccbin, named)
+        for value, judged in ((str(self.ccbin), self.ccbin), ("fixture-cxx", named)):
+            with self.subTest(value=value):
+                self.env["NVCC_CCBIN"] = value
+                self.log.unlink(missing_ok=True)
+                shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(f"ccbin         {judged}\n", result.stdout)
+                build = [c for c in self.calls() if c[:2] == ["cargo", "build"]]
+                self.assertEqual(len(build), 1, self.calls())
+
+    def test_an_unset_cuda_directory_is_the_toolkits_own_or_the_plan_refuses(self):
+        """**An unset CUDA_LIB_DIR is the library directory of the toolkit the
+        build's nvcc belongs to** (deploy/engine-libraries.sh, `cuda_lib_dir`),
+        never one distribution's path: the `lib` of this host's own target
+        joins the loader's entry, judged as a set value is, and another
+        target beside it, as a cross-compiling package lays one, is not read.
+        Where the host's target holds no `lib`, or the toolkit holds no target
+        for this host, both scripts refuse before the build and before any
+        sudo and say to set it. Perturbations: put back the /opt/cuda/lib64
+        default and the derived case names it; take the first target in name
+        order and the other target's lib is planned; derive it after
+        update-stack's build and its refusals build first."""
+        self.env.pop("CUDA_LIB_DIR")
+        self.ldso_conf.unlink()
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"NEW      {self.lib_dir} and {self.toolkit_lib}, then ldconfig", result.stdout)
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        result = self.bootstrap_once()
+        self.assertIn(f"cuda lib dir  {self.toolkit_lib}", result.stdout)
+        other = self.root / "targets" / OTHER_TARGET / "lib"
+        other.mkdir(parents=True)
+        # Named so it sorts ahead of the host's in either order.
+        early = self.root / "targets" / "aaa-linux" / "lib"
+        early.mkdir(parents=True)
+        with self.subTest(case="other targets beside the host's"):
+            self.log.unlink(missing_ok=True)
+            shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+            result = self.run_script("update-stack.sh")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(f"NEW      {self.lib_dir} and {self.toolkit_lib}, then ldconfig", result.stdout)
+        self.toolkit_lib.rmdir()
+        no_lib = (f"CUDA_LIB_DIR is unset and the toolkit's target {self.root}/targets/{HOST_TARGET} holds no lib "
+                  "directory, so the CUDA directory the loader's entry names is unknown: set CUDA_LIB_DIR")
+        no_target = (f"CUDA_LIB_DIR is unset and the toolkit at {self.root} holds no targets/{HOST_TARGET} for "
+                     "this host, so the CUDA directory the loader's entry names is unknown: set CUDA_LIB_DIR")
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script, case="no lib"):
+                self.build_refusal(script, no_lib)
+        host = self.root / "targets" / HOST_TARGET
+        host.rename(self.root / "targets" / "moved-linux")
+        # The CCCL header named ahead, so the CCCL read passes and the CUDA
+        # directory is the question.
+        self.env["NVCC_PREPEND_FLAGS"] = f"-I{self.root / 'targets' / 'moved-linux' / 'include'}"
+        for script in ("update-stack.sh", "bootstrap-stack.sh"):
+            with self.subTest(script=script, case="no target for this host"):
+                self.build_refusal(script, no_target)
+
+    def test_bootstrap_plans_a_build_on_a_box_with_no_card(self):
+        """**A build box needs no card** (the Planner's ruling of 2026-11-23):
+        where nvidia-smi answers its failure sentence, bootstrap's plan says
+        no driver, reads the cccl version and the host compiler, builds, and
+        stops in this fixture at the member check after the build, as on a
+        box with cards. Perturbation: refuse an empty driver and the plan
+        stops before the build."""
+        self.env["NO_NVIDIA"] = "1"
+        result = self.bootstrap()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("driver        none", result.stdout)
+        self.assertIn("cccl          3.3.4", result.stdout)
+        self.assertIn(f"ccbin         {self.ccbin}", result.stdout)
+        self.assertTrue([c for c in self.calls() if c[:2] == ["cargo", "build"]], self.calls())
+        self.assertIn("release/worker was not built", result.stderr)
+
+    CARRY_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+    CARRY_RUNTIME = (("libcudart.so.99", "99.1.2"), ("libcublas.so.99", "99.3.4"),
+                     ("libcublasLt.so.99", "99.3.4"), ("libcurand.so.99", "99.5.6"))
+
+    def carry(self, name="set-1", **env):
+        """bootstrap-stack.sh --carry DIR on a build box: a clean checkout at
+        a full commit, members that are programs, the CUDA runtime files in
+        the toolkit's own library directory, no driver, and the C library
+        the box's own. DIR is NAME under `sets/`, a directory the operator
+        owns, 0755. The environment is left as it was found."""
+        saved = dict(self.env)
+        try:
+            self.env.pop("CUDA_LIB_DIR", None)
+            for soname, version in self.CARRY_RUNTIME:
+                stem = soname.rsplit(".so.", 1)[0]
+                if not (self.toolkit_lib / soname).is_symlink():
+                    shutil.copy(self.cuda_lib / f"{stem}.so.{version}", self.toolkit_lib)
+                    (self.toolkit_lib / soname).symlink_to(f"{stem}.so.{version}")
+            # The operator is the tester, who owns the directory the set is
+            # written in.
+            self.env.update(FIXTURE_COMMIT=self.CARRY_COMMIT, CARGO_EXECUTABLE="1", FIXTURE_UID=str(os.getuid()),
+                            LDD_RUNTIME=str(self.toolkit_lib), LDD_DRIVER="none", LDD_SYSTEM="/fixture-system")
+            self.env.update(env)
+            self.sets = self.root / "sets"
+            self.sets.mkdir(mode=0o755, exist_ok=True)
+            return self.bootstrap("--carry", str(self.sets / name))
+        finally:
+            self.env.clear()
+            self.env.update(saved)
+
+    def carry_refusal(self, said, built, name="set-1", **env):
+        """--carry refuses with SAID, after the build where BUILT, and leaves
+        neither its directory nor a directory it filled, and calls no sudo."""
+        self.log.unlink(missing_ok=True)
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        result = self.carry(name, **env)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(said, result.stderr)
+        self.assertEqual(bool([c for c in self.calls() if c[:2] == ["cargo", "build"]]), built, self.calls())
+        self.assertFalse([c for c in self.calls() if c[0] in ("sudo", "ldconfig")], self.calls())
+        self.assertEqual([p.name for p in self.sets.iterdir() if p.name.startswith(".carry-")], [])
+        return result
+
+    def test_carry_writes_the_set_its_manifest_and_the_builds_half_of_the_tuple(self):
+        """**--carry writes a carry set and installs nothing** (weaver-admin-PRD
+        section 7.2, deploy/bootstrap-stack.sh): the members, the shell, the
+        engine libraries and the four CUDA runtime files, each versioned
+        file beside its links, the deploy copy with every file
+        deploy/deployed-copy.txt names, `build-tuple`, and a manifest that
+        names every entry, sorted, whose sha256 is the run's last line. The
+        build half carries `build-os` and a `build-runtime.` digest of each
+        carried runtime file in place of the install tuple's `runtime.`
+        lines. No sudo and no ldconfig is called, and nothing of the box's
+        stack is written. Perturbations: drop the link rows from the manifest
+        and the links are unnamed; carry the runtime file without its link
+        and the set lacks the name the SPU links."""
+        result = self.carry()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        carried = self.sets / "set-1"
+        manifest = (carried / "MANIFEST").read_text()
+        self.assertEqual(result.stdout.splitlines()[-1], hashlib.sha256(manifest.encode()).hexdigest())
+        lines = manifest.splitlines()
+        self.assertEqual(lines[:2], ["# weaver carry set 1", f"# commit {self.CARRY_COMMIT}"])
+        rows = [line.split("\t") for line in lines[2:]]
+        paths = [row[3] for row in rows]
+        self.assertEqual(paths, sorted(paths, key=lambda p: p.encode()))
+        on_disk = sorted(str(p.relative_to(carried)) for p in carried.rglob("*")
+                         if not p.is_dir() or p.is_symlink())
+        self.assertEqual(sorted(paths), sorted(p for p in on_disk if p != "MANIFEST"))
+        for kind, value, mode, path in rows:
+            at = carried / path
+            if kind == "link":
+                self.assertTrue(at.is_symlink(), path)
+                self.assertEqual((os.readlink(at), mode), (value, "-"))
+            else:
+                self.assertEqual(kind, "file")
+                self.assertFalse(at.is_symlink(), path)
+                self.assertEqual(value, hashlib.sha256(at.read_bytes()).hexdigest(), path)
+                self.assertEqual(mode, f"{at.stat().st_mode & 0o7777:04o}", path)
+        members = ["worker", "weaver-admin", "weaver-trace-relay", "weaver-gate", "weaver-spu", "weaver-state"]
+        self.assertEqual(sorted(p.name for p in (carried / "bin").iterdir()),
+                         sorted(members + ["busybox", "busybox.applets"]))
+        self.assertEqual({r[2] for r in rows if r[3].startswith("bin/")},
+                         {"0755", "0644"})
+        self.assertEqual(next(r[2] for r in rows if r[3] == "bin/busybox.applets"), "0644")
+        lib = {p.name: (os.readlink(p) if p.is_symlink() else None) for p in (carried / "lib").iterdir()}
+        for soname, version in self.CARRY_RUNTIME:
+            stem = soname.rsplit(".so.", 1)[0]
+            self.assertEqual(lib[soname], f"{stem}.so.{version}")
+            self.assertIsNone(lib[f"{stem}.so.{version}"])
+        self.assertEqual(lib["libllama.so.0"], "libllama.so.0.0.1")
+        self.assertEqual(lib["libllama.so"], "libllama.so.0")
+        self.assertNotIn("libcuda.so.1", lib)
+        listed = [line for line in (DEPLOY / "deployed-copy.txt").read_text().splitlines()
+                  if line and not line.startswith("#")]
+        self.assertEqual(sorted(p.name for p in (carried / "deploy").iterdir()),
+                         sorted(listed + ["deployed-copy.txt"]))
+        tuple_lines = (carried / "build-tuple").read_text().splitlines()
+        keys = [line.split(" = ", 1)[0] for line in tuple_lines]
+        expected = [k for k in self.TUPLE_KEYS if not k.startswith("runtime.")]
+        expected.insert(expected.index("ccbin") + 1, "build-os")
+        expected[-1:-1] = ["build-runtime.cudart", "build-runtime.cublas", "build-runtime.cublaslt",
+                           "build-runtime.curand"]
+        self.assertEqual(keys, expected)
+        facts = dict(line.split(" = ", 1) for line in tuple_lines)
+        self.assertEqual(facts["commit"], self.CARRY_COMMIT)
+        self.assertEqual(facts["build-runtime.cudart"],
+                         hashlib.sha256((carried / "lib" / "libcudart.so.99.1.2").read_bytes()).hexdigest())
+        self.assertEqual(facts["member.weaver-spu"],
+                         hashlib.sha256((carried / "bin" / "weaver-spu").read_bytes()).hexdigest())
+        self.assertNotEqual(facts["build-os"], "")
+        self.assertFalse([c for c in self.calls() if c[0] in ("sudo", "ldconfig")], self.calls())
+        for absent in ("new-prefix", "new-stack", "new-admin", "new-agents"):
+            self.assertFalse((self.root / absent).exists(), absent)
+        self.assertEqual([p.name for p in self.sets.iterdir()], ["set-1"])
+        looked = [c for c in self.calls() if c[0] == "ldd-env"]
+        self.assertTrue(looked and looked[-1][1].endswith(f":{self.toolkit_lib}"), looked)
+
+    def test_carry_writes_a_set_on_a_build_box_with_no_card(self):
+        """**A build box needs no card** (the Planner's note of 2026-11-23):
+        where nvidia-smi answers its failure sentence and the driver's own
+        library resolves nowhere, --carry plans no driver and writes the
+        set, which carries no driver library. The operator names nothing
+        for the card: the toolkit is the nvcc on PATH and the host compiler
+        NVCC_CCBIN, as on any build. A library other than the driver's that
+        resolves nowhere still refuses. Perturbation: refuse every library
+        not found and the box with no driver refuses."""
+        result = self.carry(NO_NVIDIA="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("driver        none", result.stdout)
+        self.assertFalse(list((self.sets / "set-1" / "lib").glob("libcuda.so*")))
+        self.carry_refusal("libcublas.so.99 => not found", True, name="set-2",
+                           NO_NVIDIA="1", LDD_MISSING="libcublas.so.99")
+
+    def test_carry_refuses_a_tree_that_is_not_one_clean_commit(self):
+        """**A carry set names the one commit it was built from**: --carry
+        refuses a tree git lists changes in, a tree that is not a checkout,
+        and a commit git does not name in full, before the build. The plan
+        and --install keep marking a dirty tree. Perturbation: keep the
+        `-dirty` marking in carry mode and the dirty tree builds."""
+        self.carry_refusal("is not clean, and a carry set names the one commit", False,
+                           FIXTURE_STATUS=" M deploy/bootstrap-stack.sh\n")
+        self.carry_refusal("the tree is not a git checkout", False, FIXTURE_COMMIT="nogit")
+        self.carry_refusal("git names the commit as 'abcdef0'", False, FIXTURE_COMMIT="abcdef0")
+
+    def test_carry_refuses_a_directory_that_stands_or_a_parent_another_could_write(self):
+        """**A carry set is written whole into a directory that does not stand,
+        under one only the operator can write**, refused before the build: a
+        directory that stands (an earlier set), a parent that does not
+        stand, and a parent a group can write. Perturbation: drop the parent
+        check and the group-writable parent builds."""
+        self.sets = self.root / "sets"
+        self.sets.mkdir(mode=0o755)
+        (self.sets / "set-1").mkdir()
+        self.carry_refusal("already stands. A carry set is written whole", False)
+        self.carry_refusal("does not stand", False, name="missing/set-1")
+        self.sets.chmod(0o775)
+        try:
+            self.carry_refusal("is not a directory the operator owns that no group or other can write", False,
+                               name="set-2")
+            (self.sets / "mine").mkdir(mode=0o755)
+            self.carry_refusal(f"{self.sets}, above where the carry set would be written, is a directory another "
+                               "principal could rename a name in", False, name="mine/set-3")
+            self.assertEqual(list((self.sets / "mine").iterdir()), [])
+        finally:
+            self.sets.chmod(0o755)
+
+    def test_carry_refuses_a_cuda_directory_that_is_not_the_toolkits_own(self):
+        """**A carry set carries the runtime files of the toolkit whose nvcc
+        builds the kernels**: an operator's CUDA_LIB_DIR naming another
+        directory refuses before the build rather than being passed over,
+        and one naming the toolkit's own is accepted. Perturbation: drop the
+        comparison and the other directory builds."""
+        self.carry_refusal("but a carry set carries the runtime files of the toolkit", False,
+                           CUDA_LIB_DIR=str(self.cuda_lib))
+        result = self.carry(name="set-2", CUDA_LIB_DIR=str(self.toolkit_lib))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_carry_judges_what_the_built_spu_resolves(self):
+        """**The built SPU resolves as the carried one will** (deploy/engine-
+        libraries.sh, `carry_resolved`), or --carry refuses after the build
+        and before it fills a directory: a runtime file outside the
+        toolkit's library directory, a library of the toolkit that is not
+        one of the four runtime files, a symbol version not found, and an
+        engine library outside the engine's output directory. Perturbations:
+        accept a runtime file from any directory, and the first case writes
+        a set; drop the toolkit rule, and the second does."""
+        nvrtc = self.toolkit_lib / "libnvrtc.so.99"
+        nvrtc.write_text("fixture nvrtc\n")
+        for env, said in (({"LDD_RUNTIME": str(self.cuda_lib)}, f"libcudart.so.99 => {self.cuda_lib}"),
+                          ({"LDD_EXTRA": f"\tlibnvrtc.so.99 => {nvrtc} (0x0000)"}, f"libnvrtc.so.99 => {nvrtc}"),
+                          ({"LDD_EXTRA": "./weaver-spu: /usr/lib64/libstdc++.so.6: version `GLIBCXX_3.4.99' "
+                                         "not found (required by ./weaver-spu)"}, "GLIBCXX_3.4.99"),
+                          ({"LDD_ELSEWHERE": str(self.lib_dir)}, f"libllama.so.0 => {self.lib_dir}")):
+            with self.subTest(said=said):
+                result = self.carry_refusal(said, True, **env)
+                self.assertIn("does not resolve as a carry set carries it", result.stderr)
+                self.assertFalse((self.sets / "set-1").exists())
+
+    def test_carry_reads_nothing_of_a_stack_this_box_holds(self):
+        """**A build box that runs an agent writes a set beside its stack**:
+        --carry makes none of the box's standing checks, so a standing stack
+        record, admin base and install do not refuse it, and it writes
+        nothing of them. Perturbation: run the standing checks in carry
+        mode and the standing record refuses."""
+        self.assertTrue(any(self.stack.iterdir()))
+        self.assertEqual(self.env["WEAVER_STACK_RECORD"], str(self.stack))
+        before = sorted(p.name for p in self.stack.iterdir())
+        result = self.carry_standing("set-2")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.sets / "set-2" / "MANIFEST").is_file())
+        self.assertEqual(sorted(p.name for p in self.stack.iterdir()), before)
+        self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
+
+    def carry_standing(self, name):
+        """--carry as `carry` runs it, with the fixture's stack record and
+        admin base, which stand."""
+        bootstrap, self.bootstrap = self.bootstrap, lambda *a: self.run_script("bootstrap-stack.sh", *a)
+        try:
+            return self.carry(name=name)
+        finally:
+            self.bootstrap = bootstrap
+
+    def test_carry_names_a_relative_directory_from_where_it_ran(self):
+        """**A relative DIR is the caller's**: the script works from the
+        repository, and a relative DIR once named a directory inside it.
+        Perturbation: resolve DIR after the script's own `cd` and the set
+        lands in the repository."""
+        self.carry(name="set-0")
+        shutil.rmtree(self.sets / "set-0")
+        saved = dict(self.env)
+        try:
+            self.env.update(FIXTURE_COMMIT=self.CARRY_COMMIT, CARGO_EXECUTABLE="1", FIXTURE_UID=str(os.getuid()),
+                            LDD_RUNTIME=str(self.toolkit_lib), LDD_DRIVER="none", LDD_SYSTEM="/fixture-system",
+                            WEAVER_STACK_RECORD=str(self.root / "new-stack"),
+                            WEAVER_ADMIN_CONFIG=str(self.root / "new-admin"),
+                            WEAVER_PREFIX=str(self.root / "new-prefix"), WEAVER_AGENT_DIR=str(self.root / "new-agents"))
+            self.env.pop("CUDA_LIB_DIR", None)
+            shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+            result = subprocess.run(["bash", str(self.repo / "deploy" / "bootstrap-stack.sh"), "--carry", "set-1"],
+                                    env=self.env, text=True, capture_output=True, timeout=60, cwd=self.sets)
+        finally:
+            self.env.clear()
+            self.env.update(saved)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.sets / "set-1" / "MANIFEST").is_file())
+        self.assertFalse((self.repo / "set-1").exists())
+
+    def test_carry_refuses_a_tree_the_build_moved(self):
+        """**The set carries the commit it names**: where HEAD reads another
+        commit after the build (a checkout during it), --carry refuses
+        before it writes the manifest, and leaves nothing. Perturbation:
+        drop the second read and the set is written under the first
+        commit."""
+        self.carry_refusal("the tree moved during the build", True, MOVE_TREE="1")
+        self.assertFalse((self.sets / "set-1").exists())
+
+    def test_carry_reads_tracked_files_alone_after_the_build(self):
+        """**The run's own files do not move the tree**: a target directory
+        and logs the build wrote inside the checkout, unignored, are not a
+        change of commit, and the set is written. Perturbation: read
+        untracked files again and the run refuses its own logs."""
+        result = self.carry(TREE_UNTRACKED="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.sets / "set-1" / "MANIFEST").is_file())
+
+    def test_carry_refuses_a_library_of_the_engines_directory_it_does_not_carry(self):
+        """**Every library the SPU takes from the engine's directory is
+        carried**: one the engine's names do not match (llama.cpp's libmtmd,
+        say) refuses, since the set would leave it behind. Perturbation:
+        pass a non-engine name from the engine's directory and the set is
+        written without it."""
+        # The target outside the fixture's toolkit tree, which holds the
+        # fixture root, so the toolkit rule cannot refuse the line instead.
+        target = Path(tempfile.mkdtemp(prefix="weaver-carry-target-"))
+        self.addCleanup(shutil.rmtree, target)
+        out = target / "release" / "build" / "llama-cpp-sys-2-fixture" / "out" / "lib"
+        self.carry_refusal(f"libmtmd.so.0 => {out}", True, CARGO_TARGET_DIR=str(target),
+                           LDD_EXTRA=f"\tlibmtmd.so.0 => {out}/libmtmd.so.0 (0x0000)")
+
+    def test_a_carry_that_fails_while_filling_leaves_nothing(self):
+        """**A carry set is a whole set or does not stand**: where the fill
+        fails after its directory is made (here, the deploy list names a
+        file that is not beside it), the directory it filled is removed and
+        DIR never stands. Perturbation: drop the exit trap and the filled
+        directory is left behind."""
+        with open(self.repo / "deploy" / "deployed-copy.txt", "a") as listed:
+            listed.write("no-such-script.sh\n")
+        self.carry_refusal("names 'no-such-script.sh', which is not a file beside it", True)
+        self.assertFalse((self.sets / "set-1").exists())
+
+    def install_carry(self, carried, sha, *args, **env):
+        """<set>/deploy/install-carry.sh on a run box with no stack: its
+        prefix, record, admin base and agent directory named under the
+        fixture and absent, the image's programs its program directory, the
+        driver's library its own, and the SPU resolving its engine and
+        runtime from the placed library directory. The environment is left
+        as it was found."""
+        saved = dict(self.env)
+        try:
+            self.run_bin = self.run_bins(skip=())
+            self.run_prefix = self.root / "run-prefix"
+            self.run_stack = self.root / "run-stack"
+            self.env.update(ALLOW_APPLY_CHECKS="1", WEAVER_PREFIX=str(self.run_prefix),
+                            WEAVER_STACK_RECORD=str(self.run_stack), WEAVER_ADMIN_CONFIG=str(self.root / "run-admin"),
+                            WEAVER_AGENT_DIR=str(self.root / "run-agents"), WEAVER_PROGRAM_DIRS=str(self.run_bin),
+                            LDD_RUNTIME=str(self.run_prefix / "lib"), LDD_DRIVER=str(self.root / "run-driver"),
+                            LDD_SYSTEM="/fixture-system")
+            self.env.update(env)
+            return subprocess.run(["bash", str(carried / "deploy" / "install-carry.sh"), str(carried), sha, *args],
+                                  env=self.env, text=True, capture_output=True, timeout=60)
+        finally:
+            self.env.clear()
+            self.env.update(saved)
+
+    def run_bins(self, skip):
+        """A run box's program directory: an executable stand-in for each
+        name deploy/image-programs.txt lists, those in SKIP left out."""
+        made = self.root / ("run-bin-" + "-".join(skip) if skip else "run-bin")
+        if not made.exists():
+            made.mkdir()
+            for name in program_check().read_names(DEPLOY / "image-programs.txt"):
+                if name not in skip:
+                    (made / name).write_text("#!/bin/sh\nexit 99\n")
+                    (made / name).chmod(0o755)
+        return made
+
+    def carried(self):
+        """A carry set written in this fixture, and its manifest's sha256."""
+        result = self.carry()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return self.sets / "set-1", result.stdout.splitlines()[-1]
+
+    def test_install_carry_places_the_set_and_writes_the_record_and_the_whole_tuple(self):
+        """**A carry set installs on a box with no compiler** (weaver-admin-PRD
+        section 7.2, deploy/install-carry.sh): the plan checks the set and
+        places nothing; the install places every entry from root's checked
+        copy, writes the stack record with `library-path` the stack's library
+        directory, and writes the install tuple whole: the build half as
+        carried, each runtime file as the placed SPU resolves it, and
+        `carry = <manifest sha256>`, which agent_tuple.py reads. No loader
+        entry is written and ldconfig is never called, and root's copy is
+        removed. Perturbations: copy the tuple's member lines unread and a
+        placed file swapped after the check is not caught (the unit test);
+        leave out the carry line and update-stack.sh no longer knows the box."""
+        carried, sha = self.carried()
+        loader = self.ldso_conf.read_text()
+        self.log.unlink(missing_ok=True)
+        result = self.install_carry(carried, sha)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("plan only. rerun with --install", result.stdout)
+        self.assertIn(f"commit        {self.CARRY_COMMIT}", result.stdout)
+        self.assertFalse((self.root / "run-prefix").exists())
+        self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
+        result = self.install_carry(carried, sha, "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"installed carry set {sha[:12]} at {self.CARRY_COMMIT}", result.stdout)
+        for row in (carried / "MANIFEST").read_text().splitlines()[2:]:
+            kind, value, mode, path = row.split("\t")
+            if path == "build-tuple":
+                continue
+            placed = self.run_prefix / path
+            if kind == "link":
+                self.assertEqual(os.readlink(placed), value, path)
+            else:
+                self.assertEqual(hashlib.sha256(placed.read_bytes()).hexdigest(), value, path)
+        self.assertEqual((self.run_stack / "library-path").read_text(), f"{self.run_prefix / 'lib'}\n")
+        self.assertEqual((self.run_stack / "spu-binary").read_text(), f"{self.run_prefix / 'bin' / 'weaver-spu'}\n")
+        record = (self.run_stack / "install-tuple").read_text()
+        build = (carried / "build-tuple").read_text()
+        self.assertTrue(record.startswith(build), record)
+        tail = record[len(build):].splitlines()
+        cudart = (self.run_prefix / "lib" / "libcudart.so.99.1.2")
+        self.assertEqual(tail, [
+            f"runtime.cudart = {hashlib.sha256(cudart.read_bytes()).hexdigest()} {cudart}",
+            *[line for line in tail if line.startswith(("runtime.cublas ", "runtime.cublaslt ", "runtime.curand "))],
+            f"carry = {sha}"])
+        self.assertEqual(len(tail), 5, tail)
+        install = _agent_tuple().read_install_tuple(self.run_stack / "install-tuple")
+        self.assertEqual(install["facts"]["carry"], sha)
+        self.assertEqual(sorted(install["build_runtime"]), ["cublas", "cublaslt", "cudart", "curand"])
+        self.assertFalse([c for c in self.calls() if "ldconfig" in c], self.calls())
+        self.assertEqual(self.ldso_conf.read_text(), loader)
+        self.assertEqual([p.name for p in self.run_prefix.iterdir() if p.name.startswith(".carry-")], [])
+
+    def test_install_carry_refuses_another_set_before_anything_is_placed(self):
+        """**The manifest's sha256 names the set**: a digest that is not the
+        manifest's, and a set whose file differs from its manifest row,
+        each refuse at the plan, before any sudo. Perturbation: skip the
+        digest comparison and the other digest plans."""
+        carried, sha = self.carried()
+        self.log.unlink(missing_ok=True)
+        result = self.install_carry(carried, "0" * 64, "--install")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"not the {'0' * 64} named, so this is not that set", result.stderr)
+        (carried / "deploy" / "turn.py").write_text("changed after the set was written\n")
+        result = self.install_carry(carried, sha, "--install")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("deploy/turn.py is not as the manifest names it", result.stderr)
+        self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
+        self.assertFalse(self.run_prefix.exists())
+
+    def test_install_carry_refuses_a_prefix_part_left_with_no_stack_record(self):
+        """**What a take-down leaves under the prefix blocks the next
+        install**: with no stack record and an empty admin base, a
+        `<prefix>/bin`, `lib` or `deploy` that stands refuses at the plan,
+        before any sudo, naming the new set's own decommission.sh. This is why decommission.sh
+        must take them on a box where no agent was made
+        (`test_a_box_with_no_agent_names_its_prefix_from_the_stack_record`).
+        Perturbation: drop the check and the plan goes on to sudo."""
+        carried, sha = self.carried()
+        prefix = self.root / "run-prefix"  # install_carry's prefix
+        for part in ("bin", "lib", "deploy"):
+            with self.subTest(part=part):
+                (prefix / part).mkdir(parents=True)
+                self.log.unlink(missing_ok=True)
+                result = self.install_carry(carried, sha, "--install")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(f"{prefix / part} already stands. This is a first install; take the box down "
+                              "with the new set's own deploy/decommission.sh", result.stderr)
+                self.assertFalse(self.run_stack.exists())
+                self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
+                (prefix / part).rmdir()
+
+    def test_the_new_set_is_checked_by_hand_before_the_take_down(self):
+        """**The check REDEPLOY.md section 3a gives before the take-down
+        runs**, its four lines run as the page gives them, as the operator:
+        the manifest's sha256 is the one carried, the set's `carry_set.py`
+        is the file its manifest names before it is run, and its `check`
+        prints the set's commit. A changed `carry_set.py` shows as two
+        digests, before it runs; a changed `decommission.sh` is refused by
+        name. Perturbations: the page's row reader prints another field, and
+        the changed checker passes; drop the comparison of the set with its
+        manifest, and the changed script passes."""
+        page = (DEPLOY / "REDEPLOY.md").read_text()
+        block = page[page.index("**Check the new set before the take-down.**"):]
+        block = block[block.index("```bash\n") + len("```bash\n"):]
+        lines = block[:block.index("```")].splitlines()
+        self.assertEqual(len(lines), 4, lines)
+        self.assertTrue(lines[3].startswith("python3 -I <set>/deploy/carry_set.py check"), lines)
+        carried, sha = self.carried()
+        env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+        def line(n):
+            command = lines[n].replace("<set>", shlex.quote(str(carried))).replace("<manifest sha256>", sha)
+            return subprocess.run(["bash", "-c", command], env=env, text=True, capture_output=True, timeout=60)
+        def first_field(n):
+            result = line(n)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result.stdout.split()[0] if result.stdout.split() else ""
+        self.assertEqual(first_field(0), sha)
+        self.assertEqual(first_field(1), first_field(2))
+        result = line(3)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout.strip(), r"^[0-9a-f]{40}$")
+        for changed in ("carry_set.py", "decommission.sh"):
+            with self.subTest(changed=changed):
+                path = carried / "deploy" / changed
+                kept = path.read_bytes()
+                path.write_bytes(kept + b"# changed after the set was written\n")
+                try:
+                    if changed == "carry_set.py":
+                        self.assertNotEqual(first_field(1), first_field(2))
+                    else:
+                        result = line(3)
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                        self.assertIn("deploy/decommission.sh is not as the manifest names it",
+                                      result.stdout + result.stderr)
+                finally:
+                    path.write_bytes(kept)
+
+    def test_install_carry_judges_roots_copy_not_the_operators(self):
+        """**Digests are judged in the copy root holds**: a file that differs
+        in root's copy (a file changed under the copy) refuses after the
+        operator's copy passed, places nothing, and removes root's copy.
+        Perturbation: check the operator's set instead of root's copy and
+        the swapped file installs."""
+        carried, sha = self.carried()
+        for swapped, said in (("turn.py", "deploy/turn.py is not as the manifest names it"),
+                              ("carry_set.py", "root's copy of deploy/carry_set.py is not the file the manifest names")):
+            with self.subTest(swapped=swapped):
+                result = self.install_carry(carried, sha, "--install", CARRY_SWAP=swapped)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("root's copy of the set is not the set", result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertFalse(self.run_prefix.exists())
+                self.assertFalse(self.run_stack.exists())
+
+    def test_install_carry_runs_only_from_the_set_it_installs(self):
+        """**The script is the set's own**: run from another set's deploy
+        copy, it refuses before any check. Perturbation: drop the comparison
+        and set A's checker judges set B."""
+        carried, sha = self.carried()
+        other = self.root / "other-set"
+        shutil.copytree(carried, other, symlinks=True)
+        saved = dict(self.env)
+        try:
+            self.env.update(WEAVER_PREFIX=str(self.root / "run-prefix"))
+            result = subprocess.run(["bash", str(other / "deploy" / "install-carry.sh"), str(carried), sha],
+                                    env=self.env, text=True, capture_output=True, timeout=60)
+        finally:
+            self.env.clear()
+            self.env.update(saved)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"not from the deploy copy of the set it installs ({carried}/deploy)", result.stderr)
+
+    def test_install_carry_removes_a_record_it_could_not_finish(self):
+        """**The stack record stands whole or not at all**: where a write of
+        the record fails (here the install tuple's, after the keys), the
+        record being filled, the placed stack, root's copy and each
+        directory the run made are removed, so a rerun is a first install
+        again. Perturbations: write the record in place and its keys stay
+        behind; leave the made directories and the prefix stays."""
+        carried, sha = self.carried()
+        result = self.install_carry(carried, sha, "--install", TEE_FAIL="install-tuple")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("worker-binary = ", result.stdout)
+        self.assertFalse(self.run_stack.exists())
+        self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith(".stack-")], [])
+        self.assertFalse(self.run_prefix.exists())
+        result = self.install_carry(carried, sha, "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_decommission_takes_every_part_of_a_prefix_install_carry_refuses(self):
+        """**A carried box takes a newer set after decommission.sh**: every
+        directory under the prefix whose standing install-carry.sh refuses is
+        one decommission.sh plans, archives and purges, so the documented way
+        is open. Perturbation: drop deploy from any of decommission's three
+        loops."""
+        carry = (DEPLOY / "install-carry.sh").read_text()
+        refused, = re.findall(r"^for part in ([a-z ]+); do$", carry, re.M)
+        loops = re.findall(r"for sub in ([a-z -]+); do \[ -d \"\$p/\$sub\" \]",
+                           (DEPLOY / "decommission.sh").read_text())
+        self.assertEqual(len(loops), 3, loops)
+        for loop in loops:
+            self.assertLessEqual(set(refused.split()), set(loop.split()), loop)
+
+    def test_install_carry_refuses_a_runtime_or_driver_that_does_not_resolve_as_carried(self):
+        """**The placed SPU resolves as the set carries it, or the install
+        refuses and removes what it placed**: a runtime file resolved from
+        outside the stack's library directory, and the driver's own library
+        not found, which a run box must have. Perturbations: compare
+        runtime paths with no directory rule and the first case installs;
+        skip the undo and the prefix keeps the placed files."""
+        carried, sha = self.carried()
+        for env, said in (({"LDD_RUNTIME": str(self.cuda_lib)}, f"resolves to {self.cuda_lib}"),
+                          ({"LDD_DRIVER": "none"}, "libcuda.so.1 => not found")):
+            with self.subTest(said=said):
+                result = self.install_carry(carried, sha, "--install", **env)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("does not resolve as the set carries it", result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertIn("what was placed is removed", result.stderr)
+                self.assertFalse(self.run_prefix.exists())
+                self.assertFalse(self.run_stack.exists())
+
+    def test_install_carry_judges_the_deploy_copy_against_this_boxs_programs(self):
+        """**The deploy copy calls only programs the run box carries**
+        (#610): a program directory lacking one the copy calls refuses and
+        removes what was placed. Perturbation: judge against
+        deploy/image-programs.txt and the missing program passes."""
+        carried, sha = self.carried()
+        short = self.run_bins(skip=("useradd",))
+        result = self.install_carry(carried, sha, "--install", WEAVER_PROGRAM_DIRS=str(short))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("useradd: called here, and not a program the image carries", result.stdout)
+        self.assertIn("calls a program this box does not carry", result.stderr)
+        self.assertFalse(self.run_prefix.exists())
+
+    def test_install_carry_takes_a_box_with_rpm_and_no_pacman(self):
+        """**A Fedora box passes the deploy copy's check** (#635): a program
+        directory with rpm and no pacman, as Fedora's, takes the install,
+        since no copied script asks pacman. Perturbation: put back
+        decommission.sh's `pacman -Q cccl`, and the install refuses."""
+        carried, sha = self.carried()
+        pacman = ("pacman", "pacman-conf", "pacman-db-upgrade", "pacman-key")
+        fedora = self.run_bins(skip=pacman)
+        (fedora / "rpm").write_text("#!/bin/sh\nexit 99\n")
+        (fedora / "rpm").chmod(0o755)
+        self.assertFalse(any((fedora / n).exists() for n in pacman))
+        result = self.install_carry(carried, sha, "--install", WEAVER_PROGRAM_DIRS=str(fedora))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("not a program the image carries", result.stdout)
+        self.assertIn("the deploy copy calls only programs this box carries", result.stdout)
+        self.assertTrue((self.run_prefix / "deploy" / "decommission.sh").exists())
+
+    def test_install_carry_takes_a_box_with_pacman_as_before(self):
+        """**An Arch box passes as before** (#635): the program directory
+        deploy/image-programs.txt names, pacman in it and rpm not, takes the
+        install. Perturbation: read the cccl version through `rpm -q cccl`,
+        and the install refuses."""
+        carried, sha = self.carried()
+        arch = self.run_bins(skip=())
+        self.assertTrue((arch / "pacman").exists())
+        self.assertFalse((arch / "rpm").exists())
+        result = self.install_carry(carried, sha, "--install", WEAVER_PROGRAM_DIRS=str(arch))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.run_prefix / "deploy" / "decommission.sh").exists())
+
+    def test_a_carried_box_takes_a_newer_set_only_after_decommission(self):
+        """**A second set on a box that holds one** is refused by
+        install-carry.sh, and update-stack.sh refuses the carried box, each
+        naming the new set's own decommission.sh, what it costs, then the
+        install, and why the copy under the prefix is not the one to run.
+        Perturbations: drop either refusal and its run proceeds."""
+        carried, sha = self.carried()
+        result = self.install_carry(carried, sha, "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        cost = "decommission.sh, which archives and removes every agent on the box and the stack"
+        own = "the new set's own deploy/decommission.sh"
+        why = "the purge removes {}, so a rerun after a removal that failed would find no script there"
+        installed = self.run_prefix
+        # Run with another prefix: the refusal names the one the box's record
+        # names, not this run's.
+        result = self.install_carry(carried, sha, WEAVER_PREFIX=str(self.root / "other-prefix"))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("already stands, so this box holds a stack", result.stderr)
+        self.assertIn(cost, result.stderr)
+        self.assertIn(own, result.stderr)
+        self.assertIn(f"not {installed}/deploy/decommission.sh: " + why.format(f"{installed}/deploy"),
+                      result.stderr)
+        self.assertNotIn("other-prefix/deploy", result.stderr)
+        self.log.unlink(missing_ok=True)
+        self.env["WEAVER_STACK_RECORD"] = str(self.run_stack)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"installed from the carry set {sha}", result.stderr)
+        self.assertIn(cost, result.stderr)
+        self.assertIn(own, result.stderr)
+        self.assertIn("not the one under the prefix: " + why.format("<prefix>/deploy"), result.stderr)
+        (self.run_stack / "install-tuple").chmod(0o000)
+        try:
+            if not os.access(self.run_stack / "install-tuple", os.R_OK):
+                result = self.run_script("update-stack.sh")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("to tell whether a carry set installed this box", result.stderr)
+        finally:
+            (self.run_stack / "install-tuple").chmod(0o644)
+        self.assertFalse([c for c in self.calls() if c[:2] == ["cargo", "build"]], self.calls())
+
     def library_install(self, **env):
         """An --install on a box with no agent, the engine moved to build b,
         libggml's SONAME link at another target and libllama's bare link
@@ -5895,7 +6751,7 @@ esac
         self.assertNotIn("RESTORE INCOMPLETE", result.stderr)
 
     TUPLE_KEYS = ["commit", "toolchain", "features", "engine", "engine-source", "engine-vendored", "nvcc",
-                  "member.worker", "member.weaver-admin", "member.weaver-trace-relay", "member.weaver-gate",
+                  "ccbin", "member.worker", "member.weaver-admin", "member.weaver-trace-relay", "member.weaver-gate",
                   "member.weaver-spu", "member.weaver-state", "member.busybox", "member.busybox.applets",
                   "library.libggml.so.0.9.1", "library.libllama.so.0.0.1",
                   "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand", "cccl"]
@@ -5916,7 +6772,8 @@ esac
         operator's environment and its library path reaches ldd; read the
         lock unfiltered and the metadata call carries no platform; record
         the name ldd prints rather than the file it leads to and the path is
-        the link's; put back the driver or card lines and the keys differ."""
+        the link's; put back the driver or card lines and the keys differ;
+        read the cccl version from pacman and it reads 3.3.4-1."""
         # The operator's shell carries its own library path, which neither
         # the install's check nor the tuple's runtime read may take.
         result = self.library_install(LD_LIBRARY_PATH="/operator/out/lib")
@@ -5946,7 +6803,11 @@ esac
                           ("cublaslt", "libcublasLt.so.99.3.4"), ("curand", "libcurand.so.99.5.6")):
             path = (self.cuda_lib / file).resolve()
             self.assertEqual(facts[f"runtime.{key}"], f"{hashlib.sha256(path.read_bytes()).hexdigest()} {path}")
-        self.assertEqual(facts["cccl"], "3.3.4-1")
+        self.assertEqual(facts["ccbin"], f"{self.ccbin} g++ (Fixture) 99.1.0")
+        # The version in the toolkit's own CCCL header, though the box's
+        # pacman answers another; pacman is never asked.
+        self.assertEqual(facts["cccl"], "3.3.4")
+        self.assertFalse([c for c in self.calls() if c[0] == "pacman"], self.calls())
         self.assertFalse([key for key in facts if key in ("driver", "gpus") or key.startswith(("gpu.", "runtime.libcuda"))],
                          "the hardware half is read at each load, never stored")
         # The record reads as the helper takes it, a tuple of this form.
@@ -5975,9 +6836,13 @@ esac
         out**: no SPU to resolve, no lock to read and no toolchain file, on a
         box with no card, where nvidia-smi answers its failure sentence. The
         sentence is never a fact, since the tuple reads no hardware.
-        Perturbation: print nothing for an unanswered fact and the keys
-        differ."""
+        No host compiler named reads `unknown` too, and so does one that is
+        not an executable file or whose path is not printable ASCII, which
+        the reader would refuse. Perturbation: print nothing for an
+        unanswered fact and the keys differ; read NVCC_CCBIN unchecked and
+        the later cases print its path."""
         self.env["NO_NVIDIA"] = "1"
+        self.env.pop("NVCC_CCBIN")
         empty = self.root / "empty-repo"
         empty.mkdir()
         script = (f"source {shlex.quote(str(self.repo / 'deploy' / 'engine-libraries.sh'))}; "
@@ -5991,31 +6856,39 @@ esac
         self.assertEqual(ran.returncode, 0, ran.stderr)
         facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
         self.assertEqual(list(facts), ["commit", "toolchain", "features", "engine", "engine-source", "engine-vendored",
-                                       "nvcc", "member.worker", "library.libllama.so.0.0.1", "runtime.cudart",
-                                       "runtime.cublas", "runtime.cublaslt", "runtime.curand", "cccl"])
-        for key in ("toolchain", "engine-source", "engine-vendored", "member.worker", "library.libllama.so.0.0.1",
+                                       "nvcc", "ccbin", "member.worker", "library.libllama.so.0.0.1",
+                                       "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand",
+                                       "cccl"])
+        for key in ("ccbin", "toolchain", "engine-source", "engine-vendored", "member.worker", "library.libllama.so.0.0.1",
                     "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand"):
             self.assertEqual(facts[key], "unknown", key)
         self.assertEqual(facts["engine"], "llama-cpp-sys-2 unknown")
         self.assertEqual(facts["commit"], "fixture-commit", "the commit is the caller's, never read again")
         self.assertNotIn("NVIDIA-SMI", ran.stdout)
+        accented = self.root / "g++-\u00e9"
+        shutil.copy2(self.ccbin, accented)
+        for value in (str(self.root / "no-such-g++"), str(accented)):
+            with self.subTest(ccbin=value):
+                ran = subprocess.run(["bash", "-c", script], env={**env, "NVCC_CCBIN": value},
+                                     text=True, capture_output=True, timeout=20)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertIn("ccbin = unknown\n", ran.stdout)
 
-    def ubuntu_box(self):
-        """Lay out an Ubuntu box's CUDA as NVIDIA's repository installs it:
-        two toolkit releases, each with its CCCL under
-        `targets/x86_64-linux/include/cccl` from its own package, each
+    def toolkits(self):
+        """Lay out two CUDA toolkits as NVIDIA's repository installs them, each
+        release's CCCL under `targets/<host target>/include/cccl`, each
         `include` a link to its target's, and `cuda` a link to the newer,
-        whose nvcc is the one on PATH. Answers the CCCL directory of each
-        release, by release."""
+        whose nvcc is the one on PATH. The older carries CCCL 3.2.1 and the
+        newer 3.3.4. Answers the CCCL directory of each release, by release."""
         local = self.root / "usr-local"
         cccl = {}
-        for release in ("99.3", "99.4"):
+        for release, version in (("99.3", 3002001), ("99.4", 3003004)):
             top = local / f"cuda-{release}"
-            include = top / "targets" / "x86_64-linux" / "include"
+            include = top / "targets" / HOST_TARGET / "include"
             (include / "cccl" / "cuda" / "std" / "__cccl").mkdir(parents=True)
             (include / "cccl" / "cuda" / "std" / "__cccl" / "version.h").write_text(
-                f"#define CCCL_VERSION fixture-{release}\n")
-            (top / "include").symlink_to("targets/x86_64-linux/include")
+                CCCL_HEADER.format(version=version))
+            (top / "include").symlink_to(f"targets/{HOST_TARGET}/include")
             cccl[release] = include / "cccl"
         (local / "cuda-99.4" / "bin").mkdir()
         nvcc = local / "cuda-99.4" / "bin" / "nvcc"
@@ -6024,17 +6897,18 @@ esac
         (local / "cuda").symlink_to("cuda-99.4")
         return cccl
 
-    def ubuntu_tuple(self, pacman=False, dpkg=True, **env):
+    def toolkit_tuple(self, pacman=False, **env):
         """The install tuple as bootstrap writes it, `TUPLE=$(install_tuple
         ...)` under `set -euo pipefail`, on a box whose PATH holds no pacman
-        (or, with PACMAN, the double's), the dpkg-query double unless DPKG
-        is false, the fixture toolkit's nvcc and the system's tools the
-        function names. Answers the facts and the dpkg-query calls."""
-        bin_dir = self.root / "ubuntu-bin"
+        and no dpkg-query (or, with PACMAN, the pacman double), the fixture
+        toolkit's nvcc and the system's tools the function names. Answers
+        the facts, and the reason `cccl_read` gives in the same shell, after
+        the tuple."""
+        bin_dir = self.root / "toolkit-bin"
         if not bin_dir.exists():
             bin_dir.mkdir()
             for tool in ("bash", "python3", "sed", "grep", "awk", "cut", "sha256sum", "tr", "readlink",
-                         "dirname", "env"):
+                         "dirname", "env", "sort", "head", "uname"):
                 (bin_dir / tool).symlink_to(shutil.which(tool))
             for name, body in (("cargo", "#!/bin/sh\nexit 101\n"), ("git", "#!/bin/sh\nexit 128\n"),
                                ("ldd", "#!/bin/sh\nexit 1\n")):
@@ -6042,11 +6916,10 @@ esac
                 (bin_dir / name).chmod(0o755)
         # Absent, not merely not executable: bash's `command -v` answers a
         # file it cannot run when PATH holds no other of the name.
-        for name, keep in (("pacman", pacman), ("dpkg-query", dpkg)):
-            (bin_dir / name).unlink(missing_ok=True)
-            if keep:
-                (bin_dir / name).write_text(DOUBLE)
-                (bin_dir / name).chmod(0o755)
+        (bin_dir / "pacman").unlink(missing_ok=True)
+        if pacman:
+            (bin_dir / "pacman").write_text(DOUBLE)
+            (bin_dir / "pacman").chmod(0o755)
         empty = self.root / "empty-repo"
         empty.mkdir(exist_ok=True)
         script = (f"set -euo pipefail; "
@@ -6054,7 +6927,8 @@ esac
                   f"source {shlex.quote(str(self.repo / 'deploy' / 'install-tuple.sh'))}; "
                   f"TUPLE=$(install_tuple {shlex.quote(str(empty))} fixture-commit "
                   f"{shlex.quote(str(self.root / 'no-bin'))} {shlex.quote(str(self.root / 'no-lib'))} "
-                  f"fixture-features 'worker' 'libllama.so.0.0.1'); printf '%s\\n' \"$TUPLE\"")
+                  f"fixture-features 'worker' 'libllama.so.0.0.1'); printf '%s\\n' \"$TUPLE\"; "
+                  f"cccl_read || printf 'why = %s\\n' \"$CCCL_WHY\"")
         path = os.pathsep.join([str(bin_dir), str(self.root / "usr-local" / "cuda" / "bin")])
         self.log.unlink(missing_ok=True)
         # weaver-spu's build script reads CUDA_PATH, else CUDA_ROOT, as the
@@ -6065,43 +6939,27 @@ esac
                              text=True, capture_output=True, timeout=20)
         self.assertEqual(ran.returncode, 0, ran.stderr)
         facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
-        return facts, [c for c in self.calls() if c[0] == "dpkg-query"]
+        self.assertFalse(any(c[0] in ("pacman", "dpkg-query") for c in self.calls()), self.calls())
+        return facts
 
-    def dpkg_database(self, cccl, **changes):
-        """The fixture's package database: each release's CCCL header owned
-        by its own package, by the path dpkg records, the resolved one."""
-        header = "cuda/std/__cccl/version.h"
-        db = {"owners": {str((cccl[r] / header).resolve()): f"cccl-{r.replace('.', '-')}" for r in cccl},
-              "versions": {"cccl-99-3": "99.3.3.4.1-1", "cccl-99-4": "99.3.4.3.1-1"}}
-        db.update(changes)
-        return json.dumps(db)
-
-    def test_without_pacman_the_tuple_records_the_cccl_package_nvcc_reads_first(self):
-        """**Where pacman is absent, the cccl fact is the dpkg package that
-        owns the CCCL header nvcc reads first**, as `<package>=<version>`
-        (the Planner's brief of 2026-11-15): an Ubuntu box holds one CCCL
-        package per toolkit release, as the appliance image holds
-        `cccl-13-3` and `cccl-13-4`, and builds against the one its
-        NVCC_PREPEND_FLAGS names. The first include directory of those flags
-        that holds the header wins, by any spelling nvcc reads and across
-        lines, and the path is asked for as found and then resolved, since
-        dpkg records the path a package unpacks. With none, the header is
-        the toolkit's own CCCL, beside the nvcc on PATH, and the SPU
-        build's own include may hold that same file. Where pacman stands
-        it answers, and dpkg-query is never asked. Perturbations: read no
-        prepended flag and the first case reads cccl-99-4; ask only as
-        found and the linked spelling reads unknown; ask only as resolved
-        and the linked ancestor reads unknown; read one directory per flag
-        and the comma list reads cccl-99-4; read the first line of the
-        flags and the two-line case reads cccl-99-4; compare the build's
-        include as spelled and its link to the toolkit reads unknown; pass
-        over pacman and the last case asks dpkg-query."""
-        cccl = self.ubuntu_box()
-        self.env["FIXTURE_DPKG"] = self.dpkg_database(cccl)
+    def test_the_tuple_records_the_cccl_version_from_the_header_nvcc_reads_first(self):
+        """**The cccl fact is the version in the CCCL header nvcc reads first,
+        by no package manager**, as `<major>.<minor>.<patch>`: a box with
+        neither pacman nor dpkg reads it, and one with pacman reads the
+        header too, never the package. The first include directory of
+        NVCC_PREPEND_FLAGS that holds the header wins, by any spelling nvcc
+        reads and across lines; with none, the header is the toolkit's own
+        CCCL, beside the nvcc on PATH, and the SPU build's own include may
+        hold that same file. Perturbations: read no prepended flag and the
+        first case reads 3.3.4; read one directory per flag and the comma
+        list reads 3.3.4; read the first line of the flags and the two-line
+        case reads 3.3.4; compare the build's include as spelled and its link
+        to the toolkit reads no version; ask pacman where it stands and the
+        last case reads 3.3.4-1."""
+        cccl = self.toolkits()
         bare = self.root / "no-cccl-here"
         bare.mkdir()
         linked = self.root / "usr-local" / "cuda-99.3" / "include" / "cccl"
-        header = str((cccl["99.3"] / "cuda/std/__cccl/version.h").resolve())
         for case, flags in (("separate", f"-O2 -I {bare} -I {cccl['99.3']}"),
                             ("joined", f"-I{bare} -I{cccl['99.3']}"),
                             ("long", f"--include-path={bare} --include-path {cccl['99.3']}"),
@@ -6109,135 +6967,112 @@ esac
                             ("two lines", f"-O2\n-I{cccl['99.3']}"),
                             ("linked spelling", f"-I{linked}")):
             with self.subTest(case=case):
-                facts, asked = self.ubuntu_tuple(NVCC_PREPEND_FLAGS=flags)
-                self.assertEqual(facts["cccl"], "cccl-99-3=99.3.3.4.1-1")
-                self.assertIn(["dpkg-query", "-S", header], asked)
-        with self.subTest(case="a linked ancestor"):
-            # The path dpkg records runs through a link above the toolkit, as
-            # where /usr/local is itself a link: asked for as found it is
-            # owned, and resolved it is not.
-            (self.root / "usr-link").symlink_to("usr-local")
-            spelled = self.root / "usr-link" / "cuda-99.3" / "targets" / "x86_64-linux" / "include" / "cccl"
-            owned = str(spelled / "cuda/std/__cccl/version.h")
-            facts, _ = self.ubuntu_tuple(NVCC_PREPEND_FLAGS=f"-I{spelled}",
-                                         FIXTURE_DPKG=self.dpkg_database(cccl, owners={owned: "cccl-99-3"}))
-            self.assertEqual(facts["cccl"], "cccl-99-3=99.3.3.4.1-1")
+                facts = self.toolkit_tuple(NVCC_PREPEND_FLAGS=flags)
+                self.assertEqual(facts["cccl"], "3.2.1")
         with self.subTest(case="the build's include links to the toolkit's"):
             same = self.root / "cuda-same"
             same.mkdir()
             (same / "include").symlink_to(cccl["99.4"])
-            facts, _ = self.ubuntu_tuple(CUDA_PATH=str(same))
-            self.assertEqual(facts["cccl"], "cccl-99-4=99.3.4.3.1-1")
+            facts = self.toolkit_tuple(CUDA_PATH=str(same))
+            self.assertEqual(facts["cccl"], "3.3.4")
         with self.subTest(case="the toolkit's own"):
-            facts, asked = self.ubuntu_tuple()
-            self.assertEqual(facts["cccl"], "cccl-99-4=99.3.4.3.1-1")
-            self.assertEqual(asked[0], ["dpkg-query", "-S",
-                                        str((cccl["99.4"] / "cuda/std/__cccl/version.h").resolve())])
+            facts = self.toolkit_tuple()
+            self.assertEqual(facts["cccl"], "3.3.4")
+            self.assertNotIn("why", facts)
+        with self.subTest(case="another target beside the host's"):
+            # A cross-compiling package's target, holding its own CCCL and
+            # sorting ahead of the host's, is not read.
+            for target in (OTHER_TARGET, "aaa-linux"):
+                other = self.root / "usr-local" / "cuda-99.4" / "targets" / target / "include" / "cccl"
+                (other / "cuda" / "std" / "__cccl").mkdir(parents=True)
+                (other / "cuda" / "std" / "__cccl" / "version.h").write_text(CCCL_HEADER.format(version=3001004))
+            facts = self.toolkit_tuple()
+            self.assertEqual(facts["cccl"], "3.3.4")
         with self.subTest(case="an include directory appended that holds no CCCL"):
-            facts, _ = self.ubuntu_tuple(NVCC_APPEND_FLAGS=f"-I{bare}")
-            self.assertEqual(facts["cccl"], "cccl-99-4=99.3.4.3.1-1")
+            facts = self.toolkit_tuple(NVCC_APPEND_FLAGS=f"-I{bare}")
+            self.assertEqual(facts["cccl"], "3.3.4")
         with self.subTest(case="pacman stands"):
-            facts, asked = self.ubuntu_tuple(pacman=True, NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}")
-            self.assertEqual(facts["cccl"], "3.3.4-1")
-            self.assertEqual(asked, [])
+            facts = self.toolkit_tuple(pacman=True, NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}")
+            self.assertEqual(facts["cccl"], "3.2.1")
 
-    def test_without_pacman_a_cccl_the_box_cannot_place_reads_unknown(self):
-        """**A cccl package the box cannot place reads `unknown`**, never a
-        guess: a relative include directory ahead of the rest (relative to
-        a compiler's directory this script never sees), an appended include
-        directory that holds CCCL (the build's own flags stand between it
-        and the toolkit's), an include form the reader does not rank (a
-        system include, options for the host compiler, an options file, a
-        pre-included header, a quote), an SPU build include that holds a
-        CCCL of its own (the engine's compile does not read it), a toolkit
-        of two targets, a header no package owns (a toolkit from NVIDIA's
-        installer) or two packages own, a header path dpkg-query would read
-        as a pattern, a header a diversion names, a package's or a local
-        one, by either spelling and in any message locale (the file there
-        may be the replacement, while the original package's line still
-        names the path), and a box with no dpkg-query. Perturbations: skip
-        relative directories, drop the appended flags' read, rank no other
-        include form, rank an options file or a pre-included header as no
-        flag, drop the build include's check, take the first target, take
-        the first of two owners, drop the pattern refusal, pass over a
-        package's or a local diversion's lines, ask the resolved spelling
-        after a diversion of the spelling as found, or ask dpkg-query in
-        the box's locale, and that case reads a package."""
-        cccl = self.ubuntu_box()
-        database = self.dpkg_database(cccl)
+    def test_a_cccl_version_that_cannot_be_read_reads_unknown_and_says_why(self):
+        """**A cccl version the box cannot read reads `unknown` in the tuple,
+        and `cccl_read` names why**, never a guess: a relative include
+        directory ahead of the rest (relative to a compiler's directory this
+        script never sees), an appended include directory that holds CCCL
+        (the build's own flags stand between it and the toolkit's), an
+        include form the reader does not rank (a system include, options for
+        the host compiler, an options file, a pre-included header, a quote),
+        an SPU build include that holds a CCCL of its own (the engine's
+        compile does not read it), a toolkit with no target for this host, a
+        header whose CCCL_VERSION is not one decimal number or is defined
+        twice, and no nvcc at all. Perturbations: skip relative directories,
+        drop the appended flags' read, rank no other include form, rank an
+        options file or a pre-included header as no flag, drop the build
+        include's check, read whatever target sorts first, take any
+        CCCL_VERSION value or the first of two, and that case reads a
+        version."""
+        cccl = self.toolkits()
         header = str((cccl["99.3"] / "cuda/std/__cccl/version.h").resolve())
-        odd = self.root / "odd[dir]"
-        (odd / "cuda" / "std" / "__cccl").mkdir(parents=True)
-        (odd / "cuda" / "std" / "__cccl" / "version.h").write_text("#define CCCL_VERSION fixture-odd\n")
-        oddheader = str((odd / "cuda/std/__cccl/version.h").resolve())
-        # A CUDA 12 layout, its CCCL directly under include, owned.
+        # A CUDA 12 layout, its CCCL directly under include.
         twelve = self.root / "cuda-99.2"
         (twelve / "include" / "cuda" / "std" / "__cccl").mkdir(parents=True)
-        (twelve / "include" / "cuda" / "std" / "__cccl" / "version.h").write_text("#define CCCL_VERSION fixture-12\n")
-        twelveheader = str((twelve / "include" / "cuda/std/__cccl/version.h").resolve())
+        (twelve / "include" / "cuda" / "std" / "__cccl" / "version.h").write_text(
+            CCCL_HEADER.format(version=3001004))
         # An options file naming the older toolkit's CCCL, which nvcc reads.
         optf = self.root / "cccl.flags"
         optf.write_text(f"-I{cccl['99.3']}\n")
-        for case, env in (
-                ("relative first", {"NVCC_PREPEND_FLAGS": f"-Irelative/cccl -I{cccl['99.3']}"}),
-                ("appended CCCL", {"NVCC_APPEND_FLAGS": f"-I{cccl['99.3']}"}),
-                ("a system include", {"NVCC_PREPEND_FLAGS": f"-isystem {cccl['99.3']}"}),
-                ("host compiler options", {"NVCC_PREPEND_FLAGS": f"-Xcompiler -I{cccl['99.3']}"}),
-                ("an options file", {"NVCC_PREPEND_FLAGS": f"--options-file {optf}"}),
-                ("an options file, short", {"NVCC_PREPEND_FLAGS": f"-optf {optf}"}),
-                ("a pre-included header", {"NVCC_PREPEND_FLAGS": f"--pre-include {header}"}),
-                ("a pre-included header, short", {"NVCC_PREPEND_FLAGS": f"-include {header}"}),
-                ("a quote", {"NVCC_PREPEND_FLAGS": f'-I{cccl["99.3"]} -DFIXTURE="a b"'}),
-                ("the build's own CCCL", {"CUDA_PATH": str(twelve),
-                                          "FIXTURE_DPKG": self.dpkg_database(cccl, owners={
-                                              **json.loads(database)["owners"], twelveheader: "cccl-99-3"})}),
-                ("unowned", {"NVCC_PREPEND_FLAGS": f"-I{cccl['99.3']}",
-                             "FIXTURE_DPKG": self.dpkg_database(cccl, owners={})}),
-                ("two owners", {"NVCC_PREPEND_FLAGS": f"-I{cccl['99.3']}",
-                                "FIXTURE_DPKG": self.dpkg_database(cccl, owners={header: "cccl-99-3, cccl-99-4"})}),
-                ("a pattern", {"NVCC_PREPEND_FLAGS": f"-I{odd}",
-                               "FIXTURE_DPKG": self.dpkg_database(cccl, owners={oddheader: "cccl-99-3"})})):
+        odd = {}
+        for name, text in (("not a number", CCCL_HEADER.format(version="fixture")),
+                           ("defined twice", CCCL_HEADER.format(version=3002001) + "#define CCCL_VERSION 3003004\n"),
+                           ("not defined", "#define CCCL_MAJOR_VERSION 3\n"),
+                           ("too short", CCCL_HEADER.format(version=30021))):
+            d = self.root / ("odd-" + name.replace(" ", "-"))
+            (d / "cuda" / "std" / "__cccl").mkdir(parents=True)
+            (d / "cuda" / "std" / "__cccl" / "version.h").write_text(text)
+            odd[name] = d
+        for case, env, why in (
+                ("relative first", {"NVCC_PREPEND_FLAGS": f"-Irelative/cccl -I{cccl['99.3']}"},
+                 "a relative include directory comes first in NVCC_PREPEND_FLAGS"),
+                ("appended CCCL", {"NVCC_APPEND_FLAGS": f"-I{cccl['99.3']}"},
+                 "an include directory of NVCC_APPEND_FLAGS holds CCCL"),
+                ("a system include", {"NVCC_PREPEND_FLAGS": f"-isystem {cccl['99.3']}"},
+                 "NVCC_PREPEND_FLAGS hold an include form this script does not rank"),
+                ("host compiler options", {"NVCC_PREPEND_FLAGS": f"-Xcompiler -I{cccl['99.3']}"},
+                 "NVCC_PREPEND_FLAGS hold an include form"),
+                ("an options file", {"NVCC_PREPEND_FLAGS": f"--options-file {optf}"},
+                 "NVCC_PREPEND_FLAGS hold an include form"),
+                ("an options file, short", {"NVCC_PREPEND_FLAGS": f"-optf {optf}"},
+                 "NVCC_PREPEND_FLAGS hold an include form"),
+                ("a pre-included header", {"NVCC_PREPEND_FLAGS": f"--pre-include {header}"},
+                 "NVCC_PREPEND_FLAGS hold an include form"),
+                ("a pre-included header, short", {"NVCC_PREPEND_FLAGS": f"-include {header}"},
+                 "NVCC_PREPEND_FLAGS hold an include form"),
+                ("a quote", {"NVCC_PREPEND_FLAGS": f'-I{cccl["99.3"]} -DFIXTURE="a b"'},
+                 "NVCC_PREPEND_FLAGS hold an include form"),
+                ("an appended quote", {"NVCC_APPEND_FLAGS": '-DFIXTURE="a b"'},
+                 "NVCC_APPEND_FLAGS hold an include form"),
+                ("the build's own CCCL", {"CUDA_PATH": str(twelve)},
+                 f"the SPU build's include directory {twelve}/include holds a CCCL header that is not the toolkit's"),
+                ("a relative build include", {"CUDA_PATH": "relative-cuda"},
+                 "the SPU build's include directory relative-cuda/include is not an absolute path"),
+                *((f"a header whose CCCL_VERSION is {name}", {"NVCC_PREPEND_FLAGS": f"-I{d}"},
+                   "defines no one CCCL_VERSION as a decimal number") for name, d in odd.items())):
             with self.subTest(case=case):
-                facts, _ = self.ubuntu_tuple(**{"FIXTURE_DPKG": database, **env})
+                facts = self.toolkit_tuple(**env)
                 self.assertEqual(facts["cccl"], "unknown")
-        with self.subTest(case="no dpkg-query"):
-            facts, _ = self.ubuntu_tuple(dpkg=False, NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}", FIXTURE_DPKG=database)
+                self.assertIn(why, facts["why"])
+        with self.subTest(case="no target for this host"):
+            targets = self.root / "usr-local" / "cuda-99.4" / "targets"
+            (targets / HOST_TARGET).rename(targets / "moved-linux")
+            facts = self.toolkit_tuple()
+            (targets / "moved-linux").rename(targets / HOST_TARGET)
             self.assertEqual(facts["cccl"], "unknown")
-        with self.subTest(case="a diversion names the header"):
-            facts, _ = self.ubuntu_tuple(NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}",
-                                         FIXTURE_DPKG=self.dpkg_database(cccl, diverted=[header]))
+            self.assertIn(f"holds no targets/{HOST_TARGET} for this host", facts["why"])
+        with self.subTest(case="no nvcc"):
+            facts = self.toolkit_tuple(PATH=str(self.root / "toolkit-bin"))
             self.assertEqual(facts["cccl"], "unknown")
-        with self.subTest(case="a local diversion names the header"):
-            facts, _ = self.ubuntu_tuple(NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}",
-                                         FIXTURE_DPKG=self.dpkg_database(cccl, local_diverted=[header]))
-            self.assertEqual(facts["cccl"], "unknown")
-        # Through a linked ancestor: the diversion names the spelling the
-        # flags give, which no package owns, and the resolved spelling's
-        # owner line still names the package, so the asking stops at the
-        # diversion.
-        (self.root / "usr-divert").symlink_to("usr-local")
-        spelled = self.root / "usr-divert" / "cuda-99.3" / "targets" / "x86_64-linux" / "include" / "cccl"
-        for kind in ("diverted", "local_diverted"):
-            with self.subTest(case=f"{kind} names the spelling as found"):
-                facts, asked = self.ubuntu_tuple(
-                    NVCC_PREPEND_FLAGS=f"-I{spelled}",
-                    FIXTURE_DPKG=self.dpkg_database(cccl, **{kind: [str(spelled / "cuda/std/__cccl/version.h")]}))
-                self.assertEqual(facts["cccl"], "unknown")
-                self.assertNotIn(["dpkg-query", "-S", header], asked)
-        with self.subTest(case="a diversion in a translated locale"):
-            facts, _ = self.ubuntu_tuple(NVCC_PREPEND_FLAGS=f"-I{cccl['99.3']}", LC_ALL="", LC_MESSAGES="",
-                                         LANG="de_DE.UTF-8",
-                                         FIXTURE_DPKG=self.dpkg_database(cccl, diverted=[header]))
-            self.assertEqual(facts["cccl"], "unknown")
-        with self.subTest(case="two targets"):
-            # The other target holds its own CCCL, owned, and sorts first.
-            other = self.root / "usr-local" / "cuda-99.4" / "targets" / "sbsa-linux" / "include" / "cccl"
-            (other / "cuda" / "std" / "__cccl").mkdir(parents=True)
-            (other / "cuda" / "std" / "__cccl" / "version.h").write_text("#define CCCL_VERSION fixture-sbsa\n")
-            owners = json.loads(database)["owners"]
-            owners[str((other / "cuda/std/__cccl/version.h").resolve())] = "cccl-99-4"
-            facts, _ = self.ubuntu_tuple(FIXTURE_DPKG=self.dpkg_database(cccl, owners=owners))
-            self.assertEqual(facts["cccl"], "unknown")
+            self.assertEqual(facts["why"], "no nvcc is on PATH")
 
     def test_bootstrap_records_the_same_install_tuple_after_its_install(self):
         """**The two scripts write one record from one function**: bootstrap
@@ -9363,7 +10198,8 @@ class ProgramCheckTests(unittest.TestCase):
                "decommission.sh": [f"as_op {h}", f"as_op sh -c '{h}'"],
                "verify-load.sh": [f"as_account nobody {h}"],
                "account-drop.sh": [f"as_account nobody {h}"],
-               "retired-python.sh": [f"root {h}"]}
+               "retired-python.sh": [f"root {h}"],
+               "install-carry.sh": []}
         with tempfile.TemporaryDirectory() as scratch:
             copy, names = self.copied(Path(scratch))
             shells = [n for n in names if n.endswith(".sh")]
@@ -10095,7 +10931,7 @@ class ProgramCheckTests(unittest.TestCase):
                               "case b in a) true ;; b) hostname\nesac\nSELF_RUN=(\"${SELF_RUN[@]}\")\n\"${SELF_RUN[@]}\"\n"
                               "awk -F: '$1 == 1 || $2 == 2 { print }' f\nsed -n 's/a/b/p' f\nsed 2d f\nvisudo -cqf x\n"
                               "sed -n 's/a\\/b/c\\\\/p' f\n"
-                              "pacman -Q x\nsort -u x\n")
+                              "sort -u x\n")
             found = self.findings(copy)["retired-python.sh"]
             self.assertEqual([(w, why) for _, w, why in found],
                              [("hostname", "called here, and not a program the image carries")] * 2
@@ -10154,6 +10990,206 @@ class ProgramCheckTests(unittest.TestCase):
         for name, text in texts.items():
             with self.subTest(file=name):
                 self.assertEqual([n for n, line in enumerate(text.splitlines(), 1) if pattern.search(line)], [])
+
+
+class CarrySetTests(unittest.TestCase):
+    """**The carry set's manifest and the build box's distribution**
+    (deploy/carry_set.py, deploy/install-tuple.sh `tuple_os`), judged apart
+    from a build."""
+
+    COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="weaver-carry-test-")
+        self.addCleanup(self.tmp.cleanup)
+        self.set = Path(self.tmp.name) / "set"
+        for d in ("bin", "lib", "deploy"):
+            (self.set / d).mkdir(parents=True)
+        (self.set / "bin" / "worker").write_text("worker\n")
+        (self.set / "bin" / "worker").chmod(0o755)
+        (self.set / "bin" / "Zed").write_text("upper case sorts first in C order\n")
+        (self.set / "bin" / "Zed").chmod(0o644)
+        (self.set / "lib" / "libllama.so.0.0.1").write_text("llama\n")
+        (self.set / "lib" / "libllama.so.0.0.1").chmod(0o755)
+        (self.set / "lib" / "libllama.so.0").symlink_to("libllama.so.0.0.1")
+        (self.set / "deploy" / "turn.py").write_text("turn\n")
+        (self.set / "deploy" / "turn.py").chmod(0o755)
+        (self.set / "build-tuple").write_text("commit = x\n")
+        (self.set / "build-tuple").chmod(0o644)
+
+    def write(self, commit=None):
+        return subprocess.run([sys.executable, str(DEPLOY / "carry_set.py"), "write", str(self.set),
+                               commit or self.COMMIT], text=True, capture_output=True, timeout=20)
+
+    def test_the_manifest_names_every_entry_sorted_by_path_in_c_order(self):
+        """Every file by sha256 and mode, every link by its target, after the
+        two header lines, sorted by path in C order. Perturbation: sort
+        without C order and `bin/Zed` follows `bin/worker`."""
+        result = self.write()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        digest = lambda p: hashlib.sha256((self.set / p).read_bytes()).hexdigest()
+        self.assertEqual((self.set / "MANIFEST").read_text().splitlines(), [
+            "# weaver carry set 1", f"# commit {self.COMMIT}",
+            f"file\t{digest('bin/Zed')}\t0644\tbin/Zed",
+            f"file\t{digest('bin/worker')}\t0755\tbin/worker",
+            f"file\t{digest('build-tuple')}\t0644\tbuild-tuple",
+            f"file\t{digest('deploy/turn.py')}\t0755\tdeploy/turn.py",
+            "link\tlibllama.so.0.0.1\t-\tlib/libllama.so.0",
+            f"file\t{digest('lib/libllama.so.0.0.1')}\t0755\tlib/libllama.so.0.0.1"])
+        self.assertEqual((self.set / "MANIFEST").stat().st_mode & 0o7777, 0o644)
+        self.assertNotEqual(self.write().returncode, 0, "a set holding a manifest is not written again")
+
+    def test_writing_refuses_what_a_reader_would_refuse(self):
+        """Each rule refuses, naming the entry, and writes no manifest: a
+        mode other than 0755 or 0644, a link to a path, a link to a name the
+        set lacks, an entry outside the three directories, a directory
+        inside one, a name with a blank, no build-tuple, and a commit that
+        is not 40 hex digits. Perturbation: drop any rule and its case
+        writes a manifest."""
+        cases = (
+            ("bin/worker has mode 0700", lambda: (self.set / "bin" / "worker").chmod(0o700)),
+            ("is a link to '../bin/worker'", lambda: (self.set / "lib" / "up").symlink_to("../bin/worker")),
+            ("which the set does not hold", lambda: (self.set / "lib" / "gone").symlink_to("libgone.so")),
+            ("extra is not build-tuple", lambda: (self.set / "extra").write_text("x")),
+            ("lib/sub is neither a file nor a link", lambda: (self.set / "lib" / "sub").mkdir()),
+            ("is not a name of printable ASCII", lambda: (self.set / "deploy" / "a b").write_text("x")),
+            ("the set holds no build-tuple", lambda: (self.set / "build-tuple").unlink()),
+            ("the set holds no deploy directory", lambda: shutil.rmtree(self.set / "deploy")),
+        )
+        for said, damage in cases:
+            with self.subTest(said=said):
+                self.setUp()
+                damage()
+                result = self.write()
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(said, result.stderr)
+                self.assertFalse((self.set / "MANIFEST").exists())
+        self.setUp()
+        result = self.write("ABCDEF0")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("is not 40 hex digits", result.stderr)
+
+    def test_a_set_is_checked_against_the_manifest_its_digest_names(self):
+        """**`check` refuses a set that is not the one the digest names**: a
+        manifest of another digest, and a set with a file added, a file
+        missing, a file changed, a mode changed or a link retargeted, each
+        naming the entry. The set as written passes and prints its commit.
+        Perturbation: compare the paths alone and the changed file passes."""
+        self.assertEqual(self.write().returncode, 0)
+        sha = hashlib.sha256((self.set / "MANIFEST").read_bytes()).hexdigest()
+        result = self.run_set("check", str(self.set), sha)
+        self.assertEqual((result.returncode, result.stdout), (0, self.COMMIT + "\n"), result.stderr)
+        result = self.run_set("check", str(self.set), "1" * 64)
+        self.assertIn("not the " + "1" * 64 + " named", result.stderr)
+        damages = (
+            ("bin/extra is in the set and the manifest does not name it",
+             lambda: (self.set / "bin" / "extra").write_text("x")),
+            ("deploy/turn.py is named by the manifest and the set does not hold it",
+             lambda: (self.set / "deploy" / "turn.py").unlink()),
+            ("bin/worker is not as the manifest names it", lambda: (self.set / "bin" / "worker").write_text("y")),
+            ("bin/Zed is not as the manifest names it", lambda: (self.set / "bin" / "Zed").chmod(0o755)),
+            ("lib/libllama.so.0 is not as the manifest names it",
+             lambda: ((self.set / "lib" / "libllama.so.0").unlink(),
+                      (self.set / "lib" / "libllama.so.0").symlink_to("libllama.so.0.0.1x"),
+                      (self.set / "lib" / "libllama.so.0.0.1x").write_text("x"))),
+        )
+        for said, damage in damages:
+            with self.subTest(said=said):
+                self.setUp()
+                self.assertEqual(self.write().returncode, 0)
+                sha = hashlib.sha256((self.set / "MANIFEST").read_bytes()).hexdigest()
+                damage()
+                result = self.run_set("check", str(self.set), sha)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(said, result.stderr)
+
+    def test_the_install_tuple_binds_the_placed_stack_to_the_set(self):
+        """**`tuple` judges the placed stack against the set**: each placed
+        file equal to its row, the build half's member digests equal to the
+        rows, and each runtime file the build half names resolving in the
+        stack's library directory with the build's sha256. It prints the
+        build half, the runtime lines and the carry line. Perturbations:
+        skip the placed files' check and a swapped placed file passes; drop
+        the runtime digest comparison and a runtime file of other bytes
+        passes."""
+        cudart = self.set / "lib" / "libcudart.so.13.0.1"
+        cudart.write_text("cudart\n")
+        cudart.chmod(0o755)
+        (self.set / "lib" / "libcudart.so.13").symlink_to("libcudart.so.13.0.1")
+        digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+        build = (f"commit = {self.COMMIT}\nmember.worker = {digest(self.set / 'bin' / 'worker')}\n"
+                 f"build-runtime.cudart = {digest(cudart)}\n")
+        (self.set / "build-tuple").write_text(build)
+        self.assertEqual(self.write().returncode, 0)
+        sha = digest(self.set / "MANIFEST")
+        prefix = Path(self.tmp.name) / "prefix"
+        for d in ("bin", "lib", "deploy"):
+            shutil.copytree(self.set / d, prefix / d, symlinks=True)
+        lib = prefix / "lib"
+        report = (f"\tlibllama.so.0 => {lib}/libllama.so.0 (0x0000)\n"
+                  f"\tlibcudart.so.13 => {lib}/libcudart.so.13 (0x0000)\n"
+                  "\tlibcuda.so.1 => /fixture-driver/libcuda.so.1 (0x0000)\n")
+        result = self.run_set("tuple", str(self.set), str(prefix), report, sha)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, build + f"runtime.cudart = {digest(cudart)} {lib / 'libcudart.so.13.0.1'}\n"
+                                               f"carry = {sha}\n")
+        cases = (
+            ("is not the file the manifest names", lambda: (prefix / "bin" / "worker").write_text("swapped\n"),
+             report),
+            ("whose sha256", lambda: ((lib / "libcudart.so.13.9").write_text("other\n"),),
+             report.replace("libcudart.so.13 (", "libcudart.so.13.9 (")),
+            ("libcuda.so.1 => not found", lambda: None,
+             report.replace("/fixture-driver/libcuda.so.1 (0x0000)", "not found")),
+        )
+        for said, damage, told in cases:
+            with self.subTest(said=said):
+                shutil.rmtree(prefix)
+                for d in ("bin", "lib", "deploy"):
+                    shutil.copytree(self.set / d, prefix / d, symlinks=True)
+                damage()
+                result = self.run_set("tuple", str(self.set), str(prefix), told, sha)
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn(said, result.stderr)
+        shutil.rmtree(prefix)
+        for d in ("bin", "lib", "deploy"):
+            shutil.copytree(self.set / d, prefix / d, symlinks=True)
+        # A build half whose member digest is not the file its row names.
+        (self.set / "build-tuple").write_text(build.replace(f"member.worker = {digest(self.set / 'bin' / 'worker')}",
+                                                            "member.worker = " + "0" * 64))
+        (self.set / "MANIFEST").unlink()
+        self.assertEqual(self.write().returncode, 0)
+        other = digest(self.set / "MANIFEST")
+        result = self.run_set("tuple", str(self.set), str(prefix), report, other)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("build-tuple's member.worker is not the digest of the file the manifest names", result.stderr)
+
+    def run_set(self, *args):
+        return subprocess.run([sys.executable, str(DEPLOY / "carry_set.py"), *args],
+                              text=True, capture_output=True, timeout=20)
+
+    def test_the_build_os_is_read_from_os_release(self):
+        """**`build-os` is the distribution's ID and VERSION_ID** as
+        os-release(5) writes them, bare or quoted; ID alone for a rolling
+        release with no VERSION_ID; `unknown` where the file is absent or a
+        value is not of the format's characters. Perturbation: keep the
+        quotes and the quoted case reads them."""
+        root = Path(self.tmp.name)
+        for text, said in (('NAME="Fedora Linux"\nID=fedora\nVERSION_ID=45\n', "fedora 45"),
+                           ("ID='ubuntu'\nVERSION_ID=\"26.04\"\n", "ubuntu 26.04"),
+                           ("ID=arch\nBUILD_ID=rolling\n", "arch"),
+                           ("ID=Fedora\nVERSION_ID=45\n", "unknown"),
+                           ("ID=fedora\nVERSION_ID=4 5\n", "unknown"),
+                           ("ID=fedora\nVERSION_ID=44\nVERSION_ID=45\n", "fedora 45"),
+                           (None, "unknown")):
+            with self.subTest(said=said, text=text):
+                release = root / "os-release"
+                release.unlink(missing_ok=True)
+                if text is not None:
+                    release.write_text(text)
+                result = subprocess.run(["bash", "-c", 'source "$1"; tuple_os "$2"', "-",
+                                         str(DEPLOY / "install-tuple.sh"), str(release)],
+                                        text=True, capture_output=True, timeout=20)
+                self.assertEqual(result.stdout, said + "\n", result.stderr)
 
 
 class DeployedCopyTests(unittest.TestCase):
@@ -11422,6 +12458,75 @@ class DecommissionTests(unittest.TestCase):
         self.assertEqual(agents.stdout.split(), ["a"])
         self.assertIn('if is_box_account "$u"; then', self.script[self.script.index("query_runs()"):])
 
+    def test_the_archive_reads_cccl_from_the_stack_record(self):
+        """**The archive's cccl line is the stack record's** (#635): the
+        install tuple's `cccl` value, marked as the install tuple's and read
+        by no package manager, from a line that starts with the key alone,
+        and a bare `unknown` where no record states it: no tuple, a tuple
+        without the key, a stored `unknown` (install-tuple.sh writes one
+        where the build read no version), an empty value, a link in the
+        tuple's place, or a linked stack record. A PATH that holds a pacman answering another version is
+        never asked. Perturbations: read it through `pacman -Q cccl` again,
+        follow either link, match the key anywhere in a line, read a stored
+        `unknown` as a value, or drop the mark or put it on `unknown`, and
+        this fails."""
+        with tempfile.TemporaryDirectory() as scratch:
+            box = Path(scratch)
+            stack = box / "etc" / "weaver" / "stack"
+            stack.mkdir(parents=True)
+            bin_dir = box / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "pacman").write_text("#!/bin/sh\necho cccl 9.9.9-1\n")
+            (bin_dir / "pacman").chmod(0o755)
+            program = (shell_function(self.script, "stack_cccl") + "stack_cccl\n").replace(
+                "/etc/weaver", f"{box}/etc/weaver")
+            env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+            def read():
+                run = subprocess.run(["bash", "-c", "set -euo pipefail\n" + program], env=env, text=True,
+                                     capture_output=True, timeout=20)
+                self.assertEqual((run.returncode, run.stderr), (0, ""))
+                return run.stdout
+
+            tuple_ = stack / "install-tuple"
+            with self.subTest(case="no tuple"):
+                self.assertEqual(read(), "unknown\n")
+            with self.subTest(case="the tuple states it"):
+                tuple_.write_text("commit = abc\nnvcc = 13.0\ncccl = 3.1.4\ncarry = def\n")
+                self.assertEqual(read(), "3.1.4 (install tuple)\n")
+            with self.subTest(case="its last line, with no newline"):
+                tuple_.write_text("commit = abc\ncccl = 3.2.1")
+                self.assertEqual(read(), "3.2.1 (install tuple)\n")
+            with self.subTest(case="the key after other text on an earlier line"):
+                tuple_.write_text("note = was cccl = 9.9.9\ncommit = abc\ncccl = 3.1.4\n")
+                self.assertEqual(read(), "3.1.4 (install tuple)\n")
+            with self.subTest(case="a stored unknown"):
+                tuple_.write_text("commit = abc\ncccl = unknown\n")
+                self.assertEqual(read(), "unknown\n")
+            with self.subTest(case="an empty value"):
+                tuple_.write_text("commit = abc\ncccl = \n")
+                self.assertEqual(read(), "unknown\n")
+            with self.subTest(case="no cccl key"):
+                tuple_.write_text("commit = abc\nnvcc = 13.0\n")
+                self.assertEqual(read(), "unknown\n")
+            with self.subTest(case="a link in the tuple's place"):
+                elsewhere = box / "elsewhere"
+                elsewhere.write_text("cccl = 3.3.4\n")
+                tuple_.unlink()
+                tuple_.symlink_to(elsewhere)
+                self.assertEqual(read(), "unknown\n")
+            with self.subTest(case="a link in the stack record's place"):
+                real = box / "real-stack"
+                real.mkdir()
+                (real / "install-tuple").write_text("cccl = 3.3.4\n")
+                tuple_.unlink()
+                stack.rmdir()
+                stack.symlink_to(real)
+                self.assertEqual(read(), "unknown\n")
+        self.assertIn('    echo "cccl      $(stack_cccl)"\n', self.script)
+        self.assertNotIn("pacman", "".join(l for l in self.script.splitlines(True) if not l.lstrip().startswith("#")))
+
     def test_the_agent_is_archived_whole_with_its_territory_and_the_home_untouched(self):
         # The operator's ruling of 2026-10-07 on #1: the declaration, the
         # draft, the logs and the save points live in the territory, which
@@ -11577,6 +12682,130 @@ class DecommissionTests(unittest.TestCase):
                 self.assertIn(said, run.stderr)
         self.assertNotIn("bulk-store/dev-archive", self.script)
         self.assertIn("#   sudo deploy/decommission.sh --archive DIR ", self.script)
+
+    def test_a_box_with_no_agent_names_its_prefix_from_the_stack_record(self):
+        """**A carried box taken down before any agent was made loses its
+        prefix too**: install-carry.sh leaves a stack record, an empty admin
+        base and `<prefix>/{bin,lib,deploy}`, and install-carry.sh refuses
+        while any of the three stands, so decommission.sh must plan, archive
+        and purge them with no agent root to name them, and keep `models`.
+        The script runs whole only as root, so its discovery, the plan's
+        prefix lines, the archive's prefix parts and `purge_candidates` run
+        here as it defines them, against a fixture whose `/etc/weaver` is
+        the box's. A record whose binaries are relative names its prefix by
+        its `prefix` key alone, and a record whose prefix is `/` names none.
+        A prefix is plain or none, whatever names it: binaries in `/bin` or
+        `/./bin`, a prefix key of `/.`, an agent root's relative binary and
+        a base's `spu-implementations` line with no path name no prefix and
+        keep no bin dir, the one an admin candidate is read from.
+        Perturbations: read no stack record, and none of the three is
+        planned, archived or purged; take a relative binary, and `.` and
+        `bin` become prefixes; take `/` or `/.`, and `//bin` or `/./bin` is
+        a candidate; keep every bin dir, and one outside the box stands."""
+        script = self.script
+        def cut(start, end):
+            i = script.index(start)
+            return script[i:script.index(end, i) + len(end)]
+        discovery = cut("CONFIG_ROOTS=()\n", '[ -z "$RECORD_PREFIX" ] || PREFIXES["$RECORD_PREFIX"]=1\n')
+        plan_lines = cut('say "install prefixes (models excluded from every mode)"\n',
+                         '  [ -d "$p/models" ] && plan "$p/models  $(du -sh "$p/models" | cut -f1)  KEPT"\ndone\n')
+        archive_parts = cut('  for p in "${!PREFIXES[@]}"; do\n    parts=()\n',
+                            '    [ ${#parts[@]} -gt 0 ] && archive_path "$(archive_name opt "$p")" "${parts[@]}"\n  done\n')
+        with tempfile.TemporaryDirectory(prefix="weaver-no-agent-") as scratch:
+            box = Path(scratch).resolve()
+            prefix = box / "opt" / "weaver"
+            for sub in ("bin", "lib", "deploy", "models"):
+                (prefix / sub).mkdir(parents=True)
+                (prefix / sub / "f").write_text("x\n")
+            (box / "etc" / "weaver" / "admin").mkdir(parents=True)
+            record = box / "etc" / "weaver" / "stack"
+            record.mkdir()
+            for key, value in (("worker-binary", prefix / "bin" / "worker"),
+                               ("spu-binary", prefix / "bin" / "weaver-spu"),
+                               ("gate-binary", prefix / "bin" / "weaver-gate"),
+                               ("shell-binary", prefix / "bin" / "weaver-shell"),
+                               ("coordination-root", "/run"), ("library-path", prefix / "lib"),
+                               ("prefix", prefix), ("agent-directory", box / "var-lib")):
+                (record / key).write_text(f"{value}\n")
+            program = ("say() { :; }\nplan() { printf 'plan %s\\n' \"$1\"; }\n"
+                       "candidate() { printf 'candidate %s\\n' \"$1\"; }\n"
+                       "archive_name() { printf '%s' \"$1\"; }\n"
+                       "archive_path() { shift; printf 'archive %s\\n' \"$@\"; }\n"
+                       "SUDO_RULES=() LDSO_CONFS=() AGENT_FOLDERS=() OWN_TERRITORIES=() HOMES=() TMP_PATHS=()\n"
+                       "WEAVER_USERS=() WEAVER_GROUPS=() HOME_QUOTAS=()\ndeclare -A AGENTS=()\n"
+                       f"LEGACY_DIR={shlex.quote(str(box / 'legacy'))}\n"
+                       + discovery + plan_lines + archive_parts
+                       + shell_function(script, "purge_candidates") + "purge_candidates\n"
+                       + "for b in \"${!BIN_DIRS[@]}\"; do printf 'bindir %s\\n' \"$b\"; done\n")
+            program = program.replace("/etc/weaver", f"{box}/etc/weaver")
+            env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
+            def run_from(cwd):
+                return subprocess.run(["bash", "-c", program], env=env, text=True, capture_output=True,
+                                      timeout=20, cwd=cwd)
+            run = run_from(box)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            lines = run.stdout.splitlines()
+            for sub in ("bin", "lib", "deploy"):
+                with self.subTest(sub=sub):
+                    self.assertTrue(any(l.startswith(f"plan {prefix / sub}  ") for l in lines), run.stdout)
+                    self.assertIn(f"archive {prefix / sub}", lines)
+                    self.assertIn(f"candidate {prefix / sub}", lines)
+            self.assertTrue(any(l.startswith(f"plan {prefix / 'models'}  ") and l.endswith("KEPT") for l in lines),
+                            run.stdout)
+            self.assertNotIn(f"candidate {prefix / 'models'}", lines)
+            self.assertNotIn(f"archive {prefix / 'models'}", lines)
+            # Relative binaries, run from a directory that holds bin, lib and
+            # deploy of its own: only the record's prefix is taken.
+            here = box / "set"
+            for sub in ("bin", "lib", "deploy"):
+                (here / sub).mkdir(parents=True)
+            for key in ("worker-binary", "spu-binary", "gate-binary"):
+                (record / key).write_text(f"bin/{key}\n")
+            run = run_from(here)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            lines = run.stdout.splitlines()
+            self.assertIn(f"candidate {prefix / 'bin'}", lines)
+            for stray in ("./bin", "bin/bin", "./deploy"):
+                self.assertNotIn(f"candidate {stray}", lines)
+            self.assertFalse([l for l in lines if l.startswith("candidate ") and not l.startswith(f"candidate {box}")],
+                             run.stdout)
+            # A record whose binaries sit in /bin names no prefix by them:
+            # only its prefix key's, under the box.
+            for key in ("worker-binary", "spu-binary", "gate-binary"):
+                (record / key).write_text(f"/bin/{key}\n")
+            run = run_from(here)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            lines = run.stdout.splitlines()
+            self.assertIn(f"candidate {prefix / 'bin'}", lines)
+            self.assertFalse([l for l in lines if l.startswith(("candidate ", "archive ")) and not l.startswith(
+                (f"candidate {box}", f"archive {box}"))], run.stdout)
+            # A record whose prefix is the root, in any spelling, names no
+            # prefix; nor do binaries in /./bin or /bin/.., an agent root's
+            # relative binary, or a base's spu-implementations line with no
+            # path. No bin dir outside the box is kept either.
+            def outside(run):
+                return [l for l in run.stdout.splitlines()
+                        if l.startswith(("candidate ", "archive ", "bindir ")) and not l.startswith(
+                            (f"candidate {box}", f"archive {box}", f"bindir {box}"))]
+            root = box / "etc" / "weaver" / "admin" / "a1"
+            root.mkdir()
+            (root / "worker-binary").write_text("bin/weaver-worker\n")
+            (box / "etc" / "weaver" / "admin" / "spu-implementations").write_text("native\n")
+            for spelling in ("/", "/.", "/./", "/bin/.."):
+                (record / "prefix").write_text(f"{spelling}\n")
+                for binaries in ("/./bin", "/bin/..", "//bin"):
+                    with self.subTest(prefix=spelling, binaries=binaries):
+                        for key in ("worker-binary", "spu-binary", "gate-binary"):
+                            (record / key).write_text(f"{binaries}/{key}\n")
+                        run = run_from(here)
+                        self.assertEqual(run.returncode, 0, run.stderr)
+                        self.assertFalse(outside(run), run.stdout)
+            # The plain prefix back, the same strays beside it: only it is taken.
+            (record / "prefix").write_text(f"{prefix}\n")
+            run = run_from(here)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertIn(f"candidate {prefix / 'bin'}", run.stdout.splitlines())
+            self.assertFalse(outside(run), run.stdout)
 
     def one_line_function(self, name):
         """A function the script defines on one line, read out of its text."""
@@ -14065,8 +15294,10 @@ class BootstrapStandingTests(unittest.TestCase):
         start = script.index("standing() {")
         end = script.index('if standing "$PREFIX/bin"', start)
         body = 'die() { printf "REFUSED: %s\\n" "$*" >&2; exit 1; }\n'
-        body += f"STACK={shlex.quote(str(stack))}; ADMIN_BASE={shlex.quote(str(base))}\n"
-        body += script[start:end] + 'echo "passed"\n'
+        body += f"STACK={shlex.quote(str(stack))}; ADMIN_BASE={shlex.quote(str(base))}; CARRY=\n"
+        # The checks stand in the branch a run that writes no carry set takes,
+        # whose block the cut leaves open.
+        body += script[start:end] + 'fi\necho "passed"\n'
         return subprocess.run(["bash", "-c", body], capture_output=True, text=True)
 
     def test_an_unreadable_base_or_path_refuses(self):
@@ -14510,6 +15741,37 @@ class EngineLibrariesTests(unittest.TestCase):
                 self.assertEqual(ran.returncode, 1, ran.stdout)
                 self.assertIn(said, ran.stdout)
 
+    def test_engine_resolved_refuses_a_symbol_version_not_found(self):
+        """**A symbol version not found refuses, though every library
+        resolves** (deploy/engine-libraries.sh). ldd exits 0 for it and
+        prints the line ahead of the resolved ones, in the form ldd printed
+        on 2026-11-23 for a program linked against a library version its
+        loader's copy of the library does not define: a box whose C or C++
+        runtime is older than the build's, where the program fails at exec.
+        Both quote forms glibc has printed are read. Perturbation: drop the
+        version rule and each case passes."""
+        lib = self.dir / "lib"
+        lib.mkdir()
+        (lib / "libllama.so.0.0.1").write_text("x")
+        (lib / "libllama.so.0").symlink_to("libllama.so.0.0.1")
+        good = (f"\tlinux-vdso.so.1 (0x00007f0d45079000)\n"
+                f"\tlibllama.so.0 => {lib}/libllama.so.0 (0x00007f0d45068000)\n"
+                f"\tlibstdc++.so.6 => /usr/lib64/libstdc++.so.6 (0x00007f0d44e00000)\n"
+                f"\tlibc.so.6 => /lib64/libc.so.6 (0x00007f0d44e6a000)\n"
+                f"\t/lib64/ld-linux-x86-64.so.2 (0x00007f0d4507b000)\n")
+        check = 'engine_resolved "$REPORT" "$LIB"'
+        ran = self.run_bash(check, REPORT=good, LIB=str(lib))
+        self.assertEqual((ran.returncode, ran.stdout), (0, ""), ran.stderr)
+        for label, line in (
+                ("the C++ runtime", "/opt/bin/weaver-spu: /usr/lib64/libstdc++.so.6: version `GLIBCXX_3.4.34' "
+                                    "not found (required by /opt/bin/weaver-spu)"),
+                ("the C library, by a library", f"/opt/bin/weaver-spu: /lib64/libc.so.6: version 'GLIBC_2.42' "
+                                                f"not found (required by {lib}/libllama.so.0)")):
+            with self.subTest(label):
+                ran = self.run_bash(check, REPORT=line + "\n" + good, LIB=str(lib))
+                self.assertEqual(ran.returncode, 1, ran.stdout)
+                self.assertIn(line, ran.stdout)
+
     def test_a_resolved_path_holding_a_space_is_read_whole(self):
         """**A path ldd resolves is read whole, spaces included**, by
         `engine_resolved` and by the install tuple. A library directory may
@@ -14767,6 +16029,9 @@ exit "${CARGO_EXIT:-0}"
                    CARGO_EXIT=str(status), CARGO_SEEN=str(self.seen))
         for name_ in ("NVCC_CCBIN", "NVCC_APPEND_FLAGS", "CMAKE_CUDA_ARCHITECTURES"):
             env.pop(name_, None)
+        # The host compiler as `host_compiler` leaves it, judged and
+        # exported before the build.
+        env["NVCC_CCBIN"] = "/fixture/judged-g++"
         env.update(extra_env or {})
         return subprocess.run(["bash", "-c", body], env=env,
                               capture_output=True, text=True, timeout=30)
@@ -14989,12 +16254,21 @@ exit "${CARGO_EXIT:-0}"
                 for log in self.kept_logs():
                     log.unlink()
 
-    def test_the_build_takes_the_cuda_host_compiler_update_stack_takes(self):
-        ran = self.step("bootstrap-stack.sh", "run_build")
+    def test_the_build_takes_the_host_compiler_the_check_judged(self):
+        """**Both scripts hand the build the host compiler `host_compiler`
+        judged** (deploy/engine-libraries.sh), which each calls once before
+        the build, and default it nowhere else. Perturbation: default
+        NVCC_CCBIN again at either build and that script fails."""
+        ran = self.step("bootstrap-stack.sh", "run_build", extra_env={"NVCC_CCBIN": "/judged/g++"})
         self.assertEqual(ran.returncode, 0, ran.stderr)
-        update = (DEPLOY / "update-stack.sh").read_text()
-        default = re.search(r"NVCC_CCBIN=\$\{NVCC_CCBIN:-([^}]+)\}", update).group(1)
-        self.assertEqual(self.seen_env()["NVCC_CCBIN"], default)
+        self.assertEqual(self.seen_env()["NVCC_CCBIN"], "/judged/g++")
+        for script in ("bootstrap-stack.sh", "update-stack.sh"):
+            with self.subTest(script=script):
+                text = (DEPLOY / script).read_text()
+                self.assertEqual(text.count('NVCC_CCBIN="$NVCC_CCBIN" \\\n'), 1)
+                self.assertEqual(text.count("NVCC_CCBIN="), 1)
+                self.assertEqual(text.count("\nhost_compiler\n"), 1)
+                self.assertLess(text.index("\nhost_compiler\n"), text.index('NVCC_CCBIN="$NVCC_CCBIN"'))
 
     def test_the_build_names_its_bytes_by_its_commit(self):
         # The operator's ruling of 2026-11-15: nvcc's -objtemp and ggml's
@@ -15874,6 +17148,7 @@ INSTALL_TUPLE_LINES = [
     "engine-source = git+https://example.invalid/llama-cpp-rs?rev=" + "a" * 40 + "#" + "b" * 40,
     "engine-vendored = " + "c" * 40,
     "nvcc = 13.4, V13.4.92",
+    "ccbin = /usr/bin/g++-15 g++ (GCC) 15.2.1",
     "member.worker = " + "1" * 64,
     "member.weaver-admin = " + "2" * 64,
     "member.weaver-trace-relay = " + "3" * 64,
@@ -15978,7 +17253,7 @@ class AgentTupleInstallTests(unittest.TestCase):
         install = self.tuple.read_install_tuple(path)
         self.assertIsNone(install["runtime"])
         self.assertEqual(install["earlier"], ["cublas", "cublaslt", "cudart", "driver", "gpu.0", "gpu.1", "gpus"])
-        self.assertEqual(set(install["facts"]), set(self.tuple.INSTALL_SCALARS))
+        self.assertEqual(set(install["facts"]), set(self.tuple.INSTALL_SCALARS) | {"ccbin"})
         box = self.tuple.box_rows(str(path), install, None)
         form, = [line for line in box if "tuple form" in line]
         self.assertIn("[absent: written before the install tuple held build facts alone", form)
@@ -15998,7 +17273,7 @@ class AgentTupleInstallTests(unittest.TestCase):
             "not `key = value`": new + ["cccl=1"],
             "empty or repeated": new + ["cccl = 2"],
             "no cccl": [l for l in new if not l.startswith("cccl")],
-            "not 64 hex digits": new[:7] + ["member.worker = zz"] + new[8:],
+            "not 64 hex digits": [l if not l.startswith("member.worker ") else "member.worker = zz" for l in new],
             "neither form": new + ["driver = 580.1"],
             "so it is neither form": new + ["gpu.0 = 00000000:01:00.0, NVIDIA RTX A6000, 49140 MiB"],
             "it carries both": earlier + ["runtime.cudart = {cudart}"],
@@ -16018,6 +17293,50 @@ class AgentTupleInstallTests(unittest.TestCase):
         link.symlink_to(self.write(INSTALL_TUPLE_LINES))
         with self.assertRaises(OSError):
             self.tuple.read_install_tuple(link)
+
+    def test_a_carried_tuple_binds_each_runtime_file_to_the_builds_digest_as_well(self):
+        """**A carried install binds each runtime file to the build's digest
+        as well** (deploy/install-carry.sh): a tuple carrying
+        `build-runtime.<key>` lines reads them; a runtime file equal to the
+        install's record and to the build's digest is recorded, and one equal
+        to the record but not the build's is a FAULT. A key this reader does
+        not know, or a digest that is not 64 hex digits, is refused. A tuple
+        without the lines binds as before. Perturbation: ignore the build
+        digest and the FAULT case reads recorded."""
+        keys = {key for key, _ in self.tuple.RUNTIME_LIBRARIES}
+        build = {key: value.split()[0] for key, value in self.runtime.items() if key in keys}
+        carried = INSTALL_TUPLE_LINES + [f"build-runtime.{k} = {v}" for k, v in build.items()] + ["carry = " + "e" * 64]
+        install = self.tuple.read_install_tuple(self.write(carried))
+        self.assertEqual(install["build_runtime"], build)
+        resolved = self.tuple.loader_resolved(self.ldd)
+        rows = self.tuple.runtime_rows(install, resolved, None)
+        self.assertEqual(self.statuses(rows, "runtime "), {"recorded"})
+        self.assertTrue(all("and the build's" in row for row in rows), rows)
+        other = INSTALL_TUPLE_LINES + [f"build-runtime.{k} = {'0' * 64 if k == 'cublas' else v}"
+                                       for k, v in build.items()]
+        rows = self.tuple.runtime_rows(self.tuple.read_install_tuple(self.write(other)), resolved, None)
+        mine, = [row for row in rows if "runtime cublas " in row]
+        self.assertIn("[FAULT:", mine)
+        self.assertIn(f"is not the build's {'0' * 64}", mine)
+        # Drift on a carried box names the carried way, not update-stack.sh.
+        cudart = self.cuda / "libcudart.so.13.0.1"
+        kept = cudart.read_bytes()
+        cudart.write_bytes(b"patched")
+        try:
+            drift = self.tuple.runtime_rows(install, resolved, None)
+        finally:
+            cudart.write_bytes(kept)
+        drifted, = [row for row in drift if "runtime cudart " in row]
+        self.assertIn("the new set's own deploy/decommission.sh and then install-carry.sh", drifted)
+        self.assertNotIn("update-stack.sh", drifted)
+        self.assertEqual(self.statuses([r for r in rows if r is not mine], "runtime "), {"recorded"})
+        plain = self.tuple.read_install_tuple(self.write(INSTALL_TUPLE_LINES))
+        self.assertEqual(plain["build_runtime"], {})
+        for line, said in (("build-runtime.libcuda = " + "1" * 64, "is not a runtime file this reader knows"),
+                           ("build-runtime.cudart = not-hex", "is not 64 hex digits")):
+            with self.subTest(line=line):
+                with self.assertRaisesRegex(self.tuple.InstallTupleRefused, said):
+                    self.tuple.read_install_tuple(self.write(INSTALL_TUPLE_LINES + [line]))
 
     def test_the_runtime_files_bind_to_what_the_loader_resolves_now(self):
         """**Each runtime file the install recorded is bound to the file the
@@ -16257,7 +17576,7 @@ class AgentTupleInstallTests(unittest.TestCase):
                              capture_output=True, timeout=20)
         self.assertEqual(ran.returncode, 0, ran.stderr)
         install = self.tuple.read_install_tuple(self.write([ran.stdout.rstrip("\n")]))
-        self.assertEqual(set(install["facts"]), set(self.tuple.INSTALL_SCALARS))
+        self.assertEqual(set(install["facts"]), set(self.tuple.INSTALL_SCALARS) | {"ccbin"})
         self.assertEqual(install["members"], {"worker": "unknown", "weaver-spu": "unknown",
                                               "busybox.applets": "unknown"})
         self.assertEqual(install["libraries"], {"libllama.so.0.0.8783": "unknown"})

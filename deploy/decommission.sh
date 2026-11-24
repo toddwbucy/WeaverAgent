@@ -8,13 +8,13 @@
 #                                                    refuses unless DIR verifies
 #
 # Box-agnostic, and discovered rather than written: the config bases are every
-# `/etc/weaver/admin*`, each agent's root is a directory under one, the install
-# and territory paths are read out of them, the agents are the union of every
-# root, every allow-list of the box-wide layout before 2026-10-01, and every
-# `weaver-*` account and group. A box fact this script
-# needs and cannot find is printed
-# as unknown, never guessed, and the plan is the same reads the archive and the
-# purge make.
+# `/etc/weaver/admin*`, each agent's root is a directory under one, and the
+# install and territory paths are read out of them. The install prefix is also
+# read out of the stack record, so a box where no agent was made still names
+# it. The agents are the union of every root, every allow-list of the box-wide
+# layout before 2026-10-01, and every `weaver-*` account and group. A box fact
+# this script needs and cannot find is printed as unknown, never guessed, and
+# the plan is the same reads the archive and the purge make.
 #
 # **Its precondition, stated once** (deploy/REDEPLOY.md section 1): this is a
 # deliberate, destructive act on the whole box by the operator at a root shell.
@@ -127,6 +127,33 @@ CONFIG_ROOTS=()
 for d in /etc/weaver/admin*; do [ -d "$d" ] && CONFIG_ROOTS+=("$d"); done
 
 read_key() { cat "$1/$2" 2>/dev/null || true; }
+# **stack_cccl: the CCCL version the stack was built against**, as the stack
+# record's install tuple states it (`cccl`, deploy/install-tuple.sh's
+# cccl_read, from the header the build's nvcc read), or `unknown` where no
+# record states it. It asks no package manager: a carried box holds no CCCL
+# package, and a box with no pacman would refuse the deploy copy (#635). The
+# record is read as the other reads of it are, never through a link, and a
+# value it gives is marked as the install tuple's, beside the live nvcc line.
+# A stored `unknown` (install-tuple.sh writes it where the build read no
+# version) is no value, so the line reads a bare `unknown`.
+stack_cccl() {
+  local line v=""
+  if [ -d /etc/weaver/stack ] && [ ! -L /etc/weaver/stack ] \
+      && [ -f /etc/weaver/stack/install-tuple ] && [ ! -L /etc/weaver/stack/install-tuple ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case $line in "cccl = "*) v=${line#"cccl = "}; break ;; esac
+    done < /etc/weaver/stack/install-tuple
+  fi
+  [ "$v" != unknown ] || v=""
+  if [ -n "$v" ]; then printf '%s (install tuple)\n' "$v"; else printf 'unknown\n'; fi
+}
+# **A prefix is an absolute path in plain form, and never `/`**: no empty, `.`
+# or `..` component. Anything else could name the box's own /bin and /lib
+# (`/`, `/.`, `/bin/..`) or a directory read against where the script runs.
+plain_prefix() {
+  case $1 in /?*) ;; *) return 1 ;; esac
+  case "$1/" in *//*|*/./*|*/../*) return 1 ;; esac
+}
 
 # Every path admin's configs name, so the install tree is the one the box
 # actually ran and not the one this script remembers.
@@ -158,9 +185,35 @@ for root in "${CONFIG_ROOTS[@]}"; do
   v=$(read_key "$root" spu-implementations)
   [ -n "$v" ] && BIN_DIRS["$(dirname "$(echo "$v" | awk '{print $2}')")"]=1
 done
-# The install prefixes: the parent of each bin dir, deduplicated.
+# **The stack record names the prefix too**: a box where no agent was made,
+# as install-carry.sh leaves it, has an empty admin base, and install-carry.sh
+# refuses while `<prefix>/bin`, `lib` or `deploy` stands, so a prefix no agent
+# root names is still planned, archived and purged. The record's binaries name
+# their directory as a root's do, and its `prefix` key names the prefix
+# itself, so where the two disagree both are taken.
+RECORD_PREFIX=""
+if [ -d /etc/weaver/stack ] && [ ! -L /etc/weaver/stack ]; then
+  for k in worker-binary spu-binary gate-binary; do
+    v=$(read_key /etc/weaver/stack "$k"); [ -n "$v" ] && BIN_DIRS["$(dirname "$v")"]=1
+  done
+  v=$(read_key /etc/weaver/stack prefix); v=${v%/}
+  ! plain_prefix "$v" || RECORD_PREFIX=$v
+fi
+# **Every source is held to plain_prefix here, where the prefixes are
+# filled**: a bin dir is kept only when it and its parent, its prefix, are
+# both plain, so a relative value, an empty field, `/bin` or `/./bin` names
+# no prefix and no candidate admin binary.
+declare -A KEPT_BIN_DIRS=()
+for b in "${!BIN_DIRS[@]}"; do
+  plain_prefix "$b" && plain_prefix "$(dirname "$b")" && KEPT_BIN_DIRS["$b"]=1
+done
+BIN_DIRS=()
+for b in "${!KEPT_BIN_DIRS[@]}"; do BIN_DIRS["$b"]=1; done
+# The install prefixes: the parent of each bin dir, and the stack record's,
+# deduplicated.
 declare -A PREFIXES=()
 for b in "${!BIN_DIRS[@]}"; do PREFIXES["$(dirname "$b")"]=1; done
+[ -z "$RECORD_PREFIX" ] || PREFIXES["$RECORD_PREFIX"]=1
 
 # Agents: roots, allow-lists, and accounts.
 declare -A AGENTS=()
@@ -231,7 +284,7 @@ done
 
 say "install prefixes (models excluded from every mode)"
 for p in "${!PREFIXES[@]}"; do
-  for sub in bin lib python-spu; do [ -d "$p/$sub" ] && plan "$p/$sub  $(du -sh "$p/$sub" 2>/dev/null | cut -f1)"; done
+  for sub in bin lib deploy python-spu; do [ -d "$p/$sub" ] && plan "$p/$sub  $(du -sh "$p/$sub" 2>/dev/null | cut -f1)"; done
   for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && plan "$sub  $(du -sh "$sub" | cut -f1)"; done
   [ -d "$p/models" ] && plan "$p/models  $(du -sh "$p/models" | cut -f1)  KEPT"
 done
@@ -1124,7 +1177,7 @@ if [ "$MODE" = archive ]; then
     driver=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || true); driver=$(grep -E ', [0-9]+(\.[0-9]+)+$' <<<"$driver" || true); driver=${driver%%$'\n'*}
     echo "driver    ${driver:-none}"
     echo "nvcc      $([ -n "$NVCC" ] && "$NVCC" --version | tail -1 || echo none)"
-    echo "cccl      $(pacman -Q cccl 2>/dev/null || echo unknown)"
+    echo "cccl      $(stack_cccl)"
     echo "toolchain $(as_op rustup show active-toolchain 2>/dev/null | cut -d' ' -f1 || echo unknown)"
     echo
     echo "## accounts"; for u in "${WEAVER_USERS[@]}"; do getent passwd "$u" || true; done
@@ -1137,6 +1190,8 @@ if [ "$MODE" = archive ]; then
     echo "## installed binaries"; for p in "${!PREFIXES[@]}"; do sha_all "$p/bin"; done
     echo
     echo "## libraries"; for p in "${!PREFIXES[@]}"; do sha_all "$p/lib"; done
+    echo
+    echo "## deploy copy"; for p in "${!PREFIXES[@]}"; do sha_all "$p/deploy"; done
     echo
     echo "## ld.so.conf"; for c in "${LDSO_CONFS[@]}"; do echo "$c:"; cat "$c"; done
     echo
@@ -1182,7 +1237,7 @@ if [ "$MODE" = archive ]; then
   [ ${#LDSO_CONFS[@]} -gt 0 ] && archive_path ld-so-conf "${LDSO_CONFS[@]}"
   for p in "${!PREFIXES[@]}"; do
     parts=()
-    for sub in bin lib python-spu; do [ -d "$p/$sub" ] && parts+=("$p/$sub"); done
+    for sub in bin lib deploy python-spu; do [ -d "$p/$sub" ] && parts+=("$p/$sub"); done
     for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && parts+=("$sub"); done
     [ ${#parts[@]} -gt 0 ] && archive_path "$(archive_name opt "$p")" "${parts[@]}"
   done
@@ -1236,7 +1291,7 @@ purge_candidates() {
   [ -d /etc/weaver ] && candidate /etc/weaver
   for p in "${SUDO_RULES[@]}" "${LDSO_CONFS[@]}"; do candidate "$p"; done
   for p in "${!PREFIXES[@]}"; do
-    for sub in bin lib python-spu; do [ -d "$p/$sub" ] && candidate "$p/$sub"; done
+    for sub in bin lib deploy python-spu; do [ -d "$p/$sub" ] && candidate "$p/$sub"; done
     for sub in "$p"/backup-* "$p"/lib.backup-*; do [ -d "$sub" ] && candidate "$sub"; done
   done
   [ -e "$LEGACY_DIR" ] && candidate "$LEGACY_DIR"

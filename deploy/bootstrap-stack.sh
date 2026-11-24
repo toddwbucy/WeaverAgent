@@ -4,6 +4,24 @@
 #
 #   deploy/bootstrap-stack.sh              plan: preflight, test, build; installs nothing, no sudo
 #   deploy/bootstrap-stack.sh --install    then install under sudo
+#   deploy/bootstrap-stack.sh --carry DIR  preflight, test, build; write a carry set to DIR, no sudo
+#
+# **A carry set is the stack built here to install on another box**
+# (weaver-admin-PRD section 7.2): `--carry DIR` tests and builds as the plan
+# does, then writes into DIR, which must not stand yet, the members, the
+# shell, the engine libraries, the CUDA runtime files the built SPU resolves
+# from the toolkit whose nvcc built it, the deploy copy
+# (deploy/deployed-copy.txt), the build's half of the install tuple
+# (`build-tuple`, deploy/install-tuple.sh) and a manifest
+# (deploy/carry_set.py). Its last line is the manifest's sha256, which names
+# the set. It installs nothing, here or anywhere, and reads nothing of this
+# box's stack, so a build box that runs an agent writes one beside it. It
+# refuses a tree that is not a clean git checkout, since a set names one
+# commit. **A build box needs no card**: nothing in a carry set reads the
+# hardware, both kernel builds compile for a fixed list of architectures, and
+# the driver's own library, which a box with no driver lacks, is the run
+# box's and never carried. The operator names the toolkit by the nvcc on PATH
+# and its host compiler by NVCC_CCBIN, as for any build.
 #
 # **This is the first install; `update-stack.sh` is every later one.** That
 # script diffs the built members and engine libraries against the installed
@@ -38,7 +56,11 @@
 #   WEAVER_STACK_RECORD  /etc/weaver/stack      the scripts' record of this install
 #   WEAVER_OPERATOR      $SUDO_USER or $USER    named in the plan; owns nothing this makes
 #   WEAVER_AGENT_DIR     /var/lib/weaver-agent  the base of each agent's folder (#578)
-#   CUDA_LIB_DIR         /opt/cuda/lib64        joins the ld.so.conf.d entry; held closed by root
+#   CUDA_LIB_DIR         the toolkit's lib      joins the ld.so.conf.d entry; held closed by root;
+#                                               unset, the toolkit's lib for this host's target
+#   NVCC_CCBIN           /usr/bin/g++-15        the host compiler nvcc builds the engine's kernels
+#                                               with, a path or a name on PATH; refused before the
+#                                               build unless an executable file
 #   CARGO_TARGET_DIR     honoured; give the install its own, never a gate's
 #
 # The feature set and the member list are update-stack.sh's, stated again
@@ -50,6 +72,8 @@ say()  { printf '\n== %s\n' "$*"; }
 plan() { printf '   %s\n' "$*"; }
 die()  { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 
+# The directory the operator ran from, which a relative --carry DIR names.
+CALLER=$PWD
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 source "$REPO/deploy/retired-python.sh"
@@ -62,9 +86,17 @@ source "$REPO/deploy/install-tuple.sh"
 [ "$(id -u)" -ne 0 ] || die "run as the operator, not under sudo; the install step asks for sudo itself"
 
 INSTALL=0
+CARRY=""
 case "${1:-}" in
   "") ;;
   --install) INSTALL=1 ;;
+  --carry)
+    [ $# -eq 2 ] && [ -n "$2" ] || die "--carry takes one argument, the directory the carry set is written to"
+    CARRY=$2
+    [[ "$CARRY" == /* ]] || CARRY=$CALLER/$CARRY
+    # The path as the set will stand, every link above it followed, so the
+    # plan names where the set is written.
+    CARRY=$(realpath -m -- "$CARRY") ;;
   *) die "unknown argument $1" ;;
 esac
 
@@ -74,7 +106,8 @@ STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 OPERATOR=${WEAVER_OPERATOR:-${SUDO_USER:-$USER}}
 AGENT_DIR=${WEAVER_AGENT_DIR:-/var/lib/weaver-agent}
 
-refuse_python_install "$PREFIX" "$PREFIX/bin"
+# A carry set touches no prefix on this box.
+[ -n "$CARRY" ] || refuse_python_install "$PREFIX" "$PREFIX/bin"
 
 MEMBERS="worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
 # The agent's shell (#29): the static busybox and its applet list, installed
@@ -91,10 +124,14 @@ FEATURES="$SPU_FEATURES,$MEMBER_FEATURES"
 say "box"
 plan "host          $(uname -n)"
 plan "operator      $OPERATOR"
-plan "prefix        $PREFIX"
-plan "admin base    $ADMIN_BASE"
-plan "stack record  $STACK"
-plan "agent dir     $AGENT_DIR"
+if [ -n "$CARRY" ]; then
+  plan "carry set     $CARRY"
+else
+  plan "prefix        $PREFIX"
+  plan "admin base    $ADMIN_BASE"
+  plan "stack record  $STACK"
+  plan "agent dir     $AGENT_DIR"
+fi
 plan "toolchain     $(rustup show active-toolchain 2>/dev/null | cut -d' ' -f1)"
 # **The whole answer is read, then the first line that is an answer kept**
 # (#39): under `pipefail`, a `head` that closed the pipe on a box with more
@@ -106,22 +143,26 @@ plan "toolchain     $(rustup show active-toolchain 2>/dev/null | cut -d' ' -f1)"
 DRIVER=$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || true); DRIVER=$(grep -E ', [0-9]+(\.[0-9]+)+$' <<<"$DRIVER" || true); DRIVER=${DRIVER%%$'\n'*}
 plan "driver        ${DRIVER:-none}"
 plan "nvcc          $(nvcc --version 2>/dev/null | tail -1 | sed 's/^Build //' || echo none)"
-CCCL=$(pacman -Q cccl 2>/dev/null | awk '{print $2}' || true)
-plan "cccl          ${CCCL:-unknown}"
 plan "will build    $FEATURES"
 # The line names all three things this script installs: the members, the
 # shell and the engine libraries. It named the members alone.
-plan "will install  $MEMBERS, the shell ($SHELL_FILES), and the engine libraries ($LIB_GLOBS) built by $ENGINE_CRATE"
-
-cccl_in_window() {
-  local v=${1%%-*} lo=3.1.4 hi=3.3.4
-  [ "$(printf '%s\n%s\n' "$lo" "$v" | sort -V | head -1)" = "$lo" ] &&
-  [ "$(printf '%s\n%s\n' "$v" "$hi" | sort -V | head -1)" = "$v" ]
-}
-if [ -n "$CCCL" ] && ! cccl_in_window "$CCCL"; then
-  die "cccl $CCCL is outside the 3.1.4-3.3.4 window #397 measured. Fix the pin first."
+if [ -n "$CARRY" ]; then
+  plan "will carry    $MEMBERS, the shell ($SHELL_FILES), the engine libraries ($LIB_GLOBS) built by $ENGINE_CRATE, the CUDA runtime files ($TUPLE_RUNTIME) and the deploy copy"
+else
+  plan "will install  $MEMBERS, the shell ($SHELL_FILES), and the engine libraries ($LIB_GLOBS) built by $ENGINE_CRATE"
 fi
+
 command -v nvcc >/dev/null || die "no nvcc on PATH and the build carries $SPU_FEATURES"
+# **The cccl window is read from the header nvcc reads, by no package
+# manager, and a version that cannot be read refuses** (deploy/install-tuple.sh,
+# `cccl_read`): on a box without pacman the check once skipped itself.
+cccl_read || die "the CCCL version nvcc reads cannot be read: $CCCL_WHY. The build's CCCL window is unchecked, so nothing is built"
+plan "cccl          $CCCL_READ ($CCCL_HEADER)"
+cccl_in_window "$CCCL_READ" || die "cccl $CCCL_READ is outside the 3.1.4-3.3.4 window #397 measured. Fix the pin first."
+# **The host compiler is an executable file before the long build**
+# (deploy/engine-libraries.sh, `host_compiler`).
+host_compiler
+plan "ccbin         $NVCC_CCBIN"
 # **The shell's build needs its tools before the long build, not after** (#29).
 "$REPO/deploy/build-busybox.sh" --preflight || exit 1
 # **What stands is asked, and a question this script cannot answer refuses.**
@@ -168,37 +209,86 @@ standing() { # standing PATH: 0 stands, 1 absent, refuses where it cannot tell
   case "$err" in *"No such file or directory"*) return 1 ;; esac
   die "cannot tell whether $1 stands: $err"
 }
-if standing "$STACK"; then
-  die "$STACK already stands. This is the first install; use update-stack.sh, or decommission.sh first."
-fi
-# An admin base that holds anything is a stack this script did not write: an
-# agent's root, or the box-wide configuration of the layout before 2026-10-01,
-# which is taken down, never migrated. An empty one is harmless and kept, and one
-# that cannot be listed is never read as empty.
-if standing "$ADMIN_BASE"; then
-  listing=$(LC_ALL=C ls -A -- "$ADMIN_BASE" 2>&1) || die "cannot list $ADMIN_BASE to see whether it holds configuration: $listing"
-  [ -z "$listing" ] || die "$ADMIN_BASE already holds configuration. This is the first install; use update-stack.sh, or decommission.sh first."
-fi
-if standing "$PREFIX/bin"; then die "$PREFIX/bin already stands. Decommission first."; fi
-# **The base and the record are placed only where admin's rule holds**, judged
-# at the nearest directory that stands, since this script makes the rest root
-# 0755: admin refuses every verb on a root whose base or any directory above it
-# another principal could write, and verify-load.sh refuses a record that is
-# not closed (Codex on #45).
-for placed in "$ADMIN_BASE" "$STACK" "$AGENT_DIR"; do
-  at=$placed
-  while ! standing "$at"; do at=$(dirname -- "$at"); done
-  # Where a component is still missing, the nearest standing directory must be
-  # one no other principal can make a name in, sticky or not.
-  if [ "$at" = "$placed" ]; then
-    bad=$(held_closed "$at") || die "$placed is not held closed by root at $bad, so admin would refuse it"
-  else
-    bad=$(creatable_in "$at") || die "$placed would be made under $bad, where another principal could claim the missing name first"
+# **A carry set is written whole into a directory that does not stand, under
+# one only the operator can write**, so no other principal can change a file
+# between its digest and the manifest, and a set is never written over
+# another. Every directory above that one is owned by the operator or root
+# and writable by no group or other unless sticky, so no other principal can
+# rename it away mid-fill. (This is wider than `held_closed`, which takes
+# root's directories alone: the set is the operator's, written as the
+# operator.) The
+# runtime files it carries are the toolkit's own, the toolkit whose nvcc
+# builds the kernels: an operator's CUDA_LIB_DIR naming another directory
+# refuses rather than being silently passed over.
+carry_checks() {
+  local owner mode at me
+  if standing "$CARRY"; then
+    die "$CARRY already stands. A carry set is written whole into a directory that does not stand yet: name a new one"
   fi
-done
-# The CUDA directory joins the loader's entry beside $PREFIX/lib, so it is
-# judged as admin judges the library path (deploy/engine-libraries.sh).
-loader_dir CUDA_LIB_DIR "$CUDA_LIB_DIR"
+  me=$(id -u)
+  standing "$(dirname -- "$CARRY")" \
+    || die "$(dirname -- "$CARRY"), where the carry set would be written, does not stand"
+  CARRY_PARENT=$(realpath -e -- "$(dirname -- "$CARRY")" 2>&1) \
+    || die "cannot resolve $(dirname -- "$CARRY"), where the carry set would be written: $CARRY_PARENT"
+  CARRY=$CARRY_PARENT/$(basename -- "$CARRY")
+  read -r owner mode < <(stat -L -c '%u %a' -- "$CARRY_PARENT" 2>/dev/null) \
+    || die "cannot read $CARRY_PARENT, where the carry set would be written"
+  { [ -d "$CARRY_PARENT" ] && [ "$owner" = "$me" ] && ! (( 8#$mode & 8#022 )); } \
+    || die "$CARRY_PARENT is not a directory the operator owns that no group or other can write, so another principal could change the carry set while it is written"
+  at=$CARRY_PARENT
+  while [ "$at" != / ]; do
+    at=$(dirname -- "$at")
+    read -r owner mode < <(stat -L -c '%u %a' -- "$at" 2>/dev/null) || die "cannot read $at, above where the carry set would be written"
+    if { [ "$owner" != 0 ] && [ "$owner" != "$me" ]; } || { (( 8#$mode & 8#022 )) && ! (( 8#$mode & 8#1000 )); }; then
+      die "$at, above where the carry set would be written, is a directory another principal could rename a name in, so the set could be swapped while it is written"
+    fi
+  done
+  toolkit_lib_dir || die "$TOOLKIT_WHY, so the CUDA runtime files a carry set carries cannot be read"
+  if [ -n "${CUDA_LIB_DIR:-}" ] &&
+    [ "$(realpath -e -- "$CUDA_LIB_DIR" 2>/dev/null)" != "$(realpath -e -- "$TOOLKIT_LIB")" ]; then
+    die "CUDA_LIB_DIR names $CUDA_LIB_DIR, but a carry set carries the runtime files of the toolkit whose nvcc builds the kernels, from $TOOLKIT_LIB: unset CUDA_LIB_DIR"
+  fi
+  [[ "$TOOLKIT_LIB" != *:* ]] || die "the toolkit's library directory $TOOLKIT_LIB holds a colon, so no library path can name it"
+  plan "toolkit lib   $TOOLKIT_LIB"
+}
+if [ -n "$CARRY" ]; then
+  carry_checks
+else
+  if standing "$STACK"; then
+    die "$STACK already stands. This is the first install; use update-stack.sh, or decommission.sh first."
+  fi
+  # An admin base that holds anything is a stack this script did not write: an
+  # agent's root, or the box-wide configuration of the layout before 2026-10-01,
+  # which is taken down, never migrated. An empty one is harmless and kept, and one
+  # that cannot be listed is never read as empty.
+  if standing "$ADMIN_BASE"; then
+    listing=$(LC_ALL=C ls -A -- "$ADMIN_BASE" 2>&1) || die "cannot list $ADMIN_BASE to see whether it holds configuration: $listing"
+    [ -z "$listing" ] || die "$ADMIN_BASE already holds configuration. This is the first install; use update-stack.sh, or decommission.sh first."
+  fi
+  if standing "$PREFIX/bin"; then die "$PREFIX/bin already stands. Decommission first."; fi
+  # **The base and the record are placed only where admin's rule holds**, judged
+  # at the nearest directory that stands, since this script makes the rest root
+  # 0755: admin refuses every verb on a root whose base or any directory above it
+  # another principal could write, and verify-load.sh refuses a record that is
+  # not closed (Codex on #45).
+  for placed in "$ADMIN_BASE" "$STACK" "$AGENT_DIR"; do
+    at=$placed
+    while ! standing "$at"; do at=$(dirname -- "$at"); done
+    # Where a component is still missing, the nearest standing directory must be
+    # one no other principal can make a name in, sticky or not.
+    if [ "$at" = "$placed" ]; then
+      bad=$(held_closed "$at") || die "$placed is not held closed by root at $bad, so admin would refuse it"
+    else
+      bad=$(creatable_in "$at") || die "$placed would be made under $bad, where another principal could claim the missing name first"
+    fi
+  done
+  # The CUDA directory joins the loader's entry beside $PREFIX/lib, so it is
+  # judged as admin judges the library path (deploy/engine-libraries.sh). Unset,
+  # it is the toolkit's own library directory.
+  cuda_lib_dir
+  plan "cuda lib dir  $CUDA_LIB_DIR"
+  loader_dir CUDA_LIB_DIR "$CUDA_LIB_DIR"
+fi
 
 say "tree"
 # The install tuple names the commit in full, read here and not after the
@@ -209,11 +299,17 @@ if git -C "$REPO" rev-parse --short HEAD >/dev/null 2>&1; then
   COMMIT=$(git -C "$REPO" rev-parse HEAD)
   TREE_STATUS=$(git -C "$REPO" status --porcelain=v1 --untracked-files=all) \
     || die "cannot read the tree's status, so whether $REV is the tree built is unknown"
-  [ -z "$TREE_STATUS" ] || { REV="$REV-dirty"; COMMIT="$COMMIT-dirty"; }
+  if [ -n "$TREE_STATUS" ]; then
+    [ -z "$CARRY" ] || die "the tree at $REV is not clean, and a carry set names the one commit it was built from: commit or remove what git status lists"
+    REV="$REV-dirty"
+    COMMIT="$COMMIT-dirty"
+  fi
 else
+  [ -z "$CARRY" ] || die "the tree is not a git checkout, and a carry set names the one commit it was built from"
   REV="nogit-$(sha256sum Cargo.lock | cut -c1-12)"
   COMMIT=$REV
 fi
+[ -z "$CARRY" ] || [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]] || die "git names the commit as '$COMMIT', not 40 hex digits"
 plan "revision      $REV"
 BUILT=$(cargo metadata --format-version 1 --no-deps --offline --locked 2>/dev/null \
   | python3 -c 'import json,sys
@@ -333,7 +429,7 @@ run_build() {
   # removes the file.
   trap 'rm -f -- "$BUILD_MESSAGES"' EXIT
   printf '   output: %s\n' "$log"
-  NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
+  NVCC_CCBIN="$NVCC_CCBIN" \
   NVCC_APPEND_FLAGS="-objtemp${NVCC_APPEND_FLAGS:+ $NVCC_APPEND_FLAGS}" \
   CMAKE_CUDA_ARCHITECTURES="86-real;89-real;120a-real;121a-real" \
     cargo build --release --locked --workspace --message-format=json-render-diagnostics \
@@ -387,7 +483,82 @@ plan "engine out    $SYS_OUT"
 plan "members       $MEMBERS"
 plan "libraries     $(printf '%s ' "${LIBS[@]##*/}")"
 
-# ---------------------------------------------------------------- 4. plan
+# ---------------------------------------------------------------- 4. carry
+# **The carry set** (weaver-admin-PRD section 7.2), written into a directory
+# made beside DIR, closed to all but the operator while it is filled, and
+# renamed to DIR only once its manifest is whole, so DIR is a whole set or
+# does not stand. The built SPU is read as a run box's install will read
+# the carried one (deploy/engine-libraries.sh, `carry_resolved`): its
+# engine from the engine's output directory, each runtime file from the
+# toolkit's library directory, no library or symbol version missing but the
+# driver's, and no other library of the toolkit. A file is carried under
+# its own name with its mode set, 0755, or 0644 for the applet list and any
+# deploy file not executable here; a link as a link.
+write_carry() {
+  local rc=0 ldd_said resolved staging line name file target deployed now status
+  [[ "$SYS_OUT" != *:* ]] || die "the engine's output directory $SYS_OUT holds a colon, so no library path can name it"
+  ldd_said=$(spu_ldd "$BUILT/weaver-spu" "$SYS_OUT:$TOOLKIT_LIB") || rc=$?
+  [ "$rc" -eq 0 ] || { printf '%s\n' "$ldd_said" >&2; die "ldd could not read the built weaver-spu (it exited $rc)"; }
+  if ! resolved=$(carry_resolved "$ldd_said" "$SYS_OUT" "$TOOLKIT_TOP" "$TOOLKIT_LIB" $TUPLE_RUNTIME); then
+    printf '%s\n' "$resolved" >&2
+    die "the built weaver-spu does not resolve as a carry set carries it: its engine from $SYS_OUT, its CUDA runtime from $TOOLKIT_LIB and nothing else from the toolkit at $TOOLKIT_TOP"
+  fi
+  staging=$(mktemp -d "$CARRY_PARENT/.carry-XXXXXX") || die "no directory to fill could be made in $CARRY_PARENT"
+  trap 'rm -rf -- "$staging"' EXIT
+  mkdir -m 0755 -- "$staging/bin" "$staging/lib" "$staging/deploy"
+  for b in $MEMBERS busybox; do install -m 0755 -- "$BUILT/$b" "$staging/bin/$b"; done
+  install -m 0644 -- "$BUILT/busybox.applets" "$staging/bin/busybox.applets"
+  for f in "${LIBS[@]}"; do
+    if [ -L "$f" ]; then cp -P -- "$f" "$staging/lib/${f##*/}"; else install -m 0755 -- "$f" "$staging/lib/${f##*/}"; fi
+  done
+  while IFS=$'\t' read -r name file; do
+    install -m 0755 -- "$file" "$staging/lib/${file##*/}"
+    [ "$name" = "${file##*/}" ] || ln -s -- "${file##*/}" "$staging/lib/$name"
+    plan "runtime       $name -> ${file##*/}"
+  done <<<"$resolved"
+  deployed=$REPO/deploy/deployed-copy.txt
+  while IFS= read -r line; do
+    case $line in ""|"#"*) continue ;; esac
+    [[ "$line" =~ ^[A-Za-z0-9._-]+$ && -f "$REPO/deploy/$line" ]] \
+      || die "deploy/deployed-copy.txt names '$line', which is not a file beside it"
+    if [ -x "$REPO/deploy/$line" ]; then target=0755; else target=0644; fi
+    install -m "$target" -- "$REPO/deploy/$line" "$staging/deploy/$line"
+  done <"$deployed"
+  install -m 0644 -- "$deployed" "$staging/deploy/deployed-copy.txt"
+  build_tuple "$REPO" "$COMMIT" "$staging/bin" "$staging/lib" "$FEATURES" "$MEMBERS $SHELL_FILES" \
+    "${LIB_NAMES[*]}" "$resolved" >"$staging/build-tuple"
+  chmod 0644 -- "$staging/build-tuple"
+  sed 's/^/   /' "$staging/build-tuple"
+  # **The tree is still the commit the set names**, read again once the
+  # deploy copy and the build half have been read from the checkout, which a
+  # checkout or an edit during the build would move. Tracked files alone:
+  # the run writes its own target and logs, which may sit in the tree
+  # unignored. A checkout made and undone before this read is not seen.
+  now=$(git -C "$REPO" rev-parse HEAD 2>/dev/null) || now=""
+  status=$(git -C "$REPO" status --porcelain=v1 --untracked-files=no 2>/dev/null) || status="unreadable"
+  { [ "$now" = "$COMMIT" ] && [ -z "$status" ]; } \
+    || die "the tree moved during the build (HEAD reads '${now:-unread}', or git status lists changes), so a set written now would carry files of another commit than $COMMIT; nothing is written"
+  python3 "$REPO/deploy/carry_set.py" write "$staging" "$COMMIT" || die "the carry set's manifest could not be written"
+  CARRY_SHA=$(sha256sum <"$staging/MANIFEST" | cut -d' ' -f1)
+  chmod 0755 -- "$staging"
+  standing "$CARRY" && die "$CARRY came to stand while the set was written; the set is not written"
+  # No-clobber, so a directory that came to stand since is never replaced
+  # (rename(2) replaces an empty one); the filled directory still standing
+  # means the rename did not happen.
+  mv -T -n -- "$staging" "$CARRY" || true
+  [ ! -e "$staging" ] || die "the filled set could not be renamed to $CARRY, which may have come to stand while it was written; the set is not written"
+  trap - EXIT
+  plan "written to $CARRY: $(wc -l <"$CARRY/MANIFEST") manifest lines"
+  say "carry set written. Its manifest's sha256, which names it:"
+  printf '%s\n' "$CARRY_SHA"
+}
+if [ -n "$CARRY" ]; then
+  say "carry set"
+  write_carry
+  exit 0
+fi
+
+# ---------------------------------------------------------------- 5. plan
 say "plan"
 plan "install -d $PREFIX/bin $PREFIX/lib  (root, 0755)"
 for b in $MEMBERS; do plan "install $b -> $PREFIX/bin/$b  $(sha256sum < "$BUILT/$b" | cut -c1-12)"; done
@@ -400,7 +571,7 @@ plan "install -d $AGENT_DIR (root:root 0755): each agent's folder <name>/, root:
 [ -d "$PREFIX/models" ] && plan "$PREFIX/models stands: $(ls "$PREFIX/models" | wc -l) entries" || plan "$PREFIX/models is absent: copy the artifacts before declaring an agent"
 [ "$INSTALL" -eq 1 ] || { say "plan only. rerun with --install"; exit 0; }
 
-# ---------------------------------------------------------------- 5. install
+# ---------------------------------------------------------------- 6. install
 say "install"
 sudo -v || die "--install needs sudo"
 sudo install -d -o root -g root -m 0755 "$PREFIX/bin" "$PREFIX/lib"

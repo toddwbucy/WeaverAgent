@@ -192,7 +192,6 @@ OPTIONS = {
     ("install", "-g"): ("argument", "create-agent.sh:1162"),
     ("install", "-m"): ("argument", "create-agent.sh:1162"),
     ("visudo", "-cqf"): ("argument", "create-agent.sh:1072"),
-    ("pacman", "-Q"): ("flag", "decommission.sh:1127"),
     ("sed", "-n"): ("flag", "create-agent.sh:1443"),
 }
 
@@ -1302,7 +1301,7 @@ def siblings(path):
     outside comments joins to the script's own directory, by BASH_SOURCE or
     $0 in shell and __file__ in Python, or by a name assigned from one
     (`HERE=$(dirname "$0")`, `here = Path(__file__).parent`), after a / or a
-    quote (`"$HERE/x.sh"`, `here / "x.py"`, `os.path.join(here, "x.py")`)."""
+    quote (`"$HERE/<name>.sh"`, `here / "<name>.py"`, `os.path.join(here, "<name>.py")`)."""
     with open(path) as f:
         lines = [line for line in f.read().split("\n") if not line.lstrip().startswith("#")]
     anchors = [HERE]
