@@ -32,7 +32,7 @@ Record in the run log, from the box, not from memory:
 uname -n; uname -r
 nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 nvcc --version | tail -1
-pacman -Q cuda cccl
+grep -rhE --include=version.h '^#define CCCL_VERSION ' "$(dirname "$(dirname "$(readlink -f "$(command -v nvcc)")")")"/targets/*/include
 rustup show active-toolchain
 sudo deploy/decommission.sh            # the plan: what stands, discovered
 ```
@@ -65,6 +65,7 @@ nothing else.
 | Engine libraries `libggml*`, `libllama*` | `<prefix>/lib/`, reached by `/etc/ld.so.conf.d/weaver.conf` and named by the record's `library-path`, which admin sets as the worker's `LD_LIBRARY_PATH` | bootstrap, update-stack |
 | Model artifacts, hash-pinned | `<prefix>/models/` | operator, by hand |
 | Retired Python SPU, where an older install left it | `<prefix>/python-spu/` | archive and purge only, Python retirement below |
+| The stack's own deploy copy, on a box installed from a carry set | `<prefix>/deploy/` (root 0755, files 0755 or 0644) | install-carry |
 | Accounts: the agent's `weaver-<name>` (home `<agent-directory>/<name>/home`, 2750, in the agent's folder, #578), the member's `weaver-<name>-state`, the relay's `weaver-<name>-relay`, and the groups `weaver-<name>-trace` and `weaver-<name>-admin`; an agent laid by an earlier create-agent also has its own connector `weaver-<name>-admincon` | passwd | create-agent |
 | The box's two connector accounts, one per box: `weaver-gatecon` (WeaverWeb's gate-con, in each agent's group `weaver-<name>`) and `weaver-admincon` (WeaverWeb's admin-con, in each agent's state and access groups), no home, nologin | passwd | create-agent, at the first run that finds each absent; decommission removes them after every agent's accounts |
 | Territory `weaver-<name>/` (root:weaver-<name>-state 0710, passage for the state group alone) with `agent.toml` and `system-prompt.md` (root:weaver-<name>-admin 0640), `admin.log` and `worker.log` once admin has run a verb (root:weaver-<name>-admin 0640), `save-points/` (root:weaver-<name>-admin 0750, the published save points 0640 and the manifest root 0644), `state/` (member 0700) and `trace.ndjson` (root:weaver-<name>-trace 0640); the whole agent, on the operator's ruling of 2026-10-07 on #1 | the agent's folder `<agent-directory>/<name>/` (root:root 0755, beside the home, #578), the base the stack record's `agent-directory`, default `/var/lib/weaver-agent` | create-agent, admin for the logs and the save points |
@@ -147,7 +148,7 @@ the archive and the purge (#99 area 2 review, H4). The archive holds:
   facts: an old box's `weaver_*` roles, databases and authentication lines are the
   operator's to inspect and drop by hand (section 2, #35).
 - One `.tar.zst` per piece, owners, ACLs and xattrs preserved: `etc-weaver`,
-  `sudoers-weaver`, `ld-so-conf`, `opt-<prefix path>` (bin, lib, python-spu, the
+  `sudoers-weaver`, `ld-so-conf`, `opt-<prefix path>` (bin, lib, deploy, python-spu, the
   backup-* directories, never models), `agent-<folder path>` for each agent's folder,
   `territory-<path>` for each root's own territory outside them, `var-lib-weaver`,
   `legacy-logs` (every legacy log a box from before #50 names, in one archive),
@@ -230,9 +231,9 @@ nothing but `models`.
    to read or clear the mark, or a limit, by hand before the rerun.
 3. Every other path on the list: the territories, the logs, the homes, the `/tmp`
    entries, the run directories, `/var/lib/weaver` where it spans no base, the `ld.so`
-   confs and each prefix's `bin`, `lib`, `python-spu` and backups. (The sudo rules went
-   before step 1.) The accounts still resolve, so every owner and group still reads by
-   name.
+   confs and each prefix's `bin`, `lib`, `deploy`, `python-spu` and backups. (The sudo
+   rules went before step 1.) The accounts still resolve, so every owner and group still
+   reads by name.
 4. The `weaver-*` users, then their groups, `userdel` taking no home: a home the purge
    judged went as a path in step 3, and one outside `/home` is left. A group `userdel`
    already removed with its user, as it removes a private group, is done.
@@ -330,8 +331,10 @@ deploy/bootstrap-stack.sh --install    # then install under sudo
 
 What it does, so the log can say which step a failure was at:
 
-1. Prints the box facts and refuses if `cccl` is outside the 3.1.4-3.3.4 window, if
-   there is no `nvcc`, if the stack record `/etc/weaver/stack` or `<prefix>/bin`
+1. Prints the box facts and refuses if there is no `nvcc`, if the CCCL version nvcc
+   reads cannot be read or lies outside the 3.1.4-3.3.4 window, if `NVCC_CCBIN` (an
+   absolute path or a name on `PATH`, never nvcc's directory form) names no executable
+   file, if the stack record `/etc/weaver/stack` or `<prefix>/bin`
    already stands, or if `/etc/weaver/admin` holds anything. It refuses too where the
    shell's build lacks a tool (`build-busybox.sh --preflight`: tar with bzip2, make, a C
    compiler that links statically, python3, and curl unless `BUSYBOX_TARBALL` names
@@ -348,13 +351,12 @@ What it does, so the log can say which step a failure was at:
    outside them (the log's last 20 where none stands), and naming the log, which is
    kept (#128). `update-stack.sh`'s test step does the same.
 4. `cargo build --release --locked --workspace --features
-   weaver-spu/cuda,weaver-state/sqlite`. The engine is named,
-   though it is the default, or the member refuses an agent electing it at load
-   (measured 2026-09-11). The CUDA host compiler is `NVCC_CCBIN`, defaulted as
-   `update-stack.sh` defaults it. A build that fails refuses with the first lines cargo
-   names as the cause and the log's last 60, naming the log, and never goes on
-   to install what an earlier build left in the target directory (#128). The engine is
-   built with its OpenSSL lookup off (`CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON`,
+   weaver-spu/cuda,weaver-state/sqlite`. The engine is named, though it is the default,
+   or the member refuses an agent electing it at load (measured 2026-09-11). The CUDA
+   host compiler is `NVCC_CCBIN`, judged in step 1. A build that fails refuses with the
+   first lines cargo names as the cause and the log's last 60, naming the log, and never
+   goes on to install what an earlier build left in the target directory (#128). The
+   engine is built with its OpenSSL lookup off (`CMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON`,
    weaver-spu-Spec section 1.1): nothing in the agent downloads a model, and the
    cpp-httplib bundled with llama.cpp does not compile against OpenSSL 4.1. The
    repository's `.cargo/config.toml` forces the variable for every cargo run started
@@ -404,10 +406,11 @@ What it does, so the log can say which step a failure was at:
    engine-source = git+<fork url>?rev=<40 hex>#<40 hex>
    engine-vendored = <40 hex>
    nvcc = <release>, V<version>
+   ccbin = <path> <its --version line>   (NVCC_CCBIN, the engine kernels' host compiler)
    member.<name> = <64 hex>              (one per installed member, the shell's two files among them)
    library.<versioned file> = <64 hex>   (one per engine library)
    runtime.cudart = <64 hex> <file>      (and cublas, cublaslt, curand)
-   cccl = <package version>               (pacman's, or with no pacman <package>=<version> from dpkg)
+   cccl = <major>.<minor>.<patch>         (CCCL_VERSION in the CCCL header nvcc reads first)
    ```
 
    Each `runtime.` line is the file the installed SPU's library name leads to, as
@@ -424,6 +427,147 @@ What it does, so the log can say which step a failure was at:
 The SPU is the Rust implementation. `create-agent.sh --spu /absolute/path/to/custom-spu`
 can still select a separately installed Rust binary for one agent. The Python zipapp
 and its installation procedure are retired.
+
+## 3a. Carrying a stack to another box
+
+On the operator's ruling of 2026-11-23 **the binaries are carried** (`weaver-admin-PRD`
+section 7.2): a build box writes a carry set, and a run box installs it with no compiler
+and no CUDA toolkit. On the build box, as the operator, never under sudo:
+
+```sh
+deploy/bootstrap-stack.sh --carry <dir>
+```
+
+It makes the checks of section 3 step 1 that concern the build (nvcc, the CCCL window,
+`NVCC_CCBIN`, the shell's tools) and none that concern this box's stack, which it
+neither reads nor writes, so a build box that runs an agent writes a set beside it. It
+refuses, before the build:
+
+- a tree that is not a clean git checkout, since a set names one commit;
+- a `<dir>` that stands, or whose parent is not a directory the operator owns that no
+  group or other can write, or with a directory above it that is neither the operator's
+  nor root's, or that a group or other can write and is not sticky (a relative `<dir>`
+  is read from the directory the operator ran the script in);
+- a toolkit with no library directory for this host's target, and a `CUDA_LIB_DIR` that
+  names any other directory.
+
+**A build box needs no card.** Nothing in a set reads the hardware: both kernel builds
+compile for a fixed list of architectures, and the driver's own library, `libcuda`,
+which a box with no driver lacks, belongs to the run box and is never carried. The
+operator names the toolkit by the nvcc on `PATH` and the host compiler by `NVCC_CCBIN`,
+as for any build.
+
+It then tests and builds as section 3 steps 3 and 4 do, and reads the built SPU with
+the engine's output directory and the toolkit's library directory as its library path.
+It refuses unless every engine library resolves from the engine's output directory and
+each of the four CUDA runtime files from the toolkit's library directory, no library or
+symbol version is not found but the driver's, and no other library of the toolkit is
+named. Every library the SPU takes from the engine's output directory must be one of the
+engine's own, since the set carries those by name. Before it writes the manifest, it
+reads the tree again and refuses if HEAD or a tracked file moved during the build (a
+checkout made and undone before that read is not seen). It writes the set into a
+directory beside `<dir>` and renames it to `<dir>` once the set is whole, never over a
+directory that came to stand meanwhile, so `<dir>` is a whole set or does not stand:
+
+```text
+<dir>/
+  MANIFEST      one row per entry, sorted by path; its sha256 names the set
+  build-tuple   the build's half of the install tuple
+  bin/          the members, busybox and busybox.applets
+  lib/          the engine libraries, and libcudart, libcublas, libcublasLt and
+                libcurand, each versioned file beside its links
+  deploy/       every file deploy/deployed-copy.txt names, the list included
+```
+
+The manifest opens with `# weaver carry set 1` and `# commit <40 hex>`, and its rows are
+`file<TAB><sha256><TAB><0755|0644><TAB><path>` and `link<TAB><target><TAB>-<TAB><path>`
+(`deploy/carry_set.py`). `build-tuple` holds the lines of section 3 step 6, with
+`build-os = <ID> <VERSION_ID>` (from os-release) after `ccbin` and a
+`build-runtime.<name> = <sha256>` line for each carried runtime file in place of the
+`runtime.` lines. The run's last line is the manifest's sha256. Record it with the set:
+the install takes it as an argument.
+
+The four CUDA runtime files, libcudart, libcublas, libcublasLt and libcurand, are
+carried unmodified, as the toolkit installed them. The licence text that governs them
+ships with the operator's CUDA toolkit, and the operator reads it there.
+
+### Installing a carry set
+
+On the run box, as the operator, with sudo for the install step, from the set itself:
+
+```sh
+<set>/deploy/install-carry.sh <set> <manifest sha256>            # plan: checks, no sudo
+<set>/deploy/install-carry.sh <set> <manifest sha256> --install  # then install under sudo
+```
+
+It needs no compiler and no CUDA toolkit, only python3 and ldd. Like
+`bootstrap-stack.sh`, it refuses where a stack record stands, the admin base holds
+anything, `<prefix>/bin`, `<prefix>/lib` or `<prefix>/deploy` stands, or a place it
+makes is not held closed by root. It refuses a set whose manifest's sha256 is not the
+one named, and a set that holds any entry other than exactly those its manifest names.
+It refuses to run from any deploy copy but that of the set it installs. It runs as the
+operator from the set it checks, so it answers for the set only as far as the operator
+trusts the digest given to it. The install then:
+
+1. copies the set into a directory that root makes closed under the prefix, and checks
+   that copy again, so what root places is what root checked. Root runs no code from
+   the operator's set: it first finds by sha256 that its copy of the manifest is the
+   one named and its copy of `deploy/carry_set.py` is the file that manifest names, and
+   then runs that copy;
+2. places `bin/`, `lib/` and `deploy/` under the prefix as root, with the manifest's
+   modes;
+3. reads the placed SPU with `<prefix>/lib` alone as its library path, and refuses
+   unless every library and symbol version resolves, the driver's own `libcuda`
+   included, the engine and each runtime file resolve from `<prefix>/lib`, and each
+   runtime file's sha256 equals the build's `build-runtime.` digest;
+4. judges the deploy copy against the programs in `WEAVER_PROGRAM_DIRS` (by default
+   `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin` and `/bin`);
+5. writes the stack record as section 3 step 6 does, and the install tuple: the build
+   half as carried, a `runtime.` line for each runtime file as it resolves here, and
+   `carry = <manifest sha256>`. It fills the record in a directory beside it and renames
+   that directory into place last, so the record stands whole or not at all.
+
+On any refusal or signal after step 1, it removes what it placed, root's copy, the
+record it was filling, and each directory it made.
+
+**There is no loader entry and no ldconfig.** The runtime files are in `<prefix>/lib`
+beside the engine libraries. The stack record names `library-path = <prefix>/lib`,
+`create-agent.sh` copies that key into each agent's root, and admin gives it to the
+agent's processes as their library path (`weaver-admin-Spec` section 6). An agent root
+made by hand without `library-path` fails when its SPU is executed.
+
+On a carried box, the deploy scripts are run from `<prefix>/deploy/`
+(`HowToDeployANewAgent.md` section 1), except the take-down for a newer set, below.
+
+**A newer set on a box that holds one.** `install-carry.sh` is a first install only, and
+`update-stack.sh` refuses a box whose install tuple names a carry set. To put a newer
+set on such a box, run the new set's own `deploy/decommission.sh` (section 1), which
+archives and removes every agent on the box and the stack, `<prefix>/deploy/` included,
+and then install the new set. Run the new set's copy, not
+`<prefix>/deploy/decommission.sh`: the purge removes `<prefix>/deploy/`, so a rerun
+after a removal that failed would find no script there. The agents are made again with
+`create-agent.sh` after the install.
+
+**Check the new set before the take-down.** `install-carry.sh` refuses a box that holds a
+stack before it reaches the set's check, so on such a box nothing checks the set before
+its `decommission.sh` runs under sudo. The operator checks it by hand first, as the
+operator, with the manifest sha256 the set was carried with:
+
+```bash
+sha256sum <set>/MANIFEST
+awk -F'\t' '$1 == "file" && $4 == "deploy/carry_set.py" {print $2}' <set>/MANIFEST
+sha256sum <set>/deploy/carry_set.py
+python3 -I <set>/deploy/carry_set.py check <set> <manifest sha256>
+```
+
+The first line must print the manifest sha256, and the second and third one digest: the
+set's checker is then the file its manifest names, as `install-carry.sh` holds root's
+copy to it, and only then is it run. The fourth prints the set's commit when every file
+and link of the set, `deploy/decommission.sh` included, is as the manifest names it, and
+otherwise refuses, naming the first difference. Together they answer for the set as far
+as the operator trusts the digest the set was carried with, as the install does. They
+hold for the set as it stood when they ran: whoever can write the set can still change
+it before the take-down runs it.
 
 ## 4. Agents
 

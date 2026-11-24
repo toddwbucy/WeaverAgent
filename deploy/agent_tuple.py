@@ -599,8 +599,22 @@ def read_install_tuple(path):
     for name, digest in list(members.items()) + list(libraries.items()):
         if digest != UNKNOWN and not HEX64.fullmatch(digest):
             raise InstallTupleRefused(f"{name}'s digest is not 64 hex digits or unknown")
+    # **A carried install's build digests** (deploy/install-carry.sh): each
+    # `build-runtime.<key>` the carry set's build half carries, the sha256 of
+    # the runtime file the build box resolved, for a key of RUNTIME_LIBRARIES.
+    # A tuple without them, any not carried, binds to its own record alone.
+    build_runtime = {}
+    for key, value in facts.items():
+        if key.startswith("build-runtime."):
+            name = key[len("build-runtime."):]
+            if name not in {k for k, _ in RUNTIME_LIBRARIES}:
+                raise InstallTupleRefused(f"{key} is not a runtime file this reader knows")
+            if not HEX64.fullmatch(value):
+                raise InstallTupleRefused(f"{key} is not 64 hex digits")
+            build_runtime[name] = value
     install = {"sha256": hashlib.sha256(raw).hexdigest(), "facts": facts, "members": members,
-               "libraries": libraries, "runtime": None, "earlier": sorted(earlier)}
+               "libraries": libraries, "runtime": None, "earlier": sorted(earlier),
+               "build_runtime": build_runtime}
     if earlier:
         if runtime:
             raise InstallTupleRefused(
@@ -885,7 +899,10 @@ def runtime_rows(install, resolved, unread, failed=None, unbound=None):
     that moved, changed or no longer resolves is a FAULT: the box has
     drifted from its install, which a sealed image must never show, and
     which a box updated since its install clears by rewriting its record
-    (update-stack.sh --install).
+    (update-stack.sh --install), or, on a box installed from a carry set,
+    by the new set's own deploy/decommission.sh and a fresh install-carry.sh
+    (deploy/REDEPLOY.md section 3a). On a carried box each
+    file must also equal the build's digest (`build-runtime.<key>`).
 
     **Fail closed**: `failed` is why the loader's read cannot be trusted or
     bound (an SPU or library path another principal could write, an SPU or
@@ -950,16 +967,26 @@ def runtime_rows(install, resolved, unread, failed=None, unbound=None):
                                  f"the loader names it and it does not read: {error}"))
             continue
         live = f"{digest} {real}"
+        build = install.get("build_runtime", {}).get(key) if install is not None else None
         if recorded is None:
             lines.append(row("bind", field, live, "absent", f"not bound: {why}"))
+        elif (digest, real) == recorded and build is not None and digest != build:
+            lines.append(row("bind", field, live, "FAULT",
+                             f"{name} equals the install tuple's, and its sha256 is not the build's "
+                             f"{build}: the box runs a runtime file its carry set did not carry"))
         elif (digest, real) == recorded:
             lines.append(row("bind", field, live, "recorded",
-                             f"{name} as the loader resolves it now equals the install tuple's"))
+                             f"{name} as the loader resolves it now equals the install tuple's"
+                             + (" and the build's" if build is not None else "")))
         else:
             lines.append(row("bind", field, live, "FAULT",
                              f"drift from the install: the install tuple records {recorded[0]} "
-                             f"{recorded[1]}. A sealed image never shows this; a box updated "
-                             "since its install rewrites the record with update-stack.sh --install"))
+                             f"{recorded[1]}. "
+                             + ("A carried box takes a newer carry set by the new set's own "
+                                "deploy/decommission.sh and then install-carry.sh (deploy/REDEPLOY.md "
+                                "section 3a)" if install.get("facts", {}).get("carry") else
+                                "A sealed image never shows this; a box updated since its install "
+                                "rewrites the record with update-stack.sh --install")))
     return lines
 
 

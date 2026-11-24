@@ -343,6 +343,20 @@ sys.exit(1)
 # silently, and the seats only find it by comparing results later.
 WORKER_BINARY=$(read_key worker-binary)
 [ -n "$WORKER_BINARY" ] || die "no worker-binary in the stack record $STACK"
+# **A carried box is not updated here** (weaver-admin-PRD section 7.2): its
+# install tuple names the carry set it installed (deploy/install-carry.sh),
+# and this script builds the checkout it runs from and installs that build,
+# which no carry set names. A carried box takes a newer set by the new set's
+# own deploy/decommission.sh, which archives and removes every agent on the box
+# and the stack, and then install-carry.sh (deploy/REDEPLOY.md section 3a).
+CARRIED=""
+if [ -e "$STACK/install-tuple" ] || [ -L "$STACK/install-tuple" ]; then
+  CARRIED=$(sed -n 's/^carry = //p' -- "$STACK/install-tuple") \
+    || die "cannot read $STACK/install-tuple to tell whether a carry set installed this box"
+fi
+if [ -n "$CARRIED" ]; then
+  die "this box's stack was installed from the carry set $CARRIED, and update-stack.sh would replace it with a build that names no carry set. To put a newer set on it, take the box down with the new set's own deploy/decommission.sh, which archives and removes every agent on the box and the stack, and then run install-carry.sh (deploy/REDEPLOY.md section 3a). Run the new set's copy, not the one under the prefix: the purge removes <prefix>/deploy, so a rerun after a removal that failed would find no script there."
+fi
 BIN_DIR=$(dirname "$WORKER_BINARY")
 refuse_python_binary "$WORKER_BINARY" "the stack's worker-binary"
 refuse_python_binary "$(read_key spu-binary)" "the stack's spu-binary"
@@ -799,23 +813,22 @@ printf '  will install  %s, the shell (%s), and the engine libraries (%s) built 
 DRIVER=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null || true); DRIVER=$(grep -E '^[0-9]+(\.[0-9]+)+$' <<<"$DRIVER" || true); DRIVER=${DRIVER%%$'\n'*}
 printf '  driver        %s\n' "${DRIVER:-none}"
 
-# The cccl window of #397. Outside it the engine does not compile, and a
-# failure here is cheaper than one twenty minutes into a build.
-CCCL=$(pacman -Q cccl 2>/dev/null | awk '{print $2}' || true)
-printf '  cccl          %s\n' "${CCCL:-unknown}"
-# **Both ends, and by version order rather than by glob.** A `3.3.*` pattern
-# waves 3.3.5 through, which is outside what #397 measured, and a `3.1.4*`
-# one turns away 3.1.5, which is inside it. The pacman release suffix is
-# dropped before the comparison.
-cccl_in_window() {
-  local v=${1%%-*} lo=3.1.4 hi=3.3.4
-  [ "$(printf '%s\n%s\n' "$lo" "$v" | sort -V | head -1)" = "$lo" ] &&
-  [ "$(printf '%s\n%s\n' "$v" "$hi" | sort -V | head -1)" = "$v" ]
-}
-if [ -z "$CCCL" ]; then
-  printf '  (cccl not queryable; not gating on it)\n'
-elif ! cccl_in_window "$CCCL"; then
-  die "cccl $CCCL is outside the 3.1.4-3.3.4 window #397 measured. Fix the pin first."
+# **The cccl window of #397, read from the header nvcc reads, by no package
+# manager** (deploy/install-tuple.sh, `cccl_read`, `cccl_in_window`). Outside
+# it the engine does not compile, and a failure here is cheaper than one
+# twenty minutes into a build. A version that cannot be read refuses: on a
+# box without pacman the check once passed unread.
+cccl_read || die "the CCCL version nvcc reads cannot be read: $CCCL_WHY. The build's CCCL window is unchecked, so nothing is built"
+printf '  cccl          %s (%s)\n' "$CCCL_READ" "$CCCL_HEADER"
+cccl_in_window "$CCCL_READ" || die "cccl $CCCL_READ is outside the 3.1.4-3.3.4 window #397 measured. Fix the pin first."
+# **The host compiler is an executable file before the long build**
+# (deploy/engine-libraries.sh, `host_compiler`).
+host_compiler
+printf '  ccbin         %s\n' "$NVCC_CCBIN"
+# Where the loader's entry would be written, an unset CUDA_LIB_DIR is derived
+# here, before the build, so a toolkit that names none refuses now.
+if [ ! -e "$LDSO_CONF" ] && [ ! -L "$LDSO_CONF" ]; then
+  cuda_lib_dir
 fi
 
 # **What the agents elect is checked against what the build will carry**, on
@@ -1052,7 +1065,7 @@ BUILD_MESSAGES=$(mktemp "${BUILT%/release}/weaver-deploy-messages-XXXXXX") \
 # long build still removes the file.
 trap 'rm -f -- "$BUILD_MESSAGES"' EXIT
 rc=0
-NVCC_CCBIN=${NVCC_CCBIN:-/usr/bin/g++-15} \
+NVCC_CCBIN="$NVCC_CCBIN" \
 NVCC_APPEND_FLAGS="-objtemp${NVCC_APPEND_FLAGS:+ $NVCC_APPEND_FLAGS}" \
 CMAKE_CUDA_ARCHITECTURES="86-real;89-real;120a-real;121a-real" \
   cargo build --release --locked --workspace --message-format=json-render-diagnostics \
@@ -1187,6 +1200,8 @@ if [ -e "$LDSO_CONF" ] || [ -L "$LDSO_CONF" ]; then
 else
   # LIB_DIR was judged held closed where it was read; the CUDA directory is
   # judged here, where it would join the entry (deploy/engine-libraries.sh).
+  # Unset, it is the toolkit's own library directory.
+  cuda_lib_dir
   loader_dir CUDA_LIB_DIR "$CUDA_LIB_DIR"
   printf '  %-22s NEW      %s and %s, then ldconfig\n' "$LDSO_CONF" "$LIB_DIR" "$CUDA_LIB_DIR"
   LDSO_WRITE=1

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Sourced by bootstrap-stack.sh and update-stack.sh, never by an agent.
+# Sourced by bootstrap-stack.sh and update-stack.sh, never by an agent, after
+# deploy/engine-libraries.sh, whose spu_ldd, toolkit_target and printable_path
+# it calls.
 #
 # **The install tuple: the box-side half of the deployment tuple**, stated
 # after an install so every live run's report can cite one record of what
@@ -19,15 +21,22 @@
 #   engine-source         its lock source, the fork and the commit it names
 #   engine-vendored       the llama.cpp commit that fork commit vendors
 #   nvcc                  the CUDA compiler release that built the kernels
+#   ccbin                 NVCC_CCBIN, the host compiler nvcc built the engine's
+#                         kernels with, as `<path> <its --version line>` (not
+#                         weaver-spu's own kernels', deploy/engine-libraries.sh)
+#   build-os              the build half alone (build_tuple below): the build
+#                         box's distribution, `<ID> <VERSION_ID>`
 #   member.<name>         sha256 of each installed member, in full
 #   library.<file>        sha256 of each installed engine library's versioned file
 #   runtime.<name>        each CUDA runtime file the installed SPU resolves, as
 #                         `<sha256> <path>`, the path the file the loader's name
 #                         leads to: cudart, cublas, cublaslt and curand
-#   cccl                  the cccl package the build compiled against: pacman's
-#                         `cccl` version, or where pacman is absent, the dpkg
-#                         package that owns the CCCL header nvcc reads first, as
-#                         `<package>=<version>` (tuple_cccl below)
+#   build-runtime.<name>  the build half alone, in place of runtime.<name>: the
+#                         sha256 of the runtime file the carry set carries
+#   cccl                  the CCCL version the build compiled against, as
+#                         `<major>.<minor>.<patch>`, read from the CCCL header
+#                         nvcc reads first, by no package manager (cccl_read
+#                         below)
 #
 # **Build facts only** (the operator's rulings of 2026-11-14: one appliance
 # image serves any host's cards). Nothing here reads the hardware: no driver,
@@ -56,12 +65,10 @@
 # names, and test_plans.py pins the two equal.
 TUPLE_RUNTIME="cudart cublas cublasLt curand"
 
-# install_tuple REPO COMMIT BIN_DIR LIB_DIR FEATURES "MEMBER..." "LIBRARY..."
-# COMMIT is the tree the script built from, read at its tree gate, never
-# again here: the checkout may move during a long build.
-install_tuple() {
-  local repo=$1 commit=$2 bin_dir=$3 lib_dir=$4 features=$5 members=$6 libraries=$7
-  local host metadata engine ldd_said m f name path n digest
+# tuple_head REPO COMMIT FEATURES: the build's facts, `commit` to `ccbin`,
+# the lines both halves of the tuple open with.
+tuple_head() {
+  local repo=$1 commit=$2 features=$3 host metadata engine path m n
   printf 'commit = %s\n' "$commit"
   printf 'toolchain = %s\n' "$(python3 -c 'import sys, tomllib
 try:
@@ -95,6 +102,23 @@ if len(found) == 1:
   n=$(nvcc --version 2>/dev/null || true)
   n=$(printf '%s\n' "$n" | sed -n 's/.*release //p' | sed -n 1p)
   printf 'nvcc = %s\n' "${n:-unknown}"
+  # The host compiler as the build named it, and its version line read in
+  # the C locale with anything but printable ASCII dropped, since the record
+  # is ASCII and its reader refuses any other byte.
+  n=unknown
+  if [ -n "${NVCC_CCBIN:-}" ] && [ -f "$NVCC_CCBIN" ] && [ -x "$NVCC_CCBIN" ] &&
+    printable_path "$NVCC_CCBIN"; then
+    m=$(LC_ALL=C "$NVCC_CCBIN" --version 2>/dev/null </dev/null || true)
+    m=$(printf '%s\n' "$m" | sed -n 1p | LC_ALL=C tr -cd '\40-\176')
+    [ -z "$m" ] || n="$NVCC_CCBIN $m"
+  fi
+  printf 'ccbin = %s\n' "$n"
+}
+
+# tuple_digests BIN_DIR LIB_DIR "MEMBER..." "LIBRARY...": the `member.` and
+# `library.` lines, each file's sha256 in full.
+tuple_digests() {
+  local bin_dir=$1 lib_dir=$2 members=$3 libraries=$4 m f n
   for m in $members; do
     n=$(sha256sum 2>/dev/null < "$bin_dir/$m" | cut -d' ' -f1)
     printf 'member.%s = %s\n' "$m" "${n:-unknown}"
@@ -103,6 +127,16 @@ if len(found) == 1:
     n=$(sha256sum 2>/dev/null < "$lib_dir/$f" | cut -d' ' -f1)
     printf 'library.%s = %s\n' "$f" "${n:-unknown}"
   done
+}
+
+# install_tuple REPO COMMIT BIN_DIR LIB_DIR FEATURES "MEMBER..." "LIBRARY..."
+# COMMIT is the tree the script built from, read at its tree gate, never
+# again here: the checkout may move during a long build.
+install_tuple() {
+  local repo=$1 commit=$2 bin_dir=$3 lib_dir=$4 features=$5 members=$6 libraries=$7
+  local ldd_said name path n digest
+  tuple_head "$repo" "$commit" "$features"
+  tuple_digests "$bin_dir" "$lib_dir" "$members" "$libraries"
   # What the installed SPU resolves: the first line naming each library in
   # ldd's order, as agent_tuple.py's resolved_as takes it, followed to the
   # file it names, whose versioned name carries the runtime's version, and
@@ -131,6 +165,69 @@ if len(found) == 1:
   done
   n=$(tuple_cccl)
   printf 'cccl = %s\n' "${n:-unknown}"
+}
+
+# build_tuple REPO COMMIT BIN_DIR LIB_DIR FEATURES "MEMBER..." "LIBRARY..." RESOLVED
+# **The build's half of the tuple, which a carry set carries** as
+# `build-tuple` (weaver-admin-PRD section 7.2): the install tuple's lines with
+# `build-os` after `ccbin` and, in place of each `runtime.` line, a
+# `build-runtime.<name> = <sha256>` line, the digest of the runtime file the
+# set carries in LIB_DIR. RESOLVED is carry_resolved's answer, one
+# `<library name><TAB><file>` line per runtime file the built SPU resolved
+# (deploy/engine-libraries.sh); the set carries each file under its own name.
+# The runtime files' paths on the build box are not recorded: a run box's
+# install reads its own. (`ccbin` names the build box's host compiler by its
+# path, as every install tuple does.)
+build_tuple() {
+  local repo=$1 commit=$2 bin_dir=$3 lib_dir=$4 features=$5 members=$6 libraries=$7 resolved=$8
+  local name file n
+  tuple_head "$repo" "$commit" "$features"
+  printf 'build-os = %s\n' "$(tuple_os)"
+  tuple_digests "$bin_dir" "$lib_dir" "$members" "$libraries"
+  for name in $TUPLE_RUNTIME; do
+    file=$(printf '%s\n' "$resolved" | awk -F '\t' -v want="lib$name.so" '!seen && (index($1, want ".") == 1 || $1 == want) {seen = 1; print $2}')
+    n=""
+    [ -z "$file" ] || n=$(sha256sum 2>/dev/null < "$lib_dir/${file##*/}" | cut -d' ' -f1)
+    printf 'build-runtime.%s = %s\n' "$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')" "${n:-unknown}"
+  done
+  n=$(tuple_cccl)
+  printf 'cccl = %s\n' "${n:-unknown}"
+}
+
+# tuple_os [FILE]: the build box's distribution as `<ID> <VERSION_ID>`, or
+# `<ID>` alone where the release names no version (a rolling one), read from
+# FILE, else from os-release(5)'s two places in its order, or `unknown`. Each
+# value is read as the format writes it, bare or in one pair of quotes, and
+# must be the format's own characters: ID lowercase letters, digits, `.`,
+# `_` and `-`, VERSION_ID those with uppercase letters and `~` too. A key
+# assigned twice is read as the shell reads the file, the last one kept.
+tuple_os() {
+  python3 -c 'import os, re, sys
+paths = sys.argv[1:] or ["/etc/os-release", "/usr/lib/os-release"]
+facts = {}
+for path in paths:
+    try:
+        text = open(path, encoding="utf-8").read()
+    except (OSError, UnicodeDecodeError):
+        continue
+    for line in text.splitlines():
+        m = re.fullmatch(r"([A-Z_][A-Z0-9_]*)=(.*)", line.strip())
+        if not m:
+            continue
+        value = m.group(2)
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"\x27":
+            value = value[1:-1]
+        facts[m.group(1)] = value
+    break
+os_id, version = facts.get("ID", ""), facts.get("VERSION_ID")
+if not re.fullmatch(r"[a-z0-9._-]+", os_id):
+    print("unknown")
+elif version is None:
+    print(os_id)
+elif re.fullmatch(r"[A-Za-z0-9._~-]+", version):
+    print(os_id, version)
+else:
+    print("unknown")' "$@"
 }
 
 # CCCL's version header, under an include directory.
@@ -182,104 +279,109 @@ tuple_first_header() {
   return 1
 }
 
-# tuple_dpkg_owner PATH: the one package dpkg records as owning PATH, or
-# nothing. A path dpkg-query would read as a pattern is refused. A path a
-# diversion names, a package's or a local one, answers 2: the file there may
-# be the diverting package's or the administrator's replacement, which no
-# owner line names, while the original package's line still names the path.
-# dpkg-query translates its diversion lines, so it is asked in the C locale.
-# Two packages that own one file share one line, `a, b`, which the
-# package-name check refuses as no one owner.
-tuple_dpkg_owner() {
-  local path=$1 said line owner="" lines=0
-  case $path in
-    /*) ;;
-    *) return 1 ;;
-  esac
-  case $path in
-    *[\*\?\[\\]*|*$'\n'*) return 1 ;;
-  esac
-  said=$(LC_ALL=C dpkg-query -S "$path" 2>/dev/null) || return 1
-  while IFS= read -r line; do
-    case $line in
-      "diversion by "*|"local diversion "*) return 2 ;;
-    esac
-    [[ "$line" == *": $path" ]] || continue
-    lines=$((lines + 1))
-    owner=${line%": $path"}
-  done <<<"$said"
-  [ "$lines" -eq 1 ] || return 1
-  [[ "$owner" =~ ^[a-z0-9][a-z0-9+.-]*(:[a-z0-9-]+)?$ ]] || return 1
-  printf '%s\n' "$owner"
-}
-
-# tuple_cccl: the cccl package the build compiled against, or nothing where
-# the box cannot say. Where pacman stands, as on the boxes #397 measured, it
-# is the version of pacman's one `cccl` package. Where pacman is absent and
-# dpkg-query stands, as on the Ubuntu box an appliance image is built on,
-# NVIDIA's repository carries CCCL once per toolkit release (`cccl-13-3`,
-# `cccl-13-4`) and one box may hold several, so the fact is the package that
-# owns the CCCL version header nvcc reads first, as `<package>=<version>`,
-# the form apt installs by.
+# **cccl_read: the CCCL version the build's nvcc reads, by no package
+# manager.** One rule on every box: the version is the header's own, so a
+# box whose package manager is neither pacman nor dpkg reads it as well, and
+# a version that cannot be read refuses a build rather than passing it.
 #
 # nvcc reads NVCC_PREPEND_FLAGS ahead of a compile's own flags, then
 # NVCC_APPEND_FLAGS, then its toolkit's `targets/<target>/include` and that
 # directory's `cccl`, the second as a system include (its nvcc.profile). So
 # the header is the first an include directory of NVCC_PREPEND_FLAGS holds.
-# Else it is the toolkit's, beside the nvcc on PATH, which bootstrap requires
-# and the build's compilers find. Of the compiles' own flags, weaver-spu's
-# build script adds `$CUDA_PATH/include` (else `$CUDA_ROOT`, else
-# /usr/local/cuda), and a header there that is not the toolkit's file reads
-# nothing, since the engine's compile does not read it. The engine's own
-# flags are not read. The answer is nothing where FLAGS hold what
-# tuple_include_dirs does not rank, where a relative directory comes before
-# the header, where an appended directory is relative or holds a header,
-# where the toolkit holds other than one target, and where no one package
-# owns the header or a diversion names it. dpkg records the path a package
-# unpacks, so the header is asked for as found and then as resolved, and a
-# diversion that names either spelling ends the asking.
-tuple_cccl() {
-  local n prepend append header built path top owner="" rc=0
-  local -a targets
-  if command -v pacman >/dev/null 2>&1; then
-    n=$(pacman -Q cccl 2>/dev/null || true)
-    printf '%s\n' "$n" | awk 'NR == 1 {print $2}'
-    return 0
+# Else it is the toolkit's, beside the nvcc on PATH, under this host's own
+# target (`toolkit_target`, deploy/engine-libraries.sh). Of the compiles' own
+# flags, weaver-spu's build script adds `$CUDA_PATH/include` (else
+# `$CUDA_ROOT`, else /usr/local/cuda), and a header there that is not the
+# toolkit's file is a CCCL the engine's compile does not read, so the version
+# is not read past it. The engine's own flags are not read.
+#
+# The header defines `CCCL_VERSION` as one decimal number, major times a
+# million, plus minor times a thousand, plus patch, and the other version
+# macros from it (read in CCCL's tags v2.8.0 to v3.3.4 and on its main
+# branch on 2026-11-23). Exactly one such definition is read.
+#
+# Sets CCCL_READ (`<major>.<minor>.<patch>`) and CCCL_HEADER and answers 0;
+# else sets CCCL_WHY, one clause naming why the version cannot be read, and
+# answers 1. Called in the caller's shell, never in a substitution, so what
+# it sets stays set.
+cccl_read() {
+  local prepend append header built include value rc=0
+  CCCL_READ="" CCCL_HEADER="" CCCL_WHY=""
+  if ! prepend=$(tuple_include_dirs "${NVCC_PREPEND_FLAGS:-}"); then
+    CCCL_WHY="NVCC_PREPEND_FLAGS hold an include form this script does not rank"
+    return 1
   fi
-  command -v dpkg-query >/dev/null 2>&1 || return 0
-  prepend=$(tuple_include_dirs "${NVCC_PREPEND_FLAGS:-}") || return 0
-  append=$(tuple_include_dirs "${NVCC_APPEND_FLAGS:-}") || return 0
   header=$(tuple_first_header "$prepend") || rc=$?
-  [ "$rc" -ne 2 ] || return 0
+  if [ "$rc" -eq 2 ]; then
+    CCCL_WHY="a relative include directory comes first in NVCC_PREPEND_FLAGS"
+    return 1
+  fi
   if [ "$rc" -ne 0 ]; then
+    if ! append=$(tuple_include_dirs "${NVCC_APPEND_FLAGS:-}"); then
+      CCCL_WHY="NVCC_APPEND_FLAGS hold an include form this script does not rank"
+      return 1
+    fi
     rc=0
     tuple_first_header "$append" >/dev/null || rc=$?
-    [ "$rc" -eq 1 ] || return 0
-    path=$(command -v nvcc 2>/dev/null) || return 0
-    path=$(readlink -f -- "$path" 2>/dev/null) || return 0
-    [[ "$path" == /*/bin/nvcc ]] || return 0
-    top=${path%/bin/nvcc}
-    targets=("$top"/targets/*/include)
-    [ "${#targets[@]}" -eq 1 ] && [ -d "${targets[0]}" ] || return 0
-    header=$(tuple_first_header "${targets[0]}"$'\n'"${targets[0]}/cccl") || return 0
+    case $rc in
+      0) CCCL_WHY="an include directory of NVCC_APPEND_FLAGS holds CCCL, and the build's own flags stand between it and the toolkit's"
+         return 1 ;;
+      2) CCCL_WHY="a relative include directory stands in NVCC_APPEND_FLAGS"
+         return 1 ;;
+    esac
+    toolkit_target || { CCCL_WHY=$TOOLKIT_WHY; return 1; }
+    include=$TOOLKIT_TARGET/include
+    if [ ! -d "$include" ]; then
+      CCCL_WHY="the toolkit's target $TOOLKIT_TARGET holds no include directory"
+      return 1
+    fi
+    header=$(tuple_first_header "$include"$'\n'"$include/cccl") || {
+      CCCL_WHY="the toolkit's target $TOOLKIT_TARGET holds no $TUPLE_CCCL_HEADER"
+      return 1
+    }
     built=${CUDA_PATH:-${CUDA_ROOT:-/usr/local/cuda}}/include
-    [[ "$built" == /* ]] || return 0
+    if [[ "$built" != /* ]]; then
+      CCCL_WHY="the SPU build's include directory $built is not an absolute path"
+      return 1
+    fi
     if [ -f "$built/$TUPLE_CCCL_HEADER" ] &&
       [ "$(readlink -f -- "$built/$TUPLE_CCCL_HEADER")" != "$(readlink -f -- "$header")" ]; then
-      return 0
+      CCCL_WHY="the SPU build's include directory $built holds a CCCL header that is not the toolkit's"
+      return 1
     fi
   fi
-  for path in "$header" "$(readlink -f -- "$header" 2>/dev/null)"; do
-    rc=0
-    owner=$(tuple_dpkg_owner "$path") || rc=$?
-    [ "$rc" -ne 0 ] || break
-    owner=""
-    [ "$rc" -ne 2 ] || return 0
-  done
-  [ -n "$owner" ] || return 0
-  n=$(dpkg-query -W -f='${Package}=${Version}\n' "$owner" 2>/dev/null || true)
-  if [[ "$n" =~ ^[a-z0-9][a-z0-9+.-]*=[^[:space:]]+$ ]]; then
-    printf '%s\n' "$n"
+  # Every line is read: awk reads to the end and nothing stops it early.
+  value=$(LC_ALL=C awk '
+    /^[[:space:]]*#[[:space:]]*define[[:space:]]+CCCL_VERSION([[:space:]]|$)/ {
+      n++
+      v = $0
+      sub(/^[[:space:]]*#[[:space:]]*define[[:space:]]+CCCL_VERSION[[:space:]]*/, "", v)
+      sub(/[[:space:]]+$/, "", v)
+    }
+    END { if (n == 1) print v }' <"$header" 2>/dev/null) || value=""
+  if [[ ! "$value" =~ ^[1-9][0-9]{6,8}$ ]]; then
+    CCCL_WHY="the header $header defines no one CCCL_VERSION as a decimal number"
+    return 1
   fi
+  CCCL_HEADER=$header
+  CCCL_READ="$((value / 1000000)).$((value / 1000 % 1000)).$((value % 1000))"
+}
+
+# tuple_cccl: the install tuple's cccl fact, CCCL_READ, or nothing where it
+# cannot be read.
+tuple_cccl() {
+  if cccl_read; then printf '%s\n' "$CCCL_READ"; fi
   return 0
+}
+
+# cccl_in_window VERSION: answers 0 where VERSION lies inside the window #397
+# measured, both ends included and by version order rather than by glob: a
+# `3.3.*` pattern waves 3.3.5 through, which is outside what #397 measured,
+# and a `3.1.4*` one turns away 3.1.5, which is inside it. Outside it the
+# engine does not compile, and a refusal before the build is cheaper than one
+# twenty minutes into it.
+cccl_in_window() {
+  local lo=3.1.4 hi=3.3.4
+  [ "$(printf '%s\n%s\n' "$lo" "$1" | sort -V | head -1)" = "$lo" ] &&
+  [ "$(printf '%s\n%s\n' "$1" "$hi" | sort -V | head -1)" = "$1" ]
 }

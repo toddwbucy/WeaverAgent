@@ -10,3 +10,6 @@ account-drop.sh
 retired-python.sh
 agent_tuple.py
 turn.py
+install-carry.sh
+carry_set.py
+program_check.py
