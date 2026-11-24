@@ -131,15 +131,18 @@ read_key() { cat "$1/$2" 2>/dev/null || true; }
 # record's install tuple states it (`cccl`, deploy/install-tuple.sh's
 # cccl_read, from the header the build's nvcc read), or `unknown` where no
 # record states it. It asks no package manager: a carried box holds no CCCL
-# package, and a box with no pacman would refuse the deploy copy (#635).
+# package, and a box with no pacman would refuse the deploy copy (#635). The
+# record is read as the other reads of it are, never through a link, and a
+# value it gives is marked as the install tuple's, beside the live nvcc line.
 stack_cccl() {
   local line v=""
-  if [ -f /etc/weaver/stack/install-tuple ] && [ ! -L /etc/weaver/stack/install-tuple ]; then
+  if [ -d /etc/weaver/stack ] && [ ! -L /etc/weaver/stack ] \
+      && [ -f /etc/weaver/stack/install-tuple ] && [ ! -L /etc/weaver/stack/install-tuple ]; then
     while IFS= read -r line || [ -n "$line" ]; do
       case $line in "cccl = "*) v=${line#"cccl = "}; break ;; esac
     done < /etc/weaver/stack/install-tuple
   fi
-  printf '%s\n' "${v:-unknown}"
+  if [ -n "$v" ]; then printf '%s (install tuple)\n' "$v"; else printf 'unknown\n'; fi
 }
 # **A prefix is an absolute path in plain form, and never `/`**: no empty, `.`
 # or `..` component. Anything else could name the box's own /bin and /lib
