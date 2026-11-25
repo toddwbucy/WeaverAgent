@@ -33,8 +33,19 @@ turn to a Python process and answers each of its asks by the same `Ports` call
 5. **A pass is bounded at 10 seconds** (point 2), a ruling to be measured.
 6. **The closed list is the contract's own** (point 8). `elide` and `replay` are among
    what is not carried.
-7. **The documents that say the loop is compiled alone change in the act that makes each
-   new sentence true** (point 11). `CLAUDE.md` changes on the operator's word alone.
+7. **The relay names only what it can see** (the Planner, 2026-11-25 20:42 UTC, ruling
+   1). It answers in arrival order and counts nothing outstanding. The limit of four and
+   the ending ask sent alone are the loop's rules, kept by the board client. This brief
+   takes that lean.
+8. **The bound is on the pass and covers sends** (ruling 2): the relay's waits in a
+   pass, reads and sends, are summed and expire at 10 seconds, with at most 64 asks in a
+   pass.
+9. **The `hello` is read when the relay is made** (ruling 3). A failed `hello` refusing
+   the load is act 2's, and the lean.
+10. **A frame standing when a pass opens is a break** (ruling 4).
+11. **The documents that say the loop is compiled alone change in the act that makes
+    each new sentence true** (point 11). `CLAUDE.md` changes on the operator's word
+    alone.
 
 ## The three acts
 
@@ -49,31 +60,59 @@ turn to a Python process and answers each of its asks by the same `Ports` call
 1. **The contract,** `docs/crates/contracts/weaver-harness-loop-contract.md`, in this
    commit.
 2. **This brief,** in this commit.
-3. **`weaver-types` `wire.rs`:** `LOOP_FRAME_BOUND_MS`, 10,000, beside `LOWER_BOUND_MS`.
+3. **`weaver-types` `wire.rs`:** `LOOP_PASS_BOUND_MS`, 10,000, and `LOOP_PASS_ASKS`, 64,
+   beside `LOWER_BOUND_MS`.
 4. **The `Seat` trait moves** from the worker's `dev_loop/mod.rs`:57-66 into the harness
    library, unchanged, with its `Ports` implementation. `dev_loop` composes against it
    as before, and the relay is written against the same trait, so a stand-in seat tests
    both.
-5. **The relay,** `crates/weaver-harness/src/loop_relay.rs`, its tests in
-   `loop_relay/tests.rs` (#118): the four states of the contract's section 3, the
-   segment series through the harness's own `send_octets` and `reassemble_if_series`
-   (`channel.rs`:1013, :1025), the bound, and each break of section 4 named on standard
-   error.
-6. **The Python, `loop-runner/`, standard library alone:** `weaver_board.py` (the
-   frames, the series, the tags, the bound on the harness's side kept by the harness),
-   `runner.py` (reads the wire file once, hashes and compiles those bytes, checks the
-   syntax tree, sends the `hello`, calls `on_turn` per pass), and their tests. The
-   folder is my choice and the Planner's to move.
-7. **One file of frames, valid and broken,** read by the Rust and the Python tests
-   alike, so the two sides refuse one set.
-8. **Today's loop as a wire file,** a test fixture in act 1. A test of the worker's
+5. **`channel.rs`:** the segmenting half of `send_decode` (:789-812) moves into a
+   function over bytes that takes the send as a closure, and `send_decode` calls it.
+   That function and `reassemble_if_series` (:1025) become visible in the crate. Nothing
+   else in the file changes. The relay supplies its own send and receive under the
+   pass's deadline, since `send_octets` (:1013) blocks and `recv_octets` (:1063) has no
+   deadline.
+6. **The relay,** `crates/weaver-harness/src/loop_relay.rs`, its tests in
+   `loop_relay/tests.rs` (#118): the making that reads the `hello`, the states of the
+   contract's section 3, the look before each pass, the series, the bounds, and each
+   break of section 4. The relay writes each reason line to a writer it is given, the
+   worker's standard error when deployed, so the tests read every reason.
+   - **The tests compare the entry's own result.** A `turn` answered `Refused`,
+     `Faulted`, `Unlicensed` or `ChannelLost` reaches the harness as that same error, so
+     a relay that turns every error of `turn` into `ChannelLost` goes red.
+   - **Each break has its case and its reason,** so two swapped reasons go red.
+   - **Perturbations, beside each break taken out:** the seat's time counted against the
+     bound, the bound not summed across a pass, sends not timed, the look before a pass
+     removed, the 65th ask taken, `last_turns` taken when absent, `-0` taken as an
+     integer, a repeated member taken, and a refusal leaving the relay `Broken`.
+7. **The Python, `loop-runner/`, standard library alone:** `weaver_board.py` (the
+   frames, the series, the tags, the limit of four outstanding asks, `turn` and `refuse`
+   held until no ask is outstanding, a repeated member refused by its own code, integers
+   read from their literal text) and `runner.py` (reads the wire file once, hashes and
+   compiles those bytes, checks the grammar of the contract's section 7, sends the
+   `hello`, calls `on_turn` per pass), and their tests. **Perturbations:** the grammar
+   check removed, the wires compiled from a second read of the path, the series' count
+   as M // 65536 + 1, a fifth outstanding ask let through, `turn` sent with an ask
+   outstanding, a repeated member taken, and `-0` taken. Each goes red under its own
+   case.
+8. **One file of frames, valid and broken,** read by the Rust and the Python tests
+   alike, so the two sides refuse one set. Beside each break of section 4 it holds a
+   member named twice, `true` where an integer stands, a fraction, an exponent, `-0`, an
+   absent `last_turns`, a `pass` and a `return` from the loop, and each refusal of a
+   delta: an empty delta, an extra member, the roles `assistant` and `tool_result`, an
+   empty `content`, a tool block. An empty `text` is among the valid frames.
+9. **Today's loop as a wire file,** a test fixture in act 1. A test of the worker's
    `dev_loop` runs `compose` and the wires against one scripted seat over the inputs of
-   the contract's section 8, and compares the asks in order and the delta's bytes. This
-   measures in act 1 every point section 8 marks unmeasured, against the Rust function
-   itself. The comparison of whole records is act 2's.
-9. **One test across the two languages:** the relay and `/usr/bin/python3 -I -B -S`
-   running the runner over a socket pair, relaying to a stand-in seat. It fails where
-   the interpreter is absent, and never skips.
+   the contract's section 8, and compares the asks in order, their arguments, and the
+   delta's bytes. The seat records every argument, so a flush with `keep` 1 goes red.
+   The inputs reach each fixed sentence and each branch, a prompt seated under
+   `independent` among them, and measure every point section 8 marks unmeasured against
+   the Rust function itself. The comparison of whole records is act 2's.
+10. **One test across the two languages:** the relay and `/usr/bin/python3 -I -B -S`
+    running the runner over a socket pair, relaying to a stand-in seat. It asserts at
+    least two passes, one refusal, a `recall` return over 64 KiB crossing as a series to
+    the loop and a `turn` ask over 64 KiB crossing as a series to the harness. It fails
+    where the interpreter is absent, and never skips.
 
 ## Not in act 1
 
@@ -95,15 +134,14 @@ tripwire, each run alone:
 - `cargo clippy -p weaver-types --all-targets --locked -- -D warnings`, and the same for
   `weaver-harness`.
 - `cargo test -p weaver-types --locked` and `cargo test -p weaver-harness --locked`.
-- `for t in loop-runner/test_*.py; do python3 -I -B "$t" || break; done`.
+- `bash -c 'for t in loop-runner/test_*.py; do python3 -I -B "$t" || exit 1; done'`. The
+  form with `|| break` exits 0 after a failing test, since `break` returns 0. Measured
+  on 2026-11-25: a failing first test gives 0 under `break` and 1 under `exit 1`.
 - The full suites at the end of every self-check round: `cargo test --workspace
   --locked` and `python3 deploy/test_plans.py`.
 
-**Perturbations,** in a detached scratch worktree at the head: each break of the
-contract's section 4 taken out one at a time, the bound, each rule of the series, the
-terminal `Broken`, a refusal leaving the relay `Idle`, and on the Python side the
-whitespace set, the byte count, the saturating products and each parse the contract's
-section 8 names. Each must fail the suite under its own case.
+**Perturbations** run in a detached scratch worktree at the head, as items 6 and 7 name
+them. Each must fail the suite under its own case.
 
 ## Point 3: how a frame over 64 KiB crosses
 
@@ -111,16 +149,20 @@ section 8 names. Each must fail the suite under its own case.
 in Python too.** Every loop frame carries `kind`, so the preamble is known by its
 absence, as on the decode seam. The total bound is `DECODE_MESSAGE_BOUND`, 8 MiB.
 
-- **Which frames pass 64 KiB.** A `pass` frame carries the gate's line, at most 49,041
-  bytes (`weaver-gate` `relay.rs`:51), and its re-encoding grows where the text holds
-  characters JSON escapes. A `turn` ask carries that text again with the re-entry.
+- **Which frames pass 64 KiB.** A `return` of `recall` or `shape`, and a `turn` ask,
+  which carries a re-entry and the turn's text. **A `pass` frame never does.** Its text
+  is the decoded member of a gate line of at most 49,041 bytes (`weaver-gate`
+  `relay.rs`:51), and `serde_json` writes the shortest escape for every character, so no
+  text re-encodes longer than it arrived. The worst lines encoded (text of `U+0001`, of
+  `"`, of a four-byte character, of ASCII) give `pass` frames of 49,079 to 49,083 bytes.
 - **The 1 MiB of `state.rs`:64 is every serving answer of the state member,** recall and
   shape included. It bounds the line the state seam reads (`state.rs`:657), so a
   `recall` or `shape` return can carry up to that much, re-encoded. 8 MiB covers it with
   room.
 - **Why not another way.** A larger message bound for this pair alone would be a second
   mechanism to test. The series is tested on the decode seam already, and the harness's
-  side is two functions it holds. The Python side is about forty lines.
+  side is two functions it holds, moved as item 5 says. The Python side is about forty
+  lines.
 
 ## Point 6: the election, with nobody at the appliance
 
@@ -178,3 +220,12 @@ the reload.
 | That 10 seconds holds for a January loop | The slowest node a January loop holds, timed in act 2 |
 | Python's start under the walls | Act 2, on the build machine's kernel, then on a made appliance |
 | How WeaverAnalysis reads a `composer` with new fields | A note to the Planner in act 2. No checkout here |
+
+## What act 2's brief owes
+
+- What the two confinements would share by function and line count, what the loop's
+  Landlock grant needs beyond the shell's, and what a floor crate would newly depend on.
+- What comparing the saved images apart, less the stamp line, would cost.
+- `LoadFacts.composer`, the observation answer admin reads (`lifecycle.rs`:2377-2387,
+  `wire.rs`:507), and the wires' form of `composer`.
+- The identity session's script, path by path, as the contract's section 6 names them.
