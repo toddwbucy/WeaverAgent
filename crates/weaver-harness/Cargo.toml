@@ -25,7 +25,13 @@ weaver-trace = { path = "../weaver-trace" }
 # kind selects the arm.
 weaver-diagnostic = { path = "../weaver-diagnostic" }
 weaver-internal = { path = "../weaver-internal" }
-serde_json.workspace = true
+# `float_roundtrip` makes serde_json's float parse correctly rounded. dev_loop's compose
+# parses each recalled content with it, so a worker built alone reads a number at the edge
+# of a double's range as a worker built with the workspace does (weaver-state turns the
+# feature on too), and as the loop's wires read it in Python
+# (weaver-harness-loop-contract section 8). Without it the fast parse refuses
+# 1.7976931348623158e308, which rounds to the largest double.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 # The loop relay reads the loop's frames through serde's visitor, strictly: a member named
 # twice and an integer written with a sign, a fraction or an exponent are breaks
 # (weaver-harness-loop-contract section 2), which a derive or serde_json's Value takes.

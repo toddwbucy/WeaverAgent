@@ -451,6 +451,25 @@ fn cases() -> Vec<Case> {
         Case {
             fullness: pressure,
             seated: true,
+            recall: Some(
+                [
+                    r#"[{"type":"text","text":"max157","n":1.7976931348623157e308}]"#,
+                    r#"[{"type":"text","text":"max158","n":1.7976931348623158e308}]"#,
+                    r#"[{"type":"text","text":"past159","n":1.7976931348623159e308}]"#,
+                    r#"[{"type":"text","text":"minus159","n":-1.7976931348623159e308}]"#,
+                    r#"[{"type":"text","text":"past18","n":1.8e308}]"#,
+                    r#"[{"type":"text","text":"least","n":5e-324}]"#,
+                    r#"[{"type":"text","text":"under least","n":2e-324}]"#,
+                ]
+                .iter()
+                .map(|content| event("message.user", &[("content", content)]))
+                .collect(),
+            ),
+            ..case("numbers at the edge of a double's range")
+        },
+        Case {
+            fullness: pressure,
+            seated: true,
             recall: Some(vec![
                 said(
                     "message.user",
@@ -605,6 +624,24 @@ fn today_s_loop_as_wires_asks_what_compose_asks_and_sends_its_delta_byte_for_byt
         rest.ends_with(&format!("user: {}", words.join(" "))),
         "each of the rest of White_Space splits: {rest:?}"
     );
+    let edge = turn_texts("numbers at the edge of a double's range")[0]
+        .1
+        .clone();
+    for (word, taken) in [
+        ("max157", true),
+        ("max158", true),
+        ("past159", false),
+        ("minus159", false),
+        ("past18", false),
+        ("least", true),
+        ("under least", true),
+    ] {
+        assert_eq!(
+            edge.lines().any(|line| line == format!("user: {word}")),
+            taken,
+            "{word}: taken {taken} by compose in this build: {edge}"
+        );
+    }
     assert_eq!(
         turn_texts("the turn's text crosses unchanged")[1].1,
         "he said \"hi\"\n\u{1f600}\u{0} \\u0041"

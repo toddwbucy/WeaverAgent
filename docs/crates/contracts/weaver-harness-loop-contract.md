@@ -492,7 +492,9 @@ text.
   is read.
 - One budget of 600 bytes, `QUOTE_BOUND`, is shared across the whole recall.
 - `content` is parsed as JSON as `serde_json::from_str::<Value>` parses it at the locked
-  version, 1.0.151. A text it refuses yields no line. Python's `json` module takes more,
+  version, 1.0.151, with the feature `float_roundtrip`, which the harness's own manifest
+  turns on so that a float is read correctly rounded however the worker is built. A text
+  it refuses yields no line. Python's `json` module takes more,
   and each of these is an input of the test: `NaN`, `Infinity` and `-Infinity`, a lone
   surrogate escape, a number past the range of a double (serde refuses it,
   `de.rs`:378-408, :620-634), and nesting 128 levels deep (serde counts down from 128
