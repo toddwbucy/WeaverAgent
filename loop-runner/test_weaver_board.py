@@ -111,6 +111,22 @@ check("bytes that are not UTF-8 are refused", refused(b'{"kind":"\xff"}'))
 check("a list is refused", refused(b'[1]'))
 check("nesting past the interpreter's depth is refused, not raised", refused(b"[" * 100000))
 
+
+def judged(raw):
+    """True where read_frame returns or refuses, and raises nothing else."""
+    try:
+        wb.read_frame(raw)
+    except wb.Refused:
+        pass
+    except BaseException as e:
+        print("     raised %s" % type(e).__name__)
+        return False
+    return True
+
+
+check("balanced nesting of thousands of levels is judged, the surrogate walk raising nothing",
+      all(judged(b'{"kind":"x","a":' + b"[" * n + b"]" * n + b"}") for n in (900, 3000, 20000)))
+
 # 3. The segment series (section 2.4).
 def sent(data):
     """The messages send_frame puts on the pair for data, read while it sends."""
@@ -169,6 +185,12 @@ check("a preamble with a wrong count is refused",
 check("a preamble under the envelope is refused", series_refused([b'{"segments":1,"bytes":100}', b"y" * 100]))
 check("a kindless frame that is no preamble is refused", series_refused([b'{"pass":1}']))
 check("a short series is refused", series_refused([b'{"segments":2,"bytes":131072}', b"y" * wb.ENVELOPE]))
+check("a series longer than its preamble is refused: the slices sum past its bytes",
+      series_refused([b'{"segments":2,"bytes":100000}', b"y" * wb.ENVELOPE, b"y" * wb.ENVELOPE]))
+check("a series shorter than its preamble is refused: the right count, the slices sum under",
+      series_refused([b'{"segments":2,"bytes":100000}', b"y" * wb.ENVELOPE, b"y" * 1000]))
+check("a preamble naming more than 8 MiB is refused",
+      series_refused([b'{"segments":129,"bytes":8388609}', b"y" * wb.ENVELOPE]))
 a, b = pair()
 a.sendmsg([b"q" * (wb.ENVELOPE + 1)])
 check("a message past the envelope is refused", raises(wb.Refused, wb.recv_frame, b))
@@ -233,21 +255,36 @@ harness.close()
 check("a closed pair while waiting is Closed", raises(wb.Closed, board.wait, 0))
 
 board, harness = opened()
-check("an ask outside the closed list is refused before it is sent",
-      raises(wb.Refused, board.ask, "seed") and frames(harness) == [])
-check("flush with keep -0 is refused before it is sent", raises(wb.Refused, board.ask, "flush", keep=wb.Number("-0")))
-check("flush with keep True is refused before it is sent", raises(wb.Refused, board.ask, "flush", keep=True))
-check("recall with no last_turns is refused before it is sent", raises(wb.Refused, board.ask, "recall"))
+check("an ask outside the closed list is a Mistake, not sent",
+      raises(wb.Mistake, board.ask, "seed") and frames(harness) == [])
+check("flush with keep -0 is a Mistake, not sent", raises(wb.Mistake, board.ask, "flush", keep=wb.Number("-0")))
+check("flush with keep True is a Mistake, not sent", raises(wb.Mistake, board.ask, "flush", keep=True))
+check("recall with no last_turns is a Mistake, not sent", raises(wb.Mistake, board.ask, "recall"))
+for name, call in [("flush(-1)", lambda: board.flush(-1)), ("flush(2**64)", lambda: board.flush(1 << 64)),
+                   ("recall(-4)", lambda: board.recall(-4)), ("recall(2**64)", lambda: board.recall(1 << 64))]:
+    check("%s is a Mistake, not sent: an integer's range is checked before the send" % name,
+          raises(wb.Mistake, call) and frames(harness) == [] and board.outstanding == ())
+check("an argument named ask is a Mistake, so no turn goes out with an ask outstanding",
+      raises(wb.Mistake, board.ask, "seated", ask="turn",
+             delta=[{"role": "user", "content": [{"type": "text", "text": "x"}]}]) and frames(harness) == [])
+for own in ("kind", "pass", "tag"):
+    check("an argument named %s is a Mistake, not sent" % own,
+          raises(wb.Mistake, lambda: board.ask("seated", **{own: 0})) and frames(harness) == [])
+check("a Mistake leaves the pass open and no tag spent", not board.ended and board.outstanding == ()
+      and board.ask("flush", keep=(1 << 64) - 1) == 0
+      and frames(harness) == [{"kind": "ask", "pass": 1, "tag": 0, "ask": "flush", "keep": (1 << 64) - 1}])
+answer(harness, 0, None)
+board.wait(0)
 for name, delta in [("the role assistant", [{"role": "assistant", "content": [{"type": "text", "text": "x"}]}]),
                     ("an empty content", [{"role": "user", "content": []}]),
                     ("an empty delta", []),
                     ("a tool block", [{"role": "user", "content": [{"type": "tool_call"}]}])]:
-    check("a turn with %s is refused before it is sent, the pass still open" % name,
-          raises(wb.Refused, board.turn, delta) and frames(harness) == [] and not board.ended)
+    check("a turn with %s is a Mistake, not sent, the pass still open" % name,
+          raises(wb.Mistake, board.turn, delta) and frames(harness) == [] and not board.ended)
 board.turn([{"role": "user", "content": [{"type": "text", "text": ""}]}])
 sent = frames(harness)
 check("a turn with an empty text ends the pass", board.ended and sent == [
-    {"kind": "ask", "pass": 1, "tag": 0, "ask": "turn", "delta": [{"role": "user", "content": [{"type": "text", "text": ""}]}]}])
+    {"kind": "ask", "pass": 1, "tag": 1, "ask": "turn", "delta": [{"role": "user", "content": [{"type": "text", "text": ""}]}]}])
 
 board, harness = opened()
 tag = board.ask("recall", last_turns=None)

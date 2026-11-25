@@ -12,6 +12,11 @@ or board.ask(name, **arguments), which sends the ask and gives its tag, and
 board.wait(tag), which gives its value. turn and refuse end the pass, and each is sent
 only with no other ask outstanding (the contract's section 3).
 
+The board checks each frame before it sends it, with the relay's own rules. A frame that
+breaks them raises Mistake and is not sent: the runner refuses that pass, and the seam
+stands for the next. Limit is the same for the board's own rules. Refused and Closed are
+the harness's side: a frame it sent that breaks the contract, or its end gone.
+
 The frames are read strictly (the contract's section 2): a member named twice, an
 integer written with a sign, a fraction or an exponent, NaN and Infinity, and a lone
 surrogate are refused, by this module's own code, since Python's json takes each of
@@ -31,6 +36,11 @@ ARGUMENTS = {"flush": ("keep",), "recall": ("last_turns",), "turn": ("delta",)}
 
 class Refused(Exception):
     """A frame outside the contract. On a frame the harness sent, the seam is broken."""
+
+
+class Mistake(Exception):
+    """A frame the wires would send that breaks the contract, refused before the send.
+    The seam is not broken: the runner refuses the pass."""
 
 
 class Limit(Exception):
@@ -75,16 +85,19 @@ def _constant(written):
 
 
 def _no_surrogates(value):
-    if isinstance(value, str):
-        if any(0xD800 <= ord(c) <= 0xDFFF for c in value):
-            raise Refused("a string holding a lone surrogate")
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            _no_surrogates(key)
-            _no_surrogates(item)
-    elif isinstance(value, list):
-        for item in value:
-            _no_surrogates(item)
+    # A walk with its own stack: nesting deeper than the interpreter's recursion limit
+    # parses in json and must not raise here.
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if any(0xD800 <= ord(c) <= 0xDFFF for c in item):
+                raise Refused("a string holding a lone surrogate")
+        elif isinstance(item, dict):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
 
 
 def read_frame(raw):
@@ -96,9 +109,9 @@ def read_frame(raw):
     try:
         value = json.loads(text, object_pairs_hook=_no_twice, parse_int=_integer,
                            parse_float=Number, parse_constant=_constant)
+        _no_surrogates(value)
     except (ValueError, RecursionError) as e:
         raise Refused("a frame that does not parse as JSON: %s" % e)
-    _no_surrogates(value)
     if not isinstance(value, dict):
         raise Refused("a frame that is not one JSON object")
     return value
@@ -118,8 +131,10 @@ def _exactly(frame, names):
 
 
 def _int(frame, name):
-    if not is_int(frame[name]):
-        raise Refused("the %s frame's %r is not an integer of digits" % (frame["kind"], name))
+    # Read off the wire, a value past the range is already a Number. Built by the wires,
+    # an int may be negative or past 2^64 - 1, so the range is checked here too.
+    if not (is_int(frame[name]) and 0 <= frame[name] <= INT_MAX):
+        raise Refused("the %s frame's %r is no integer of 0 to 2^64 - 1" % (frame["kind"], name))
     return frame[name]
 
 
@@ -285,7 +300,10 @@ class Board:
         return tuple(self._outstanding)
 
     def _send(self, frame):
-        check_loop_frame(frame, self._pass)
+        try:
+            check_loop_frame(frame, self._pass)
+        except Refused as e:
+            raise Mistake(str(e)) from None
         send_frame(self._sock, encode(frame))
 
     def ask(self, name, **arguments):
@@ -296,6 +314,9 @@ class Board:
             raise Limit("turn ends the pass: call board.turn(delta)")
         if len(self._outstanding) >= OUTSTANDING:
             raise Limit("a fifth outstanding ask: wait for one first")
+        own = sorted(set(arguments) & {"kind", "pass", "tag", "ask"})
+        if own:
+            raise Mistake("the ask's own member %r given as an argument" % own[0])
         tag = self._next_tag
         frame = {"kind": "ask", "pass": self._pass, "tag": tag, "ask": name}
         frame.update(arguments)

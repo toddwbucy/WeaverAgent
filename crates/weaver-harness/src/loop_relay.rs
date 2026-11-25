@@ -458,9 +458,12 @@ impl<'de> Visitor<'de> for StrictVisitor {
         Ok(Strict::List(items))
     }
     fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Strict, A::Error> {
+        // A set beside the list keeps the check linear: an 8 MiB frame of short members
+        // must not hold the harness's thread, whose time no bound counts.
         let mut members: Vec<(String, Strict)> = Vec::new();
+        let mut names: HashSet<String> = HashSet::new();
         while let Some(key) = map.next_key::<String>()? {
-            if members.iter().any(|(k, _)| *k == key) {
+            if !names.insert(key.clone()) {
                 return Err(de::Error::custom(TWICE));
             }
             let value = map.next_value::<Strict>()?;
