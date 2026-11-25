@@ -139,3 +139,55 @@ fn a_measurement_refusal_keeps_its_case() {
         );
     }
 }
+
+/// **The segmenter over bytes** (`send_segmented`, the loop seam's brief
+/// item 5): a body that fits the envelope is one message unchanged; a longer
+/// one is the preamble with its count and length, then slices of at most the
+/// envelope that the reassembler rebuilds byte for byte; a body past the
+/// total bound sends nothing and is refused.
+#[test]
+fn the_segmenter_over_bytes_sends_what_the_reassembler_rebuilds() {
+    let envelope = weaver_types::MAX_ENVELOPE_BYTES;
+    let mut sent: Vec<Vec<u8>> = Vec::new();
+    let small = vec![b'a'; envelope];
+    send_segmented(&small, |bytes| {
+        sent.push(bytes.to_vec());
+        Ok(())
+    })
+    .expect("fits");
+    assert_eq!(
+        sent,
+        vec![small],
+        "one message, unchanged, at the envelope exactly"
+    );
+
+    let body: Vec<u8> = (0..envelope * 2 + 17).map(|i| (i % 251) as u8).collect();
+    let mut sent: Vec<Vec<u8>> = Vec::new();
+    send_segmented(&body, |bytes| {
+        sent.push(bytes.to_vec());
+        Ok(())
+    })
+    .expect("segments");
+    assert_eq!(
+        sent[0],
+        format!("{{\"segments\":3,\"bytes\":{}}}", body.len()).into_bytes(),
+        "the preamble names three slices and the whole length"
+    );
+    assert_eq!(sent.len(), 4, "the preamble, then exactly three slices");
+    assert!(sent[1..].iter().all(|slice| slice.len() <= envelope));
+    let mut slices = sent[1..].iter().cloned();
+    let whole = reassemble_if_series(sent[0].clone(), || Ok(slices.next().expect("a slice")))
+        .expect("reassembles");
+    assert_eq!(whole, body, "byte for byte through the series");
+
+    let mut calls = 0;
+    let over = vec![0u8; weaver_types::DECODE_MESSAGE_BOUND + 1];
+    let refused = send_segmented(&over, |_| {
+        calls += 1;
+        Ok(())
+    });
+    assert!(
+        matches!(refused, Err(ChannelFault::Truncated { bound }) if bound == weaver_types::DECODE_MESSAGE_BOUND)
+    );
+    assert_eq!(calls, 0, "nothing is sent past the total bound");
+}
