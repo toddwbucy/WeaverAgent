@@ -291,6 +291,36 @@ check("a Mistake leaves the pass open and no tag spent", not board.ended and boa
       and frames(harness) == [{"kind": "ask", "pass": 1, "tag": 0, "ask": "flush", "keep": (1 << 64) - 1}])
 answer(harness, 0, None)
 board.wait(0)
+
+full, its_harness = opened()
+for n in range(64):
+    tag = full.ask("seated")
+    answer(its_harness, tag, True)
+    full.wait(tag)
+sent = len(frames(its_harness))
+check("after 64 asks a turn is a Mistake, not sent: the relay counts the turn among the 64",
+      sent == 64 and raises(wb.Mistake, full.turn, [{"role": "user", "content": [{"type": "text", "text": "x"}]}])
+      and frames(its_harness) == [] and not full.ended)
+check("after 64 asks a sixty-fifth ask is a Mistake, not sent", raises(wb.Mistake, full.seated) and frames(its_harness) == [])
+full.refuse()
+check("after 64 asks the pass may still be refused", frames(its_harness) == [{"kind": "refuse", "pass": 1}] and full.ended)
+full._open(2)
+tag = full.ask("seated")
+check("the count starts again with the next pass", [f["pass"] for f in frames(its_harness)] == [2])
+answer(its_harness, tag, True, 2)
+full.wait(tag)
+
+plain, plain_harness = opened()
+check("a lone surrogate in a turn's text is a Mistake, not sent",
+      raises(wb.Mistake, plain.turn, [{"role": "user", "content": [{"type": "text", "text": chr(0xD800)}]}])
+      and frames(plain_harness) == [] and not plain.ended)
+
+
+def _store_argument():
+    wb.ARGUMENTS["flush"] = ()
+
+
+check("the board's argument map is read only", raises(TypeError, _store_argument))
 for name, delta in [("the role assistant", [{"role": "assistant", "content": [{"type": "text", "text": "x"}]}]),
                     ("an empty content", [{"role": "user", "content": []}]),
                     ("an empty delta", []),

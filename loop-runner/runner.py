@@ -9,8 +9,8 @@ those bytes, checks their grammar, and compiles from them, never from the path a
 sends the hello with that digest, then calls on_turn(board, text) once per pass until
 the harness closes its end, when it exits 0.
 
-Where on_turn raises (SystemExit, and the board's Mistake for a frame it would not
-send, among the rest) or returns without ending its pass, the runner names it on
+Where on_turn raises (anything at all: SystemExit, and the board's Mistake for a frame
+it would not send, among the rest) or returns without ending its pass, the runner names it on
 standard error, reads the returns of any asks still outstanding, and refuses the pass,
 so the harness answers ChannelLost, and the next pass runs. Where the harness breaks
 the contract, the runner names it and exits 1, and the closed pair is the harness's
@@ -30,7 +30,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 IMPORTS = ("weaver_board", "json", "re")
 BANNED = frozenset(("open", "exec", "eval", "compile", "__import__", "input", "globals",
                     "locals", "vars", "getattr", "setattr", "delattr", "hash", "id"))
-MUTABLE = (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)
 FD = 3
 
 
@@ -67,6 +66,21 @@ def _literal(node):
 
 def _dunder(name):
     return name.startswith("__")
+
+
+def _names_bound(inner, function):
+    """The names a node inside a function reads, binds or defines."""
+    if isinstance(inner, ast.Name):
+        return [inner.id]
+    if isinstance(inner, ast.arg):
+        return [inner.arg]
+    if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)) and inner is not function:
+        return [inner.name]
+    if isinstance(inner, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and inner.name:
+        return [inner.name]
+    if isinstance(inner, ast.MatchMapping) and inner.rest:
+        return [inner.rest]
+    return []
 
 
 def check_grammar(tree):
@@ -113,18 +127,23 @@ def check_grammar(tree):
                     raise Grammar("%s: a class inside a function" % line)
                 if isinstance(inner, ast.Name) and inner.id in BANNED:
                     raise Grammar("%s: the name %s" % (line, inner.id))
-                if isinstance(inner, ast.Name) and _dunder(inner.id):
-                    raise Grammar("%s: the name %s begins with two underscores" % (line, inner.id))
-                if isinstance(inner, ast.arg) and _dunder(inner.arg):
-                    raise Grammar("%s: the name %s begins with two underscores" % (line, inner.arg))
+                for bound in _names_bound(inner, node):
+                    if _dunder(bound):
+                        raise Grammar("%s: the name %s begins with two underscores" % (line, bound))
                 if isinstance(inner, ast.Attribute) and inner.attr.startswith("_"):
                     raise Grammar("%s: the attribute %s" % (line, inner.attr))
                 if isinstance(inner, ast.Attribute) and not isinstance(inner.ctx, ast.Load):
                     raise Grammar("%s: an assignment to the attribute %s" % (line, inner.attr))
+                if (isinstance(inner, ast.Subscript) and not isinstance(inner.ctx, ast.Load)
+                        and (isinstance(inner.value, ast.Attribute)
+                             or isinstance(inner.value, ast.Name) and inner.value.id in IMPORTS)):
+                    raise Grammar("%s: an assignment into an attribute or a module" % line)
+            # After the walk, so a banned name inside a default keeps its own refusal.
+            for inner in ast.walk(node):
                 if isinstance(inner, ast.arguments):
                     for default in inner.defaults + [d for d in inner.kw_defaults if d is not None]:
-                        if isinstance(default, MUTABLE):
-                            raise Grammar("line %d: a default argument that is a list, a dict or a set"
+                        if not _literal(default):
+                            raise Grammar("line %d: a default argument that is not a literal"
                                           % default.lineno)
             defined.add(node.name)
             continue
@@ -145,7 +164,8 @@ def load(path):
     digest = hashlib.sha256(data).hexdigest()
     try:
         # Decoded here and parsed as text, so a coding line cannot name another encoding.
-        text = data.decode("utf-8")
+        # A leading byte-order mark is UTF-8's own and is dropped, as the bytes parse did.
+        text = data.decode("utf-8-sig")
     except UnicodeDecodeError as e:
         raise Grammar("the wire file is not UTF-8: %s" % e)
     try:
@@ -188,7 +208,7 @@ def serve(sock, digest, on_turn, err=sys.stderr):
         except (wb.Refused, wb.Closed) as e:
             print("weaver-loop runner: the seam broke in pass %d: %s" % (frame["pass"], e), file=err)
             return 1
-        except (Exception, SystemExit) as e:  # the wires' own failure: the pass is refused
+        except BaseException as e:  # the wires' own failure, whatever it raises: the pass is refused
             if board.ended:
                 print("weaver-loop runner: on_turn raised after pass %d ended: %s: %s"
                       % (frame["pass"], type(e).__name__, e), file=err)

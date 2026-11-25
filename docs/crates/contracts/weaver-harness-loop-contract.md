@@ -393,12 +393,12 @@ after the fact. Adding a step or a field is a change of this contract.
   them.
 - **The runner** reads the wire file once, hashes those bytes, compiles from them and
   not from the path, checks the grammar below, sends the `hello`, and calls
-  `on_turn(board, text)` once per pass. Where `on_turn` fails (it raises, it exits, it
-  returns with its pass open, or the board refuses a frame of its), the runner refuses
-  that pass, and the next pass runs.
+  `on_turn(board, text)` once per pass. Where `on_turn` fails (it raises anything, it
+  exits, it returns with its pass open, or the board refuses a frame of its), the runner
+  refuses that pass, and the next pass runs.
 
 **The wire file's grammar, as what is allowed.** One Python 3 module, UTF-8 whatever a
-coding line names. At the top level it holds only:
+coding line names, a leading byte-order mark dropped. At the top level it holds only:
 
 - a docstring.
 - the imports `import weaver_board`, `import json` and `import re`, each whole, with no
@@ -414,8 +414,10 @@ begins with two underscores. Inside a function there is no `global`, no `nonloca
 import, no class, no name among `open`, `exec`, `eval`, `compile`, `__import__`,
 `input`, `globals`, `locals`, `vars`, `getattr`, `setattr`, `delattr`, `hash` and `id`,
 no name beginning with two underscores, no attribute name beginning with an underscore,
-no assignment to an attribute or deletion of one, and no default argument that is a
-list, a dict or a set. Anything else is refused before the file runs, naming the line.
+no assignment to an attribute or deletion of one, no assignment by subscript into an
+attribute or an imported module, and no default argument that is not a literal of the
+kinds a constant may be. Anything else is refused before the file runs, naming the
+line.
 
 **The check helps the author. It is not the boundary.** A syntax check cannot hold a
 determined program. The walls of act 2 (the account, no-new-privs, the limits, the

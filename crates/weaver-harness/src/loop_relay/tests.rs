@@ -992,13 +992,16 @@ mod cross;
 
 #[test]
 fn each_pass_has_its_own_bound_and_none_is_shared_across_passes() {
-    // Each pass waits 250 ms against a 400 ms bound, and the two together pass it.
-    let (mut relay, far, lines) = made(quick());
+    // Each pass waits 600 ms against a 1 s bound, and the two together pass it.
+    let (mut relay, far, lines) = made(Bounds {
+        pass: Duration::from_millis(1000),
+        ..quick()
+    });
     let mut seat = stand();
     for pass in 1..=2u64 {
         let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
             far.frame().expect("the pass");
-            thread::sleep(Duration::from_millis(250));
+            thread::sleep(Duration::from_millis(600));
             far.turn(pass, 0, "go");
         });
         assert!(result.is_ok(), "pass {pass}: {result:?} {}", lines.text());

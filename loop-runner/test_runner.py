@@ -127,9 +127,20 @@ for name, body, refusal in [
     ("an assignment to a function's attribute", "def f():\n    f.count = 1", "line 4: an assignment to the attribute count"),
     ("an augmented assignment to an attribute", "def f(board):\n    board.n += 1", "line 4: an assignment to the attribute n"),
     ("del of an attribute", "def f(board):\n    del board.n", "line 4: an assignment to the attribute n"),
-    ("a list as a default", "def f(x=[]):\n    return x", "line 3: a default argument that is a list, a dict or a set"),
-    ("a dict as a default", "def f(x={}):\n    return x", "line 3: a default argument that is a list, a dict or a set"),
-    ("a set as a default", "def f(*, x={1}):\n    return x", "line 3: a default argument that is a list, a dict or a set"),
+    ("a list as a default", "def f(x=[]):\n    return x", "line 3: a default argument that is not a literal"),
+    ("a dict as a default", "def f(x={}):\n    return x", "line 3: a default argument that is not a literal"),
+    ("a set as a default", "def f(*, x={1}):\n    return x", "line 3: a default argument that is not a literal"),
+    ('list() as a default', 'def f(x=list()):\n    return x', 'line 3: a default argument that is not a literal'),
+    ('set() as a default', 'def f(x=set()):\n    return x', 'line 3: a default argument that is not a literal'),
+    ('a tuple holding a list as a default', 'def f(x=([],)):\n    return x', 'line 3: a default argument that is not a literal'),
+    ('a generator as a default', 'def f(x=(i for i in (1, 2))):\n    return x', 'line 3: a default argument that is not a literal'),
+    ("a store into weaver_board's member", "def f():\n    weaver_board.ARGUMENTS['flush'] = ()", 'line 4: an assignment into an attribute or a module'),
+    ("a store into the board's attribute", 'def f(board):\n    board.outstanding[0] = 1', 'line 4: an assignment into an attribute or a module'),
+    ('except as a name of two underscores', 'def f():\n    try:\n        return 1\n    except ValueError as __e:\n        return 2', 'line 6: the name __e begins with two underscores'),
+    ('a match capture of two underscores', 'def f(x):\n    match x:\n        case [*__r]:\n            return 1', 'line 5: the name __r begins with two underscores'),
+    ('a match as of two underscores', 'def f(x):\n    match x:\n        case _ as __x:\n            return 1', 'line 5: the name __x begins with two underscores'),
+    ('a mapping rest of two underscores', 'def f(x):\n    match x:\n        case {**__m}:\n            return 1', 'line 5: the name __m begins with two underscores'),
+    ('a nested function of two underscores, never read', 'def f():\n    def __g():\n        return 1\n    return 2', 'line 4: the name __g begins with two underscores'),
     ("a plus sign", "X = +1", "line 3: the constant X is not a literal"),
     ("a second minus", "X = --1", "line 3: the constant X is not a literal"),
     ("a minus over True", "X = -True", "line 3: the constant X is not a literal"),
@@ -142,6 +153,18 @@ check("one leading minus over an integer or a float is taken, alone and in a tup
       grammar(small("X = -1\nY = -1.5\nZ = (1, -2, -0.5)\nW = 18446744073709551615")) == "")
 check("a tuple default and an attribute read are taken",
       grammar(small("def f(board, x=(1, 2)):\n    return board.seated()")) == "")
+check("literal defaults are taken: a string, a negative number, None, a tuple of these",
+      grammar(small("def f(a='s', b=-1, c=None, *, d=(1, -2.5, 'x')):\n    return a")) == "")
+check("a store into a local list is taken", grammar(small('def f():\n    seen = [0]\n    seen[0] = 1\n    return seen')) == "")
+bom = wire("x", "bom.py")
+with open(bom, "wb") as f:
+    f.write(b'\xef\xbb\xbf"""w"""\nimport weaver_board\n\ndef on_turn(board, text):\n    board.refuse()\n')
+try:
+    runner.load(bom)
+    bom_said = ""
+except runner.Grammar as e:
+    bom_said = str(e)
+check("a UTF-8 wire file that opens with a byte-order mark is taken (%r)" % bom_said, bom_said == "")
 latin = wire("x", "latin.py")
 with open(latin, "wb") as f:
     f.write(b'# -*- coding: latin-1 -*-\n"""caf\xe9"""\n\ndef on_turn(board, text):\n    board.refuse()\n')
@@ -355,10 +378,17 @@ def mistaken(kind):
             board.flush(-1)
         elif kind == "SystemExit":
             raise SystemExit(0)
+        elif kind == "KeyboardInterrupt":
+            raise KeyboardInterrupt()
+        elif kind == "BaseException":
+            raise BaseException("x")
+        elif kind == "a lone surrogate in a turn":
+            board.turn([{"role": "user", "content": [{"type": "text", "text": chr(0xD800)}]}])
     return on_turn
 
 
-for kind in ("empty delta", "the role assistant", "an unlisted ask", "an argument named ask", "keep -1", "SystemExit"):
+for kind in ("empty delta", "the role assistant", "an unlisted ask", "an argument named ask", "keep -1", "SystemExit",
+             "KeyboardInterrupt", "BaseException", "a lone surrogate in a turn"):
     seen, rc, err = served(mistaken(kind), one_pass)
     check("a wire file's %s refuses its pass, nothing else sent, and the next pass runs (%r)" % (kind, err[:90]),
           seen == [{"kind": "refuse", "pass": 1}, {"kind": "refuse", "pass": 2}] and rc == 0

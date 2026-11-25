@@ -24,14 +24,17 @@ them. A frame over 64 KiB crosses as the segment series of section 2.4."""
 
 import json
 import socket
+import types
 
 VERSION = "weaver-loop/1"
 ENVELOPE = 64 * 1024
 TOTAL = 8 * 1024 * 1024
 OUTSTANDING = 4
+ASKS_PER_PASS = 64
 INT_MAX = (1 << 64) - 1
 ASKS = ("seated", "turn_context", "first_turn", "fullness", "flush", "recall", "shape", "turn")
-ARGUMENTS = {"flush": ("keep",), "recall": ("last_turns",), "turn": ("delta",)}
+# Read only, so no wire file can loosen the board's own checks between passes.
+ARGUMENTS = types.MappingProxyType({"flush": ("keep",), "recall": ("last_turns",), "turn": ("delta",)})
 
 
 class Refused(Exception):
@@ -286,10 +289,11 @@ class Board:
         self._next_tag = 0
         self._outstanding = []
         self._returned = {}
+        self._asked = 0
 
     def _open(self, number):
         self._pass, self._ended, self._next_tag = number, False, 0
-        self._outstanding, self._returned = [], {}
+        self._outstanding, self._returned, self._asked = [], {}, 0
 
     @property
     def ended(self):
@@ -300,11 +304,18 @@ class Board:
         return tuple(self._outstanding)
 
     def _send(self, frame):
+        # The relay counts every ask of a pass, the turn among them, and breaks at the
+        # sixty-fifth (the contract's section 3).
+        if frame.get("kind") == "ask" and self._asked >= ASKS_PER_PASS:
+            raise Mistake("a sixty-fifth ask in one pass")
         try:
             check_loop_frame(frame, self._pass)
+            _no_surrogates(frame)
         except Refused as e:
             raise Mistake(str(e)) from None
         send_frame(self._sock, encode(frame))
+        if frame["kind"] == "ask":
+            self._asked += 1
 
     def ask(self, name, **arguments):
         """Send one ask of the closed list and give its tag."""
