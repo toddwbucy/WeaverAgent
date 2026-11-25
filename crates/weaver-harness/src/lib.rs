@@ -111,6 +111,7 @@ mod lifecycle_table;
 mod open_evidence;
 mod record;
 mod replay;
+mod seat;
 mod spawn;
 mod state;
 mod tools;
@@ -183,6 +184,7 @@ pub use flow::context::worker_startup::{
 };
 pub use lifecycle::{Harness, OrganBinaries, OrganParameters};
 pub use record::{Record, RecordFailure};
+pub use seat::Seat;
 pub use spawn::fork_organ;
 pub use state::{Recalled, RunShape, SessionShape, StateSeam};
 pub use tools::ToolResult;

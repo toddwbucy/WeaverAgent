@@ -1310,3 +1310,12 @@ fn an_absent_adapter_is_an_omitted_key_and_null_refuses() {
         "a binding's adapter is omitted when absent, never null"
     );
 }
+
+/// The loop seam's two bounds are the contract's numbers
+/// (`weaver-harness-loop-contract` sections 3 and 5): ten seconds of the
+/// loop's own time in a pass, and sixty-four asks.
+#[test]
+fn the_loop_pass_bounds_are_the_contracts() {
+    assert_eq!(weaver_types::LOOP_PASS_BOUND_MS, 10_000);
+    assert_eq!(weaver_types::LOOP_PASS_ASKS, 64);
+}

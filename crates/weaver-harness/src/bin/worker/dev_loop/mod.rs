@@ -12,7 +12,7 @@
 //! you hold, and a loop that needs a port the seat does not offer is a
 //! charter change entering through the front door, not an import.
 
-use weaver_harness::{Ports, Recalled, SessionShape, TurnError, TurnOutcome};
+use weaver_harness::{Ports, Recalled, Seat, SessionShape, TurnError, TurnOutcome};
 use weaver_traits::{ContentBlock, Message, Role};
 use weaver_types::TurnContext;
 
@@ -47,53 +47,6 @@ pub mod foundation;
 pub(crate) const SYSTEM_PROMPT: &str = "\
 You are a careful assistant. Answer from what you know, say plainly when \
 you do not know, and keep answers as short as the question allows.";
-
-/// **The seat as this loop composes it**: the reads and asks [`compose`]
-/// makes, named once so the loop's own suite can drive it against a
-/// recording stand-in. [`Ports`] is the one production implementation, each
-/// method its port of the same name, and the trait mints nothing: a stand-in
-/// answers what a test sets and holds no port, so the blade of
-/// `weaver-harness-Spec` section 8 is untouched.
-pub(crate) trait Seat {
-    /// Whether no turn has run against this decode session: the assembly's
-    /// message history is empty.
-    fn first_turn(&self) -> bool;
-    fn seated(&self) -> bool;
-    fn turn_context(&self) -> TurnContext;
-    fn fullness(&self) -> Option<(u64, u64)>;
-    fn flush(&mut self, keep: u64) -> Option<(u64, u64)>;
-    fn recall(&mut self, last_turns: Option<u64>) -> Option<Vec<Recalled>>;
-    fn session_shape(&mut self) -> Option<SessionShape>;
-    fn turn(&mut self, delta: Vec<Message>) -> Result<TurnOutcome, TurnError>;
-}
-
-impl Seat for Ports<'_> {
-    fn first_turn(&self) -> bool {
-        self.assembled()
-            .is_none_or(|prompt| prompt.messages.is_empty())
-    }
-    fn seated(&self) -> bool {
-        Ports::seated(self)
-    }
-    fn turn_context(&self) -> TurnContext {
-        Ports::turn_context(self)
-    }
-    fn fullness(&self) -> Option<(u64, u64)> {
-        Ports::fullness(self)
-    }
-    fn flush(&mut self, keep: u64) -> Option<(u64, u64)> {
-        Ports::flush(self, keep)
-    }
-    fn recall(&mut self, last_turns: Option<u64>) -> Option<Vec<Recalled>> {
-        Ports::recall(self, last_turns)
-    }
-    fn session_shape(&mut self) -> Option<SessionShape> {
-        Ports::session_shape(self)
-    }
-    fn turn(&mut self, delta: Vec<Message>) -> Result<TurnOutcome, TurnError> {
-        Ports::turn(self, delta)
-    }
-}
 
 /// The first control loop, loop 1: the system prompt once per session's
 /// standing where nothing is seated, then one turn per request.

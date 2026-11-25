@@ -788,11 +788,24 @@ impl DecodeChannel {
 
 fn send_decode(
     directive: &weaver_types::TokenDirective,
-    mut send: impl FnMut(&[u8]) -> Result<(), ChannelFault>,
+    send: impl FnMut(&[u8]) -> Result<(), ChannelFault>,
 ) -> Result<(), ChannelFault> {
     let body = serde_json::to_vec(directive).map_err(|_| ChannelFault::Undecodable)?;
+    send_segmented(&body, send)
+}
+
+/// Send one frame's bytes, as one message where they fit the envelope and as
+/// the segment series of `weaver-types-Spec` section 4.4 where they do not: a
+/// preamble, then the counted slices, under the total bound. Over bytes, with
+/// the send a closure, so the decode seam and the loop relay
+/// (`weaver-harness-loop-contract` section 2.4) share one segmenter and each
+/// brings its own send.
+pub(crate) fn send_segmented(
+    body: &[u8],
+    mut send: impl FnMut(&[u8]) -> Result<(), ChannelFault>,
+) -> Result<(), ChannelFault> {
     if body.len() <= weaver_types::MAX_ENVELOPE_BYTES {
-        return send(&body);
+        return send(body);
     }
     if body.len() > weaver_types::DECODE_MESSAGE_BOUND {
         return Err(ChannelFault::Truncated {
@@ -1022,7 +1035,7 @@ fn send_octets(end: BorrowedFd<'_>, body: &[u8]) -> Result<(), ChannelFault> {
 /// kindless shape is reserved rather than guessed, the preamble validates
 /// whole before the first slice is read, and a short, long, or inconsistent
 /// series is a channel fault, never a partial frame.
-fn reassemble_if_series(
+pub(crate) fn reassemble_if_series(
     first: Vec<u8>,
     mut next: impl FnMut() -> Result<Vec<u8>, ChannelFault>,
 ) -> Result<Vec<u8>, ChannelFault> {
