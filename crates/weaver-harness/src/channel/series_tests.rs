@@ -174,7 +174,11 @@ fn the_segmenter_over_bytes_sends_what_the_reassembler_rebuilds() {
         "the preamble names three slices and the whole length"
     );
     assert_eq!(sent.len(), 4, "the preamble, then exactly three slices");
-    assert!(sent[1..].iter().all(|slice| slice.len() <= envelope));
+    assert_eq!(
+        sent[1..].iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![envelope, envelope, 17],
+        "every slice but the last fills the envelope"
+    );
     let mut slices = sent[1..].iter().cloned();
     let whole = reassemble_if_series(sent[0].clone(), || Ok(slices.next().expect("a slice")))
         .expect("reassembles");
