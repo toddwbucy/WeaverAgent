@@ -39,10 +39,13 @@ def refused(raw):
 
 
 def raises(kind, f, *args, **kwargs):
+    """True where f raises kind. Any other exception is a failed check, not a crash."""
     try:
         f(*args, **kwargs)
     except kind:
         return True
+    except Exception as e:
+        print("     raised %s: %s" % (type(e).__name__, e))
     return False
 
 

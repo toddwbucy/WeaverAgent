@@ -156,6 +156,10 @@ def served(on_turn, script):
     worker.start()
     try:
         seen = script(harness)
+    except (wb.Closed, wb.Refused, OSError) as e:
+        # The harness's side met something its script did not: the check fails by name.
+        seen = "the harness's side raised %s: %s" % (type(e).__name__, e)
+        print("     " + seen)
     finally:
         harness.close()
         worker.join(10)
@@ -245,7 +249,7 @@ def after_turn_raising(board, text):
 
 seen, rc, err = served(after_turn_raising, one_pass)
 check("a raise after the turn sends nothing more, and says so",
-      seen[0]["ask"] == "turn" and seen[1]["ask"] == "turn" and "on_turn raised after pass 1 ended" in err)
+      isinstance(seen, list) and seen[0]["ask"] == "turn" and seen[1]["ask"] == "turn" and "on_turn raised after pass 1 ended" in err)
 
 
 def wrong_between(harness):
@@ -293,17 +297,21 @@ pid = os.posix_spawn("/usr/bin/python3",
                      ["/usr/bin/python3", "-I", "-B", "-S", os.path.join(HERE, "runner.py"), wire_path],
                      os.environ, file_actions=[(os.POSIX_SPAWN_DUP2, child_end, 3)])
 os.close(child_end)
-hello = frame(harness)
-send(harness, {"kind": "pass", "pass": 1, "text": "deployed"})
-asked = frame(harness)
-send(harness, {"kind": "return", "pass": 1, "tag": 0, "value": True})
-turned = frame(harness)
+try:
+    hello = frame(harness)
+    send(harness, {"kind": "pass", "pass": 1, "text": "deployed"})
+    asked = frame(harness)
+    send(harness, {"kind": "return", "pass": 1, "tag": 0, "value": True})
+    turned = frame(harness)
+except (wb.Closed, wb.Refused, OSError) as e:
+    print("     the harness's side raised %s: %s" % (type(e).__name__, e))
+    hello, asked, turned = {}, {}, {"delta": [{"content": [{"text": None}]}]}
 harness.close()
 rc = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
 check("as deployed, the runner finds weaver_board beside itself under -I -S and serves descriptor 3,"
       " handed non-blocking as harness_pair leaves it",
-      hello["wires_sha256"] == hashlib.sha256(GOOD.encode()).hexdigest()
-      and asked["ask"] == "seated" and turned["delta"][0]["content"][0]["text"] == "deployed" and rc == 0)
+      hello.get("wires_sha256") == hashlib.sha256(GOOD.encode()).hexdigest()
+      and asked.get("ask") == "seated" and turned["delta"][0]["content"][0]["text"] == "deployed" and rc == 0)
 p = subprocess.run(["/usr/bin/python3", "-I", "-B", "-S", os.path.join(HERE, "runner.py")], capture_output=True)
 check("with no wire file it prints its usage and exits 2", p.returncode == 2 and b"usage" in p.stderr)
 p = subprocess.run(["/usr/bin/python3", "-I", "-B", "-S", os.path.join(HERE, "runner.py"),
