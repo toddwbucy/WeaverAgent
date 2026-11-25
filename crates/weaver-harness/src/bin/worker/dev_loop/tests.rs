@@ -375,3 +375,6 @@ fn continuous_is_unchanged() {
         ]
     );
 }
+
+// Today's loop as wires against compose (the brief of 2026-11-25, item 9).
+mod wires;
