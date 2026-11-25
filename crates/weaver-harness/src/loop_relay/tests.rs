@@ -730,6 +730,9 @@ fn a_frame_standing_when_a_pass_opens_is_a_break() {
 fn an_end_of_file_standing_when_a_pass_opens_is_a_break() {
     let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
+    // Shut before the drop: a child another test forks holds a copy of every descriptor
+    // until its exec, and a close alone stands only when the last copy goes.
+    let _ = shutdown(far.end.as_raw_fd(), Shutdown::Both);
     drop(far);
     assert!(lost(&relay.pass(&mut seat, "x")));
     assert_eq!(
