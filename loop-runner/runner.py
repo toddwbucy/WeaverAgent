@@ -135,9 +135,9 @@ def check_grammar(tree):
                 if isinstance(inner, ast.Attribute) and not isinstance(inner.ctx, ast.Load):
                     raise Grammar("%s: an assignment to the attribute %s" % (line, inner.attr))
                 if (isinstance(inner, ast.Subscript) and not isinstance(inner.ctx, ast.Load)
-                        and (isinstance(inner.value, ast.Attribute)
-                             or isinstance(inner.value, ast.Name) and inner.value.id in IMPORTS)):
-                    raise Grammar("%s: an assignment into an attribute or a module" % line)
+                        and isinstance(inner.value, ast.Attribute)):
+                    raise Grammar("%s: an assignment by subscript into the attribute %s"
+                                  % (line, inner.value.attr))
             # After the walk, so a banned name inside a default keeps its own refusal.
             for inner in ast.walk(node):
                 if isinstance(inner, ast.arguments):

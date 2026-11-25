@@ -305,10 +305,8 @@ check("after 64 asks a sixty-fifth ask is a Mistake, not sent", raises(wb.Mistak
 full.refuse()
 check("after 64 asks the pass may still be refused", frames(its_harness) == [{"kind": "refuse", "pass": 1}] and full.ended)
 full._open(2)
-tag = full.ask("seated")
-check("the count starts again with the next pass", [f["pass"] for f in frames(its_harness)] == [2])
-answer(its_harness, tag, True, 2)
-full.wait(tag)
+check("the count starts again with the next pass",
+      not raises(wb.Mistake, full.ask, "seated") and [f["pass"] for f in frames(its_harness)] == [2])
 
 plain, plain_harness = opened()
 check("a lone surrogate in a turn's text is a Mistake, not sent",

@@ -414,9 +414,9 @@ begins with two underscores. Inside a function there is no `global`, no `nonloca
 import, no class, no name among `open`, `exec`, `eval`, `compile`, `__import__`,
 `input`, `globals`, `locals`, `vars`, `getattr`, `setattr`, `delattr`, `hash` and `id`,
 no name beginning with two underscores, no attribute name beginning with an underscore,
-no assignment to an attribute or deletion of one, no assignment by subscript into an
-attribute or an imported module, and no default argument that is not a literal of the
-kinds a constant may be. Anything else is refused before the file runs, naming the
+no assignment to an attribute or deletion of one, no assignment or deletion by subscript
+into an attribute, and no default argument that is not a literal of the kinds a
+constant may be. Anything else is refused before the file runs, naming the
 line.
 
 **The check helps the author. It is not the boundary.** A syntax check cannot hold a
