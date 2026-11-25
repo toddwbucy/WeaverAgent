@@ -1,0 +1,650 @@
+{
+ "about": "The loop seam's frames, valid and broken, read by the relay's tests in weaver-harness and the board client's tests in loop-runner alike (weaver-harness-loop-contract sections 2 and 4). phase hello: the frame is the loop's first. phase pass: the frame is sent inside pass 1, the open pass, with no ask before it. verdict: valid, or the relay's reason line after its prefix. ends: a valid frame that ends the pass. bytes_hex, where present, stands for text: the frame's bytes are not UTF-8.",
+ "cases": [
+  {
+   "name": "a hello",
+   "phase": "hello",
+   "text": "{\"kind\":\"hello\",\"version\":\"weaver-loop/1\",\"wires_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+   "verdict": "valid",
+   "ends": false
+  },
+  {
+   "name": "a hello with white space",
+   "phase": "hello",
+   "text": " { \"kind\" : \"hello\" , \"wires_sha256\" : \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\" , \"version\" : \"weaver-loop/1\" } ",
+   "verdict": "valid",
+   "ends": false
+  },
+  {
+   "name": "a hello of another version",
+   "phase": "hello",
+   "text": "{\"kind\":\"hello\",\"version\":\"weaver-loop/2\",\"wires_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+   "verdict": "a hello whose version is not \"weaver-loop/1\"",
+   "ends": false
+  },
+  {
+   "name": "a hello of another digest",
+   "phase": "hello",
+   "text": "{\"kind\":\"hello\",\"version\":\"weaver-loop/1\",\"wires_sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}",
+   "verdict": "a hello whose digest is not the wire file's",
+   "ends": false
+  },
+  {
+   "name": "a hello with a member more",
+   "phase": "hello",
+   "text": "{\"kind\":\"hello\",\"version\":\"weaver-loop/1\",\"wires_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"x\":1}",
+   "verdict": "a member outside the hello frame's: \"x\"",
+   "ends": false
+  },
+  {
+   "name": "a hello missing its digest",
+   "phase": "hello",
+   "text": "{\"kind\":\"hello\",\"version\":\"weaver-loop/1\"}",
+   "verdict": "the hello frame lacks its member \"wires_sha256\"",
+   "ends": false
+  },
+  {
+   "name": "a hello whose version is no string",
+   "phase": "hello",
+   "text": "{\"kind\":\"hello\",\"version\":1,\"wires_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+   "verdict": "the hello frame's \"version\" is not a string",
+   "ends": false
+  },
+  {
+   "name": "an ask before the hello",
+   "phase": "hello",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"seated\"}",
+   "verdict": "the ask frame came before the hello",
+   "ends": false
+  },
+  {
+   "name": "a hello with a member named twice",
+   "phase": "hello",
+   "text": "{\"kind\":\"hello\",\"version\":\"weaver-loop/1\",\"version\":\"weaver-loop/1\",\"wires_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+   "verdict": "a member named twice in one object",
+   "ends": false
+  },
+  {
+   "name": "a hello that is not JSON",
+   "phase": "hello",
+   "text": "{\"kind\":\"hello\"",
+   "verdict": "a frame that does not parse as JSON",
+   "ends": false
+  },
+  {
+   "name": "the ask seated",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"seated\"}",
+   "verdict": "valid",
+   "ends": false
+  },
+  {
+   "name": "the ask turn_context",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn_context\"}",
+   "verdict": "valid",
+   "ends": false
+  },
+  {
+   "name": "the ask first_turn",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"first_turn\"}",
+   "verdict": "valid",
+   "ends": false
+  },
+  {
+   "name": "the ask fullness",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"fullness\"}",
+   "verdict": "valid",
+   "ends": false
+  },
+  {
+   "name": "the ask shape",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"shape\"}",
+   "verdict": "valid",
+   "ends": false
+  },
+  {
+   "name": "the ask flush, keep 0",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"flush\",\"keep\":0}",
+   "verdict": "valid",
+   "ends": false
+  },
+  {
+   "name": "the ask recall, last_turns null",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"recall\",\"last_turns\":null}",
+   "verdict": "valid",
+   "ends": false
+  },
+  {
+   "name": "the ask recall, last_turns 4",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"recall\",\"last_turns\":4}",
+   "verdict": "valid",
+   "ends": false
+  },
+  {
+   "name": "the tag at 2^64 - 1",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":18446744073709551615,\"ask\":\"seated\"}",
+   "verdict": "valid",
+   "ends": false
+  },
+  {
+   "name": "an ask with white space and its members in another order",
+   "phase": "pass",
+   "text": " {\"ask\" : \"seated\", \"tag\":0 ,\"pass\": 1,\n\"kind\":\"ask\"}\n",
+   "verdict": "valid",
+   "ends": false
+  },
+  {
+   "name": "the ask turn",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"system\",\"content\":[{\"type\":\"text\",\"text\":\"framing\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hello\"}]}]}",
+   "verdict": "valid",
+   "ends": true
+  },
+  {
+   "name": "the ask turn with an empty text",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"\"}]}]}",
+   "verdict": "valid",
+   "ends": true
+  },
+  {
+   "name": "the ask turn with two blocks",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"},{\"type\":\"text\",\"text\":\"b\"}]}]}",
+   "verdict": "valid",
+   "ends": true
+  },
+  {
+   "name": "a text holding a surrogate pair",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"\\ud83d\\ude00\"}]}]}",
+   "verdict": "valid",
+   "ends": true
+  },
+  {
+   "name": "a refuse",
+   "phase": "pass",
+   "text": "{\"kind\":\"refuse\",\"pass\":1}",
+   "verdict": "valid",
+   "ends": true
+  },
+  {
+   "name": "not JSON",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",",
+   "verdict": "a frame that does not parse as JSON",
+   "ends": false
+  },
+  {
+   "name": "not UTF-8",
+   "phase": "pass",
+   "text": null,
+   "verdict": "a frame that does not parse as JSON",
+   "ends": false,
+   "bytes_hex": "7b226b696e64223a2261736b222c2270617373223a312c22746167223a302c2261736b223a22ff227d"
+  },
+  {
+   "name": "a list",
+   "phase": "pass",
+   "text": "[1]",
+   "verdict": "a frame that is not one JSON object",
+   "ends": false
+  },
+  {
+   "name": "a string",
+   "phase": "pass",
+   "text": "\"ask\"",
+   "verdict": "a frame that is not one JSON object",
+   "ends": false
+  },
+  {
+   "name": "a member named twice",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"seated\"}",
+   "verdict": "a member named twice in one object",
+   "ends": false
+  },
+  {
+   "name": "a member named twice inside a block",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\",\"text\":\"b\"}]}]}",
+   "verdict": "a member named twice in one object",
+   "ends": false
+  },
+  {
+   "name": "a lone leading surrogate",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"\\ud800\"}]}]}",
+   "verdict": "a string holding a lone surrogate",
+   "ends": false
+  },
+  {
+   "name": "a leading surrogate before another escape",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"\\ud800\\n\"}]}]}",
+   "verdict": "a string holding a lone surrogate",
+   "ends": false
+  },
+  {
+   "name": "a leading surrogate before a character that is no surrogate",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"\\ud800\\u0041\"}]}]}",
+   "verdict": "a string holding a lone surrogate",
+   "ends": false
+  },
+  {
+   "name": "a lone trailing surrogate",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"\\udc00\"}]}]}",
+   "verdict": "a string holding a lone surrogate",
+   "ends": false
+  },
+  {
+   "name": "a frame with no kind",
+   "phase": "pass",
+   "text": "{\"pass\":1}",
+   "verdict": "a frame with no kind that is not a segment preamble, or a series that breaks its rules",
+   "ends": false
+  },
+  {
+   "name": "a kind that is no string",
+   "phase": "pass",
+   "text": "{\"kind\":1,\"pass\":1}",
+   "verdict": "a frame whose kind is not a string",
+   "ends": false
+  },
+  {
+   "name": "an unknown kind",
+   "phase": "pass",
+   "text": "{\"kind\":\"asks\",\"pass\":1}",
+   "verdict": "an unknown kind \"asks\"",
+   "ends": false
+  },
+  {
+   "name": "a pass from the loop",
+   "phase": "pass",
+   "text": "{\"kind\":\"pass\",\"pass\":1,\"text\":\"x\"}",
+   "verdict": "the pass frame came from the loop, and only the harness sends it",
+   "ends": false
+  },
+  {
+   "name": "a return from the loop",
+   "phase": "pass",
+   "text": "{\"kind\":\"return\",\"pass\":1,\"tag\":0,\"value\":null}",
+   "verdict": "the return frame came from the loop, and only the harness sends it",
+   "ends": false
+  },
+  {
+   "name": "a second hello",
+   "phase": "pass",
+   "text": "{\"kind\":\"hello\",\"version\":\"weaver-loop/1\",\"wires_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}",
+   "verdict": "a second hello",
+   "ends": false
+  },
+  {
+   "name": "a member more",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"seated\",\"x\":1}",
+   "verdict": "a member outside the ask frame's: \"x\"",
+   "ends": false
+  },
+  {
+   "name": "an argument an ask does not take",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"seated\",\"keep\":0}",
+   "verdict": "a member outside the ask frame's: \"keep\"",
+   "ends": false
+  },
+  {
+   "name": "no tag",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"ask\":\"seated\"}",
+   "verdict": "the ask frame lacks its member \"tag\"",
+   "ends": false
+  },
+  {
+   "name": "no pass",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"tag\":0,\"ask\":\"seated\"}",
+   "verdict": "the ask frame lacks its member \"pass\"",
+   "ends": false
+  },
+  {
+   "name": "no ask member",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0}",
+   "verdict": "the ask frame lacks its member \"ask\"",
+   "ends": false
+  },
+  {
+   "name": "an ask name that is no string",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":1}",
+   "verdict": "the ask frame's \"ask\" is not a string",
+   "ends": false
+  },
+  {
+   "name": "a refuse with a member more",
+   "phase": "pass",
+   "text": "{\"kind\":\"refuse\",\"pass\":1,\"tag\":0}",
+   "verdict": "a member outside the refuse frame's: \"tag\"",
+   "ends": false
+  },
+  {
+   "name": "a refuse with no pass",
+   "phase": "pass",
+   "text": "{\"kind\":\"refuse\"}",
+   "verdict": "the refuse frame lacks its member \"pass\"",
+   "ends": false
+  },
+  {
+   "name": "recall with no last_turns",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"recall\"}",
+   "verdict": "the ask frame lacks its member \"last_turns\"",
+   "ends": false
+  },
+  {
+   "name": "recall with last_turns a string",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"recall\",\"last_turns\":\"4\"}",
+   "verdict": "the ask frame's \"last_turns\" is not an integer",
+   "ends": false
+  },
+  {
+   "name": "flush with no keep",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"flush\"}",
+   "verdict": "the ask frame lacks its member \"keep\"",
+   "ends": false
+  },
+  {
+   "name": "flush with keep null",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"flush\",\"keep\":null}",
+   "verdict": "the ask frame's \"keep\" is not an integer",
+   "ends": false
+  },
+  {
+   "name": "a tag of -0",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":-0,\"ask\":\"seated\"}",
+   "verdict": "the ask frame's \"tag\" is no integer of 0 to 2^64 - 1 written as digits",
+   "ends": false
+  },
+  {
+   "name": "a tag of -1",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":-1,\"ask\":\"seated\"}",
+   "verdict": "the ask frame's \"tag\" is no integer of 0 to 2^64 - 1 written as digits",
+   "ends": false
+  },
+  {
+   "name": "a tag written as a fraction",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":1.0,\"ask\":\"seated\"}",
+   "verdict": "the ask frame's \"tag\" is no integer of 0 to 2^64 - 1 written as digits",
+   "ends": false
+  },
+  {
+   "name": "a tag written with an exponent",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":1e2,\"ask\":\"seated\"}",
+   "verdict": "the ask frame's \"tag\" is no integer of 0 to 2^64 - 1 written as digits",
+   "ends": false
+  },
+  {
+   "name": "a tag of 2^64",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":18446744073709551616,\"ask\":\"seated\"}",
+   "verdict": "the ask frame's \"tag\" is no integer of 0 to 2^64 - 1 written as digits",
+   "ends": false
+  },
+  {
+   "name": "a tag of true",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":true,\"ask\":\"seated\"}",
+   "verdict": "the ask frame's \"tag\" is not an integer",
+   "ends": false
+  },
+  {
+   "name": "a tag that is a string",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":\"0\",\"ask\":\"seated\"}",
+   "verdict": "the ask frame's \"tag\" is not an integer",
+   "ends": false
+  },
+  {
+   "name": "keep of -0",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"flush\",\"keep\":-0}",
+   "verdict": "the ask frame's \"keep\" is no integer of 0 to 2^64 - 1 written as digits",
+   "ends": false
+  },
+  {
+   "name": "a pass of -0",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":-0,\"tag\":0,\"ask\":\"seated\"}",
+   "verdict": "the ask frame's \"pass\" is no integer of 0 to 2^64 - 1 written as digits",
+   "ends": false
+  },
+  {
+   "name": "last_turns of 4.0",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"recall\",\"last_turns\":4.0}",
+   "verdict": "the ask frame's \"last_turns\" is no integer of 0 to 2^64 - 1 written as digits",
+   "ends": false
+  },
+  {
+   "name": "an ask naming pass 2",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":2,\"tag\":0,\"ask\":\"seated\"}",
+   "verdict": "a frame naming pass 2, not the open pass 1",
+   "ends": false
+  },
+  {
+   "name": "an ask naming pass 0",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":0,\"tag\":0,\"ask\":\"seated\"}",
+   "verdict": "a frame naming pass 0, not the open pass 1",
+   "ends": false
+  },
+  {
+   "name": "a refuse naming pass 2",
+   "phase": "pass",
+   "text": "{\"kind\":\"refuse\",\"pass\":2}",
+   "verdict": "a frame naming pass 2, not the open pass 1",
+   "ends": false
+  },
+  {
+   "name": "the ask seed",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"seed\"}",
+   "verdict": "an ask outside the closed list: \"seed\"",
+   "ends": false
+  },
+  {
+   "name": "the ask elide",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"elide\"}",
+   "verdict": "an ask outside the closed list: \"elide\"",
+   "ends": false
+  },
+  {
+   "name": "the ask replay",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"replay\"}",
+   "verdict": "an ask outside the closed list: \"replay\"",
+   "ends": false
+  },
+  {
+   "name": "the ask classify",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"classify\"}",
+   "verdict": "an ask outside the closed list: \"classify\"",
+   "ends": false
+  },
+  {
+   "name": "the ask score",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"score\"}",
+   "verdict": "an ask outside the closed list: \"score\"",
+   "ends": false
+  },
+  {
+   "name": "the ask stop",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"stop\"}",
+   "verdict": "an ask outside the closed list: \"stop\"",
+   "ends": false
+  },
+  {
+   "name": "the ask Seated",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"Seated\"}",
+   "verdict": "an ask outside the closed list: \"Seated\"",
+   "ends": false
+  },
+  {
+   "name": "the ask assembled",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"assembled\"}",
+   "verdict": "an ask outside the closed list: \"assembled\"",
+   "ends": false
+  },
+  {
+   "name": "the ask session_shape",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"session_shape\"}",
+   "verdict": "an ask outside the closed list: \"session_shape\"",
+   "ends": false
+  },
+  {
+   "name": "a delta that is an object",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":{}}",
+   "verdict": "a delta that is not a list of at least one message",
+   "ends": false
+  },
+  {
+   "name": "an empty delta",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[]}",
+   "verdict": "a delta that is not a list of at least one message",
+   "ends": false
+  },
+  {
+   "name": "a delta of null",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":null}",
+   "verdict": "a delta that is not a list of at least one message",
+   "ends": false
+  },
+  {
+   "name": "a delta message with a member more",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}],\"name\":\"x\"}]}",
+   "verdict": "a delta message that is not exactly role and content",
+   "ends": false
+  },
+  {
+   "name": "a delta message missing its content",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\"}]}",
+   "verdict": "a delta message that is not exactly role and content",
+   "ends": false
+  },
+  {
+   "name": "a delta message that is a string",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[\"hello\"]}",
+   "verdict": "a delta message that is not exactly role and content",
+   "ends": false
+  },
+  {
+   "name": "the role assistant",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]}]}",
+   "verdict": "a delta role other than system or user: \"assistant\"",
+   "ends": false
+  },
+  {
+   "name": "the role tool_result",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"tool_result\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]}]}",
+   "verdict": "a delta role other than system or user: \"tool_result\"",
+   "ends": false
+  },
+  {
+   "name": "the role System",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"System\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}]}]}",
+   "verdict": "a delta role other than system or user: \"System\"",
+   "ends": false
+  },
+  {
+   "name": "a role that is no string",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":1,\"content\":[{\"type\":\"text\",\"text\":\"a\"}]}]}",
+   "verdict": "a delta role other than system or user: \"(not a string)\"",
+   "ends": false
+  },
+  {
+   "name": "an empty content",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[]}]}",
+   "verdict": "a delta message whose content is not a list of at least one block",
+   "ends": false
+  },
+  {
+   "name": "a content that is a string",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":\"a\"}]}",
+   "verdict": "a delta message whose content is not a list of at least one block",
+   "ends": false
+  },
+  {
+   "name": "a tool call block",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[{\"type\":\"tool_call\",\"id\":\"c\",\"name\":\"n\",\"arguments\":{}}]}]}",
+   "verdict": "a delta block that is not exactly the type text and a string text",
+   "ends": false
+  },
+  {
+   "name": "a text block with a member more",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"a\",\"x\":1}]}]}",
+   "verdict": "a delta block that is not exactly the type text and a string text",
+   "ends": false
+  },
+  {
+   "name": "a text block with no text",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\"}]}]}",
+   "verdict": "a delta block that is not exactly the type text and a string text",
+   "ends": false
+  },
+  {
+   "name": "a text that is no string",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":1}]}]}",
+   "verdict": "a delta block that is not exactly the type text and a string text",
+   "ends": false
+  },
+  {
+   "name": "a block that is a string",
+   "phase": "pass",
+   "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"turn\",\"delta\":[{\"role\":\"user\",\"content\":[\"a\"]}]}",
+   "verdict": "a delta block that is not exactly the type text and a string text",
+   "ends": false
+  }
+ ]
+}
