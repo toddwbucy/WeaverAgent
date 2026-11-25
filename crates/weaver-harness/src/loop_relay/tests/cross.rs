@@ -56,7 +56,12 @@ fn the_relay_and_the_python_runner_cross_passes_a_refusal_and_series_both_ways()
     // Pass 2: the wires refuse; the relay answers ChannelLost and stays Idle.
     let mut seat = stand();
     assert!(lost(&relay.pass(&mut seat, "refuse")));
-    assert!(seat.calls.is_empty());
+    assert!(seat.calls.is_empty(), "no call: {:?}", seat.calls);
+    assert!(
+        seat.reads.borrow().is_empty(),
+        "no read: {:?}",
+        seat.reads.borrow()
+    );
 
     // Pass 3: a recall's return past 64 KiB crosses to the loop as a series, whole, and
     // the turn ask past 64 KiB crosses back as a series, whole. Neither fits one message

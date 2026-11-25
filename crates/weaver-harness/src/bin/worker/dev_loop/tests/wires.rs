@@ -266,6 +266,21 @@ fn shape(runs: &[&[(&str, u64)]]) -> SessionShape {
     }
 }
 
+/// The White_Space characters the first split case leaves out, each between two words.
+const MORE_WHITE_SPACE: [char; 15] = [
+    '\u{1680}', '\u{2000}', '\u{2001}', '\u{2002}', '\u{2003}', '\u{2004}', '\u{2005}', '\u{2006}',
+    '\u{2007}', '\u{2008}', '\u{2009}', '\u{200a}', '\u{2029}', '\u{202f}', '\u{205f}',
+];
+
+fn rest_of_white_space() -> String {
+    let mut text = String::from("w0");
+    for (n, c) in MORE_WHITE_SPACE.iter().chain(['\u{0c}'].iter()).enumerate() {
+        text.push(*c);
+        text.push_str(&format!("w{}", n + 1));
+    }
+    text
+}
+
 /// A block whose nesting is `depth` levels in all: the list, the block, and the pads.
 fn nested(depth: usize, text: &str) -> String {
     let pads = depth - 2;
@@ -430,6 +445,12 @@ fn cases() -> Vec<Case> {
         Case {
             fullness: pressure,
             seated: true,
+            recall: Some(vec![said("message.user", &[&rest_of_white_space()])]),
+            ..case("the rest of White_Space splits a word")
+        },
+        Case {
+            fullness: pressure,
+            seated: true,
             recall: Some(vec![
                 said(
                     "message.user",
@@ -574,6 +595,16 @@ fn today_s_loop_as_wires_asks_what_compose_asks_and_sends_its_delta_byte_for_byt
         split.ends_with("user: a\u{1c}b c d e f\u{180e}g\u{200b}h i\u{1f}j k l m"),
         "Rust keeps U+001C and U+001F inside a word: {split:?}"
     );
+    let rest = turn_texts("the rest of White_Space splits a word")[0]
+        .1
+        .clone();
+    let words: Vec<String> = (0..=MORE_WHITE_SPACE.len() + 1)
+        .map(|n| format!("w{n}"))
+        .collect();
+    assert!(
+        rest.ends_with(&format!("user: {}", words.join(" "))),
+        "each of the rest of White_Space splits: {rest:?}"
+    );
     assert_eq!(
         turn_texts("the turn's text crosses unchanged")[1].1,
         "he said \"hi\"\n\u{1f600}\u{0} \\u0041"
@@ -604,3 +635,62 @@ fn a_continuity_line_reads_as_section_8_writes_it() {
 
 const SYSTEM: &str = "You are a careful assistant. Answer from what you know, say plainly when \
                       you do not know, and keep answers as short as the question allows.";
+
+#[test]
+fn serde_json_s_private_raw_value_member_is_the_one_known_difference() {
+    // Contract section 8: with serde_json's raw_value on, Value reads an object whose first
+    // member is named `$serde_json::private::RawValue` as that member's string parsed as a
+    // fresh document. compose meets it, and the wires stay plain. Each side is pinned here.
+    let raw = "$serde_json::private::RawValue";
+    let shapes = [
+        (
+            "the member alone in a block",
+            format!(r#"[{{"{raw}":"{{\"type\":\"text\",\"text\":\"x\"}}"}}]"#),
+        ),
+        (
+            "the member alone as the whole content",
+            format!(r#"{{"{raw}":"[{{\"type\":\"text\",\"text\":\"x\"}}]"}}"#),
+        ),
+        (
+            "the member first with another after it",
+            format!(r#"[{{"{raw}":"{{\"type\":\"text\",\"text\":\"x\"}}","text":"y"}}]"#),
+        ),
+    ];
+    let (mut relay, lines, child) = wired(WIRES);
+    let mut seen = Vec::new();
+    for (name, content) in &shapes {
+        let case = Case {
+            fullness: Some((80, 100)),
+            seated: true,
+            recall: Some(vec![event("message.user", &[("content", content)])]),
+            ..case(name)
+        };
+        let quoted = |asked: Vec<Asked>| match asked.last() {
+            Some(Asked::Turn(messages)) => messages[0]
+                .1
+                .lines()
+                .filter(|line| line.starts_with("user: "))
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            other => panic!("{name}: no turn: {other:?}"),
+        };
+        let mut compiled = Recording::new(&case);
+        compose(&mut compiled, &case.text).expect("compose turns");
+        let mut wires = Recording::new(&case);
+        relay.pass(&mut wires, &case.text).expect("the wires turn");
+        seen.push((*name, quoted(compiled.asked()), quoted(wires.asked())));
+    }
+    assert_eq!(String::from_utf8_lossy(&lines.0.borrow()), "", "no break");
+    let (exited_clean, runner_said) = ended(relay, child);
+    assert!(exited_clean && runner_said.is_empty(), "{runner_said}");
+    let user = |text: &str| vec![format!("user: {text}")];
+    assert_eq!(
+        seen,
+        vec![
+            ("the member alone in a block", user("x"), vec![]),
+            ("the member alone as the whole content", user("x"), vec![]),
+            ("the member first with another after it", vec![], user("y")),
+        ],
+        "(shape, what compose quotes, what the wires quote)"
+    );
+}

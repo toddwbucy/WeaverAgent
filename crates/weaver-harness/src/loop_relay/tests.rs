@@ -197,6 +197,8 @@ enum Answer {
 /// its asks record their arguments.
 struct Stand {
     calls: Vec<Call>,
+    /// The reads, which take `&self`, by name in the order the relay made them.
+    reads: RefCell<Vec<&'static str>>,
     seated: bool,
     independent: bool,
     first_turn: bool,
@@ -212,6 +214,7 @@ struct Stand {
 fn stand() -> Stand {
     Stand {
         calls: Vec::new(),
+        reads: RefCell::new(Vec::new()),
         seated: true,
         independent: true,
         first_turn: false,
@@ -244,13 +247,16 @@ fn key() -> TurnKey {
 
 impl Seat for Stand {
     fn first_turn(&self) -> bool {
+        self.reads.borrow_mut().push("first_turn");
         self.first_turn
     }
     fn seated(&self) -> bool {
+        self.reads.borrow_mut().push("seated");
         thread::sleep(self.slow);
         self.seated
     }
     fn turn_context(&self) -> TurnContext {
+        self.reads.borrow_mut().push("turn_context");
         if self.independent {
             TurnContext::Independent
         } else {
@@ -258,6 +264,7 @@ impl Seat for Stand {
         }
     }
     fn fullness(&self) -> Option<(u64, u64)> {
+        self.reads.borrow_mut().push("fullness");
         self.fullness
     }
     fn flush(&mut self, keep: u64) -> Option<(u64, u64)> {

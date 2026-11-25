@@ -494,8 +494,14 @@ text.
   and each of these is an input of the test: `NaN`, `Infinity` and `-Infinity`, a lone
   surrogate escape, a number past the range of a double (serde refuses it,
   `de.rs`:378-408, :620-634), and nesting 128 levels deep (serde counts down from 128
-  and refuses at 0, `de.rs`:63, :1372-1385, so 127 levels parse and 128 do not, read in
-  the source and unmeasured).
+  and refuses at 0, `de.rs`:63, :1372-1385, so 127 levels parse and 128 do not,
+  measured against `compose`).
+- **The one known difference.** serde_json's `raw_value` is on in every build of the
+  harness, and with it `Value` reads an object whose first member is named
+  `$serde_json::private::RawValue` as that member's string parsed as a fresh document,
+  its nesting counted afresh (`value/de.rs`:131-135). The wires stay plain and read such
+  an object as an object. No text a user types makes a member's name, so no pass of
+  today reaches it, and a test pins each side.
 - A value that is not a list yields no line. An element that is not an object, or has no
   string `text`, is skipped.
 - The budget is checked before each block, and a block met at a budget of 0 is skipped.
