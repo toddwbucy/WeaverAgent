@@ -161,7 +161,10 @@ check("a series reassembles whole", wb.recv_frame(b) == body)
 worker.join()
 
 
-def series_refused(messages):
+def series_refused(messages, reason=None):
+    """True where recv_frame refuses the messages, or closes on them. Given a reason, only
+    a refusal whose text holds it counts: a reader that waits on and meets the sender's
+    close has not refused."""
     a, b = pair()
 
     def send():
@@ -174,7 +177,17 @@ def series_refused(messages):
 
     worker = threading.Thread(target=send)
     worker.start()
-    result = raises((wb.Refused, wb.Closed), wb.recv_frame, b)
+    if reason is None:
+        result = raises((wb.Refused, wb.Closed), wb.recv_frame, b)
+    else:
+        try:
+            wb.recv_frame(b)
+            said = "taken"
+        except (wb.Refused, wb.Closed) as e:
+            said = "%s: %s" % (type(e).__name__, e)
+        result = said.startswith("Refused") and reason in said
+        if not result:
+            print("     %s" % said[:120])
     b.close()
     worker.join()
     return result
@@ -186,11 +199,14 @@ check("a preamble under the envelope is refused", series_refused([b'{"segments":
 check("a kindless frame that is no preamble is refused", series_refused([b'{"pass":1}']))
 check("a short series is refused", series_refused([b'{"segments":2,"bytes":131072}', b"y" * wb.ENVELOPE]))
 check("a series longer than its preamble is refused: the slices sum past its bytes",
-      series_refused([b'{"segments":2,"bytes":100000}', b"y" * wb.ENVELOPE, b"y" * wb.ENVELOPE]))
+      series_refused([b'{"segments":2,"bytes":100000}', b"y" * wb.ENVELOPE, b"y" * wb.ENVELOPE],
+                     "a series longer than its preamble"))
 check("a series shorter than its preamble is refused: the right count, the slices sum under",
-      series_refused([b'{"segments":2,"bytes":100000}', b"y" * wb.ENVELOPE, b"y" * 1000]))
+      series_refused([b'{"segments":2,"bytes":100000}', b"y" * wb.ENVELOPE, b"y" * 1000],
+                     "a series shorter than its preamble"))
 check("a preamble naming more than 8 MiB is refused",
-      series_refused([b'{"segments":129,"bytes":8388609}', b"y" * wb.ENVELOPE]))
+      series_refused([b'{"segments":129,"bytes":8388609}', b"y" * wb.ENVELOPE],
+                     "a segment preamble that breaks its rules"))
 a, b = pair()
 a.sendmsg([b"q" * (wb.ENVELOPE + 1)])
 check("a message past the envelope is refused", raises(wb.Refused, wb.recv_frame, b))
