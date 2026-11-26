@@ -755,8 +755,11 @@ ends, one final line:
   way: another exit, a signal, no object, more than one value, past 64 KiB, or not
   UTF-8. Whether it acted is read with the next `show`.
 
-**A run goes on when its connection closes.** A close before `started` starts nothing,
-and a close after it leaves the run to its end. **The service's own end ends no run it
+**A run goes on when its connection closes.** A close before the grant's read answers
+starts nothing. Once the read answers granted, the service goes on to start the root
+program whether or not the connection still stands. From the moment the root program
+is started, the run goes on to its end and is kept, whether or not `started` reached
+the connector, and a `run` ask on a new connection names it. **The service's own end ends no run it
 started**, as an invocation finishes when its caller disappears (section 3). That is a
 requirement on the service's install, which act one's code stack meets: a stop or
 restart of the service ends the service's own process and signals no root program it
@@ -921,6 +924,7 @@ the M events.
 | K4 | V: granted, and machine A refuses the run | K2, `refused` `busy` naming the run that holds the agent |
 | K4 | V: granted, and the root program does not start | K2, `refused` `not_started` |
 | K4 | C: close, before the read answers | K9. Nothing starts |
+| K4 | C: close, after the read answers granted | K9. The start goes on as if the connection stood, and a run started is kept in machine A |
 | K5 | V: the root program ends with exit 0 or 1 and one object | K2, `ran` |
 | K5 | V: it ends any other way | K2, `fault` |
 | K5 | C: close | K9. The run goes on in machine A |
@@ -965,8 +969,9 @@ the M events.
   connection.
 - **S3.** The principal enters no decision: not S1's read, not machine A, and not the
   root program's arguments.
-- **S4.** A run's end does not depend on its connection. A close before `started`
-  starts nothing, and a close after it leaves the run to end and be kept.
+- **S4.** A run's end does not depend on its connection. A close before the grant's
+  read answers starts nothing. From the moment the root program is started, the run
+  goes on to its end and is kept, whether or not `started` reached the connector.
 - **S5.** At most one run of an agent stands, except a `show`, which starts beside any
   run, and the `force-unload` beside an `unload` of A2.
 - **S6.** Every ask gets exactly one final line, or the connection closes. A verb's

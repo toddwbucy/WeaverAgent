@@ -221,6 +221,7 @@ events.
 | K4 | V: granted, and machine A refuses the run | K2, `refused` `busy` naming the run that holds the agent |
 | K4 | V: granted, and the root program does not start | K2, `refused` `not_started` |
 | K4 | C: close, before the read answers | K9. Nothing starts |
+| K4 | C: close, after the read answers granted | K9. The start goes on as if the connection stood, and a run started is kept in machine A |
 | K5 | V: the root program ends with exit 0 or 1 and one object | K2, `ran` |
 | K5 | V: it ends any other way | K2, `fault` |
 | K5 | C: close | K9. The run goes on in machine A |
@@ -267,8 +268,9 @@ events.
   connection.
 - **S3.** The principal enters no decision: not S1's read, not machine A, and not the
   root program's arguments.
-- **S4.** A run's end does not depend on its connection. A close before `started`
-  starts nothing, and a close after it leaves the run to end and be kept.
+- **S4.** A run's end does not depend on its connection. A close before the grant's
+  read answers starts nothing. From the moment the root program is started, the run
+  goes on to its end and is kept, whether or not `started` reached the connector.
 - **S5.** At most one run of an agent stands, except a `show`, which starts beside any
   run, and the `force-unload` beside an `unload` of A2.
 - **S6.** Every ask gets exactly one final line, or the connection closes. A verb's
