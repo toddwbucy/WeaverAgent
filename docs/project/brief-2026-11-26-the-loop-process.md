@@ -526,7 +526,7 @@ milliseconds above, and at most the shared deadline. The wind-down turn does not
 the loop (section 7), so stopping the runner after the drain takes nothing from that
 turn.
 
-**Point 17: who holds which end.** A worker that forks while it holds the loop's far end
+**Who holds which end of the loop's pair.** A worker that forks while it holds the loop's far end
 makes the relay's look miss the end of file. The look is the poll before each pass
 (contract section 3.2). The next read then breaks as an end of file instead.
 
@@ -563,7 +563,8 @@ organ's (`spawn.rs` `LastWord`, :196-260).
   3's. By the Weaver Web seat's report of 2026-11-26 01:23 UTC, which the Planner did not
   check in its source, Weaver Web's feeds are a verb's answer, `admin.log`'s lines and
   the trace, and nothing of it reads `worker.log`.
-- **No new trace event in act 2** (ruling 3).
+- **No new trace event in act 2** (ruling 8, the Planner's rulings of 2026-11-26 01:46
+  UTC).
 
 **"Test is functional: is the loop functional"** (73 e). A check of a laid loop is:
 
@@ -636,17 +637,20 @@ the compiled loop's, by the contract's section 6. **It is the gate the operator 
 (73 f): "The compiled loop runs until the wire loop shows an identical trace, then the
 wire loop takes over."
 
-**What runs.** Three arms under one agent name, made in turn:
+**What runs.** Four runs under one agent name, made in turn: three arms, then the
+negative control.
 
 - the compiled arm twice first, as the control (section 6, "A control arm comes first"),
-  then the wires arm
-- each arm is an agent made fresh by `create-agent.sh` with the same name and
+  then the wires arm, then the wires arm once more with one byte of its wire file
+  changed, as the end-to-end negative control (below)
+- each run is an agent made fresh by `create-agent.sh` with the same name and
   declarations, runs the script, has its record and save points copied out, and is taken
   down by `decommission.sh` before the next is made
-- `decommission.sh` takes every agent off a machine (:2), so no two arms stand at once,
+- `decommission.sh` takes every agent off a machine (:2), so no two runs stand at once,
   and the machine holds no other agent during the run.
 
-The compiled arms have no loop folder. The wires arm has today's wire file laid.
+The compiled arms have no loop folder. The wires arm has today's wire file laid, and the
+fourth run that file with its one byte changed.
 
 **The script, path by path, as section 6 names the paths:**
 
@@ -681,9 +685,14 @@ three steps:
 - **the passes served:** the runner writes one typed line at its end of file naming the
   passes it served, kept in `worker.log` by the last word (section 6). The count over
   the wires arm's six loads equals the script's turns that reach the loop
-- **a negative control:** the wires arm run once more with one byte of the wire file's
-  prompt text changed. The comparison must turn red, end to end. A comparison that stays
-  green there fails the run.
+- **the end-to-end negative control, the fourth run:** the wires arm run once more with
+  one byte of the wire file's prompt text changed. The comparison must turn red, end to
+  end. A comparison that stays green there fails the run.
+
+**There are two negative controls.** One is over recorded fixtures, on the build machine:
+the comparison script's own tests (child 6). The other is end to end, on the appliance:
+the fourth run above. The first shows the script can turn red. The second shows the run
+can.
 
 **The saved images.** The check line is a sha256 over the stamp line and the image
 (`save_point.rs`:12-34), so it differs whenever the stamp does. The comparison reads the
@@ -715,8 +724,8 @@ section 8 names.
   runner, the board and the grant file laid by the stack's scripts or by the carry set
   (section 1). The carry set is draft #632. So the appliance's run depends on one of
   them standing on that appliance, and act 2's code does not.
-- **What this machine measures:** the comparison script's own tests, the negative
-  control over recorded fixtures, the launcher's walls, and the start, the walls and the
+- **What this machine measures:** the comparison script's own tests, the first of the
+  two negative controls, over recorded fixtures, the launcher's walls, and the start, the walls and the
   stop driven against the real runner by the harness's unprivileged tests (child 5). It
   measures no model and no agent.
 - **Only an agent appliance with its cards** measures the run itself, and whether
@@ -785,9 +794,9 @@ section 8 names.
 | --- | --- | --- | --- |
 | 1 | This brief, text alone | none | 1 file |
 | 2 | The launcher, `weaver-loop-launch`, a second binary of the harness: its copy of the plumbing (section 4), its filter, limits and Landlock from the grant file, the environment's clear, the null device. The harness's manifest pin and Spec | a probe each wall refuses (below), the grant judged and refused on a stale path or digest, the parent-death signal through both execs. A row per wall and per refusal | about 8 files, about 400 lines |
-| 3 | The runner's fixes of section 9, items 1 to 5 and finding 13, typed lines, and the review's findings if the operator puts them here, with finding 8 in any case | a case and a row each, in `test_runner.py` and `test_weaver_board.py`, and finding 8's two cases in the comparison | about 6 files |
+| 3 | The runner's fixes of section 9, items 1 to 5 and finding 13, typed lines, the end-of-file line naming the passes served, and the review's findings if the operator puts them here, with finding 8 in any case | a case and a row each, in `test_runner.py` and `test_weaver_board.py`, and finding 8's two cases in the comparison | about 6 files |
 | 4 | The loop folder: `create-agent.sh` lays `/etc/weaver/<agent>/` and refuses a name beginning `admin` and `stack`, `decommission.sh` removes it, the stack lays `<prefix>/lib/weaver-loop/` and computes the grant file, admin's checks of section 2, the enter carrying the election, the types Spec, the admin-harness contract's sections 3 and 5, admin's Spec | `test_plans.py`, admin's tests for each refusal, `adminx` refused, the two digests of a file changed between the reads, a laid change taking effect at the next load alone, the workspace gate (`deploy/` changes) | about 12 files |
-| 5 | The worker starts the loop: the fork of the launcher, the relay at the enter, the loop arm, the composer per run, the stop, the reap, the failed start, the relay's shutdown, the last word, the runner's end-of-file count line, the harness and trace Specs | below, driven against the real runner in the harness's tests, unprivileged | about 8 files |
+| 5 | The worker starts the loop: the fork of the launcher, the relay at the enter, the loop arm, the composer per run, the stop, the reap, the failed start, the relay's shutdown, the last word, which keeps the runner's end-of-file line in `worker.log`, the harness and trace Specs | below, driven against the real runner in the harness's tests, unprivileged | about 8 files |
 | 6 | The identity run: the comparison script, its negative control, the script of section 8, and the procedure for the appliance | the comparison's own tests, the control arms, the negative control | about 5 files |
 | 7 | The documents of section 12 | none | about 10 files |
 
