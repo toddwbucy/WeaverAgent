@@ -71,6 +71,13 @@ case $ARM in compiled|wires|negative) ;; *) die "--arm is compiled, wires or neg
 [[ "$AGENT" =~ ^[a-z][a-z0-9]{1,15}$ ]] || die "--agent is an agent's name, a lowercase letter then 1 to 15 lowercase letters or digits: '$AGENT'"
 [ -n "$ARTIFACT" ] || die "--artifact is required"
 [ -n "$OUT" ] || die "--out is required"
+# **The arm's folder is absolute from here**: take-down.sh refuses a relative archive,
+# and the take-down is the arm's last step, so a relative --out would fail only after
+# every load and turn had run, with the agent left standing.
+case $OUT in
+    /*) ;;
+    *) OUT=$PWD/$OUT ;;
+esac
 [[ "$CAPACITY" =~ ^[0-9]+$ ]] || die "--context-capacity is a count: '$CAPACITY'"
 WIRES_SHA=
 if [ "$ARM" = compiled ]; then

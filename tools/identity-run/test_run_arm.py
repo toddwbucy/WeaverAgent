@@ -94,6 +94,16 @@ class ThePlan(unittest.TestCase):
                          ["operator-admitted", "turn-context=independent", "turn-context=continuous",
                           "turn-context=independent"])
 
+    def test_a_relative_out_is_made_absolute_so_the_take_down_takes_its_archive(self):
+        common = [a if a != self.common[-1] else "arm1" for a in self.common]
+        env = {k: v for k, v in os.environ.items() if k != "SUDO_USER"}
+        ran = subprocess.run(["bash", SCRIPT, "--arm", "compiled", *common], capture_output=True,
+                             text=True, env=env, cwd=self.scratch.name)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        here = os.path.realpath(self.scratch.name)
+        self.assertRegex(ran.stdout, r"(?m)^\+ \S*/take-down\.sh --agent a1 --archive %s/archive --admin \S+ --apply$"
+                         % re.escape(os.path.join(here, "arm1")))
+
     def test_the_deploy_scripts_default_to_the_trees_own(self):
         ran = plan("--arm", "compiled", *self.common)
         deploy = os.path.realpath(os.path.join(HERE, "..", "..", "deploy"))
