@@ -460,6 +460,12 @@ struct Run {
     /// standing, and `None` where the compiled loop runs. Taken by the stop
     /// after the gate is lowered, so a leave tried again finds none.
     loop_arm: Option<crate::loop_arm::LoopArm>,
+    /// **A run whose enter was refused after the load serves no dialer.** It
+    /// is retained for admin's rollback alone, its gate standing where the
+    /// refusal came after the raise (a loop that did not start, section
+    /// 2.5), and a frame that reaches it before the rollback's leave is
+    /// refused, never turned by the compiled loop in the elected one's place.
+    enter_refused: bool,
 }
 
 impl Run {
@@ -999,6 +1005,12 @@ impl Harness {
             crate::lifecycle_table::Event::DialerRequest,
         ) == crate::lifecycle_table::Response::RefuseNoResidency;
         let response = match parse_request(&frame) {
+            _ if run.enter_refused => render_close(
+                "refused",
+                "reason",
+                "the load was refused and is being rolled back",
+                None,
+            ),
             _ if no_model => render_close("refused", "reason", "no model is resident", None),
             Err(reason) => render_close("refused", "reason", &reason, None),
             // **A `system` line is the operator's alone**, per Spec 6.1's
@@ -2447,6 +2459,7 @@ impl Harness {
             leave: None,
             carried: None,
             loop_arm: None,
+            enter_refused: false,
             diagnostic: diagnostic.then(|| DiagnosticSeat {
                 reader_elected: payload.spu_instruction.decoder.residual_readout_election,
                 artifact: payload
@@ -2462,9 +2475,11 @@ impl Harness {
         };
 
         macro_rules! after_load {
-            ($run:expr, $refusal:expr) => {
-                return Err(EnterFailure::AfterLoad(Box::new($run), $refusal))
-            };
+            ($run:expr, $refusal:expr) => {{
+                let mut refused = $run;
+                refused.enter_refused = true;
+                return Err(EnterFailure::AfterLoad(Box::new(refused), $refusal));
+            }};
         }
 
         if let Some(setup) = setup.as_deref_mut() {

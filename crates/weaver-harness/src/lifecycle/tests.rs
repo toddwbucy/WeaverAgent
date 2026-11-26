@@ -370,6 +370,7 @@ fn entered_run(turn: Option<&str>) -> (Run, OrganChannel, crate::scratch::Scratc
             carried: Some(crate::engine::test_carried()),
             turn_context: weaver_types::TurnContext::Continuous,
             loop_arm: None,
+            enter_refused: false,
         },
         near,
         path,
@@ -587,6 +588,9 @@ fn the_declared_election_reaches_the_tee() {
             panic!("failed before the load: {refusal:?}")
         }
     };
+    // **A run refused after the load is marked**, so the frame path serves
+    // it no dialer before admin's rollback.
+    assert!(run.enter_refused, "a run refused after the load is marked");
     let _ = leave(&mut run, None, false);
     drop(run);
     // The leave closed the bracket and the drop closed the tee's
@@ -6914,6 +6918,62 @@ fn a_request_after_the_spu_died_is_refused_no_model_is_resident() {
     assert!(
         matches!(harness.state, ChannelState::Entered(_)),
         "the run stands"
+    );
+}
+
+/// **A request to a run whose enter was refused is refused** (review of
+/// #655): a loop that did not start leaves the run retained for admin's
+/// rollback with the gate raised, and a dialer's frame that reaches the
+/// worker before the rollback's leave is refused, the compiled loop never
+/// entered in the elected one's place, the run standing for the rollback.
+/// Perturbation: drop the guard, and the frame is turned at `S2(Resident)`.
+#[test]
+fn a_request_to_a_run_whose_enter_was_refused_is_refused() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    run.enter_refused = true;
+    let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+    run.gate = Some(GateChannel {
+        channel: gate_end,
+        pid: nix::unistd::Pid::from_raw(1),
+        last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
+    });
+    let gate_peer = gate_peer.into_channel();
+    let (mut harness, _dir) = harness_entered(run);
+    let mut entered = false;
+    let mut entry = |_: &mut crate::engine::Ports<'_>, _: &str| {
+        entered = true;
+        Err(crate::engine::TurnError::Unlicensed {
+            turn: TurnKey("t-0".into()),
+        })
+    };
+    gate_peer
+        .send(&OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal: 1,
+            },
+            position: Position::Open,
+            payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
+                br#"{"text":"hello"}"#,
+            )),
+        })
+        .expect("frame sends");
+    let mut verb_slot = None;
+    harness
+        .serve_gate_wake(&mut entry, &mut verb_slot)
+        .expect("the wake serves");
+    let answer = gate_peer.recv().expect("the refusal returns");
+    let weaver_types::Payload::Frame(frame) = answer.payload else {
+        panic!("a frame answers a frame");
+    };
+    let line = String::from_utf8(frame.octets().expect("decodes")).expect("utf8");
+    assert!(line.contains("refused"), "{line}");
+    assert!(line.contains("rolled back"), "{line}");
+    assert!(!entered, "the compiled loop is never entered");
+    assert!(
+        matches!(harness.state, ChannelState::Entered(_)),
+        "the run stands for the rollback"
     );
 }
 
