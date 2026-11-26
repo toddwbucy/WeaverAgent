@@ -208,8 +208,9 @@ gains the folder check in act 2, and the types Spec does not change.
 Checked at `lifecycle.rs`:1443-1500 and `engine.rs`:1105. A graceful unload of a run
 that holds an SPU, outside a diagnostic binding, runs one wind-down turn before its save
 point. The turn is the harness's own, asked in its own words (`engine.rs`:156), and
-never reaches the loop, under either loop. So each reload adds one turn and one save
-point to the record, then opens a new run. That line goes to the Weaver Web seat with
+never reaches the loop, under either loop. So each graceful reload of such a run (a serving one outside a
+diagnostic binding, its SPU standing and its gate not yet lowered, over a record not
+latched) adds one turn and one save point to the record, then opens a new run. That line goes to the Weaver Web seat with
 the reload.
 
 ## Unmeasured, and what measures it

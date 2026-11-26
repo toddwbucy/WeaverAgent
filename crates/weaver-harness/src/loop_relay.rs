@@ -809,7 +809,7 @@ impl fmt::Display for Break {
                 f,
                 "the {kind} frame's {member:?} is no integer of 0 to 2^64 - 1 written as digits"
             ),
-            Break::BeforeHello(kind) => write!(f, "the {kind} frame came before the hello"),
+            Break::BeforeHello(kind) => write!(f, "the {kind:?} frame came before the hello"),
             Break::Version => write!(f, "a hello whose version is not {LOOP_VERSION:?}"),
             Break::Digest => f.write_str("a hello whose digest is not the wire file's"),
             Break::SecondHello => f.write_str("a second hello"),

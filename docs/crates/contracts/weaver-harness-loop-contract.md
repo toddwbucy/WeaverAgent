@@ -243,8 +243,9 @@ the record tells it apart. The loop cannot know the new pass's text before it re
 2. Every `return` answers one `ask` of the open pass, once, in the order the asks
    arrived.
 3. A pass holds at most 64 asks, and no tag twice.
-4. A pass ends at exactly one of `turn` and `refuse`. The relay reads nothing more of
-   that pass, and any frame of it that follows is found by the next pass's look or read.
+4. A pass ends at exactly one of `turn`, `refuse` and a break of section 4, which leaves
+   the relay `Broken`. After `turn` or `refuse` the relay reads nothing more of that
+   pass, and any frame of it that follows is found by the next pass's look or read.
 5. The relay calls no `Ports` method outside section 2.2, and calls each listed method
    with the arguments the ask carried.
 6. Every event in the record is the harness's. A relayed ask authors exactly what the
@@ -393,11 +394,47 @@ after the fact. Adding a step or a field is a change of this contract.
   them.
 - **The runner** reads the wire file once, hashes those bytes, compiles from them and
   not from the path, checks the grammar below, sends the `hello`, and calls
-  `on_turn(board, text)` once per pass. Where `on_turn` fails (it raises anything, it
-  exits, it returns with its pass open, or the board refuses a frame of its), the runner
-  refuses that pass, and the next pass runs. The harness's breach is told by what the
-  board met, a frame the harness sent that breaks the contract or the end gone, and never
-  by what `on_turn` raised. Then the runner exits 1, whatever the wires did after.
+  `on_turn(board, text)` once per pass. Where `on_turn` fails before its pass ends (it
+  raises anything, it exits, it returns with its pass open, or the board refuses a frame
+  of its), the runner reads the returns of any asks outstanding and refuses that pass.
+  Where `on_turn` raises after its `turn` or `refuse` is sent, the pass stands as it
+  ended, and nothing more is sent. The runner and the relay stand ready if the harness
+  opens another pass. On an agent the harness opens none: a refused pass is
+  `ChannelLost`, and service ends. The harness's breach is told by what the board met (a
+  frame the harness sent that breaks the contract, its end closed inside a segment
+  series, or the end gone inside a pass), and never by what `on_turn` raised. Then the
+  runner exits 1, whatever the wires did after. At the harness's end of file between
+  passes it exits 0.
+- **A limit of the interpreter's** (`RecursionError`, `MemoryError`) met while the board
+  parses a return loses no frame. The board keeps the frame's bytes before it parses
+  them. A limit met in a wire file's wait is raised to the wires as it is, and the
+  runner's refusal reads the kept bytes again at its own depth, where a limit is the
+  frame's own and a breach.
+
+**What the runner says.** Every line the runner writes on its standard error is one JSON
+object in ASCII, `{"loop": <word>, "pass": <n>, "reason": <text>}`, `pass` present where
+a pass is open. The words:
+
+- `start`: the runner ends before its `hello`, exit 1 (exit 2 for a wrong count of
+  arguments). The reasons:
+  - an interpreter older than Python 3.12, named with its version
+  - the file unreadable, or not UTF-8
+  - the grammar below, naming the line
+  - a file `compile` refuses after the parse took it (a `break` outside a loop), naming
+    the line
+  - a file nested past the interpreter's limits: "the wire file nests past the
+    interpreter's limits".
+- `refused`: a pass the runner refused, with what `on_turn` raised.
+- `raised`: `on_turn` raised after its pass ended.
+- `unrefused`: a pass the runner could not refuse, exit 1.
+- `broken`: the harness broke the contract, exit 1.
+- `end`: the harness's end of file, exit 0, carrying `passes`, `turns` and `refused`:
+  the passes served, those ended by `turn`, and those ended by `refuse`, the wires' own
+  refusals among them.
+
+A line that cannot be written is let go: the pass is refused whether or not its line
+was written. The launcher's refusal takes the same form with the word `launch`
+(`weaver-harness-Spec` section 2.5).
 
 **The wire file's grammar, as what is allowed.** One Python 3 module, UTF-8 whatever a
 coding line names, a leading byte-order mark dropped. At the top level it holds only:
