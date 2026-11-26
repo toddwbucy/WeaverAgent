@@ -462,6 +462,24 @@ class TheSteps(unittest.TestCase):
         normal = compare.normalize(events, compare.COMPILED_COMPOSER)
         self.assertEqual(normal[first]["payload"], normal[second]["payload"])
 
+    def test_values_compare_by_json_type_as_well_as_value(self):
+        rows = (("true against 1", True, 1), ("false against 0", False, 0),
+                ("1 against 1.0", 1, 1.0), ("0.0 against -0.0", 0.0, -0.0),
+                ("1 in a list against 1.0", [1], [1.0]), ("null against false", None, False))
+        for row, left, right in rows:
+            with self.subTest(row=row):
+                a = [{"kind": "x", "payload": {"a": left}}]
+                b = [{"kind": "x", "payload": {"a": right}}]
+                difference = compare.first_difference(a, b)
+                self.assertIsNotNone(difference, row)
+                self.assertTrue(difference["at"].startswith("payload.a"), difference)
+                self.assertIsNotNone(compare.first_difference(b, a), row)
+        for row, value in (("members in another order", ({"a": 1, "b": [2.5, True]}, {"b": [2.5, True], "a": 1})),
+                           ("equal floats", (0.1, 0.1)), ("equal strings", ("t-1", "t-1"))):
+            with self.subTest(row=row):
+                self.assertIsNone(compare.first_difference([{"kind": "x", "v": value[0]}],
+                                                           [{"kind": "x", "v": value[1]}]))
+
     def test_pair_answers_equal_or_the_first_difference(self):
         made = Arms(self)
         a = made.write("a", "compiled", remint(fixture(), "a"))

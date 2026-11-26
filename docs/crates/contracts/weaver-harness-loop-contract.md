@@ -329,8 +329,11 @@ later load with earlier runs (the continuity line), a first turn with a prompt s
 and `independent`, both with nothing seated and with a prompt seated.
 
 **The comparison** is over parsed values, each event's canonical line parsed as JSON,
-event by event. The two records are identical when they hold the same events, in the
-same order, with the same values, after exactly these three steps and no others:
+event by event. Two values are the same where they are of one JSON type and equal: a
+boolean never equals a number, an integer never equals a float, and `0.0` is not `-0.0`,
+while an object's members in another order are the same object. The two records are
+identical when they hold the same events, in the same order, with the same values, after
+exactly these three steps and no others:
 
 1. Every envelope's `wall_ms` and `monotonic_ns` are set aside, and so are each
    `model.measurement`'s `payload.timings.prefill_ns` and `payload.timings.decode_ns`.
@@ -604,5 +607,6 @@ those it changes (the Planner's ruling of 2026-11-25, point 11). The list of can
 is the brief's.
 
 Section 6 changed on 2026-11-26, before any run: step 1 names the measurement's two
-timings, which every real arm differs in, and the unclean arm's marks name the worker's
-queue line (the Planner's ruling of 2026-11-26).
+timings, which every real arm differs in, the unclean arm's marks name the worker's
+queue line, and two values are the same only where their JSON types are (the Planner's
+ruling of 2026-11-26).

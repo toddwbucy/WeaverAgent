@@ -41,6 +41,7 @@ after exactly the contract's three steps and no others:
 
 import hashlib
 import json
+import math
 import os
 import sys
 
@@ -211,7 +212,7 @@ def normalize(events, composer):
             event = _set_aside(event, timing)
         if event["kind"] == "load":
             payload = event.get("payload")
-            if not isinstance(payload, dict) or payload.get("composer") != composer:
+            if not isinstance(payload, dict) or not same(payload.get("composer"), composer):
                 held = payload.get("composer") if isinstance(payload, dict) else None
                 raise Mismatch("event %d, a load, names the composer %s where its arm must name %s"
                                % (index, shown(held), shown(composer)))
@@ -246,10 +247,27 @@ class Mismatch(Exception):
     """A check of the comparison does not hold."""
 
 
+def same(x, y):
+    """Two parsed JSON values are the same value of the same JSON type: a boolean never
+    equals a number, an integer never equals a float, and 0.0 is not -0.0. Members in
+    another order are the same object (the contract's parsed values)."""
+    if isinstance(x, dict) or isinstance(y, dict):
+        return (isinstance(x, dict) and isinstance(y, dict) and x.keys() == y.keys()
+                and all(same(x[k], y[k]) for k in x))
+    if isinstance(x, list) or isinstance(y, list):
+        return (isinstance(x, list) and isinstance(y, list) and len(x) == len(y)
+                and all(same(u, v) for u, v in zip(x, y)))
+    if type(x) is not type(y):
+        return False
+    if isinstance(x, float):
+        return x == y and math.copysign(1.0, x) == math.copysign(1.0, y)
+    return x == y
+
+
 def first_difference(a, b):
     """The first event at which two normalized arms differ, and where in it, or None."""
     for index, (x, y) in enumerate(zip(a, b)):
-        if x != y:
+        if not same(x, y):
             path, xv, yv = _where(x, y, ())
             return {"event": index, "kind": [x.get("kind"), y.get("kind")],
                     "at": ".".join(map(str, path)) or "(the event)",
@@ -265,11 +283,11 @@ def _where(x, y, path):
         for key in list(x) + [k for k in y if k not in x]:
             if key not in x or key not in y:
                 return path + (key,), x.get(key, "(absent)"), y.get(key, "(absent)")
-            if x[key] != y[key]:
+            if not same(x[key], y[key]):
                 return _where(x[key], y[key], path + (key,))
     if isinstance(x, list) and isinstance(y, list):
         for i, (u, v) in enumerate(zip(x, y)):
-            if u != v:
+            if not same(u, v):
                 return _where(u, v, path + (i,))
         return path, "%d elements" % len(x), "%d elements" % len(y)
     return path, x, y
