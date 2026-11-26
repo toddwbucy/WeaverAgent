@@ -429,6 +429,9 @@ fn each_file_of_the_runners_folder_is_judged_as_the_grant_file_is() {
 #[test]
 fn a_runner_folder_of_another_owner_is_refused() {
     if own() == 0 {
+        eprintln!(
+            "SKIP a_runner_folder_of_another_owner_is_refused: run as root, where /usr is the owner's"
+        );
         return;
     }
     let layout = Layout::new("owner");

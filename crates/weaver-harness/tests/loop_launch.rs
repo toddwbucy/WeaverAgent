@@ -484,8 +484,11 @@ fn a_stale_digest_ends_the_launch_before_its_exec() {
 }
 
 /// A row per refusal of the launch, each one JSON line and exit 1 before any
-/// exec: a path gone, the runner's folder not root's, no end at 3, the wire
-/// file relative, and the grant file absent.
+/// exec: a path gone, the launcher run unmapped (where every file is another
+/// owner's than root, so the grant file's owner, judged first, refuses it), no
+/// end at 3, the wire file relative, and the grant file absent. The runner's
+/// folder, `runner.py`, the board and the pycache folder of another owner are
+/// `a_runner_board_or_pycache_of_another_owner_refuses_the_launch`'s rows.
 #[test]
 fn each_refused_launch_says_one_line_and_runs_nothing() {
     let layout = Layout::new("refusals");
@@ -532,6 +535,120 @@ fn each_refused_launch_says_one_line_and_runs_nothing() {
         reason(&all).contains("the grant file") && all.contains("does not open"),
         "{all}"
     );
+}
+
+/// **A launch with `target` showing another owner's file**: the launcher
+/// started in a user namespace where the suite's uid is root, with its own
+/// mount namespace, and `source` (a root-owned path outside, which shows as
+/// the overflow uid inside) bound over `target`. Made with the syscalls
+/// alone in the child before its exec, so no setuid program runs. `None`
+/// where this kernel admits no user namespace.
+fn refused_under_bind(
+    layout: &Layout,
+    source: &Path,
+    target: &Path,
+) -> Option<(std::process::ExitStatus, String)> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt as _;
+    let c = |p: &Path| CString::new(p.as_os_str().as_bytes()).unwrap();
+    let (source, target) = (c(source), c(target));
+    let uid_map = format!("0 {} 1", nix::unistd::getuid());
+    let gid_map = format!("0 {} 1", nix::unistd::getgid());
+    let (near, far) = UnixStream::pair().unwrap();
+    let far: OwnedFd = far.into();
+    let far_fd = far.as_raw_fd();
+    let mut command = Command::new(LAUNCHER);
+    command
+        .arg(layout.grant_file())
+        .arg(layout.wires())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    // SAFETY: the child is single-threaded after the fork, and runs only
+    // system calls on values made before it.
+    unsafe {
+        command.pre_exec(move || {
+            let fail = || Err(std::io::Error::last_os_error());
+            let write = |path: &[u8], text: &[u8]| {
+                let fd = libc::open(path.as_ptr().cast(), libc::O_WRONLY);
+                if fd < 0 {
+                    return false;
+                }
+                let ok = libc::write(fd, text.as_ptr().cast(), text.len()) == text.len() as isize;
+                libc::close(fd);
+                ok
+            };
+            if libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) != 0
+                || !write(b"/proc/self/setgroups\0", b"deny")
+                || !write(b"/proc/self/uid_map\0", uid_map.as_bytes())
+                || !write(b"/proc/self/gid_map\0", gid_map.as_bytes())
+            {
+                return fail();
+            }
+            let none = std::ptr::null();
+            if libc::mount(
+                none,
+                c"/".as_ptr(),
+                none,
+                libc::MS_REC | libc::MS_PRIVATE,
+                std::ptr::null(),
+            ) != 0
+                || libc::mount(
+                    source.as_ptr(),
+                    target.as_ptr(),
+                    none,
+                    libc::MS_BIND,
+                    std::ptr::null(),
+                ) != 0
+            {
+                return fail();
+            }
+            if libc::dup2(far_fd, 3) != 3 || libc::fcntl(3, libc::F_SETFD, 0) != 0 {
+                return fail();
+            }
+            Ok(())
+        });
+    }
+    let child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            eprintln!("SKIP refused_under_bind: no user and mount namespace here: {e}");
+            return None;
+        }
+    };
+    drop(far);
+    drop(near);
+    let out = child.wait_with_output().unwrap();
+    Some((out.status, String::from_utf8(out.stderr).unwrap()))
+}
+
+/// **Each owned path the launcher judges refuses another owner's**, a row
+/// each, each one JSON line and exit 1 before any exec: `runner.py`, the
+/// board beside it, and the pycache folder, each with a root-owned path from
+/// outside bound over it, which the namespace shows as the overflow uid.
+/// Perturbation: drop the owner check of the file or the folder and its row
+/// is admitted.
+#[test]
+fn a_runner_board_or_pycache_of_another_owner_refuses_the_launch() {
+    let layout = Layout::new("owners");
+    let board = layout.root.join("lib/weaver-loop/weaver_board.py");
+    std::fs::write(&board, "").unwrap();
+    set_mode(&board, 0o644);
+    let rows = [
+        (layout.runner(), Path::new("/etc/hostname")),
+        (board.clone(), Path::new("/etc/hostname")),
+        (layout.root.join("pycache"), Path::new("/usr")),
+    ];
+    for (target, source) in rows {
+        let Some((exit, all)) = refused_under_bind(&layout, source, &target) else {
+            return;
+        };
+        assert_eq!(exit.code(), Some(1), "{}: {all}", target.display());
+        assert_eq!(
+            reason(&all),
+            format!("{} is owned by uid 65534, not 0", target.display())
+        );
+    }
 }
 
 /// **The parent-death signal survives both execs**, the launcher's and the
