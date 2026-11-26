@@ -16574,6 +16574,95 @@ class AgentTupleInstallTests(unittest.TestCase):
         self.assertIn("[absent: no install tuple was named; the box side is unstated]", box)
 
 
+class LoopGrantTests(unittest.TestCase):
+    """deploy/loop-grant.sh's loop_grant through doubles: an interpreter that
+    answers the two questions the script asks it, and an ldd on PATH that
+    prints a written answer, so each refusal and each line's role is read
+    without the machine's own interpreter (weaver-harness-Spec section 2.5)."""
+
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-loop-grant-")
+        self.addCleanup(scratch.cleanup)
+        self.root = Path(scratch.name)
+        self.lib = self.root / "lib"
+        self.stdlib = self.root / "stdlib"
+        self.bin = self.root / "bin"
+        for d in (self.lib, self.stdlib, self.bin):
+            d.mkdir()
+        for name in ("ld-real.so", "libpython3.so", "libc.so.6"):
+            (self.lib / name).write_bytes(b"")
+        (self.lib / "ld.so").symlink_to("ld-real.so")
+        self.interp = self.root / "python3"
+
+    def interpreter(self, recent=True):
+        self.interp.write_text(
+            "#!/bin/sh\n"
+            'case "$4" in\n'
+            "  *version_info*) exit %d ;;\n"
+            "  *os.__file__*) printf '%%s\\n' %s ;;\n"
+            "esac\n" % (0 if recent else 1, shlex.quote(str(self.stdlib))))
+        self.interp.chmod(0o755)
+
+    def ldd(self, answer):
+        (self.bin / "answer").write_text(answer)
+        double = self.bin / "ldd"
+        double.write_text('#!/bin/sh\ncat "%s"\n' % (self.bin / "answer"))
+        double.chmod(0o755)
+
+    def grant(self):
+        env = dict(os.environ, PATH="%s%s%s" % (self.bin, os.pathsep, os.environ["PATH"]))
+        return subprocess.run(
+            ["bash", "-c", 'set -euo pipefail; source "$1"; loop_grant "$2" /pyc', "x",
+             str(DEPLOY / "loop-grant.sh"), str(self.interp)],
+            text=True, capture_output=True, timeout=20, env=env)
+
+    def test_a_written_ldd_answer_gives_the_written_grant(self):
+        # The loader named with an arrow to its file is executed, the vdso
+        # written with an arrow and no path is passed over, and the libraries
+        # are read. Perturbation: class every arrow line as a read, and the
+        # loader is read and the grant names no execute line.
+        self.interpreter()
+        lib = self.lib
+        self.ldd("\tlinux-vdso.so.1 => (0x00007ffd1)\n"
+                 "\tlibpython3.so => %s/libpython3.so (0x00007f2)\n"
+                 "\tlibc.so.6 => %s/libc.so.6 (0x00007f3)\n"
+                 "\t%s/ld.so => %s/ld.so (0x00007f4)\n" % (lib, lib, lib, lib))
+        ran = self.grant()
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        sha = hashlib.sha256(self.interp.read_bytes()).hexdigest()
+        self.assertEqual(ran.stdout, "".join(line + "\n" for line in [
+            "weaver-loop-grant 1",
+            "interpreter %s %s" % (sha, self.interp),
+            "execute %s/ld-real.so" % lib,
+            "read %s/libpython3.so" % lib,
+            "read %s/libc.so.6" % lib,
+            "beneath %s" % self.stdlib,
+            "pycache /pyc",
+        ]))
+
+    def test_an_interpreter_older_than_python_3_12_refuses(self):
+        # Perturbation: drop the version question, and the grant is laid.
+        self.interpreter(recent=False)
+        self.ldd("\t%s/ld.so (0x1)\n" % self.lib)
+        ran = self.grant()
+        self.assertEqual(ran.returncode, 1, ran.stdout)
+        self.assertEqual(ran.stdout, "")
+        self.assertEqual(ran.stderr, "the loop interpreter %s is older than Python 3.12, which the runner "
+                         "needs\n" % self.interp)
+
+    def test_a_library_the_loader_does_not_find_refuses(self):
+        # Perturbation: drop the "not found" look, and the line refuses as a
+        # path that does not resolve, or not at all.
+        self.interpreter()
+        answer = "\tlibgone.so.1 => not found\n\t%s/ld.so (0x1)\n" % self.lib
+        self.ldd(answer)
+        ran = self.grant()
+        self.assertEqual(ran.returncode, 1, ran.stdout)
+        self.assertEqual(ran.stdout, "")
+        self.assertEqual(ran.stderr, "the loop interpreter %s has a library the loader does not find:\n%s"
+                         % (self.interp, answer))
+
+
 class _NamingResult(unittest.TextTestResult):
     """Names the running test to every child it starts, for the reach record."""
 

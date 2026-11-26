@@ -1051,8 +1051,11 @@ keeps. No runner starts with a wall missing.
 (`deploy/loop-grant.sh`, sourced by `bootstrap-stack.sh` and `update-stack.sh`, which
 lay it with the runner and the board and compute it again at every run), from the
 resolved interpreter, its loader and the libraries the loader resolves for it,
-every link resolved to its file, and the interpreter's standard library. The enter
-carries none of it, and admin does not read it. It is ASCII, one fact per line, each line
+every link resolved to its file, and the interpreter's standard library. The loader is
+the line `ldd` starts with a path, with or without an arrow to its file, and the vdso,
+with no path, is passed over. An interpreter older than Python 3.12, or a library the
+loader does not find, refuses the install. `LoopGrantTests` in `deploy/test_plans.py`
+reads each through doubles. The enter carries none of it, and admin does not read it. It is ASCII, one fact per line, each line
 ended by a newline:
 
 ```text

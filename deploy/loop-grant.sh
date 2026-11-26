@@ -26,7 +26,7 @@ loop_paths() {
 # loop_grant INTERPRETER PYCACHE: the grant file's text on standard output, or
 # a refusal on standard error and 1. Nothing privileged is asked.
 loop_grant() {
-  local named=$1 pycache=$2 interp said rc=0 line path real sha stdlib
+  local named=$1 pycache=$2 interp said rc=0 line path real sha stdlib role
   local -a execs=() reads=()
   local -A seen=()
   interp=$(readlink -f -- "$named") \
@@ -45,13 +45,17 @@ loop_grant() {
     printf 'the loop interpreter %s has a library the loader does not find:\n%s\n' "$interp" "$said" >&2
     return 1
   fi
-  # **A library is read; the loader is executed and read** (the line that
-  # starts with its own path). The vdso has no path and is not a file.
+  # **A library is read; the loader is executed and read**: the line that
+  # starts with its own path, written with or without an arrow to the file it
+  # resolves to. The vdso has no path and is not a file, written with or
+  # without an arrow.
   while IFS= read -r line; do
     line=${line#"${line%%[![:space:]]*}"}
     case $line in
-      *' => '*) path=${line#* => }; path=${path%% (*} ;;
-      /*) path=${line%% (*} ;;
+      *' => ('*|*' =>') continue ;;
+      /*' => '*) path=${line#* => }; path=${path%% (*}; role=execute ;;
+      *' => '*) path=${line#* => }; path=${path%% (*}; role=read ;;
+      /*) path=${line%% (*}; role=execute ;;
       *) continue ;;
     esac
     real=$(readlink -f -- "$path") && [ -f "$real" ] \
@@ -60,8 +64,8 @@ loop_grant() {
     # granted once, under its first role.
     [ -z "${seen[$real]+x}" ] || continue
     seen[$real]=1
-    case $line in
-      *' => '*) reads+=("$real") ;;
+    case $role in
+      read) reads+=("$real") ;;
       *) execs+=("$real") ;;
     esac
   done <<<"$said"
