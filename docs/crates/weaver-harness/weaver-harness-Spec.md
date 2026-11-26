@@ -98,12 +98,16 @@ leftovers.
 
     src/bin/worker/main.rs    the composition root, framework, section 6
     src/bin/worker/dev_loop/  the loop body, the developer's, section 6
+    src/bin/weaver-loop-launch/  the loop's launcher, section 2.5
 
 The library holds the framework and the `worker` bin target holds the composition root
-and its Rust loop. The Python worker, its loop scripts, the `pyworker` feature and the
+and its Rust loop. The `weaver-loop-launch` bin target is the loop's launcher, which lays
+the loop runner's walls and executes the interpreter (section 2.5). It links nothing of
+the library. The Python worker, its loop scripts, the `pyworker` feature and the
 pyo3 dependency retire on the operator's ruling of 2026-10-20 (#180). The manifest
-instrument checks declared dependencies, including optional ones, and the bin inventory.
-No pyo3 dependency or second worker target is carried.
+instrument checks declared dependencies, including optional ones, and the bin inventory,
+which is exactly `weaver-loop-launch` and `worker`. No pyo3 dependency or second worker
+target is carried.
 
 **`src/classify.rs` leaves the listing, and the disagreement that leaves behind
 is named rather than settled here.** No such file exists and the label seam's
@@ -950,6 +954,109 @@ edge: asserts
 from: weaver-harness
 to: harness-descriptors-owned-types
 ```
+
+### 2.5 The loop's launcher
+
+**What it is.** `weaver-loop-launch` is the second bin target of this crate. The worker
+forks it by the organ fork as it stands (section 2.2), with the loop's end at descriptor
+3 and the last word's pipe at 2, and it lays the loop runner's walls on itself before it
+executes the interpreter. It holds one thread. No process stays resident for it, and the
+gate does not change for it.
+
+**Its arguments** are two absolute paths: the grant file, and the wire file. The runner is
+`runner.py` in the grant file's folder, `<prefix>/lib/weaver-loop/`, and the loop folder
+granted is the wire file's, `/etc/weaver/<agent>/loop/`.
+
+**Its steps, in order.** Any step that fails ends it before its exec, with exit 1 and one
+JSON line on standard error, `{"loop": "launch", "reason": "<why>"}`, which the last word
+keeps. No runner starts with a wall missing.
+
+1. **Descriptor 3 is judged a socket**, the loop's end. A launch without it refuses.
+2. **The null device is opened and placed at 0 and 1**, before Landlock, so the grant does
+   not name it and the runner holds no log of the worker's open.
+3. **The grant file is read and judged** (below). Every granted path is opened `O_PATH`
+   without following a link at its last component and judged by `fstat` on that
+   descriptor, as the gate's shell grant is (`weaver-gate-Spec` section 8.1). The
+   interpreter's sha256 is read from the same file, its device and inode compared with
+   the judged descriptor's, and compared with the grant's. A path that fails, or a digest
+   that differs, refuses naming the path.
+4. **Every descriptor above 3 is marked close-on-exec**, so exactly 0 to 3 cross the exec.
+5. **The walls, in the shell's order:** no-new-privs, the limits, the filter, Landlock.
+6. **The interpreter is executed** with exactly one variable, `LANG=C.UTF-8`:
+
+   ```text
+   <interpreter> -I -B -S -X pycache_prefix=<pycache folder> <runner.py> <wire file>
+   ```
+
+**The grant file.** The stack's install computes it on the machine that runs the loop,
+from the resolved interpreter, its loader and the libraries the loader resolves for it,
+every link resolved to its file, and the interpreter's standard library. The enter
+carries none of it, and admin does not read it. It is ASCII, one fact per line, each line
+ended by a newline:
+
+```text
+weaver-loop-grant 1
+interpreter <sha256, 64 lowercase hex> <path>
+execute <path>
+read <path>
+beneath <path>
+pycache <path>
+```
+
+- The first line is the version. `interpreter` and `pycache` stand once each.
+- `execute` names a file executed and read beside the interpreter (its loader), `read` a
+  file read (a library), and `beneath` a folder read and listed beneath (the standard
+  library).
+- Each path is absolute and is the rest of its line. No path stands twice.
+- Any other line refuses the file, naming the line.
+
+**What the launcher judges as root's.** The grant file is root's regular file, not a
+link, written by no group and no other, and at most 64 KiB. The runner's folder is root's
+directory, written by no group and no other, and `runner.py` in it is root's regular
+file. The pycache folder is root's directory, written by no group and no other, and
+empty. So the agent's uid cannot widen its own walls. The loop folder's owner and mode
+are admin's checks, and the launcher takes it as a directory that is not a link.
+
+**The walls.**
+
+| Wall | What it holds |
+| --- | --- |
+| No-new-privs | set again, as the gate's shell sets it, since the filter needs it |
+| Limits | soft and hard alike: address space 512 MiB, 64 descriptors, 64 MiB of file size, no core. The shell's values. A hard limit below one refuses |
+| Filter | x86-64 alone, no x32 call, then `io_uring_setup`, `socket`, `socketpair`, `clone`, `fork`, `vfork` and `clone3`, each refused with `EACCES`. So the loop makes no socket, no process and no thread |
+| Landlock | ABI 6 at the floor. Every filesystem right through ABI 5 handled, with `RESOLVE_UNIX` where offered, TCP bind and connect handled, signal and abstract-socket scoping. Granted: execute and read on the interpreter and each `execute` file, read on each `read` file, read and list beneath each `beneath` folder, the runner's folder and the loop folder. No write, no `/dev` file, no TCP port |
+
+**A file replaced after its rule is refused.** A rule grants an inode, so an interpreter
+replaced between the judgment and the exec is a file the domain does not grant, and its
+exec fails, refused.
+
+**The plumbing is a copy.** The Landlock and seccomp structures, the ABI query and its
+floor, and the path rules are copied from `weaver-gate`'s confinement module, and the
+ruleset, the limits and the filter are written for the loop. The bin target takes no edge
+to the gate, and this crate links no organ. The three Landlock calls, the filter's
+`prctl`, `setrlimit`, `close_range`, and the `fstat` and `dup2` on standard descriptor
+numbers go through `nix`'s re-exported `libc`, a second stated exception to "no raw
+`libc`" (section 2.4), confined to this bin target. It adds no dependency. Making the
+gate's copy and this one one module waits on the layout of the repository.
+
+**Enforced by:**
+
+- `src/bin/weaver-loop-launch/confine/tests.rs`: the filter's own instructions, run over
+  each call, refuse the seven named calls with `EACCES`, another architecture and every
+  x32 call, and allow every other call. The limits are the shell's values, and the ABI
+  floor fails closed.
+- `src/bin/weaver-loop-launch/grant/tests.rs`: a row per malformed grant file, a row per
+  stale or wrong path, a stale digest, and the grant file's own judgment.
+- `tests/loop_launch.rs`, the launcher run on a real interpreter inside a user namespace
+  where the suite's files are root's, beside the same probe run with no wall:
+  - each wall refuses its probe: a socket, a read outside the grant, a write, a process,
+    a thread, an allocation past the limit, a raised limit. The bare probe makes each.
+  - the kernel's view of the runner: the limits, `NoNewPrivs` and `Seccomp`.
+  - the cleared environment, the null device at 0 and 1, exactly descriptors 0 to 3,
+    and no bytecode written.
+  - a stale digest, a path gone, a grant file not root's, no end at 3, a relative wire
+    file and an absent grant file each end the launch with its one line.
+  - the runner dies by `SIGKILL` with the thread that forked it, through both execs.
 
 ## 3. The lifecycle interior
 
