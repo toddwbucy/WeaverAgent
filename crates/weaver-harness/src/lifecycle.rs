@@ -3085,8 +3085,9 @@ fn leave(
 /// that failed refuses `BindFailed`, and a launcher that refused, a runner
 /// that did not start, or a `hello` that was not the one expected refuses
 /// `ConfigInvalid` naming `loop`, the child killed and reaped. Either way the
-/// worker's standard error carries one line naming the reason and, where one
-/// was said, the launcher's or the runner's last line.
+/// worker's standard error carries one line naming the reason, the launcher's
+/// and the grant file's paths, and, where one was said, the launcher's or the
+/// runner's last line, so a launcher or a grant that does not stand is named.
 ///
 /// # Safety
 ///
@@ -3105,7 +3106,13 @@ unsafe fn start_loop(
         Err(crate::loop_arm::StartRefused::Fork(why)) => {
             eprintln!(
                 "{}",
-                serde_json::json!({"organ": "harness", "loop": "not-started", "reason": why})
+                serde_json::json!({
+                    "organ": "harness",
+                    "loop": "not-started",
+                    "reason": why,
+                    "launcher": launch.launcher.display().to_string(),
+                    "grant": launch.grant.display().to_string(),
+                })
             );
             Err(LifecycleRefusal::BindFailed)
         }
@@ -3117,6 +3124,8 @@ unsafe fn start_loop(
                     "loop": "refused",
                     "reason": reason,
                     "last_word": last_word,
+                    "launcher": launch.launcher.display().to_string(),
+                    "grant": launch.grant.display().to_string(),
                 })
             );
             Err(LifecycleRefusal::ConfigInvalid {

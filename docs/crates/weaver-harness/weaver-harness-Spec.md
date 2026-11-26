@@ -989,7 +989,9 @@ the launcher's path and the grant file's as `--loop-launcher` and `--loop-grant`
   close the near end, and refuse the load after it, `ConfigInvalid` naming `loop`
   (`BindFailed` where the fork itself fails). The rollback lowers the gate and the SPU.
   The worker's standard error carries one line, `{"organ": "harness", "loop":
-  "refused", ...}`, with the reason and the launcher's or the runner's last line.
+  "refused", ...}`, with the reason, the launcher's and the grant file's paths, and the
+  launcher's or the runner's last line, so a launcher or a grant that does not stand is
+  named. No test reads the line.
 - **The turn.** A run holding the loop arm answers each turn by the relay's pass,
   through the same seat, and calls no compiled entry. A run holding none calls the entry.
   The choice is the run's own.
