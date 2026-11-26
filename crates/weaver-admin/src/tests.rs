@@ -5829,3 +5829,90 @@ fn only_a_serving_binding_looks_for_the_loop() {
         Err(LifecycleRefusal::BoundaryUnverified)
     );
 }
+
+/// **The agent's folder is vouched for by its ancestors**, per Spec section
+/// 4, as the territory is: where the folder stands, an ancestor writable by
+/// others refuses `BoundaryUnverified`, and the same layout with that
+/// ancestor closed answers no loop. The inventory names this uid's own group,
+/// so the control passes the group's resolution and reaches the folder.
+/// Skipped, naming why, where the scratch's own ancestors cannot be vouched
+/// for. Perturbation: drop the ancestors' judgment, and the row answers no
+/// loop.
+#[test]
+fn an_agents_folder_under_an_ancestor_others_can_write_refuses() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let scratch = crate::scratch::Scratch(std::env::temp_dir().join(format!(
+        "weaver-admin-loop-ancestors-{}",
+        std::process::id()
+    )));
+    let base = scratch.0.join("etc");
+    std::fs::create_dir_all(base.join("admin/alpha")).unwrap();
+    std::fs::create_dir_all(base.join("alpha")).unwrap();
+    for dir in [&scratch.0, &base, &base.join("admin"), &base.join("alpha")] {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    if judge_ancestors(&base, &[nix::unistd::geteuid().as_raw(), 0]).is_err() {
+        eprintln!(
+            "SKIP an_agents_folder_under_an_ancestor_others_can_write_refuses: the scratch's own \
+             ancestors cannot be vouched for here"
+        );
+        return;
+    }
+    let group = nix::unistd::Group::from_gid(nix::unistd::getegid())
+        .ok()
+        .flatten()
+        .expect("this uid's group resolves");
+    let declaration = weaver_types::parse(concat!(
+        "session = \"s-1\"\n",
+        "tool-set = []\n",
+        "\n",
+        "[spu-instruction.decoder]\n",
+        "residual-readout-election = false\n",
+        "tunable-values = {}\n",
+        "\n",
+        "[spu-instruction.decoder.model-binding]\n",
+        "artifact = \"qwen3-4b-instruct\"\n",
+        "devices = [0]\n",
+        "\n",
+        "[gate-instruction.access-rule]\n",
+        "allowed-uids = [0]\n",
+        "allowed-gids = []\n",
+        "denied-uids = [1701]\n",
+        "\n",
+        "[trace-sink]\n",
+        "kind = \"file\"\n",
+        "path = \"/nonexistent/territory/trace.ndjson\"\n",
+        "create = true\n",
+    ))
+    .expect("the declaration parses");
+    let gate_instruction = declaration
+        .gate_instruction
+        .clone()
+        .expect("a serving declaration");
+    let mut config = unread_config();
+    config.root = base.join("admin/alpha");
+    let mut inventory = inventory::Inventory {
+        config: declaration,
+        identity: group.name,
+        declaration: String::new(),
+        binding: weaver_types::EnterBinding::Serving {
+            gate_instruction,
+            shell: None,
+        },
+        lineage: None,
+        member_account: None,
+        shell: None,
+        wires: None,
+    };
+    // The control: every ancestor closed, the folder holding no loop/.
+    assert_eq!(
+        judge_loop(&config, &AgentName("alpha".into()), &mut inventory),
+        Ok(())
+    );
+    assert_eq!(inventory.wires, None);
+    // The row: the folder's parent writable by others, with no sticky bit.
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let refused = judge_loop(&config, &AgentName("alpha".into()), &mut inventory);
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(refused, Err(LifecycleRefusal::BoundaryUnverified));
+}

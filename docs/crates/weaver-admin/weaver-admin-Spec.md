@@ -4357,8 +4357,9 @@ perturbation-verified:
   there. Both are unmeasured on the build machine and are root's steps on an agent
   appliance (`tools/identity-run/PROCEDURE.md` section 2).
   `only_a_serving_binding_looks_for_the_loop` in `src/tests.rs` watches the binding's
-  guard. The perturbation drops any one check, and
-  its row is admitted.
+  guard, and `an_agents_folder_under_an_ancestor_others_can_write_refuses` the folder's
+  ancestors, beside a control that answers no loop. The perturbation drops any one check,
+  and its row is admitted.
 - **The lock stands where the agent cannot replace it**, watched by the agent's uid
   trying to unlink and recreate `run.lock`: refused by the root-owned run directory.
   The perturbation places it in the runtime directory, and a second worker starts.
