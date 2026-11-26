@@ -966,3 +966,6 @@ fn a_series_whose_frame_has_no_kind_is_a_break() {
     assert!(lost(&result));
     assert_eq!(lines.text(), format!("{PREFIX}a frame with no kind\n"));
 }
+
+// The relay and the Python runner, across the two languages (item 10).
+mod cross;
