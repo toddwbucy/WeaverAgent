@@ -30,3 +30,43 @@ fn a_fourth_positional_is_refused_by_name() {
         "the refusal does not name the word: {stderr}"
     );
 }
+
+/// **The loop's two flags are handed together or not at all**
+/// (`weaver-harness-Spec` section 2.5): either alone is refused by name
+/// before the bind, and both together pass the parse and fail at the bind,
+/// the socket's directory not existing. Perturbation: let one flag stand
+/// alone, and its row fails at the bind instead.
+#[test]
+fn the_loops_two_flags_are_handed_together() {
+    let run = |flags: &[&str]| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_worker"))
+            .args([
+                "/nonexistent-weaver-worker-arguments/coordination.sock",
+                "/nonexistent/weaver-spu",
+                "/nonexistent/weaver-gate",
+            ])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        String::from_utf8_lossy(&output.stderr).into_owned()
+    };
+    let together = "--loop-launcher and --loop-grant are handed together or not at all";
+    for alone in [
+        ["--loop-launcher", "/opt/weaver/bin/weaver-loop-launch"],
+        ["--loop-grant", "/opt/weaver/lib/weaver-loop/grant"],
+    ] {
+        let stderr = run(&alone);
+        assert!(stderr.contains(together), "{alone:?}: {stderr}");
+    }
+    let stderr = run(&[
+        "--loop-launcher",
+        "/opt/weaver/bin/weaver-loop-launch",
+        "--loop-grant",
+        "/opt/weaver/lib/weaver-loop/grant",
+    ]);
+    assert!(
+        !stderr.contains(together) && stderr.contains("did not bind"),
+        "both flags pass the parse: {stderr}"
+    );
+}

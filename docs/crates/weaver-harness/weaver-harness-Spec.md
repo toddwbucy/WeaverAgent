@@ -1122,7 +1122,9 @@ gate's copy and this one one module waits on the layout of the repository.
   under a diagnostic binding, the load's composer for each loop (the compiled one to the
   byte), the start standing the loop or refusing `ConfigInvalid` naming `loop`, a run
   holding the arm answering by its relay and calling no entry, and the unwind's leave and
-  a dispatched rollback each stopping the loop and reaping it. No test drives the start's
+  a dispatched rollback each stopping the loop and reaping it.
+- `tests/worker_arguments.rs`: either loop flag alone refused by name, both together
+  passing the parse. No test drives the start's
   call at the enter's end: a serving enter reaches it only once the gate stands, which
   needs the agent's `tools/` cgroup.
 
