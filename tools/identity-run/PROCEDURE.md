@@ -166,7 +166,7 @@ first character that differs. Confirm that it is the changed word, `cAreful`.
 The saved images are read one save point at a time. Where the two compiled arms' images
 of a save point are equal, the wires arm's must be. Where they differ, that save point is
 not compared. `result.json`'s `images` names the save points compared and those not
-compared, by their order in the record.
+compared, by their order in the record, and where none was compared its `words` say so.
 
 ## 6. What comes back
 

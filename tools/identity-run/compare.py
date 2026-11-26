@@ -446,9 +446,11 @@ def run(folders):
             compared.append(index)
     result["images"] = {"compared": compared, "not compared": not_compared}
     if not compared:
-        # The verdict stands on the records; the words say the images added nothing.
-        result["reason"] = ("no save point's image was compared: the two compiled arms' images "
-                            "differ at every save point, so identity rests on the records alone")
+        # The words ride in `images`, never in `reason`, which a failing negative control
+        # below still names: the verdict stands on the records, and the images added nothing.
+        result["images"]["words"] = ("no save point's image was compared: the two compiled arms' "
+                                     "images differ at every save point, so identity rests on the "
+                                     "records alone")
 
     if arms[3]["meta"]["wires_sha256"] == arms[2]["meta"]["wires_sha256"]:
         return answer(FAILS, reason="the negative control's wire file is the wires arm's: no byte was changed", **result)
