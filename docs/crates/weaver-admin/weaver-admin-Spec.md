@@ -1975,7 +1975,9 @@ it. Admin reads neither. The launcher judges the grant file, and the worker fork
 launcher. Where no loop folder stands, the vector carries neither flag, so a worker
 serving the compiled loop starts with the arguments it started with before. A worker
 binary with no prefix above it refuses a load that carries a loop,
-`BoundaryUnverified`.
+`BoundaryUnverified`. Enforced by
+`admin_hands_the_loops_paths_only_where_the_enter_carries_a_loop` and
+`the_loops_launcher_and_grant_stand_where_the_stack_lays_them` in `src/tests.rs`.
 
 **The state member is started here too, as it always was, a direct child of this
 crate.** The custodian runs under its own account over a territory this crate prepares,

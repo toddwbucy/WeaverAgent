@@ -1223,6 +1223,26 @@ pub fn loop_launch_beside(worker: &Path) -> Option<(std::path::PathBuf, std::pat
     ))
 }
 
+/// **The loop's two paths where the enter carries a loop, and none where it
+/// does not** (`weaver-admin-Spec` section 6), so a worker serving the
+/// compiled loop starts with the arguments it started with before. A loop
+/// carried to a worker binary with no prefix above it is refused, naming the
+/// binary.
+pub fn loop_launch_for(
+    carries_loop: bool,
+    worker: &Path,
+) -> Result<Option<(std::path::PathBuf, std::path::PathBuf)>, String> {
+    if !carries_loop {
+        return Ok(None);
+    }
+    loop_launch_beside(worker).map(Some).ok_or_else(|| {
+        format!(
+            "the worker binary {} has no prefix to find the loop's launcher beside",
+            worker.display()
+        )
+    })
+}
+
 /// Opens a log the start step appends to, `worker.log` in the declaration
 /// directory, owned by `owner`, through `log::open_append`.
 pub fn open_log(path: &Path, owner: Option<(u32, u32)>) -> std::io::Result<std::fs::File> {

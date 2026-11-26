@@ -73,6 +73,20 @@ s.send(json.dumps({"kind": "hello", "version": "weaver-loop/1", "wires_sha256": 
 time.sleep(3600)
 "#;
 
+/// **A probe that sends a good `hello` and never reads its end again**, so
+/// neither the end of file nor the relay ends it: only a signal does.
+const DEAF: &str = r#"
+import hashlib, json, socket, sys, time
+digest = hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest()
+s = socket.socket(fileno=3)
+s.send(json.dumps({"kind": "hello", "version": "weaver-loop/1", "wires_sha256": digest},
+                  separators=(",", ":")).encode())
+time.sleep(3600)
+"#;
+
+/// How long the `settles` case holds the tee before freeing it.
+const TEE_HELD: Duration = Duration::from_millis(100);
+
 /// A scratch layout as the stack and the agent's folder lay it.
 struct Layout {
     root: PathBuf,
@@ -390,6 +404,88 @@ fn a_case_in_the_namespace() {
                 other => panic!("the launcher's line is the last word: {other:?}"),
             }
         }
+        "settles" => {
+            use nix::libc;
+            let mut arm = started.expect("the loop starts");
+            let mut seat = Recording::default();
+            let _ = arm.pass(&mut seat, "hello");
+            // **The worker's standard error onto a full pipe**, so the tee
+            // that carries the runner's end line blocks on it until a drainer
+            // frees the pipe, `TEE_HELD` from now.
+            // SAFETY: plain descriptor calls on numbers this process owns,
+            // checked as they return.
+            let (saved, read_end, filled) = unsafe {
+                let saved = libc::dup(2);
+                assert!(saved >= 0, "dup");
+                let mut ends = [0; 2];
+                assert_eq!(
+                    libc::pipe2(ends.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK),
+                    0
+                );
+                let mut filled = 0usize;
+                while libc::write(ends[1], b".".as_ptr().cast(), 1) == 1 {
+                    filled += 1;
+                }
+                assert_eq!(libc::fcntl(ends[1], libc::F_SETFL, 0), 0);
+                assert_eq!(libc::dup2(ends[1], 2), 2);
+                libc::close(ends[1]);
+                (saved, ends[0], filled)
+            };
+            let drainer = std::thread::spawn(move || {
+                std::thread::sleep(TEE_HELD);
+                let mut sink = [0u8; 4096];
+                let mut drained = 0;
+                while drained < filled {
+                    // SAFETY: the read end is this process's and outlives the
+                    // thread, which is joined before it closes.
+                    let n = unsafe {
+                        libc::read(
+                            read_end,
+                            sink.as_mut_ptr().cast(),
+                            sink.len().min(filled - drained),
+                        )
+                    };
+                    if n > 0 {
+                        drained += n as usize;
+                    } else {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+            });
+            let stopping = Instant::now();
+            let status = arm.stop(Some(Instant::now() + Duration::from_secs(30)));
+            let stopped_after = stopping.elapsed();
+            drainer.join().unwrap();
+            let mut after = Vec::new();
+            let mut chunk = [0u8; 4096];
+            // SAFETY: as above, then the worker's own standard error put back.
+            unsafe {
+                loop {
+                    let n = libc::read(read_end, chunk.as_mut_ptr().cast(), chunk.len());
+                    if n <= 0 {
+                        break;
+                    }
+                    after.extend_from_slice(&chunk[..n as usize]);
+                }
+                libc::dup2(saved, 2);
+                libc::close(saved);
+                libc::close(read_end);
+            }
+            let after = String::from_utf8_lossy(&after);
+            assert!(
+                matches!(status, Some(nix::sys::wait::WaitStatus::Exited(_, 0))),
+                "{status:?}"
+            );
+            assert!(
+                stopped_after >= TEE_HELD,
+                "the stop returned in {stopped_after:?}, before the tee holding the runner's end line was freed"
+            );
+            assert_eq!(
+                lines_where(&after, "loop", "end").len(),
+                1,
+                "the runner's end line went through the tee: {after}"
+            );
+        }
         "dies-with-worker" => {
             let arm = started.expect("the loop starts");
             println!("{}", serde_json::json!({ "runner": arm.pid().as_raw() }));
@@ -497,14 +593,15 @@ fn a_launch_the_launcher_refuses_refuses_the_start_with_its_line() {
 
 /// **The runner dies with the worker, through the launcher**: the case starts
 /// the loop by the organ fork, which arms `PR_SET_PDEATHSIG` to `SIGKILL`
-/// inside the namespace, names the runner's pid and waits. Killed by
-/// `SIGKILL`, it leaves the runner dead within seconds, through both execs, the
-/// launcher's and the interpreter's. Perturbation: drop the fork's arming, and
-/// the runner outlives the case.
+/// inside the namespace, names the runner's pid and waits. The runner sent a
+/// good `hello` and never reads its end again, so the end of file the case's
+/// death brings does not end it. Killed by `SIGKILL`, the case leaves the
+/// runner dead within seconds, through both execs, the launcher's and the
+/// interpreter's. Perturbation: drop the fork's arming, and the runner
+/// outlives the case.
 #[test]
 fn the_runner_dies_with_the_worker_through_the_launcher() {
-    let wires = std::fs::read(CROSS_WIRES).unwrap();
-    let layout = Layout::new("dies", None, &wires);
+    let layout = Layout::new("dies", Some(DEAF), b"the wire file\n");
     let mut runner = 0;
     let ran = run_case("dies-with-worker", &layout, |pid, stdout| {
         // libtest's own lines come first: the runner's is the first that
@@ -531,12 +628,35 @@ fn the_runner_dies_with_the_worker_through_the_launcher() {
     assert!(!ran.success, "the case was killed");
     let deadline = Instant::now() + Duration::from_secs(10);
     while alive(runner) {
-        assert!(
-            Instant::now() < deadline,
-            "the runner {runner} outlived the worker by 10 s"
-        );
+        if Instant::now() >= deadline {
+            // Ended here, so a failed run leaves no runner sleeping its hour.
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(runner),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+            panic!("the runner {runner} outlived the worker by 10 s");
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// **The stop returns once the runner's end line is through the tee**: the
+/// case holds the worker's standard error on a full pipe, so the tee carrying
+/// the runner's end line blocks until a drainer frees it `TEE_HELD` later.
+/// The runner exits at once on its end of file, and the stop still returns
+/// only after the hold, the end line then in the pipe. Perturbation: drop the
+/// stop's settle of the last word, and it returns as soon as the runner is
+/// reaped, the line still held.
+#[test]
+fn the_stop_returns_once_the_runners_end_line_is_through_the_tee() {
+    let wires = std::fs::read(CROSS_WIRES).unwrap();
+    let layout = Layout::new("settles", None, &wires);
+    let ran = run_case("settles", &layout, |_, _| {});
+    assert!(
+        ran.success,
+        "the case failed\nstdout:\n{}\nstderr:\n{}",
+        ran.stdout, ran.stderr
+    );
 }
 
 /// Whether `pid` runs: present in `/proc` and not a zombie.

@@ -1117,7 +1117,10 @@ gate's copy and this one one module waits on the layout of the repository.
   - a `hello` naming another digest, from a runner that never reads its end again, is
     killed and reaped before the start returns
   - a launch the launcher refuses refuses the start, its line the last word
-  - the runner dies with the worker, through the launcher.
+  - the stop returns only once the runner's end line is through the tee, the worker's
+    standard error held on a full pipe for 100 ms
+  - the runner dies with the worker, through the launcher, a runner that never reads its
+    end again, so only the signal ends it.
 - `src/lifecycle/tests.rs`: a wire file refused before the load with no launcher and
   under a diagnostic binding, the load's composer for each loop (the compiled one to the
   byte), the start standing the loop or refusing `ConfigInvalid` naming `loop`, a run

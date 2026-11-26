@@ -1567,17 +1567,13 @@ fn run_load(
     // **The loop's launcher and grant file are handed where the enter will
     // carry a loop** (section 6), so a worker serving the compiled loop is
     // started with the arguments it was started with before.
-    let loop_launch = inventory
-        .wires
-        .as_ref()
-        .and_then(|_| start::loop_launch_beside(&config.worker));
-    if inventory.wires.is_some() && loop_launch.is_none() {
-        diag!(
-            "weaver-admin: the worker binary {} has no prefix to find the loop's launcher beside",
-            config.worker.display()
-        );
-        return Err(LifecycleRefusal::BoundaryUnverified);
-    }
+    let loop_launch = match start::loop_launch_for(inventory.wires.is_some(), &config.worker) {
+        Ok(found) => found,
+        Err(why) => {
+            diag!("weaver-admin: {why}");
+            return Err(LifecycleRefusal::BoundaryUnverified);
+        }
+    };
     let socket_path = config.coordination_socket();
     let mut worker = start::spawn_worker(start::WorkerStart {
         binary: &config.worker,

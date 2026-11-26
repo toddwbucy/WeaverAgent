@@ -336,6 +336,29 @@ fn the_loops_launcher_and_grant_stand_where_the_stack_lays_them() {
     );
 }
 
+/// **Admin hands the loop's paths only where the enter carries a loop**, per
+/// `weaver-admin-Spec` section 6: none where it does not, the pair where it
+/// does, and a refusal naming the binary where the worker has no prefix.
+/// Perturbation: hand the pair whatever the enter carries, or none, and its
+/// row fails.
+#[test]
+fn admin_hands_the_loops_paths_only_where_the_enter_carries_a_loop() {
+    let worker = std::path::Path::new("/opt/weaver/bin/worker");
+    assert_eq!(start::loop_launch_for(false, worker), Ok(None));
+    assert_eq!(
+        start::loop_launch_for(true, worker),
+        Ok(start::loop_launch_beside(worker))
+    );
+    assert!(start::loop_launch_for(true, worker).unwrap().is_some());
+    let refused =
+        start::loop_launch_for(true, std::path::Path::new("/worker")).expect_err("no prefix");
+    assert!(refused.contains("/worker"), "{refused}");
+    assert_eq!(
+        start::loop_launch_for(false, std::path::Path::new("/worker")),
+        Ok(None)
+    );
+}
+
 /// The configuration as `validate`, `load` and `restore` read it: the
 /// territory judged, then the declaration read through it and judged
 /// where it is read (the #94 survey's S8).
