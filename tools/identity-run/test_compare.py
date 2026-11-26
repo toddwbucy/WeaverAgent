@@ -193,6 +193,19 @@ class TheRun(unittest.TestCase):
         self.assertEqual(body["images"], {"compared": [0, 1], "not compared": []}, body)
         self.assertEqual(body["negative"]["kind"], ["message.system", "message.system"])
         self.assertEqual(body["negative"]["at"], "payload.content.0.text")
+        prompt = next(e for e in fixture() if e["kind"] == "message.system")["payload"]["content"][0]["text"]
+        self.assertEqual(body["negative"]["offset"], len(prompt) - 1)
+        self.assertEqual(body["negative"]["window"][0][-1], prompt[-1])
+        self.assertEqual(body["negative"]["window"][1][-1], "X" if prompt[-1] != "X" else "Y")
+
+    def test_a_string_differing_past_what_values_prints_names_its_offset_and_a_window(self):
+        left = "a" * 700 + "careful" + "b" * 300
+        right = "a" * 700 + "cAreful" + "b" * 300
+        difference = compare.first_difference([{"kind": "x", "v": left}], [{"kind": "x", "v": right}])
+        self.assertEqual(difference["values"][0], difference["values"][1], "two equal beginnings")
+        self.assertEqual(difference["offset"], 701)
+        self.assertEqual(difference["window"], [left[661:741], right[661:741]])
+        self.assertIn("cAreful", difference["window"][1])
 
     def test_the_command_line_answers_its_verdict_as_its_status(self):
         folders = self.arms()

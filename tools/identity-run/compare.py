@@ -84,6 +84,8 @@ WIRE_FILE = "/etc/weaver/{agent}/loop/wires.py"
 
 PRESSURE_FAULT = "recorder_commit_pressure"
 SHOWN = 240  # the most characters of a value an answer prints
+# Characters each side of the first that differs, where two strings differ.
+WINDOW = 40
 
 
 class Unreadable(Exception):
@@ -269,9 +271,16 @@ def first_difference(a, b):
     for index, (x, y) in enumerate(zip(a, b)):
         if not same(x, y):
             path, xv, yv = _where(x, y, ())
-            return {"event": index, "kind": [x.get("kind"), y.get("kind")],
-                    "at": ".".join(map(str, path)) or "(the event)",
-                    "values": [shown(xv), shown(yv)]}
+            found = {"event": index, "kind": [x.get("kind"), y.get("kind")],
+                     "at": ".".join(map(str, path)) or "(the event)",
+                     "values": [shown(xv), shown(yv)]}
+            if isinstance(xv, str) and isinstance(yv, str):
+                # `values` cuts each at SHOWN characters, which can print two equal
+                # beginnings: the first character that differs, and a window around it.
+                at = next((i for i, (p, q) in enumerate(zip(xv, yv)) if p != q), min(len(xv), len(yv)))
+                found["offset"] = at
+                found["window"] = [xv[max(0, at - WINDOW):at + WINDOW], yv[max(0, at - WINDOW):at + WINDOW]]
+            return found
     if len(a) != len(b):
         return {"event": min(len(a), len(b)), "kind": None, "at": "(the record's length)",
                 "values": ["%d events" % len(a), "%d events" % len(b)]}
