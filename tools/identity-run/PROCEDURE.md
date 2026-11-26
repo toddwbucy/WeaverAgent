@@ -17,7 +17,11 @@ The tools beside this file:
   record and the machine's own accounts standing, the connector accounts among them, so
   every arm runs on the one install. It plans by default and acts with `--apply`.
 - `compare.py`: the comparison over the four arms, standard library alone.
-- `test_compare.py`, `test_run_arm.py` and `test_take_down.py`: their tests, the first
+- `fullness.py`: the reading `run-arm.sh` takes after each turn of load 1, to know when
+  the next runs under pressure. It waits for the answered turn's close in the record,
+  which lags the answer, and fails the arm where the close does not come in 30 seconds.
+- `test_compare.py`, `test_fullness.py`, `test_run_arm.py` and `test_take_down.py`:
+  their tests, the first
   of the two negative controls among them. They test the comparison, and the two
   scripts' plans and refusals. **Every `--apply` step of the two scripts is unmeasured
   until this run**: read each plan before its first apply, and keep every console.

@@ -388,6 +388,16 @@ class TheRun(unittest.TestCase):
         self.assertEqual(code, compare.FAILS, body)
         self.assertIn("holds 3 loads where the script makes 6", body["reason"])
 
+    def test_the_compiled_arms_and_the_wires_arm_must_send_one_count_of_turns(self):
+        for arm in ("c1", "c2", "w"):
+            with self.subTest(arm=arm):
+                code, body = self.run_on(self.arms(write={arm: {"turns": 9}}))
+                self.assertEqual(code, compare.FAILS, body)
+                self.assertIn("did not run one script", body["reason"])
+        # The negative's prompt differs, so pressure may come a turn sooner or later there.
+        code, body = self.run_on(self.arms(write={"n": {"turns": 9}}))
+        self.assertEqual(code, compare.IDENTICAL, body)
+
     @staticmethod
     def append(folder, line):
         with open(os.path.join(folder, "trace.ndjson"), "a", encoding="utf-8") as f:

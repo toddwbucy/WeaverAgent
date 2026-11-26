@@ -356,6 +356,11 @@ def run(folders):
         return answer(FAILS, reason="the four arms do not run under one agent name")
     if len({a["meta"]["loads"] for a in arms}) != 1:
         return answer(FAILS, reason="the four arms do not declare one script of loads")
+    sent = [a["meta"]["turns_to_loop"] for a in arms[:3]]
+    if len(set(sent)) != 1:
+        return answer(FAILS, reason="the compiled arms and the wires arm sent %s turns to the loop, so they did "
+                      "not run one script: the pressure reading counted the turns before pressure "
+                      "differently in each" % sent)
     dirty = {a["folder"]: unclean(a) for a in arms if unclean(a)}
     if dirty:
         return answer(UNCLEAN, arms=dirty,

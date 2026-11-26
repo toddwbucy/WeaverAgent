@@ -83,6 +83,7 @@ BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 LOAD_BOUND=900
 TURN_BOUND=900
 PRESSURE_MOST=40
+FULLNESS_BOUND=30
 
 # The asks, sent in this order in every arm, one each turn but the seeding one.
 ASKS=(
@@ -213,30 +214,25 @@ os.replace(part, path)
 DECLARATION
 }
 
-# full_enough: the last answer's resident tokens reach four-fifths of capacity, read from
-# the record's last model.output, so the next turn is under pressure.
-full_enough() {
-    python3 -I - "$TRACE" <<'FULLNESS'
-import json, sys
-last = None
-for line in open(sys.argv[1], encoding="utf-8"):
-    e = json.loads(line)
-    if e.get("kind") == "model.output":
-        last = e.get("payload") or {}
-r, c = (last or {}).get("resident", 0), (last or {}).get("capacity", 0)
-print("   fullness %s of %s" % (r, c))
-sys.exit(0 if c > 0 and r * 5 >= c * 4 else 1)
-FULLNESS
-}
-
+# The fullness reading after the turn just answered (fullness.py beside this script): it
+# waits, up to FULLNESS_BOUND seconds, until the record holds that turn's close, since the
+# record lags the answer, and reads only ended lines. 0 full enough, 1 not yet; anything
+# else fails the arm, which then names why.
 until_pressure() {
     step "load $LOADS: turns until fullness passes four-fifths of capacity, then one under pressure (at most $PRESSURE_MOST)"
+    printf '   after each turn: python3 -I %s/fullness.py <trace> t-<n> %s, waiting for the turn'"'"'s close\n' "$HERE" "$FULLNESS_BOUND"
     if [ "$APPLY" != 1 ]; then
-        printf '   each a turn as above, then the record'"'"'s last model.output read; then one turn more\n'
+        printf '   each a turn as above, then the reading; then one turn more\n'
         return 0
     fi
-    local n=0
-    until full_enough; do
+    local n=0 said
+    while :; do
+        python3 -I "$HERE/fullness.py" "$TRACE" "t-$TURN_IN_LOAD" "$FULLNESS_BOUND"; said=$?
+        case $said in
+            0) break ;;
+            1) ;;
+            *) fail "the fullness reading after turn t-$TURN_IN_LOAD of load $LOADS (exit $said)" ;;
+        esac
         n=$((n + 1)); [ "$n" -le "$PRESSURE_MOST" ] || fail "no pressure within $PRESSURE_MOST turns"
         turn
     done
@@ -269,7 +265,7 @@ if [ "$APPLY" = 1 ]; then
     [ ! -e "$OUT" ] || die "$OUT stands: each arm writes a folder of its own"
     [ -z "$(ls -A -- "$BASE" 2>/dev/null)" ] || die "an agent stands under $BASE: the run needs an appliance holding none (take-down.sh first)"
     for f in create-agent.sh turn.py; do [ -r "$DEPLOY/$f" ] || die "$DEPLOY/$f is not there"; done
-    [ -x "$HERE/take-down.sh" ] || die "$HERE/take-down.sh is not there"
+    for f in take-down.sh fullness.py; do [ -r "$HERE/$f" ] || die "$HERE/$f is not there"; done
     [ -x "$ADMIN" ] || die "$ADMIN is not there"
     mkdir -p "$OUT/steps" || die "cannot make $OUT"
 fi
