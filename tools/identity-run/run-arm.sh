@@ -7,7 +7,8 @@
 #   run-arm.sh --arm wires    --agent NAME --artifact MODEL.gguf --out DIR --wires FILE --apply
 #   run-arm.sh --arm negative --agent NAME --artifact MODEL.gguf --out DIR --wires FILE --apply
 #
-# Options: --deploy DIR (the stack's deployed scripts, default /opt/weaver/deploy),
+# Options: --deploy DIR (the deploy scripts, default the deploy/ folder of the tree this
+# script stands in; a deployed copy holds what deploy/deployed-copy.txt lists),
 # --admin PATH (default /opt/weaver/bin/weaver-admin), --context-capacity N (default
 # 8192, the same in every arm, so pressure comes within a few turns).
 #
@@ -48,7 +49,7 @@ die() { printf 'run-arm: %s\n' "$*" >&2; exit 2; }
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || die "cannot find the script's own folder"
 
 ARM= AGENT= ARTIFACT= OUT= WIRES= APPLY=0
-DEPLOY=/opt/weaver/deploy
+DEPLOY=$(cd -- "$HERE/../../deploy" 2>/dev/null && pwd) || DEPLOY="$HERE/../../deploy"
 ADMIN=/opt/weaver/bin/weaver-admin
 CAPACITY=8192
 while [ $# -gt 0 ]; do

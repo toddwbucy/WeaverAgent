@@ -21,9 +21,8 @@ The tools beside this file:
   the next runs under pressure. It waits for the answered turn's close in the record,
   which lags the answer, and fails the arm where the close does not come in 30 seconds.
 - `test_compare.py`, `test_fullness.py`, `test_run_arm.py` and `test_take_down.py`:
-  their tests, the first
-  of the two negative controls among them. They test the comparison, and the two
-  scripts' plans and refusals. **Every `--apply` step of the two scripts is unmeasured
+  their tests, the first of the two negative controls among them. They test the
+  comparison, the reading, and the two scripts' plans and refusals. **Every `--apply` step of the two scripts is unmeasured
   until this run**: read each plan before its first apply, and keep every console.
 
 ## 1. Before the run
@@ -32,7 +31,13 @@ The tools beside this file:
    (`weaver-loop-launch`) and the runner's files. Install it with the stack's own
    scripts, `deploy/bootstrap-stack.sh --install` or `deploy/update-stack.sh`, or from a
    carry set that holds the same build.
-2. **Read the grant back.** The stack lays `<prefix>/lib/weaver-loop/` with
+2. **The tree on the appliance.** Every command here runs from the root of a checkout of
+   the same commit as the stack, laid on the appliance by root: `git archive <commit>`
+   on a machine that holds the repository, copied over and unpacked. `run-arm.sh` takes
+   the `deploy/` folder beside its own (`--deploy` names another, such as a deployed
+   copy, which holds what `deploy/deployed-copy.txt` lists), and finds `take-down.sh`
+   and `fullness.py` beside itself.
+3. **Read the grant back.** The stack lays `<prefix>/lib/weaver-loop/` with
    `runner.py`, `weaver_board.py` and `grant`. The grant digests the interpreter and
    names the rest as paths. Read it back:
 
@@ -44,10 +49,10 @@ The tools beside this file:
 
    The interpreter's digest in the grant must be the interpreter's sha256. Write the
    grant and all three sha256 values into the run's notes.
-3. **The appliance holds no agent.** `ls -A /etc/weaver/admin` lists nothing.
+4. **The appliance holds no agent.** `ls -A /etc/weaver/admin` lists nothing.
    `deploy/decommission.sh` is not used anywhere in this run: it would remove the
    stack, its record and every `weaver-` account.
-4. **The two wire files.** The wires arm runs today's wire file,
+5. **The two wire files.** The wires arm runs today's wire file,
    `crates/weaver-harness/tests/fixtures/loop-wires-today.py`, from the same commit as
    the stack. The negative arm runs the same file with one byte of its prompt text
    changed:

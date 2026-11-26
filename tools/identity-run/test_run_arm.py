@@ -93,6 +93,14 @@ class ThePlan(unittest.TestCase):
                          ["operator-admitted", "turn-context=independent", "turn-context=continuous",
                           "turn-context=independent"])
 
+    def test_the_deploy_scripts_default_to_the_trees_own(self):
+        ran = plan("--arm", "compiled", *self.common)
+        deploy = os.path.realpath(os.path.join(HERE, "..", "..", "deploy"))
+        self.assertIn("+ %s/create-agent.sh a1 " % deploy, ran.stdout)
+        self.assertIn("reads %s/turn.py on its standard input" % deploy, ran.stdout)
+        ran = plan("--arm", "compiled", *self.common, "--deploy", "/elsewhere/deploy")
+        self.assertIn("+ /elsewhere/deploy/create-agent.sh a1 ", ran.stdout)
+
     def test_the_create_step_names_the_shared_declarations(self):
         ran = plan("--arm", "compiled", *self.common, "--context-capacity", "4096")
         self.assertRegex(ran.stdout, r"create-agent\.sh a1 --engine sqlite --artifact /models/model\.gguf "
