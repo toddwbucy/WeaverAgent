@@ -141,6 +141,9 @@ for name, body, refusal in [
     ('a match as of two underscores', 'def f(x):\n    match x:\n        case _ as __x:\n            return 1', 'line 5: the name __x begins with two underscores'),
     ('a mapping rest of two underscores', 'def f(x):\n    match x:\n        case {**__m}:\n            return 1', 'line 5: the name __m begins with two underscores'),
     ('a nested function of two underscores, never read', 'def f():\n    def __g():\n        return 1\n    return 2', 'line 4: the name __g begins with two underscores'),
+    ('a type parameter', 'def f[T](x):\n    return x', 'line 3: a type parameter'),
+    ('a type parameter of two underscores', 'def f[__T](x):\n    return x', 'line 3: a type parameter'),
+    ("a nested function's parameter spec", 'def f():\n    def g[**P]():\n        return 1\n    return g', 'line 4: a type parameter'),
     ("a plus sign", "X = +1", "line 3: the constant X is not a literal"),
     ("a second minus", "X = --1", "line 3: the constant X is not a literal"),
     ("a minus over True", "X = -True", "line 3: the constant X is not a literal"),
@@ -362,6 +365,11 @@ check("a broken return inside a pass ends the runner with 1, named",
 
 # 3b. A wire file's own mistake refuses its pass, and the next pass runs (point 1), as does
 # its SystemExit (point 4).
+class Unprintable(Exception):
+    def __str__(self):
+        raise RuntimeError("no text")
+
+
 def mistaken(kind):
     def on_turn(board, text):
         if text == "y":
@@ -382,17 +390,76 @@ def mistaken(kind):
             raise KeyboardInterrupt()
         elif kind == "BaseException":
             raise BaseException("x")
+        elif kind == "check_delta called by the wires":
+            wb.check_delta([])
+        elif kind == "Refused raised by the wires":
+            raise wb.Refused("x")
+        elif kind == "Closed raised by the wires":
+            raise wb.Closed()
+        elif kind == "an exception whose text raises":
+            raise Unprintable()
         elif kind == "a lone surrogate in a turn":
             board.turn([{"role": "user", "content": [{"type": "text", "text": chr(0xD800)}]}])
     return on_turn
 
 
 for kind in ("empty delta", "the role assistant", "an unlisted ask", "an argument named ask", "keep -1", "SystemExit",
-             "KeyboardInterrupt", "BaseException", "a lone surrogate in a turn"):
+             "KeyboardInterrupt", "BaseException", "a lone surrogate in a turn",
+             "check_delta called by the wires", "Refused raised by the wires", "Closed raised by the wires",
+             "an exception whose text raises"):
     seen, rc, err = served(mistaken(kind), one_pass)
     check("a wire file's %s refuses its pass, nothing else sent, and the next pass runs (%r)" % (kind, err[:90]),
           seen == [{"kind": "refuse", "pass": 1}, {"kind": "refuse", "pass": 2}] and rc == 0
           and "pass 1 is refused" in err and "the seam broke" not in err)
+
+seen, rc, err = served(mistaken("an exception whose text raises"), one_pass)
+check("an exception whose text raises is named by its type alone (%r)" % err[:80],
+      "pass 1 is refused: Unprintable\n" in err)
+
+
+# 3c. A breach the board met ends the runner, though the wires catch it and go on.
+def caught(board, text):
+    try:
+        board.seated()
+    except wb.Refused:
+        pass
+    try:
+        board.refuse()
+    except wb.Limit:
+        pass
+
+
+def bad_return(harness):
+    seen = [frame(harness)]
+    send(harness, {"kind": "pass", "pass": 1, "text": "x"})
+    seen.append(frame(harness))
+    send(harness, {"kind": "return", "pass": 1, "tag": 7, "value": True})
+    try:
+        seen.append(frame(harness))
+    except wb.Closed:
+        seen.append("closed")
+    return seen
+
+
+seen, rc, err = served(caught, bad_return)
+check("a wire file that catches the board's true Refused and goes on still ends the runner with 1, named (%r)"
+      % err[:120],
+      rc == 1 and seen[-1] == "closed"
+      and "the seam broke in pass 1: a return for pass 1 and tag 7 out of order" in err
+      and "is refused" not in err)
+
+
+def caught_returns(board, text):
+    try:
+        board.seated()
+    except wb.Refused:
+        return
+
+
+seen, rc, err = served(caught_returns, bad_return)
+check("a wire file that catches the board's true Refused and returns still ends the runner with 1 (%r)" % err[:120],
+      rc == 1 and seen[-1] == "closed" and "the seam broke in pass 1" in err)
+
 
 # 4. As deployed: python3 -I -B -S runner.py with the pair at descriptor 3.
 # posix_spawn's dup2 action lands the pair at descriptor 3 without close-on-exec, and every

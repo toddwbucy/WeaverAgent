@@ -15,7 +15,10 @@ only with no other ask outstanding (the contract's section 3).
 The board checks each frame before it sends it, with the relay's own rules. A frame that
 breaks them raises Mistake and is not sent: the runner refuses that pass, and the seam
 stands for the next. Limit is the same for the board's own rules. Refused and Closed are
-the harness's side: a frame it sent that breaks the contract, or its end gone.
+the harness's side: a frame it sent that breaks the contract, or its end gone. The board
+keeps the first it meets as board.broken, and after it sends and waits for nothing. The
+runner reads board.broken, not what on_turn raised, so a wire file can neither break the
+seam by raising Refused nor keep it by catching one.
 
 The frames are read strictly (the contract's section 2): a member named twice, an
 integer written with a sign, a fraction or an exponent, NaN and Infinity, and a lone
@@ -290,6 +293,7 @@ class Board:
         self._outstanding = []
         self._returned = {}
         self._asked = 0
+        self._broken = None
 
     def _open(self, number):
         self._pass, self._ended, self._next_tag = number, False, 0
@@ -300,10 +304,20 @@ class Board:
         return self._ended
 
     @property
+    def broken(self):
+        """The harness's breach the board itself met, Refused or Closed, or None."""
+        return self._broken
+
+    def _whole(self):
+        if self._broken is not None:
+            raise Limit("the seam broke: %s" % (self._broken,))
+
+    @property
     def outstanding(self):
         return tuple(self._outstanding)
 
     def _send(self, frame):
+        self._whole()
         # The relay counts every ask of a pass, the turn among them, and breaks at the
         # sixty-fifth (the contract's section 3).
         if frame.get("kind") == "ask" and self._asked >= ASKS_PER_PASS:
@@ -313,7 +327,11 @@ class Board:
             _no_surrogates(frame)
         except Refused as e:
             raise Mistake(str(e)) from None
-        send_frame(self._sock, encode(frame))
+        try:
+            send_frame(self._sock, encode(frame))
+        except Closed as e:
+            self._broken = e
+            raise
         if frame["kind"] == "ask":
             self._asked += 1
 
@@ -339,15 +357,20 @@ class Board:
     def wait(self, tag):
         """The value of an outstanding ask. The harness answers in arrival order, so the
         returns of the asks sent before it are read and kept on the way."""
+        self._whole()
         while tag not in self._returned:
             if tag not in self._outstanding:
                 raise Limit("the tag %r is not outstanding" % (tag,))
-            frame = read_frame(recv_frame(self._sock))
-            if frame.get("kind") != "return":
-                raise Refused("a frame of the kind %r inside a pass" % (frame.get("kind"),))
-            _exactly(frame, ("kind", "pass", "tag", "value"))
-            if _int(frame, "pass") != self._pass or _int(frame, "tag") != self._outstanding[0]:
-                raise Refused("a return for pass %r and tag %r out of order" % (frame["pass"], frame["tag"]))
+            try:
+                frame = read_frame(recv_frame(self._sock))
+                if frame.get("kind") != "return":
+                    raise Refused("a frame of the kind %r inside a pass" % (frame.get("kind"),))
+                _exactly(frame, ("kind", "pass", "tag", "value"))
+                if _int(frame, "pass") != self._pass or _int(frame, "tag") != self._outstanding[0]:
+                    raise Refused("a return for pass %r and tag %r out of order" % (frame["pass"], frame["tag"]))
+            except (Refused, Closed) as e:
+                self._broken = e
+                raise
             self._returned[self._outstanding.pop(0)] = frame["value"]
         return self._returned.pop(tag)
 

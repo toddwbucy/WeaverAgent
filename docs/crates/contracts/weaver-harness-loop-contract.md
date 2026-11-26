@@ -395,7 +395,9 @@ after the fact. Adding a step or a field is a change of this contract.
   not from the path, checks the grammar below, sends the `hello`, and calls
   `on_turn(board, text)` once per pass. Where `on_turn` fails (it raises anything, it
   exits, it returns with its pass open, or the board refuses a frame of its), the runner
-  refuses that pass, and the next pass runs.
+  refuses that pass, and the next pass runs. The harness's breach is told by what the
+  board met, a frame the harness sent that breaks the contract or the end gone, and never
+  by what `on_turn` raised. Then the runner exits 1, whatever the wires did after.
 
 **The wire file's grammar, as what is allowed.** One Python 3 module, UTF-8 whatever a
 coding line names, a leading byte-order mark dropped. At the top level it holds only:
@@ -413,14 +415,17 @@ It defines `on_turn(board, text)`. No name it assigns, defines or takes as an ar
 begins with two underscores. Inside a function there is no `global`, no `nonlocal`, no
 import, no class, no name among `open`, `exec`, `eval`, `compile`, `__import__`,
 `input`, `globals`, `locals`, `vars`, `getattr`, `setattr`, `delattr`, `hash` and `id`,
-no name beginning with two underscores, no attribute name beginning with an underscore,
+no type parameter, no name beginning with two underscores, no attribute name beginning with an underscore,
 no assignment to an attribute or deletion of one, no assignment or deletion by subscript
 into an attribute, and no default argument that is not a literal of the kinds a
 constant may be. Anything else is refused before the file runs, naming the
 line.
 
 **The check helps the author. It is not the boundary.** A syntax check cannot hold a
-determined program. The walls of act 2 (the account, no-new-privs, the limits, the
+determined program. The three modules a wire file may import reach the rest of the
+standard library by attribute (`json.codecs.builtins.open`, for one), so the grammar keeps
+no wire file from a file, from a socket, or from state kept between passes. Keeping the
+rulings of 2026-11-11 is the author's work. The walls of act 2 (the account, no-new-privs, the limits, the
 filter with no new socket, Landlock read-only) are what hold the loop.
 
 ## 8. Conformance: today's loop as wires

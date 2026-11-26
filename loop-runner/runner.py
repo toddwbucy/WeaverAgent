@@ -64,6 +64,14 @@ def _literal(node):
     return _scalar(node)
 
 
+def _said(e):
+    """An exception's type and text, or its type alone where its text cannot be had."""
+    try:
+        return "%s: %s" % (type(e).__name__, e)
+    except BaseException:
+        return type(e).__name__
+
+
 def _dunder(name):
     return name.startswith("__")
 
@@ -125,6 +133,8 @@ def check_grammar(tree):
                     raise Grammar("%s: an import inside a function" % line)
                 if isinstance(inner, ast.ClassDef):
                     raise Grammar("%s: a class inside a function" % line)
+                if isinstance(inner, (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple)):
+                    raise Grammar("%s: a type parameter" % line)
                 if isinstance(inner, ast.Name) and inner.id in BANNED:
                     raise Grammar("%s: the name %s" % (line, inner.id))
                 for bound in _names_bound(inner, node):
@@ -201,27 +211,37 @@ def serve(sock, digest, on_turn, err=sys.stderr):
             return 1
         expected += 1
         board._open(frame["pass"])
+        # The harness's breach is told by what the board met, never by what on_turn
+        # raised: the wires can raise Refused or Closed themselves, or catch the board's.
+        raised = None
         try:
             on_turn(board, frame["text"])
             if not board.ended:
                 raise wb.Limit("on_turn returned without ending its pass")
-        except (wb.Refused, wb.Closed) as e:
-            print("weaver-loop runner: the seam broke in pass %d: %s" % (frame["pass"], e), file=err)
+        except BaseException as e:  # the wires' own failure, whatever it raises
+            raised = e
+        if board.broken is not None:
+            print("weaver-loop runner: the seam broke in pass %d: %s" % (frame["pass"], board.broken), file=err)
             return 1
-        except BaseException as e:  # the wires' own failure, whatever it raises: the pass is refused
-            if board.ended:
-                print("weaver-loop runner: on_turn raised after pass %d ended: %s: %s"
-                      % (frame["pass"], type(e).__name__, e), file=err)
-                continue
-            print("weaver-loop runner: pass %d is refused: %s: %s" % (frame["pass"], type(e).__name__, e), file=err)
-            try:
-                for tag in board.outstanding:
-                    board.wait(tag)
-                if not board.ended:
-                    board.refuse()
-            except (wb.Refused, wb.Closed) as e:
-                print("weaver-loop runner: the seam broke in pass %d: %s" % (frame["pass"], e), file=err)
-                return 1
+        if raised is None:
+            continue
+        if board.ended:
+            print("weaver-loop runner: on_turn raised after pass %d ended: %s" % (frame["pass"], _said(raised)),
+                  file=err)
+            continue
+        print("weaver-loop runner: pass %d is refused: %s" % (frame["pass"], _said(raised)), file=err)
+        try:
+            for tag in board.outstanding:
+                board.wait(tag)
+            board.refuse()
+        except BaseException:
+            pass
+        if board.broken is not None:
+            print("weaver-loop runner: the seam broke in pass %d: %s" % (frame["pass"], board.broken), file=err)
+            return 1
+        if not board.ended:
+            print("weaver-loop runner: pass %d could not be refused" % frame["pass"], file=err)
+            return 1
 
 
 def main(argv):
