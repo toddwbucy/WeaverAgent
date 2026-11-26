@@ -335,8 +335,9 @@ while an object's members in another order are the same object. The two records 
 identical when they hold the same events, in the same order, with the same values, after
 exactly these three steps and no others:
 
-1. Every envelope's `wall_ms` and `monotonic_ns` are set aside, and so are each
-   `model.measurement`'s `payload.timings.prefill_ns` and `payload.timings.decode_ns`.
+1. Every envelope's `wall_ms` and `monotonic_ns` are set aside, and so are the values
+   of each `model.measurement`'s `payload.timings.prefill_ns` and
+   `payload.timings.decode_ns`, whose presence is still compared.
    The clocks differ between any two runs, and the two timings are elapsed times as the
    clocks are, taken by the SPU (`weaver-spu` `decoder/session.rs`) and rendered into
    every measurement (`main.rs`). These four and no others: a timing added to the record

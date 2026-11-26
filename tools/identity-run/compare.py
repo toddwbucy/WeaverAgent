@@ -224,12 +224,16 @@ def normalize(events, composer):
     return out
 
 
+SET_ASIDE = "(set aside)"
+
+
 def _set_aside(node, path):
-    """`node` less the member at `path`, where it stands; `node` itself is not changed."""
+    """`node` with the value at `path` replaced by `SET_ASIDE`, where it stands, so the
+    value is not compared and the member's presence is; `node` itself is not changed."""
     if not isinstance(node, dict) or path[0] not in node:
         return node
     if len(path) == 1:
-        return {k: v for k, v in node.items() if k != path[0]}
+        return {k: (SET_ASIDE if k == path[0] else v) for k, v in node.items()}
     return {k: (_set_aside(v, path[1:]) if k == path[0] else v) for k, v in node.items()}
 
 
@@ -441,6 +445,10 @@ def run(folders):
         else:
             compared.append(index)
     result["images"] = {"compared": compared, "not compared": not_compared}
+    if not compared:
+        # The verdict stands on the records; the words say the images added nothing.
+        result["reason"] = ("no save point's image was compared: the two compiled arms' images "
+                            "differ at every save point, so identity rests on the records alone")
 
     if arms[3]["meta"]["wires_sha256"] == arms[2]["meta"]["wires_sha256"]:
         return answer(FAILS, reason="the negative control's wire file is the wires arm's: no byte was changed", **result)
