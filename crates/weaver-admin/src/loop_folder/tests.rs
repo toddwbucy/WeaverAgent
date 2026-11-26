@@ -35,6 +35,13 @@ fn laid(tag: &str, content: &[u8]) -> crate::scratch::Scratch {
     base
 }
 
+/// **The bound is 256 KiB**, as `weaver-admin-Spec` section 4 states it, so
+/// a moved constant is caught here and not followed by the rows that use it.
+#[test]
+fn the_wire_files_bound_is_256_kib() {
+    assert_eq!(WIRE_FILE_BOUND, 262_144);
+}
+
 /// **The agent's folder is the config base's parent joined with the name.**
 #[test]
 fn the_agents_folder_stands_beside_the_config_base() {
