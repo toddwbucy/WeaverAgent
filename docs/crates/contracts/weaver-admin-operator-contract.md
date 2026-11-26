@@ -855,17 +855,25 @@ judges the service's uid as it judges any reader's.
 - **The service dials the agent's relay before it answers the opening line**, and sends
   `open` only once that dial has connected, **within 1 second of the connect**. A
   service that cannot send it in that second closes the dialed connection and refuses
-  the opening `relay_unreachable`. After `open` it copies the bytes each way until
-  either side closes, and closes the other.
+  the opening `relay_unreachable`. **After `open` the service holds no byte**: it
+  forwards each way as the bytes arrive, until either side closes, and closes the
+  other.
 - **Where no relay stands to dial** (a pipe or socket sink, or a relay that has died), or
   the dial fails, the opening is refused `relay_unreachable` in place of `open`. The
   connector reads it as a closed door, as it reads a failed dial of the relay today.
-- **After `open`, a clean close before any header byte has two causes**: the relay's
-  refusal of the position the request named, or a relay that died after the service's
-  dial connected. The two close alike. The connector reads such a close as the relay's
-  refusal of the position, as it does today. Where the cause was a relay that died, the
-  next opening is refused `relay_unreachable`, so the wrong reading costs one mark or
-  one alert and does not repeat. That is a known limit.
+- **After `open`, a clean close before any header byte has three causes**: the relay's
+  refusal of the position the request named, a relay that died after the service's
+  dial connected, or a request that reached the relay after its window, from a
+  connector that read `open` late or was slow to send. The three close alike.
+- **The connector may confirm.** Before it acts on such a close, it may open the trace
+  once more with the same position. The relay judges each request on its own, so a
+  second close before any header byte at that position is the relay's refusal of it,
+  and `relay_unreachable` at that opening is the closed door. This is permitted, not
+  required. A connector that does not confirm reads the close as the relay's refusal of
+  the position, as it does today. Where the cause was one of the other two, the wrong
+  reading costs one mark or one alert and does not repeat: a relay that died refuses
+  the next opening `relay_unreachable`, and the next request in time is judged on its
+  own. That is a known limit.
 - The newest connection replaces the old at the relay, as section 2 states, so the
   service closes the older splice when the relay ends it, and not at the newer
   connection's opening. The relay replaces its reader
@@ -875,8 +883,10 @@ judges the service's uid as it judges any reader's.
   the relay's accept. The relay accepts no earlier than the service's dial connects, and
   `open` leaves within 1 second of that connect, so at least 4 seconds of the relay's
   window remain once `open` is sent. **The connector sends its whole request within 1
-  second of reading `open`.** A request later than the relay's window is refused by the
-  relay, a close before any header byte.
+  second of reading `open`.** Nothing bounds the time from the service's send of `open`
+  to the connector's read of it, so a connector that reads `open` late, or sends
+  slowly, can reach the relay after its window. The relay then closes before any
+  header byte, the third cause above.
 
 ### 8.6 The log
 
@@ -942,7 +952,7 @@ from the moment it answered `open`, with no history before it:
 | A line the service sends on a control connection | 256 KiB: a 64 KiB object, 16 KiB of standard error at most 96 KiB escaped, and the members | a connector bounding its read here reads past it as a fault |
 | A run's length | none at the service. The root program's own bounds hold: 900 seconds on a load's start by default (section 3) | the connector's own bound, then `run` |
 | Runs remembered per agent | those standing, and the last ended, until the service restarts | `ended` is `null`, under a new `instance` |
-| The trace request | 4096 bytes within 5 seconds of the relay's accept, the relay's (`weaver-types-Spec` section 3.1), at least 4 seconds of them after `open`. The connector sends it within 1 second of reading `open` | the relay's close before the header |
+| The trace request | 4096 bytes within 5 seconds of the relay's accept, the relay's (`weaver-types-Spec` section 3.1), at least 4 seconds of them after `open`. The connector sends it within 1 second of reading `open`, and the service holds no byte of it, forwarding each way as the bytes arrive | the relay's close before the header, one of section 8.5's three causes |
 | A log line carried | 8 KiB | the `oversized` marker |
 | A log line's delay | 1 second from its append | none: the service's promise |
 | A log connection's unsent bytes | 1 MiB | closed, `refused` `log_behind` sent first where the connection takes it |
@@ -1007,7 +1017,7 @@ the M events.
 | K6 | V: machine A read | K2, `run` |
 | K6 | C: close | K9 |
 | K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run machine A admitted goes on |
-| K7 | the relay: a close before any header byte | K9, the connector's side closed. Its cause is the relay's refusal of the position or a relay that died, which close alike, and the connector reads it as the refusal (section 8.5) |
+| K7 | the relay: a close before any header byte | K9, the connector's side closed. Its cause is the relay's refusal of the position, a relay that died, or a request that reached the relay after its window, which close alike. The connector reads it as the refusal, or may first open once more at the same position (section 8.5) |
 | K7 | C closes, or the relay closes after a header byte | K9, the other side closed |
 | K7 | the relay: it admits a newer trace request of the agent and ends this connection | K9, the connector's side closed. A newer trace connection's opening alone closes nothing |
 | K8 | V: a line appended | K8, `log` with `line` or `text`, or the `oversized` marker past 8 KiB |
@@ -1059,11 +1069,13 @@ the M events.
 - **S6.** Every ask gets exactly one final line, or the connection closes. A verb's
   `started` comes before its final line.
 - **S7.** After `open` on a trace connection, the bytes each way are the relay's,
-  unchanged. `open` is sent only once the relay's dial has connected, and within 1
-  second of the connect. A close there before any header byte is the relay's refusal of
-  the position or a relay that died after the dial connected. The two close alike, and
-  the connector reads the close as the refusal. Where the relay died, the next opening
-  is refused `relay_unreachable`, so the wrong reading does not repeat.
+  unchanged, and the service holds none of them. `open` is sent only once the relay's
+  dial has connected, and within 1 second of the connect. A close there before any
+  header byte is the relay's refusal of the position, a relay that died after the dial
+  connected, or a request that reached the relay after its window. The three close
+  alike. The connector reads the close as the refusal, or may first open once more at
+  the same position, where a second such close is the refusal and `relay_unreachable`
+  the closed door. A wrong reading does not repeat.
 - **S8.** A refusal of the service's own is a `refused` line, never inside the root
   program's object and never an exit code. A refusal of the root program's is inside its
   object, at exit 1, carried untouched.
@@ -1114,7 +1126,9 @@ of the connector account's, and can:
   refuse by closing before the header, name `length`, send heartbeats while idle, send
   `truncated` then end, and end the older connection only once it admits a newer
   request, as the relay does. It can also close before the header as a relay that died
-  after the dial does, and then refuse the next opening `relay_unreachable`.
+  after the dial does, and then refuse the next opening `relay_unreachable`, or close
+  before the header as a relay whose window passed, and then admit the same position at
+  the next opening.
 - on a log connection, send scripted lines with their flag, markers, and `log_behind`,
   let the newest log connection replace the older when it opens, and close.
 
