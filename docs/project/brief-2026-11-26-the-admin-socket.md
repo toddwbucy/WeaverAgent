@@ -129,12 +129,12 @@ change.
      run that holds the agent.
 2. **The service answers the opening line before any purpose's exchange begins:** one
    `open` line, or one `refused` line and a close, at most 4096 bytes and within 10
-   seconds of the opening line, the log's judging and the relay's dial included. A
-   refusal of the opening is then a typed line on every purpose. On a trace connection
-   the service dials the relay before it answers, and where no relay stands or the dial
-   fails it refuses the opening `relay_unreachable`. The trace's own refusal, a close
-   before the header, stays the relay's, after `open`, and is never a relay that was not
-   there.
+   seconds of the opening line, the log's judging and the relay's dial included, each
+   cut off at 8 seconds so a refusal arrives in time. A refusal of the opening is then a
+   typed line on every purpose. On a trace connection the service dials the relay before
+   it answers, and where no relay stands or the dial fails it refuses the opening
+   `relay_unreachable`. The trace's own refusal, a close before the header, stays the
+   relay's, after `open`, and is never a relay that was not there.
 3. **The peer admitted is the admin connector's account alone,** by its uid from
    `SO_PEERCRED`, checked at accept. Root is refused too. The operator at a root shell
    runs the root program directly and never needs the socket. A refused peer reads
@@ -161,8 +161,10 @@ change.
    containment until a load moves into the agent's scope. The root program's own invocation
    lock refuses a second verb meanwhile, inside admin's object, and the outcome is in
    `admin.log` and the next `show`. Each start of the service draws an `instance`,
-   which every `open` and every `run` answer names, so a connector tells a run
-   forgotten by a restart from one never started.
+   which every `open` and every `run` answer names. Under another `instance` the
+   connector reads its ask as unknown, never started or forgotten, and `show` settles
+   it. Under the same `instance`, a run neither standing nor `ended` did not run, where
+   the connector asked no other verb meanwhile.
 8. **The socket's path is `/run/weaver-admin.sock`,** owned by the weaver-admin
    account, grouped to the admin connector's own group, mode `0660`, made by systemd.
    That group holds no member but the connector's account, so the mode admits the
@@ -206,6 +208,7 @@ events.
 | K1 | C: a control or log opening line that judges | K2 or K8 by its purpose, `open` sent |
 | K1 | C: a trace opening line that judges, and the service's dial of the agent's relay connects | K7, `open` sent |
 | K1 | C: a trace opening line that judges, where no relay stands or the service's dial of it fails | K9, `refused` `relay_unreachable` |
+| K1 | C: close, while the service dials the relay | K9. The dialed connection is closed, before it sends the relay any byte |
 | K1 | C: an unknown version or purpose, a refused name, or an unread log | K9, `refused` with its word |
 | K1 | C: a line past 4096 bytes, one that does not parse, or a version that is not a positive integer | K9, `refused` `opening_malformed` |
 | K1 | V: a newer trace or log connection of the agent is opened | K9, closed |
@@ -226,15 +229,15 @@ events.
 | K4 | V: granted, and machine A refuses the run | K2, `refused` `busy` naming the run that holds the agent |
 | K4 | V: granted, and the root program does not start | K2, `refused` `not_started` |
 | K4 | C: close, before the read answers | K9. Nothing starts |
-| K4 | C: close, after the read answers granted | K9. The start goes on as if the connection stood, and a run started is kept in machine A |
+| K4 | C: close, after the read answers granted | K9. The start goes on as if the connection stood, and a run started, a `show` excepted, is kept in machine A |
 | K5 | V: the root program ends with exit 0 or 1 and one object | K2, `ran` |
 | K5 | V: it ends any other way | K2, `fault` |
-| K5 | C: close | K9. The run goes on in machine A |
+| K5 | C: close | K9. The run goes on, kept in machine A unless it is a `show` |
 | K6 | V: machine A read | K2, `run` |
 | K6 | C: close | K9 |
 | K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run started goes on |
 | K7 | the relay: a close before any header byte | K9, the connector's side closed. It is the relay's refusal of the position |
-| K7 | C or the relay: either side closes | K9, the other side closed |
+| K7 | C closes, or the relay closes after a header byte | K9, the other side closed |
 | K7 | V: a newer trace connection of the agent is opened | K9, closed |
 | K8 | V: a line appended | K8, `log` with `line` or `text`, or the `oversized` marker past 8 KiB |
 | K8 | V: the file truncated or replaced | K8, the `discontinuity` marker, the file read from its start |
@@ -276,7 +279,8 @@ events.
   root program's arguments.
 - **S4.** A run's end does not depend on its connection. A close before the grant's
   read answers starts nothing. From the moment the root program is started, the run
-  goes on to its end and is kept, whether or not `started` reached the connector.
+  goes on to its end, whether or not `started` reached the connector, and is kept unless
+  it is a `show`.
 - **S5.** At most one run of an agent stands, except a `show`, which starts beside any
   run, and the `force-unload` beside an `unload` of A2.
 - **S6.** Every ask gets exactly one final line, or the connection closes. A verb's
