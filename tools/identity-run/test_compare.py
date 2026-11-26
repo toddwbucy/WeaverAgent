@@ -54,7 +54,7 @@ def fixture():
 
 def remint(events, tag):
     """Every minted identifier given a fresh value for this arm, the same value always to
-    the same new one, and every clock moved."""
+    the same new one, and every clock and both of a measurement's timings moved."""
     fresh = {}
 
     def mint(value):
@@ -72,6 +72,10 @@ def remint(events, tag):
         event = walk(event, (), compare.ENVELOPE_RENAMED | compare.RENAMED.get(event["kind"], frozenset()))
         event["wall_ms"] = 1 + i + len(tag) * 1000
         event["monotonic_ns"] = str(7 * i + len(tag))
+        timings = event.get("payload", {}).get("timings") if isinstance(event.get("payload"), dict) else None
+        if event["kind"] == "model.measurement" and isinstance(timings, dict):
+            timings["prefill_ns"] = str(1000 + 3 * i + len(tag))
+            timings["decode_ns"] = str(2000 + 5 * i + len(tag))
         out.append(event)
     return out
 
@@ -236,6 +240,14 @@ class TheRun(unittest.TestCase):
         code, body = self.run_on(self.arms(wires=wires))
         self.assertEqual(code, compare.FAILS, body)
         self.assertEqual(body["difference"]["at"], "sequence")
+
+    def test_a_timing_beside_the_two_named_is_compared(self):
+        wires = set_composer(remint(fixture(), "w"), wires_composer(WIRES_SHA))
+        at = next(i for i, e in enumerate(wires) if e["kind"] == "model.measurement")
+        wires[at]["payload"]["timings"]["sample_ns"] = "5"
+        code, body = self.run_on(self.arms(wires=wires))
+        self.assertEqual(code, compare.FAILS, body)
+        self.assertEqual(body["difference"]["at"], "payload.timings.sample_ns")
 
     def test_an_event_more_or_fewer_fails_at_the_records_length(self):
         wires = set_composer(remint(fixture(), "w"), wires_composer(WIRES_SHA))
@@ -416,13 +428,29 @@ class TheSteps(unittest.TestCase):
         ids = {v for e in normal for v in json.dumps(e).split('"') if v.startswith("id-")}
         self.assertEqual(ids, {"id-%d" % n for n in range(1, 9)})
 
-    def test_the_clocks_and_the_composer_alone_are_set_aside(self):
+    def test_the_clocks_the_timings_and_the_composer_alone_are_set_aside(self):
         events = fixture()
         normal = compare.normalize(events, compare.COMPILED_COMPOSER)
+        measured = 0
         for before, after in zip(events, normal):
             self.assertEqual(set(before) - set(after), {"wall_ms", "monotonic_ns"})
+            if before["kind"] == "model.measurement":
+                measured += 1
+                self.assertEqual(set(before["payload"]["timings"]) - set(after["payload"]["timings"]),
+                                 {"prefill_ns", "decode_ns"})
+                self.assertEqual(set(before["payload"]) - set(after["payload"]), set())
+        self.assertEqual(measured, 2, "the real record's two measurements")
         self.assertEqual(set(events[0]["payload"]) - set(normal[0]["payload"]), {"composer"})
         self.assertEqual(events[0]["payload"]["composer"], {"binary": "worker"}, "the real record's composer")
+
+    def test_the_real_records_two_measurements_differ_by_their_timings_alone(self):
+        # Graded against the live shape: two loads of one agent, each one turn, whose
+        # measurements differ in the two elapsed times and are equal once step 1 holds.
+        events = fixture()
+        first, second = (i for i, e in enumerate(events) if e["kind"] == "model.measurement")
+        self.assertNotEqual(events[first]["payload"]["timings"], events[second]["payload"]["timings"])
+        normal = compare.normalize(events, compare.COMPILED_COMPOSER)
+        self.assertEqual(normal[first]["payload"], normal[second]["payload"])
 
     def test_pair_answers_equal_or_the_first_difference(self):
         made = Arms(self)

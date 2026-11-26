@@ -52,8 +52,13 @@ USAGE = """usage:
 VERDICTS = {IDENTICAL: "identical", FAILS: "fails", CONTROL_DIFFERS: "control-differs",
             UNCLEAN: "unclean", UNREADABLE: "unreadable"}
 
-# Step 1: the clocks, which differ between any two runs.
+# Step 1: the clocks, which differ between any two runs, and the two elapsed times the
+# SPU renders into every `model.measurement` (`weaver-spu` `main.rs`, taken in
+# `decoder/session.rs`), elapsed times as the clocks are. These and no others: a timing
+# added later fails the comparison until the contract names it.
 CLOCKS = ("wall_ms", "monotonic_ns")
+TIMINGS = {"model.measurement": (("payload", "timings", "prefill_ns"),
+                                 ("payload", "timings", "decode_ns"))}
 
 # Step 3: the minted identifiers, by kind, as paths from the event's top. `*` is any
 # element of a list. The envelope's are every event's. These and no others
@@ -202,6 +207,8 @@ def normalize(events, composer):
     out = []
     for index, event in enumerate(events):
         event = {k: v for k, v in event.items() if k not in CLOCKS}
+        for timing in TIMINGS.get(event["kind"], ()):
+            event = _set_aside(event, timing)
         if event["kind"] == "load":
             payload = event.get("payload")
             if not isinstance(payload, dict) or payload.get("composer") != composer:
@@ -212,6 +219,15 @@ def normalize(events, composer):
         paths = ENVELOPE_RENAMED | RENAMED.get(event["kind"], frozenset())
         out.append(_rename(event, (), paths, name))
     return out
+
+
+def _set_aside(node, path):
+    """`node` less the member at `path`, where it stands; `node` itself is not changed."""
+    if not isinstance(node, dict) or path[0] not in node:
+        return node
+    if len(path) == 1:
+        return {k: v for k, v in node.items() if k != path[0]}
+    return {k: (_set_aside(v, path[1:]) if k == path[0] else v) for k, v in node.items()}
 
 
 def _rename(node, path, paths, name):

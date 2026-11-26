@@ -332,8 +332,12 @@ and `independent`, both with nothing seated and with a prompt seated.
 event by event. The two records are identical when they hold the same events, in the
 same order, with the same values, after exactly these three steps and no others:
 
-1. Every envelope's `wall_ms` and `monotonic_ns` are set aside. They differ between any
-   two runs.
+1. Every envelope's `wall_ms` and `monotonic_ns` are set aside, and so are each
+   `model.measurement`'s `payload.timings.prefill_ns` and `payload.timings.decode_ns`.
+   The clocks differ between any two runs, and the two timings are elapsed times as the
+   clocks are, taken by the SPU (`weaver-spu` `decoder/session.rs`) and rendered into
+   every measurement (`main.rs`). These four and no others: a timing added to the record
+   later fails the comparison until this step names it.
 2. Each arm's load events' `composer` is checked against what that arm must hold, then
    set aside: the compiled loop's `{binary: "worker"}` in the compiled arm, and the
    wires' form with the wire file's digest in the wires arm.
@@ -362,17 +366,21 @@ repeats bit for bit. So the test runs the compiled loop twice under this compari
 before it runs the wires. Where the two compiled arms differ, the test reports that and
 does not compare the wires.
 
-**Two timing paths are outside the comparison.**
+**Two timing paths are outside the comparison, read by three marks.**
 
 - The `RecorderCommitPressure` fault reads the recorder's queue depth at the turn's end
   (`engine.rs`:162-188), which depends on the writer's timing. The script keeps each
   session short of the high-water mark (`weaver-trace` `writer.rs`:50, 768 queued
-  records).
+  records). The worker's log reads the same mark a second way: its queue line names the
+  peak the trace queue reached and the mark, and a peak at or past the mark is the
+  third mark of an unclean arm.
 - The state seam's answer bound of 2 seconds (`state.rs`:27). A late `recall` or `shape`
   answers `null` and changes the delta.
 
-Every arm, the control arms included, must hold neither: no pressure fault, and no
-answer the state seam timed out. An arm that holds one is run again, at most three
+Every arm, the control arms included, must hold none of the three: no pressure fault, no
+queue peak at its mark in the worker's log, and no answer the state seam timed out. A
+timed-out answer retires the state seam, and the unload records the member as
+`unconfirmed`. An arm that holds one is run again, at most three
 times, and then the test fails.
 
 A difference outside the three steps is a failure of the test, never a field to add
@@ -592,3 +600,7 @@ Nothing, when it lands. Each standing sentence that says the loop is compiled al
 changes in the act that makes the new sentence true, and each pull request's body lists
 those it changes (the Planner's ruling of 2026-11-25, point 11). The list of candidates
 is the brief's.
+
+Section 6 changed on 2026-11-26, before any run: step 1 names the measurement's two
+timings, which every real arm differs in, and the unclean arm's marks name the worker's
+queue line (the Planner's ruling of 2026-11-26).
