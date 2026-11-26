@@ -304,7 +304,7 @@ fn each_stale_or_wrong_path_is_refused_naming_it() {
         ),
         (
             "the pycache folder a link to an empty folder",
-            |l, g| {
+            |l, _| {
                 let p = l.0.join("pycache");
                 std::fs::remove_dir(&p).unwrap();
                 std::fs::create_dir(l.0.join("empty")).unwrap();
