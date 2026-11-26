@@ -142,10 +142,10 @@ change.
    `SO_PEERCRED`, checked at accept. Root is refused too. The operator at a root shell
    runs the root program directly and never needs the socket. A refused peer reads
    nothing, and the connection closes.
-4. **A run carries a run id,** 16 hex digits drawn by the service. A `started` line
-   names it once the root program is running, and the final line names it again. A new
-   control connection asks `run` and learns which runs stand and how the last one
-   ended, by that id. A `show` is never listed in `standing` and never kept as `ended`,
+4. **A run carries a run id,** 16 hex digits drawn by the service when it takes the
+   run, at the grant. The run stands from then. A `started` line names it once the root
+   program is running, and the final line names it again. A new control connection asks
+   `run` and learns which runs stand and how the last one ended, by that id. A `show` is never listed in `standing` and never kept as `ended`,
    so it never hides the outcome of a verb asked before a drop.
 5. **The principal is recorded in the service's own log,** one line per run, with the
    run id, the agent, the verb and the outcome. `admin.log` and the trace carry the
@@ -199,7 +199,7 @@ events.
 | K1 | Admitted, waiting for the opening line |
 | K2 | Control, no ask outstanding |
 | K3 | Control, a grants ask outstanding |
-| K4 | Control, a verb ask outstanding, its grant being read |
+| K4 | Control, a verb ask outstanding, its grant being read, or its run admitted and its root program starting |
 | K5 | Control, a verb ask outstanding, its run started |
 | K6 | Control, a run ask outstanding |
 | K7 | Trace, after `open`: the relay's wire |
@@ -229,19 +229,19 @@ events.
 | K3 | V: the eight grants read | K2, `grants` naming the granted verbs |
 | K3 | V: a read fails, or 10 seconds pass | K2, `refused` `grants_unread` |
 | K3 | C: close | K9 |
-| K4 | V: granted, and machine A admits the run | K5, `started` with the run id |
+| K4 | V: granted, machine A admits the run, and its root program starts | K5, `started` with the run's id |
 | K4 | V: not granted | K2, `refused` `not_granted` |
 | K4 | V: the grant cannot be read within 10 seconds | K2, `refused` `grant_unread` |
 | K4 | V: granted, and machine A refuses the run | K2, `refused` `busy` naming the run that holds the agent |
-| K4 | V: granted, and the root program does not start | K2, `refused` `not_started` |
+| K4 | V: granted, machine A admits the run, and its root program does not start | K2, `refused` `not_started`. A run machine A holds leaves it, with nothing kept as the last ended |
 | K4 | C: close, before the read answers | K9. Nothing starts |
-| K4 | C: close, after the read answers granted | K9. The start goes on as if the connection stood, and a run started, a `show` excepted, is kept in machine A |
+| K4 | C: close, after the read answers granted | K9. The start goes on as if the connection stood. A run machine A admitted, a `show` excepted, stands there from the grant and is kept once it ends |
 | K5 | V: the root program ends with exit 0 or 1 and one object | K2, `ran` |
 | K5 | V: it ends any other way | K2, `fault` |
 | K5 | C: close | K9. The run goes on, kept in machine A unless it is a `show` |
 | K6 | V: machine A read | K2, `run` |
 | K6 | C: close | K9 |
-| K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run started goes on |
+| K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run machine A admitted goes on |
 | K7 | the relay: a close before any header byte | K9, the connector's side closed. It is the relay's refusal of the position |
 | K7 | C closes, or the relay closes after a header byte | K9, the other side closed |
 | K7 | the relay: it admits a newer trace request of the agent and ends this connection | K9, the connector's side closed. A newer trace connection's opening alone closes nothing |
@@ -258,19 +258,21 @@ events.
 | State | What holds |
 | --- | --- |
 | A0 | No run of the agent stands. The last run that ended, a `show` excepted, is kept, or none since the service started |
-| A1 | One run stands |
+| A1 | One run stands, from its grant |
 | A2 | An `unload` and a `force-unload` beside it stand |
 
 | State | Event | Next |
 | --- | --- | --- |
 | any | a `show` ask, granted | no change. The `show` starts beside whatever stands, and is not a run this machine holds |
 | any | a `show` ends | no change. Its final line goes to its own connection alone, never kept as the last ended |
-| A0 | a verb ask other than `show`, granted | A1, holding that run |
+| A0 | a verb ask other than `show`, granted | A1, holding that run, its id drawn now, before its root program starts |
 | A1 | a `force-unload` ask, granted, while the run A1 holds is an `unload` | A2, holding both |
 | A1 | any other verb ask but `show`, granted | A1, that ask refused `busy` |
 | A1 | the run A1 holds ends | A0, its final line kept as the last ended |
+| A1 | the root program of the run A1 holds cannot be started | A0, nothing kept in its place. The last ended stays as it was |
 | A2 | another verb ask but `show`, granted | A2, that ask refused `busy` |
 | A2 | the `unload` or the `force-unload` ends | A1, holding the one still standing, the ended one's final line kept as the last ended |
+| A2 | the root program of the `unload` or the `force-unload` cannot be started | A1, holding the other. The last ended stays as it was |
 | any | the asking connection closes | no change |
 | any | the service restarts | A0 with no run kept, under a new `instance`. A root program it started runs on, under the root program's own lock, where the install meets section 8.4's requirement |
 
@@ -284,9 +286,11 @@ events.
 - **S3.** The principal enters no decision: not S1's read, not machine A, and not the
   root program's arguments.
 - **S4.** A run's end does not depend on its connection. A close before the grant's
-  read answers starts nothing. From the moment the root program is started, the run
-  goes on to its end, whether or not `started` reached the connector, and is kept unless
-  it is a `show`.
+  read answers starts nothing. A run stands from its grant, when machine A takes it, and
+  a `run` answer lists it from then. From the moment the root program is started, the
+  run goes on to its end, whether or not `started` reached the connector, and is kept
+  unless it is a `show`. A run whose root program cannot be started leaves `standing`
+  with nothing kept as `ended`.
 - **S5.** At most one run of an agent stands, except a `show`, which starts beside any
   run, and the `force-unload` beside an `unload` of A2.
 - **S6.** Every ask gets exactly one final line, or the connection closes. A verb's
