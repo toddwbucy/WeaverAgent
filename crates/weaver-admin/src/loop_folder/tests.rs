@@ -249,3 +249,33 @@ fn another_owner_or_group_refuses() {
         "{refused}"
     );
 }
+
+/// **The wire file grouped to another group refuses**, the loop folder
+/// standing in its shape: set to another of this uid's own groups, and
+/// skipped, naming why, where it holds none (as the declaration's group case
+/// in `src/tests.rs` is). Perturbation: drop the wire file's group check, and
+/// it is admitted.
+#[test]
+fn a_wire_file_of_another_group_refuses() {
+    let (owner, group) = ids();
+    let egid = nix::unistd::getegid();
+    let Some(other) = nix::unistd::getgroups()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|g| *g != egid)
+    else {
+        eprintln!(
+            "skipped: this uid holds one group, so the wire file's group cannot be set apart"
+        );
+        return;
+    };
+    let base = laid("wire-group", b"abc");
+    let wire = base.join("a1/loop/wires.py");
+    nix::unistd::chown(&wire, None, Some(other)).expect("chgrp to another of this uid's groups");
+    let refused = judge(&base.join("a1"), owner, group).expect_err("another group");
+    assert!(
+        refused.contains("the wire file")
+            && refused.contains("is not grouped to the agent's group"),
+        "{refused}"
+    );
+}

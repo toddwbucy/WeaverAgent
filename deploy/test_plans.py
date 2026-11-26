@@ -1250,7 +1250,11 @@ elif name == 'sudo':
         source, destination = (pathlib.Path(mapped(a)) for a in rest[-2:])
         assert source.is_relative_to(root) and destination.is_relative_to(root)
         def move():
-            assert not destination.exists(), destination
+            # **A staged file renamed over its name replaces it**, as
+            # rename(2) does (deploy/loop-grant.sh's `.<name>.new`); any other
+            # move onto a standing name is a script's error here.
+            staged = source.name.startswith('.') and source.name.endswith('.new') and source.is_file()
+            assert not destination.exists() or (staged and destination.is_file()), destination
             source.rename(destination)
         privileged([source, destination], move)
     elif op == 'mktemp':
@@ -6013,6 +6017,18 @@ esac
         result = self.run_script("update-stack.sh")
         for name in ("runner.py", "weaver_board.py", "grant"):
             self.assertIn(f"  {'weaver-loop/' + name:<22} unchanged", result.stdout)
+        # Laid over a runner and a grant that differ, each is replaced by its
+        # stage's rename and nothing else is left in the folder.
+        (folder / "runner.py").write_text("old runner\n")
+        (folder / "grant").write_text("old grant\n")
+        shutil.rmtree(self.root / 'target with "quotes"')
+        self.log.unlink(missing_ok=True)
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"  {'weaver-loop/runner.py':<22} CHANGED", result.stdout)
+        self.assertEqual((folder / "runner.py").read_bytes(), (DEPLOY.parent / "loop-runner" / "runner.py").read_bytes())
+        self.assertEqual((folder / "grant").read_text(), self.loop_grant(prefix))
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ["grant", "runner.py", "weaver_board.py"])
 
     def test_a_rollback_puts_the_loop_runner_back(self):
         """**The loop runner's files go back as the binaries do**: a runner
@@ -6030,6 +6046,10 @@ esac
         result = self.library_install(LDD_MISSING="libllama.so.0")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn(f"  {'weaver-loop/runner.py':<22} CHANGED", result.stdout)
+        # The folder was laid before the rollback, so the restore is what
+        # put the old files back (a run that dies before laying passes the
+        # rows below untested).
+        self.assertIn(f"  laid {folder} (runner.py weaver_board.py grant)", result.stdout)
         self.assertEqual((folder / "runner.py").read_text(), "old runner\n")
         self.assertEqual((folder / "grant").read_text(), "old grant\n")
         self.assertEqual(sorted(p.name for p in folder.iterdir()), ["grant", "runner.py"])
@@ -6043,6 +6063,7 @@ esac
         Perturbation: drop either rmdir and its folder stays."""
         result = self.library_install(LDD_MISSING="libllama.so.0")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("  laid " + str(self.root / "installed" / "lib" / "weaver-loop"), result.stdout)
         self.assertFalse((self.root / "installed" / "lib" / "weaver-loop").exists())
         self.assertFalse((self.root / "installed" / "lib" / "weaver-loop-pycache").exists())
         self.assertNotIn("FAILED to", result.stderr)
