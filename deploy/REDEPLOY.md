@@ -84,7 +84,10 @@ known retired executable, or the prefix still contains `python-spu/` or its bina
 directory contains `pyworker`. Dangling links count as remnants. A declaration with
 `loop-file` refuses before an update builds, and admin's parser names it as an
 unknown field. The checks recognize the published paths and filenames, not the
-language of an arbitrarily renamed executable. The operator inventories any
+language of an arbitrarily renamed executable. **The loop runner is not a retired
+track**: it runs a wire file root lays in the agent's loop folder, under the launcher's
+walls, and the stack lays it under `<prefix>/lib/weaver-loop/` (the table above,
+`weaver-harness-Spec` section 2.5). The operator inventories any
 custom deployment paths as part of the transition.
 
 For a box carrying either Python track, use the decommission, archive, purge and

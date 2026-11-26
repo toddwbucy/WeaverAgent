@@ -11,6 +11,15 @@
 //! whole of the traffic across this boundary. The seat is the only surface
 //! you hold, and a loop that needs a port the seat does not offer is a
 //! charter change entering through the front door, not an import.
+//!
+//! **This loop runs where no loop is laid.** A wire file root lays in the
+//! agent's loop folder, `/etc/weaver/<agent>/loop/wires.py`, runs in its
+//! place, as a process of its own under the launcher's walls, composing
+//! through the same seat over `weaver-harness-loop-contract`
+//! (`weaver-harness-Spec` section 2.5). Today's loop written as wires is
+//! `tests/fixtures/loop-wires-today.py`, held to `compose` by the cross
+//! test, and the identity run (`tools/identity-run/`) is the gate on the
+//! wires taking over.
 
 use weaver_harness::{Ports, Recalled, Seat, SessionShape, TurnError, TurnOutcome};
 use weaver_traits::{ContentBlock, Message, Role};
