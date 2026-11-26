@@ -18,7 +18,8 @@ SCRIPT = os.path.join(HERE, "run-arm.sh")
 
 
 def plan(*args):
-    return subprocess.run(["bash", SCRIPT, *args], capture_output=True, text=True)
+    env = {k: v for k, v in os.environ.items() if k != "SUDO_USER"}
+    return subprocess.run(["bash", SCRIPT, *args], capture_output=True, text=True, env=env)
 
 
 def steps(out):
@@ -119,6 +120,15 @@ class ThePlan(unittest.TestCase):
                 ran = plan(*args)
                 self.assertEqual(ran.returncode, 2, ran.stdout + ran.stderr)
                 self.assertNotIn("== step", ran.stdout)
+
+    def test_apply_through_sudo_from_another_account_is_refused_before_anything(self):
+        env = dict(os.environ, SUDO_USER="someone")
+        ran = subprocess.run(["bash", SCRIPT, "--arm", "compiled", *self.common, "--apply"],
+                             capture_output=True, text=True, env=env)
+        self.assertEqual(ran.returncode, 2, ran.stdout + ran.stderr)
+        self.assertIn("not sudo from someone: run the identity run from root's own login", ran.stderr)
+        self.assertNotIn("== step", ran.stdout)
+        self.assertFalse(os.path.exists(self.common[-1]))
 
     def test_apply_is_roots_and_refused_to_anyone_else_before_it_touches_anything(self):
         if os.geteuid() == 0:

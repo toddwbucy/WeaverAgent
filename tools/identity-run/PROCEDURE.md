@@ -110,7 +110,10 @@ tools/identity-run/run-arm.sh --arm negative --wires wires-negative.py --agent i
     --out $R/negative --apply 2>&1 | tee $R/negative.console
 ```
 
-Run each without `--apply` first and read the plan. Each arm ends with its agent
+Run each from root's own login, not through sudo from another account:
+`create-agent.sh` refuses `--root-operator` under sudo from another account, so
+`run-arm.sh` refuses it first, before anything is touched. Run each without `--apply`
+first and read the plan. Each arm ends with its agent
 archived into `<arm>/archive` and taken down by `take-down.sh`, the stack left standing.
 
 **Not measured before this run:**

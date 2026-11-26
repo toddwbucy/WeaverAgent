@@ -262,6 +262,10 @@ ARMJSON
 printf 'identity run, %s arm, agent %s%s: %s\n' "$ARM" "$AGENT" "${WIRES_SHA:+, wire file $WIRES_SHA}" \
     "$([ "$APPLY" = 1 ] && echo acting || echo 'plan only (--apply acts)')"
 if [ "$APPLY" = 1 ]; then
+    # create-agent.sh refuses --root-operator through sudo from another account, so the
+    # arm refuses it first, in its words, before anything is touched.
+    [ -z "${SUDO_USER:-}" ] || [ "$SUDO_USER" = root ] \
+        || die "--root-operator is for root's own login on a single-purpose appliance, not sudo from $SUDO_USER: run the identity run from root's own login"
     [ "$(id -u)" = 0 ] || die "--apply is root's, the operator on an agent appliance"
     [ ! -e "$OUT" ] || die "$OUT stands: each arm writes a folder of its own"
     [ -z "$(ls -A -- "$BASE" 2>/dev/null)" ] || die "an agent stands under $BASE: the run needs an appliance holding none (take-down.sh first)"
