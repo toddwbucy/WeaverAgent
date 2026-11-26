@@ -108,9 +108,11 @@ mod failure;
 mod flow;
 mod lifecycle;
 mod lifecycle_table;
+mod loop_relay;
 mod open_evidence;
 mod record;
 mod replay;
+mod seat;
 mod spawn;
 mod state;
 mod tools;
@@ -182,7 +184,9 @@ pub use flow::context::worker_startup::{
     FoundationServing,
 };
 pub use lifecycle::{Harness, OrganBinaries, OrganParameters};
+pub use loop_relay::{HelloRefused, LOOP_VERSION, LoopRelay};
 pub use record::{Record, RecordFailure};
+pub use seat::Seat;
 pub use spawn::fork_organ;
 pub use state::{Recalled, RunShape, SessionShape, StateSeam};
 pub use tools::ToolResult;
