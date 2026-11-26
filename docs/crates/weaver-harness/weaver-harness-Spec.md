@@ -986,7 +986,10 @@ the launcher's path and the grant file's as `--loop-launcher` and `--loop-grant`
 - **The composer.** The load names the loop the run composes with (`weaver-trace-Spec`
   section 3): the compiled one exactly as before, or the binary with the wire file's path
   and the digest admin read. The load is authored before the loop starts, so the digest
-  is the election's, and the relay refuses a `hello` naming another.
+  is the election's, and the relay refuses a `hello` naming another. The load's `stack`
+  map names the organ binaries admin started and not the launcher or the runner's files.
+  Their record is the install tuple's: `member.weaver-loop-launch` and the three `loop.`
+  lines, the runner, the board and the grant as laid (`deploy/install-tuple.sh`).
 - **The start comes last.** Once the gate stands, the worker makes the loop's pair with
   `SOCK_CLOEXEC`, forks the launcher by the organ fork with the far end at 3 and the last
   word's pipe at 2, drops its copies of the far end and the pipe's write end in the same
