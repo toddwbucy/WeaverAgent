@@ -185,8 +185,12 @@ else
 fi
 
 [ -n "$AGENT" ] || die "name the throwaway agent: --agent <name> (see --help)"
-# create-agent.sh's own rule, so the name step 1 makes is the name refused here.
+# create-agent.sh's own rule, so the name step 1 makes is the name refused here:
+# its pattern and its reserved names (weaver-admin-Spec section 4).
 [[ "$AGENT" =~ ^[a-z][a-z0-9]{1,15}$ ]] || die "the name is lowercase letters and digits, 2 to 16 characters, as create-agent.sh requires: '$AGENT'"
+case "$AGENT" in
+  gatecon|admincon|admin*|stack) die "'$AGENT' is reserved, as create-agent.sh refuses it: weaver-$AGENT or /etc/weaver/$AGENT is the machine's (weaver-admin-Spec section 4)" ;;
+esac
 
 if [ -z "$CHECKOUT" ]; then
   CHECKOUT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -553,7 +557,7 @@ box_groups_outside() {
     esac
     if [ -n "$n" ] && [[ "$n" =~ ^[A-Za-z0-9_-]+$ ]]; then
       case "$n" in
-        *-state|*-trace|*-relay|*-admin|*-admincon|gatecon|admincon) ;;
+        *-state|*-trace|*-relay|*-admin|*-admincon|*-gate|gatecon|admincon|admin*|stack) ;;
         *) continue ;;
       esac
     fi

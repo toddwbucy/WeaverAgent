@@ -461,8 +461,9 @@ fn admissible(config: &ServiceConfig, agent: &AgentName) -> Result<(), Lifecycle
 /// ASCII letters, digits, `-` and `_`, so `.`, `..` and anything carrying `/`
 /// are refused. **A name ending in a reserved suffix is refused too**, per
 /// Spec section 4, since the agent's derived accounts and groups append
-/// `-state`, `-trace`, `-relay`, `-admin` and `-admincon` to `weaver-<name>`,
-/// and an agent named `x-relay` would collide with agent `x`'s relay.
+/// `-state`, `-trace`, `-relay`, `-admin`, `-admincon` and `-gate` to
+/// `weaver-<name>`, and an agent named `x-relay` would collide with agent
+/// `x`'s relay.
 /// **The names `gatecon` and `admincon` are refused whole**, on the operator's
 /// ruling of 2026-11-10: `weaver-gatecon` and `weaver-admincon` are the box's
 /// two connector accounts, so an agent of either name would own one of them as
@@ -471,7 +472,7 @@ fn admissible(config: &ServiceConfig, agent: &AgentName) -> Result<(), Lifecycle
 /// loop folder, stands beside the config bases, every `/etc/weaver/admin*`,
 /// and the stack's record, `/etc/weaver/stack`.
 fn well_formed(agent: &str) -> bool {
-    const RESERVED: &[&str] = &["-state", "-trace", "-relay", "-admin", "-admincon"];
+    const RESERVED: &[&str] = &["-state", "-trace", "-relay", "-admin", "-admincon", "-gate"];
     const BOX_ACCOUNTS: &[&str] = &["gatecon", "admincon"];
     const BESIDE: &[&str] = &["stack"];
     !agent.is_empty()

@@ -821,12 +821,13 @@ allows() {
 UID_MIN=$(awk '$1 == "UID_MIN" { v = $2 } END { print v }' /etc/login.defs 2>/dev/null || true)
 [[ "$UID_MIN" =~ ^[0-9]+$ ]] || UID_MIN=1000
 # agent_name_ok N: N is a name admin's name check admits (weaver-admin-Spec
-# section 4): ASCII letters, digits, `-` and `_`, no reserved suffix, not a
-# box account's name, not beginning admin, and not stack.
+# section 4): ASCII letters, digits, `-` and `_`, no reserved suffix (`-gate`
+# among them, the gate's door group), not a box account's name, not beginning
+# admin, and not stack.
 agent_name_ok() {
   [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
   case "$1" in
-    *-state|*-trace|*-relay|*-admin|*-admincon|gatecon|admincon|admin*|stack) return 1 ;;
+    *-state|*-trace|*-relay|*-admin|*-admincon|*-gate|gatecon|admincon|admin*|stack) return 1 ;;
   esac
   return 0
 }
