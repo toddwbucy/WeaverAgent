@@ -4331,9 +4331,11 @@ perturbation-verified:
   drops either check, and `adminx` would lay a folder decommission reads as a config
   base.
 - **The loop folder is judged before it is carried**, watched by `src/loop_folder/tests.rs`:
-  no folder is no loop, a row per piece out of its shape, another owner or group, the
-  election naming the file with the digest of `abc` the standard gives, and a change read
-  at the next judgment alone. `only_a_serving_binding_looks_for_the_loop` in
+  no folder is no loop, a row per piece out of its shape, another owner or group, the wire
+  file grouped to another of the test uid's groups (skipped, naming why, where it holds
+  one), the bound pinned at 256 KiB, the election naming the file with the digest of
+  `abc` the standard gives, and a change read at the next judgment alone. The wire
+  file's owner has no row of its own: it needs a second uid. `only_a_serving_binding_looks_for_the_loop` in
   `src/tests.rs` watches the binding's guard. The perturbation drops any one check, and
   its row is admitted.
 - **The lock stands where the agent cannot replace it**, watched by the agent's uid
