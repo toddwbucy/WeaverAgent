@@ -73,7 +73,7 @@ contract takes it whole (section 8.4).
 - On each verb ask the service reads, in that request and after the ask arrived, whether
   the machine grants that verb on that agent. In act one the read is the one the
   connector makes today, run by the weaver-admin account: `sudo -n -l` on the exact
-  fixed line. Exit 0 naming the line is granted, exit 1 is not granted, and anything
+  fixed line. Exit 0 is granted, exit 1 is not granted, and anything
   else, or no answer within 10 seconds, is a grant that cannot be read.
 - A verb not granted is refused `not_granted`, and one whose grant cannot be read is
   refused `grant_unread`. Neither runs anything, and both are the service's own words,
@@ -117,10 +117,11 @@ change.
    - Under a machine-wide rule, one agent's `show` would wait behind another agent's
      load, whose bound is 900 seconds by default.
    - On a one-agent appliance the two rules are the same.
-   - **The one overlap admin admits is kept:** a `force-unload` asked while an `unload`
-     of the same agent runs is started beside it (`weaver-admin-operator-contract`
-     section 4.1). Every other second ask is refused `busy`, naming the run that holds
-     the agent.
+   - **The two overlaps admin admits are kept** (`weaver-admin-operator-contract`
+     section 4.1): a `show` starts beside any run, since admin's `show` alone reads
+     beside a holder, and a `force-unload` asked while an `unload` of the same agent
+     runs is started beside it. Every other second ask is refused `busy`, naming the
+     run that holds the agent.
 2. **The service answers the opening line before any purpose's exchange begins:** one
    `open` line, or one `refused` line and a close. A refusal of the opening is then a
    typed line on every purpose, and the trace's own refusal, a close before the header,
@@ -144,17 +145,29 @@ change.
    names exactly the acts that came through the socket. An act that gives the service
    a run of its own, the pairing among them, amends this rule.
 7. **A restart of the service forgets its runs.** A root program the service started
-   runs to its end whatever becomes of the service. The root program's own invocation
+   runs to its end whatever becomes of the service. That is a requirement on the
+   service's install, which act one's code stack meets: the service's stop signals its
+   own process alone, since sudo and the root program stand in the service's
+   containment until a load moves into the agent's scope. The root program's own invocation
    lock refuses a second verb meanwhile, inside admin's object, and the outcome is in
    `admin.log` and the next `show`.
 8. **The socket's path is `/run/weaver-admin.sock`,** owned by the weaver-admin
    account, grouped to the admin connector's own group, mode `0660`, made by systemd.
    That group holds no member but the connector's account, so the mode admits the
    connector, and `SO_PEERCRED` checks it again.
+9. **Connections are bounded per agent.** One connector serves every agent, so one
+   machine-wide bound would let watched agents crowd out a control connection. Each
+   agent holds at most one trace and one log connection, the newest replacing the
+   older, and 8 control connections, under 1024 at the service in all.
+10. **A refusal of an ask's kind leaves the connection standing.** `ask_unknown` and
+   `verb_unknown` answer and stay, so a newer connector probing a later ask or verb
+   reads "not here yet". A malformed line and a line sent over an outstanding ask
+   close it.
 
 ## The state table
 
 The protocol has two machines: one per connection, and one per agent at the service.
+The contract's section 8.8 carries the same table and is its authority.
 The connector causes the C events, the service the V events, and the machine the M
 events.
 
@@ -175,76 +188,86 @@ events.
 
 | State | Event | Next, and what is sent |
 | --- | --- | --- |
-| K0 | V: peer uid is the connector's | K1 |
-| K0 | V: any other peer uid | K9, nothing sent, the service's log names the uid |
-| K0 | V: 64 connections already stand | K9, `refused` `full` |
+| K0 | V: the peer's uid is the connector's | K1 |
+| K0 | V: any other uid | K9, nothing sent, the service's log names the uid |
+| K0 | V: a bound of section 8.1 is met | K9, `refused` `full` |
 | K1 | C: an opening line that judges | K2, K7 or K8 by its purpose, `open` sent |
-| K1 | C: an unknown version, purpose or a refused name | K9, `refused` with its word |
-| K1 | C: a line past 4096 bytes, or one that does not parse | K9, `refused` `opening_malformed` |
+| K1 | C: an unknown version or purpose, a refused name, or an unread log | K9, `refused` with its word |
+| K1 | C: a line past 4096 bytes, one that does not parse, or a version that is not a positive integer | K9, `refused` `opening_malformed` |
+| K1 | V: a newer trace or log connection of the agent is opened | K9, closed |
 | K1 | V: 10 seconds pass with no line | K9, `refused` `opening_late` |
 | K2 | C: `grants` | K3 |
-| K2 | C: `verb` | K4. The grant is read now |
+| K2 | C: `verb` naming one of the eight, with a principal of its shape | K4. The grant is read now |
+| K2 | C: `verb` naming another verb | K2, `refused` `verb_unknown` |
 | K2 | C: `run` | K6 |
-| K2 | C: an unknown ask, or one that does not parse | K9, `refused` `ask_unknown` or `ask_malformed` |
+| K2 | C: an unknown ask | K2, `refused` `ask_unknown` |
+| K2 | C: a line that does not parse, past 4096 bytes, naming `length`, or a principal of another shape | K9, `refused` `ask_malformed` |
 | K2 | C: close | K9 |
 | K3 | V: the eight grants read | K2, `grants` naming the granted verbs |
 | K3 | V: a read fails, or 10 seconds pass | K2, `refused` `grants_unread` |
-| K4 | V: granted, and the agent admits the run (machine A) | K5, `started` with the run id |
+| K3 | C: close | K9 |
+| K4 | V: granted, and machine A admits the run | K5, `started` with the run id |
 | K4 | V: not granted | K2, `refused` `not_granted` |
 | K4 | V: the grant cannot be read within 10 seconds | K2, `refused` `grant_unread` |
-| K4 | V: granted, and another run holds the agent | K2, `refused` `busy` naming that run |
+| K4 | V: granted, and machine A refuses the run | K2, `refused` `busy` naming the run that holds the agent |
 | K4 | V: granted, and the root program does not start | K2, `refused` `not_started` |
 | K4 | C: close, before the read answers | K9. Nothing starts |
-| K5 | V: the root program ends with exit 0 or 1 and one object | K2, `ran` with the exit code and the object, untouched |
+| K5 | V: the root program ends with exit 0 or 1 and one object | K2, `ran` |
 | K5 | V: it ends any other way | K2, `fault` |
-| K5 | C: close | K9. The run goes on (machine A) |
-| K6 | V: the agent's runs read | K2, `run` naming the runs standing and the last ended |
-| K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run already started goes on |
+| K5 | C: close | K9. The run goes on in machine A |
+| K6 | V: machine A read | K2, `run` |
+| K6 | C: close | K9 |
+| K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run started goes on |
 | K7 | C or the relay: either side closes | K9, the other side closed |
-| K8 | V: a line appended | K8, `log` with the line and its flag |
+| K7 | V: a newer trace connection of the agent is opened | K9, closed |
+| K8 | V: a line appended | K8, `log` with `line` or `text`, or the `oversized` marker past 8 KiB |
+| K8 | V: the file truncated or replaced | K8, the `discontinuity` marker, the file read from its start |
+| K8 | C: any byte | K9, `refused` `ask_malformed` |
+| K8 | V: a newer log connection of the agent is opened | K9, closed |
 | K8 | V: 1 MiB stands unsent | K9, `refused` `log_behind` |
 | K8 | C: close | K9 |
-| any | M: the sudo rule is edited | No change. The next verb ask reads the rule as it stands then |
+| any | M: the sudo rule is edited | no change. The next verb ask reads the rule as it stands then |
 
 ### Machine A, the agent's runs at the service
 
 | State | What holds |
 | --- | --- |
-| A0 | No run of this agent stands. The last ended run is kept, or none since the service started |
+| A0 | No run of the agent stands. The last ended run is kept, or none since the service started |
 | A1 | One run stands |
 | A2 | An `unload` and a `force-unload` beside it stand |
 
 | State | Event | Next |
 | --- | --- | --- |
+| any | a `show` ask, granted | no change. The `show` starts beside whatever stands |
 | A0 | a verb ask, granted | A1 |
-| A1 | a `force-unload` ask, granted, and the run standing is an `unload` | A2 |
+| A1 | a `force-unload` ask, granted, while the run standing is an `unload` | A2 |
 | A1 | any other verb ask, granted | A1, that ask refused `busy` |
-| A1 | the run ends | A0, its outcome kept as the last ended |
+| A1 | the run ends | A0, its final line kept as the last ended |
 | A2 | another verb ask, granted | A2, that ask refused `busy` |
-| A2 | one run ends | A1, its outcome kept as the last ended |
-| any | the asking connection closes | No change |
-| any | the service restarts | A0 with no run kept. A root program it started runs on, under the root program's own lock |
+| A2 | one run ends | A1, its final line kept as the last ended |
+| any | the asking connection closes | no change |
+| any | the service restarts | A0 with no run kept. A root program it started runs on, under the root program's own lock, where the install meets section 8.4's requirement |
 
 ### The invariants
 
-- **S1.** A root program starts only from K4, after a read of that verb's grant on
-  that agent made in that request after its ask arrived, answering granted. No path
-  from K2 reaches K5 without it.
+- **S1.** A root program starts only from K4, after a read of that verb's grant on that
+  agent, made in that request after its ask arrived, answering granted. No path from K2
+  reaches K5 without it.
 - **S2.** Nothing enters S1's read from a grants answer, an earlier ask, or another
   connection.
-- **S3.** The principal enters no decision. Not S1's read, not machine A, and not the
+- **S3.** The principal enters no decision: not S1's read, not machine A, and not the
   root program's arguments.
 - **S4.** A run's end does not depend on its connection. A close before `started`
   starts nothing, and a close after it leaves the run to end and be kept.
-- **S5.** At most one run of an agent stands, except the `force-unload` beside an
-  `unload` of A2.
+- **S5.** At most one run of an agent stands, except a `show`, which starts beside any
+  run, and the `force-unload` beside an `unload` of A2.
 - **S6.** Every ask gets exactly one final line, or the connection closes. A verb's
-  `started` line comes before its final line.
-- **S7.** After `open` on a trace connection the bytes each way are the relay's,
+  `started` comes before its final line.
+- **S7.** After `open` on a trace connection, the bytes each way are the relay's,
   unchanged.
-- **S8.** A refusal of the service's own is a `refused` line, never inside admin's
-  object and never an exit code. A refusal of the root program is inside its object, at
-  exit 1, and the service carries it untouched.
+- **S8.** A refusal of the service's own is a `refused` line, never inside the root
+  program's object and never an exit code. A refusal of the root program's is inside its
+  object, at exit 1, carried untouched.
 
 ## The children
 
