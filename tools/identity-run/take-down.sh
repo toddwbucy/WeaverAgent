@@ -106,6 +106,18 @@ AGENT_DIR='<agent-directory>' COORD='<coordination-root>' TERRITORY='<territory>
 if [ -d "$STACK" ]; then
     AGENT_DIR=$(key "$STACK/agent-directory") || die "the stack record $STACK names no agent-directory"
     COORD=$(key "$STACK/coordination-root") || die "the stack record $STACK names no coordination-root"
+    case $AGENT_DIR in /*) ;; *) die "the stack record names a path that is not absolute: '$AGENT_DIR'" ;; esac
+    # **The territory is compared with the canonical folder**, which create-agent.sh
+    # builds it from (realpath -e), so a record written through a link or with a
+    # trailing slash names the same folder. A plan on a machine without it reads it
+    # lexically.
+    if resolved=$(realpath -e -- "$AGENT_DIR" 2>/dev/null); then
+        AGENT_DIR=$resolved
+    elif [ "$APPLY" = 1 ]; then
+        die "the stack record's agent-directory $AGENT_DIR does not resolve"
+    else
+        AGENT_DIR=$(realpath -m -- "$AGENT_DIR")
+    fi
 elif [ "$APPLY" = 1 ]; then
     die "no stack record at $STACK"
 fi

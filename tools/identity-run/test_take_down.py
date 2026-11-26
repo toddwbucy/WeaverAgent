@@ -137,6 +137,23 @@ class ThePlan(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertIn("rm -rf --one-file-system --", line)
 
+    def test_the_territory_is_compared_with_the_canonical_agent_directory(self):
+        real = os.path.join(self.scratch.name, "agents")
+        os.makedirs(real)
+        link = os.path.join(self.scratch.name, "agents-link")
+        os.symlink(real, link)
+        territory = os.path.join(real, "a1", "weaver-a1")
+        for row, written in (("a trailing slash", real + "/"), ("through a link", link)):
+            with self.subTest(row=row):
+                for d in (self.stack, self.base):
+                    subprocess.run(["rm", "-rf", "--", d], check=True)
+                self.lay(territory)
+                with open(os.path.join(self.stack, "agent-directory"), "w") as f:
+                    f.write(written + "\n")
+                ran = self.plan("--agent", "a1", "--archive", self.archive)
+                self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+                self.assertIn("+ rm -rf --one-file-system -- %s\n" % territory, ran.stdout)
+
     def test_a_name_that_is_not_an_agents_refuses_before_any_step(self):
         for name in ("gatecon", "admincon", "adminx", "stack", "A1", "a", "a-1", "a1/b", "a" * 17, ""):
             with self.subTest(name=name):
