@@ -633,7 +633,10 @@ newline, within 10 seconds of the connect:
   act one's code stack, on the operator's ruling of 2026-11-26, since an agent of that
   name would own `weaver-admin`, the service's account.
 
-**The service answers it with one line**, before any purpose's exchange begins. Either
+**The service answers it with one line**, before any purpose's exchange begins, at
+most 4096 bytes with its newline and within 10 seconds of the opening line's arrival.
+That time holds the log's judging of section 8.6 and the relay's dial of section 8.5,
+and one not done within it is refused `log_unread` or `relay_unreachable`. Either
 `{"open":{"version":1}}`, and the purpose's exchange follows, or one `refused` line and
 the close:
 
@@ -869,6 +872,7 @@ from the moment it answered `open`, with no history before it:
 | Connections standing at the service | 1024 | `refused` `full`, closed |
 | The opening line | 4096 bytes with its newline | `refused` `opening_malformed`, closed |
 | The opening's arrival | 10 seconds from the connect | `refused` `opening_late`, closed |
+| The service's answer to the opening | 4096 bytes with its newline, within 10 seconds of the opening line, the log's judging and the relay's dial included | a judging or dial not done in time is `refused` `log_unread` or `relay_unreachable`. A connector bounding its read here reads past it as a fault |
 | A connector's line on a control connection | 4096 bytes with its newline | `refused` `ask_malformed`, closed |
 | Asks outstanding on a connection | 1 | `refused` `ask_outstanding`, closed |
 | The eight grants read | 10 seconds from the ask | `refused` `grants_unread` |

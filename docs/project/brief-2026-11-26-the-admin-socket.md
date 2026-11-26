@@ -128,7 +128,8 @@ change.
      runs is started beside it. Every other second ask is refused `busy`, naming the
      run that holds the agent.
 2. **The service answers the opening line before any purpose's exchange begins:** one
-   `open` line, or one `refused` line and a close. A refusal of the opening is then a
+   `open` line, or one `refused` line and a close, at most 4096 bytes and within 10
+   seconds of the opening line, the log's judging and the relay's dial included. A refusal of the opening is then a
    typed line on every purpose. On a trace connection the service dials the relay
    before it answers, and where no relay stands or the dial fails it refuses the opening
    `relay_unreachable`. The trace's own refusal, a close before the header, stays the
