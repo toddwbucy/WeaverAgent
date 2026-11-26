@@ -746,5 +746,26 @@ check("a wire file outside the grammar exits 1 before any socket, naming the lin
       p.returncode == 1 and json.loads(p.stderr) == {
           "loop": "start", "reason": "line 4: import os is not import weaver_board, json or re, whole"})
 
+# Two failures before the hello is through: each a typed start line and exit 1, never a
+# traceback (the Planner's point (s), 2026-11-26).
+loop_end, harness = harness_pair()
+harness.close()
+err = io.StringIO()
+rc = runner.serve(loop_end, "d" * 64, raising, err)
+loop_end.close()
+said = typed(err.getvalue())
+check("a hello that cannot be sent is a start line naming it, and exit 1",
+      rc == 1 and said is not None and len(said) == 1 and said[0].get("loop") == "start"
+      and said[0].get("reason", "").startswith("the hello could not be sent: Closed: "))
+good_wires = wire(GOOD, "fd3.py")
+for row, redirect in (("a regular file", '3<"$2"'), ("closed", "3<&-")):
+    p = subprocess.run(["/bin/sh", "-c", 'exec %s; exec /usr/bin/python3 -I -B -S "$1" "$2"' % redirect, "sh",
+                        os.path.join(HERE, "runner.py"), good_wires], capture_output=True)
+    lines = p.stderr.decode("ascii", "replace").splitlines()
+    first = json.loads(lines[0]) if len(lines) == 1 else {}
+    check("descriptor 3 %s is a start line naming it, and exit 1, no traceback" % row,
+          p.returncode == 1 and first.get("loop") == "start"
+          and first.get("reason", "").startswith("descriptor 3 is not the loop's end of a socket pair: OSError"))
+
 print("== %d passed, %d failed" % (passed, len(failed)))
 sys.exit(1 if failed else 0)

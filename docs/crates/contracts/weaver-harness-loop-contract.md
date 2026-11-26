@@ -435,6 +435,8 @@ file's own exception text, and the worker holds and logs every line. The words:
   - the grammar below, naming the line
   - a file `compile` refuses after the parse took it (a `break` outside a loop), naming
     the line
+  - descriptor 3 not the loop's end of a socket pair (closed, or not a socket)
+  - the hello that cannot be sent, the harness's end gone
   - a file nested past the interpreter's limits: "the wire file nests past the
     interpreter's limits".
 - `refused`: a pass the runner refused, with what `on_turn` raised.
