@@ -800,7 +800,15 @@ fn a_standing_loop_folder_refuses_the_replacement_load_before_any_lock_or_fork()
     }
     let f = fixture();
     setup(&f);
+    // The agent's folder is the fixture's own, inside its scratch, so no
+    // other test meets this loop folder and the scratch removes it.
     let folder = crate::loop_folder::agent_folder(&f.config.root, &agent(&f).0).unwrap();
+    assert!(
+        folder.starts_with(f.config.root.parent().unwrap().parent().unwrap())
+            && !folder.starts_with(std::env::temp_dir().join(&agent(&f).0)),
+        "{}",
+        folder.display()
+    );
     fs::create_dir_all(folder.join("loop")).unwrap();
     let result = run_authorized(
         &f.config,
