@@ -313,11 +313,20 @@ fn probe(layout: &Layout, arm: Arm) -> Probed {
 }
 
 /// A launch refused before its exec: its exit and its one line.
+///
+/// **The near end is dropped before the read**, so a launch that wrongly
+/// reaches the probe meets its end of file at once and exits, and the test
+/// fails on the probe's line instead of waiting on it.
 fn refused(layout: &Layout, arm: Arm, with_end: bool) -> (std::process::ExitStatus, String) {
-    let mut started = start(layout, arm, with_end);
+    let Started {
+        mut child,
+        mut stderr,
+        near,
+    } = start(layout, arm, with_end);
+    drop(near);
     let mut all = String::new();
-    std::io::Read::read_to_string(&mut started.stderr, &mut all).unwrap();
-    let exit = started.child.wait().unwrap();
+    std::io::Read::read_to_string(&mut stderr, &mut all).unwrap();
+    let exit = child.wait().unwrap();
     (exit, all)
 }
 
