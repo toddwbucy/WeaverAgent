@@ -1034,11 +1034,20 @@ contract.
 (issue 645, section 7). It listens at a temporary path, admits its test's uid in place
 of the connector account's, and can:
 
+- refuse an opening with a given word of section 8.2 (`log_unread`, `full`,
+  `version_unknown`, `relay_unreachable` among them), and delay its answer to an
+  opening.
 - answer the grants with a configured list, refuse them `grants_unread`, or send nothing
   past 10 seconds.
 - answer a verb with `started` and a configured exit code and object, `show` from a
   state it holds (`InTransition` for a set count), refuse it with any word of section
   8.4, end it as a `fault`, or delay its final line.
+- refuse a verb `busy` naming a run, and refuse `not_granted` a verb that a grants answer
+  before it listed.
+- drop a control connection between the grant's read and `started`, and answer a later
+  `run` with that run standing or ended.
+- forget its runs as a restart does, drawing a new `instance`, while a run it scripted
+  goes on.
 - append lines to a trace file before and after it takes its state, and record each
   verb it ran with its principal.
 - drop a control connection while a verb runs, and answer a later `run` with that run
