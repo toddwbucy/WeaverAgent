@@ -18,7 +18,8 @@ operator** (the operator's ruling of 2026-11-16, #576): there `create-agent.sh` 
 without sudo, though root's own sudo still serves the admin-con account's rule (sections
 1, 2 and 4). On a workstation the operator is your own account, which can sudo. `<name>`
 is the agent's name: a unix user, a group and a directory, so `create-agent.sh` takes
-lowercase letters and digits, 2 to 16 characters. Paths below are the defaults, and a
+lowercase letters and digits, 2 to 16 characters, and refuses `gatecon`, `stack` and any
+name beginning `admin` (`weaver-admin-Spec` section 4). Paths below are the defaults, and a
 box's real values are in the stack record `/etc/weaver/stack/`, one file per key, which
 `bootstrap-stack.sh` wrote and the scripts read, and in each agent's own root
 `/etc/weaver/admin/<name>/`, which is all admin reads besides the territory that root
@@ -57,6 +58,7 @@ table.
 | Operations and worker logs | `<territory>/admin.log` and `worker.log` | made by admin at the first verb, root:weaver-<name>-admin 0640 |
 | Published save points and their manifest | `<territory>/save-points/`: `<YYYYMMDDTHHMMSSZ>-<digest>.save-point` and `save-points.manifest` | the directory root:weaver-<name>-admin 0750; each save point root:weaver-<name>-admin 0640, the manifest root 0644, all written by admin |
 | Agent root, which is the admission | `/etc/weaver/admin/<name>/`: `worker-binary`, `spu-binary`, `gate-binary`, `coordination-root` (and `library-path`, `headroom-bytes`, `load-bound-seconds`, `shell-binary` where the stack record has them), copied from the stack record, plus `territory` (the territory's path), `operator` (the operator's uid, 0 where root is the operator) and `roles.toml` (`trace-reader = "weaver-admincon"`) | root, directory 0755, files 0644, and admin refuses a root that is not root-owned or is group- or world-writable |
+| Agent's own folder beside the admin base | `/etc/weaver/<name>/`, the admin base's parent joined with the name; the loop folder `loop/` with its `wires.py` goes in it, laid by root by hand | root:root 0755, made empty by create-agent once the agent is admitted; admin's inventory looks in it for `loop/`, and an agent without it runs the compiled loop (`weaver-admin-Spec` section 4) |
 | Sudo rule | `/etc/sudoers.d/weaver-<name>` | root 0440, checked by `visudo` |
 | Run directory | `<coordination-root>/weaver.run/<name>/`: `run.lock`, `admin.lock`, `trace.sock` | made by admin, root 0755 |
 
@@ -820,7 +822,9 @@ first.
 `show` reports any of them running. To take one agent down by hand, remove the pieces of
 section 0 in reverse. Unload it, and check `show` reads unloaded with no constituent.
 Remove its sudo rule `/etc/sudoers.d/weaver-<name>` first, so admin-con can run nothing
-more on it, then its root `/etc/weaver/admin/<name>/`, which ends its admission, and its
+more on it, then its root `/etc/weaver/admin/<name>/`, which ends its admission, then
+its own folder `/etc/weaver/<name>/` with any loop folder in it (archive a loop you mean
+to keep), which `create-agent.sh` refuses while it stands, and its
 run and runtime directories, `<coordination-root>/weaver.run/<name>/` and
 `<coordination-root>/weaver-<name>/`, the second holding the gate's and the harness's
 sockets, which `decommission.sh` purges beside the first (both on tmpfs, so a reboot

@@ -963,6 +963,13 @@ forks it by the organ fork as it stands (section 2.2), with the loop's end at de
 executes the interpreter. It holds one thread. No process stays resident for it, and the
 gate does not change for it.
 
+**Until the worker runs it, an enter naming a wire file refuses.** Admin carries the loop
+it found standing on the enter (`weaver-types-Spec` section 4). The worker refuses such
+an enter before the load and before the sink is taken, `ConfigInvalid` naming `loop`, so
+the stream stays clean and a loop the operator laid is never replaced by the compiled
+loop silently. Enforced by `an_enter_naming_a_wire_file_is_refused_before_the_load` in
+`src/lifecycle/tests.rs`.
+
 **Its arguments** are two absolute paths: the grant file, and the wire file. The runner is
 `runner.py` in the grant file's folder, `<prefix>/lib/weaver-loop/`, and the loop folder
 granted is the wire file's, `/etc/weaver/<agent>/loop/`.
@@ -988,8 +995,10 @@ keeps. No runner starts with a wall missing.
    <interpreter> -I -B -S -X pycache_prefix=<pycache folder> <runner.py> <wire file>
    ```
 
-**The grant file.** The stack's install computes it on the machine that runs the loop,
-from the resolved interpreter, its loader and the libraries the loader resolves for it,
+**The grant file.** The stack's install computes it on the machine that runs the loop
+(`deploy/loop-grant.sh`, sourced by `bootstrap-stack.sh` and `update-stack.sh`, which
+lay it with the runner and the board and compute it again at every run), from the
+resolved interpreter, its loader and the libraries the loader resolves for it,
 every link resolved to its file, and the interpreter's standard library. The enter
 carries none of it, and admin does not read it. It is ASCII, one fact per line, each line
 ended by a newline:
@@ -1057,6 +1066,8 @@ gate's copy and this one one module waits on the layout of the repository.
   - a stale digest, a path gone, a grant file not root's, no end at 3, a relative wire
     file and an absent grant file each end the launch with its one line.
   - the runner dies by `SIGKILL` with the thread that forked it, through both execs.
+  - the grant `deploy/loop-grant.sh` computes is the suite's, and a launch under it
+    serves.
 
 ## 3. The lifecycle interior
 

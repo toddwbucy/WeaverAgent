@@ -1015,6 +1015,7 @@ fn a_load_with_save_points_waiting_in_the_room_refuses() {
             gid: nix::unistd::getgid().as_raw(),
         }),
         shell: None,
+        wires: None,
     };
     assert_eq!(
         publish_then_select(&config, &AgentName("alpha".into()), &inventory).err(),
@@ -4385,8 +4386,29 @@ fn a_box_account_name_refuses() {
             "{reserved}"
         );
     }
-    for admissible in ["gatecons", "xgatecon", "admincon1", "gate", "con"] {
+    for admissible in ["gatecons", "xgatecon", "xadmincon", "gate", "con"] {
         assert!(well_formed(admissible), "{admissible} is matched whole");
+    }
+}
+
+/// **A name beginning `admin`, and `stack`, refuse as a box account's name
+/// does**, per Spec section 4: the agent's own folder `/etc/weaver/<agent>/`
+/// stands beside the config bases, every `/etc/weaver/admin*`, and the stack's
+/// record, so `adminx` would lay a folder decommission reads as a config base.
+/// `stack` is matched whole, and `admin` only at the start. Perturbation: drop
+/// either check and its names pass.
+#[test]
+fn a_name_beside_the_config_bases_refuses() {
+    for reserved in ["admin", "adminx", "admin-1", "admin_x", "stack"] {
+        assert!(!well_formed(reserved), "{reserved}");
+        assert_eq!(
+            load_service_config(&AgentName(reserved.into()), false).err(),
+            Some(LifecycleRefusal::NoSuchAgent),
+            "{reserved}"
+        );
+    }
+    for admissible in ["xadmin", "badmin", "stacks", "astack", "stack1", "adm"] {
+        assert!(well_formed(admissible), "{admissible} is admissible");
     }
 }
 
@@ -4710,6 +4732,7 @@ fn the_member_spawn_lands_the_members_identity_as_root() {
         lineage: None,
         member_account: Some(member),
         shell: None,
+        wires: None,
     };
     let mut service = unread_config();
     // The territory's access group as judged, which no longer rides the
@@ -5693,4 +5716,66 @@ fn without_the_seam_productions_request_is_refused_in_the_suite() {
         Err(other) => panic!("the request's refusal is BoundaryUnverified, not {other:?}"),
         Ok(_) => panic!("the suite never stands the agent's scope"),
     }
+}
+
+/// **Only a serving binding looks for the loop**, per Spec section 4: a
+/// diagnostic binding carries no wire file and looks at nothing, so a root
+/// with no folder two levels above it, which a serving binding refuses,
+/// passes untouched. Perturbation: drop the binding's guard, and the
+/// diagnostic inventory refuses.
+#[test]
+fn only_a_serving_binding_looks_for_the_loop() {
+    let declaration = weaver_types::parse(concat!(
+        "session = \"s-1\"\n",
+        "tool-set = []\n",
+        "\n",
+        "[spu-instruction.decoder]\n",
+        "residual-readout-election = false\n",
+        "tunable-values = {}\n",
+        "\n",
+        "[spu-instruction.decoder.model-binding]\n",
+        "artifact = \"qwen3-4b-instruct\"\n",
+        "devices = [0]\n",
+        "\n",
+        "[gate-instruction.access-rule]\n",
+        "allowed-uids = [0]\n",
+        "allowed-gids = []\n",
+        "denied-uids = [1701]\n",
+        "\n",
+        "[trace-sink]\n",
+        "kind = \"file\"\n",
+        "path = \"/nonexistent/territory/trace.ndjson\"\n",
+        "create = true\n",
+    ))
+    .expect("the declaration parses");
+    let gate_instruction = declaration
+        .gate_instruction
+        .clone()
+        .expect("a serving declaration");
+    let mut config = unread_config();
+    config.root = PathBuf::from("alpha");
+    let inventory_with = |binding| inventory::Inventory {
+        config: declaration.clone(),
+        identity: "weaver-alpha".into(),
+        declaration: String::new(),
+        binding,
+        lineage: None,
+        member_account: None,
+        shell: None,
+        wires: None,
+    };
+    let mut diagnostic = inventory_with(weaver_types::EnterBinding::Diagnostic);
+    assert_eq!(
+        judge_loop(&config, &AgentName("alpha".into()), &mut diagnostic),
+        Ok(())
+    );
+    assert_eq!(diagnostic.wires, None);
+    let mut serving = inventory_with(weaver_types::EnterBinding::Serving {
+        gate_instruction,
+        shell: None,
+    });
+    assert_eq!(
+        judge_loop(&config, &AgentName("alpha".into()), &mut serving),
+        Err(LifecycleRefusal::BoundaryUnverified)
+    );
 }

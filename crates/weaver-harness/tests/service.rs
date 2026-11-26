@@ -381,6 +381,7 @@ fn refused_enter_leaves_the_state_at_before_enter() {
                 wind_down_bound: None,
                 state_election: weaver_types::StateElection::default(),
                 turn_context: weaver_types::TurnContext::Continuous,
+                wires: None,
             }),
         },
     );
@@ -658,6 +659,7 @@ fn serving_enter(session: &str, bounds: (Option<u64>, Option<u64>)) -> Lifecycle
                 keys: Vec::new(),
             },
             turn_context: weaver_types::TurnContext::Continuous,
+            wires: None,
         }),
     }
 }

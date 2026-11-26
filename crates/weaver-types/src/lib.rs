@@ -132,6 +132,6 @@ pub use wire::{
     Payload, Position, RefusalRecord, RefusingOrgan, Reset, ResetReason, RunId,
     SAMPLING_COUNT_CEILING, Sampling, SamplingMember, SavePointLeg, SavePointReport, ScoredLabel,
     SegmentPreamble, SessionId, TokenAnswer, TokenAsk, TokenDirective, TokenRefusal, ToolExecution,
-    ToolOutcome, TurnFrame, TurnKey, TurnRequest, UnrecoveredCall, UnrecoveredReason, echoed,
-    field_below_cutoff,
+    ToolOutcome, TurnFrame, TurnKey, TurnRequest, UnrecoveredCall, UnrecoveredReason,
+    WiresElection, echoed, field_below_cutoff,
 };

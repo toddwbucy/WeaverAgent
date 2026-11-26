@@ -109,3 +109,57 @@ fn the_relay_and_the_python_runner_cross_passes_a_refusal_and_series_both_ways()
         "the runner refused no pass of its own and broke nothing: the wires refused pass 2"
     );
 }
+
+/// **A wire file changed between admin's read and the runner's gives two
+/// digests, and the load is refused** (the brief of 2026-11-26, section 2,
+/// child 4): admin carried the digest of the bytes it read, the file was laid
+/// again before the runner read it, and the relay refuses the runner's
+/// `hello` naming the digest. Admin's half is
+/// `loop_folder::tests::the_election_names_the_file_and_the_digest_of_its_bytes`.
+/// Perturbation: let the relay take any digest, and the hello is admitted.
+#[test]
+fn a_wire_file_changed_between_the_two_reads_refuses_the_hello() {
+    let scratch = crate::scratch::dir(format!(
+        "weaver-two-digests-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let wires = scratch.join("wires.py");
+    let laid = std::fs::read(WIRES).unwrap();
+    std::fs::write(&wires, &laid).unwrap();
+    let admins = format!("{:x}", Sha256::digest(&laid));
+    // Laid again, still a grammar the runner admits, before the runner reads.
+    let mut again = laid.clone();
+    again.extend_from_slice(b"\n# laid again\n");
+    std::fs::write(&wires, &again).unwrap();
+
+    let (near, far) = pair();
+    let raw = far.end.as_raw_fd();
+    let mut command = Command::new("/usr/bin/python3");
+    command
+        .args(["-I", "-B", "-S", RUNNER])
+        .arg(&wires)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: place_child_ends runs between fork and exec, on an end this process made.
+    unsafe {
+        command.pre_exec(move || {
+            crate::place_child_ends(&[BorrowedFd::borrow_raw(raw)]).map_err(std::io::Error::from)
+        });
+    }
+    let mut child = command
+        .spawn()
+        .expect("the interpreter at /usr/bin/python3");
+    drop(far);
+    let lines = Lines::default();
+    let refused = LoopRelay::make(near, &admins, lines.clone())
+        .err()
+        .expect("the hello of the file laid again is refused");
+    assert_eq!(
+        refused.reason,
+        "a hello whose digest is not the wire file's"
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+}

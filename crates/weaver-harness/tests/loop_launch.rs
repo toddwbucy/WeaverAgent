@@ -434,6 +434,39 @@ fn the_runner_starts_with_the_cleared_environment_and_descriptors_0_to_3() {
     assert!(left.is_empty(), "no bytecode is written");
 }
 
+/// **The stack's grant is the grant this suite computes, and a launch under it
+/// serves**: `deploy/loop-grant.sh`'s `loop_grant`, run as the stack's scripts
+/// run it on the layout's interpreter and pycache folder, writes the same text,
+/// and the probe runs walled under it. Perturbation: drop the loader's line or
+/// leave a link unresolved in the script, and the texts differ.
+#[test]
+fn the_stacks_grant_is_the_suites_and_a_launch_under_it_serves() {
+    let layout = Layout::new("stack");
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../deploy/loop-grant.sh");
+    let out = Command::new("bash")
+        .args([
+            "-c",
+            "set -euo pipefail; source \"$1\"; loop_grant \"$2\" \"$3\"",
+            "x",
+            script,
+        ])
+        .arg(&layout.interpreter)
+        .arg(layout.root.join("pycache"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(text, layout.grant_text(None));
+    layout.write_grant(&text);
+    let walled = probe(&layout, Arm::Launched).said;
+    assert_eq!(walled["socket"], "EACCES");
+    assert_eq!(walled["read_wires"], "the wire file\n");
+}
+
 /// **A stale digest ends the launcher before its exec**, one JSON line naming
 /// the interpreter, and no probe runs. Perturbation: skip the comparison.
 #[test]

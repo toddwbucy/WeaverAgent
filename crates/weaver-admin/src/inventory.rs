@@ -113,6 +113,10 @@ pub struct Inventory {
     /// declaration elects `sh` (#29): filled by the caller that reads the
     /// root's `shell-binary`, read by the start step to build `commands/`.
     pub shell: Option<crate::shell::Judged>,
+    /// The loop admin found standing in the agent's own folder, per
+    /// `weaver-admin-Spec` section 4: filled by `validate`'s and `load`'s
+    /// inventory under a serving binding, carried on the enter.
+    pub wires: Option<weaver_types::WiresElection>,
 }
 
 /// The one inventory function.
@@ -526,6 +530,7 @@ fn judge_config(
             .then_some(boundary.member_account)
             .flatten(),
         shell: None,
+        wires: None,
     })
 }
 
