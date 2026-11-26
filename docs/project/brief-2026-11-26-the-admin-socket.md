@@ -129,11 +129,12 @@ change.
      run that holds the agent.
 2. **The service answers the opening line before any purpose's exchange begins:** one
    `open` line, or one `refused` line and a close, at most 4096 bytes and within 10
-   seconds of the opening line, the log's judging and the relay's dial included. A refusal of the opening is then a
-   typed line on every purpose. On a trace connection the service dials the relay
-   before it answers, and where no relay stands or the dial fails it refuses the opening
-   `relay_unreachable`. The trace's own refusal, a close before the header, stays the
-   relay's, after `open`, and is never a relay that was not there.
+   seconds of the opening line, the log's judging and the relay's dial included. A
+   refusal of the opening is then a typed line on every purpose. On a trace connection
+   the service dials the relay before it answers, and where no relay stands or the dial
+   fails it refuses the opening `relay_unreachable`. The trace's own refusal, a close
+   before the header, stays the relay's, after `open`, and is never a relay that was not
+   there.
 3. **The peer admitted is the admin connector's account alone,** by its uid from
    `SO_PEERCRED`, checked at accept. Root is refused too. The operator at a root shell
    runs the root program directly and never needs the socket. A refused peer reads

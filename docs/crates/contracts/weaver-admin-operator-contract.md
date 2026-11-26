@@ -768,16 +768,16 @@ ends, one final line:
 
 **A run goes on when its connection closes.** A close before the grant's read answers
 starts nothing. Once the read answers granted, the service goes on to start the root
-program whether or not the connection still stands. From the moment the root program
-is started, the run goes on to its end and is kept, whether or not `started` reached
-the connector, and a `run` ask on a new connection names it. **The service's own end ends no run it
-started**, as an invocation finishes when its caller disappears (section 3). That is a
-requirement on the service's install, which act one's code stack meets: a stop or
+program whether or not the connection still stands. From the moment the root program is
+started, the run goes on to its end and is kept, whether or not `started` reached the
+connector, and a `run` ask on a new connection names it. **The service's own end ends no
+run it started**, as an invocation finishes when its caller disappears (section 3). That
+is a requirement on the service's install, which act one's code stack meets: a stop or
 restart of the service ends the service's own process and signals no root program it
 started, whose sudo and root program stand in the service's containment until a load
-moves into the agent's scope (section 2). An install that does not meet it leaves a
-verb killed mid-command, outside the envelope (section 4.1). A new control connection
-asks `{"run":{}}` and is answered:
+moves into the agent's scope (section 2). An install that does not meet it leaves a verb
+killed mid-command, outside the envelope (section 4.1). A new control connection asks
+`{"run":{}}` and is answered:
 
 ```json
 {"run":{"instance":"<16 hex>","standing":[{"run":"...","verb":"unload","started_ms":0}],"ended":{"ran":{...}}}}
