@@ -4349,7 +4349,8 @@ perturbation-verified:
 - **The loop folder is judged before it is carried**, watched by `src/loop_folder/tests.rs`:
   no folder is no loop, a row per piece out of its shape, another owner or group, the wire
   file grouped to another of the test uid's groups (skipped, naming why, where it holds
-  one), the bound pinned at 256 KiB, the election naming the file with the digest of
+  one), an access-control entry on each of the three pieces (skipped, naming why, where
+  setfacl cannot set one), the bound pinned at 256 KiB, the election naming the file with the digest of
   `abc` the standard gives, and a change read at the next judgment alone. Neither
   `loop/`'s owner nor the wire file's has a row of its own: each needs a second uid, and
   the row for another owner ends at the agent's folder, so neither check is reached
