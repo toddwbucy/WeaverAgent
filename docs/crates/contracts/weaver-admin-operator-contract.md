@@ -803,10 +803,18 @@ bounds what a connector reads from a `run` answer after a drop:
 - **Another `instance`:** the service no longer knows that ask. Its run may never have
   started, a restart while the grant was read, or may have started and been forgotten.
   The connector reads it as unknown, and `admin.log` and the next `show` settle it.
-- **The same `instance`, the run neither standing nor `ended`:** it did not run, where
-  the connector asked no other verb of the agent meanwhile. Only the last run that ended
-  is kept, so a later verb's end replaces it, and a connector that asks one verb at a
-  time keeps that reading true. Otherwise it reads as unknown, and `show` settles it.
+- **The same `instance`, the run's id held, the run neither standing nor `ended`:** it
+  did not run, where the connector asked no other verb of the agent meanwhile. Only the
+  last run that ended is kept, so a later verb's end replaces it, and a connector that
+  asks one verb at a time keeps that reading true. Otherwise it reads as unknown, and
+  `show` settles it.
+- **The same `instance`, no run id held**, after a drop before `started`: the connector
+  reads its run as standing where a standing run names its verb, and as ended where
+  `ended` names its verb and a `run` that is not the id of the last run it learned had
+  ended. Otherwise it did not run. An `ended` naming that last id is the outcome of an
+  earlier ask, never told as new. This rests on every final line naming `run` and
+  `verb`, and on a connector that asks one verb at a time and keeps the id of the last
+  run it learned had ended.
 
 **The cause is the service's account.** The root program reads sudo's `SUDO_UID`, so
 the cause `admin.log` and the trace record is the weaver-admin account's uid (section

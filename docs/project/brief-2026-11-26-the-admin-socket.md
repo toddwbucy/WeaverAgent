@@ -164,7 +164,9 @@ change.
    which every `open` and every `run` answer names. Under another `instance` the
    connector reads its ask as unknown, never started or forgotten, and `show` settles
    it. Under the same `instance`, a run neither standing nor `ended` did not run, where
-   the connector asked no other verb meanwhile.
+   the connector asked no other verb meanwhile. A connector holding no run id reads its
+   run as a standing run of its verb, or an `ended` of its verb whose `run` is not the
+   last id it learned had ended, and otherwise as not run.
 8. **The socket's path is `/run/weaver-admin.sock`,** owned by the weaver-admin
    account, grouped to the admin connector's own group, mode `0660`, made by systemd.
    That group holds no member but the connector's account, so the mode admits the
