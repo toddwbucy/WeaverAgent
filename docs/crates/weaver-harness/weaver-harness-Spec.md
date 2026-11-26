@@ -1070,12 +1070,16 @@ pycache <path>
 - Any other line refuses the file, naming the line.
 
 **What the launcher judges as root's.** The grant file is root's regular file, not a
-link, written by no group and no other, and at most 64 KiB. The runner's folder is root's
-directory, written by no group and no other, listed through its judged descriptor, and
-every file in it, `runner.py` (which must stand) and the board among them, is root's
-regular file written by no group and no other. The pycache folder is root's directory, written by no group and no other, and
-empty. So the agent's uid cannot widen its own walls. The loop folder's owner and mode
-are admin's checks, and the launcher takes it as a directory that is not a link.
+link, written by no group and no other, and at most 64 KiB. The runner's folder is
+root's directory, written by no group and no other, listed through its judged
+descriptor, and every file in it, `runner.py` (which must stand) and the board among
+them, is root's regular file written by no group and no other. The pycache folder is
+root's directory, written by no group and no other, and empty. The interpreter and each
+`execute` file are written by no group and no other, and are not the running uid's
+unless that uid is root: the digest pins the interpreter's bytes when it is judged, and
+this keeps the agent's uid from rewriting the same file before the exec. So the agent's
+uid cannot widen its own walls. The loop folder's owner and mode are admin's checks, and
+the launcher takes it as a directory that is not a link.
 
 **The walls.**
 

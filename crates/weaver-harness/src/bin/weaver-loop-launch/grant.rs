@@ -198,8 +198,27 @@ pub fn judge(grant: &Grant, launch: &Launch, owner: u32) -> Result<Vec<Rule>, St
     let directory = |stat: &libc::stat| {
         (stat.st_mode & libc::S_IFMT != libc::S_IFDIR).then(|| "is not a directory".to_string())
     };
+    // **The interpreter and each `execute` file are written by no one the
+    // launch answers to**: not by the uid the launch runs as (unless that is
+    // the owner), not by a group, not by others. The digest pins the
+    // interpreter's bytes at the judgment, and this keeps the agent's uid from
+    // rewriting the same inode between the digest and the exec.
+    let running = nix::unistd::geteuid().as_raw();
+    let unwritable = |stat: &libc::stat| {
+        regular(stat).or_else(|| {
+            if stat.st_uid == running && running != owner {
+                Some(format!(
+                    "is owned by uid {running}, the uid the launch runs as"
+                ))
+            } else if stat.st_mode & 0o022 != 0 {
+                Some("is writable by its group or others".to_string())
+            } else {
+                None
+            }
+        })
+    };
     let mut rules = Vec::new();
-    let interpreter = open_judged(&grant.interpreter, regular)?;
+    let interpreter = open_judged(&grant.interpreter, unwritable)?;
     digest_matches(&grant.interpreter, &interpreter, &grant.interpreter_sha256)?;
     rules.push(rule(
         interpreter,
@@ -208,7 +227,7 @@ pub fn judge(grant: &Grant, launch: &Launch, owner: u32) -> Result<Vec<Rule>, St
     ));
     for path in &grant.execute {
         rules.push(rule(
-            open_judged(path, regular)?,
+            open_judged(path, unwritable)?,
             FS_EXECUTE | FS_READ_FILE,
             path,
         ));

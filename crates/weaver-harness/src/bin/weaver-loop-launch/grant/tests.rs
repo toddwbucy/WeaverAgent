@@ -175,6 +175,18 @@ impl Layout {
         std::fs::write(root.join("runner/runner.py"), b"").unwrap();
         std::fs::write(root.join("lib/interp"), b"interpreter bytes").unwrap();
         std::fs::write(root.join("lib/libc"), b"").unwrap();
+        // Modes set, not left to the umask: the judgment reads group and
+        // other write.
+        use std::os::unix::fs::PermissionsExt as _;
+        for (path, mode) in [
+            ("runner", 0o755),
+            ("pycache", 0o755),
+            ("runner/runner.py", 0o644),
+            ("lib/interp", 0o755),
+        ] {
+            std::fs::set_permissions(root.join(path), std::fs::Permissions::from_mode(mode))
+                .unwrap();
+        }
         Layout(root)
     }
 
@@ -422,6 +434,62 @@ fn each_file_of_the_runners_folder_is_judged_as_the_grant_file_is() {
     set_mode(&board, 0o644);
     set_mode(&layout.0.join("runner/runner.py"), 0o644);
     layout.judge(&layout.grant()).unwrap();
+}
+
+/// **The interpreter and each `execute` file are written by no one the launch
+/// answers to**, a row each: the interpreter owned by the uid the launch runs
+/// as where that is not the owner, the interpreter written by others, an
+/// `execute` file written by its group. Perturbation: judge either as a
+/// regular file alone and its rows are admitted.
+#[test]
+fn an_interpreter_or_execute_file_the_launch_could_write_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = |path: &Path, mode: u32| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+    };
+    // The suite's uid as the running uid, judged for another owner: the
+    // interpreter, judged first, is the running uid's.
+    let layout = Layout::new("interp-owner");
+    mode(&layout.0.join("lib/interp"), 0o755);
+    let got = judge(
+        &layout.grant(),
+        &Launch {
+            runner_dir: &layout.0.join("runner"),
+            loop_dir: &layout.0.join("loop"),
+        },
+        own().wrapping_add(1),
+    )
+    .err()
+    .unwrap();
+    assert_eq!(
+        got,
+        format!(
+            "{} is owned by uid {}, the uid the launch runs as",
+            layout.0.join("lib/interp").display(),
+            own()
+        )
+    );
+    let layout = Layout::new("interp-mode");
+    mode(&layout.0.join("lib/interp"), 0o757);
+    let got = layout.judge(&layout.grant()).err().unwrap();
+    assert!(
+        got.ends_with("lib/interp is writable by its group or others"),
+        "{got}"
+    );
+    let layout = Layout::new("execute-mode");
+    let loader = layout.0.join("lib/loader");
+    std::fs::write(&loader, b"").unwrap();
+    mode(&loader, 0o775);
+    let mut grant = layout.grant();
+    grant.execute.push(loader.clone());
+    let got = layout.judge(&grant).err().unwrap();
+    assert_eq!(
+        got,
+        format!("{} is writable by its group or others", loader.display())
+    );
+    // The control: the loader 0755 judges.
+    mode(&loader, 0o755);
+    layout.judge(&grant).unwrap();
 }
 
 /// **The runner's folder must be the owner's**: here the suite's uid stands
