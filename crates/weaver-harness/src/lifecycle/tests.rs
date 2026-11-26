@@ -566,6 +566,7 @@ fn the_declared_election_reaches_the_tee() {
             }],
         },
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
 
     // The fan-out fails after-load at the SPU exec, which is the point:
@@ -606,6 +607,102 @@ fn the_declared_election_reaches_the_tee() {
     assert_eq!(frame["envelope"]["kind"], "load");
     assert_eq!(frame["envelope"]["session"], "s-election");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// **An enter naming a wire file is refused until the worker runs the
+/// loop**, per `weaver-harness-Spec` section 2.5: never the compiled loop in
+/// its place. It refuses before the load, `ConfigInvalid` on `loop`, and the
+/// sink carries nothing. Perturbation: drop the refusal, and the enter goes
+/// on to the fan-out.
+#[test]
+fn an_enter_naming_a_wire_file_is_refused_before_the_load() {
+    let dir = crate::scratch::dir(format!(
+        "weaver-wires-refused-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let listener = crate::channel::bind_coordination(&dir.join("coordination.sock")).expect("bind");
+
+    let sink_path = dir.join("trace.ndjson");
+    let sink = OwnedFd::from(File::create(&sink_path).expect("sink"));
+    let mut harness = Harness {
+        coordination: listener,
+        organs: OrganBinaries {
+            classify: None,
+            spu: "/nonexistent/weaver-spu".into(),
+            gate: "/nonexistent/weaver-gate".into(),
+        },
+        parameters: OrganParameters::default(),
+        state: ChannelState::BeforeEnter,
+        composer: Some(weaver_trace::LoopIdentity::compiled("test")),
+    };
+    let payload = weaver_types::EnterPayload {
+        session: SessionId("s-wires".into()),
+        run: weaver_types::RunId("r-1".into()),
+        spu_instruction: weaver_types::SpuInstruction {
+            classify: None,
+            decoder: weaver_types::DecoderInstruction {
+                model_binding: weaver_types::ModelBinding {
+                    artifact: weaver_types::ArtifactRef("unreachable".into()),
+                    devices: vec![weaver_types::DeviceOrdinal(0)],
+                    adapter: None,
+                },
+                residual_readout_election: false,
+                field_election: None,
+                surprisal_election: false,
+                refeed_permission: false,
+                column_permission: false,
+                tunable_values: crate::lifecycle::test_tunable_values(),
+            },
+        },
+        binding: weaver_types::EnterBinding::Serving {
+            gate_instruction: weaver_types::GateInstruction {
+                access_rule: weaver_types::AccessRule {
+                    allowed_uids: Default::default(),
+                    allowed_gids: Default::default(),
+                    denied_uids: Default::default(),
+                },
+            },
+            shell: None,
+        },
+        state_store: weaver_types::StateStore::default(),
+        declaration: String::new(),
+        restore: None,
+        reset: None,
+        stack: Default::default(),
+        boundary: String::new(),
+        cause: weaver_types::Cause { uid: 0 },
+        operator: 1000,
+        library_path: None,
+        drain_bound: None,
+        wind_down_bound: None,
+        state_election: weaver_types::StateElection {
+            all_kinds: false,
+            keys: vec![weaver_types::ElectedKindConfig {
+                kind: "load".into(),
+                paths: vec!["origin".into()],
+            }],
+        },
+        turn_context: weaver_types::TurnContext::Continuous,
+        wires: Some(weaver_types::WiresElection {
+            file: "/etc/weaver/a1/loop/wires.py".into(),
+            sha256: "0".repeat(64),
+        }),
+    };
+    match harness.enter(payload, Some(sink), None) {
+        Err(EnterFailure::BeforeLoad(refusal)) => assert_eq!(
+            refusal,
+            LifecycleRefusal::ConfigInvalid {
+                field: Some(weaver_types::FieldName("loop".into())),
+            }
+        ),
+        Err(EnterFailure::AfterLoad(..)) => panic!("refused after the load"),
+        Ok(_) => panic!("an enter naming a wire file was served"),
+    }
+    assert_eq!(
+        std::fs::read(&sink_path).expect("the sink"),
+        Vec::<u8>::new()
+    );
 }
 
 /// **A refused enter leaves its reason in the run's record.** Before
@@ -689,6 +786,7 @@ fn a_refused_enter_leaves_its_reason_in_the_record() {
             keys: Vec::new(),
         },
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
     // The fan-out fails after-load at the SPU exec, which is the arm
     // this test exists for: the bracket stands and the refusal is the
@@ -861,6 +959,7 @@ fn the_load_names_the_member_it_was_handed_and_the_composer_serve_set() {
             } else {
                 weaver_types::TurnContext::Continuous
             },
+            wires: None,
         };
         // The member's end, where it stands: one half of a pair the test
         // holds, the way admin's spawn hands the harness its half, its
@@ -987,6 +1086,7 @@ fn an_enter_naming_a_lineage_with_no_member_refuses_before_the_load() {
             keys: Vec::new(),
         },
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
     let refusal = match harness.enter(payload, Some(sink), None) {
         Err(EnterFailure::BeforeLoad(refusal)) => refusal,
@@ -1205,6 +1305,7 @@ fn a_serving_enter_lacking_a_sampling_default_refuses_before_the_load() {
         wind_down_bound: None,
         state_election: weaver_types::StateElection::default(),
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
     let refusal = match harness.enter(payload, Some(sink), None) {
         Err(EnterFailure::BeforeLoad(refusal)) => refusal,
@@ -1442,6 +1543,7 @@ fn enter_against_a_member_seating(
             keys: Vec::new(),
         },
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
     let (near, far) = std::os::unix::net::UnixStream::pair().expect("pair");
     // Every line the member reads and every directive the gate stand-in
@@ -2758,6 +2860,7 @@ fn an_enter_with_no_member_seats_no_prefix() {
             keys: Vec::new(),
         },
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
     let mut run = match harness.enter(payload, Some(sink), None) {
         Err(EnterFailure::AfterLoad(run, _)) => run,
@@ -2866,6 +2969,7 @@ fn the_declared_elections_reach_the_load_record() {
                 }],
             },
             turn_context: weaver_types::TurnContext::Continuous,
+            wires: None,
         };
         let mut run = match harness.enter(payload, Some(sink), None) {
             Err(EnterFailure::AfterLoad(run, _)) => run,
@@ -3020,6 +3124,7 @@ fn the_diagnostic_enter_forks_no_gate() {
         wind_down_bound: None,
         state_election: weaver_types::StateElection::default(),
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
 
     let mut run = match harness.enter(payload, Some(sink), None) {
@@ -3158,6 +3263,7 @@ fn the_turn_rehearses_on_the_device() {
         wind_down_bound: None,
         state_election: weaver_types::StateElection::default(),
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
 
     // The real fan-out: real forks, real admit against real weights,

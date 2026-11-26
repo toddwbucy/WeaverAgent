@@ -1563,6 +1563,26 @@ of that name stands:
 - `-admincon`: the per-agent connector account of an agent laid before 2026-11-10,
   which `deploy/decommission.sh` still finds and removes.
 
+**The loop folder.** `validate` and `load` look in the agent's own folder for `loop/`,
+under a serving binding alone. Where the agent's folder or `loop/` does not stand, the
+enter carries no loop and the compiled loop runs. Where it stands, every piece is judged
+on its descriptor, each opened without following a link, and a piece out of its shape
+refuses `BoundaryUnverified`, naming the piece and the check on standard error:
+
+| Piece | Shape |
+| --- | --- |
+| The agent's folder | a directory, root's, written by no group and no other, no access entry, and its ancestors judged as the territory's are |
+| `loop/` | a directory, `root:weaver-<name> 0750`, no access entry |
+| `loop/wires.py` | a regular file, `root:weaver-<name> 0640`, no access entry, at most 256 KiB |
+
+The wire file is opened through the judged `loop/` descriptor and read once through its
+own, at most one byte past the bound, and the enter carries its path and the sha256 of
+the bytes read (`weaver-types-Spec` section 4). A `loop/` without a wire file refuses,
+never read as no loop. Nothing is cached between verbs, so a laid change takes effect at
+the next load alone. The grant file and the interpreter are not admin's: the launcher
+judges them (`weaver-harness-Spec` section 2.5). A diagnostic binding looks at nothing
+and carries no loop.
+
 ```graph
 node: admin-identity-from-validated-name
 kind: assertion
@@ -4310,6 +4330,12 @@ perturbation-verified:
   at the name check and by `deploy/create-agent.sh` before any call. The perturbation
   drops either check, and `adminx` would lay a folder decommission reads as a config
   base.
+- **The loop folder is judged before it is carried**, watched by `src/loop_folder/tests.rs`:
+  no folder is no loop, a row per piece out of its shape, another owner or group, the
+  election naming the file with the digest of `abc` the standard gives, and a change read
+  at the next judgment alone. `only_a_serving_binding_looks_for_the_loop` in
+  `src/tests.rs` watches the binding's guard. The perturbation drops any one check, and
+  its row is admitted.
 - **The lock stands where the agent cannot replace it**, watched by the agent's uid
   trying to unlink and recreate `run.lock`: refused by the root-owned run directory.
   The perturbation places it in the runtime directory, and a second worker starts.

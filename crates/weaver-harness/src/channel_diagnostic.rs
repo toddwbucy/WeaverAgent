@@ -183,5 +183,6 @@ pub(crate) fn diagnostic_payload(source: &EnterEnvelope) -> Option<weaver_types:
         // the foundation's enter carries no turn-context election until its
         // cutover (#423), so the projection names the absence's meaning.
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     })
 }

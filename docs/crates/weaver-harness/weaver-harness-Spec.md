@@ -963,6 +963,13 @@ forks it by the organ fork as it stands (section 2.2), with the loop's end at de
 executes the interpreter. It holds one thread. No process stays resident for it, and the
 gate does not change for it.
 
+**Until the worker runs it, an enter naming a wire file refuses.** Admin carries the loop
+it found standing on the enter (`weaver-types-Spec` section 4). The worker refuses such
+an enter before the load and before the sink is taken, `ConfigInvalid` naming `loop`, so
+the stream stays clean and a loop the operator laid is never replaced by the compiled
+loop silently. Enforced by `an_enter_naming_a_wire_file_is_refused_before_the_load` in
+`src/lifecycle/tests.rs`.
+
 **Its arguments** are two absolute paths: the grant file, and the wire file. The runner is
 `runner.py` in the grant file's folder, `<prefix>/lib/weaver-loop/`, and the loop folder
 granted is the wire file's, `/etc/weaver/<agent>/loop/`.

@@ -817,6 +817,26 @@ pub struct EnterPayload {
     /// same reason. The harness lends it to loop 1's seat and names it on the
     /// load event.
     pub turn_context: crate::config::TurnContext,
+    /// **The loop admin found standing**, per `weaver-admin-harness-contract`
+    /// sections 3 and 5 and `weaver-admin-Spec` section 4: the wire file's
+    /// path as admin read it and the sha256 of the bytes it read, which the
+    /// relay compares with the runner's `hello`. Absent where no loop folder
+    /// stands, and then the compiled loop runs. Never present under a
+    /// diagnostic binding. The interpreter and the grant stay out of it: the
+    /// launcher reads them from the grant file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wires: Option<WiresElection>,
+}
+
+/// The loop admin found standing, per `weaver-types-Spec` section 4: the wire
+/// file's path and admin's digest of the bytes it read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct WiresElection {
+    /// The wire file's path as admin read it, `/etc/weaver/<agent>/loop/wires.py`.
+    pub file: String,
+    /// The sha256 hex of the bytes admin read, lowercase.
+    pub sha256: String,
 }
 
 /// A save point's lineage as admin resolved it from the stamp, per

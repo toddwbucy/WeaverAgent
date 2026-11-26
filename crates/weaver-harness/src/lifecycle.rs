@@ -2028,6 +2028,16 @@ impl Harness {
         mut setup: Option<&mut diagnostic_setup::Setup<'_>>,
     ) -> Result<Run, EnterFailure> {
         let state_member = state_end.is_some();
+        // **A loop admin found standing is refused until the worker runs
+        // it**, per `weaver-harness-Spec` section 2.5: an enter that names
+        // a wire file never falls back to the compiled loop, so a loop the
+        // operator laid is never replaced by another one silently. Refused
+        // before the sink is taken, so the stream stays clean.
+        if payload.wires.is_some() {
+            return Err(EnterFailure::BeforeLoad(LifecycleRefusal::ConfigInvalid {
+                field: Some(weaver_types::FieldName("loop".into())),
+            }));
+        }
         // The sink descriptor arrives on the directive's own message, the
         // state channel's end beside it where the member stands, per the
         // ruling of 2026-08-26. The sink's absence refuses and the end's

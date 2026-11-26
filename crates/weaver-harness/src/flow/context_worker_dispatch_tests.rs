@@ -986,6 +986,7 @@ pub(in crate::flow::context::worker_startup) fn ordering(
             drain_bound: source.drain_bound,
             wind_down_bound: source.wind_down_bound,
             turn_context: weaver_types::TurnContext::Continuous,
+            wires: None,
         }),
     };
     let original_input = std::ptr::from_ref(&**guard.input.as_ref().unwrap());
