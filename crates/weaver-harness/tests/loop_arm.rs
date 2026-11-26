@@ -189,6 +189,16 @@ fn run_case(
     layout: &Layout,
     during: impl FnOnce(u32, &mut dyn std::io::BufRead),
 ) -> Ran {
+    run_case_within(case, layout, CASE_BOUND, during)
+}
+
+/// [`run_case`] under `bound` in place of [`CASE_BOUND`].
+fn run_case_within(
+    case: &str,
+    layout: &Layout,
+    bound: Duration,
+    during: impl FnOnce(u32, &mut dyn std::io::BufRead),
+) -> Ran {
     let exe = std::env::current_exe().unwrap();
     let mut child = Command::new("unshare")
         .arg("--map-root-user")
@@ -214,27 +224,61 @@ fn run_case(
         let _ = stderr.read_to_string(&mut held);
         held
     });
-    during(pid, &mut stdout);
+    // **The bound holds through `during`**: its clock starts before it, and a
+    // watchdog kills the child at the bound, which ends a read `during` would
+    // otherwise block on forever where the case stalls before saying what it
+    // waits for. The child is shared, so the kill never reaches a pid that
+    // was reaped and reused.
+    let started = Instant::now();
+    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
+    let (finished, watched) = std::sync::mpsc::channel::<()>();
+    let watchdog = {
+        let child = std::sync::Arc::clone(&child);
+        std::thread::spawn(move || {
+            let timed_out = matches!(
+                watched.recv_timeout(bound),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            );
+            if timed_out {
+                let _ = child.lock().unwrap().kill();
+            }
+            timed_out
+        })
+    };
+    let during_ran =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| during(pid, &mut stdout)));
     let outs = std::thread::spawn(move || {
         let mut held = String::new();
         let _ = stdout.read_to_string(&mut held);
         held
     });
-    let started = Instant::now();
+    // A `during` that panicked leaves a child no one waits on: it is killed
+    // and reaped at once, and the panic carried on below.
+    if during_ran.is_err() {
+        let _ = child.lock().unwrap().kill();
+    }
     let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
+        if let Some(status) = child.lock().unwrap().try_wait().unwrap() {
             break status;
         }
-        if started.elapsed() > CASE_BOUND {
+        if started.elapsed() > bound {
+            let mut child = child.lock().unwrap();
             let _ = child.kill();
-            let _ = child.wait();
-            panic!(
-                "the case {case} did not end within {CASE_BOUND:?} and was killed\nstderr:\n{}",
-                errors.join().unwrap()
-            );
+            break child.wait().unwrap();
         }
         std::thread::sleep(Duration::from_millis(20));
     };
+    let _ = finished.send(());
+    let timed_out = watchdog.join().unwrap() || started.elapsed() > bound;
+    if timed_out {
+        panic!(
+            "the case {case} did not end within {bound:?} and was killed\nstderr:\n{}",
+            errors.join().unwrap()
+        );
+    }
+    if let Err(panicked) = during_ran {
+        std::panic::resume_unwind(panicked);
+    }
     Ran {
         success: status.success(),
         stdout: outs.join().unwrap(),
@@ -492,6 +536,11 @@ fn a_case_in_the_namespace() {
             std::thread::sleep(Duration::from_secs(50));
             panic!("the parent kills this process before here");
         }
+        // **Says nothing and does not end**, for the runner's own bound.
+        "silent" => {
+            drop(started);
+            std::thread::sleep(Duration::from_secs(45));
+        }
         other => panic!("no case {other}"),
     }
 }
@@ -550,6 +599,38 @@ fn the_runner_holds_descriptors_0_to_3_and_the_cleared_environment_under_the_wor
     assert_eq!(held[0]["null_at"], serde_json::json!([0, 1]));
     assert_eq!(held[0]["socket_at_3"], serde_json::json!(true));
     assert_eq!(held[0]["env"], serde_json::json!({"LANG": "C.UTF-8"}));
+}
+
+/// **A case's bound holds through `during`** (review of #655): a case that
+/// says nothing while `during` waits on its standard output is killed at the
+/// bound and fails naming it, never hanging the suite for as long as the case
+/// stalls. Perturbation: start the bound's clock after `during`, or drop the
+/// watchdog, and the run waits out the case's 45 seconds.
+#[test]
+fn a_case_silent_while_during_reads_is_killed_at_its_bound() {
+    let wires = std::fs::read(CROSS_WIRES).unwrap();
+    let layout = Layout::new("silent", None, &wires);
+    let begun = Instant::now();
+    let ran = std::panic::catch_unwind(|| {
+        run_case_within("silent", &layout, Duration::from_secs(3), |_, stdout| {
+            let mut line = String::new();
+            let _ = stdout.read_line(&mut line);
+        })
+    });
+    let panicked = match ran {
+        Ok(_) => panic!("a silent case cannot pass its bound"),
+        Err(panicked) => panicked,
+    };
+    let said = panicked
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    assert!(said.contains("did not end within"), "{said}");
+    assert!(
+        begun.elapsed() < Duration::from_secs(30),
+        "the bound held through during: {:?}",
+        begun.elapsed()
+    );
 }
 
 /// **A `hello` naming another digest refuses the start, and the runner is

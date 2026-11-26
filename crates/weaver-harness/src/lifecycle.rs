@@ -3132,7 +3132,6 @@ unsafe fn start_loop_saying(
     wires: &weaver_types::WiresElection,
     diagnostic: &mut impl std::io::Write,
 ) -> Result<(), LifecycleRefusal> {
-    use std::io::Write as _;
     let mut say = |line: serde_json::Value| {
         let _ = writeln!(diagnostic, "{line}");
     };
