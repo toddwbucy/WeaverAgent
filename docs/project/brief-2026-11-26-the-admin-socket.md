@@ -155,6 +155,7 @@ change.
 ## The state table
 
 The protocol has two machines: one per connection, and one per agent at the service.
+The contract's section 8.8 carries the same table and is its authority.
 The connector causes the C events, the service the V events, and the machine the M
 events.
 
@@ -179,7 +180,7 @@ events.
 | K0 | V: any other peer uid | K9, nothing sent, the service's log names the uid |
 | K0 | V: 64 connections already stand | K9, `refused` `full` |
 | K1 | C: an opening line that judges | K2, K7 or K8 by its purpose, `open` sent |
-| K1 | C: an unknown version, purpose or a refused name | K9, `refused` with its word |
+| K1 | C: an unknown version or purpose, a refused name, or an unread log | K9, `refused` with its word |
 | K1 | C: a line past 4096 bytes, or one that does not parse | K9, `refused` `opening_malformed` |
 | K1 | V: 10 seconds pass with no line | K9, `refused` `opening_late` |
 | K2 | C: `grants` | K3 |
