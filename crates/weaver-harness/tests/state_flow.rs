@@ -260,6 +260,7 @@ impl Circuit {
 fn circuit(root: &Path, case: Case) {
     let program = FoundationProgram {
         organs: OrganBinaries {
+            loop_launch: None,
             classify: Some(host::organ(root, "checker")),
             spu: host::organ(root, "spu"),
             gate: host::organ(root, "gate"),
