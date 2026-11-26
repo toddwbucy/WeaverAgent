@@ -411,6 +411,7 @@ What it does, so the log can say which step a failure was at:
    nvcc = <release>, V<version>
    member.<name> = <64 hex>              (one per installed member, the shell's two files among them)
    library.<versioned file> = <64 hex>   (one per engine library)
+   loop.runner.py = <64 hex>             (and weaver_board.py, grant: the loop runner's files as laid)
    runtime.cudart = <64 hex> <file>      (and cublas, cublaslt, curand)
    cccl = <package version>               (pacman's, or with no pacman <package>=<version> from dpkg)
    ```

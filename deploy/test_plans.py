@@ -6121,6 +6121,7 @@ esac
                   "member.worker", "member.weaver-admin", "member.weaver-trace-relay", "member.weaver-gate",
                   "member.weaver-spu", "member.weaver-state", "member.weaver-loop-launch", "member.busybox", "member.busybox.applets",
                   "library.libggml.so.0.9.1", "library.libllama.so.0.0.1",
+                  "loop.runner.py", "loop.weaver_board.py", "loop.grant",
                   "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand", "cccl"]
 
     def test_a_verified_install_prints_and_records_the_install_tuple(self):
@@ -6159,6 +6160,10 @@ esac
             self.assertEqual(facts[f"member.{member}"], hashlib.sha256((installed / member).read_bytes()).hexdigest())
         self.assertEqual(facts["library.libllama.so.0.0.1"],
                          hashlib.sha256(b"fixture libllama b").hexdigest())
+        # The loop runner's three files as laid, each by its sha256.
+        laid = self.lib_dir / "weaver-loop"
+        for name in ("runner.py", "weaver_board.py", "grant"):
+            self.assertEqual(facts[f"loop.{name}"], hashlib.sha256((laid / name).read_bytes()).hexdigest(), name)
         self.assertEqual(facts["commit"], "abcdef0")
         self.assertEqual(facts["features"], "weaver-spu/cuda,weaver-state/sqlite")
         self.assertEqual(facts["engine"], "llama-cpp-sys-2 0.1.0")
@@ -6176,6 +6181,7 @@ esac
         install = _agent_tuple().read_install_tuple(str(self.stack / "install-tuple"))
         self.assertEqual(install["earlier"], [])
         self.assertEqual(sorted(install["runtime"]), ["cublas", "cublaslt", "cudart", "curand"])
+        self.assertEqual(sorted(install["loop"]), ["grant", "runner.py", "weaver_board.py"])
         # The lock read filtered to the host, so an offline cache a build
         # filled answers it.
         metadata = [c for c in self.calls() if c[:2] == ["cargo", "metadata"] and "--no-deps" not in c]
@@ -6214,10 +6220,11 @@ esac
         self.assertEqual(ran.returncode, 0, ran.stderr)
         facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
         self.assertEqual(list(facts), ["commit", "toolchain", "features", "engine", "engine-source", "engine-vendored",
-                                       "nvcc", "member.worker", "library.libllama.so.0.0.1", "runtime.cudart",
+                                       "nvcc", "member.worker", "library.libllama.so.0.0.1", "loop.runner.py",
+                                       "loop.weaver_board.py", "loop.grant", "runtime.cudart",
                                        "runtime.cublas", "runtime.cublaslt", "runtime.curand", "cccl"])
         for key in ("toolchain", "engine-source", "engine-vendored", "member.worker", "library.libllama.so.0.0.1",
-                    "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand"):
+                    "loop.runner.py", "loop.weaver_board.py", "loop.grant", "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand"):
             self.assertEqual(facts[key], "unknown", key)
         self.assertEqual(facts["engine"], "llama-cpp-sys-2 unknown")
         self.assertEqual(facts["commit"], "fixture-commit", "the commit is the caller's, never read again")
@@ -16188,6 +16195,21 @@ class AgentTupleInstallTests(unittest.TestCase):
                          (hashlib.sha256(cudart.read_bytes()).hexdigest(), str(cudart)))
         self.assertEqual(sorted(install["runtime"]), ["cublas", "cublaslt", "cudart", "curand"])
         self.assertNotIn("gpus", install)
+        # A tuple written before the loop's group reads, holding none.
+        self.assertEqual(install["loop"], {})
+
+    def test_the_loop_runners_group_is_read_as_its_own(self):
+        """**The loop runner's files are a group of their own**, as the
+        members are: read by name, each digest 64 hex digits or `unknown`.
+        Perturbations: read them as scalars and they land among the facts;
+        drop their digest check and the malformed one reads."""
+        lines = INSTALL_TUPLE_LINES + ["loop.runner.py = " + "a" * 64, "loop.weaver_board.py = unknown",
+                                       "loop.grant = " + "b" * 64]
+        install = self.tuple.read_install_tuple(self.write(lines))
+        self.assertEqual(install["loop"], {"runner.py": "a" * 64, "weaver_board.py": "unknown", "grant": "b" * 64})
+        self.assertFalse([key for key in install["facts"] if key.startswith("loop")])
+        with self.assertRaisesRegex(self.tuple.InstallTupleRefused, "grant's digest is not 64 hex digits"):
+            self.tuple.read_install_tuple(self.write(INSTALL_TUPLE_LINES + ["loop.grant = zz"]))
 
     def test_an_earlier_tuple_is_read_with_its_hardware_lines_unread(self):
         """**A tuple of the earlier form is read, not refused**, so a box
@@ -16377,6 +16399,8 @@ class AgentTupleInstallTests(unittest.TestCase):
         facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
         self.assertEqual(facts["member.worker"], hashlib.sha256(b"worker").hexdigest())
         self.assertEqual(facts["library.libllama.so.0.0.8783"], hashlib.sha256(b"llama").hexdigest())
+        self.assertEqual([facts[f"loop.{n}"] for n in ("runner.py", "weaver_board.py", "grant")], ["unknown"] * 3,
+                         "no loop folder named, so each reads unknown")
         cudart = (odd / "cuda" / "libcudart.so.13.0.1").resolve()
         self.assertEqual(facts["runtime.cudart"], f"{hashlib.sha256(b'cudart').hexdigest()} {cudart}")
         install = self.tuple.read_install_tuple(self.write([ran.stdout.rstrip("\n")]))

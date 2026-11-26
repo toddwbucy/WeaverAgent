@@ -468,7 +468,7 @@ sudo install -d -o root -g root -m 0755 "$AGENT_DIR"
 # **The install tuple** (deploy/install-tuple.sh), read from what this run
 # installed, the same record update-stack.sh writes after each install.
 say "tuple"
-TUPLE=$(install_tuple "$REPO" "$COMMIT" "$PREFIX/bin" "$PREFIX/lib" "$FEATURES" "$MEMBERS $SHELL_FILES" "${LIB_NAMES[*]}")
+TUPLE=$(install_tuple "$REPO" "$COMMIT" "$PREFIX/bin" "$PREFIX/lib" "$FEATURES" "$MEMBERS $SHELL_FILES" "${LIB_NAMES[*]}" "$LOOP_DIR")
 printf '%s\n' "$TUPLE" | sed 's/^/   /'
 printf '%s\n' "$TUPLE" | sudo tee "$STACK/install-tuple" >/dev/null
 sudo chmod 0644 "$STACK/install-tuple"

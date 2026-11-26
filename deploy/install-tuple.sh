@@ -21,6 +21,8 @@
 #   nvcc                  the CUDA compiler release that built the kernels
 #   member.<name>         sha256 of each installed member, in full
 #   library.<file>        sha256 of each installed engine library's versioned file
+#   loop.<file>           sha256 of the loop runner's runner.py, weaver_board.py
+#                         and grant, as laid in the runner's folder
 #   runtime.<name>        each CUDA runtime file the installed SPU resolves, as
 #                         `<sha256> <path>`, the path the file the loader's name
 #                         leads to: cudart, cublas, cublaslt and curand
@@ -56,11 +58,12 @@
 # names, and test_plans.py pins the two equal.
 TUPLE_RUNTIME="cudart cublas cublasLt curand"
 
-# install_tuple REPO COMMIT BIN_DIR LIB_DIR FEATURES "MEMBER..." "LIBRARY..."
+# install_tuple REPO COMMIT BIN_DIR LIB_DIR FEATURES "MEMBER..." "LIBRARY..." [LOOP_DIR]
 # COMMIT is the tree the script built from, read at its tree gate, never
-# again here: the checkout may move during a long build.
+# again here: the checkout may move during a long build. LOOP_DIR is the loop
+# runner's folder, whose three files read `unknown` where it is not named.
 install_tuple() {
-  local repo=$1 commit=$2 bin_dir=$3 lib_dir=$4 features=$5 members=$6 libraries=$7
+  local repo=$1 commit=$2 bin_dir=$3 lib_dir=$4 features=$5 members=$6 libraries=$7 loop_dir=${8:-}
   local host metadata engine ldd_said m f name path n digest
   printf 'commit = %s\n' "$commit"
   printf 'toolchain = %s\n' "$(python3 -c 'import sys, tomllib
@@ -102,6 +105,11 @@ if len(found) == 1:
   for f in $libraries; do
     n=$(sha256sum 2>/dev/null < "$lib_dir/$f" | cut -d' ' -f1)
     printf 'library.%s = %s\n' "$f" "${n:-unknown}"
+  done
+  for f in runner.py weaver_board.py grant; do
+    n=""
+    [ -z "$loop_dir" ] || n=$(sha256sum 2>/dev/null < "$loop_dir/$f" | cut -d' ' -f1)
+    printf 'loop.%s = %s\n' "$f" "${n:-unknown}"
   done
   # What the installed SPU resolves: the first line naming each library in
   # ldd's order, as agent_tuple.py's resolved_as takes it, followed to the
