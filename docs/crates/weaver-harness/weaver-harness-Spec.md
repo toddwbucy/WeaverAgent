@@ -1143,9 +1143,11 @@ gate's copy and this one one module waits on the layout of the repository.
     end again, so only the signal ends it.
 - `src/lifecycle/tests.rs`: a wire file refused before the load with no launcher and
   under a diagnostic binding, the load's composer for each loop (the compiled one to the
-  byte), the start standing the loop or refusing `ConfigInvalid` naming `loop`, a run
-  holding the arm answering by its relay and calling no entry, and the unwind's leave and
-  a dispatched rollback each stopping the loop and reaping it.
+  byte), the start standing the loop or refusing `ConfigInvalid` naming `loop` (a grant
+  path not in UTF-8 among them), a run holding the arm answering by its relay and calling
+  no entry, and the unwind's leave and a dispatched rollback each stopping the loop and
+  reaping it, the runner still standing when the lower reaches the gate. That the stop
+  comes before the save point is held by reading alone: neither leave takes one.
 - `tests/worker_arguments.rs`: either loop flag alone refused by name, both together
   passing the parse. No test drives the start's
   call at the enter's end: a serving enter reaches it only once the gate stands, which
