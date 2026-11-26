@@ -11,7 +11,7 @@
 # it takes every agent, the stack and every `weaver-` account off the machine.
 #
 #  1. Read before anything: admin's `show` must name the agent unloaded with no
-#     constituent. The stack record's `agent-directory` and `coordination-root` and the
+#     constituent. No other root's territory may lie inside a folder this removes. The stack record's `agent-directory` and `coordination-root` and the
 #     root's `territory` key are read, and the territory must be the agent's own,
 #     <agent-directory>/NAME/weaver-NAME. A per-agent connector account,
 #     weaver-NAME-admincon, that an earlier create-agent.sh laid, refuses: this
@@ -31,7 +31,8 @@
 # 11. The groups: weaver-NAME, -state, -trace, -admin.
 # 12. The agent's folder <agent-directory>/NAME/, by rmdir, so it must stand empty.
 #
-# Every apply step is unmeasured on the build machine: only the plan and the refusals
+# Each folder is removed with --one-file-system, so a mount inside it is left and the
+# step stops. Every apply step is unmeasured on the build machine: only the plan and the refusals
 # before any step are tested (test_take_down.py). A failed step stops at once and says
 # which, and what was removed before it stays removed: read the plan, then finish by
 # hand by the runbook's section 7.
@@ -118,6 +119,25 @@ fi
 for p in "$AGENT_DIR" "$COORD"; do
     case $p in /*|'<'*) ;; *) die "the stack record names a path that is not absolute: '$p'" ;; esac
 done
+RUN_DIR=$COORD/weaver.run/$NAME RUNTIME_DIR=$COORD/weaver-$NAME FOLDER=$AGENT_DIR/$NAME
+# **No other agent's territory lies inside a folder this take-down removes**, as
+# decommission.sh refuses a target that spans a base: every other root under the admin
+# base is read, and a territory it names inside the agent's folder, its root, its own
+# folder, its run directories or its territory refuses before anything is touched.
+if [ -d "$BASE" ]; then
+    for other in "$BASE"/*; do
+        [ "${other##*/}" != "$NAME" ] && [ -f "$other/territory" ] || continue
+        theirs=$(key "$other/territory") || continue
+        theirs=$(realpath -m -- "$theirs")
+        for removed in "$FOLDER" "$BASE/$NAME" "$OWN" "$RUN_DIR" "$RUNTIME_DIR" "$TERRITORY"; do
+            case $removed in /*) ;; *) continue ;; esac
+            removed=$(realpath -m -- "$removed")
+            case $theirs in
+                "$removed"|"$removed"/*) die "the root $other names the territory $theirs, inside $removed, which this take-down removes: take that agent down first, or by hand" ;;
+            esac
+        done
+    done
+fi
 if [ "$APPLY" = 1 ]; then
     for p in "$STACK" "$STACK/agent-directory" "$STACK/coordination-root" "$BASE" "$BASE/$NAME" "$BASE/$NAME/territory"; do
         held_root "$p" || die "$p is not held by root alone, and this step acts on the paths it names"
@@ -137,7 +157,6 @@ except ValueError:
 sys.exit(0 if isinstance(d, dict) and d.get("kind") == "state" and d.get("state") == "unloaded" and not d.get("constituents") else 1)
 ' "$said" || die "show does not name $NAME unloaded with no constituent: unload it first, and take nothing down while it runs or is in transition"
 fi
-RUN_DIR=$COORD/weaver.run/$NAME RUNTIME_DIR=$COORD/weaver-$NAME FOLDER=$AGENT_DIR/$NAME
 
 # ------------------------------------------------------------------ 2, the archive
 step "archive the agent's pieces into $ARCHIVE, as root, before anything is removed"
@@ -161,22 +180,22 @@ fi
 step "remove the sudo rule, so the connector can run nothing more on the agent"
 act rm -f -- "$SUDO_RULE"
 step "remove the root, which ends the admission"
-act rm -rf -- "$BASE/$NAME"
+act rm -rf --one-file-system -- "$BASE/$NAME"
 step "remove the agent's own folder, with any loop folder in it"
-act rm -rf -- "$OWN"
+act rm -rf --one-file-system -- "$OWN"
 step "remove the run and runtime directories"
-act rm -rf -- "$RUN_DIR" "$RUNTIME_DIR"
+act rm -rf --one-file-system -- "$RUN_DIR" "$RUNTIME_DIR"
 step "remove the territory"
-act rm -rf -- "$TERRITORY"
+act rm -rf --one-file-system -- "$TERRITORY"
 
 # ------------------------------------------------------------------ 8, /tmp
 step "remove the agent's /tmp entries, chosen by owner among its accounts"
 for u in "${ACCOUNTS[@]}"; do
-    shown find /tmp -mindepth 1 -maxdepth 1 '(' -name 'weaver-*' -o -name 'torchinductor_weaver-*' ')' -user "$u" -exec rm -rf -- '{}' +
+    shown find /tmp -mindepth 1 -maxdepth 1 '(' -name 'weaver-*' -o -name 'torchinductor_weaver-*' ')' -user "$u" -exec rm -rf --one-file-system -- '{}' +
     [ "$APPLY" = 1 ] || continue
     getent passwd "$u" >/dev/null || continue
     find /tmp -mindepth 1 -maxdepth 1 \( -name 'weaver-*' -o -name 'torchinductor_weaver-*' \) -user "$u" \
-        -exec rm -rf -- {} + || stop "the /tmp entries of $u"
+        -exec rm -rf --one-file-system -- {} + || stop "the /tmp entries of $u"
 done
 
 # ------------------------------------------------------------------ 9, the quota

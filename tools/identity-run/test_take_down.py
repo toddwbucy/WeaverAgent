@@ -79,10 +79,10 @@ class ThePlan(unittest.TestCase):
         ran = self.plan("--agent", "a1", "--archive", self.archive)
         self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
         out = ran.stdout
-        self.assertIn("+ rm -rf -- %s/a1\n" % self.base, out)
-        self.assertIn("+ rm -rf -- /etc/weaver/a1\n", out)
-        self.assertIn("+ rm -rf -- /run/weaver.run/a1 /run/weaver-a1\n", out)
-        self.assertIn("+ rm -rf -- /var/lib/weaver-agent/a1/weaver-a1\n", out)
+        self.assertIn("+ rm -rf --one-file-system -- %s/a1\n" % self.base, out)
+        self.assertIn("+ rm -rf --one-file-system -- /etc/weaver/a1\n", out)
+        self.assertIn("+ rm -rf --one-file-system -- /run/weaver.run/a1 /run/weaver-a1\n", out)
+        self.assertIn("+ rm -rf --one-file-system -- /var/lib/weaver-agent/a1/weaver-a1\n", out)
         self.assertIn("+ rmdir -- /var/lib/weaver-agent/a1\n", out)
         self.assertIn("var/lib/weaver-agent/a1/weaver-a1", next(l for l in out.splitlines() if l.startswith("+ tar")))
 
@@ -112,6 +112,30 @@ class ThePlan(unittest.TestCase):
                 self.assertEqual(ran.returncode, 2, ran.stdout + ran.stderr)
                 self.assertIn("is not the agent's own", ran.stderr)
                 self.assertNotIn("== step 2", ran.stdout)
+
+    def test_another_agents_territory_inside_this_agents_folder_refuses_before_anything(self):
+        self.lay()
+        os.makedirs(os.path.join(self.base, "b1"))
+        with open(os.path.join(self.base, "b1", "territory"), "w") as f:
+            f.write("/var/lib/weaver-agent/a1/weaver-b1\n")
+        ran = self.plan("--agent", "a1", "--archive", self.archive)
+        self.assertEqual(ran.returncode, 2, ran.stdout + ran.stderr)
+        self.assertIn("names the territory /var/lib/weaver-agent/a1/weaver-b1, inside /var/lib/weaver-agent/a1,", ran.stderr)
+        self.assertNotIn("== step 2", ran.stdout)
+        # The control: b1's territory beside a1's folder plans.
+        with open(os.path.join(self.base, "b1", "territory"), "w") as f:
+            f.write("/var/lib/weaver-agent/b1/weaver-b1\n")
+        ran = self.plan("--agent", "a1", "--archive", self.archive)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+
+    def test_every_folder_is_removed_on_its_own_file_system(self):
+        self.lay()
+        ran = self.plan("--agent", "a1", "--archive", self.archive)
+        removals = [l for l in ran.stdout.splitlines() if re.match(r"\+ (rm -rf|find) ", l)]
+        self.assertEqual(len(removals), 7, removals)
+        for line in removals:
+            with self.subTest(line=line):
+                self.assertIn("rm -rf --one-file-system --", line)
 
     def test_a_name_that_is_not_an_agents_refuses_before_any_step(self):
         for name in ("gatecon", "admincon", "adminx", "stack", "A1", "a", "a-1", "a1/b", "a" * 17, ""):
