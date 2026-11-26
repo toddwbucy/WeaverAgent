@@ -262,6 +262,17 @@ class TheRun(unittest.TestCase):
         self.assertEqual(code, compare.FAILS, body)
         self.assertEqual(body["difference"]["at"], "payload.timings.sample_ns")
 
+    def test_a_named_timing_is_set_aside_by_value_and_compared_by_presence(self):
+        wires = set_composer(remint(fixture(), "w"), wires_composer(WIRES_SHA))
+        at = next(i for i, e in enumerate(wires) if e["kind"] == "model.measurement")
+        wires[at]["payload"]["timings"]["decode_ns"] = "999"
+        code, body = self.run_on(self.arms(wires=wires))
+        self.assertEqual(code, compare.IDENTICAL, body)
+        del wires[at]["payload"]["timings"]["decode_ns"]
+        code, body = self.run_on(self.arms(wires=wires))
+        self.assertEqual(code, compare.FAILS, body)
+        self.assertEqual(body["difference"]["at"], "payload.timings.decode_ns")
+
     def test_an_event_more_or_fewer_fails_at_the_records_length(self):
         wires = set_composer(remint(fixture(), "w"), wires_composer(WIRES_SHA))
         code, body = self.run_on(self.arms(wires=wires[:-1]))
@@ -317,7 +328,10 @@ class TheRun(unittest.TestCase):
     def test_images_the_control_holds_unequal_are_not_compared_and_the_result_says_so(self):
         code, body = self.run_on(self.arms(write={"c2": {"image": lambda i: b"?"}, "w": {"image": lambda i: b"!"}}))
         self.assertEqual(code, compare.IDENTICAL, body)
-        self.assertEqual(body["images"], {"compared": [], "not compared": [0, 1]})
+        self.assertEqual(body["images"]["compared"], [])
+        self.assertEqual(body["images"]["not compared"], [0, 1])
+        self.assertIn("no save point's image was compared", body["images"]["words"])
+        self.assertNotIn("reason", body)
 
     def test_a_save_point_file_that_is_not_the_events_is_unreadable(self):
         folders = self.arms()
@@ -361,6 +375,40 @@ class TheRun(unittest.TestCase):
         code, body = self.run_on(folders)
         self.assertEqual(code, compare.FAILS, body)
         self.assertIn("no byte was changed", body["reason"])
+
+    def test_a_failing_negative_control_keeps_its_reason_where_no_image_was_compared(self):
+        # Every save point's images differ between the two compiled arms, and the negative
+        # control fails: the answer is fails, one JSON object, naming the negative control,
+        # and `images` still says nothing was compared. Perturbation: put the words in
+        # `reason`, and answer() raises on the second reason.
+        base = fixture()
+        differ = {"c2": {"image": lambda i: b"?"}}
+        rows = {
+            "the negative control stays green": (
+                set_composer(remint(base, "n"), wires_composer(NEGATIVE_SHA)), NEGATIVE_SHA,
+                "the negative control stayed green"),
+            "the negative control on the wires arm's file": (
+                set_composer(change_system_prompt(remint(base, "n")), wires_composer(WIRES_SHA)), WIRES_SHA,
+                "no byte was changed"),
+        }
+        for row, (negative, sha, words) in rows.items():
+            with self.subTest(row=row):
+                made = Arms(self)
+                folders = [made.write("c1", "compiled", remint(base, "c1")),
+                           made.write("c2", "compiled", remint(base, "c2"), **differ["c2"]),
+                           made.write("w", "wires", set_composer(remint(base, "w"), wires_composer(WIRES_SHA)),
+                                      sha=WIRES_SHA),
+                           made.write("n", "negative", negative, sha=sha)]
+                code, body = self.run_on(folders)
+                self.assertEqual(code, compare.FAILS, body)
+                self.assertIn(words, body["reason"])
+                self.assertEqual(body["images"]["compared"], [])
+                self.assertIn("no save point's image was compared", body["images"]["words"])
+                self.assertIsInstance(json.loads(json.dumps(body)), dict)
+                ran = subprocess.run([sys.executable, "-I", os.path.join(HERE, "compare.py"), "run", *folders],
+                                     capture_output=True, text=True)
+                self.assertNotIn("Traceback", ran.stderr)
+                self.assertIn(words, json.loads(ran.stdout)["reason"])
 
     # -- the timing paths outside the comparison ------------------------------------------
 
@@ -492,7 +540,8 @@ class TheSteps(unittest.TestCase):
             self.assertEqual(set(before) - set(after), {"wall_ms", "monotonic_ns"})
             if before["kind"] == "model.measurement":
                 measured += 1
-                self.assertEqual(set(before["payload"]["timings"]) - set(after["payload"]["timings"]),
+                self.assertEqual(set(before["payload"]["timings"]), set(after["payload"]["timings"]))
+                self.assertEqual({k for k, v in after["payload"]["timings"].items() if v == compare.SET_ASIDE},
                                  {"prefill_ns", "decode_ns"})
                 self.assertEqual(set(before["payload"]) - set(after["payload"]), set())
         self.assertEqual(measured, 2, "the real record's two measurements")

@@ -492,6 +492,36 @@ fn an_interpreter_or_execute_file_the_launch_could_write_is_refused() {
     layout.judge(&grant).unwrap();
 }
 
+/// **A `read` file and a `beneath` folder take the same judgment**: each
+/// written by a group or others is refused, named. Perturbation: judge either
+/// by its type alone, and its row is admitted.
+#[test]
+fn a_read_file_or_beneath_folder_the_launch_could_write_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = |path: &Path, mode: u32| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+    };
+    let layout = Layout::new("read-mode");
+    let libc = layout.0.join("lib/libc");
+    mode(&libc, 0o664);
+    assert_eq!(
+        layout.judge(&layout.grant()).err().unwrap(),
+        format!("{} is writable by its group or others", libc.display())
+    );
+    let layout = Layout::new("beneath-mode");
+    let lib = layout.0.join("lib");
+    mode(&lib, 0o775);
+    let got = layout.judge(&layout.grant()).err().unwrap();
+    // The interpreter and the library inside it are judged first and pass.
+    assert_eq!(
+        got,
+        format!("{} is writable by its group or others", lib.display())
+    );
+    // The control: the folder 0755 judges.
+    mode(&lib, 0o755);
+    layout.judge(&layout.grant()).unwrap();
+}
+
 /// **The runner's folder must be the owner's**: here the suite's uid stands
 /// for root, and another owner (root's own `/`) is refused.
 #[test]

@@ -104,6 +104,21 @@ class ThePlan(unittest.TestCase):
         self.assertRegex(ran.stdout, r"(?m)^\+ \S*/take-down\.sh --agent a1 --archive %s/archive --admin \S+ --apply$"
                          % re.escape(os.path.join(here, "arm1")))
 
+    def test_the_take_downs_exit_code_says_whether_it_refused_or_stopped_partway(self):
+        with open(SCRIPT) as f:
+            text = f.read()
+        said = re.search(r"(?ms)^take_down_said\(\) \{.*?^\}$", text).group(0)
+        for code, words, absent in (("2", "refused in its step 1 and removed nothing", "STOPPED"),
+                                    ("1", "stopped partway: its STOPPED line", "removed nothing")):
+            with self.subTest(code=code):
+                ran = subprocess.run(["bash", "-c", said + '\ntake_down_said "$1" /arm', "x", code],
+                                     capture_output=True, text=True)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertIn(words, ran.stdout)
+                self.assertNotIn(absent, ran.stdout)
+                self.assertIn("/arm", ran.stdout)
+        self.assertIn('|| { TAKE_DOWN_RC=$?; fail "the take-down, exit $TAKE_DOWN_RC"; }', text)
+
     def test_the_deploy_scripts_default_to_the_trees_own(self):
         ran = plan("--arm", "compiled", *self.common)
         deploy = os.path.realpath(os.path.join(HERE, "..", "..", "deploy"))

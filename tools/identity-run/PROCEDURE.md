@@ -91,7 +91,9 @@ tools/identity-run/take-down.sh --agent probe --archive $R/probe-archive        
 tools/identity-run/take-down.sh --agent probe --archive $R/probe-archive --apply 2>&1 | tee $R/probe-take-down.console
 ```
 
-Keep each answer. Each refusal names the piece and that it is not root's.
+Keep each answer. Each refusal names the piece and that it is not root's. A take-down
+stopped after its step 4 is finished by hand by `deploy/HowToDeployANewAgent.md` section
+7: a second run refuses at step 1, because the root is gone.
 
 ## 3. The four runs
 
@@ -164,7 +166,7 @@ first character that differs. Confirm that it is the changed word, `cAreful`.
 The saved images are read one save point at a time. Where the two compiled arms' images
 of a save point are equal, the wires arm's must be. Where they differ, that save point is
 not compared. `result.json`'s `images` names the save points compared and those not
-compared, by their order in the record.
+compared, by their order in the record, and where none was compared its `words` say so.
 
 ## 6. What comes back
 
