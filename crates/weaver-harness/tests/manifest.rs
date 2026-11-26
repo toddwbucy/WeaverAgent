@@ -61,7 +61,7 @@ fn the_only_worker_target_is_rust_and_no_python_dependency_is_carried() {
         .filter(|t| t["kind"].as_array().unwrap().iter().any(|k| k == "bin"))
         .map(|t| t["name"].as_str().unwrap())
         .collect();
-    assert_eq!(bins, ["worker"]);
+    assert_eq!(bins, ["weaver-loop-launch", "worker"]);
     assert!(package["features"].get("pyworker").is_none());
     for dependency in package["dependencies"].as_array().unwrap() {
         assert!(
