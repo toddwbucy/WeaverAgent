@@ -320,8 +320,9 @@ answer(torn_harness, 9, True)
 check("a return out of order is Refused, and the board keeps it as broken",
       torn.broken is None and raises(wb.Refused, torn.wait, first) and isinstance(torn.broken, wb.Refused))
 frames(torn_harness)
-check("after a breach the board sends nothing: a refuse is a Limit",
-      raises(wb.Limit, torn.refuse) and frames(torn_harness) == [] and not torn.ended)
+check("after a breach the board sends nothing: an ask and a refuse are each a Limit",
+      raises(wb.Limit, torn.ask, "fullness") and raises(wb.Limit, torn.refuse)
+      and frames(torn_harness) == [] and not torn.ended)
 calm, calm_harness = opened()
 check("Refused raised by a caller is no breach the board met", raises(wb.Refused, wb.check_delta, [])
       and calm.broken is None)
