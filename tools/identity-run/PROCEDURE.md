@@ -149,8 +149,10 @@ echo "status $?"
 | 3 | `unclean` | An arm holds a timing path outside the comparison: a recorder pressure fault, a state seam that died, or the recorder's queue at its mark. | Run that arm again, at most three times. Then the run fails. |
 | 4 | `unreadable` | An arm's files are missing or malformed. | Read `reason`, then fix the copy or run the arm again. |
 
-`result.json` says whether the saved images were compared. Where the control arms'
-images differ, they are not compared, and the result says so.
+The saved images are read one save point at a time. Where the two compiled arms' images
+of a save point are equal, the wires arm's must be. Where they differ, that save point is
+not compared. `result.json`'s `images` names the save points compared and those not
+compared, by their order in the record.
 
 ## 6. What comes back
 

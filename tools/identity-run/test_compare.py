@@ -190,7 +190,7 @@ class TheRun(unittest.TestCase):
         code, body = self.run_on(self.arms())
         self.assertEqual(code, compare.IDENTICAL, body)
         self.assertEqual(body["passes"], {"served": 2, "script": 2, "end_lines": 3})
-        self.assertTrue(body["images"].startswith("compared: equal in all three arms (2 save points)"), body)
+        self.assertEqual(body["images"], {"compared": [0, 1], "not compared": []}, body)
         self.assertEqual(body["negative"]["kind"], ["message.system", "message.system"])
         self.assertEqual(body["negative"]["at"], "payload.content.0.text")
 
@@ -288,12 +288,23 @@ class TheRun(unittest.TestCase):
     def test_images_equal_in_the_control_must_be_equal_in_the_wires(self):
         code, body = self.run_on(self.arms(write={"w": {"image": lambda i: b"!" if i == 1 else b""}}))
         self.assertEqual(code, compare.FAILS, body)
-        self.assertIn("at save point 1", body["reason"])
+        self.assertIn("save point 1:", body["reason"])
+
+    def test_images_are_read_one_save_point_at_a_time(self):
+        # The control differs at save point 0 alone: save point 1 is still compared, and a
+        # wires arm that differs there fails; one that differs at 0 alone does not.
+        c2 = {"image": lambda i: b"?" if i == 0 else b""}
+        code, body = self.run_on(self.arms(write={"c2": c2, "w": {"image": lambda i: b"!" if i == 1 else b""}}))
+        self.assertEqual(code, compare.FAILS, body)
+        self.assertIn("save point 1:", body["reason"])
+        code, body = self.run_on(self.arms(write={"c2": c2, "w": {"image": lambda i: b"!" if i == 0 else b""}}))
+        self.assertEqual(code, compare.IDENTICAL, body)
+        self.assertEqual(body["images"], {"compared": [1], "not compared": [0]})
 
     def test_images_the_control_holds_unequal_are_not_compared_and_the_result_says_so(self):
         code, body = self.run_on(self.arms(write={"c2": {"image": lambda i: b"?"}, "w": {"image": lambda i: b"!"}}))
         self.assertEqual(code, compare.IDENTICAL, body)
-        self.assertEqual(body["images"], "not compared: the control arms' images differ at save point 0")
+        self.assertEqual(body["images"], {"compared": [], "not compared": [0, 1]})
 
     def test_a_save_point_file_that_is_not_the_events_is_unreadable(self):
         folders = self.arms()

@@ -415,14 +415,20 @@ def run(folders):
         saved = [images(a) for a in arms[:3]]
     except Unreadable as why:
         return answer(UNREADABLE, reason=str(why), **result)
-    if saved[0] == saved[1]:
-        if saved[2] != saved[0]:
-            at = next((i for i, (x, y) in enumerate(zip(saved[0], saved[2])) if x != y), min(len(saved[0]), len(saved[2])))
-            return answer(FAILS, reason="the control arms' saved images are equal and the wires arm's differ, at save point %d" % at, **result)
-        result["images"] = "compared: equal in all three arms (%d save points)" % len(saved[0])
-    else:
-        at = next((i for i, (x, y) in enumerate(zip(saved[0], saved[1])) if x != y), min(len(saved[0]), len(saved[1])))
-        result["images"] = "not compared: the control arms' images differ at save point %d" % at
+    # One read per save point (the brief, section 8): where the two compiled arms' images
+    # of a save point are equal, the wires arm's must be; where they differ, that save
+    # point is not compared and the result names it. The records being equal, the three
+    # arms hold the same save points in the same order.
+    compared, not_compared = [], []
+    for index, (one, two, wired) in enumerate(zip(*saved)):
+        if one != two:
+            not_compared.append(index)
+        elif wired != one:
+            return answer(FAILS, reason="save point %d: the control arms' images are equal and the wires arm's "
+                          "differs" % index, **result)
+        else:
+            compared.append(index)
+    result["images"] = {"compared": compared, "not compared": not_compared}
 
     if arms[3]["meta"]["wires_sha256"] == arms[2]["meta"]["wires_sha256"]:
         return answer(FAILS, reason="the negative control's wire file is the wires arm's: no byte was changed", **result)
