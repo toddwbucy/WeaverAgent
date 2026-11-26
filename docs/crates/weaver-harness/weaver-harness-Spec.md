@@ -1118,7 +1118,11 @@ gate's copy and this one one module waits on the layout of the repository.
   x32 call, and allow every other call. The limits are the shell's values, and the ABI
   floor fails closed.
 - `src/bin/weaver-loop-launch/grant/tests.rs`: a row per malformed grant file, a row per
-  stale or wrong path, a stale digest, and the grant file's own judgment.
+  stale or wrong path (a pycache folder that is a link among them), a stale digest, the
+  grant file's own judgment, every file of the runner's folder judged as the grant file
+  is, and the interpreter or an `execute` file the launch's uid, a group or others could
+  write. The runner's folder of another owner prints a SKIP where the suite runs as
+  root.
 - `tests/loop_launch.rs`, the launcher run on a real interpreter inside a user namespace
   where the suite's files are root's, beside the same probe run with no wall:
   - each wall refuses its probe: a socket, a read outside the grant, a write, a process,
@@ -1128,6 +1132,9 @@ gate's copy and this one one module waits on the layout of the repository.
     and no bytecode written.
   - a stale digest, a path gone, a grant file not root's, no end at 3, a relative wire
     file and an absent grant file each end the launch with its one line.
+  - `runner.py`, the board and the pycache folder of another owner, each a root-owned
+    path bound over it in a mount namespace of the launch's own, end the launch naming
+    the owner.
   - the runner dies by `SIGKILL` with the thread that forked it, through both execs.
   - the grant `deploy/loop-grant.sh` computes is the suite's, and a launch under it
     serves.
