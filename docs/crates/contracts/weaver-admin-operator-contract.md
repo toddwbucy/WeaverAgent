@@ -868,6 +868,10 @@ from the moment it answered `open`, with no history before it:
   among them. Which groups let the weaver-admin account pass the territory and read the
   log is act one's code stack's. One that does not open or judge is refused `log_unread`
   in place of `open`.
+- **While a log cannot be opened, every opening is refused `log_unread`**, so the lines
+  appended meanwhile are never sent. A log connection carries lines from its own `open`
+  alone, never a history from before it, and the connector marks a discontinuity when
+  an opening is answered `open` again.
 
 ### 8.7 Limits
 
