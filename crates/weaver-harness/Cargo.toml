@@ -26,6 +26,10 @@ weaver-trace = { path = "../weaver-trace" }
 weaver-diagnostic = { path = "../weaver-diagnostic" }
 weaver-internal = { path = "../weaver-internal" }
 serde_json.workspace = true
+# The loop relay reads the loop's frames through serde's visitor, strictly: a member named
+# twice and an integer written with a sign, a fraction or an exponent are breaks
+# (weaver-harness-loop-contract section 2), which a derive or serde_json's Value takes.
+serde.workspace = true
 # TEMPLATES binds the compiled inventory to its exact canonical bytes at load.
 sha2 = "0.10"
 nix = { version = "0.31", features = ["socket", "fs", "process", "uio", "user", "poll", "signal"] }
