@@ -350,6 +350,78 @@ fn each_stale_or_wrong_path_is_refused_naming_it() {
     }
 }
 
+/// **Every file in the runner's folder is judged as the grant file is**: a
+/// row per refusal, each naming the path, and the board laid as the stack
+/// lays it judges. Perturbation: drop the mode check, or the listing, and a
+/// row is admitted.
+#[test]
+fn each_file_of_the_runners_folder_is_judged_as_the_grant_file_is() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let set_mode = |path: &Path, mode: u32| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+    };
+    type Change = fn(&Layout, &dyn Fn(&Path, u32)) -> PathBuf;
+    let rows: [(&str, Change, &str); 4] = [
+        (
+            "runner.py written by its group",
+            |l, mode| {
+                let p = l.0.join("runner/runner.py");
+                mode(&p, 0o664);
+                p
+            },
+            "is writable by its group or others",
+        ),
+        (
+            "the board written by others",
+            |l, mode| {
+                let p = l.0.join("runner/weaver_board.py");
+                std::fs::write(&p, b"").unwrap();
+                mode(&p, 0o646);
+                p
+            },
+            "is writable by its group or others",
+        ),
+        (
+            "a folder standing in the runner's folder",
+            |l, _| {
+                let p = l.0.join("runner/__pycache__");
+                std::fs::create_dir(&p).unwrap();
+                p
+            },
+            "is not a regular file",
+        ),
+        (
+            "runner.py gone",
+            |l, _| {
+                let p = l.0.join("runner/runner.py");
+                std::fs::remove_file(&p).unwrap();
+                p
+            },
+            "does not open",
+        ),
+    ];
+    for (name, change, want) in rows {
+        let layout = Layout::new("runner-files");
+        let path = change(&layout, &set_mode);
+        let got = layout
+            .judge(&layout.grant())
+            .err()
+            .unwrap_or_else(|| panic!("{name} judged"));
+        assert!(got.contains(want), "{name}: {got:?} lacks {want:?}");
+        assert!(
+            got.contains(&path.display().to_string()),
+            "{name}: {got:?} names no path"
+        );
+    }
+    // The control: the board laid beside the runner, 0644, judges.
+    let layout = Layout::new("runner-board");
+    let board = layout.0.join("runner/weaver_board.py");
+    std::fs::write(&board, b"").unwrap();
+    set_mode(&board, 0o644);
+    set_mode(&layout.0.join("runner/runner.py"), 0o644);
+    layout.judge(&layout.grant()).unwrap();
+}
+
 /// **The runner's folder must be the owner's**: here the suite's uid stands
 /// for root, and another owner (root's own `/`) is refused.
 #[test]

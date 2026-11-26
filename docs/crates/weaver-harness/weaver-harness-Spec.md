@@ -1071,8 +1071,9 @@ pycache <path>
 
 **What the launcher judges as root's.** The grant file is root's regular file, not a
 link, written by no group and no other, and at most 64 KiB. The runner's folder is root's
-directory, written by no group and no other, and `runner.py` in it is root's regular
-file. The pycache folder is root's directory, written by no group and no other, and
+directory, written by no group and no other, listed through its judged descriptor, and
+every file in it, `runner.py` (which must stand) and the board among them, is root's
+regular file written by no group and no other. The pycache folder is root's directory, written by no group and no other, and
 empty. So the agent's uid cannot widen its own walls. The loop folder's owner and mode
 are admin's checks, and the launcher takes it as a directory that is not a link.
 
