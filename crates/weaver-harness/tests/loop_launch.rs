@@ -542,7 +542,10 @@ fn each_refused_launch_says_one_line_and_runs_nothing() {
 /// mount namespace, and `source` (a root-owned path outside, which shows as
 /// the overflow uid inside) bound over `target`. Made with the syscalls
 /// alone in the child before its exec, so no setuid program runs. `None`
-/// where this kernel admits no user namespace.
+/// where this kernel admits no user and mount namespace, the one failure that
+/// skips: any step after the namespace is entered (the id maps, the mounts,
+/// the end at 3) answers `ENOTRECOVERABLE` across the exec, and the test
+/// fails on it rather than passing with nothing checked.
 fn refused_under_bind(
     layout: &Layout,
     source: &Path,
@@ -551,6 +554,7 @@ fn refused_under_bind(
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt as _;
     let c = |p: &Path| CString::new(p.as_os_str().as_bytes()).unwrap();
+    let shown = target.display().to_string();
     let (source, target) = (c(source), c(target));
     let uid_map = format!("0 {} 1", nix::unistd::getuid());
     let gid_map = format!("0 {} 1", nix::unistd::getgid());
@@ -569,6 +573,7 @@ fn refused_under_bind(
     unsafe {
         command.pre_exec(move || {
             let fail = || Err(std::io::Error::last_os_error());
+            let after = || Err(std::io::Error::from_raw_os_error(libc::ENOTRECOVERABLE));
             let write = |path: &[u8], text: &[u8]| {
                 let fd = libc::open(path.as_ptr().cast(), libc::O_WRONLY);
                 if fd < 0 {
@@ -578,12 +583,14 @@ fn refused_under_bind(
                 libc::close(fd);
                 ok
             };
-            if libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) != 0
-                || !write(b"/proc/self/setgroups\0", b"deny")
+            if libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS) != 0 {
+                return fail();
+            }
+            if !write(b"/proc/self/setgroups\0", b"deny")
                 || !write(b"/proc/self/uid_map\0", uid_map.as_bytes())
                 || !write(b"/proc/self/gid_map\0", gid_map.as_bytes())
             {
-                return fail();
+                return after();
             }
             let none = std::ptr::null();
             if libc::mount(
@@ -601,16 +608,19 @@ fn refused_under_bind(
                     std::ptr::null(),
                 ) != 0
             {
-                return fail();
+                return after();
             }
             if libc::dup2(far_fd, 3) != 3 || libc::fcntl(3, libc::F_SETFD, 0) != 0 {
-                return fail();
+                return after();
             }
             Ok(())
         });
     }
     let child = match command.spawn() {
         Ok(child) => child,
+        Err(e) if e.raw_os_error() == Some(libc::ENOTRECOVERABLE) => {
+            panic!("the bind of {shown} could not be made after the namespace was entered")
+        }
         Err(e) => {
             eprintln!("SKIP refused_under_bind: no user and mount namespace here: {e}");
             return None;
@@ -634,13 +644,19 @@ fn a_runner_board_or_pycache_of_another_owner_refuses_the_launch() {
     let board = layout.root.join("lib/weaver-loop/weaver_board.py");
     std::fs::write(&board, "").unwrap();
     set_mode(&board, 0o644);
+    // Sources every system holds: the account file and the folder above the
+    // programs, each root's, which the namespace shows as the overflow uid.
     let rows = [
-        (layout.runner(), Path::new("/etc/hostname")),
-        (board.clone(), Path::new("/etc/hostname")),
+        (layout.runner(), Path::new("/etc/passwd")),
+        (board.clone(), Path::new("/etc/passwd")),
         (layout.root.join("pycache"), Path::new("/usr")),
     ];
-    for (target, source) in rows {
+    for (index, (target, source)) in rows.into_iter().enumerate() {
         let Some((exit, all)) = refused_under_bind(&layout, source, &target) else {
+            assert_eq!(
+                index, 0,
+                "a namespace the first row entered is refused to a later one"
+            );
             return;
         };
         assert_eq!(exit.code(), Some(1), "{}: {all}", target.display());
