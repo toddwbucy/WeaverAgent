@@ -581,8 +581,10 @@ door, and that stack changes them to this section.
 boot under the weaver-admin account. The **root program** is `weaver-admin`, run as root
 at a root shell or through the sudo rule, one fixed line per verb, which sections 1 to
 6 call admin. The service is the root program's invoker: it runs the fixed lines through
-sudo, so section 2's obligations on the invoker's execution context are the service's,
-no-new-privs first among them (`weaver-admin-Spec` section 2).
+sudo, so section 2's obligations on the invoker's execution context are the service's.
+**The service runs without no-new-privs**, because sudo gains root by its set-user-id
+bit and under no-new-privs every verb would fail. `weaver-admin-Spec` section 2 gives
+the reason.
 
 ### 8.1 Admission
 
