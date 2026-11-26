@@ -140,7 +140,8 @@ change.
 4. **A run carries a run id,** 16 hex digits drawn by the service. A `started` line
    names it once the root program is running, and the final line names it again. A new
    control connection asks `run` and learns which runs stand and how the last one
-   ended, by that id.
+   ended, by that id. A `show` is never listed in `standing` and never kept as `ended`,
+   so it never hides the outcome of a verb asked before a drop.
 5. **The principal is recorded in the service's own log,** one line per run, with the
    run id, the agent, the verb and the outcome. `admin.log` and the trace carry the
    uid sudo reports, which is the weaver-admin account's. The principal is never an
@@ -243,19 +244,20 @@ events.
 
 | State | What holds |
 | --- | --- |
-| A0 | No run of the agent stands. The last ended run is kept, or none since the service started |
+| A0 | No run of the agent stands. The last run that ended, a `show` excepted, is kept, or none since the service started |
 | A1 | One run stands |
 | A2 | An `unload` and a `force-unload` beside it stand |
 
 | State | Event | Next |
 | --- | --- | --- |
-| any | a `show` ask, granted | no change. The `show` starts beside whatever stands |
-| A0 | a verb ask, granted | A1 |
-| A1 | a `force-unload` ask, granted, while the run standing is an `unload` | A2 |
-| A1 | any other verb ask, granted | A1, that ask refused `busy` |
-| A1 | the run ends | A0, its final line kept as the last ended |
-| A2 | another verb ask, granted | A2, that ask refused `busy` |
-| A2 | one run ends | A1, its final line kept as the last ended |
+| any | a `show` ask, granted | no change. The `show` starts beside whatever stands, and is not a run this machine holds |
+| any | a `show` ends | no change. Its final line goes to its own connection alone, never kept as the last ended |
+| A0 | a verb ask other than `show`, granted | A1, holding that run |
+| A1 | a `force-unload` ask, granted, while the run A1 holds is an `unload` | A2, holding both |
+| A1 | any other verb ask but `show`, granted | A1, that ask refused `busy` |
+| A1 | the run A1 holds ends | A0, its final line kept as the last ended |
+| A2 | another verb ask but `show`, granted | A2, that ask refused `busy` |
+| A2 | the `unload` or the `force-unload` ends | A1, holding the one still standing, the ended one's final line kept as the last ended |
 | any | the asking connection closes | no change |
 | any | the service restarts | A0 with no run kept. A root program it started runs on, under the root program's own lock, where the install meets section 8.4's requirement |
 
