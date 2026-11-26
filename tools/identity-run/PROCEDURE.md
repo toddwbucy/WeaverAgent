@@ -91,7 +91,9 @@ tools/identity-run/take-down.sh --agent probe --archive $R/probe-archive        
 tools/identity-run/take-down.sh --agent probe --archive $R/probe-archive --apply 2>&1 | tee $R/probe-take-down.console
 ```
 
-Keep each answer. Each refusal names the piece and that it is not root's.
+Keep each answer. Each refusal names the piece and that it is not root's. A take-down
+stopped after its step 4 is finished by hand by `deploy/HowToDeployANewAgent.md` section
+7: a second run refuses at step 1, because the root is gone.
 
 ## 3. The four runs
 
