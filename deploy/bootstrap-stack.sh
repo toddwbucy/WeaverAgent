@@ -402,6 +402,8 @@ plan "write $LDSO_CONF = $PREFIX/lib and $CUDA_LIB_DIR, then ldconfig"
 plan "install busybox -> $PREFIX/bin/busybox (root, 0755) and busybox.applets beside it (root, 0644)"
 LOOP_REFUSAL=$(loop_standing_refusal)
 [ -z "$LOOP_REFUSAL" ] || die "$LOOP_REFUSAL"
+LOOP_REFUSAL=$(loop_placing_refusal)
+[ -z "$LOOP_REFUSAL" ] || die "$LOOP_REFUSAL"
 LOOP_GRANT=$(loop_grant "$LOOP_PYTHON" "$LOOP_PYCACHE") || die "the loop runner's grant could not be computed from $LOOP_PYTHON"
 plan "install -d $LOOP_DIR (root:root 0755): $LOOP_FILES and grant (root:root 0644), the grant computed from $(sed -n 's/^interpreter [0-9a-f]* //p' <<<"$LOOP_GRANT")"
 plan "install -d $LOOP_PYCACHE (root:root 0755), empty"

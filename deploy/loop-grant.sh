@@ -116,11 +116,43 @@ loop_standing_refusal() {
   fi
 }
 
+# loop_placing_refusal: a refusal on standard output where LOOP_DIR or
+# LOOP_PYCACHE does not stand and would be made under a directory another
+# principal can make a name in, nothing otherwise. **Each is a new name in the
+# prefix's lib folder**, judged at the nearest directory that stands as the
+# scripts judge every other folder they make: held closed by admin's rule, and
+# writable by no group or other even where sticky, since the sticky bit keeps
+# another principal from renaming an entry it does not own but not from
+# claiming a name that does not exist yet, which root's `install -d` would then
+# follow. One that stands is loop_standing_refusal's to judge. Needs the
+# caller's held_closed. Read without privilege.
+loop_placing_refusal() {
+  local placed at bad mode
+  for placed in "$LOOP_DIR" "$LOOP_PYCACHE"; do
+    if [ -e "$placed" ] || [ -L "$placed" ]; then continue; fi
+    at=$(dirname -- "$placed")
+    while [ ! -e "$at" ]; do at=$(dirname -- "$at"); done
+    if ! bad=$(held_closed "$at"); then
+      printf '%s would be made under %s, which is not held closed by root' "$placed" "$bad"
+      return 0
+    fi
+    mode=$(stat -c '%a' -- "$(realpath -e -- "$at")" 2>/dev/null) \
+      || { printf 'the mode of %s, where %s would be made, cannot be read' "$at" "$placed"; return 0; }
+    if (( 8#$mode & 8#022 )); then
+      printf '%s would be made under %s, where another principal could claim the missing name first' "$placed" "$at"
+      return 0
+    fi
+  done
+}
+
 # lay_loop SOURCE GRANT: lays LOOP_DIR and LOOP_PYCACHE, the runner's files
 # from SOURCE (the repository's loop-runner/) and the grant from the text
 # GRANT, which loop_grant computed. **Each file is staged beside its name
 # and renamed over it**, root's from the moment it has a name, so the launcher
-# reads the old file or the new one and never a part.
+# reads the old file or the new one and never a part. **Every stage is made by
+# `install`**, which replaces whatever stands at the stage's name, a link
+# among them, and never writes through it: the grant is written first to a
+# file of the operator's own and installed from there.
 lay_loop() {
   local source=$1 grant=$2 f
   sudo install -d -o root -g root -m 0755 "$LOOP_DIR"
@@ -129,8 +161,13 @@ lay_loop() {
     sudo install -o root -g root -m 0644 "$source/$f" "$LOOP_DIR/.$f.new"
     sudo mv -T -- "$LOOP_DIR/.$f.new" "$LOOP_DIR/$f"
   done
-  printf '%s\n' "$grant" | sudo tee "$LOOP_DIR/.grant.new" >/dev/null
-  sudo chown root:root "$LOOP_DIR/.grant.new"
-  sudo chmod 0644 "$LOOP_DIR/.grant.new"
+  local staged
+  staged=$(mktemp "${TMPDIR:-/tmp}/weaver-loop-grant.XXXXXX") || return 1
+  if ! printf '%s\n' "$grant" >"$staged" \
+    || ! sudo install -o root -g root -m 0644 "$staged" "$LOOP_DIR/.grant.new"; then
+    rm -f -- "$staged"
+    return 1
+  fi
+  rm -f -- "$staged"
   sudo mv -T -- "$LOOP_DIR/.grant.new" "$LOOP_DIR/grant"
 }

@@ -828,6 +828,10 @@ if name == 'findmnt':
 if name == 'mktemp' and args and '/weaver-deploy-messages-' in args[-1]:
     # The build's messages file, made as the scripts make it; not logged.
     os.execv('/usr/bin/mktemp', ['mktemp', *args])
+if name == 'mktemp' and args and '/weaver-loop-grant.' in args[-1]:
+    # The grant's text, the operator's own file that lay_loop installs from
+    # and removes (review of #655), made as the helper makes it; not logged.
+    os.execv('/usr/bin/mktemp', ['mktemp', *args])
 if (name == 'mktemp' and args or name == 'as-root' and args[:1] == ['mktemp']) and '/weaver-drop.' in args[-1]:
     # **A drop's relays' directory** (#590), which account-drop.sh makes
     # under TMPDIR in either mode, root mode's routing included: made as the
@@ -1238,11 +1242,14 @@ elif name == 'sudo':
         if '-d' in rest: privileged([target], lambda: target.mkdir(parents=True, exist_ok=True))
         else:
             # A file installed from a source is a new file holding its bytes,
-            # as `install` unlinks the name first.
+            # as `install` unlinks the name first, a link standing there among
+            # them. The grant's text is the operator's own file under TMPDIR
+            # (deploy/loop-grant.sh), carried as any source under the root is.
             source = pathlib.Path(mapped(rest[-2]))
             def place():
-                if source.is_relative_to(root) and source.is_file():
-                    if target.exists() or target.is_symlink(): target.unlink()
+                if target.exists() or target.is_symlink(): target.unlink()
+                if source.is_file() and (source.is_relative_to(root)
+                                         or source.name.startswith('weaver-loop-grant.')):
                     shutil.copyfile(source, target)
                 else: target.touch()
             privileged([target], place)
@@ -6050,6 +6057,50 @@ esac
         self.assertEqual((folder / "grant").read_text(), self.loop_grant(prefix))
         self.assertEqual(sorted(p.name for p in folder.iterdir()), ["grant", "runner.py", "weaver_board.py"])
 
+    def test_the_grant_is_never_written_through_a_name_that_stands(self):
+        """**The grant's stage is made by `install`, as every other file's
+        is** (review of #655): a link standing at `.grant.new` is replaced,
+        never written through, and the grant is installed from a file of the
+        operator's own. Perturbation: write the stage through `tee`, and the
+        link's target takes the grant."""
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        prefix = self.root / "installed"
+        folder = prefix / "lib" / "weaver-loop"
+        victim = self.root / "victim"
+        victim.write_text("not the grant\n")
+        (folder / ".grant.new").symlink_to(victim)
+        (folder / "grant").write_text("old grant\n")
+        shutil.rmtree(self.root / 'target with "quotes"')
+        self.log.unlink(missing_ok=True)
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(victim.read_text(), "not the grant\n")
+        self.assertEqual((folder / "grant").read_text(), self.loop_grant(prefix))
+        self.assertFalse((folder / ".grant.new").exists() or (folder / ".grant.new").is_symlink())
+        calls = self.calls()
+        self.assertFalse([c for c in calls if c[:2] == ["sudo", "tee"] and c[-1].endswith("/.grant.new")], calls)
+        staged = [c for c in calls if c[:2] == ["sudo", "install"] and c[-1] == f"{folder}/.grant.new"]
+        self.assertEqual(len(staged), 1, calls)
+        self.assertEqual(staged[0][2:8], ["-o", "root", "-g", "root", "-m", "0644"])
+        self.assertFalse(Path(staged[0][-2]).exists(), "the operator's own file is removed")
+
+    def test_the_loop_folder_is_made_only_where_no_other_principal_can_claim_it(self):
+        """**The loop folder and its pycache folder are new names in the
+        prefix's lib folder** (review of #655): where either does not stand,
+        that folder is judged as the scripts judge every folder they make, and
+        a sticky open one refuses before anything is built or moved.
+        Perturbation: drop loop_placing_refusal, and the plan goes on."""
+        mode = self.lib_dir.stat().st_mode & 0o7777
+        self.lib_dir.chmod(0o1777)
+        try:
+            result = self.run_script("update-stack.sh")
+        finally:
+            self.lib_dir.chmod(mode)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("could claim the missing name first", result.stderr)
+        self.assertFalse((self.lib_dir / "weaver-loop").exists())
+
     def test_a_rollback_puts_the_loop_runner_back(self):
         """**The loop runner's files go back as the binaries do**: a runner
         and a grant the box held come back from the backup, and the board it
@@ -6127,11 +6178,13 @@ esac
             with self.subTest(script=name):
                 self.assertIn('source "$REPO/deploy/loop-grant.sh"', text)
                 self.assertIn("weaver-loop-launch", text.split("MEMBERS=", 1)[1].splitlines()[0])
-                for helper in ("loop_grant() {", "lay_loop() {", "loop_standing_refusal() {"):
+                for helper in ("loop_grant() {", "lay_loop() {", "loop_standing_refusal() {",
+                               "loop_placing_refusal() {"):
                     self.assertNotIn(helper, text)
                 self.assertEqual(text.count('lay_loop "$REPO/loop-runner" "$LOOP_GRANT"'), 1)
                 self.assertLess(text.index("LOOP_GRANT=$(loop_grant "), text.index('lay_loop "$REPO/loop-runner"'))
                 self.assertLess(text.index("LOOP_REFUSAL=$(loop_standing_refusal)"), text.index("LOOP_GRANT=$(loop_grant "))
+                self.assertLess(text.index("LOOP_REFUSAL=$(loop_placing_refusal)"), text.index("LOOP_GRANT=$(loop_grant "))
         text = (self.repo / "deploy" / "bootstrap-stack.sh").read_text()
         self.assertLess(text.index("LOOP_GRANT=$(loop_grant "), text.index('[ "$INSTALL" -eq 1 ] || { say "plan only'))
         self.assertLess(text.index('sudo install -o root -g root -m 0755 "$BUILT/$b" "$PREFIX/bin/$b"'),
