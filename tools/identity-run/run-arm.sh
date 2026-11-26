@@ -33,16 +33,19 @@
 #  5. The record, worker.log and every save point are copied to DIR, with arm.json for
 #     compare.py: the arm, the agent, the loads, the turns that reach the loop (every turn
 #     but the seeding one, which is the harness's own), and the laid file's sha256.
-#  6. decommission.sh archives every agent into DIR/archive and purges it, so the
-#     appliance holds no agent when the next arm is made.
+#  6. take-down.sh, beside this script, archives the arm's agent into DIR/archive as
+#     root and takes that one agent down by the runbook's section 7, leaving the stack,
+#     its record and the machine's own accounts standing, so the next arm is made on the
+#     same install.
 #
 # Every turn is checked answered under its own key, t-1 onward in each load. A step that
 # fails stops the arm: the agent is unloaded if it may stand, what stands is copied to
-# DIR/failed, and nothing is decommissioned, so the operator reads it first. Keep the
+# DIR/failed, and nothing is taken down, so the operator reads it first. Keep the
 # console: `--apply 2>&1 | tee DIR.console`.
 set -uo pipefail
 
 die() { printf 'run-arm: %s\n' "$*" >&2; exit 2; }
+HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || die "cannot find the script's own folder"
 
 ARM= AGENT= ARTIFACT= OUT= WIRES= APPLY=0
 DEPLOY=/opt/weaver/deploy
@@ -64,7 +67,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 case $ARM in compiled|wires|negative) ;; *) die "--arm is compiled, wires or negative: '$ARM'" ;; esac
-[[ "$AGENT" =~ ^[a-z][a-z0-9-]*$ ]] || die "--agent is an agent's name: '$AGENT'"
+[[ "$AGENT" =~ ^[a-z][a-z0-9]{1,15}$ ]] || die "--agent is an agent's name, a lowercase letter then 1 to 15 lowercase letters or digits: '$AGENT'"
 [ -n "$ARTIFACT" ] || die "--artifact is required"
 [ -n "$OUT" ] || die "--out is required"
 [[ "$CAPACITY" =~ ^[0-9]+$ ]] || die "--context-capacity is a count: '$CAPACITY'"
@@ -112,7 +115,7 @@ fail() {
         mkdir -p "$OUT/failed" && cp -a -- "$TERRITORY/worker.log" "$OUT/failed/" 2>/dev/null
         [ -z "$TRACE" ] || cp -a -- "$TRACE" "$OUT/failed/" 2>/dev/null
     fi
-    printf 'nothing is decommissioned: read %s/failed, then take the agent down\n' "$OUT"
+    printf 'nothing is taken down: read %s/failed, then take the agent down with take-down.sh\n' "$OUT"
     exit 1
 }
 
@@ -264,8 +267,9 @@ printf 'identity run, %s arm, agent %s%s: %s\n' "$ARM" "$AGENT" "${WIRES_SHA:+, 
 if [ "$APPLY" = 1 ]; then
     [ "$(id -u)" = 0 ] || die "--apply is root's, the operator on an agent appliance"
     [ ! -e "$OUT" ] || die "$OUT stands: each arm writes a folder of its own"
-    [ -z "$(ls -A -- "$BASE" 2>/dev/null)" ] || die "an agent stands under $BASE: the run needs an appliance holding none (decommission.sh first)"
-    for f in create-agent.sh decommission.sh turn.py; do [ -r "$DEPLOY/$f" ] || die "$DEPLOY/$f is not there"; done
+    [ -z "$(ls -A -- "$BASE" 2>/dev/null)" ] || die "an agent stands under $BASE: the run needs an appliance holding none (take-down.sh first)"
+    for f in create-agent.sh turn.py; do [ -r "$DEPLOY/$f" ] || die "$DEPLOY/$f is not there"; done
+    [ -x "$HERE/take-down.sh" ] || die "$HERE/take-down.sh is not there"
     [ -x "$ADMIN" ] || die "$ADMIN is not there"
     mkdir -p "$OUT/steps" || die "cannot make $OUT"
 fi
@@ -323,8 +327,7 @@ turn
 unload
 
 copy_out
-step "take every agent off the appliance"
-act "$DEPLOY/decommission.sh" --archive "$OUT/archive" || fail "the archive"
-act "$DEPLOY/decommission.sh" --purge "$OUT/archive" || fail "the purge"
+step "take the arm's agent off the appliance, the stack left standing"
+act "$HERE/take-down.sh" --agent "$AGENT" --archive "$OUT/archive" --admin "$ADMIN" --apply || fail "the take-down"
 printf '\nidentity run, %s arm: done, %d loads, %s turns to the loop\n' "$ARM" "$LOADS" \
     "$([ "$APPLY" = 1 ] && echo "$TURNS_TO_LOOP" || echo "$TURNS_TO_LOOP (plan: before the pressure turns)")"

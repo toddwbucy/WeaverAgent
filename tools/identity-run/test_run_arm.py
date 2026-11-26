@@ -64,9 +64,12 @@ class ThePlan(unittest.TestCase):
         self.assertEqual(steps(ran.stdout), ["create the agent",
                                              "admit the operator's uid at the gate, for the seeding turn"]
                          + THE_SCRIPT + ["the record, worker.log and the save points copied to %s, with arm.json"
-                                         % self.common[-1], "take every agent off the appliance"])
+                                         % self.common[-1], "take the arm's agent off the appliance, the stack left standing"])
         self.assertIn("plan only", ran.stdout)
         self.assertNotIn("/loop", ran.stdout)
+        self.assertNotIn("decommission", ran.stdout)
+        self.assertRegex(ran.stdout, r"(?m)^\+ \S*/take-down\.sh --agent a1 --archive %s/archive --admin \S+ --apply$"
+                         % re.escape(self.common[-1]))
 
     def test_a_wires_arm_lays_the_loop_and_has_it_judged_before_the_first_load(self):
         ran = plan("--arm", "wires", "--wires", self.wires, *self.common)

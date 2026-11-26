@@ -12,9 +12,15 @@ The tools beside this file:
 
 - `run-arm.sh`: one arm, made, driven, copied out and taken down. It plans by default
   and acts with `--apply`.
+- `take-down.sh`: one agent taken off the appliance by the runbook's section 7
+  (`deploy/HowToDeployANewAgent.md`), archived as root first. It leaves the stack, its
+  record and the machine's own accounts standing, the connector accounts among them, so
+  every arm runs on the one install. It plans by default and acts with `--apply`.
 - `compare.py`: the comparison over the four arms, standard library alone.
-- `test_compare.py` and `test_run_arm.py`: their tests, the first of the two negative
-  controls among them.
+- `test_compare.py`, `test_run_arm.py` and `test_take_down.py`: their tests, the first
+  of the two negative controls among them. They test the comparison, and the two
+  scripts' plans and refusals. **Every `--apply` step of the two scripts is unmeasured
+  until this run**: read each plan before its first apply, and keep every console.
 
 ## 1. Before the run
 
@@ -34,7 +40,9 @@ The tools beside this file:
 
    The interpreter's digest in the grant must be the interpreter's sha256. Write the
    grant and all three sha256 values into the run's notes.
-3. **The appliance holds no agent.** `deploy/decommission.sh` (plan) lists none.
+3. **The appliance holds no agent.** `ls -A /etc/weaver/admin` lists nothing.
+   `deploy/decommission.sh` is not used anywhere in this run: it would remove the
+   stack, its record and every `weaver-` account.
 4. **The two wire files.** The wires arm runs today's wire file,
    `crates/weaver-harness/tests/fixtures/loop-wires-today.py`, from the same commit as
    the stack. The negative arm runs the same file with one byte of its prompt text
@@ -58,6 +66,7 @@ can lay a file owned by another account, so these are root's steps here, on a th
 agent, before the run:
 
 ```sh
+R=<the run's folder, made by root for the whole run>
 deploy/create-agent.sh probe --engine sqlite --artifact <model> --root-operator --apply
 install -d -o root -g weaver-probe -m 0750 /etc/weaver/probe/loop
 install -o root -g weaver-probe -m 0640 wires-today.py /etc/weaver/probe/loop/wires.py
@@ -69,7 +78,8 @@ chown nobody /etc/weaver/probe/loop/wires.py
 /opt/weaver/bin/weaver-admin validate probe          # refused: the wire file is not root's
 chown root /etc/weaver/probe/loop/wires.py
 /opt/weaver/bin/weaver-admin validate probe          # {"kind":"validated"} again
-deploy/decommission.sh --archive <dir> && deploy/decommission.sh --purge <dir>
+tools/identity-run/take-down.sh --agent probe --archive $R/probe-archive             # the plan
+tools/identity-run/take-down.sh --agent probe --archive $R/probe-archive --apply 2>&1 | tee $R/probe-take-down.console
 ```
 
 Keep each answer. Each refusal names the piece and that it is not root's.
@@ -80,7 +90,7 @@ Run each arm in turn, under one agent name, with the same model and the same opt
 Each is made fresh and taken down before the next. Keep every console:
 
 ```sh
-R=<the run's folder>
+# R as in section 2
 tools/identity-run/run-arm.sh --arm compiled --agent idrun --artifact <model> --out $R/compiled-1 \
     --apply 2>&1 | tee $R/compiled-1.console
 tools/identity-run/run-arm.sh --arm compiled --agent idrun --artifact <model> --out $R/compiled-2 \
@@ -91,8 +101,8 @@ tools/identity-run/run-arm.sh --arm negative --wires wires-negative.py --agent i
     --out $R/negative --apply 2>&1 | tee $R/negative.console
 ```
 
-Run each without `--apply` first and read the plan. Each arm ends with every agent
-archived into `<arm>/archive` and purged.
+Run each without `--apply` first and read the plan. Each arm ends with its agent
+archived into `<arm>/archive` and taken down by `take-down.sh`, the stack left standing.
 
 **Not measured before this run:**
 
