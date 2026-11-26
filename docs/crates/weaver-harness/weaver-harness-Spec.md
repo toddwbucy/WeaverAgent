@@ -138,10 +138,13 @@ crossing's whole option space: an alternative realization of `dev_loop`
 composes against the same crossing without the framework moving, which is
 the general form and the only form this document states.
 
-**The loop is developed and deployed in Rust**, on the operator's ruling of 2026-10-20
-(#180). The worker's `dev_loop` is the builder-facing surface, compiled against the
-granted seat. There is no file-loaded Python loop, interpreter, `WEAVER_PY_LOOP`
-override or `--loop-file` argument. The declaration parser refuses `loop-file` by name.
+**The compiled loop is developed and deployed in Rust**, on the operator's ruling of
+2026-10-20 (#180). The worker's `dev_loop` is the builder-facing surface, compiled against
+the granted seat. There is no `WEAVER_PY_LOOP` override or `--loop-file` argument, and the
+declaration parser refuses `loop-file` by name. The one other loop is a wire file admin
+finds standing in the agent's loop folder, run by the loop runner on the interpreter the
+grant names, under the launcher's walls, and answered by the relay through the same seat
+(section 2.5).
 The compiled worker's argument parser continues to refuse unknown flags. Which worker
 binary admin starts stays a provisioning fact.
 
@@ -963,12 +966,46 @@ forks it by the organ fork as it stands (section 2.2), with the loop's end at de
 executes the interpreter. It holds one thread. No process stays resident for it, and the
 gate does not change for it.
 
-**Until the worker runs it, an enter naming a wire file refuses.** Admin carries the loop
-it found standing on the enter (`weaver-types-Spec` section 4). The worker refuses such
-an enter before the load and before the sink is taken, `ConfigInvalid` naming `loop`, so
-the stream stays clean and a loop the operator laid is never replaced by the compiled
-loop silently. Enforced by `an_enter_naming_a_wire_file_is_refused_before_the_load` in
-`src/lifecycle/tests.rs`.
+**The worker starts it, once per load, where the enter carries a loop.** Admin carries the
+loop it found standing on the enter (`weaver-types-Spec` section 4), and hands the worker
+the launcher's path and the grant file's as `--loop-launcher` and `--loop-grant`
+(`weaver-admin-Spec` section 6), held as `OrganBinaries::loop_launch`.
+
+- **Refused before the load:** an enter naming a wire file to a worker handed no
+  launcher, and one under a diagnostic binding, which starts no runner, each refuse
+  `ConfigInvalid` naming `loop` before the sink is taken. A loop the operator laid is
+  never replaced by the compiled loop silently.
+- **The composer.** The load names the loop the run composes with (`weaver-trace-Spec`
+  section 3): the compiled one exactly as before, or the binary with the wire file's path
+  and the digest admin read. The load is authored before the loop starts, so the digest
+  is the election's, and the relay refuses a `hello` naming another.
+- **The start comes last.** Once the gate stands, the worker makes the loop's pair with
+  `SOCK_CLOEXEC`, forks the launcher by the organ fork with the far end at 3 and the last
+  word's pipe at 2, drops its copies of the far end and the pipe's write end in the same
+  step, and makes the relay, which reads the `hello` under its own 10 s. The run then
+  holds the loop arm: the runner's pid, the relay, and the last word.
+- **The failed start.** A launcher that refuses, a runner that does not start, and a
+  `hello` that is wrong or absent each kill the child (`SIGKILL`) and reap it at once,
+  close the near end, and refuse the load after it, `ConfigInvalid` naming `loop`
+  (`BindFailed` where the fork itself fails). The rollback lowers the gate and the SPU.
+  The worker's standard error carries one line, `{"organ": "harness", "loop":
+  "refused", ...}`, with the reason and the launcher's or the runner's last line.
+- **The turn.** A run holding the loop arm answers each turn by the relay's pass,
+  through the same seat, and calls no compiled entry. A run holding none calls the entry.
+  The choice is the run's own.
+- **The stop.** Every leave takes the arm after the gate is lowered and before the save
+  point: the graceful one after its drain, the forced, the rollback and the unwind with
+  none. The relay shuts its end down both ways (`LoopRelay::shut_down`), the end closes,
+  the runner reads its end of file and exits, and the worker reaps it by the leave's
+  shared deadline, killing it there if it has not gone. A leave tried again from S9
+  finds no arm. The stop leans on no signal before the deadline.
+- **The last word.** The runner's standard error is the last word's pipe. Every line
+  reaches the worker's standard error, `worker.log`, the runner's end-of-file line naming
+  its passes among them, and the stop waits for the pipe's end of file, within the last
+  word's bound, before it returns.
+- **The worker's death.** The organ fork arms `PR_SET_PDEATHSIG` to `SIGKILL` before
+  the launcher's exec, and it survives the launcher's exec and the interpreter's, so the
+  runner dies with the worker.
 
 **Its arguments** are two absolute paths: the grant file, and the wire file. The runner is
 `runner.py` in the grant file's folder, `<prefix>/lib/weaver-loop/`, and the loop folder
@@ -1068,6 +1105,22 @@ gate's copy and this one one module waits on the layout of the repository.
   - the runner dies by `SIGKILL` with the thread that forked it, through both execs.
   - the grant `deploy/loop-grant.sh` computes is the suite's, and a launch under it
     serves.
+- `tests/loop_arm.rs`, the loop arm forked by the organ fork through the real launcher
+  on the real interpreter, each case in a child process inside a user namespace, where
+  the fork arms its own parent-death signal:
+  - a started loop serves its pass, the seat's answer comes back unchanged, and the stop
+    ends the runner at its end of file, exit 0, its end-of-file line on the worker's
+    standard error
+  - under the worker's fork the runner holds descriptors 0 to 3 and `LANG=C.UTF-8`
+    alone, with a descriptor born without close-on-exec in the worker
+  - a `hello` naming another digest, from a runner that never reads its end again, is
+    killed and reaped before the start returns
+  - a launch the launcher refuses refuses the start, its line the last word
+  - the runner dies with the worker, through the launcher.
+- `src/lifecycle/tests.rs`: a wire file refused before the load with no launcher and
+  under a diagnostic binding, the load's composer for each loop (the compiled one to the
+  byte), a run holding the arm answering by its relay and calling no entry, and the
+  unwind's leave and a dispatched rollback each stopping the loop and reaping it.
 
 ## 3. The lifecycle interior
 

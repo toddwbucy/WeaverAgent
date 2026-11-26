@@ -605,8 +605,11 @@ section 3, I2, the rollback's leave excepted by name), that every wait of a pend
 frame the gate admitted is answered, recorded refused, or recorded as a turn the unload
 stopped, before the leave's save point is taken (I5). It guarantees that an enter naming
 a wire file runs that loop or refuses, and is never served by the compiled loop in its
-place: until the worker runs the loop, it refuses such an enter before the load,
-`ConfigInvalid` naming `loop` (`weaver-harness-Spec` section 2.5).
+place: a worker handed no launcher, or an enter under a diagnostic binding, refuses before
+the load, `ConfigInvalid` naming `loop`, and a loop that does not start, whose launcher
+refuses or whose `hello` is not the one expected, refuses after the load, `ConfigInvalid`
+naming `loop` (`BindFailed` where the fork itself fails), and the load rolls back
+(`weaver-harness-Spec` section 2.5).
 
 **Non-inheritance is the receiver's, and only the receiver can supply it.** The flag
 rides the handle rather than the open file description, so it does not cross with
