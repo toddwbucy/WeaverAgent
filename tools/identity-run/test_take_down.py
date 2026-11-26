@@ -84,7 +84,9 @@ class ThePlan(unittest.TestCase):
         self.assertIn("+ rm -rf --one-file-system -- /run/weaver.run/a1 /run/weaver-a1\n", out)
         self.assertIn("+ rm -rf --one-file-system -- /var/lib/weaver-agent/a1/weaver-a1\n", out)
         self.assertIn("+ rmdir -- /var/lib/weaver-agent/a1\n", out)
-        self.assertIn("var/lib/weaver-agent/a1/weaver-a1", next(l for l in out.splitlines() if l.startswith("+ tar")))
+        tar = next(l for l in out.splitlines() if l.startswith("+ tar"))
+        self.assertIn("var/lib/weaver-agent/a1/weaver-a1", tar)
+        self.assertTrue(tar.endswith(" var/lib/weaver-agent/a1/weaver-a1 var/lib/weaver-agent/a1/home"), tar)
 
     def test_every_path_and_account_is_the_agents_own_and_no_connector_is_touched(self):
         self.lay()
@@ -153,6 +155,22 @@ class ThePlan(unittest.TestCase):
                 ran = self.plan("--agent", "a1", "--archive", self.archive)
                 self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
                 self.assertIn("+ rm -rf --one-file-system -- %s\n" % territory, ran.stdout)
+
+    def test_an_account_whose_home_is_not_the_agents_own_refuses_before_anything(self):
+        self.lay()
+        stubs = os.path.join(self.scratch.name, "stubs")
+        os.makedirs(stubs)
+        for row, home, code in (("elsewhere", "/", 2), ("the agent's own", "/var/lib/weaver-agent/a1/home", 0)):
+            with self.subTest(row=row):
+                with open(os.path.join(stubs, "getent"), "w") as f:
+                    f.write('#!/bin/sh\n[ "$1 $2" = "passwd weaver-a1" ] && { echo "weaver-a1:x:5000:5000::%s:/sbin/nologin"; exit 0; }\nexit 2\n' % home)
+                os.chmod(os.path.join(stubs, "getent"), 0o755)
+                env = dict(self.env, PATH=stubs + os.pathsep + self.env["PATH"])
+                ran = self.plan("--agent", "a1", "--archive", self.archive, env=env)
+                self.assertEqual(ran.returncode, code, ran.stdout + ran.stderr)
+                if code:
+                    self.assertIn("userdel -r would remove it", ran.stderr)
+                    self.assertNotIn("== step 2", ran.stdout)
 
     def test_a_name_that_is_not_an_agents_refuses_before_any_step(self):
         for name in ("gatecon", "admincon", "adminx", "stack", "A1", "a", "a-1", "a1/b", "a" * 17, ""):

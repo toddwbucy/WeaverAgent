@@ -17,7 +17,8 @@
 #     weaver-NAME-admincon, that an earlier create-agent.sh laid, refuses: this
 #     take-down removes no connector account.
 #  2. The archive: DIR made by root 0700, then one tar, written by root under umask 077,
-#     of the agent's sudo rule, its root, its own folder and its territory, listed back.
+#     of the agent's sudo rule, its root, its own folder, its territory and its home,
+#     listed back.
 #  3. The sudo rule /etc/sudoers.d/weaver-NAME.
 #  4. The root <admin base>/NAME/, which ends the admission.
 #  5. The agent's own folder /etc/weaver/NAME/, with any loop folder in it.
@@ -132,6 +133,13 @@ for p in "$AGENT_DIR" "$COORD"; do
     case $p in /*|'<'*) ;; *) die "the stack record names a path that is not absolute: '$p'" ;; esac
 done
 RUN_DIR=$COORD/weaver.run/$NAME RUNTIME_DIR=$COORD/weaver-$NAME FOLDER=$AGENT_DIR/$NAME
+HOME_DIR=$FOLDER/home
+# **The agent's home is archived, and step 10 removes it with the account**, so the
+# account's home must be the layout's, <agent-directory>/NAME/home, and nothing else.
+if home=$(getent passwd "weaver-$NAME" 2>/dev/null | cut -d: -f6) && [ -n "$home" ] && [[ $FOLDER == /* ]]; then
+    [ "$home" = "$HOME_DIR" ] \
+        || die "weaver-$NAME's home is $home, not the agent's own $HOME_DIR: userdel -r would remove it, so take this agent down by hand"
+fi
 # **No other agent's territory lies inside a folder this take-down removes**, as
 # decommission.sh refuses a target that spans a base: every other root under the admin
 # base is read, and a territory it names inside the agent's folder, its root, its own
@@ -174,12 +182,12 @@ fi
 step "archive the agent's pieces into $ARCHIVE, as root, before anything is removed"
 TAR=$ARCHIVE/agent-$NAME.tar
 shown install -d -o root -g root -m 0700 "$ARCHIVE"
-shown tar --create --file "$TAR" --numeric-owner --acls --xattrs -C / "${SUDO_RULE#/}" "${BASE#/}/$NAME" "${OWN#/}" "${TERRITORY#/}"
+shown tar --create --file "$TAR" --numeric-owner --acls --xattrs -C / "${SUDO_RULE#/}" "${BASE#/}/$NAME" "${OWN#/}" "${TERRITORY#/}" "${HOME_DIR#/}"
 printf '   each piece where it stands, under umask 077; then listed back, and its sha256 written beside it\n'
 if [ "$APPLY" = 1 ]; then
     install -d -o root -g root -m 0700 "$ARCHIVE" || stop "the archive's folder"
     pieces=()
-    for p in "$SUDO_RULE" "$BASE/$NAME" "$OWN" "$TERRITORY"; do
+    for p in "$SUDO_RULE" "$BASE/$NAME" "$OWN" "$TERRITORY" "$HOME_DIR"; do
         [ -e "$p" ] && pieces+=("${p#/}")
     done
     (umask 077 && tar --create --file "$TAR" --numeric-owner --acls --xattrs -C / "${pieces[@]}") || stop "the archive"
