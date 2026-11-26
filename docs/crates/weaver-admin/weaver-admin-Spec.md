@@ -1581,7 +1581,10 @@ the bytes read (`weaver-types-Spec` section 4). A `loop/` without a wire file re
 never read as no loop. Nothing is cached between verbs, so a laid change takes effect at
 the next load alone. The grant file and the interpreter are not admin's: the launcher
 judges them (`weaver-harness-Spec` section 2.5). A diagnostic binding looks at nothing
-and carries no loop.
+and carries no loop. The replacement serving load, which no command dispatches until the
+foundation's cutover, composes no loop yet: where `loop/` stands it refuses
+`ConfigInvalid` naming `loop` before any lock or fork, so it never serves an agent with
+a loop laid by the compiled loop, and the refusal stands until it carries the election.
 
 ```graph
 node: admin-identity-from-validated-name
