@@ -860,8 +860,12 @@ judges the service's uid as it judges any reader's.
 - **Where no relay stands to dial** (a pipe or socket sink, or a relay that has died), or
   the dial fails, the opening is refused `relay_unreachable` in place of `open`. The
   connector reads it as a closed door, as it reads a failed dial of the relay today.
-- **After `open`, a close before any header byte is the relay's refusal alone**, its
-  verdict on the position the request named.
+- **After `open`, a clean close before any header byte has two causes**: the relay's
+  refusal of the position the request named, or a relay that died after the service's
+  dial connected. The two close alike. The connector reads such a close as the relay's
+  refusal of the position, as it does today. Where the cause was a relay that died, the
+  next opening is refused `relay_unreachable`, so the wrong reading costs one mark or
+  one alert and does not repeat. That is a known limit.
 - The newest connection replaces the old at the relay, as section 2 states, so the
   service closes the older splice when the relay ends it, and not at the newer
   connection's opening. The relay replaces its reader
@@ -1003,7 +1007,7 @@ the M events.
 | K6 | V: machine A read | K2, `run` |
 | K6 | C: close | K9 |
 | K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run machine A admitted goes on |
-| K7 | the relay: a close before any header byte | K9, the connector's side closed. It is the relay's refusal of the position |
+| K7 | the relay: a close before any header byte | K9, the connector's side closed. Its cause is the relay's refusal of the position or a relay that died, which close alike, and the connector reads it as the refusal (section 8.5) |
 | K7 | C closes, or the relay closes after a header byte | K9, the other side closed |
 | K7 | the relay: it admits a newer trace request of the agent and ends this connection | K9, the connector's side closed. A newer trace connection's opening alone closes nothing |
 | K8 | V: a line appended | K8, `log` with `line` or `text`, or the `oversized` marker past 8 KiB |
@@ -1056,8 +1060,10 @@ the M events.
   `started` comes before its final line.
 - **S7.** After `open` on a trace connection, the bytes each way are the relay's,
   unchanged. `open` is sent only once the relay's dial has connected, and within 1
-  second of the connect, so a close there before any header byte is the relay's refusal
-  of the position alone.
+  second of the connect. A close there before any header byte is the relay's refusal of
+  the position or a relay that died after the dial connected. The two close alike, and
+  the connector reads the close as the refusal. Where the relay died, the next opening
+  is refused `relay_unreachable`, so the wrong reading does not repeat.
 - **S8.** A refusal of the service's own is a `refused` line, never inside the root
   program's object and never an exit code. A refusal of the root program's is inside its
   object, at exit 1, carried untouched.
@@ -1107,7 +1113,8 @@ of the connector account's, and can:
   stands, and after `open` do what a relay does: verify the position by its digest,
   refuse by closing before the header, name `length`, send heartbeats while idle, send
   `truncated` then end, and end the older connection only once it admits a newer
-  request, as the relay does.
+  request, as the relay does. It can also close before the header as a relay that died
+  after the dial does, and then refuse the next opening `relay_unreachable`.
 - on a log connection, send scripted lines with their flag, markers, and `log_behind`,
   let the newest log connection replace the older when it opens, and close.
 

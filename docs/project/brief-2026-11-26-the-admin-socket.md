@@ -136,8 +136,10 @@ change.
    stands, the dial fails or that second passes, it refuses the opening
    `relay_unreachable`. The connector sends its request within 1 second of reading
    `open`, inside the relay's 5 seconds from its accept. The trace's own refusal, a
-   close before the header, stays the relay's, after `open`, and is never a relay that
-   was not there.
+   close before the header, stays the relay's, after `open`. A relay that dies after the
+   dial connected closes the same way, and the connector reads that close as a refusal.
+   The next opening then answers `relay_unreachable`, so the wrong reading does not
+   repeat. That is a known limit.
 3. **The peer admitted is the admin connector's account alone,** by its uid from
    `SO_PEERCRED`, checked at accept. Root is refused too. The operator at a root shell
    runs the root program directly and never needs the socket. A refused peer reads
@@ -145,8 +147,9 @@ change.
 4. **A run carries a run id,** 16 hex digits drawn by the service when it takes the
    run, at the grant. The run stands from then. A `started` line names it once the root
    program is running, and the final line names it again. A new control connection asks
-   `run` and learns which runs stand and how the last one ended, by that id. A `show` is never listed in `standing` and never kept as `ended`,
-   so it never hides the outcome of a verb asked before a drop.
+   `run` and learns which runs stand and how the last one ended, by that id. A `show`
+   is never listed in `standing` and never kept as `ended`, so it never hides the
+   outcome of a verb asked before a drop.
 5. **The principal is recorded in the service's own log,** one line per run, with the
    run id, the agent, the verb and the outcome. `admin.log` and the trace carry the
    uid sudo reports, which is the weaver-admin account's. The principal is never an
@@ -242,7 +245,7 @@ events.
 | K6 | V: machine A read | K2, `run` |
 | K6 | C: close | K9 |
 | K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run machine A admitted goes on |
-| K7 | the relay: a close before any header byte | K9, the connector's side closed. It is the relay's refusal of the position |
+| K7 | the relay: a close before any header byte | K9, the connector's side closed. Its cause is the relay's refusal of the position or a relay that died, which close alike, and the connector reads it as the refusal (section 8.5) |
 | K7 | C closes, or the relay closes after a header byte | K9, the other side closed |
 | K7 | the relay: it admits a newer trace request of the agent and ends this connection | K9, the connector's side closed. A newer trace connection's opening alone closes nothing |
 | K8 | V: a line appended | K8, `log` with `line` or `text`, or the `oversized` marker past 8 KiB |
@@ -297,8 +300,10 @@ events.
   `started` comes before its final line.
 - **S7.** After `open` on a trace connection, the bytes each way are the relay's,
   unchanged. `open` is sent only once the relay's dial has connected, and within 1
-  second of the connect, so a close there before any header byte is the relay's refusal
-  of the position alone.
+  second of the connect. A close there before any header byte is the relay's refusal of
+  the position or a relay that died after the dial connected. The two close alike, and
+  the connector reads the close as the refusal. Where the relay died, the next opening
+  is refused `relay_unreachable`, so the wrong reading does not repeat.
 - **S8.** A refusal of the service's own is a `refused` line, never inside the root
   program's object and never an exit code. A refusal of the root program's is inside its
   object, at exit 1, carried untouched.
