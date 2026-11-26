@@ -4385,8 +4385,29 @@ fn a_box_account_name_refuses() {
             "{reserved}"
         );
     }
-    for admissible in ["gatecons", "xgatecon", "admincon1", "gate", "con"] {
+    for admissible in ["gatecons", "xgatecon", "xadmincon", "gate", "con"] {
         assert!(well_formed(admissible), "{admissible} is matched whole");
+    }
+}
+
+/// **A name beginning `admin`, and `stack`, refuse as a box account's name
+/// does**, per Spec section 4: the agent's own folder `/etc/weaver/<agent>/`
+/// stands beside the config bases, every `/etc/weaver/admin*`, and the stack's
+/// record, so `adminx` would lay a folder decommission reads as a config base.
+/// `stack` is matched whole, and `admin` only at the start. Perturbation: drop
+/// either check and its names pass.
+#[test]
+fn a_name_beside_the_config_bases_refuses() {
+    for reserved in ["admin", "adminx", "admin-1", "admin_x", "stack"] {
+        assert!(!well_formed(reserved), "{reserved}");
+        assert_eq!(
+            load_service_config(&AgentName(reserved.into()), false).err(),
+            Some(LifecycleRefusal::NoSuchAgent),
+            "{reserved}"
+        );
+    }
+    for admissible in ["xadmin", "badmin", "stacks", "astack", "stack1", "adm"] {
+        assert!(well_formed(admissible), "{admissible} is admissible");
     }
 }
 

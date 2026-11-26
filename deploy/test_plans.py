@@ -1654,10 +1654,10 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
 
     def test_agent_plan_refuses_visible_collisions(self):
         for collision in ("account", "relay account", "access group",
-                          "agent root", "staged root", "sudo rule", "territory"):
+                          "agent root", "staged root", "agent's folder", "sudo rule", "territory"):
             with self.subTest(collision=collision):
                 self.env.pop("COLLISION", None)
-                for path in (self.config / "m1", self.config / ".m1.partial"):
+                for path in (self.config / "m1", self.config / ".m1.partial", self.root / "m1"):
                     if path.exists(): path.rmdir()
                 self.rule.unlink(missing_ok=True)
                 shutil.rmtree(self.folder, ignore_errors=True)
@@ -1666,6 +1666,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 elif collision == "access group": self.env["COLLISION"] = "weaver-m1-admin"
                 elif collision == "agent root": (self.config / "m1").mkdir()
                 elif collision == "staged root": (self.config / ".m1.partial").mkdir()
+                elif collision == "agent's folder": (self.root / "m1").mkdir()
                 elif collision == "sudo rule": self.rule.write_text("")
                 else:
                     self.decl.mkdir(parents=True)
@@ -3010,6 +3011,29 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 self.assertIn(f"'{reserved}' is reserved", result.stderr)
         self.assertEqual(self.calls(), [])
 
+    def test_a_name_beginning_admin_or_stack_is_not_an_agents(self):
+        # weaver-admin-Spec section 4: the agent's folder /etc/weaver/<name>/
+        # stands beside admin's config bases, every /etc/weaver/admin*, which
+        # decommission.sh discovers, and the stack's record /etc/weaver/stack,
+        # so create-agent refuses a name beginning admin, and stack, before
+        # any call, as admin does. adminx is the brief's case. Perturbation:
+        # drop the refusal and the plan runs.
+        for reserved in ("admin", "adminx", "admin1", "stack"):
+            with self.subTest(reserved=reserved):
+                self.install_stack()
+                result = self.run_script("create-agent.sh", reserved, "--artifact", str(self.artifact))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"'{reserved}' is reserved", result.stderr)
+                self.assertIn("/etc/weaver/admin*", result.stderr)
+        self.assertEqual(self.calls(), [])
+        script = (DEPLOY / "create-agent.sh").read_text()
+        fn = script[script.index("agent_name_ok() {"):]
+        fn = fn[:fn.index("\n}\n") + 3]
+        for name, admitted in (("adminx", False), ("stack", False), ("admin", False), ("xadmin", True), ("stacks", True)):
+            with self.subTest(agent_name_ok=name):
+                run = subprocess.run(["bash", "-c", fn + 'agent_name_ok "$1"', "x", name], capture_output=True)
+                self.assertEqual(run.returncode == 0, admitted, name)
+
     def test_the_declaration_directory_flag_is_retired(self):
         # The operator's ruling of 2026-10-07 on #1: the declaration lives in
         # the territory and nothing is written into the operator's home, so
@@ -3042,6 +3066,14 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertIn(["sudo", "tee", territory + "/agent.toml"], calls)
         self.assertIn(["sudo", "tee", territory + "/system-prompt.md"], calls)
         self.assertNotIn(["sudo", "usermod", "-aG", "weaver-m1-admin", "weaver-m1-state"], calls)
+        # **The agent's own folder beside the admin base**, root:root 0755,
+        # laid before the admission (weaver-admin-Spec section 4): admin's load
+        # looks in it for the loop folder. Perturbation: drop the laying, or
+        # lay it after the root is admitted, and this fails.
+        etc_folder = ["sudo", "install", "-d", "-o", "root", "-g", "root", "-m", "00755", str(self.root / "m1")]
+        self.assertIn(etc_folder, calls)
+        admitted = calls.index(["sudo", "mv", "-T", "--", str(self.config / ".m1.partial"), str(self.config / "m1")])
+        self.assertLess(calls.index(etc_folder), admitted)
         # The operator joins the trace, state and access groups and never the
         # agent's own (it does not dial the gate); the gate-con account joins
         # the agent's own group alone, and the admin-con account the state and

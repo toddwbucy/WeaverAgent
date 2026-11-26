@@ -465,16 +465,22 @@ fn admissible(config: &ServiceConfig, agent: &AgentName) -> Result<(), Lifecycle
 /// **The names `gatecon` and `admincon` are refused whole**, on the operator's
 /// ruling of 2026-11-10: `weaver-gatecon` and `weaver-admincon` are the box's
 /// two connector accounts, so an agent of either name would own one of them as
-/// its own identity.
+/// its own identity. **Nor is a name beginning `admin`, or `stack`**: the
+/// agent's own folder `/etc/weaver/<agent>/`, where the load looks for the
+/// loop folder, stands beside the config bases, every `/etc/weaver/admin*`,
+/// and the stack's record, `/etc/weaver/stack`.
 fn well_formed(agent: &str) -> bool {
     const RESERVED: &[&str] = &["-state", "-trace", "-relay", "-admin", "-admincon"];
     const BOX_ACCOUNTS: &[&str] = &["gatecon", "admincon"];
+    const BESIDE: &[&str] = &["stack"];
     !agent.is_empty()
         && agent
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         && !RESERVED.iter().any(|suffix| agent.ends_with(suffix))
         && !BOX_ACCOUNTS.contains(&agent)
+        && !agent.starts_with("admin")
+        && !BESIDE.contains(&agent)
 }
 
 /// The one inventory, called by both `validate` and `load`, so the two cannot

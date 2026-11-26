@@ -1546,6 +1546,23 @@ absent, and where an account of the name stands it judges the account's shape an
 only its name, a system account with no login shell, no home and no group that reaches
 the other account's door, so a standing account is never adopted unjudged.
 
+**A name beginning `admin`, and the name `stack`, refuse as well.** Each agent has a
+folder of its own beside the config base, the base's parent joined with the name
+(`/etc/weaver/<name>/` where the base is `/etc/weaver/admin`), `root:root 0755`, laid
+by `deploy/create-agent.sh`, in which the inventory looks for the loop folder (below).
+The config bases are every `/etc/weaver/admin*`, as `deploy/decommission.sh` discovers
+them, and the stack's record is `/etc/weaver/stack`, so an agent named `adminx` would
+lay a folder decommission reads as a config base. The operator's list of 2026-11-26
+names `admin`, `admincon`, `gatecon` and any name ending in `-state`, and each is
+refused by the rules above. The other suffixes stay refused while an account or a group
+of that name stands:
+
+- `-trace`: the trace group, `weaver-<name>-trace`.
+- `-relay`: the relay's account, `weaver-<name>-relay`.
+- `-admin`: the access group, `weaver-<name>-admin`.
+- `-admincon`: the per-agent connector account of an agent laid before 2026-11-10,
+  which `deploy/decommission.sh` still finds and removes.
+
 ```graph
 node: admin-identity-from-validated-name
 kind: assertion
@@ -4289,6 +4306,10 @@ perturbation-verified:
 - **A reserved suffix refuses**, watched by an agent named `x-relay`: refused at the
   name check. The perturbation drops the suffix check, and the agent's accounts collide
   with agent `x`'s.
+- **A name beside the config bases refuses**, watched by `adminx` and `stack`, refused
+  at the name check and by `deploy/create-agent.sh` before any call. The perturbation
+  drops either check, and `adminx` would lay a folder decommission reads as a config
+  base.
 - **The lock stands where the agent cannot replace it**, watched by the agent's uid
   trying to unlink and recreate `run.lock`: refused by the root-owned run directory.
   The perturbation places it in the runtime directory, and a second worker starts.
