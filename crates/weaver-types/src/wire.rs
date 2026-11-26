@@ -48,6 +48,20 @@ pub const DECODE_MESSAGE_BOUND: usize = 8 * 1024 * 1024;
 /// Defined here once, the floor, so the gate and the harness read one value.
 pub const LOWER_BOUND_MS: u64 = 10_000;
 
+/// **The loop's pass bound**, per `weaver-harness-loop-contract` section 5 on
+/// the Planner's ruling of 2026-11-25: the loop relay's waits on the loop's
+/// socket in one pass, reads and sends together and the slices of a segment
+/// series included, are summed, and the pass breaks when the sum passes this.
+/// The harness's time inside a port call is not counted. The loop's `hello`
+/// has a bound of its own of the same length. Defined here once, the floor,
+/// beside the lower bound.
+pub const LOOP_PASS_BOUND_MS: u64 = 10_000;
+
+/// **The asks one pass may make**, per `weaver-harness-loop-contract` section
+/// 3: the relay counts the asks of the open pass, and the next past this is a
+/// break, so a loop that asks without end cannot hold its pass open.
+pub const LOOP_PASS_ASKS: u64 = 64;
+
 /// **The leave bound**, per `weaver-admin-Spec` section 3 (I3): admin waits
 /// this long on a harness's `Left` from the moment a force can act, and the
 /// harness's legs from the lower on sum inside it, the trace's drain, the
