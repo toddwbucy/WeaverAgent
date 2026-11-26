@@ -422,6 +422,41 @@ check("a raise after the wires' own refuse is counted refused, not turned (%r)" 
       seen == [{"kind": "refuse", "pass": 1}, {"kind": "refuse", "pass": 2}] and typed(err)[-1] == ended(2, 0, 2))
 
 
+def raising_unicode(board, text):
+    raise ValueError("caf\u00e9 \u2028 \U0001F600")
+
+
+seen, rc, err = served(raising_unicode, one_pass)
+check("a reason outside ASCII is written as ASCII JSON, read back whole (%r)" % err[:80],
+      err.isascii() and (typed(err) or [{}])[0].get("reason") == "ValueError: caf\u00e9 \u2028 \U0001F600")
+
+
+def limit_between_passes(raw):
+    # The runner's thread alone: the pass frame meets the interpreter's limit as it parses.
+    if threading.current_thread() is not threading.main_thread() and b'"kind": "pass"' in raw:
+        raise RecursionError()
+    return real_read_between(raw)
+
+
+def sends_one_pass(harness):
+    frame(harness)
+    send(harness, {"kind": "pass", "pass": 1, "text": "x"})
+    return "closed" if at_end(harness) else "no end of file"
+
+
+real_read_between = wb.read_frame
+wb.read_frame = limit_between_passes
+try:
+    seen, rc, err = served(on_turn, sends_one_pass)
+finally:
+    wb.read_frame = real_read_between
+check("a frame between passes that meets the interpreter's limits ends the runner with 1, one broken line (%r)"
+      % err,
+      rc == 1 and seen == "closed"
+      and typed(err) == [{"loop": "broken",
+                          "reason": "a frame between passes met the interpreter's limits: RecursionError: "}])
+
+
 class Shut(io.StringIO):
     def write(self, text):
         raise ValueError("I/O operation on closed file")
