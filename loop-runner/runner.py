@@ -47,6 +47,10 @@ IMPORTS = ("weaver_board", "json", "re")
 BANNED = frozenset(("open", "exec", "eval", "compile", "__import__", "input", "globals",
                     "locals", "vars", "getattr", "setattr", "delattr", "hash", "id"))
 FD = 3
+# The longest reason a line carries, in characters; past it the reason is cut and says so.
+# A wire file's exception text is the reason of its refused or raised line, and the
+# worker holds and logs every line, so the runner bounds what it says.
+REASON_MOST = 1024
 
 
 def board_module():
@@ -95,6 +99,8 @@ def say(err, word, reason=None, number=None, **counts):
     if number is not None:
         line["pass"] = number
     if reason is not None:
+        if len(reason) > REASON_MOST:
+            reason = "%s ... (cut at %d of %d characters)" % (reason[:REASON_MOST], REASON_MOST, len(reason))
         line["reason"] = reason
     line.update(counts)
     try:

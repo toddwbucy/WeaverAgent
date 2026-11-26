@@ -658,6 +658,14 @@ The race at the very tail is narrowed and named: the author's read
 settles on the reader's end-of-stream, bounded so an arm that never died
 cannot hold the death hostage, and a read that hits the bound may miss
 the final line, which costs the member and never the death.
+**A line is held to 16 KiB** (`LAST_WORD_LINE_BOUND`), newline included,
+for every organ's last word: one reader serves them all, every organ's
+typed line is far shorter, and since 2026-11-26 the loop runner, behind
+its walls, writes on it a reason the wire file chose. Past the bound the
+reader tees the first 16 KiB, ends them with a newline, drops the rest of
+the line without holding it, and keeps no word of it, the word staying the
+last line that was whole. The reader reads bytes, so a line that is not
+UTF-8 is teed and read past and never ends the reader.
 
 **The write end travels clear of descriptor 2, and the parent is where it
 is made to.** The placement is a `dup2` onto 2, and a `dup2` whose two
@@ -1004,7 +1012,10 @@ the launcher's path and the grant file's as `--loop-launcher` and `--loop-grant`
 - **The last word.** The runner's standard error is the last word's pipe. Every line
   reaches the worker's standard error, `worker.log`, the runner's end-of-file line naming
   its passes among them, and the stop waits for the pipe's end of file, within the last
-  word's bound, before it returns.
+  word's bound, before it returns. The worker holds a line to 16 KiB (section 2.2, the
+  last word), and the runner cuts a reason at 1024 characters
+  (`weaver-harness-loop-contract` section 7), so a wire file's exception text decides
+  neither what the worker holds nor what its log takes.
 - **The worker's death.** The organ fork arms `PR_SET_PDEATHSIG` to `SIGKILL` before
   the launcher's exec, and it survives the launcher's exec and the interpreter's, so the
   runner dies with the worker.

@@ -306,3 +306,73 @@ fn the_last_words_pipe_closes_on_exec() {
         "the last word's pipe must close on exec, or it rides into every organ"
     );
 }
+
+#[test]
+fn a_line_past_the_bound_is_held_to_the_bound_and_the_next_line_read_whole() {
+    let bound = 64;
+    let mut input = vec![b'x'; bound * 3];
+    input.extend_from_slice(b"\n{\"a\":1}\n");
+    let mut reader = std::io::BufReader::with_capacity(16, input.as_slice());
+    let mut line = Vec::new();
+    assert_eq!(
+        read_bounded_line(&mut reader, &mut line, bound).unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        line,
+        vec![b'x'; bound],
+        "the first bound's bytes, and no more"
+    );
+    assert_eq!(
+        read_bounded_line(&mut reader, &mut line, bound).unwrap(),
+        Some(false)
+    );
+    assert_eq!(line, b"{\"a\":1}\n");
+    assert_eq!(
+        read_bounded_line(&mut reader, &mut line, bound).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn a_line_that_is_not_utf8_is_read_past_and_the_next_word_retained() {
+    use std::io::Write;
+    let (word, write_end) = LastWord::stand().unwrap();
+    let mut writer = std::fs::File::from(write_end);
+    writer.write_all(b"\xff\xfe not text\n{\"b\":2}\n").unwrap();
+    drop(writer);
+    let snapshot = wait_snapshot(&word, |snapshot| snapshot.eof);
+    assert_eq!(snapshot.word, Some(serde_json::json!({"b": 2})));
+}
+
+#[test]
+fn a_typed_line_past_the_bound_is_no_word_and_the_reader_reads_on() {
+    use std::io::Write;
+    let (word, write_end) = LastWord::stand().unwrap();
+    let mut writer = std::fs::File::from(write_end);
+    let long = format!(
+        "{{\"loop\":\"refused\",\"reason\":\"{}\"}}\n",
+        "y".repeat(LAST_WORD_LINE_BOUND * 4)
+    );
+    // Written from a thread, since the line is longer than the pipe holds.
+    let writing = std::thread::spawn(move || {
+        writer.write_all(b"{\"d\":4}\n").unwrap();
+        writer.write_all(long.as_bytes()).unwrap();
+        writer
+    });
+    let writer = writing.join().unwrap();
+    drop(writer);
+    let snapshot = wait_snapshot(&word, |snapshot| snapshot.eof);
+    assert_eq!(snapshot.word, Some(serde_json::json!({"d": 4})));
+
+    let (word, write_end) = LastWord::stand().unwrap();
+    let mut writer = std::fs::File::from(write_end);
+    let past = "z".repeat(LAST_WORD_LINE_BOUND * 4);
+    let writing = std::thread::spawn(move || {
+        writer.write_all(past.as_bytes()).unwrap();
+        writer.write_all(b"\n{\"c\":3}\n").unwrap();
+    });
+    writing.join().unwrap();
+    let snapshot = wait_snapshot(&word, |snapshot| snapshot.eof);
+    assert_eq!(snapshot.word, Some(serde_json::json!({"c": 3})));
+}

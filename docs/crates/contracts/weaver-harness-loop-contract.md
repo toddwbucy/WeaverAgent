@@ -421,7 +421,9 @@ after the fact. Adding a step or a field is a change of this contract.
 
 **What the runner says.** Every line the runner writes on its standard error is one JSON
 object in ASCII, `{"loop": <word>, "pass": <n>, "reason": <text>}`, `pass` present where
-a pass is open. The words:
+a pass is open. A reason past 1024 characters is cut there and ends
+` ... (cut at 1024 of <n> characters)`: a refused or raised line's reason is the wire
+file's own exception text, and the worker holds and logs every line. The words:
 
 - `start`: the runner ends before its `hello`, exit 1 (exit 2 for a wrong count of
   arguments). The reasons:

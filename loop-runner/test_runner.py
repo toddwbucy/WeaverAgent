@@ -368,6 +368,19 @@ check("on_turn raising refuses the pass, names it, and the next pass still runs"
                          ended(2, 0, 2)])
 
 
+def raising_long(board, text):
+    raise ValueError("x" * 100000)
+
+
+seen, rc, err = served(raising_long, one_pass)
+said = (typed(err) or [{}])[0].get("reason", "")
+check("a reason past REASON_MOST is cut there and says so, and the line stays one typed line",
+      seen[0] == {"kind": "refuse", "pass": 1} and rc == 0
+      and said == "ValueError: " + "x" * (runner.REASON_MOST - 12)
+      + " ... (cut at %d of %d characters)" % (runner.REASON_MOST, 100012)
+      and all(len(line) < 2 * runner.REASON_MOST for line in err.splitlines()))
+
+
 def returning(board, text):
     board.seated
 

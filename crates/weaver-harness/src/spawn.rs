@@ -255,7 +255,6 @@ impl LastWord {
     /// the fork - the returned `OwnedFd` is exactly that copy - or the
     /// reader never sees EOF.
     pub fn stand() -> Result<(Self, std::os::fd::OwnedFd), nix::Error> {
-        use std::io::BufRead as _;
         use std::io::Write as _;
         // **One constructor, so the pipe's properties have one home.** The
         // flag every organ's entry depends on and the numbering the child's
@@ -273,20 +272,26 @@ impl LastWord {
         // leave hostage, and the tee writes through as lines arrive.
         std::thread::spawn(move || {
             let mut lines = std::io::BufReader::new(reader);
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match lines.read_line(&mut line) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
+            let mut line = Vec::new();
+            while let Ok(Some(cut)) = read_bounded_line(&mut lines, &mut line, LAST_WORD_LINE_BOUND)
+            {
+                // The tee: the journal keeps every line it kept before, and of a
+                // line past the bound its first bound's bytes, newline-ended.
+                let mut tee = std::io::stderr().lock();
+                let _ = tee.write_all(&line);
+                if cut {
+                    let _ = tee.write_all(b"\n");
+                    // A cut line is no typed word: the word stays the last one whole.
+                    continue;
                 }
-                // The tee: the journal keeps every line it kept before.
-                let _ = std::io::stderr().write_all(line.as_bytes());
-                let trimmed = line.trim();
-                if !trimmed.is_empty() && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
+                drop(tee);
+                let trimmed = line.trim_ascii();
+                if !trimmed.is_empty()
+                    && serde_json::from_slice::<serde_json::Value>(trimmed).is_ok()
+                    && let Ok(text) = std::str::from_utf8(trimmed)
                 {
                     retained.0.lock().unwrap_or_else(|p| p.into_inner()).word =
-                        Some(trimmed.to_string());
+                        Some(text.to_string());
                 }
             }
             retained.0.lock().unwrap_or_else(|p| p.into_inner()).eof = true;
@@ -294,6 +299,54 @@ impl LastWord {
         });
         Ok((LastWord { cell }, write_end))
     }
+}
+
+/// **The longest line the last word's reader holds**, newline included
+/// (`weaver-harness-Spec`, the last word). Past it the reader keeps and tees
+/// the first bound's bytes, ends them with a newline, and drops the rest of
+/// the line without holding it, so no organ's line, the loop runner's among
+/// them, decides how much the worker holds or writes to its log. It holds for
+/// every organ's last word: one reader serves them all, and every organ's
+/// typed line is far shorter.
+pub(crate) const LAST_WORD_LINE_BOUND: usize = 16 * 1024;
+
+/// One line of at most `bound` bytes into `line`, as bytes, so a line that is
+/// not UTF-8 is read past and never ends the reader. `None` at end of file
+/// with nothing read; `Some(true)` where the line ran past the bound, its
+/// first `bound` bytes in `line` and the rest consumed up to and through its
+/// newline; `Some(false)` otherwise.
+pub(crate) fn read_bounded_line(
+    reader: &mut impl std::io::BufRead,
+    line: &mut Vec<u8>,
+    bound: usize,
+) -> std::io::Result<Option<bool>> {
+    use std::io::BufRead as _;
+    use std::io::Read as _;
+    line.clear();
+    let read = reader.by_ref().take(bound as u64).read_until(b'\n', line)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if line.last() == Some(&b'\n') || read < bound {
+        return Ok(Some(false));
+    }
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            break;
+        }
+        match buffer.iter().position(|&byte| byte == b'\n') {
+            Some(at) => {
+                reader.consume(at + 1);
+                break;
+            }
+            None => {
+                let all = buffer.len();
+                reader.consume(all);
+            }
+        }
+    }
+    Ok(Some(true))
 }
 
 /// The last word's pipe, with both properties the placement depends on.
