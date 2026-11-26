@@ -235,7 +235,7 @@ events.
 | K8 | V: the file truncated or replaced | K8, the `discontinuity` marker, the file read from its start |
 | K8 | C: any byte | K9, `refused` `ask_malformed` |
 | K8 | V: a newer log connection of the agent is opened | K9, closed |
-| K8 | V: 1 MiB stands unsent | K9, `refused` `log_behind` |
+| K8 | V: 1 MiB stands unsent | K9, `refused` `log_behind` where the connection takes it |
 | K8 | C: close | K9 |
 | any | M: the sudo rule is edited | no change. The next verb ask reads the rule as it stands then |
 

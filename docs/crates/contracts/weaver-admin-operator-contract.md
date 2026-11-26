@@ -665,7 +665,7 @@ log connection `log_behind` and `ask_malformed` close it.
 | `grant_unread` | control | the verb's grant cannot be read within 10 seconds |
 | `busy` | control | another run of the agent stands, a `show` excepted. The answer names it as `run` |
 | `not_started` | control | the root program could not be started, so nothing ran |
-| `log_behind` | log | 1 MiB stands unsent (section 8.6) |
+| `log_behind` | log | 1 MiB stands unsent (section 8.6). Best effort: a connector that does not read may never receive it |
 
 **A service answers every version at or below its own as that version was written**,
 so a newer connector reads `version_unknown` or `purpose_unknown` as "not here yet",
@@ -838,10 +838,12 @@ from the moment it answered `open`, with no history before it:
   `{"log":{"discontinuity":"truncated"}}` or `"replaced"`, and the service then reads
   the file from its start.
 - **A line appended reaches the connection within 1 second.** Where 1 MiB stands unsent
-  to a connector that does not read, the service sends `refused` `log_behind` and
-  closes.
-- **A closed log connection is a discontinuity for the connector**, which it marks as it
-  marks a replacement today. Resending toward Weaver Web stays the connector's.
+  to a connector that does not read, the service closes the connection, sending
+  `refused` `log_behind` first where the connection takes it. That line is best effort,
+  and a connector that does not read may never receive it.
+- **Any close of a log connection is a discontinuity for the connector**, with or
+  without `log_behind` before it, which it marks as it marks a replacement today.
+  Resending toward Weaver Web stays the connector's.
 - **The log is judged before `open`**: it is opened and judged by every check
   `weaver-admin-Spec` section 8 makes of a log, a non-blocking open of a regular file
   among them. Which groups let the weaver-admin account pass the territory and read the
@@ -870,7 +872,7 @@ from the moment it answered `open`, with no history before it:
 | The trace request | 4096 bytes within 5 seconds, the relay's (`weaver-types-Spec` section 3.1) | the relay's close before the header |
 | A log line carried | 8 KiB | the `oversized` marker |
 | A log line's delay | 1 second from its append | none: the service's promise |
-| A log connection's unsent bytes | 1 MiB | `refused` `log_behind`, closed |
+| A log connection's unsent bytes | 1 MiB | closed, `refused` `log_behind` sent first where the connection takes it |
 | The reserved text of section 8.9 | 256 KiB, with its sha256 | reserved. A version 1 service refuses its opening `version_unknown` or `purpose_unknown`, and an ask naming `length` on a version 1 connection `ask_malformed` |
 
 The connector's own bounds (its 960 seconds on a verb, its 1,080 seconds of grace at a
@@ -938,7 +940,7 @@ the M events.
 | K8 | V: the file truncated or replaced | K8, the `discontinuity` marker, the file read from its start |
 | K8 | C: any byte | K9, `refused` `ask_malformed` |
 | K8 | V: a newer log connection of the agent is opened | K9, closed |
-| K8 | V: 1 MiB stands unsent | K9, `refused` `log_behind` |
+| K8 | V: 1 MiB stands unsent | K9, `refused` `log_behind` where the connection takes it |
 | K8 | C: close | K9 |
 | any | M: the sudo rule is edited | no change. The next verb ask reads the rule as it stands then |
 
