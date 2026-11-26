@@ -159,7 +159,9 @@ change.
    own process alone, since sudo and the root program stand in the service's
    containment until a load moves into the agent's scope. The root program's own invocation
    lock refuses a second verb meanwhile, inside admin's object, and the outcome is in
-   `admin.log` and the next `show`.
+   `admin.log` and the next `show`. Each start of the service draws an `instance`,
+   which every `open` and every `run` answer names, so a connector tells a run
+   forgotten by a restart from one never started.
 8. **The socket's path is `/run/weaver-admin.sock`,** owned by the weaver-admin
    account, grouped to the admin connector's own group, mode `0660`, made by systemd.
    That group holds no member but the connector's account, so the mode admits the
@@ -260,7 +262,7 @@ events.
 | A2 | another verb ask but `show`, granted | A2, that ask refused `busy` |
 | A2 | the `unload` or the `force-unload` ends | A1, holding the one still standing, the ended one's final line kept as the last ended |
 | any | the asking connection closes | no change |
-| any | the service restarts | A0 with no run kept. A root program it started runs on, under the root program's own lock, where the install meets section 8.4's requirement |
+| any | the service restarts | A0 with no run kept, under a new `instance`. A root program it started runs on, under the root program's own lock, where the install meets section 8.4's requirement |
 
 ### The invariants
 

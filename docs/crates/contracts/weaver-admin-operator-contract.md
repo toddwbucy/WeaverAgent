@@ -637,8 +637,9 @@ newline, within 10 seconds of the connect:
 most 4096 bytes with its newline and within 10 seconds of the opening line's arrival.
 That time holds the log's judging of section 8.6 and the relay's dial of section 8.5,
 and one not done within it is refused `log_unread` or `relay_unreachable`. Either
-`{"open":{"version":1}}`, and the purpose's exchange follows, or one `refused` line and
-the close:
+`{"open":{"version":1,"instance":"<16 hex>"}}`, and the purpose's exchange follows, or
+one `refused` line and the close. `instance` is drawn by the service at each start of
+its own and names that start (section 8.4):
 
 ```json
 {"refused":{"word":"purpose_unknown","detail":"...","purposes":["control","trace","log"]}}
@@ -779,7 +780,7 @@ verb killed mid-command, outside the envelope (section 4.1). A new control conne
 asks `{"run":{}}` and is answered:
 
 ```json
-{"run":{"standing":[{"run":"...","verb":"unload","started_ms":0}],"ended":{"ran":{...}}}}
+{"run":{"instance":"<16 hex>","standing":[{"run":"...","verb":"unload","started_ms":0}],"ended":{"ran":{...}}}}
 ```
 
 `standing` lists the agent's runs standing, a `show` excepted. `ended` is the final
@@ -787,9 +788,14 @@ line, `ran` or `fault`, of the last run that ended, a `show` excepted, or `null`
 none has ended since the service started. **A `show` is never listed in `standing` and
 never kept as `ended`**, so a `show` that ends later never hides the outcome of the
 verb a connector asked before a drop. A `show` whose connection closed is not named,
-and the next `show` reads the state. A service that restarted knows no run of before: the root program's own
-invocation lock then refuses a second verb inside its object, and the outcome is in
-`admin.log` and the next `show`.
+and the next `show` reads the state.
+
+A service that restarted knows no run of before: the root program's own invocation lock
+then refuses a second verb inside its object, and the outcome is in `admin.log` and the
+next `show`. **`instance` names the service's own start**, as its `open` lines do. A
+connector that asked a verb on a connection whose `open` named another `instance` knows
+the run was forgotten by a restart, and never reads that `standing` and `ended` as
+"never started".
 
 **The cause is the service's account.** The root program reads sudo's `SUDO_UID`, so
 the cause `admin.log` and the trace record is the weaver-admin account's uid (section
@@ -882,7 +888,7 @@ from the moment it answered `open`, with no history before it:
 | The root program's standard error kept | 16 KiB | cut, `stderr_cut` true |
 | A line the service sends on a control connection | 256 KiB: a 64 KiB object, 16 KiB of standard error at most 96 KiB escaped, and the members | a connector bounding its read here reads past it as a fault |
 | A run's length | none at the service. The root program's own bounds hold: 900 seconds on a load's start by default (section 3) | the connector's own bound, then `run` |
-| Runs remembered per agent | those standing, and the last ended, until the service restarts | `ended` is `null` |
+| Runs remembered per agent | those standing, and the last ended, until the service restarts | `ended` is `null`, under a new `instance` |
 | The trace request | 4096 bytes within 5 seconds, the relay's (`weaver-types-Spec` section 3.1) | the relay's close before the header |
 | A log line carried | 8 KiB | the `oversized` marker |
 | A log line's delay | 1 second from its append | none: the service's promise |
@@ -975,7 +981,7 @@ the M events.
 | A2 | another verb ask but `show`, granted | A2, that ask refused `busy` |
 | A2 | the `unload` or the `force-unload` ends | A1, holding the one still standing, the ended one's final line kept as the last ended |
 | any | the asking connection closes | no change |
-| any | the service restarts | A0 with no run kept. A root program it started runs on, under the root program's own lock, where the install meets section 8.4's requirement |
+| any | the service restarts | A0 with no run kept, under a new `instance`. A root program it started runs on, under the root program's own lock, where the install meets section 8.4's requirement |
 
 **The invariants.**
 
