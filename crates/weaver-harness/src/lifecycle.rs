@@ -2898,32 +2898,8 @@ impl Harness {
                 );
             // SAFETY: the enter runs on the serving thread, whose lifetime is
             // the worker's, as every organ's fork does.
-            match unsafe { crate::loop_arm::LoopArm::start(launch, wires) } {
-                Ok(arm) => run.loop_arm = Some(arm),
-                Err(crate::loop_arm::StartRefused::Fork(why)) => {
-                    eprintln!(
-                        "{}",
-                        serde_json::json!({"organ": "harness", "loop": "not-started", "reason": why})
-                    );
-                    after_load!(run, LifecycleRefusal::BindFailed);
-                }
-                Err(crate::loop_arm::StartRefused::Hello { reason, last_word }) => {
-                    eprintln!(
-                        "{}",
-                        serde_json::json!({
-                            "organ": "harness",
-                            "loop": "refused",
-                            "reason": reason,
-                            "last_word": last_word,
-                        })
-                    );
-                    after_load!(
-                        run,
-                        LifecycleRefusal::ConfigInvalid {
-                            field: Some(weaver_types::FieldName("loop".into())),
-                        }
-                    );
-                }
+            if let Err(refusal) = unsafe { start_loop(&mut run, launch, wires) } {
+                after_load!(run, refusal);
             }
         }
 
@@ -3102,6 +3078,52 @@ fn leave(
     let (lowered, _) = lower_gate(run, shared);
     stop_loop(run, shared);
     leave_after(run, cause, forced, None, lowered, shared)
+}
+
+/// **Start the loop admin found standing** into `run`, per
+/// `weaver-harness-Spec` section 2.5, or name why it did not start: a fork
+/// that failed refuses `BindFailed`, and a launcher that refused, a runner
+/// that did not start, or a `hello` that was not the one expected refuses
+/// `ConfigInvalid` naming `loop`, the child killed and reaped. Either way the
+/// worker's standard error carries one line naming the reason and, where one
+/// was said, the launcher's or the runner's last line.
+///
+/// # Safety
+///
+/// As [`crate::spawn::fork_organ`]: the caller is the serving thread.
+unsafe fn start_loop(
+    run: &mut Run,
+    launch: &crate::loop_arm::LoopLaunch,
+    wires: &weaver_types::WiresElection,
+) -> Result<(), LifecycleRefusal> {
+    // SAFETY: the caller's contract above.
+    match unsafe { crate::loop_arm::LoopArm::start(launch, wires) } {
+        Ok(arm) => {
+            run.loop_arm = Some(arm);
+            Ok(())
+        }
+        Err(crate::loop_arm::StartRefused::Fork(why)) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({"organ": "harness", "loop": "not-started", "reason": why})
+            );
+            Err(LifecycleRefusal::BindFailed)
+        }
+        Err(crate::loop_arm::StartRefused::Hello { reason, last_word }) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "organ": "harness",
+                    "loop": "refused",
+                    "reason": reason,
+                    "last_word": last_word,
+                })
+            );
+            Err(LifecycleRefusal::ConfigInvalid {
+                field: Some(weaver_types::FieldName("loop".into())),
+            })
+        }
+    }
 }
 
 /// **Which loop answers a turn**, per `weaver-harness-Spec` section 2.5: a

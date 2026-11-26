@@ -1108,9 +1108,10 @@ gate's copy and this one one module waits on the layout of the repository.
 - `tests/loop_arm.rs`, the loop arm forked by the organ fork through the real launcher
   on the real interpreter, each case in a child process inside a user namespace, where
   the fork arms its own parent-death signal:
-  - a started loop serves its pass, the seat's answer comes back unchanged, and the stop
-    ends the runner at its end of file, exit 0, its end-of-file line on the worker's
-    standard error
+  - a started loop leaves the worker two new descriptors, serves its pass, the seat's
+    answer comes back unchanged, and the stop ends the runner at its end of file, exit 0,
+    with a child forked since holding a copy of the near end, its end-of-file line on the
+    worker's standard error
   - under the worker's fork the runner holds descriptors 0 to 3 and `LANG=C.UTF-8`
     alone, with a descriptor born without close-on-exec in the worker
   - a `hello` naming another digest, from a runner that never reads its end again, is
@@ -1119,8 +1120,11 @@ gate's copy and this one one module waits on the layout of the repository.
   - the runner dies with the worker, through the launcher.
 - `src/lifecycle/tests.rs`: a wire file refused before the load with no launcher and
   under a diagnostic binding, the load's composer for each loop (the compiled one to the
-  byte), a run holding the arm answering by its relay and calling no entry, and the
-  unwind's leave and a dispatched rollback each stopping the loop and reaping it.
+  byte), the start standing the loop or refusing `ConfigInvalid` naming `loop`, a run
+  holding the arm answering by its relay and calling no entry, and the unwind's leave and
+  a dispatched rollback each stopping the loop and reaping it. No test drives the start's
+  call at the enter's end: a serving enter reaches it only once the gate stands, which
+  needs the agent's `tools/` cgroup.
 
 ## 3. The lifecycle interior
 

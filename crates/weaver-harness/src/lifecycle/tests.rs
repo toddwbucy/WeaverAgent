@@ -851,6 +851,74 @@ fn unwalled_arm() -> (crate::loop_arm::LoopArm, crate::scratch::Scratch) {
     (arm, dir)
 }
 
+/// **The start's three outcomes**, per `weaver-harness-Spec` section 2.5: a
+/// loop that sends its `hello` stands in the run; a wire file whose digest is
+/// not the election's refuses `ConfigInvalid` naming `loop`; and a launcher
+/// that does not execute refuses the same, the run holding no arm. That a
+/// refused child is reaped is `tests/loop_arm.rs`'s, in a process of its
+/// own. Perturbation: answer a refused `hello` with any other refusal, or
+/// keep a refused arm, and its row fails.
+#[test]
+fn the_start_stands_the_loop_or_refuses_naming_it() {
+    let loop_refused = LifecycleRefusal::ConfigInvalid {
+        field: Some(weaver_types::FieldName("loop".into())),
+    };
+    let wires = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/loop-wires-cross.py"
+    );
+    let (arm, dir) = unwalled_arm();
+    let launch = crate::loop_arm::LoopLaunch {
+        launcher: dir.join("launch"),
+        grant: dir.join("grant"),
+    };
+    arm.stop(None);
+    let sha256: String = {
+        use sha2::Digest as _;
+        sha2::Sha256::digest(std::fs::read(wires).expect("the wires"))
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    for (row, launcher, digest, want) in [
+        (
+            "the hello accepted",
+            launch.launcher.clone(),
+            sha256.clone(),
+            Ok(()),
+        ),
+        (
+            "another digest",
+            launch.launcher.clone(),
+            "ab".repeat(32),
+            Err(loop_refused.clone()),
+        ),
+        (
+            "no launcher to execute",
+            dir.join("absent"),
+            sha256.clone(),
+            Err(loop_refused.clone()),
+        ),
+    ] {
+        let (mut run, _spare, _sink) = entered_run(None);
+        let launch = crate::loop_arm::LoopLaunch {
+            launcher,
+            grant: launch.grant.clone(),
+        };
+        let election = weaver_types::WiresElection {
+            file: wires.into(),
+            sha256: digest,
+        };
+        // SAFETY: on this test's thread, which outlives the arm.
+        let started = unsafe { start_loop(&mut run, &launch, &election) };
+        assert_eq!(started, want, "{row}");
+        assert_eq!(run.loop_arm.is_some(), want.is_ok(), "{row}");
+        if let Some(arm) = run.loop_arm.take() {
+            arm.stop(None);
+        }
+    }
+}
+
 /// A seat recording each turn's text, answering a refusal no relay makes.
 #[derive(Default)]
 struct TurnRecording {

@@ -228,6 +228,11 @@ fn run_case(
     }
 }
 
+/// How many descriptors this process holds.
+fn open_descriptors() -> usize {
+    std::fs::read_dir("/proc/self/fd").unwrap().count()
+}
+
 /// The JSON lines of `text` whose member `key` is `value`.
 fn lines_where(text: &str, key: &str, value: &str) -> Vec<serde_json::Value> {
     text.lines()
@@ -296,12 +301,21 @@ fn a_case_in_the_namespace() {
         file: wires_path.to_str().unwrap().to_owned(),
         sha256: digest(&std::fs::read(&wires_path).unwrap()),
     };
+    let before = open_descriptors();
     // SAFETY: the case runs on this test's thread for the whole of its arm's
     // life: every arm is stopped, or the process ends, before the thread does.
     let started = unsafe { LoopArm::start(&launch, &election) };
     match case.as_str() {
         "serve" => {
             let mut arm = started.expect("the loop starts");
+            // **The worker holds the near end and the last word's reader, and
+            // nothing more**: its copies of the far end and of the pipe's
+            // write end dropped with the fork.
+            assert_eq!(
+                open_descriptors() - before,
+                2,
+                "the start leaves the worker two descriptors"
+            );
             let mut seat = Recording::default();
             let answered = arm.pass(&mut seat, "hello");
             assert!(
@@ -309,8 +323,23 @@ fn a_case_in_the_namespace() {
                 "the seat's answer comes back unchanged: {answered:?}"
             );
             assert_eq!(seat.turned, ["hello, seated True"]);
+            // **A child forked since holds a copy of the near end**, as a fork
+            // the worker makes later would until its exec: the stop's shutdown
+            // stands at once all the same, where a close alone would wait on
+            // the copy.
+            // SAFETY: the child calls sleep and _exit alone, both
+            // async-signal-safe.
+            let holder = match unsafe { nix::unistd::fork() }.expect("fork") {
+                nix::unistd::ForkResult::Child => unsafe {
+                    nix::libc::sleep(20);
+                    nix::libc::_exit(0)
+                },
+                nix::unistd::ForkResult::Parent { child } => child,
+            };
             let stopping = Instant::now();
             let status = arm.stop(Some(Instant::now() + Duration::from_secs(30)));
+            let _ = nix::sys::signal::kill(holder, nix::sys::signal::Signal::SIGKILL);
+            let _ = nix::sys::wait::waitpid(holder, None);
             assert!(
                 matches!(status, Some(nix::sys::wait::WaitStatus::Exited(_, 0))),
                 "the runner exits 0 on its end of file: {status:?}"
@@ -376,9 +405,11 @@ fn a_case_in_the_namespace() {
 /// reaches the seat and whose answer comes back unchanged, then the stop,
 /// where the runner exits 0 well inside the deadline, and its end-of-file line
 /// naming the one pass and the one turn reaches the worker's standard error
-/// through the last word. Perturbation: drop the relay's shutdown, or keep the
-/// worker's copy of the far end, and the runner never meets its end of file
-/// and is killed at the deadline.
+/// through the last word. The worker holds two new descriptors after the
+/// start, and a child forked before the stop holding a copy of the near end
+/// does not delay it. Perturbation: drop the relay's shutdown, and the stop
+/// waits on the copy; keep the worker's copy of the far end or of the pipe's
+/// write end, and it holds three.
 #[test]
 fn a_started_loop_serves_its_pass_and_stops_on_its_end_of_file() {
     let wires = std::fs::read(CROSS_WIRES).unwrap();
