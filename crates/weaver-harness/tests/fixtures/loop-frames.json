@@ -54,7 +54,14 @@
    "name": "an ask before the hello",
    "phase": "hello",
    "text": "{\"kind\":\"ask\",\"pass\":1,\"tag\":0,\"ask\":\"seated\"}",
-   "verdict": "the ask frame came before the hello",
+   "verdict": "the \"ask\" frame came before the hello",
+   "ends": false
+  },
+  {
+   "name": "a kind holding a newline before the hello, named on one line",
+   "phase": "hello",
+   "text": "{\"kind\":\"a\\nb\"}",
+   "verdict": "the \"a\\nb\" frame came before the hello",
    "ends": false
   },
   {

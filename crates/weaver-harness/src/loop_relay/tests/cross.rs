@@ -93,7 +93,8 @@ fn the_relay_and_the_python_runner_cross_passes_a_refusal_and_series_both_ways()
     assert_eq!(lines.text(), "", "no break");
 
     drop(relay);
-    let status = child.wait().unwrap();
+    // Standard error is read to its end before the wait: a runner that fills the pipe would
+    // otherwise never exit.
     let mut said = String::new();
     child
         .stderr
@@ -101,6 +102,10 @@ fn the_relay_and_the_python_runner_cross_passes_a_refusal_and_series_both_ways()
         .unwrap()
         .read_to_string(&mut said)
         .unwrap();
+    let status = child.wait().unwrap();
     assert!(status.success(), "the runner's exit: {status:?} {said}");
-    assert_eq!(said, "", "the runner refused no pass and broke nothing");
+    assert_eq!(
+        said, "{\"loop\": \"end\", \"passes\": 4, \"turns\": 3, \"refused\": 1}\n",
+        "the runner refused no pass of its own and broke nothing: the wires refused pass 2"
+    );
 }

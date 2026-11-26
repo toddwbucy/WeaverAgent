@@ -108,6 +108,43 @@ for name, text, refusal in [
     check("the grammar refuses %s, naming the line (%r)" % (name, said),
           said == refusal if refusal is not None else said.startswith("the wire file does not parse"))
 
+# 1a. What compile refuses after the parse took it, and the interpreter's limits
+# (act 2, section 9, findings 12 and 13): each a refusal, never a raise.
+def raw_grammar(text):
+    try:
+        runner.load(wire(text))
+    except runner.Grammar as e:
+        return str(e)
+    except BaseException as e:
+        return "raised %s" % type(e).__name__
+    return ""
+
+
+said = raw_grammar('"""w"""\nimport weaver_board\n\ndef on_turn(board, text):\n    break\n')
+check("a break outside a loop, which the parse takes and compile refuses, is a grammar refusal naming"
+      " its line (%r)" % said, said == "line 5: 'break' outside loop")
+said = raw_grammar('"""w"""\nimport weaver_board\n\ndef on_turn(board, text):\n    return '
+                   + "+".join(["text"] * 40000) + "\n")
+check("a sum of 40000 terms, which parses and meets the limit in compile, is refused as nesting (%r)" % said,
+      said == "the wire file nests past the interpreter's limits")
+said = raw_grammar('"""w"""\nimport weaver_board\n\ndef on_turn(board, text):\n    return '
+                   + "-" * 200000 + "1\n")
+check("a minus chain the parser cannot hold (MemoryError) is refused as nesting (%r)" % said,
+      said == "the wire file nests past the interpreter's limits")
+said = raw_grammar('"""w"""\nimport weaver_board\n\ndef on_turn(board, text):\n    return text'
+                   + ".a" * 200000 + "\n")
+check("an attribute chain the parse cannot build (RecursionError) is refused as nesting (%r)" % said,
+      said == "the wire file nests past the interpreter's limits")
+old = subprocess.run(["/usr/bin/python3", "-I", "-B", "-S", "-c",
+                      "import runpy, sys\nsys.version_info = (3, 11, 9, 'final', 0)\n"
+                      "sys.argv = ['runner.py', 'w.py']\nrunpy.run_path(sys.argv[0] if False else %r, run_name='__main__')"
+                      % os.path.join(HERE, "runner.py")], capture_output=True)
+check("on an interpreter before 3.12 the runner refuses before anything else, one start line, exit 1 (%r)"
+      % old.stderr[:120],
+      old.returncode == 1 and old.stdout == b""
+      and json.loads(old.stderr) == {"loop": "start",
+                                     "reason": "weaver-loop runner needs Python 3.12 or later, and this is 3.11"})
+
 # 1b. The fix round's grammar (the Planner's list of 2026-11-25, point 7, and the leading
 # minus): each refusal names its line.
 def small(body):
@@ -230,7 +267,16 @@ def served(on_turn, script):
     loop_end, harness = harness_pair()
     err = io.StringIO()
     result = {}
-    worker = threading.Thread(target=lambda: result.update(rc=runner.serve(loop_end, "d" * 64, on_turn, err)))
+
+    def go():
+        # The runner's process ends at serve's return, and its end of the pair with it:
+        # the harness's side then reads an end of file, never a read that timed out.
+        try:
+            result.update(rc=runner.serve(loop_end, "d" * 64, on_turn, err))
+        finally:
+            loop_end.close()
+
+    worker = threading.Thread(target=go)
     worker.start()
     try:
         seen = script(harness)
@@ -242,6 +288,35 @@ def served(on_turn, script):
         harness.close()
         worker.join(10)
     return seen, result.get("rc"), err.getvalue()
+
+
+def typed(err):
+    """Every line the runner wrote, each one ASCII JSON object carrying a loop word, or
+    None where any line is not."""
+    out = []
+    for line in err.splitlines():
+        try:
+            value = json.loads(line)
+        except ValueError:
+            return None
+        if not line.isascii() or not isinstance(value, dict) or not isinstance(value.get("loop"), str):
+            return None
+        out.append(value)
+    return out
+
+
+def ended(passes, turns, refused):
+    return {"loop": "end", "passes": passes, "turns": turns, "refused": refused}
+
+
+def at_end(harness):
+    """True where the harness's side reads an end of file: not a frame, and not a timeout."""
+    try:
+        data, _, _, _ = harness.recvmsg(wb.ENVELOPE)
+    except OSError as e:
+        print("     the read raised %s, no end of file" % type(e).__name__)
+        return False
+    return data == b""
 
 
 _, on_turn = runner.load(wire(GOOD))
@@ -268,7 +343,8 @@ check("pass 1: the wires ask seated, then turn with the text",
                       "delta": [{"role": "user", "content": [{"type": "text", "text": "hello"}]}]})
 check("pass 2: tags start again at 0, and the wires refuse",
       seen[3] == {"kind": "ask", "pass": 2, "tag": 0, "ask": "seated"} and seen[4] == {"kind": "refuse", "pass": 2})
-check("the harness's end closing ends the runner with 0, nothing said", rc == 0 and err == "")
+check("the harness's end closing ends the runner with 0 and one end line counting the passes (%r)" % err,
+      rc == 0 and typed(err) == [ended(2, 1, 1)])
 
 
 def one_pass(harness):
@@ -287,7 +363,9 @@ def raising(board, text):
 seen, rc, err = served(raising, one_pass)
 check("on_turn raising refuses the pass, names it, and the next pass still runs",
       seen == [{"kind": "refuse", "pass": 1}, {"kind": "refuse", "pass": 2}] and rc == 0
-      and "pass 1 is refused: ValueError: the wires failed" in err)
+      and typed(err) == [{"loop": "refused", "pass": 1, "reason": "ValueError: the wires failed"},
+                         {"loop": "refused", "pass": 2, "reason": "ValueError: the wires failed"},
+                         ended(2, 0, 2)])
 
 
 def returning(board, text):
@@ -296,7 +374,8 @@ def returning(board, text):
 
 seen, rc, err = served(returning, one_pass)
 check("on_turn returning without ending its pass refuses it",
-      seen[0] == {"kind": "refuse", "pass": 1} and "on_turn returned without ending its pass" in err)
+      seen[0] == {"kind": "refuse", "pass": 1}
+      and typed(err)[0] == {"loop": "refused", "pass": 1, "reason": "Limit: on_turn returned without ending its pass"})
 
 
 def raising_with_two_out(board, text):
@@ -327,7 +406,50 @@ def after_turn_raising(board, text):
 
 seen, rc, err = served(after_turn_raising, one_pass)
 check("a raise after the turn sends nothing more, and says so",
-      isinstance(seen, list) and seen[0]["ask"] == "turn" and seen[1]["ask"] == "turn" and "on_turn raised after pass 1 ended" in err)
+      isinstance(seen, list) and seen[0]["ask"] == "turn" and seen[1]["ask"] == "turn"
+      and typed(err) == [{"loop": "raised", "pass": 1, "reason": "on_turn raised after the pass ended: ValueError: late"},
+                         {"loop": "raised", "pass": 2, "reason": "on_turn raised after the pass ended: ValueError: late"},
+                         ended(2, 2, 0)])
+
+
+def refuse_then_raise(board, text):
+    board.refuse()
+    raise ValueError("after the refuse")
+
+
+seen, rc, err = served(refuse_then_raise, one_pass)
+check("a raise after the wires' own refuse is counted refused, not turned (%r)" % err[-80:],
+      seen == [{"kind": "refuse", "pass": 1}, {"kind": "refuse", "pass": 2}] and typed(err)[-1] == ended(2, 0, 2))
+
+
+class Shut(io.StringIO):
+    def write(self, text):
+        raise ValueError("I/O operation on closed file")
+
+
+loop_end, harness = harness_pair()
+shut_result = {}
+
+
+def shut_serve():
+    try:
+        shut_result["rc"] = runner.serve(loop_end, "d" * 64, raising, Shut())
+    except BaseException as e:
+        shut_result["raised"] = type(e).__name__
+    finally:
+        loop_end.close()
+
+
+shut_worker = threading.Thread(target=shut_serve)
+shut_worker.start()
+try:
+    shut_seen = one_pass(harness)
+except (wb.Closed, wb.Refused, OSError) as e:
+    shut_seen = str(e)
+harness.close()
+shut_worker.join(10)
+check("a standard error that cannot be written is let go: the passes are refused and the runner ends 0",
+      shut_seen == [{"kind": "refuse", "pass": 1}, {"kind": "refuse", "pass": 2}] and shut_result == {"rc": 0})
 
 
 def wrong_between(harness):
@@ -337,8 +459,9 @@ def wrong_between(harness):
 
 
 seen, rc, err = served(on_turn, wrong_between)
-check("a frame other than pass between passes ends the runner with 1, named",
-      rc == 1 and "a frame of the kind 'return' between passes" in err)
+check("a frame other than pass between passes ends the runner with 1, one broken line (%r)" % err,
+      rc == 1 and typed(err) == [{"loop": "broken", "reason":
+                                  "the harness broke the contract: a frame of the kind 'return' between passes"}])
 
 
 def skipped_pass(harness):
@@ -348,7 +471,8 @@ def skipped_pass(harness):
 
 
 seen, rc, err = served(on_turn, skipped_pass)
-check("a pass numbered out of order ends the runner with 1", rc == 1 and "not pass 1" in err)
+check("a pass numbered out of order ends the runner with 1",
+      rc == 1 and len(typed(err)) == 1 and typed(err)[0]["loop"] == "broken" and "not pass 1" in typed(err)[0]["reason"])
 
 
 def broken_return(harness):
@@ -360,8 +484,79 @@ def broken_return(harness):
 
 
 seen, rc, err = served(on_turn, broken_return)
-check("a broken return inside a pass ends the runner with 1, named",
-      rc == 1 and "the seam broke in pass 1" in err and "named twice" in err)
+lines = typed(err) or [{}]
+check("a broken return inside a pass ends the runner with 1, named (%r)" % err,
+      rc == 1 and len(lines) == 1 and lines[0].get("loop") == "broken" and lines[0].get("pass") == 1
+      and lines[0]["reason"].startswith("the seam broke: ") and "named twice" in lines[0]["reason"])
+
+
+def cut_series(harness):
+    frame(harness)
+    send(harness, {"kind": "pass", "pass": 1, "text": "x"})
+    frame(harness)
+    # A preamble and the first of its two slices, then the harness's end closes.
+    harness.sendmsg([b'{"segments":2,"bytes":131072}'])
+    harness.sendmsg([b"y" * wb.ENVELOPE])
+    return None
+
+
+seen, rc, err = served(on_turn, cut_series)
+lines = typed(err) or [{}]
+check("a close inside a segment series is a breach: the runner ends with 1, not the clean end (%r)" % err,
+      rc == 1 and len(lines) == 1 and lines[0].get("loop") == "broken" and lines[0].get("pass") == 1
+      and "closed inside a segment series" in lines[0]["reason"])
+
+
+# 3a. A limit of the interpreter's met while a return parses loses no frame (act 2,
+# section 9, item 1): the runner's refusal reads the kept frame, and the next pass runs.
+real_read = wb.read_frame
+limit_calls = []
+
+
+def limit_on_the_wait(raw):
+    # Armed by the wires. The first call is recv_frame's look for a preamble, the second
+    # the wait's parse, the third the runner's own read as it refuses.
+    # The harness's side reads through this module too, on the main thread.
+    if limit_calls and threading.current_thread() is not threading.main_thread():
+        limit_calls.append(raw)
+        if len(limit_calls) == 3:
+            raise MemoryError()
+    return real_read(raw)
+
+
+def limited(board, text):
+    if text == "y":
+        board.refuse()
+        return
+    tag = board.ask("seated")
+    limit_calls.append("armed")
+    board.wait(tag)
+
+
+def answers_one(harness):
+    frame(harness)
+    send(harness, {"kind": "pass", "pass": 1, "text": "x"})
+    seen = [frame(harness)]
+    send(harness, {"kind": "return", "pass": 1, "tag": 0, "value": True})
+    seen.append(frame(harness))
+    send(harness, {"kind": "pass", "pass": 2, "text": "y"})
+    seen.append(frame(harness))
+    return seen
+
+
+wb.read_frame = limit_on_the_wait
+try:
+    seen, rc, err = served(limited, answers_one)
+finally:
+    wb.read_frame = real_read
+check("a MemoryError while a return parses in the wires refuses the pass, the frame kept and read by the"
+      " runner, and the next pass runs (%r)" % err,
+      seen == [{"kind": "ask", "pass": 1, "tag": 0, "ask": "seated"}, {"kind": "refuse", "pass": 1},
+               {"kind": "refuse", "pass": 2}]
+      and typed(err) == [{"loop": "refused", "pass": 1, "reason": "MemoryError: "}, ended(2, 0, 2)]
+      # armed, then pass 1's look, the wait's parse that met the limit, and the runner's
+      # read of the same kept bytes (one object, never read again), then pass 2's look and parse
+      and len(limit_calls) == 6 and limit_calls[2] is limit_calls[3])
 
 # 3b. A wire file's own mistake refuses its pass, and the next pass runs (point 1), as does
 # its SystemExit (point 4).
@@ -408,13 +603,14 @@ for kind in ("empty delta", "the role assistant", "an unlisted ask", "an argumen
              "check_delta called by the wires", "Refused raised by the wires", "Closed raised by the wires",
              "an exception whose text raises"):
     seen, rc, err = served(mistaken(kind), one_pass)
+    lines = typed(err) or [{}]
     check("a wire file's %s refuses its pass, nothing else sent, and the next pass runs (%r)" % (kind, err[:90]),
           seen == [{"kind": "refuse", "pass": 1}, {"kind": "refuse", "pass": 2}] and rc == 0
-          and "pass 1 is refused" in err and "the seam broke" not in err)
+          and lines[0].get("loop") == "refused" and lines[0].get("pass") == 1 and lines[1:] == [ended(2, 0, 2)])
 
 seen, rc, err = served(mistaken("an exception whose text raises"), one_pass)
 check("an exception whose text raises is named by its type alone (%r)" % err[:80],
-      "pass 1 is refused: Unprintable\n" in err)
+      (typed(err) or [{}])[0] == {"loop": "refused", "pass": 1, "reason": "Unprintable"})
 
 
 # 3c. A breach the board met ends the runner, though the wires catch it and go on.
@@ -434,10 +630,9 @@ def bad_return(harness):
     send(harness, {"kind": "pass", "pass": 1, "text": "x"})
     seen.append(frame(harness))
     send(harness, {"kind": "return", "pass": 1, "tag": 7, "value": True})
-    try:
-        seen.append(frame(harness))
-    except wb.Closed:
-        seen.append("closed")
+    # The runner ends at the breach: its end closes, an end of file, not a read that waits
+    # out its timeout (act 2, section 9, finding 14).
+    seen.append("closed" if at_end(harness) else "no end of file")
     return seen
 
 
@@ -445,8 +640,8 @@ seen, rc, err = served(caught, bad_return)
 check("a wire file that catches the board's true Refused and goes on still ends the runner with 1, named (%r)"
       % err[:120],
       rc == 1 and seen[-1] == "closed"
-      and "the seam broke in pass 1: a return for pass 1 and tag 7 out of order" in err
-      and "is refused" not in err)
+      and typed(err) == [{"loop": "broken", "pass": 1,
+                          "reason": "the seam broke: a return for pass 1 and tag 7 out of order"}])
 
 
 def caught_returns(board, text):
@@ -458,7 +653,7 @@ def caught_returns(board, text):
 
 seen, rc, err = served(caught_returns, bad_return)
 check("a wire file that catches the board's true Refused and returns still ends the runner with 1 (%r)" % err[:120],
-      rc == 1 and seen[-1] == "closed" and "the seam broke in pass 1" in err)
+      rc == 1 and seen[-1] == "closed" and [line["loop"] for line in typed(err)] == ["broken"])
 
 
 # 4. As deployed: python3 -I -B -S runner.py with the pair at descriptor 3.
@@ -469,10 +664,13 @@ loop_end, harness = harness_pair()
 child_end = fcntl.fcntl(loop_end.fileno(), fcntl.F_DUPFD_CLOEXEC, 10)
 loop_end.close()
 wire_path = wire(GOOD, "deployed.py")
+said_read, said_write = os.pipe2(os.O_CLOEXEC)
 pid = os.posix_spawn("/usr/bin/python3",
                      ["/usr/bin/python3", "-I", "-B", "-S", os.path.join(HERE, "runner.py"), wire_path],
-                     os.environ, file_actions=[(os.POSIX_SPAWN_DUP2, child_end, 3)])
+                     os.environ, file_actions=[(os.POSIX_SPAWN_DUP2, child_end, 3),
+                                               (os.POSIX_SPAWN_DUP2, said_write, 2)])
 os.close(child_end)
+os.close(said_write)
 try:
     hello = frame(harness)
     send(harness, {"kind": "pass", "pass": 1, "text": "deployed"})
@@ -483,17 +681,22 @@ except (wb.Closed, wb.Refused, OSError) as e:
     print("     the harness's side raised %s: %s" % (type(e).__name__, e))
     hello, asked, turned = {}, {}, {"delta": [{"content": [{"text": None}]}]}
 harness.close()
+with os.fdopen(said_read, "rb") as f:
+    deployed_said = f.read().decode("ascii", "replace")
 rc = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
 check("as deployed, the runner finds weaver_board beside itself under -I -S and serves descriptor 3,"
       " handed non-blocking as harness_pair leaves it",
       hello.get("wires_sha256") == hashlib.sha256(GOOD.encode()).hexdigest()
-      and asked.get("ask") == "seated" and turned["delta"][0]["content"][0]["text"] == "deployed" and rc == 0)
+      and asked.get("ask") == "seated" and turned["delta"][0]["content"][0]["text"] == "deployed" and rc == 0
+      and typed(deployed_said) == [ended(1, 1, 0)])
 p = subprocess.run(["/usr/bin/python3", "-I", "-B", "-S", os.path.join(HERE, "runner.py")], capture_output=True)
-check("with no wire file it prints its usage and exits 2", p.returncode == 2 and b"usage" in p.stderr)
+check("with no wire file it prints its usage as a start line and exits 2",
+      p.returncode == 2 and json.loads(p.stderr) == {"loop": "start", "reason": "usage: runner.py <wire file>"})
 p = subprocess.run(["/usr/bin/python3", "-I", "-B", "-S", os.path.join(HERE, "runner.py"),
                     wire(GOOD.replace("import re", "import os"), "bad.py")], capture_output=True)
 check("a wire file outside the grammar exits 1 before any socket, naming the line",
-      p.returncode == 1 and b"line 4: import os" in p.stderr)
+      p.returncode == 1 and json.loads(p.stderr) == {
+          "loop": "start", "reason": "line 4: import os is not import weaver_board, json or re, whole"})
 
 print("== %d passed, %d failed" % (passed, len(failed)))
 sys.exit(1 if failed else 0)

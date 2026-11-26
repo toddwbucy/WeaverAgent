@@ -12,19 +12,35 @@ the harness closes its end, when it exits 0.
 Where on_turn raises (anything at all: SystemExit, and the board's Mistake for a frame
 it would not send, among the rest) or returns without ending its pass, the runner names it on
 standard error, reads the returns of any asks still outstanding, and refuses the pass,
-so the harness answers ChannelLost, and the next pass runs. Where the harness breaks
-the contract, the runner names it and exits 1, and the closed pair is the harness's
-next read.
+so the harness answers ChannelLost. The runner stands ready if the harness opens another
+pass. Where the harness breaks the contract, the runner names it and exits 1, and the
+closed pair is the harness's next read. At the harness's end of file it names the passes
+it served and exits 0.
+
+Every line the runner writes on standard error is one JSON object (the contract's
+section 7): {"loop": <word>, "pass": <n>, "reason": <text>}, "pass" where a pass is
+open. The words are "start" (before the hello), "refused", "raised" (after the pass
+ended), "unrefused" (a pass that could not be refused), "broken" (the harness broke the
+contract), and "end" with the counts {"passes", "turns", "refused"}. A line that cannot
+be written is let go: the pass is refused whether or not its line was written.
 
 The grammar check helps the author. It is not the boundary: the walls the worker lays
 around the loop are (act 2)."""
 
+import sys
+
+# Before any other import or name: the grammar reads Python 3.12's node classes.
+if sys.version_info < (3, 12):
+    sys.stderr.write('{"loop": "start", "reason": "weaver-loop runner needs Python 3.12 or later, and this is %d.%d"}\n'
+                     % sys.version_info[:2])
+    sys.exit(1)
+
 import ast
 import hashlib
+import json
 import importlib.util
 import os
 import socket
-import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 IMPORTS = ("weaver_board", "json", "re")
@@ -70,6 +86,22 @@ def _said(e):
         return "%s: %s" % (type(e).__name__, e)
     except BaseException:
         return type(e).__name__
+
+
+def say(err, word, reason=None, number=None, **counts):
+    """One typed line on standard error. Any failure of the write is let go: a wire file
+    may close standard error, and the line is the operator's, never the pass's."""
+    line = {"loop": word}
+    if number is not None:
+        line["pass"] = number
+    if reason is not None:
+        line["reason"] = reason
+    line.update(counts)
+    try:
+        err.write(json.dumps(line, ensure_ascii=True) + "\n")
+        err.flush()
+    except BaseException:
+        pass
 
 
 def _dunder(name):
@@ -178,14 +210,24 @@ def load(path):
         text = data.decode("utf-8-sig")
     except UnicodeDecodeError as e:
         raise Grammar("the wire file is not UTF-8: %s" % e)
+    nests = "the wire file nests past the interpreter's limits"
     try:
         tree = ast.parse(text, filename=path)
+    except (RecursionError, MemoryError):
+        raise Grammar(nests)
     except (SyntaxError, ValueError) as e:
         raise Grammar("the wire file does not parse: %s" % e)
-    check_grammar(tree)
+    try:
+        check_grammar(tree)
+        code = compile(tree, path, "exec")
+    except (RecursionError, MemoryError):
+        raise Grammar(nests)
+    except SyntaxError as e:
+        # compile refuses some files the parse took, a break outside a loop among them.
+        raise Grammar("line %s: %s" % (e.lineno, e.msg))
     board_module()
     namespace = {"__name__": "wires"}
-    exec(compile(tree, path, "exec"), namespace)
+    exec(code, namespace)
     return digest, namespace["on_turn"]
 
 
@@ -196,6 +238,7 @@ def serve(sock, digest, on_turn, err=sys.stderr):
     wb.send_frame(sock, wb.encode({"kind": "hello", "version": wb.VERSION, "wires_sha256": digest}))
     board = wb.Board(sock)
     expected = 1
+    turns = refused = 0
     while True:
         try:
             frame = wb.read_frame(wb.recv_frame(sock))
@@ -205,9 +248,13 @@ def serve(sock, digest, on_turn, err=sys.stderr):
                     or not wb.is_int(frame["pass"]) or not isinstance(frame["text"], str):
                 raise wb.Refused("a pass frame that is not pass %d with its text" % expected)
         except wb.Closed:
+            say(err, "end", passes=expected - 1, turns=turns, refused=refused)
             return 0
         except wb.Refused as e:
-            print("weaver-loop runner: the harness broke the contract: %s" % e, file=err)
+            say(err, "broken", "the harness broke the contract: %s" % e)
+            return 1
+        except (RecursionError, MemoryError) as e:
+            say(err, "broken", "a frame between passes met the interpreter's limits: %s" % _said(e))
             return 1
         expected += 1
         board._open(frame["pass"])
@@ -221,37 +268,39 @@ def serve(sock, digest, on_turn, err=sys.stderr):
         except BaseException as e:  # the wires' own failure, whatever it raises
             raised = e
         if board.broken is not None:
-            print("weaver-loop runner: the seam broke in pass %d: %s" % (frame["pass"], board.broken), file=err)
+            say(err, "broken", "the seam broke: %s" % board.broken, frame["pass"])
             return 1
-        if raised is None:
-            continue
-        if board.ended:
-            print("weaver-loop runner: on_turn raised after pass %d ended: %s" % (frame["pass"], _said(raised)),
-                  file=err)
-            continue
-        print("weaver-loop runner: pass %d is refused: %s" % (frame["pass"], _said(raised)), file=err)
-        try:
-            for tag in board.outstanding:
-                board.wait(tag)
-            board.refuse()
-        except BaseException:
-            pass
-        if board.broken is not None:
-            print("weaver-loop runner: the seam broke in pass %d: %s" % (frame["pass"], board.broken), file=err)
-            return 1
-        if not board.ended:
-            print("weaver-loop runner: pass %d could not be refused" % frame["pass"], file=err)
-            return 1
+        if raised is not None and board.ended:
+            say(err, "raised", "on_turn raised after the pass ended: %s" % _said(raised), frame["pass"])
+        elif raised is not None:
+            say(err, "refused", _said(raised), frame["pass"])
+            try:
+                for tag in board.outstanding:
+                    board._settle(tag)
+                board.refuse()
+            except BaseException:
+                pass
+            if board.broken is not None:
+                say(err, "broken", "the seam broke: %s" % board.broken, frame["pass"])
+                return 1
+            if not board.ended:
+                say(err, "unrefused", "the pass could not be refused", frame["pass"])
+                return 1
+        # The pass ended, by the wires' turn or refuse or by the runner's refuse.
+        if board.ended_by == "turn":
+            turns += 1
+        else:
+            refused += 1
 
 
 def main(argv):
     if len(argv) != 2:
-        print("usage: runner.py <wire file>", file=sys.stderr)
+        say(sys.stderr, "start", "usage: runner.py <wire file>")
         return 2
     try:
         digest, on_turn = load(argv[1])
     except (OSError, Grammar) as e:
-        print("weaver-loop runner: %s" % e, file=sys.stderr)
+        say(sys.stderr, "start", str(e))
         return 1
     sock = socket.socket(fileno=FD)
     # O_NONBLOCK lives on the open file description, which the descriptor shares with
