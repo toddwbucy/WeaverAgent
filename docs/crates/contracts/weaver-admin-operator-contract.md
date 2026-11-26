@@ -596,12 +596,16 @@ the reason.
   is the connector account's, `weaver-admincon`. Every other uid is refused, root's
   included, since the operator at a root shell runs the root program directly. A refused
   peer reads no byte, its connection is closed, and the service's own log names the uid.
-- **Connections are bounded per agent and in all.** For each agent, at most one trace
-  connection and one log connection stand, the newest of either replacing the older,
-  which the service closes, and at most 8 control connections. The service holds at
-  most 1024 connections in all, those still awaiting their opening line included. A
-  control connection past 8 for its agent, or any connection past 1024, is answered
-  `refused` `full` and closed.
+- **Connections are bounded per agent and in all.** For each agent, at most one log
+  connection stands: the newest replaces the older when it opens, and the service closes
+  the older. The relay reads for one trace connection of the agent at a time, and the
+  relay's rule ends the older (section 8.5): it replaces its reader once it admits a
+  newer request, and the service then closes the older splice. A newer trace
+  connection's opening closes nothing, and it stands beside the older until the relay
+  admits or refuses its request, within the relay's 5 seconds. At most 8 control
+  connections stand for each agent. The service holds at most 1024 connections in all,
+  those still awaiting their opening line included. A control connection past 8 for its
+  agent, or any connection past 1024, is answered `refused` `full` and closed.
 
 ### 8.2 The opening line, and the framing
 
@@ -847,7 +851,8 @@ judges the service's uid as it judges any reader's.
 - **After `open`, a close before any header byte is the relay's refusal alone**, its
   verdict on the position the request named.
 - The newest connection replaces the old at the relay, as section 2 states, so the
-  service closes the older splice when the relay ends it. The relay replaces its reader
+  service closes the older splice when the relay ends it, and not at the newer
+  connection's opening. The relay replaces its reader
   only once a newer request is admitted, so the service's dial alone ends no splice that
   stands, and a connector that closes during the dial ends only the dialed connection.
 - The request's bound is the relay's: 4096 bytes with its newline, within 5 seconds of
@@ -884,6 +889,8 @@ from the moment it answered `open`, with no history before it:
 - **Any close of a log connection is a discontinuity for the connector**, with or
   without `log_behind` before it, which it marks as it marks a replacement today.
   Resending toward Weaver Web stays the connector's.
+- **The newest log connection of the agent replaces the older when it opens**, and the
+  service closes the older. The log has no relay, so this rule is the service's own.
 - **The log is judged before `open`**: it is opened and judged by every check
   `weaver-admin-Spec` section 8 makes of a log, a non-blocking open of a regular file
   among them. Which groups let the weaver-admin account pass the territory and read the
@@ -899,7 +906,8 @@ from the moment it answered `open`, with no history before it:
 | What | Number | At the limit |
 | --- | --- | --- |
 | Control connections standing for one agent | 8 | `refused` `full`, closed |
-| Trace or log connections standing for one agent | 1 of each | the newest replaces the older, which is closed |
+| Log connections standing for one agent | 1 | the newest replaces the older when it opens, which is closed |
+| Trace connections the relay reads for, for one agent | 1 | the relay replaces its reader once it admits a newer request, and the service closes the older splice. A newer opening alone closes nothing |
 | Connections standing at the service | 1024 | `refused` `full`, closed |
 | The opening line | 4096 bytes with its newline | `refused` `opening_malformed`, closed |
 | The opening's arrival | 10 seconds from the connect | `refused` `opening_late`, closed |
@@ -954,7 +962,7 @@ the M events.
 | K1 | C: close, while the service dials the relay | K9. The dialed connection is closed, before it sends the relay any byte |
 | K1 | C: an unknown version or purpose, a refused name, or an unread log | K9, `refused` with its word |
 | K1 | C: a line past 4096 bytes, one that does not parse, or a version that is not a positive integer | K9, `refused` `opening_malformed` |
-| K1 | V: a newer trace or log connection of the agent is opened | K9, closed |
+| K1 | V: a newer trace or log connection of the agent opens | no change. Neither rule of section 8.1 reaches a connection whose opening line is not yet judged |
 | K1 | V: 10 seconds pass with no line | K9, `refused` `opening_late` |
 | K2 | C: `grants` | K3 |
 | K2 | C: `verb` naming one of the eight, with a principal of its shape | K4. The grant is read now |
@@ -981,7 +989,7 @@ the M events.
 | K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run started goes on |
 | K7 | the relay: a close before any header byte | K9, the connector's side closed. It is the relay's refusal of the position |
 | K7 | C closes, or the relay closes after a header byte | K9, the other side closed |
-| K7 | V: a newer trace connection of the agent is opened | K9, closed |
+| K7 | the relay: it admits a newer trace request of the agent and ends this connection | K9, the connector's side closed. A newer trace connection's opening alone closes nothing |
 | K8 | V: a line appended | K8, `log` with `line` or `text`, or the `oversized` marker past 8 KiB |
 | K8 | V: the file truncated or replaced | K8, the `discontinuity` marker, the file read from its start |
 | K8 | C: any byte | K9, `refused` `ask_malformed` |
@@ -1076,9 +1084,10 @@ of the connector account's, and can:
 - on a trace connection, refuse the opening `relay_unreachable` as where no relay
   stands, and after `open` do what a relay does: verify the position by its digest,
   refuse by closing before the header, name `length`, send heartbeats while idle, send
-  `truncated` then end, and let the newest connection replace the old.
+  `truncated` then end, and end the older connection only once it admits a newer
+  request, as the relay does.
 - on a log connection, send scripted lines with their flag, markers, and `log_behind`,
-  and close.
+  let the newest log connection replace the older when it opens, and close.
 
 It reaches no agent and no privileged program.
 

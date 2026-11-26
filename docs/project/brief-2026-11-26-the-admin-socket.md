@@ -173,8 +173,9 @@ change.
    connector, and `SO_PEERCRED` checks it again.
 9. **Connections are bounded per agent.** One connector serves every agent, so one
    machine-wide bound would let watched agents crowd out a control connection. Each
-   agent holds at most one trace and one log connection, the newest replacing the
-   older, and 8 control connections, under 1024 at the service in all.
+   agent holds at most one log connection, the newest replacing the older when it
+   opens, one trace connection the relay reads for, replaced only when the relay admits
+   a newer request, and 8 control connections, under 1024 at the service in all.
 10. **A refusal of an ask's kind leaves the connection standing.** `ask_unknown` and
    `verb_unknown` answer and stay, so a newer connector probing a later ask or verb
    reads "not here yet". A malformed line and a line sent over an outstanding ask
@@ -213,7 +214,7 @@ events.
 | K1 | C: close, while the service dials the relay | K9. The dialed connection is closed, before it sends the relay any byte |
 | K1 | C: an unknown version or purpose, a refused name, or an unread log | K9, `refused` with its word |
 | K1 | C: a line past 4096 bytes, one that does not parse, or a version that is not a positive integer | K9, `refused` `opening_malformed` |
-| K1 | V: a newer trace or log connection of the agent is opened | K9, closed |
+| K1 | V: a newer trace or log connection of the agent opens | no change. Neither rule of section 8.1 reaches a connection whose opening line is not yet judged |
 | K1 | V: 10 seconds pass with no line | K9, `refused` `opening_late` |
 | K2 | C: `grants` | K3 |
 | K2 | C: `verb` naming one of the eight, with a principal of its shape | K4. The grant is read now |
@@ -240,7 +241,7 @@ events.
 | K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run started goes on |
 | K7 | the relay: a close before any header byte | K9, the connector's side closed. It is the relay's refusal of the position |
 | K7 | C closes, or the relay closes after a header byte | K9, the other side closed |
-| K7 | V: a newer trace connection of the agent is opened | K9, closed |
+| K7 | the relay: it admits a newer trace request of the agent and ends this connection | K9, the connector's side closed. A newer trace connection's opening alone closes nothing |
 | K8 | V: a line appended | K8, `log` with `line` or `text`, or the `oversized` marker past 8 KiB |
 | K8 | V: the file truncated or replaced | K8, the `discontinuity` marker, the file read from its start |
 | K8 | C: any byte | K9, `refused` `ask_malformed` |
