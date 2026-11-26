@@ -261,10 +261,9 @@ pub fn judge(grant: &Grant, launch: &Launch, owner: u32) -> Result<Vec<Rule>, St
     for name in list_judged(launch.runner_dir, owned_dir)? {
         open_judged(&launch.runner_dir.join(name), owned_file)?;
     }
-    open_judged(&grant.pycache, owned_dir)?;
-    let mut entries = std::fs::read_dir(&grant.pycache)
-        .map_err(|e| format!("{} does not list: {e}", grant.pycache.display()))?;
-    if entries.next().is_some() {
+    // The pycache folder's emptiness is read through the descriptor judged,
+    // so a folder swapped for a link after its judgment is not the one read.
+    if !list_judged(&grant.pycache, owned_dir)?.is_empty() {
         return Err(format!("{} is not empty", grant.pycache.display()));
     }
     // The loop folder's owner and mode are admin's checks (section 2). The

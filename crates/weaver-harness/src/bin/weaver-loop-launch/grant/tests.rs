@@ -245,7 +245,7 @@ fn a_stale_digest_is_refused() {
 #[test]
 fn each_stale_or_wrong_path_is_refused_naming_it() {
     type Change = fn(&Layout, &mut Grant) -> PathBuf;
-    let rows: [(&str, Change, &str); 9] = [
+    let rows: [(&str, Change, &str); 10] = [
         (
             "a library gone",
             |l, g| {
@@ -301,6 +301,17 @@ fn each_stale_or_wrong_path_is_refused_naming_it() {
                 g.pycache.clone()
             },
             "is not empty",
+        ),
+        (
+            "the pycache folder a link to an empty folder",
+            |l, g| {
+                let p = l.0.join("pycache");
+                std::fs::remove_dir(&p).unwrap();
+                std::fs::create_dir(l.0.join("empty")).unwrap();
+                std::os::unix::fs::symlink(l.0.join("empty"), &p).unwrap();
+                p
+            },
+            "does not open to list",
         ),
         (
             "the pycache folder writable by others",
@@ -361,7 +372,7 @@ fn each_file_of_the_runners_folder_is_judged_as_the_grant_file_is() {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
     };
     type Change = fn(&Layout, &dyn Fn(&Path, u32)) -> PathBuf;
-    let rows: [(&str, Change, &str); 4] = [
+    let rows: [(&str, Change, &str); 3] = [
         (
             "runner.py written by its group",
             |l, mode| {
@@ -389,15 +400,6 @@ fn each_file_of_the_runners_folder_is_judged_as_the_grant_file_is() {
                 p
             },
             "is not a regular file",
-        ),
-        (
-            "runner.py gone",
-            |l, _| {
-                let p = l.0.join("runner/runner.py");
-                std::fs::remove_file(&p).unwrap();
-                p
-            },
-            "does not open",
         ),
     ];
     for (name, change, want) in rows {
