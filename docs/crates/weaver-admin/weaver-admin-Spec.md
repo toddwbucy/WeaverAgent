@@ -1966,6 +1966,19 @@ the custody rule of issue #456. Admin passing a flag for a file that is
 there, and staying silent about a file that is not, is the whole of its
 part.
 
+**The loop's launcher and its grant file ride the vector where the enter will carry a
+loop**, as `--loop-launcher` and `--loop-grant`, together or not at all
+(`weaver-harness-Spec` section 2.5). Both are derived, as the classify binary is: the
+launcher is `weaver-loop-launch` beside the worker binary the operator placed, and the
+grant file is `lib/weaver-loop/grant` under that binary's prefix, where the stack lays
+it. Admin reads neither. The launcher judges the grant file, and the worker forks the
+launcher. Where no loop folder stands, the vector carries neither flag, so a worker
+serving the compiled loop starts with the arguments it started with before. A worker
+binary with no prefix above it refuses a load that carries a loop,
+`BoundaryUnverified`. Enforced by
+`admin_hands_the_loops_paths_only_where_the_enter_carries_a_loop` and
+`the_loops_launcher_and_grant_stand_where_the_stack_lays_them` in `src/tests.rs`.
+
 **The state member is started here too, as it always was, a direct child of this
 crate.** The custodian runs under its own account over a territory this crate prepares,
 per `weaver-admin-PRD` section 2, and this crate holds no channel to it once it runs.
@@ -4501,8 +4514,9 @@ Each names what settles it, and none is this Spec's to settle alone.
   `AgentSummary` left with `list` on the operator's ruling of 2026-10-02. -
   **The two values the argument vector does not carry.** Section 6's vector carries the
   socket path, the two placed organ binaries, the SPU's the agent's own, the
-  headroom where the root names it, and the derived classify binary where one
-  stands, and the worker's remaining two
+  headroom where the root names it, the derived classify binary where one
+  stands, and the derived launcher and grant file where the enter carries a loop, and
+  the worker's remaining two
   inputs are named here rather than routed, because routing either now would carry a
   value nothing reads. The assembled prompt's identity is one: the agent's declaration
   holds an identity the SPU makes resident as the session's prefix, the assembled prompt

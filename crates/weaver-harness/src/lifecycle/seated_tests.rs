@@ -291,6 +291,7 @@ fn enter_seated(identity: Option<&'static str>) -> Entered {
     let mut harness = Harness {
         coordination: listener,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu,
             gate: "/nonexistent/weaver-gate".into(),

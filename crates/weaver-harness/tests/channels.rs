@@ -331,6 +331,7 @@ fn adoption_clears_the_dumpable_flag() {
             let constructed = Harness::listen(
                 listener,
                 OrganBinaries {
+                    loop_launch: None,
                     classify: None,
                     spu: "/nonexistent/spu".into(),
                     gate: "/nonexistent/gate".into(),

@@ -61,7 +61,8 @@ impl Bounds {
 }
 
 /// Why making the relay failed: the `hello` was not read, or not the one the
-/// relay was given to expect. What a failed `hello` does to a load is act 2's.
+/// relay was given to expect. A failed `hello` refuses the load
+/// (`weaver-harness-Spec` section 2.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HelloRefused {
     pub reason: String,
@@ -111,6 +112,16 @@ impl<W: Write> LoopRelay<W> {
             pass: 0,
             broken: false,
         })
+    }
+
+    /// **The stop, the relay's own act** (`weaver-harness-Spec` section 2.5,
+    /// the stop): the end is shut down both ways and handed back for the
+    /// caller to close. A shutdown stands at once on the far end even where a
+    /// child forked since holds a copy of this end, where a close alone does
+    /// not, so the loop reads its end of file and exits.
+    pub fn shut_down(self) -> OwnedFd {
+        let _ = nix::sys::socket::shutdown(self.end.as_raw_fd(), nix::sys::socket::Shutdown::Both);
+        self.end
     }
 
     /// **The entry**: one pass, from `pass` to the loop's `turn` or `refuse`

@@ -274,6 +274,10 @@ pub struct OrganBinaries {
     /// declaration carrying the binding with no binary provisioned refuses
     /// the load rather than standing half an arm.
     pub classify: Option<PathBuf>,
+    /// **The loop's launcher and its grant file**, per `weaver-harness-Spec`
+    /// section 2.5: handed where admin will carry a loop on the enter, and an
+    /// enter that carries one to a worker handed none refuses before the load.
+    pub loop_launch: Option<crate::loop_arm::LoopLaunch>,
 }
 
 /// The construction parameters this worker hands its organs, per
@@ -451,6 +455,11 @@ struct Run {
     /// session opened, per `weaver-harness-Spec` section 6.1. `None` under a
     /// diagnostic binding, whose re-feeds carry their recorded values.
     carried: Option<crate::engine::Carried>,
+    /// **The loop arm**, per `weaver-harness-Spec` section 2.5: the runner,
+    /// its relay and its last word, where the enter carried a loop admin found
+    /// standing, and `None` where the compiled loop runs. Taken by the stop
+    /// after the gate is lowered, so a leave tried again finds none.
+    loop_arm: Option<crate::loop_arm::LoopArm>,
 }
 
 impl Run {
@@ -1133,7 +1142,7 @@ impl Harness {
                 // answers, per Spec 6.1. Every other line is the loop's.
                 let ran = match seeding {
                     Some(message) => ports.seed(message),
-                    None => entry(&mut ports, &text),
+                    None => compose_turn(run.loop_arm.as_mut(), &mut ports, &text, entry),
                 };
                 // The interrupt's instant anchors the leave this turn held.
                 let interrupted = ports.interrupted_at();
@@ -1626,6 +1635,7 @@ impl Harness {
             }
         }
         let (lowered, died) = lower_gate(run, shared);
+        stop_loop(run, shared);
         if died {
             held.as_mut().expect("the leave").progress.leave = Leave::Forced;
         }
@@ -2028,12 +2038,16 @@ impl Harness {
         mut setup: Option<&mut diagnostic_setup::Setup<'_>>,
     ) -> Result<Run, EnterFailure> {
         let state_member = state_end.is_some();
-        // **A loop admin found standing is refused until the worker runs
-        // it**, per `weaver-harness-Spec` section 2.5: an enter that names
-        // a wire file never falls back to the compiled loop, so a loop the
-        // operator laid is never replaced by another one silently. Refused
-        // before the sink is taken, so the stream stays clean.
-        if payload.wires.is_some() {
+        // **A loop this worker cannot start is refused before the load**,
+        // per `weaver-harness-Spec` section 2.5: an enter that names a wire
+        // file to a worker handed no launcher, or under a diagnostic binding,
+        // which starts no runner, never falls back to the compiled loop, so a
+        // loop the operator laid is never replaced by another one silently.
+        // Refused before the sink is taken, so the stream stays clean.
+        if payload.wires.is_some()
+            && (self.organs.loop_launch.is_none()
+                || matches!(payload.binding, weaver_types::EnterBinding::Diagnostic))
+        {
             return Err(EnterFailure::BeforeLoad(LifecycleRefusal::ConfigInvalid {
                 field: Some(weaver_types::FieldName("loop".into())),
             }));
@@ -2174,6 +2188,26 @@ impl Harness {
         // costs one read of what is in hand. Without it a record holding
         // no field and a record whose election stood and produced nothing
         // are one absence on disk.
+        // **The composer names the loop this run composes with**, per
+        // `weaver-trace-Spec` section 3 and `weaver-harness-Spec` section 2.5:
+        // the binary's own where no loop stands, unchanged by a byte, and
+        // where the enter carries one, the binary with the wire file's path
+        // and the digest admin read. The load is authored before the loop
+        // starts, so the digest is the election's, and the relay refuses any
+        // `hello` naming another and the load rolls back: a run that serves
+        // past its enter carries the digest its `hello` named.
+        let compiled = self
+            .composer
+            .clone()
+            .expect("serve names the composer before any enter");
+        let composer = match &payload.wires {
+            Some(wires) => weaver_trace::LoopIdentity::file(
+                &compiled.binary,
+                std::path::Path::new(&wires.file),
+                Some(wires.sha256.clone()),
+            ),
+            None => compiled,
+        };
         let elections = weaver_trace::Elections {
             // **Two members are not elections and arrive by a third route**,
             // per Spec section 6.1: the member stands where its end arrived
@@ -2222,10 +2256,7 @@ impl Harness {
                 }
                 .to_string(),
             },
-            composer: self
-                .composer
-                .clone()
-                .expect("serve names the composer before any enter"),
+            composer: composer.clone(),
             residual_readout: payload.spu_instruction.decoder.residual_readout_election,
             field: payload
                 .spu_instruction
@@ -2385,10 +2416,7 @@ impl Harness {
                 state_store: payload.state_store.clone(),
                 state_member,
                 composer: {
-                    let loop_identity = self
-                        .composer
-                        .clone()
-                        .expect("serve names the composer before any enter");
+                    let loop_identity = composer;
                     weaver_types::Composer {
                         binary: loop_identity.binary,
                         file: loop_identity.file.map(std::path::PathBuf::from),
@@ -2418,6 +2446,7 @@ impl Harness {
             wind_down_bound: payload.wind_down_bound,
             leave: None,
             carried: None,
+            loop_arm: None,
             diagnostic: diagnostic.then(|| DiagnosticSeat {
                 reader_elected: payload.spu_instruction.decoder.residual_readout_election,
                 artifact: payload
@@ -2854,6 +2883,26 @@ impl Harness {
             shell_granted,
         });
 
+        // **The loop comes last**, per `weaver-harness-Spec` section 2.5: a
+        // loop admin found standing starts once the gate stands, so no
+        // organ's fork window ever holds its far end. A start refused, by
+        // the launcher, by a runner that does not start, or by a `hello` that
+        // is not the one expected, has been killed and reaped, and the load
+        // rolls back through the rollback that lowers the gate and the SPU,
+        // the launcher's or the runner's last line in the worker's standard
+        // error naming why.
+        if let Some(wires) = payload.wires.as_ref() {
+            let launch =
+                self.organs.loop_launch.as_ref().expect(
+                    "an enter carrying a loop to a worker handed no launcher refused above",
+                );
+            // SAFETY: the enter runs on the serving thread, whose lifetime is
+            // the worker's, as every organ's fork does.
+            if let Err(refusal) = unsafe { start_loop(&mut run, launch, wires) } {
+                after_load!(run, refusal);
+            }
+        }
+
         Ok(run)
     }
 
@@ -3027,7 +3076,92 @@ fn leave(
     run.lower_anchor = Some(anchor);
     let shared = shared_deadline(anchor);
     let (lowered, _) = lower_gate(run, shared);
+    stop_loop(run, shared);
     leave_after(run, cause, forced, None, lowered, shared)
+}
+
+/// **Start the loop admin found standing** into `run`, per
+/// `weaver-harness-Spec` section 2.5, or name why it did not start: a fork
+/// that failed refuses `BindFailed`, and a launcher that refused, a runner
+/// that did not start, or a `hello` that was not the one expected refuses
+/// `ConfigInvalid` naming `loop`, the child killed and reaped. Either way the
+/// worker's standard error carries one line naming the reason, the launcher's
+/// and the grant file's paths, and, where one was said, the launcher's or the
+/// runner's last line, so a launcher or a grant that does not stand is named.
+///
+/// # Safety
+///
+/// As [`crate::spawn::fork_organ`]: the caller is the serving thread.
+unsafe fn start_loop(
+    run: &mut Run,
+    launch: &crate::loop_arm::LoopLaunch,
+    wires: &weaver_types::WiresElection,
+) -> Result<(), LifecycleRefusal> {
+    // SAFETY: the caller's contract above.
+    match unsafe { crate::loop_arm::LoopArm::start(launch, wires) } {
+        Ok(arm) => {
+            run.loop_arm = Some(arm);
+            Ok(())
+        }
+        Err(crate::loop_arm::StartRefused::Fork(why)) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "organ": "harness",
+                    "loop": "not-started",
+                    "reason": why,
+                    "launcher": launch.launcher.display().to_string(),
+                    "grant": launch.grant.display().to_string(),
+                })
+            );
+            Err(LifecycleRefusal::BindFailed)
+        }
+        Err(crate::loop_arm::StartRefused::Hello { reason, last_word }) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "organ": "harness",
+                    "loop": "refused",
+                    "reason": reason,
+                    "last_word": last_word,
+                    "launcher": launch.launcher.display().to_string(),
+                    "grant": launch.grant.display().to_string(),
+                })
+            );
+            Err(LifecycleRefusal::ConfigInvalid {
+                field: Some(weaver_types::FieldName("loop".into())),
+            })
+        }
+    }
+}
+
+/// **Which loop answers a turn**, per `weaver-harness-Spec` section 2.5: a
+/// run holding a loop arm answers by its relay's pass, the loop composing
+/// through the same seat, and the compiled entry is not called. A run holding
+/// none calls the entry as before. The choice is the run's own, from its
+/// enter, so two loads of one binary may run different loops.
+fn compose_turn<S: crate::seat::Seat>(
+    arm: Option<&mut crate::loop_arm::LoopArm>,
+    seat: &mut S,
+    text: &str,
+    entry: &mut impl FnMut(&mut S, &str) -> Result<crate::engine::TurnOutcome, crate::engine::TurnError>,
+) -> Result<crate::engine::TurnOutcome, crate::engine::TurnError> {
+    match arm {
+        Some(arm) => arm.pass(seat, text),
+        None => entry(seat, text),
+    }
+}
+
+/// **Stop the loop**, per `weaver-harness-Spec` section 2.5: after the gate
+/// is lowered, under every leave, the graceful one after its drain and the
+/// forced, the rollback and the unwind with none, and before the save point.
+/// The arm is taken, so a leave tried again from S9 finds none to stop. The
+/// runner is reaped by the leave's shared deadline and killed there if it has
+/// not gone.
+fn stop_loop(run: &mut Run, shared: Option<std::time::Instant>) {
+    if let Some(arm) = run.loop_arm.take() {
+        arm.stop(shared);
+    }
 }
 
 /// **The shared deadline** (`weaver-harness-Spec` section 6): taken at the

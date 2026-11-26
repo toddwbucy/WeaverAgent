@@ -1173,15 +1173,17 @@ pub fn spawn_relay(start: RelayStart<'_>) -> std::io::Result<std::process::Child
 }
 
 /// The worker's argument vector, per section 6: the coordination socket,
-/// the SPU and gate binaries, and the named flags for the headroom and
-/// the classify binary where each stands. Only the validated
-/// name, the root's installed values and the validated declaration reach it.
+/// the SPU and gate binaries, and the named flags for the headroom, the
+/// classify binary and the loop's launcher and grant file where each stands.
+/// Only the validated name, the root's installed values and the validated
+/// declaration reach it.
 pub fn worker_arguments(
     coordination_socket: &Path,
     spu: &Path,
     gate: &Path,
     headroom_bytes: Option<&str>,
     classify: Option<&Path>,
+    loop_launch: Option<(&Path, &Path)>,
 ) -> Vec<String> {
     let mut args = vec![
         coordination_socket.display().to_string(),
@@ -1196,7 +1198,49 @@ pub fn worker_arguments(
         args.push("--classify-binary".to_string());
         args.push(classify.display().to_string());
     }
+    if let Some((launcher, grant)) = loop_launch {
+        args.push("--loop-launcher".to_string());
+        args.push(launcher.display().to_string());
+        args.push("--loop-grant".to_string());
+        args.push(grant.display().to_string());
+    }
     args
+}
+
+/// **Where the loop's launcher and its grant file stand**, per section 6:
+/// `weaver-loop-launch` beside the worker, and the grant file in the runner's
+/// folder the stack lays, `<prefix>/lib/weaver-loop/grant` where the worker is
+/// `<prefix>/bin/worker`. Derived from the installed worker as the state
+/// member's binary is, and read by nothing here: the launcher judges the grant
+/// file and the worker forks the launcher. `None` where the worker's path has
+/// no grandparent.
+pub fn loop_launch_beside(worker: &Path) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let bin = worker.parent()?;
+    let prefix = bin.parent()?;
+    Some((
+        bin.join("weaver-loop-launch"),
+        prefix.join("lib").join("weaver-loop").join("grant"),
+    ))
+}
+
+/// **The loop's two paths where the enter carries a loop, and none where it
+/// does not** (`weaver-admin-Spec` section 6), so a worker serving the
+/// compiled loop starts with the arguments it started with before. A loop
+/// carried to a worker binary with no prefix above it is refused, naming the
+/// binary.
+pub fn loop_launch_for(
+    carries_loop: bool,
+    worker: &Path,
+) -> Result<Option<(std::path::PathBuf, std::path::PathBuf)>, String> {
+    if !carries_loop {
+        return Ok(None);
+    }
+    loop_launch_beside(worker).map(Some).ok_or_else(|| {
+        format!(
+            "the worker binary {} has no prefix to find the loop's launcher beside",
+            worker.display()
+        )
+    })
 }
 
 /// Opens a log the start step appends to, `worker.log` in the declaration

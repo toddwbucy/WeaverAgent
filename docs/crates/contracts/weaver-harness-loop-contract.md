@@ -210,9 +210,9 @@ of the open pass, and the 65th is a break. Today's loop asks seven at most.
 
 **The `hello` is read when the relay is made, before any pass.** Making the relay reads
 the `hello` under its own bound of section 5, and gives either a relay that is `Idle` or
-an error. The harness is never handed a relay that is `Unannounced`. What a failed
-`hello` does to a load is act 2's, and the lean is that it refuses the load, as a loop
-folder that fails its check does.
+an error. The harness is never handed a relay that is `Unannounced`. **A failed `hello`
+refuses the load**, as a loop folder that fails its check does: the worker kills and
+reaps the loop at once and the load rolls back (`weaver-harness-Spec` section 2.5).
 
 ### 3.2 Events, by state
 

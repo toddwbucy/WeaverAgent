@@ -282,6 +282,7 @@ fn start_load(
             &config.gate,
             config.headroom_bytes.as_deref(),
             Some(prepared.checker_binary()),
+            None,
         ),
         uid: account.uid,
         gid: account.gid,

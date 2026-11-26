@@ -279,12 +279,13 @@ fn the_stack_names_what_was_started_and_handed() {
 /// section 6: the socket, the SPU the root names and the gate, then each
 /// named flag only where its value stands. Perturbation: substitute a
 /// fixed SPU path in `worker_arguments` and the first assertion fails;
-/// emit `--classify-binary` unconditionally and the bare vector carries it.
+/// emit `--classify-binary` or the loop's two flags unconditionally and the
+/// bare vector carries them.
 #[test]
 fn the_roots_spu_reaches_the_vector() {
     let config = unread_config();
     let socket = config.coordination_socket();
-    let bare = start::worker_arguments(&socket, &config.spu, &config.gate, None, None);
+    let bare = start::worker_arguments(&socket, &config.spu, &config.gate, None, None, None);
     assert_eq!(
         bare,
         vec![
@@ -299,14 +300,63 @@ fn the_roots_spu_reaches_the_vector() {
         &config.gate,
         Some("4096"),
         Some(std::path::Path::new("/opt/weaver/bin/weaver-spu-classify")),
+        Some((
+            std::path::Path::new("/opt/weaver/bin/weaver-loop-launch"),
+            std::path::Path::new("/opt/weaver/lib/weaver-loop/grant"),
+        )),
     );
     for (flag, value) in [
         ("--headroom-bytes", "4096"),
         ("--classify-binary", "/opt/weaver/bin/weaver-spu-classify"),
+        ("--loop-launcher", "/opt/weaver/bin/weaver-loop-launch"),
+        ("--loop-grant", "/opt/weaver/lib/weaver-loop/grant"),
     ] {
         let at = full.iter().position(|a| a == flag).expect(flag);
         assert_eq!(full[at + 1], value);
     }
+}
+
+/// **The loop's launcher stands beside the worker and its grant file in the
+/// runner's folder the stack lays** (section 6): `<prefix>/bin/worker` gives
+/// `<prefix>/bin/weaver-loop-launch` and `<prefix>/lib/weaver-loop/grant`,
+/// as `deploy/loop-grant.sh` lays them. Perturbation: derive the grant from
+/// the worker's own folder, and the second path differs.
+#[test]
+fn the_loops_launcher_and_grant_stand_where_the_stack_lays_them() {
+    assert_eq!(
+        start::loop_launch_beside(std::path::Path::new("/opt/weaver/bin/worker")),
+        Some((
+            std::path::PathBuf::from("/opt/weaver/bin/weaver-loop-launch"),
+            std::path::PathBuf::from("/opt/weaver/lib/weaver-loop/grant"),
+        ))
+    );
+    assert_eq!(
+        start::loop_launch_beside(std::path::Path::new("/worker")),
+        None
+    );
+}
+
+/// **Admin hands the loop's paths only where the enter carries a loop**, per
+/// `weaver-admin-Spec` section 6: none where it does not, the pair where it
+/// does, and a refusal naming the binary where the worker has no prefix.
+/// Perturbation: hand the pair whatever the enter carries, or none, and its
+/// row fails.
+#[test]
+fn admin_hands_the_loops_paths_only_where_the_enter_carries_a_loop() {
+    let worker = std::path::Path::new("/opt/weaver/bin/worker");
+    assert_eq!(start::loop_launch_for(false, worker), Ok(None));
+    assert_eq!(
+        start::loop_launch_for(true, worker),
+        Ok(start::loop_launch_beside(worker))
+    );
+    assert!(start::loop_launch_for(true, worker).unwrap().is_some());
+    let refused =
+        start::loop_launch_for(true, std::path::Path::new("/worker")).expect_err("no prefix");
+    assert!(refused.contains("/worker"), "{refused}");
+    assert_eq!(
+        start::loop_launch_for(false, std::path::Path::new("/worker")),
+        Ok(None)
+    );
 }
 
 /// The configuration as `validate`, `load` and `restore` read it: the

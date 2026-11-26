@@ -1564,6 +1564,16 @@ fn run_load(
         .map(|directory| directory.join("weaver-spu-classify"))
         .filter(|binary| binary.is_file());
     let stack = stack_digests(config, state_end.is_some(), classify.as_deref());
+    // **The loop's launcher and grant file are handed where the enter will
+    // carry a loop** (section 6), so a worker serving the compiled loop is
+    // started with the arguments it was started with before.
+    let loop_launch = match start::loop_launch_for(inventory.wires.is_some(), &config.worker) {
+        Ok(found) => found,
+        Err(why) => {
+            diag!("weaver-admin: {why}");
+            return Err(LifecycleRefusal::BoundaryUnverified);
+        }
+    };
     let socket_path = config.coordination_socket();
     let mut worker = start::spawn_worker(start::WorkerStart {
         binary: &config.worker,
@@ -1573,6 +1583,9 @@ fn run_load(
             &config.gate,
             config.headroom_bytes.as_deref(),
             classify.as_deref(),
+            loop_launch
+                .as_ref()
+                .map(|(launcher, grant)| (launcher.as_path(), grant.as_path())),
         ),
         uid: account.uid,
         gid: account.gid,
