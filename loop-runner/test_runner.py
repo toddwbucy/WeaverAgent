@@ -108,6 +108,84 @@ for name, text, refusal in [
     check("the grammar refuses %s, naming the line (%r)" % (name, said),
           said == refusal if refusal is not None else said.startswith("the wire file does not parse"))
 
+# 1b. The fix round's grammar (the Planner's list of 2026-11-25, point 7, and the leading
+# minus): each refusal names its line.
+def small(body):
+    """A wire file of a docstring, one import and the body, on_turn last."""
+    return '"""w"""\nimport weaver_board\n' + body + "\n\ndef on_turn(board, text):\n    board.refuse()\n"
+
+
+for name, body, refusal in [
+    ("__builtins__ inside a function", "def f():\n    return __builtins__", "line 4: the name __builtins__ begins with two underscores"),
+    ("a top-level name of two underscores", "__x = 1", "line 3: the name __x begins with two underscores"),
+    ("a function of two underscores", "def __f():\n    return 1", "line 3: the name __f begins with two underscores"),
+    ("an argument of two underscores", "def f(__a):\n    return 1", "line 3: the name __a begins with two underscores"),
+    ("hash", "def f(x):\n    return hash(x)", "line 4: the name hash"),
+    ("id", "def f(x):\n    return id(x)", "line 4: the name id"),
+    ("an assignment to the board's attribute", "def f(board):\n    board.seen = 1", "line 4: an assignment to the attribute seen"),
+    ("an assignment to weaver_board's function", "def f():\n    weaver_board.encode = None", "line 4: an assignment to the attribute encode"),
+    ("an assignment to a function's attribute", "def f():\n    f.count = 1", "line 4: an assignment to the attribute count"),
+    ("an augmented assignment to an attribute", "def f(board):\n    board.n += 1", "line 4: an assignment to the attribute n"),
+    ("del of an attribute", "def f(board):\n    del board.n", "line 4: an assignment to the attribute n"),
+    ("a list as a default", "def f(x=[]):\n    return x", "line 3: a default argument that is not a literal"),
+    ("a dict as a default", "def f(x={}):\n    return x", "line 3: a default argument that is not a literal"),
+    ("a set as a default", "def f(*, x={1}):\n    return x", "line 3: a default argument that is not a literal"),
+    ('list() as a default', 'def f(x=list()):\n    return x', 'line 3: a default argument that is not a literal'),
+    ('set() as a default', 'def f(x=set()):\n    return x', 'line 3: a default argument that is not a literal'),
+    ('a tuple holding a list as a default', 'def f(x=([],)):\n    return x', 'line 3: a default argument that is not a literal'),
+    ('a generator as a default', 'def f(x=(i for i in (1, 2))):\n    return x', 'line 3: a default argument that is not a literal'),
+    ("a store into weaver_board's member", "def f():\n    weaver_board.ARGUMENTS['flush'] = ()", 'line 4: an assignment by subscript into the attribute ARGUMENTS'),
+    ("a store into the board's attribute", 'def f(board):\n    board.outstanding[0] = 1', 'line 4: an assignment by subscript into the attribute outstanding'),
+    ('except as a name of two underscores', 'def f():\n    try:\n        return 1\n    except ValueError as __e:\n        return 2', 'line 6: the name __e begins with two underscores'),
+    ('a match capture of two underscores', 'def f(x):\n    match x:\n        case [*__r]:\n            return 1', 'line 5: the name __r begins with two underscores'),
+    ('a match as of two underscores', 'def f(x):\n    match x:\n        case _ as __x:\n            return 1', 'line 5: the name __x begins with two underscores'),
+    ('a mapping rest of two underscores', 'def f(x):\n    match x:\n        case {**__m}:\n            return 1', 'line 5: the name __m begins with two underscores'),
+    ('a nested function of two underscores, never read', 'def f():\n    def __g():\n        return 1\n    return 2', 'line 4: the name __g begins with two underscores'),
+    ('a type parameter', 'def f[T](x):\n    return x', 'line 3: a type parameter'),
+    ('a type parameter of two underscores', 'def f[__T](x):\n    return x', 'line 3: a type parameter'),
+    ("a nested function's parameter spec", 'def f():\n    def g[**P]():\n        return 1\n    return g', 'line 4: a type parameter'),
+    ("a plus sign", "X = +1", "line 3: the constant X is not a literal"),
+    ("a second minus", "X = --1", "line 3: the constant X is not a literal"),
+    ("a minus over True", "X = -True", "line 3: the constant X is not a literal"),
+    ("a minus over a string", "X = -'a'", "line 3: the constant X is not a literal"),
+    ("a second minus in a tuple", "X = (1, --2)", "line 3: the constant X is not a literal"),
+]:
+    said = grammar(small(body))
+    check("the grammar refuses %s, naming the line (%r)" % (name, said), said == refusal)
+check("one leading minus over an integer or a float is taken, alone and in a tuple",
+      grammar(small("X = -1\nY = -1.5\nZ = (1, -2, -0.5)\nW = 18446744073709551615")) == "")
+check("a tuple default and an attribute read are taken",
+      grammar(small("def f(board, x=(1, 2)):\n    return board.seated()")) == "")
+check("literal defaults are taken: a string, a negative number, None, a tuple of these",
+      grammar(small("def f(a='s', b=-1, c=None, *, d=(1, -2.5, 'x')):\n    return a")) == "")
+check("a store into a local list is taken", grammar(small('def f():\n    seen = [0]\n    seen[0] = 1\n    return seen')) == "")
+bom = wire("x", "bom.py")
+with open(bom, "wb") as f:
+    f.write(b'\xef\xbb\xbf"""w"""\nimport weaver_board\n\ndef on_turn(board, text):\n    board.refuse()\n')
+try:
+    runner.load(bom)
+    bom_said = ""
+except runner.Grammar as e:
+    bom_said = str(e)
+check("a UTF-8 wire file that opens with a byte-order mark is taken (%r)" % bom_said, bom_said == "")
+latin = wire("x", "latin.py")
+with open(latin, "wb") as f:
+    f.write(b'# -*- coding: latin-1 -*-\n"""caf\xe9"""\n\ndef on_turn(board, text):\n    board.refuse()\n')
+try:
+    runner.load(latin)
+    latin_said = ""
+except runner.Grammar as e:
+    latin_said = str(e)
+check("a wire file that is not UTF-8 is refused, whatever its coding line names (%r)" % latin_said,
+      latin_said.startswith("the wire file is not UTF-8"))
+cookie = wire("x", "cookie.py")
+with open(cookie, "wb") as f:
+    f.write(b'# -*- coding: latin-1 -*-\n"""w"""\nimport weaver_board\nX = "caf\xc3\xa9"\n\n'
+            b'def on_turn(board, text):\n    board.refuse()\n')
+_, cookie_turn = runner.load(cookie)
+check("a UTF-8 wire file is read as UTF-8 whatever its coding line names",
+      cookie_turn.__globals__["X"] == "caf\u00e9")
+
 # 2. The file is read once: the digest is of the bytes compiled.
 path = wire(GOOD.replace("LIMIT = 600", "LIMIT = 601"), "once.py")
 real_check = runner.check_grammar
@@ -284,6 +362,104 @@ def broken_return(harness):
 seen, rc, err = served(on_turn, broken_return)
 check("a broken return inside a pass ends the runner with 1, named",
       rc == 1 and "the seam broke in pass 1" in err and "named twice" in err)
+
+# 3b. A wire file's own mistake refuses its pass, and the next pass runs (point 1), as does
+# its SystemExit (point 4).
+class Unprintable(Exception):
+    def __str__(self):
+        raise RuntimeError("no text")
+
+
+def mistaken(kind):
+    def on_turn(board, text):
+        if text == "y":
+            board.refuse()
+        elif kind == "empty delta":
+            board.turn([])
+        elif kind == "the role assistant":
+            board.turn([{"role": "assistant", "content": [{"type": "text", "text": "x"}]}])
+        elif kind == "an unlisted ask":
+            board.ask("seed")
+        elif kind == "an argument named ask":
+            board.ask("seated", ask="turn", delta=[{"role": "user", "content": [{"type": "text", "text": "x"}]}])
+        elif kind == "keep -1":
+            board.flush(-1)
+        elif kind == "SystemExit":
+            raise SystemExit(0)
+        elif kind == "KeyboardInterrupt":
+            raise KeyboardInterrupt()
+        elif kind == "BaseException":
+            raise BaseException("x")
+        elif kind == "check_delta called by the wires":
+            wb.check_delta([])
+        elif kind == "Refused raised by the wires":
+            raise wb.Refused("x")
+        elif kind == "Closed raised by the wires":
+            raise wb.Closed()
+        elif kind == "an exception whose text raises":
+            raise Unprintable()
+        elif kind == "a lone surrogate in a turn":
+            board.turn([{"role": "user", "content": [{"type": "text", "text": chr(0xD800)}]}])
+    return on_turn
+
+
+for kind in ("empty delta", "the role assistant", "an unlisted ask", "an argument named ask", "keep -1", "SystemExit",
+             "KeyboardInterrupt", "BaseException", "a lone surrogate in a turn",
+             "check_delta called by the wires", "Refused raised by the wires", "Closed raised by the wires",
+             "an exception whose text raises"):
+    seen, rc, err = served(mistaken(kind), one_pass)
+    check("a wire file's %s refuses its pass, nothing else sent, and the next pass runs (%r)" % (kind, err[:90]),
+          seen == [{"kind": "refuse", "pass": 1}, {"kind": "refuse", "pass": 2}] and rc == 0
+          and "pass 1 is refused" in err and "the seam broke" not in err)
+
+seen, rc, err = served(mistaken("an exception whose text raises"), one_pass)
+check("an exception whose text raises is named by its type alone (%r)" % err[:80],
+      "pass 1 is refused: Unprintable\n" in err)
+
+
+# 3c. A breach the board met ends the runner, though the wires catch it and go on.
+def caught(board, text):
+    try:
+        board.seated()
+    except wb.Refused:
+        pass
+    try:
+        board.refuse()
+    except wb.Limit:
+        pass
+
+
+def bad_return(harness):
+    seen = [frame(harness)]
+    send(harness, {"kind": "pass", "pass": 1, "text": "x"})
+    seen.append(frame(harness))
+    send(harness, {"kind": "return", "pass": 1, "tag": 7, "value": True})
+    try:
+        seen.append(frame(harness))
+    except wb.Closed:
+        seen.append("closed")
+    return seen
+
+
+seen, rc, err = served(caught, bad_return)
+check("a wire file that catches the board's true Refused and goes on still ends the runner with 1, named (%r)"
+      % err[:120],
+      rc == 1 and seen[-1] == "closed"
+      and "the seam broke in pass 1: a return for pass 1 and tag 7 out of order" in err
+      and "is refused" not in err)
+
+
+def caught_returns(board, text):
+    try:
+        board.seated()
+    except wb.Refused:
+        return
+
+
+seen, rc, err = served(caught_returns, bad_return)
+check("a wire file that catches the board's true Refused and returns still ends the runner with 1 (%r)" % err[:120],
+      rc == 1 and seen[-1] == "closed" and "the seam broke in pass 1" in err)
+
 
 # 4. As deployed: python3 -I -B -S runner.py with the pair at descriptor 3.
 # posix_spawn's dup2 action lands the pair at descriptor 3 without close-on-exec, and every

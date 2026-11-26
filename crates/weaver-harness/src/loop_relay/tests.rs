@@ -8,7 +8,7 @@ use nix::sys::socket::{AddressFamily, Shutdown, SockFlag, SockType, shutdown, so
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::thread;
-use weaver_types::{TokenRefusal, TurnKey};
+use weaver_types::{DECODE_MESSAGE_BOUND, TokenRefusal, TurnKey};
 
 const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const PREFIX: &str = "weaver-harness: the loop relay broke: ";
@@ -129,6 +129,12 @@ fn quick() -> Bounds {
     }
 }
 
+/// The contract's bounds, for the tests that do not wait for a bound to pass: a loaded
+/// machine slows their round trips, and only the tests of the bound need a short one.
+fn wide() -> Bounds {
+    Bounds::contract()
+}
+
 fn pair() -> (OwnedFd, Far) {
     let (near, far) = socketpair(
         AddressFamily::Unix,
@@ -191,6 +197,8 @@ enum Answer {
 /// its asks record their arguments.
 struct Stand {
     calls: Vec<Call>,
+    /// The reads, which take `&self`, by name in the order the relay made them.
+    reads: RefCell<Vec<&'static str>>,
     seated: bool,
     independent: bool,
     first_turn: bool,
@@ -206,6 +214,7 @@ struct Stand {
 fn stand() -> Stand {
     Stand {
         calls: Vec::new(),
+        reads: RefCell::new(Vec::new()),
         seated: true,
         independent: true,
         first_turn: false,
@@ -238,13 +247,16 @@ fn key() -> TurnKey {
 
 impl Seat for Stand {
     fn first_turn(&self) -> bool {
+        self.reads.borrow_mut().push("first_turn");
         self.first_turn
     }
     fn seated(&self) -> bool {
+        self.reads.borrow_mut().push("seated");
         thread::sleep(self.slow);
         self.seated
     }
     fn turn_context(&self) -> TurnContext {
+        self.reads.borrow_mut().push("turn_context");
         if self.independent {
             TurnContext::Independent
         } else {
@@ -252,6 +264,7 @@ impl Seat for Stand {
         }
     }
     fn fullness(&self) -> Option<(u64, u64)> {
+        self.reads.borrow_mut().push("fullness");
         self.fullness
     }
     fn flush(&mut self, keep: u64) -> Option<(u64, u64)> {
@@ -316,7 +329,7 @@ impl Seat for Stand {
 
 #[test]
 fn the_hello_is_read_when_the_relay_is_made() {
-    let (_relay, _far, lines) = made(quick());
+    let (_relay, _far, lines) = made(wide());
     assert_eq!(lines.text(), "", "a good hello names nothing");
 }
 
@@ -343,7 +356,7 @@ fn no_hello_within_its_bound_refuses_the_making() {
 fn a_loop_that_closes_before_its_hello_refuses_the_making() {
     let (near, far) = pair();
     drop(far);
-    let refused = LoopRelay::make_bounded(near, DIGEST, Lines::default(), quick()).err();
+    let refused = LoopRelay::make_bounded(near, DIGEST, Lines::default(), wide()).err();
     assert_eq!(
         refused.map(|r| r.reason).as_deref(),
         Some("the loop's end of the pair closed")
@@ -371,7 +384,7 @@ fn verdict_of(case: &Value) -> String {
         let (near, far) = pair();
         far.send_bytes(&bytes);
         let lines = Lines::default();
-        return match LoopRelay::make_bounded(near, DIGEST, lines.clone(), quick()) {
+        return match LoopRelay::make_bounded(near, DIGEST, lines.clone(), wide()) {
             Ok(_) if lines.text().is_empty() => "valid".to_string(),
             Ok(_) => format!("made, but said {}", lines.text()),
             Err(refused) if lines.text() == format!("{HELLO_PREFIX}{}\n", refused.reason) => {
@@ -380,7 +393,7 @@ fn verdict_of(case: &Value) -> String {
             Err(refused) => format!("refused {refused:?}, but said {}", lines.text()),
         };
     }
-    let (mut relay, far, lines) = made(quick());
+    let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
     let goes_on = case["verdict"] == "valid" && case["ends"] != json!(true);
     let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
@@ -439,7 +452,7 @@ const RECALLED: &str = r#"[{"kind": "message.user", "run": "r-1", "turn": "t-2",
 
 #[test]
 fn each_listed_ask_reaches_its_seat_call_and_returns_its_value() {
-    let (mut relay, far, lines) = made(quick());
+    let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
     let script = [
         ("seated", ""),
@@ -499,7 +512,7 @@ fn each_listed_ask_reaches_its_seat_call_and_returns_its_value() {
 
 #[test]
 fn a_seat_that_answers_nothing_returns_null() {
-    let (mut relay, far, _lines) = made(quick());
+    let (mut relay, far, _lines) = made(wide());
     let mut seat = stand();
     seat.fullness = None;
     seat.flush = None;
@@ -554,7 +567,7 @@ fn the_turns_own_result_reaches_the_harness_unchanged() {
         Answer::Unlicensed,
         Answer::Lost,
     ] {
-        let (mut relay, far, lines) = made(quick());
+        let (mut relay, far, lines) = made(wide());
         let mut seat = stand();
         seat.answer = answer;
         let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
@@ -592,7 +605,7 @@ fn the_turns_own_result_reaches_the_harness_unchanged() {
 
 #[test]
 fn a_refusal_answers_channel_lost_and_leaves_the_relay_idle() {
-    let (mut relay, far, lines) = made(quick());
+    let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
     let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
         far.frame().expect("the pass");
@@ -613,7 +626,7 @@ fn a_refusal_answers_channel_lost_and_leaves_the_relay_idle() {
 
 #[test]
 fn a_broken_relay_answers_at_once_and_sends_nothing() {
-    let (mut relay, far, lines) = made(quick());
+    let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
     let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
         far.frame().expect("the pass");
@@ -636,7 +649,7 @@ fn a_broken_relay_answers_at_once_and_sends_nothing() {
 
 #[test]
 fn passes_count_up_from_one_and_tags_may_repeat_across_passes() {
-    let (mut relay, far, _lines) = made(quick());
+    let (mut relay, far, _lines) = made(wide());
     let mut seat = stand();
     for pass in 1..=3u64 {
         let (result, opened) = drive(&mut relay, &far, &mut seat, "x", |far| {
@@ -653,7 +666,7 @@ fn passes_count_up_from_one_and_tags_may_repeat_across_passes() {
 
 #[test]
 fn a_tag_used_twice_in_one_pass_is_a_break() {
-    let (mut relay, far, lines) = made(quick());
+    let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
     let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
         far.frame().expect("the pass");
@@ -670,7 +683,7 @@ fn a_tag_used_twice_in_one_pass_is_a_break() {
 
 #[test]
 fn sixty_four_asks_end_a_pass_and_a_sixty_fifth_is_a_break() {
-    let (mut relay, far, lines) = made(quick());
+    let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
     let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
         far.frame().expect("the pass");
@@ -701,7 +714,7 @@ fn sixty_four_asks_end_a_pass_and_a_sixty_fifth_is_a_break() {
 
 #[test]
 fn a_frame_standing_when_a_pass_opens_is_a_break() {
-    let (mut relay, far, lines) = made(quick());
+    let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
     let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
         far.frame().expect("the pass");
@@ -722,8 +735,11 @@ fn a_frame_standing_when_a_pass_opens_is_a_break() {
 
 #[test]
 fn an_end_of_file_standing_when_a_pass_opens_is_a_break() {
-    let (mut relay, far, lines) = made(quick());
+    let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
+    // Shut before the drop: a child another test forks holds a copy of every descriptor
+    // until its exec, and a close alone stands only when the last copy goes.
+    let _ = shutdown(far.end.as_raw_fd(), Shutdown::Both);
     drop(far);
     assert!(lost(&relay.pass(&mut seat, "x")));
     assert_eq!(
@@ -820,7 +836,7 @@ fn a_loop_that_stops_reading_meets_the_bound_in_a_send() {
 
 #[test]
 fn an_end_of_file_inside_a_pass_is_a_break() {
-    let (mut relay, far, lines) = made(quick());
+    let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
     let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
         far.frame().expect("the pass");
@@ -835,12 +851,14 @@ fn an_end_of_file_inside_a_pass_is_a_break() {
 
 #[test]
 fn a_send_to_a_loop_that_has_gone_is_a_break() {
-    let (mut relay, far, lines) = made(quick());
+    let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
     let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
         far.frame().expect("the pass");
-        far.ask(1, 0, "seated", "");
+        // The read side shuts first, so the relay's answer to the ask can only fail: the
+        // scheduler decides nothing.
         let _ = shutdown(far.end.as_raw_fd(), Shutdown::Read);
+        far.ask(1, 0, "seated", "");
     });
     assert!(lost(&result));
     assert_eq!(lines.text(), format!("{PREFIX}a send to the loop failed\n"));
@@ -848,7 +866,7 @@ fn a_send_to_a_loop_that_has_gone_is_a_break() {
 
 #[test]
 fn a_message_past_the_envelope_is_a_break() {
-    let (mut relay, far, lines) = made(quick());
+    let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
     let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
         far.frame().expect("the pass");
@@ -865,7 +883,7 @@ fn a_message_past_the_envelope_is_a_break() {
 
 #[test]
 fn a_recall_past_the_envelope_crosses_to_the_loop_as_a_series() {
-    let (mut relay, far, _lines) = made(quick());
+    let (mut relay, far, _lines) = made(wide());
     let mut seat = stand();
     let content = "y".repeat(200_000);
     seat.recall = Some(vec![Recalled {
@@ -889,7 +907,7 @@ fn a_recall_past_the_envelope_crosses_to_the_loop_as_a_series() {
 
 #[test]
 fn a_turn_past_the_envelope_crosses_from_the_loop_as_a_series() {
-    let (mut relay, far, lines) = made(quick());
+    let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
     let text = "z".repeat(150_000);
     let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
@@ -952,7 +970,7 @@ fn a_series_that_breaks_its_rules_is_a_break() {
 
 #[test]
 fn a_series_whose_frame_has_no_kind_is_a_break() {
-    let (mut relay, far, lines) = made(quick());
+    let (mut relay, far, lines) = made(wide());
     let mut seat = stand();
     let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
         far.frame().expect("the pass");
@@ -969,3 +987,122 @@ fn a_series_whose_frame_has_no_kind_is_a_break() {
 
 // The relay and the Python runner, across the two languages (item 10).
 mod cross;
+
+// ---- The fix round of 2026-11-25 (the Planner's list, points 8 to 11).
+
+#[test]
+fn each_pass_has_its_own_bound_and_none_is_shared_across_passes() {
+    // Each pass waits 600 ms against a 1 s bound, and the two together pass it.
+    let (mut relay, far, lines) = made(Bounds {
+        pass: Duration::from_millis(1000),
+        ..quick()
+    });
+    let mut seat = stand();
+    for pass in 1..=2u64 {
+        let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
+            far.frame().expect("the pass");
+            thread::sleep(Duration::from_millis(600));
+            far.turn(pass, 0, "go");
+        });
+        assert!(result.is_ok(), "pass {pass}: {result:?} {}", lines.text());
+    }
+    assert_eq!(lines.text(), "");
+}
+
+#[test]
+fn a_frame_of_the_relays_own_past_the_total_bound_is_a_break() {
+    let (mut relay, far, lines) = made(wide());
+    let mut seat = stand();
+    seat.recall = Some(vec![Recalled {
+        kind: "message.user".to_string(),
+        run: "r-1".to_string(),
+        turn: None,
+        sequence: "1".to_string(),
+        pairs: vec![("content".to_string(), "x".repeat(DECODE_MESSAGE_BOUND + 1))],
+    }]);
+    let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
+        far.frame().expect("the pass");
+        far.ask(1, 0, "recall", r#","last_turns":4"#);
+    });
+    assert!(lost(&result));
+    assert_eq!(
+        lines.text(),
+        format!("{PREFIX}a frame of the relay's own past the total bound\n")
+    );
+    assert_eq!(far.raw(200), None, "nothing of the frame was sent");
+}
+
+#[test]
+fn a_read_that_fails_is_a_break() {
+    // A loop that closes its end with the pass frame unread leaves the relay's read an
+    // error (ECONNRESET on a Unix pair), not an end of file.
+    let (mut relay, far, lines) = made(wide());
+    let mut seat = stand();
+    let closer = thread::spawn(move || {
+        let mut fds = [PollFd::new(far.end.as_fd(), PollFlags::POLLIN)];
+        poll(&mut fds, 3000u16).expect("the pass arrives");
+        drop(far);
+    });
+    let result = relay.pass(&mut seat, "x");
+    closer.join().unwrap();
+    assert!(lost(&result));
+    assert_eq!(
+        lines.text(),
+        format!("{PREFIX}a read from the loop failed\n")
+    );
+}
+
+#[test]
+fn a_series_whose_slices_do_not_sum_to_its_preamble_is_a_break() {
+    let series =
+        "a frame with no kind that is not a segment preamble, or a series that breaks its rules";
+    for (name, preamble, slices) in [
+        (
+            "slices summing past the preamble",
+            r#"{"segments":2,"bytes":100000}"#,
+            vec![MAX_ENVELOPE_BYTES, MAX_ENVELOPE_BYTES],
+        ),
+        (
+            "slices summing under the preamble, the count kept",
+            r#"{"segments":2,"bytes":100000}"#,
+            vec![MAX_ENVELOPE_BYTES, 1000],
+        ),
+        (
+            "a preamble naming more than 8 MiB",
+            r#"{"segments":129,"bytes":8388609}"#,
+            vec![MAX_ENVELOPE_BYTES],
+        ),
+    ] {
+        let (mut relay, far, lines) = made(wide());
+        let mut seat = stand();
+        let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
+            far.frame().expect("the pass");
+            far.send(preamble);
+            for size in &slices {
+                far.send_bytes(&vec![b'x'; *size]);
+            }
+            far.close_after(1500);
+        });
+        assert!(lost(&result), "{name}");
+        assert_eq!(lines.text(), format!("{PREFIX}{series}\n"), "{name}");
+    }
+}
+
+#[test]
+fn a_member_named_twice_among_many_is_found_in_linear_time() {
+    // 40,000 members and the first named again at the end: a check that compares each
+    // member with every earlier one makes some 800 million comparisons.
+    let mut frame = String::from(r#"{"kind":"ask""#);
+    for n in 0..40_000 {
+        frame.push_str(&format!(r#","m{n}":0"#));
+    }
+    frame.push_str(r#","m0":1}"#);
+    let started = Instant::now();
+    let parsed = parse(frame.as_bytes());
+    let took = started.elapsed();
+    assert!(matches!(parsed, Err(Break::Twice)), "{:?}", parsed.err());
+    assert!(
+        took < Duration::from_secs(1),
+        "the check took {took:?} over 40,000 members"
+    );
+}

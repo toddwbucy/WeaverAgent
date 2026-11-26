@@ -12,6 +12,14 @@ or board.ask(name, **arguments), which sends the ask and gives its tag, and
 board.wait(tag), which gives its value. turn and refuse end the pass, and each is sent
 only with no other ask outstanding (the contract's section 3).
 
+The board checks each frame before it sends it, with the relay's own rules. A frame that
+breaks them raises Mistake and is not sent: the runner refuses that pass, and the seam
+stands for the next. Limit is the same for the board's own rules. Refused and Closed are
+the harness's side: a frame it sent that breaks the contract, or its end gone. The board
+keeps the first it meets as board.broken, and after it sends and waits for nothing. The
+runner reads board.broken, not what on_turn raised, so a wire file can neither break the
+seam by raising Refused nor keep it by catching one.
+
 The frames are read strictly (the contract's section 2): a member named twice, an
 integer written with a sign, a fraction or an exponent, NaN and Infinity, and a lone
 surrogate are refused, by this module's own code, since Python's json takes each of
@@ -19,18 +27,26 @@ them. A frame over 64 KiB crosses as the segment series of section 2.4."""
 
 import json
 import socket
+import types
 
 VERSION = "weaver-loop/1"
 ENVELOPE = 64 * 1024
 TOTAL = 8 * 1024 * 1024
 OUTSTANDING = 4
+ASKS_PER_PASS = 64
 INT_MAX = (1 << 64) - 1
 ASKS = ("seated", "turn_context", "first_turn", "fullness", "flush", "recall", "shape", "turn")
-ARGUMENTS = {"flush": ("keep",), "recall": ("last_turns",), "turn": ("delta",)}
+# Read only, so no wire file can loosen the board's own checks between passes.
+ARGUMENTS = types.MappingProxyType({"flush": ("keep",), "recall": ("last_turns",), "turn": ("delta",)})
 
 
 class Refused(Exception):
     """A frame outside the contract. On a frame the harness sent, the seam is broken."""
+
+
+class Mistake(Exception):
+    """A frame the wires would send that breaks the contract, refused before the send.
+    The seam is not broken: the runner refuses the pass."""
 
 
 class Limit(Exception):
@@ -75,16 +91,19 @@ def _constant(written):
 
 
 def _no_surrogates(value):
-    if isinstance(value, str):
-        if any(0xD800 <= ord(c) <= 0xDFFF for c in value):
-            raise Refused("a string holding a lone surrogate")
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            _no_surrogates(key)
-            _no_surrogates(item)
-    elif isinstance(value, list):
-        for item in value:
-            _no_surrogates(item)
+    # A walk with its own stack: nesting deeper than the interpreter's recursion limit
+    # parses in json and must not raise here.
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, str):
+            if any(0xD800 <= ord(c) <= 0xDFFF for c in item):
+                raise Refused("a string holding a lone surrogate")
+        elif isinstance(item, dict):
+            stack.extend(item.keys())
+            stack.extend(item.values())
+        elif isinstance(item, list):
+            stack.extend(item)
 
 
 def read_frame(raw):
@@ -96,9 +115,9 @@ def read_frame(raw):
     try:
         value = json.loads(text, object_pairs_hook=_no_twice, parse_int=_integer,
                            parse_float=Number, parse_constant=_constant)
+        _no_surrogates(value)
     except (ValueError, RecursionError) as e:
         raise Refused("a frame that does not parse as JSON: %s" % e)
-    _no_surrogates(value)
     if not isinstance(value, dict):
         raise Refused("a frame that is not one JSON object")
     return value
@@ -118,8 +137,10 @@ def _exactly(frame, names):
 
 
 def _int(frame, name):
-    if not is_int(frame[name]):
-        raise Refused("the %s frame's %r is not an integer of digits" % (frame["kind"], name))
+    # Read off the wire, a value past the range is already a Number. Built by the wires,
+    # an int may be negative or past 2^64 - 1, so the range is checked here too.
+    if not (is_int(frame[name]) and 0 <= frame[name] <= INT_MAX):
+        raise Refused("the %s frame's %r is no integer of 0 to 2^64 - 1" % (frame["kind"], name))
     return frame[name]
 
 
@@ -271,22 +292,48 @@ class Board:
         self._next_tag = 0
         self._outstanding = []
         self._returned = {}
+        self._asked = 0
+        self._broken = None
 
     def _open(self, number):
         self._pass, self._ended, self._next_tag = number, False, 0
-        self._outstanding, self._returned = [], {}
+        self._outstanding, self._returned, self._asked = [], {}, 0
 
     @property
     def ended(self):
         return self._ended
 
     @property
+    def broken(self):
+        """The harness's breach the board itself met, Refused or Closed, or None."""
+        return self._broken
+
+    def _whole(self):
+        if self._broken is not None:
+            raise Limit("the seam broke: %s" % (self._broken,))
+
+    @property
     def outstanding(self):
         return tuple(self._outstanding)
 
     def _send(self, frame):
-        check_loop_frame(frame, self._pass)
-        send_frame(self._sock, encode(frame))
+        self._whole()
+        # The relay counts every ask of a pass, the turn among them, and breaks at the
+        # sixty-fifth (the contract's section 3).
+        if frame.get("kind") == "ask" and self._asked >= ASKS_PER_PASS:
+            raise Mistake("a sixty-fifth ask in one pass")
+        try:
+            check_loop_frame(frame, self._pass)
+            _no_surrogates(frame)
+        except Refused as e:
+            raise Mistake(str(e)) from None
+        try:
+            send_frame(self._sock, encode(frame))
+        except Closed as e:
+            self._broken = e
+            raise
+        if frame["kind"] == "ask":
+            self._asked += 1
 
     def ask(self, name, **arguments):
         """Send one ask of the closed list and give its tag."""
@@ -296,6 +343,9 @@ class Board:
             raise Limit("turn ends the pass: call board.turn(delta)")
         if len(self._outstanding) >= OUTSTANDING:
             raise Limit("a fifth outstanding ask: wait for one first")
+        own = sorted(set(arguments) & {"kind", "pass", "tag", "ask"})
+        if own:
+            raise Mistake("the ask's own member %r given as an argument" % own[0])
         tag = self._next_tag
         frame = {"kind": "ask", "pass": self._pass, "tag": tag, "ask": name}
         frame.update(arguments)
@@ -307,15 +357,20 @@ class Board:
     def wait(self, tag):
         """The value of an outstanding ask. The harness answers in arrival order, so the
         returns of the asks sent before it are read and kept on the way."""
+        self._whole()
         while tag not in self._returned:
             if tag not in self._outstanding:
                 raise Limit("the tag %r is not outstanding" % (tag,))
-            frame = read_frame(recv_frame(self._sock))
-            if frame.get("kind") != "return":
-                raise Refused("a frame of the kind %r inside a pass" % (frame.get("kind"),))
-            _exactly(frame, ("kind", "pass", "tag", "value"))
-            if _int(frame, "pass") != self._pass or _int(frame, "tag") != self._outstanding[0]:
-                raise Refused("a return for pass %r and tag %r out of order" % (frame["pass"], frame["tag"]))
+            try:
+                frame = read_frame(recv_frame(self._sock))
+                if frame.get("kind") != "return":
+                    raise Refused("a frame of the kind %r inside a pass" % (frame.get("kind"),))
+                _exactly(frame, ("kind", "pass", "tag", "value"))
+                if _int(frame, "pass") != self._pass or _int(frame, "tag") != self._outstanding[0]:
+                    raise Refused("a return for pass %r and tag %r out of order" % (frame["pass"], frame["tag"]))
+            except (Refused, Closed) as e:
+                self._broken = e
+                raise
             self._returned[self._outstanding.pop(0)] = frame["value"]
         return self._returned.pop(tag)
 

@@ -385,30 +385,47 @@ after the fact. Adding a step or a field is a change of this contract.
 - **The loop** holds nothing between passes, and asks for what it needs. A node is a
   pure function of what crossed the socket in its pass: no clock, no randomness, no
   file, no network, no state kept between passes (the rulings of 2026-11-11, section
-  6.3, items 4 and 5). The board client keeps at most four asks outstanding, and sends
-  `turn` and `refuse` with no other ask outstanding.
+  6.3, items 4 and 5). A set of strings has no fixed order between two loads, since each
+  process seeds its string hashing, so a node that iterates over one is not the same
+  function of its pass in the next load. The board client keeps at most four asks
+  outstanding, and sends `turn` and `refuse` with no other ask outstanding. It checks
+  each frame it would send by the rules of sections 2 and 3, and sends none that breaks
+  them.
 - **The runner** reads the wire file once, hashes those bytes, compiles from them and
   not from the path, checks the grammar below, sends the `hello`, and calls
-  `on_turn(board, text)` once per pass.
+  `on_turn(board, text)` once per pass. Where `on_turn` fails (it raises anything, it
+  exits, it returns with its pass open, or the board refuses a frame of its), the runner
+  refuses that pass, and the next pass runs. The harness's breach is told by what the
+  board met, a frame the harness sent that breaks the contract or the end gone, and never
+  by what `on_turn` raised. Then the runner exits 1, whatever the wires did after.
 
-**The wire file's grammar, as what is allowed.** One Python 3 module, UTF-8. At the top
-level it holds only:
+**The wire file's grammar, as what is allowed.** One Python 3 module, UTF-8 whatever a
+coding line names, a leading byte-order mark dropped. At the top level it holds only:
 
 - a docstring.
 - the imports `import weaver_board`, `import json` and `import re`, each whole, with no
   alias and no other module.
 - constants, a name assigned once to a literal: a string, an integer, a float, `True`,
-  `False`, `None`, or a tuple of these.
+  `False`, `None`, or a tuple of these. An integer or a float may carry one leading
+  minus. Nothing else carries a sign: no plus, no second minus, no minus over `True` or
+  `False`.
 - function definitions, with no decorator.
 
-It defines `on_turn(board, text)`. Inside a function there is no `global`, no
-`nonlocal`, no import, no class, and no name among `open`, `exec`, `eval`, `compile`,
-`__import__`, `input`, `globals`, `locals`, `vars`, `getattr`, `setattr` and `delattr`,
-and no attribute name beginning with an underscore. Anything else is refused before the
-file runs, naming the line.
+It defines `on_turn(board, text)`. No name it assigns, defines or takes as an argument
+begins with two underscores. Inside a function there is no `global`, no `nonlocal`, no
+import, no class, no name among `open`, `exec`, `eval`, `compile`, `__import__`,
+`input`, `globals`, `locals`, `vars`, `getattr`, `setattr`, `delattr`, `hash` and `id`,
+no type parameter, no name beginning with two underscores, no attribute name beginning with an underscore,
+no assignment to an attribute or deletion of one, no assignment or deletion by subscript
+into an attribute, and no default argument that is not a literal of the kinds a
+constant may be. Anything else is refused before the file runs, naming the
+line.
 
 **The check helps the author. It is not the boundary.** A syntax check cannot hold a
-determined program. The walls of act 2 (the account, no-new-privs, the limits, the
+determined program. The three modules a wire file may import reach the rest of the
+standard library by attribute (`json.codecs.builtins.open`, for one), so the grammar keeps
+no wire file from a file, from a socket, or from state kept between passes. Keeping the
+rulings of 2026-11-11 is the author's work. The walls of act 2 (the account, no-new-privs, the limits, the
 filter with no new socket, Landlock read-only) are what hold the loop.
 
 ## 8. Conformance: today's loop as wires
@@ -480,12 +497,20 @@ text.
   is read.
 - One budget of 600 bytes, `QUOTE_BOUND`, is shared across the whole recall.
 - `content` is parsed as JSON as `serde_json::from_str::<Value>` parses it at the locked
-  version, 1.0.151. A text it refuses yields no line. Python's `json` module takes more,
+  version, 1.0.151, with the feature `float_roundtrip`, which the harness's own manifest
+  turns on so that a float is read correctly rounded however the worker is built. A text
+  it refuses yields no line. Python's `json` module takes more,
   and each of these is an input of the test: `NaN`, `Infinity` and `-Infinity`, a lone
   surrogate escape, a number past the range of a double (serde refuses it,
   `de.rs`:378-408, :620-634), and nesting 128 levels deep (serde counts down from 128
-  and refuses at 0, `de.rs`:63, :1372-1385, so 127 levels parse and 128 do not, read in
-  the source and unmeasured).
+  and refuses at 0, `de.rs`:63, :1372-1385, so 127 levels parse and 128 do not,
+  measured against `compose`).
+- **The one known difference.** serde_json's `raw_value` is on in every build of the
+  harness, and with it `Value` reads an object whose first member is named
+  `$serde_json::private::RawValue` as that member's string parsed as a fresh document,
+  its nesting counted afresh (`value/de.rs`:131-135). The wires stay plain and read such
+  an object as an object. No text a user types makes a member's name, so no pass of
+  today reaches it, and a test pins each side.
 - A value that is not a list yields no line. An element that is not an object, or has no
   string `text`, is skipped.
 - The budget is checked before each block, and a block met at a budget of 0 is skipped.
