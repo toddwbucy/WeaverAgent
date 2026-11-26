@@ -124,8 +124,10 @@ change.
      run that holds the agent.
 2. **The service answers the opening line before any purpose's exchange begins:** one
    `open` line, or one `refused` line and a close. A refusal of the opening is then a
-   typed line on every purpose, and the trace's own refusal, a close before the header,
-   stays the relay's, after `open`.
+   typed line on every purpose. On a trace connection the service dials the relay
+   before it answers, and where no relay stands or the dial fails it refuses the opening
+   `relay_unreachable`. The trace's own refusal, a close before the header, stays the
+   relay's, after `open`, and is never a relay that was not there.
 3. **The peer admitted is the admin connector's account alone,** by its uid from
    `SO_PEERCRED`, checked at accept. Root is refused too. The operator at a root shell
    runs the root program directly and never needs the socket. A refused peer reads
@@ -191,7 +193,9 @@ events.
 | K0 | V: the peer's uid is the connector's | K1 |
 | K0 | V: any other uid | K9, nothing sent, the service's log names the uid |
 | K0 | V: a bound of section 8.1 is met | K9, `refused` `full` |
-| K1 | C: an opening line that judges | K2, K7 or K8 by its purpose, `open` sent |
+| K1 | C: a control or log opening line that judges | K2 or K8 by its purpose, `open` sent |
+| K1 | C: a trace opening line that judges, and the service's dial of the agent's relay connects | K7, `open` sent |
+| K1 | C: a trace opening line that judges, where no relay stands or the service's dial of it fails | K9, `refused` `relay_unreachable` |
 | K1 | C: an unknown version or purpose, a refused name, or an unread log | K9, `refused` with its word |
 | K1 | C: a line past 4096 bytes, one that does not parse, or a version that is not a positive integer | K9, `refused` `opening_malformed` |
 | K1 | V: a newer trace or log connection of the agent is opened | K9, closed |
@@ -218,6 +222,7 @@ events.
 | K6 | V: machine A read | K2, `run` |
 | K6 | C: close | K9 |
 | K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run started goes on |
+| K7 | the relay: a close before any header byte | K9, the connector's side closed. It is the relay's refusal of the position |
 | K7 | C or the relay: either side closes | K9, the other side closed |
 | K7 | V: a newer trace connection of the agent is opened | K9, closed |
 | K8 | V: a line appended | K8, `log` with `line` or `text`, or the `oversized` marker past 8 KiB |
@@ -264,7 +269,8 @@ events.
 - **S6.** Every ask gets exactly one final line, or the connection closes. A verb's
   `started` comes before its final line.
 - **S7.** After `open` on a trace connection, the bytes each way are the relay's,
-  unchanged.
+  unchanged. `open` is sent only once the relay's dial has connected, so a close there
+  before any header byte is the relay's refusal of the position alone.
 - **S8.** A refusal of the service's own is a `refused` line, never inside the root
   program's object and never an exit code. A refusal of the root program's is inside its
   object, at exit 1, carried untouched.

@@ -654,6 +654,7 @@ log connection `log_behind` and `ask_malformed` close it.
 | `purpose_unknown` | opening | the purpose is not on the list of the version named. The answer names `purposes` |
 | `name_refused` | opening | the name fails the root program's rule |
 | `log_unread` | opening | the purpose is `log`, and the agent's `admin.log` cannot be opened or judged (section 8.6) |
+| `relay_unreachable` | opening | the purpose is `trace`, and no relay of the agent stands to dial, or the service's dial of it fails (section 8.5) |
 | `full` | opening | the connection is past a bound of section 8.1. Sent before the opening line is read |
 | `ask_unknown` | control | the ask's member is not an ask of the version opened. The connection stands, so a newer connector reads it as "not here yet" |
 | `ask_malformed` | control, log | a line past 4096 bytes, one that does not parse, an ask whose body names `length`, a principal of another shape, or any byte sent on a log connection |
@@ -786,15 +787,21 @@ On a trace connection, after `open`, the bytes each way are the relay's wire of
 relay's header, the trace's own lines byte for byte, its heartbeats while idle, and
 `truncated` before the end. **The service is the relay's one declared reader in act
 one**: the boundary file's `trace-reader` names the weaver-admin account, and the relay
-judges the service's uid as it judges any reader's. The service dials the agent's relay
-when it sends `open` and copies the bytes each way until either side closes, then
-closes the other. **A refusal is the relay's own, a close before any header byte**, and
-where no relay stands to dial (a pipe or socket sink, or a relay that has died) the
-service closes the same way, which the connector reads as the same refusal. The newest
-connection replaces the old at the relay, as section 2 states, so the service closes
-the older splice when the relay ends it. The request's bound is the relay's: 4096 bytes
-with its newline, within 5 seconds, which the connector meets by sending it at once
-after `open`.
+judges the service's uid as it judges any reader's.
+
+- **The service dials the agent's relay before it answers the opening line**, and sends
+  `open` only once that dial has connected. It then copies the bytes each way until
+  either side closes, and closes the other.
+- **Where no relay stands to dial** (a pipe or socket sink, or a relay that has died), or
+  the dial fails, the opening is refused `relay_unreachable` in place of `open`. The
+  connector reads it as a closed door, as it reads a failed dial of the relay today.
+- **After `open`, a close before any header byte is the relay's refusal alone**, its
+  verdict on the position the request named.
+- The newest connection replaces the old at the relay, as section 2 states, so the
+  service closes the older splice when the relay ends it.
+- The request's bound is the relay's: 4096 bytes with its newline, within 5 seconds of
+  the relay's accept. The service's dial comes before `open`, so the connector sends
+  the request at once after `open`.
 
 ### 8.6 The log
 
@@ -883,7 +890,9 @@ the M events.
 | K0 | V: the peer's uid is the connector's | K1 |
 | K0 | V: any other uid | K9, nothing sent, the service's log names the uid |
 | K0 | V: a bound of section 8.1 is met | K9, `refused` `full` |
-| K1 | C: an opening line that judges | K2, K7 or K8 by its purpose, `open` sent |
+| K1 | C: a control or log opening line that judges | K2 or K8 by its purpose, `open` sent |
+| K1 | C: a trace opening line that judges, and the service's dial of the agent's relay connects | K7, `open` sent |
+| K1 | C: a trace opening line that judges, where no relay stands or the service's dial of it fails | K9, `refused` `relay_unreachable` |
 | K1 | C: an unknown version or purpose, a refused name, or an unread log | K9, `refused` with its word |
 | K1 | C: a line past 4096 bytes, one that does not parse, or a version that is not a positive integer | K9, `refused` `opening_malformed` |
 | K1 | V: a newer trace or log connection of the agent is opened | K9, closed |
@@ -910,6 +919,7 @@ the M events.
 | K6 | V: machine A read | K2, `run` |
 | K6 | C: close | K9 |
 | K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run started goes on |
+| K7 | the relay: a close before any header byte | K9, the connector's side closed. It is the relay's refusal of the position |
 | K7 | C or the relay: either side closes | K9, the other side closed |
 | K7 | V: a newer trace connection of the agent is opened | K9, closed |
 | K8 | V: a line appended | K8, `log` with `line` or `text`, or the `oversized` marker past 8 KiB |
@@ -954,7 +964,8 @@ the M events.
 - **S6.** Every ask gets exactly one final line, or the connection closes. A verb's
   `started` comes before its final line.
 - **S7.** After `open` on a trace connection, the bytes each way are the relay's,
-  unchanged.
+  unchanged. `open` is sent only once the relay's dial has connected, so a close there
+  before any header byte is the relay's refusal of the position alone.
 - **S8.** A refusal of the service's own is a `refused` line, never inside the root
   program's object and never an exit code. A refusal of the root program's is inside its
   object, at exit 1, carried untouched.
@@ -992,7 +1003,8 @@ of the connector account's, and can:
   verb it ran with its principal.
 - drop a control connection while a verb runs, and answer a later `run` with that run
   standing or ended.
-- on a trace connection, do what a relay does: verify the position by its digest,
+- on a trace connection, refuse the opening `relay_unreachable` as where no relay
+  stands, and after `open` do what a relay does: verify the position by its digest,
   refuse by closing before the header, name `length`, send heartbeats while idle, send
   `truncated` then end, and let the newest connection replace the old.
 - on a log connection, send scripted lines with their flag, markers, and `log_behind`,
