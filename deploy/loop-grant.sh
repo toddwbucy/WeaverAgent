@@ -117,19 +117,40 @@ loop_standing_refusal() {
 }
 
 # loop_placing_refusal: a refusal on standard output where LOOP_DIR or
-# LOOP_PYCACHE does not stand and would be made under a directory another
-# principal can make a name in, nothing otherwise. **Each is a new name in the
-# prefix's lib folder**, judged at the nearest directory that stands as the
-# scripts judge every other folder they make: held closed by admin's rule, and
-# writable by no group or other even where sticky, since the sticky bit keeps
-# another principal from renaming an entry it does not own but not from
-# claiming a name that does not exist yet, which root's `install -d` would then
-# follow. One that stands is loop_standing_refusal's to judge. Needs the
-# caller's held_closed. Read without privilege.
+# LOOP_PYCACHE is not placed where only root could have placed it, nothing
+# otherwise. Both cases are judged. **One that stands** must be root's,
+# writable by no group or other, and held closed above it by admin's rule: one
+# another principal made first, its own, holds whatever that principal put in
+# it, and root's `install -d` would only take it over, so it refuses before
+# anything is computed or moved. **One that does not stand is a new name in
+# the prefix's lib folder**, judged at the nearest directory that stands as
+# the scripts judge every other folder they make: held closed by admin's rule,
+# and writable by no group or other even where sticky, since the sticky bit
+# keeps another principal from renaming an entry it does not own but not from
+# claiming a name that does not exist yet, which root's `install -d` would
+# then follow. A link or a file at either name is loop_standing_refusal's,
+# which the scripts ask first. Needs the caller's held_closed. Read without
+# privilege.
 loop_placing_refusal() {
-  local placed at bad mode
+  local placed at bad mode owner
   for placed in "$LOOP_DIR" "$LOOP_PYCACHE"; do
-    if [ -e "$placed" ] || [ -L "$placed" ]; then continue; fi
+    if [ -e "$placed" ] || [ -L "$placed" ]; then
+      read -r owner mode < <(stat -c '%u %a' -- "$placed" 2>/dev/null) \
+        || { printf 'the owner and mode of %s cannot be read' "$placed"; return 0; }
+      if [ "$owner" != 0 ]; then
+        printf '%s stands as uid %s, not root, so another principal made it and what it holds is not the install'"'"'s: remove it by hand, then rerun' "$placed" "$owner"
+        return 0
+      fi
+      if (( 8#$mode & 8#022 )); then
+        printf '%s stands with mode %s, which its group or others can write in: remove it by hand, then rerun' "$placed" "$mode"
+        return 0
+      fi
+      if ! bad=$(held_closed "$(dirname -- "$placed")"); then
+        printf '%s stands under %s, which is not held closed by root' "$placed" "$bad"
+        return 0
+      fi
+      continue
+    fi
     at=$(dirname -- "$placed")
     while [ ! -e "$at" ]; do at=$(dirname -- "$at"); done
     if ! bad=$(held_closed "$at"); then

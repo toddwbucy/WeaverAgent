@@ -779,9 +779,11 @@ if 'FIXTURE_ROOT' not in os.environ:
     if settings.exists(): os.environ.update(json.loads(settings.read_text()))
 root = pathlib.Path(os.environ['FIXTURE_ROOT'])
 def owner(path, st):
-    """uid 0 under the fixture, STRANGER_UID for any other path the tests
+    """uid 0 under the fixture but the paths STRANGERS names (a list joined
+    by colons), STRANGER_UID for those and for any other path the tests
     made, and the file's own owner elsewhere, so a stranger's file is never
     read as root's when the suite runs as root (Codex on #599)."""
+    if str(path) in os.environ.get('STRANGERS', '').split(':'): return @STRANGER_UID@
     if path.is_relative_to(root): return 0
     if path != pathlib.Path('@TEST_ROOT@') and path.is_relative_to('@TEST_ROOT@'): return @STRANGER_UID@
     return st.st_uid
@@ -6100,6 +6102,81 @@ esac
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn("could claim the missing name first", result.stderr)
         self.assertFalse((self.lib_dir / "weaver-loop").exists())
+
+    def test_a_loop_folder_that_stands_is_judged_by_its_owner_its_mode_and_what_holds_it(self):
+        """**A loop folder that stands is judged too** (review of #655,
+        finding 5): one another principal made first, its own, holds what
+        that principal planted, and root's `install -d` would only take it
+        over. So a loop folder or pycache folder that stands must be root's,
+        writable by no group or other, and held closed above it, or the plan
+        refuses before anything is computed or moved. A stranger's folder is
+        modelled by the stand-in's `stat`, which answers STRANGER_UID for
+        each path STRANGERS names. Perturbations: drop the owner's look, the
+        mode's, or the held-closed look above, and its row goes on."""
+        prefix = self.root / "installed"
+        folder = prefix / "lib" / "weaver-loop"
+        pycache = prefix / "lib" / "weaver-loop-pycache"
+        rows = (
+            ("the folder a stranger's", folder, {"STRANGERS": str(folder)}, None,
+             f"{folder} stands as uid {STRANGER_UID}, not root"),
+            ("the pycache folder a stranger's", pycache, {"STRANGERS": str(pycache)}, None,
+             f"{pycache} stands as uid {STRANGER_UID}, not root"),
+            ("the folder group-writable", folder, {}, 0o775,
+             f"{folder} stands with mode 775, which its group or others can write in"),
+            ("the folder writable by others", folder, {}, 0o757,
+             f"{folder} stands with mode 757, which its group or others can write in"),
+            ("the pycache folder group-writable", pycache, {}, 0o775,
+             f"{pycache} stands with mode 775, which its group or others can write in"),
+        )
+        for label, spoiled, env, mode, said in rows:
+            with self.subTest(row=label):
+                shutil.rmtree(folder, ignore_errors=True)
+                shutil.rmtree(pycache, ignore_errors=True)
+                shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+                folder.mkdir(parents=True, mode=0o755)
+                pycache.mkdir(mode=0o755)
+                folder.chmod(0o755)
+                pycache.chmod(0o755)
+                planted = folder / "planted.py"
+                planted.write_text("planted\n")
+                if mode is not None:
+                    spoiled.chmod(mode)
+                self.log.unlink(missing_ok=True)
+                saved = dict(self.env)
+                self.env.update(env)
+                try:
+                    result = self.run_script("update-stack.sh", "--install")
+                finally:
+                    self.env.clear()
+                    self.env.update(saved)
+                    spoiled.chmod(0o755)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(said, result.stderr)
+                self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
+                self.assertEqual(sorted(p.name for p in folder.iterdir()), ["planted.py"])
+        # **Held closed above it.** Both stack scripts refuse a lib folder that
+        # is not held closed before this look (the record's library-path), so
+        # the helper is driven alone: root's folders of mode 755, a held_closed
+        # that refuses the folder above, and then one that admits it.
+        with tempfile.TemporaryDirectory() as d:
+            for held, said in (("printf %s \"$1\"; return 1", f"{d}/weaver-loop stands under {d}, which is not held closed by root"),
+                               ("return 0", "")):
+                program = (f"source {shlex.quote(str(self.repo / 'deploy' / 'loop-grant.sh'))}\n"
+                           "stat() { echo '0 755'; }\n"
+                           f"held_closed() {{ {held}; }}\n"
+                           f"LOOP_DIR={shlex.quote(d)}/weaver-loop LOOP_PYCACHE={shlex.quote(d)}/weaver-loop-pycache\n"
+                           'mkdir -p "$LOOP_DIR" "$LOOP_PYCACHE"\n'
+                           "loop_placing_refusal\n")
+                run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+                self.assertEqual((run.returncode, run.stderr), (0, ""))
+                self.assertEqual(run.stdout, said)
+        # The control: the same folders, root's and closed, go on to the install.
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        (folder / "planted.py").unlink()
+        self.log.unlink(missing_ok=True)
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((folder / "grant").read_text(), self.loop_grant(prefix))
 
     def test_a_rollback_puts_the_loop_runner_back(self):
         """**The loop runner's files go back as the binaries do**: a runner
