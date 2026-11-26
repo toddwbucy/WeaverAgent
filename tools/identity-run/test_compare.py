@@ -399,6 +399,28 @@ class TheRun(unittest.TestCase):
         self.assertEqual(code, compare.FAILS, body)
         self.assertIn("holds 3 loads where the script makes 6", body["reason"])
 
+    def test_a_run_over_nothing_fails(self):
+        for row, keep in (("no load and no save point", lambda e: e["kind"] not in ("load", "save_point")),
+                          ("no save point", lambda e: e["kind"] != "save_point")):
+            with self.subTest(row=row):
+                events = {}
+                for arm, tag in (("c1", "a"), ("c2", "b"), ("w", "w"), ("n", "n")):
+                    made = remint(fixture(), tag)
+                    if arm in ("w", "n"):
+                        made = set_composer(made, wires_composer(WIRES_SHA if arm == "w" else NEGATIVE_SHA))
+                    if arm == "n":
+                        made = change_system_prompt(made)
+                    events[arm] = [e for e in made if keep(e)]
+                loads = sum(1 for e in events["c1"] if e["kind"] == "load")
+                code, body = self.run_on(self.arms(c1=events["c1"], c2=events["c2"], wires=events["w"],
+                                                   negative=events["n"],
+                                                   write={a: {"loads": loads} for a in ("c1", "c2", "w", "n")}))
+                self.assertEqual(code, compare.FAILS, body)
+                self.assertIn("holds no load or no save point", body["reason"])
+        # A record with no event at all is no record.
+        code, body = self.run_on(self.arms(c1=[], c2=[], wires=[], negative=[]))
+        self.assertEqual(code, compare.UNREADABLE, body)
+
     def test_the_compiled_arms_and_the_wires_arm_must_send_one_count_of_turns(self):
         for arm in ("c1", "c2", "w"):
             with self.subTest(arm=arm):

@@ -384,6 +384,9 @@ def run(folders):
         return answer(UNCLEAN, arms=dirty,
                       reason="an arm holds a timing path outside the comparison: run it again, at most three times")
     for arm in arms:
+        if not loads(arm) or not any(e["kind"] == "save_point" for e in arm["events"]):
+            return answer(FAILS, reason="%s holds no load or no save point, so the run would compare nothing"
+                          % arm["folder"])
         if len(loads(arm)) != arm["meta"]["loads"]:
             return answer(FAILS, reason="%s holds %d loads where the script makes %d"
                           % (arm["folder"], len(loads(arm)), arm["meta"]["loads"]))
