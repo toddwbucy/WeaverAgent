@@ -734,7 +734,14 @@ agent stands, in which case it is refused `busy`, the answer naming that run's i
 `show` starts beside any run**, since the root program's `show` alone reads beside a
 holder, and it holds the agent for no other ask. **A `force-unload` asked while an
 `unload` of the same agent stands is started beside it.** The grant is read before this
-rule, so a verb not granted is `not_granted` whatever stands.
+rule, so a verb not granted is `not_granted` whatever stands. The refusal:
+
+```json
+{"refused":{"word":"busy","detail":"...","run":"0123456789abcdef"}}
+```
+
+`run` is the 16 hex digits of the run that holds the agent, the one its `started` line
+named, and the `unload` where an `unload` and a `force-unload` stand.
 
 **A run started is named, then answered.** Once the root program is running, the
 service sends `{"started":{"run":"<16 hex>"}}`, the run's id drawn by the service. A
