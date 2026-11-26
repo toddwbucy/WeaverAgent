@@ -109,7 +109,7 @@ ASKS=(
     "Describe how a seed becomes a plant."
 )
 
-STEP=0 LOADS=0 TURN_IN_LOAD=0 TURNS_TO_LOOP=0 ASKED=0 LOADED=0 TERRITORY= TRACE=
+STEP=0 LOADS=0 TURN_IN_LOAD=0 TURNS_TO_LOOP=0 ASKED=0 LOADED=0 TERRITORY= TRACE= TAKING_DOWN=0
 step() { STEP=$((STEP + 1)); printf '\n== step %d: %s\n' "$STEP" "$*"; }
 shown() { printf '+'; printf ' %q' "$@"; printf '\n'; }
 act() { shown "$@"; [ "$APPLY" = 1 ] || return 0; "$@"; }
@@ -117,6 +117,12 @@ act() { shown "$@"; [ "$APPLY" = 1 ] || return 0; "$@"; }
 fail() {
     printf '\nFAILED at step %d: %s\n' "$STEP" "$*"
     [ "$APPLY" = 1 ] || exit 1
+    # The take-down removes piece by piece and stops at the first step that fails:
+    # what it removed stays removed, and its STOPPED line names that step.
+    if [ "$TAKING_DOWN" = 1 ]; then
+        printf 'the take-down stopped partway: its STOPPED line above names the step, the arm is copied to %s and the archive is %s/archive. Finish by hand by deploy/HowToDeployANewAgent.md section 7\n' "$OUT" "$OUT"
+        exit 1
+    fi
     if [ "$LOADED" = 1 ]; then
         timeout "$LOAD_BOUND" "$ADMIN" unload "$AGENT" || true
     fi
@@ -336,6 +342,7 @@ unload
 
 copy_out
 step "take the arm's agent off the appliance, the stack left standing"
+TAKING_DOWN=1
 act "$HERE/take-down.sh" --agent "$AGENT" --archive "$OUT/archive" --admin "$ADMIN" --apply || fail "the take-down"
 printf '\nidentity run, %s arm: done, %d loads, %s turns to the loop\n' "$ARM" "$LOADS" \
     "$([ "$APPLY" = 1 ] && echo "$TURNS_TO_LOOP" || echo "$TURNS_TO_LOOP (plan: before the pressure turns)")"
