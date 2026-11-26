@@ -33,8 +33,9 @@ and a proven connection to a classifier on the SPU,
 `weaver-harness-spu-classify-contract`. Neither holds an opinion about what is stored,
 how it is judged, or why. The operator's side is the schema, which is enforcement by
 construction, what violates it having nowhere to land, and the loop, which is purpose.
-**The loop is state management**, per apex section 5.5: one loop, written in Rust and
-compiled into the worker, calling on this crate and on the classifier through the
+**The loop is state management**, per apex section 5.5: the compiled loop, written in
+Rust and compiled into the worker, or a loop laid in the agent's loop folder in its
+place, calling on this crate and on the classifier through the
 harness, organs never linking.
 
 **The store is an in-memory embedded SQLite in this member's own process.** One

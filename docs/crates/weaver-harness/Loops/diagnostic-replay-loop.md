@@ -35,7 +35,8 @@ port, per `weaver-harness-Spec` section 6.
 
 **It is no exception to the one deployed loop**, per the operator's rulings of
 2026-10-02 on issue #1. The loop an agent serves under is state management, compiled
-into the worker, and nothing elects another. This loop is not elected either: it is what
+into the worker, or the loop laid in the agent's loop folder in its place, and no
+declaration elects either. This loop is not elected: it is what
 a diagnostic binding runs, the binding's kind selecting it at the load, and it manages
 no state, re-executing a finished record rather than composing a new one. The Python
 loop route and `loop-file` retire on the ruling of 2026-10-20 (#180).

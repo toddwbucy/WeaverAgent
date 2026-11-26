@@ -2404,9 +2404,11 @@ fails it: push the compiled prompt unconditionally, read the assembled identity,
 `prefix_tokens`.
 
 **The loop these ports serve is state management**, per the operator's rulings of
-2026-10-02 on issue #1 and `weaver-agent-PRD` section 5.5. **One loop is deployed, the
-Rust loop compiled into the worker under `dev_loop`**, developed and tested through
-the same Rust surface as section 1 states. No declaration elects another loop.
+2026-10-02 on issue #1 and `weaver-agent-PRD` section 5.5. **The compiled loop is the
+Rust loop compiled into the worker under `dev_loop`**, developed and tested through the
+same Rust surface as section 1 states, and it runs where no loop is laid. A loop laid in
+the agent's loop folder runs in its place and reaches these ports through the same seat,
+by the relay of section 2.5. No declaration elects a loop.
 The ports above are the loop's whole reach into the store and the classifier, so state
 management composes against the same granted surface as every loop and mints nothing.
 **Its opinions are settings in the declaration's `[state-management]` table**, each with

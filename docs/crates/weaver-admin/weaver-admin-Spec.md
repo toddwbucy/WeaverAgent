@@ -4347,9 +4347,13 @@ perturbation-verified:
   no folder is no loop, a row per piece out of its shape, another owner or group, the wire
   file grouped to another of the test uid's groups (skipped, naming why, where it holds
   one), the bound pinned at 256 KiB, the election naming the file with the digest of
-  `abc` the standard gives, and a change read at the next judgment alone. The wire
-  file's owner has no row of its own: it needs a second uid. `only_a_serving_binding_looks_for_the_loop` in
-  `src/tests.rs` watches the binding's guard. The perturbation drops any one check, and
+  `abc` the standard gives, and a change read at the next judgment alone. Neither
+  `loop/`'s owner nor the wire file's has a row of its own: each needs a second uid, and
+  the row for another owner ends at the agent's folder, so neither check is reached
+  there. Both are unmeasured on the build machine and are root's steps on an agent
+  appliance (`tools/identity-run/PROCEDURE.md` section 2).
+  `only_a_serving_binding_looks_for_the_loop` in `src/tests.rs` watches the binding's
+  guard. The perturbation drops any one check, and
   its row is admitted.
 - **The lock stands where the agent cannot replace it**, watched by the agent's uid
   trying to unlink and recreate `run.lock`: refused by the root-owned run directory.
