@@ -917,6 +917,24 @@ fn the_start_stands_the_loop_or_refuses_naming_it() {
             arm.stop(None);
         }
     }
+    // A grant file named in bytes that are not UTF-8 is the launch's own
+    // configuration, refused `ConfigInvalid` naming `loop` before any fork,
+    // not the fork's `BindFailed`.
+    let (mut run, _spare, _sink) = entered_run(None);
+    let launch = crate::loop_arm::LoopLaunch {
+        launcher: launch.launcher.clone(),
+        grant: std::path::PathBuf::from(
+            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"/grant-\xff"),
+        ),
+    };
+    let election = weaver_types::WiresElection {
+        file: wires.into(),
+        sha256,
+    };
+    // SAFETY: on this test's thread; no fork is reached.
+    let started = unsafe { start_loop(&mut run, &launch, &election) };
+    assert_eq!(started, Err(loop_refused), "a grant path not in UTF-8");
+    assert!(run.loop_arm.is_none());
 }
 
 /// A seat recording each turn's text, answering a refusal no relay makes.

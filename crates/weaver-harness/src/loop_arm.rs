@@ -51,8 +51,11 @@ pub struct LoopLaunch {
 /// the runner's own line where one was said.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StartRefused {
-    /// The pair or the pipe could not be made, an argument held a NUL or was
-    /// not UTF-8, or the fork failed.
+    /// The launch's own configuration does not stand before any fork: the
+    /// grant file's path is not UTF-8.
+    Config(String),
+    /// The pair or the pipe could not be made, an argument held a NUL, or the
+    /// fork failed.
     Fork(String),
     /// The child started and no `hello` the relay accepts arrived.
     Hello {
@@ -100,7 +103,7 @@ impl LoopArm {
         let utf8 = |path: &std::path::Path, what: &str| {
             path.to_str()
                 .map(str::to_owned)
-                .ok_or_else(|| StartRefused::Fork(format!("the {what} is not named in UTF-8")))
+                .ok_or_else(|| StartRefused::Config(format!("the {what} is not named in UTF-8")))
         };
         let arguments = [utf8(&launch.grant, "grant file")?, wires.file.clone()];
         // **Both ends close on exec from their creation**, as every organ

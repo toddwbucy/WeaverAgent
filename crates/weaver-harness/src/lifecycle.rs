@@ -3084,7 +3084,8 @@ fn leave(
 /// `weaver-harness-Spec` section 2.5, or name why it did not start: a fork
 /// that failed refuses `BindFailed`, and a launcher that refused, a runner
 /// that did not start, or a `hello` that was not the one expected refuses
-/// `ConfigInvalid` naming `loop`, the child killed and reaped. Either way the
+/// `ConfigInvalid` naming `loop`, the child killed and reaped, as does a grant
+/// path that is not UTF-8, before any fork. Either way the
 /// worker's standard error carries one line naming the reason, the launcher's
 /// and the grant file's paths, and, where one was said, the launcher's or the
 /// runner's last line, so a launcher or a grant that does not stand is named.
@@ -3115,6 +3116,21 @@ unsafe fn start_loop(
                 })
             );
             Err(LifecycleRefusal::BindFailed)
+        }
+        Err(crate::loop_arm::StartRefused::Config(reason)) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "organ": "harness",
+                    "loop": "refused",
+                    "reason": reason,
+                    "launcher": launch.launcher.display().to_string(),
+                    "grant": launch.grant.display().to_string(),
+                })
+            );
+            Err(LifecycleRefusal::ConfigInvalid {
+                field: Some(weaver_types::FieldName("loop".into())),
+            })
         }
         Err(crate::loop_arm::StartRefused::Hello { reason, last_word }) => {
             eprintln!(
