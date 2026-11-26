@@ -132,9 +132,12 @@ change.
    seconds of the opening line, the log's judging and the relay's dial included, each
    cut off at 8 seconds so a refusal arrives in time. A refusal of the opening is then a
    typed line on every purpose. On a trace connection the service dials the relay before
-   it answers, and where no relay stands or the dial fails it refuses the opening
-   `relay_unreachable`. The trace's own refusal, a close before the header, stays the
-   relay's, after `open`, and is never a relay that was not there.
+   it answers and sends `open` within 1 second of the dial's connect. Where no relay
+   stands, the dial fails or that second passes, it refuses the opening
+   `relay_unreachable`. The connector sends its request within 1 second of reading
+   `open`, inside the relay's 5 seconds from its accept. The trace's own refusal, a
+   close before the header, stays the relay's, after `open`, and is never a relay that
+   was not there.
 3. **The peer admitted is the admin connector's account alone,** by its uid from
    `SO_PEERCRED`, checked at accept. Root is refused too. The operator at a root shell
    runs the root program directly and never needs the socket. A refused peer reads
@@ -209,8 +212,8 @@ events.
 | K0 | V: any other uid | K9, nothing sent, the service's log names the uid |
 | K0 | V: a bound of section 8.1 is met | K9, `refused` `full` |
 | K1 | C: a control or log opening line that judges | K2 or K8 by its purpose, `open` sent |
-| K1 | C: a trace opening line that judges, and the service's dial of the agent's relay connects | K7, `open` sent |
-| K1 | C: a trace opening line that judges, where no relay stands or the service's dial of it fails | K9, `refused` `relay_unreachable` |
+| K1 | C: a trace opening line that judges, and the service's dial of the agent's relay connects | K7, `open` sent within 1 second of the connect |
+| K1 | C: a trace opening line that judges, where no relay stands, the service's dial of it fails, or `open` cannot be sent within 1 second of the connect | K9, `refused` `relay_unreachable`, a dialed connection closed |
 | K1 | C: close, while the service dials the relay | K9. The dialed connection is closed, before it sends the relay any byte |
 | K1 | C: an unknown version or purpose, a refused name, or an unread log | K9, `refused` with its word |
 | K1 | C: a line past 4096 bytes, one that does not parse, or a version that is not a positive integer | K9, `refused` `opening_malformed` |
@@ -289,8 +292,9 @@ events.
 - **S6.** Every ask gets exactly one final line, or the connection closes. A verb's
   `started` comes before its final line.
 - **S7.** After `open` on a trace connection, the bytes each way are the relay's,
-  unchanged. `open` is sent only once the relay's dial has connected, so a close there
-  before any header byte is the relay's refusal of the position alone.
+  unchanged. `open` is sent only once the relay's dial has connected, and within 1
+  second of the connect, so a close there before any header byte is the relay's refusal
+  of the position alone.
 - **S8.** A refusal of the service's own is a `refused` line, never inside the root
   program's object and never an exit code. A refusal of the root program's is inside its
   object, at exit 1, carried untouched.

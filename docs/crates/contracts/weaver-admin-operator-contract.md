@@ -642,7 +642,9 @@ most 4096 bytes with its newline and within 10 seconds of the opening line's arr
 That time holds the log's judging of section 8.6 and the relay's dial of section 8.5.
 Each is cut off 8 seconds after the opening line, and one not done by then is refused
 `log_unread` or `relay_unreachable`, so the refusal itself arrives within the 10
-seconds. Either
+seconds. A trace's `open` follows its dial's connect within 1 second (section 8.5), so a
+dial that connects by the 8 seconds is answered, `open` or `relay_unreachable`, within 9
+seconds of the opening line. Either
 `{"open":{"version":1,"instance":"<16 hex>"}}`, and the purpose's exchange follows, or
 one `refused` line and the close. `instance` is drawn by the service at each start of
 its own and names that start (section 8.4):
@@ -843,7 +845,9 @@ one**: the boundary file's `trace-reader` names the weaver-admin account, and th
 judges the service's uid as it judges any reader's.
 
 - **The service dials the agent's relay before it answers the opening line**, and sends
-  `open` only once that dial has connected. It then copies the bytes each way until
+  `open` only once that dial has connected, **within 1 second of the connect**. A
+  service that cannot send it in that second closes the dialed connection and refuses
+  the opening `relay_unreachable`. After `open` it copies the bytes each way until
   either side closes, and closes the other.
 - **Where no relay stands to dial** (a pipe or socket sink, or a relay that has died), or
   the dial fails, the opening is refused `relay_unreachable` in place of `open`. The
@@ -856,8 +860,11 @@ judges the service's uid as it judges any reader's.
   only once a newer request is admitted, so the service's dial alone ends no splice that
   stands, and a connector that closes during the dial ends only the dialed connection.
 - The request's bound is the relay's: 4096 bytes with its newline, within 5 seconds of
-  the relay's accept. The service's dial comes before `open`, so the connector sends
-  the request at once after `open`.
+  the relay's accept. The relay accepts no earlier than the service's dial connects, and
+  `open` leaves within 1 second of that connect, so at least 4 seconds of the relay's
+  window remain once `open` is sent. **The connector sends its whole request within 1
+  second of reading `open`.** A request later than the relay's window is refused by the
+  relay, a close before any header byte.
 
 ### 8.6 The log
 
@@ -912,6 +919,7 @@ from the moment it answered `open`, with no history before it:
 | The opening line | 4096 bytes with its newline | `refused` `opening_malformed`, closed |
 | The opening's arrival | 10 seconds from the connect | `refused` `opening_late`, closed |
 | The service's answer to the opening | 4096 bytes with its newline, within 10 seconds of the opening line, the log's judging and the relay's dial included | a judging or dial not done 8 seconds after the opening line is `refused` `log_unread` or `relay_unreachable`. A connector bounding its read here reads past it as a fault |
+| A trace's `open` | 1 second from the service's dial's connect | the dialed connection closed, `refused` `relay_unreachable` |
 | A connector's line on a control connection | 4096 bytes with its newline | `refused` `ask_malformed`, closed |
 | Asks outstanding on a connection | 1 | `refused` `ask_outstanding`, closed |
 | The eight grants read | 10 seconds from the ask | `refused` `grants_unread` |
@@ -922,7 +930,7 @@ from the moment it answered `open`, with no history before it:
 | A line the service sends on a control connection | 256 KiB: a 64 KiB object, 16 KiB of standard error at most 96 KiB escaped, and the members | a connector bounding its read here reads past it as a fault |
 | A run's length | none at the service. The root program's own bounds hold: 900 seconds on a load's start by default (section 3) | the connector's own bound, then `run` |
 | Runs remembered per agent | those standing, and the last ended, until the service restarts | `ended` is `null`, under a new `instance` |
-| The trace request | 4096 bytes within 5 seconds, the relay's (`weaver-types-Spec` section 3.1) | the relay's close before the header |
+| The trace request | 4096 bytes within 5 seconds of the relay's accept, the relay's (`weaver-types-Spec` section 3.1), at least 4 seconds of them after `open`. The connector sends it within 1 second of reading `open` | the relay's close before the header |
 | A log line carried | 8 KiB | the `oversized` marker |
 | A log line's delay | 1 second from its append | none: the service's promise |
 | A log connection's unsent bytes | 1 MiB | closed, `refused` `log_behind` sent first where the connection takes it |
@@ -957,8 +965,8 @@ the M events.
 | K0 | V: any other uid | K9, nothing sent, the service's log names the uid |
 | K0 | V: a bound of section 8.1 is met | K9, `refused` `full` |
 | K1 | C: a control or log opening line that judges | K2 or K8 by its purpose, `open` sent |
-| K1 | C: a trace opening line that judges, and the service's dial of the agent's relay connects | K7, `open` sent |
-| K1 | C: a trace opening line that judges, where no relay stands or the service's dial of it fails | K9, `refused` `relay_unreachable` |
+| K1 | C: a trace opening line that judges, and the service's dial of the agent's relay connects | K7, `open` sent within 1 second of the connect |
+| K1 | C: a trace opening line that judges, where no relay stands, the service's dial of it fails, or `open` cannot be sent within 1 second of the connect | K9, `refused` `relay_unreachable`, a dialed connection closed |
 | K1 | C: close, while the service dials the relay | K9. The dialed connection is closed, before it sends the relay any byte |
 | K1 | C: an unknown version or purpose, a refused name, or an unread log | K9, `refused` with its word |
 | K1 | C: a line past 4096 bytes, one that does not parse, or a version that is not a positive integer | K9, `refused` `opening_malformed` |
@@ -1035,8 +1043,9 @@ the M events.
 - **S6.** Every ask gets exactly one final line, or the connection closes. A verb's
   `started` comes before its final line.
 - **S7.** After `open` on a trace connection, the bytes each way are the relay's,
-  unchanged. `open` is sent only once the relay's dial has connected, so a close there
-  before any header byte is the relay's refusal of the position alone.
+  unchanged. `open` is sent only once the relay's dial has connected, and within 1
+  second of the connect, so a close there before any header byte is the relay's refusal
+  of the position alone.
 - **S8.** A refusal of the service's own is a `refused` line, never inside the root
   program's object and never an exit code. A refusal of the root program's is inside its
   object, at exit 1, carried untouched.
