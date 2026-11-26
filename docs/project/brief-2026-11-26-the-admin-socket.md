@@ -75,6 +75,11 @@ contract takes it whole (section 8.4).
   connector makes today, run by the weaver-admin account: `sudo -n -l` on the exact
   fixed line. Exit 0 is granted, exit 1 is not granted, and anything
   else, or no answer within 10 seconds, is a grant that cannot be read.
+- sudo exits 1 for a rule it could not read as for one that does not grant, so exit 1
+  means "not granted, or a rule sudo could not read". No decision is made from sudo's
+  standard error, and the service's own log keeps it for each read that did not answer
+  granted. That is the planning seat's decision of 2026-11-26, and the operator's to
+  overrule.
 - A verb not granted is refused `not_granted`, and one whose grant cannot be read is
   refused `grant_unread`. Neither runs anything, and both are the service's own words,
   never inside admin's object and never an exit code.

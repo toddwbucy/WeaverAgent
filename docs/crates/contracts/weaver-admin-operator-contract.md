@@ -684,7 +684,10 @@ the opening named.
   `force-unload`. An empty list is an honest answer: nothing is granted.
 - **A read that fails is not a guess.** Where any of the eight cannot be read, or the
   eight are not read within 10 seconds of the ask, the answer is `refused`
-  `grants_unread`, never a shorter list, so a failure and "none granted" stay apart.
+  `grants_unread`, never a shorter list. A verb whose read exits 1 is left out as not
+  granted, and exit 1 covers a rule sudo could not read as well (section 8.4). So an
+  empty list says that no verb's read answered granted, and never that a read did not
+  answer.
 - **The answer is the connector's ceiling for Weaver Web and never the service's
   authorization.** Nothing in it is read again at a verb.
 
@@ -714,11 +717,16 @@ agent), the read the connector makes today:
 | The read | The answer |
 | --- | --- |
 | exit 0 | granted |
-| exit 1 | `refused` `not_granted`, nothing run |
+| exit 1 | `refused` `not_granted`, nothing run. Exit 1 means not granted, or a rule sudo could not read |
 | any other exit, a read that does not start, or none within 10 seconds of the ask | `refused` `grant_unread`, nothing run |
 
-A rule that asks a password is not a grant, since sudo runs with `-n`. Both refusals are
-the service's own, and the root program never runs to produce them.
+A rule that asks a password is not a grant, since sudo runs with `-n`. **sudo exits 1
+both where the rule does not grant the line and where it could not read a rule**, and
+the service makes no decision from sudo's standard error, so the two read alike.
+**The service's own log keeps sudo's standard error** for every read that did not
+answer granted, here and in section 8.3, so the operator finds the cause where Weaver
+Web shows a verb not granted. Both refusals are the service's own, and the root program
+never runs to produce them.
 
 **Then one run at a time per agent.** A granted verb starts unless a run of the same
 agent stands, in which case it is refused `busy`, the answer naming that run's id as
