@@ -3114,51 +3114,65 @@ unsafe fn start_loop(
     wires: &weaver_types::WiresElection,
 ) -> Result<(), LifecycleRefusal> {
     // SAFETY: the caller's contract above.
+    unsafe { start_loop_saying(run, launch, wires, &mut std::io::stderr()) }
+}
+
+/// [`start_loop`], its one line written to `diagnostic`. **A failed write is
+/// no fault of the start's**, as at the leave's queue peak: `eprintln!` panics
+/// where standard error cannot take the line (a full disk under worker.log),
+/// which would end the worker before it answers the enter, so the write's
+/// error is dropped.
+///
+/// # Safety
+///
+/// As [`start_loop`].
+unsafe fn start_loop_saying(
+    run: &mut Run,
+    launch: &crate::loop_arm::LoopLaunch,
+    wires: &weaver_types::WiresElection,
+    diagnostic: &mut impl std::io::Write,
+) -> Result<(), LifecycleRefusal> {
+    use std::io::Write as _;
+    let mut say = |line: serde_json::Value| {
+        let _ = writeln!(diagnostic, "{line}");
+    };
+    // SAFETY: the caller's contract above.
     match unsafe { crate::loop_arm::LoopArm::start(launch, wires) } {
         Ok(arm) => {
             run.loop_arm = Some(arm);
             Ok(())
         }
         Err(crate::loop_arm::StartRefused::Fork(why)) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "organ": "harness",
-                    "loop": "not-started",
-                    "reason": why,
-                    "launcher": launch.launcher.display().to_string(),
-                    "grant": launch.grant.display().to_string(),
-                })
-            );
+            say(serde_json::json!({
+                "organ": "harness",
+                "loop": "not-started",
+                "reason": why,
+                "launcher": launch.launcher.display().to_string(),
+                "grant": launch.grant.display().to_string(),
+            }));
             Err(LifecycleRefusal::BindFailed)
         }
         Err(crate::loop_arm::StartRefused::Config(reason)) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "organ": "harness",
-                    "loop": "refused",
-                    "reason": reason,
-                    "launcher": launch.launcher.display().to_string(),
-                    "grant": launch.grant.display().to_string(),
-                })
-            );
+            say(serde_json::json!({
+                "organ": "harness",
+                "loop": "refused",
+                "reason": reason,
+                "launcher": launch.launcher.display().to_string(),
+                "grant": launch.grant.display().to_string(),
+            }));
             Err(LifecycleRefusal::ConfigInvalid {
                 field: Some(weaver_types::FieldName("loop".into())),
             })
         }
         Err(crate::loop_arm::StartRefused::Hello { reason, last_word }) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "organ": "harness",
-                    "loop": "refused",
-                    "reason": reason,
-                    "last_word": last_word,
-                    "launcher": launch.launcher.display().to_string(),
-                    "grant": launch.grant.display().to_string(),
-                })
-            );
+            say(serde_json::json!({
+                "organ": "harness",
+                "loop": "refused",
+                "reason": reason,
+                "last_word": last_word,
+                "launcher": launch.launcher.display().to_string(),
+                "grant": launch.grant.display().to_string(),
+            }));
             Err(LifecycleRefusal::ConfigInvalid {
                 field: Some(weaver_types::FieldName("loop".into())),
             })

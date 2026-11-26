@@ -941,6 +941,77 @@ fn the_start_stands_the_loop_or_refuses_naming_it() {
     assert!(run.loop_arm.is_none());
 }
 
+/// A writer that takes no byte, as standard error does under a full disk.
+struct WriteFails;
+
+impl std::io::Write for WriteFails {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("no space left"))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::Error::other("no space left"))
+    }
+}
+
+/// **A refused start's line is written best effort** (review of #655), as
+/// the leave's queue peak is: the line names the loop's refusal where
+/// standard error takes it, and where it cannot, the start still answers its
+/// refusal and the worker does not panic. Both refusals that can be reached
+/// here are driven: the grant path not in UTF-8, before any fork, and a
+/// `hello` refused on another digest. Perturbation: write the line with
+/// `eprintln!`, and the recorded line is missing; unwrap the write, and the
+/// failing writer panics the start.
+#[test]
+fn a_refused_starts_line_is_written_best_effort() {
+    let loop_refused = LifecycleRefusal::ConfigInvalid {
+        field: Some(weaver_types::FieldName("loop".into())),
+    };
+    let wires = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/loop-wires-cross.py"
+    );
+    let (arm, dir) = unwalled_arm();
+    arm.stop(None);
+    let not_utf8 = crate::loop_arm::LoopLaunch {
+        launcher: dir.join("launch"),
+        grant: std::path::PathBuf::from(
+            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"/grant-\xff"),
+        ),
+    };
+    let unwalled = crate::loop_arm::LoopLaunch {
+        launcher: dir.join("launch"),
+        grant: dir.join("grant"),
+    };
+    let other_digest = weaver_types::WiresElection {
+        file: wires.into(),
+        sha256: "ab".repeat(32),
+    };
+    for (row, launch) in [
+        ("a grant path not in UTF-8", &not_utf8),
+        ("a hello on another digest", &unwalled),
+    ] {
+        let mut said = Vec::new();
+        let (mut run, _spare, _sink) = entered_run(None);
+        // SAFETY: on this test's thread, which outlives any child.
+        let started = unsafe { start_loop_saying(&mut run, launch, &other_digest, &mut said) };
+        assert_eq!(started, Err(loop_refused.clone()), "{row}");
+        let line: serde_json::Value = serde_json::from_slice(&said)
+            .unwrap_or_else(|_| panic!("{row}: one JSON line said, not {said:?}"));
+        assert_eq!(line["organ"], "harness", "{row}");
+        assert_eq!(line["loop"], "refused", "{row}");
+        let (mut run, _spare, _sink) = entered_run(None);
+        // SAFETY: as above.
+        let started =
+            unsafe { start_loop_saying(&mut run, launch, &other_digest, &mut WriteFails) };
+        assert_eq!(
+            started,
+            Err(loop_refused.clone()),
+            "{row}: a write that fails"
+        );
+        assert!(run.loop_arm.is_none(), "{row}");
+    }
+}
+
 /// A seat recording each turn's text, answering a refusal no relay makes.
 #[derive(Default)]
 struct TurnRecording {
