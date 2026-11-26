@@ -16645,24 +16645,27 @@ class LoopGrantTests(unittest.TestCase):
         # written with an arrow and no path is passed over, and the libraries
         # are read. Perturbation: class every arrow line as a read, and the
         # loader is read and the grant names no execute line.
+        # Older ldd writes the vdso's arrow with two spaces before its address.
         self.interpreter()
         lib = self.lib
-        self.ldd("\tlinux-vdso.so.1 => (0x00007ffd1)\n"
-                 "\tlibpython3.so => %s/libpython3.so (0x00007f2)\n"
-                 "\tlibc.so.6 => %s/libc.so.6 (0x00007f3)\n"
-                 "\t%s/ld.so => %s/ld.so (0x00007f4)\n" % (lib, lib, lib, lib))
-        ran = self.grant()
-        self.assertEqual(ran.returncode, 0, ran.stderr)
-        sha = hashlib.sha256(self.interp.read_bytes()).hexdigest()
-        self.assertEqual(ran.stdout, "".join(line + "\n" for line in [
-            "weaver-loop-grant 1",
-            "interpreter %s %s" % (sha, self.interp),
-            "execute %s/ld-real.so" % lib,
-            "read %s/libpython3.so" % lib,
-            "read %s/libc.so.6" % lib,
-            "beneath %s" % self.stdlib,
-            "pycache /pyc",
-        ]))
+        for vdso in ("\tlinux-vdso.so.1 => (0x00007ffd1)\n", "\tlinux-vdso.so.1 =>  (0x00007ffd1)\n"):
+            with self.subTest(vdso=vdso):
+                self.ldd(vdso +
+                         "\tlibpython3.so => %s/libpython3.so (0x00007f2)\n"
+                         "\tlibc.so.6 => %s/libc.so.6 (0x00007f3)\n"
+                         "\t%s/ld.so => %s/ld.so (0x00007f4)\n" % (lib, lib, lib, lib))
+                ran = self.grant()
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                sha = hashlib.sha256(self.interp.read_bytes()).hexdigest()
+                self.assertEqual(ran.stdout, "".join(line + "\n" for line in [
+                    "weaver-loop-grant 1",
+                    "interpreter %s %s" % (sha, self.interp),
+                    "execute %s/ld-real.so" % lib,
+                    "read %s/libpython3.so" % lib,
+                    "read %s/libc.so.6" % lib,
+                    "beneath %s" % self.stdlib,
+                    "pycache /pyc",
+                ]))
 
     def test_an_interpreter_older_than_python_3_12_refuses(self):
         # Perturbation: drop the version question, and the grant is laid.

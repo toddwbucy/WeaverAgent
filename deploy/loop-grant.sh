@@ -26,7 +26,7 @@ loop_paths() {
 # loop_grant INTERPRETER PYCACHE: the grant file's text on standard output, or
 # a refusal on standard error and 1. Nothing privileged is asked.
 loop_grant() {
-  local named=$1 pycache=$2 interp said rc=0 line path real sha stdlib role
+  local named=$1 pycache=$2 interp said rc=0 line path real sha stdlib role rest
   local -a execs=() reads=()
   local -A seen=()
   interp=$(readlink -f -- "$named") \
@@ -48,13 +48,24 @@ loop_grant() {
   # **A library is read; the loader is executed and read**: the line that
   # starts with its own path, written with or without an arrow to the file it
   # resolves to. The vdso has no path and is not a file, written with or
-  # without an arrow.
+  # without an arrow, and older ldd writes the arrow before it with two spaces:
+  # what follows an arrow is read trimmed, and nothing or a load address there is
+  # no path.
   while IFS= read -r line; do
     line=${line#"${line%%[![:space:]]*}"}
     case $line in
-      *' => ('*|*' =>') continue ;;
-      /*' => '*) path=${line#* => }; path=${path%% (*}; role=execute ;;
-      *' => '*) path=${line#* => }; path=${path%% (*}; role=read ;;
+      *' =>'*)
+        rest=${line#* =>}
+        rest=${rest#"${rest%%[![:space:]]*}"}
+        case $rest in
+          ''|'('*) continue ;;
+        esac
+        path=${rest%% (*}
+        case $line in
+          /*) role=execute ;;
+          *) role=read ;;
+        esac
+        ;;
       /*) path=${line%% (*}; role=execute ;;
       *) continue ;;
     esac
