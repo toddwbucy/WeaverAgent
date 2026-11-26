@@ -1825,7 +1825,7 @@ restore_rules || die "the install stands verified, but a connector rule named ab
 # digest; no driver and no card. It replaces the previous run's record whole,
 # an earlier form's included.
 say "tuple"
-TUPLE=$(install_tuple "$REPO" "$COMMIT" "$BIN_DIR" "$LIB_DIR" "$FEATURES" "$MEMBERS $SHELL_FILES" "${LIB_NAMES[*]}")
+TUPLE=$(install_tuple "$REPO" "$COMMIT" "$BIN_DIR" "$LIB_DIR" "$FEATURES" "$MEMBERS $SHELL_FILES" "${LIB_NAMES[*]}" "$LOOP_DIR")
 printf '%s\n' "$TUPLE" | sed 's/^/  /'
 printf '%s\n' "$TUPLE" | sudo tee "$STACK/install-tuple" >/dev/null
 sudo chmod 0644 "$STACK/install-tuple"

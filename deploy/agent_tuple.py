@@ -545,13 +545,14 @@ class InstallTupleRefused(Exception):
 
 def read_install_tuple(path):
     """The box's install tuple: its own sha256 (the box side's identity), the
-    scalar facts, the member and library digests by name, the runtime files
+    scalar facts, the member, library and loop runner digests by name (the
+    loop's group absent from a tuple written before it), the runtime files
     by key, each `(sha256, path)` or None for `unknown`, and the earlier
     form's lines it left unread.
 
     One fact per line, `key = value`, split on the first " = ", no value
-    empty, every scalar key present, no key twice, each member and library
-    digest 64 hex digits or `unknown` (install-tuple.sh writes `unknown` for
+    empty, every scalar key present, no key twice, each member, library and
+    loop digest 64 hex digits or `unknown` (install-tuple.sh writes `unknown` for
     any fact the box cannot answer, a file it could not hash among them), and
     each runtime file of RUNTIME_LIBRARIES present, as `<sha256> <absolute
     path>` or `unknown`, and no other.
@@ -575,7 +576,7 @@ def read_install_tuple(path):
         text = raw.decode("ascii")
     except UnicodeDecodeError:
         raise InstallTupleRefused("not ASCII") from None
-    facts, members, libraries, runtime, earlier = {}, {}, {}, {}, {}
+    facts, members, libraries, loop, runtime, earlier = {}, {}, {}, {}, {}, {}
     for number, line in enumerate(text.splitlines(), start=1):
         key, sep, value = line.partition(" = ")
         if not sep or not key or not value or not line.isprintable():
@@ -584,7 +585,7 @@ def read_install_tuple(path):
             into, name = earlier, key
         else:
             for prefix, into in (("member.", members), ("library.", libraries),
-                                 ("runtime.", runtime)):
+                                 ("loop.", loop), ("runtime.", runtime)):
                 if key.startswith(prefix):
                     name = key[len(prefix):]
                     break
@@ -596,11 +597,11 @@ def read_install_tuple(path):
     missing = [key for key in INSTALL_SCALARS if key not in facts]
     if missing:
         raise InstallTupleRefused(f"no {', '.join(missing)}")
-    for name, digest in list(members.items()) + list(libraries.items()):
+    for name, digest in list(members.items()) + list(libraries.items()) + list(loop.items()):
         if digest != UNKNOWN and not HEX64.fullmatch(digest):
             raise InstallTupleRefused(f"{name}'s digest is not 64 hex digits or unknown")
     install = {"sha256": hashlib.sha256(raw).hexdigest(), "facts": facts, "members": members,
-               "libraries": libraries, "runtime": None, "earlier": sorted(earlier)}
+               "libraries": libraries, "loop": loop, "runtime": None, "earlier": sorted(earlier)}
     if earlier:
         if runtime:
             raise InstallTupleRefused(

@@ -1090,17 +1090,18 @@ hold, and answering a query over what it holds, are state management's and in sc
 What stays out is the layer below it, the lossy compression consolidation writes, which
 returns by the same door and reads from state's save points when it comes.
 
-**The operator bringing the loop is parked here by name**, on the same rulings. The loop
-of section 5.5 is one loop, compiled into the worker, and `loop-file`, a declaration
-naming code the worker runs, is retired with the Python worker on 2026-10-20 (#180). A
-declaration carrying it refuses by name. Its opinions are settings in the declaration's
-`[state-management]` table, recorded on the load event: the table's grammar is
-`weaver-types-Spec`'s, with the declaration's other keys, and its meaning is
-`weaver-harness-Spec`'s, with the loop, per the operator's ruling of 2026-10-02 on #58's
-sixth question. An operator supplying a loop of its own, by a declared file or any other
-path, is a possible future feature, not built here, and it returns by the mechanism
-below if it returns at all. Naming it is not a slot: no field, flag or seam is carried
-for it.
+**Installing the loop over the management plane is parked here by name**, on the
+operator's rulings of 2026-11-25. A loop root lays by hand in the agent's loop folder
+runs, and the compiled loop runs where none is laid (section 5.5). `loop-file`, a
+declaration naming code the worker runs, is retired with the Python worker on 2026-10-20
+(#180), and a declaration carrying it refuses by name. The compiled loop's opinions are
+settings in the declaration's `[state-management]` table, recorded on the load event:
+the table's grammar is `weaver-types-Spec`'s, with the declaration's other keys, and its
+meaning is `weaver-harness-Spec`'s, with the loop, per the operator's ruling of
+2026-10-02 on #58's sixth question. Laying, checking and removing a loop from Weaver
+Web, over the management plane, is a later act's, and it returns by the mechanism below.
+Until then root lays the folder by hand. Naming the install is not a slot: no admin
+verb, field or flag is carried for it.
 
 **Save points as task- or workflow-level presets are parked here by name**, on the
 operator's ruling of 2026-10-02 on #58: a known-good context returned to repeatedly for

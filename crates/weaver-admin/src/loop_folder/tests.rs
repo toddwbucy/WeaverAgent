@@ -286,3 +286,44 @@ fn a_wire_file_of_another_group_refuses() {
         "{refused}"
     );
 }
+
+/// **An access-control entry beyond the mode refuses, on each piece**, a row
+/// each: the agent's folder, the loop folder and the wire file, each given a
+/// named user's read entry that leaves its mode as it was, so the judgment
+/// reaches the entry's check. Skipped, naming why, where setfacl cannot set
+/// an entry here. Perturbation: drop any piece's entry check, and its row is
+/// admitted.
+#[test]
+fn an_access_entry_on_any_piece_refuses() {
+    let (owner, group) = ids();
+    for (row, piece, named) in [
+        ("the agent's folder", "a1", "the agent's folder"),
+        ("the loop folder", "a1/loop", "the loop folder"),
+        ("the wire file", "a1/loop/wires.py", "the wire file"),
+    ] {
+        let base = laid("acl", b"abc");
+        let path = base.join(piece);
+        let set = std::process::Command::new("setfacl")
+            .args(["-m", "u:nobody:r"])
+            .arg(&path)
+            .status();
+        if !set.is_ok_and(|status| status.success()) {
+            eprintln!(
+                "SKIP an_access_entry_on_any_piece_refuses: setfacl could not set an entry here"
+            );
+            return;
+        }
+        let refused = judge(&base.join("a1"), owner, group).expect_err(row);
+        assert_eq!(
+            refused,
+            format!(
+                "{named} {} carries an access-control entry beyond its mode",
+                path.display()
+            ),
+            "{row}"
+        );
+    }
+    // The control: the same layout with no entry is elected.
+    let base = laid("acl-control", b"abc");
+    assert!(judge(&base.join("a1"), owner, group).unwrap().is_some());
+}

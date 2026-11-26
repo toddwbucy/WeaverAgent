@@ -7,7 +7,8 @@
 #   run-arm.sh --arm wires    --agent NAME --artifact MODEL.gguf --out DIR --wires FILE --apply
 #   run-arm.sh --arm negative --agent NAME --artifact MODEL.gguf --out DIR --wires FILE --apply
 #
-# Options: --deploy DIR (the stack's deployed scripts, default /opt/weaver/deploy),
+# Options: --deploy DIR (the deploy scripts, default the deploy/ folder of the tree this
+# script stands in; a deployed copy holds what deploy/deployed-copy.txt lists),
 # --admin PATH (default /opt/weaver/bin/weaver-admin), --context-capacity N (default
 # 8192, the same in every arm, so pressure comes within a few turns).
 #
@@ -33,19 +34,22 @@
 #  5. The record, worker.log and every save point are copied to DIR, with arm.json for
 #     compare.py: the arm, the agent, the loads, the turns that reach the loop (every turn
 #     but the seeding one, which is the harness's own), and the laid file's sha256.
-#  6. decommission.sh archives every agent into DIR/archive and purges it, so the
-#     appliance holds no agent when the next arm is made.
+#  6. take-down.sh, beside this script, archives the arm's agent into DIR/archive as
+#     root and takes that one agent down by the runbook's section 7, leaving the stack,
+#     its record and the machine's own accounts standing, so the next arm is made on the
+#     same install.
 #
 # Every turn is checked answered under its own key, t-1 onward in each load. A step that
 # fails stops the arm: the agent is unloaded if it may stand, what stands is copied to
-# DIR/failed, and nothing is decommissioned, so the operator reads it first. Keep the
+# DIR/failed, and nothing is taken down, so the operator reads it first. Keep the
 # console: `--apply 2>&1 | tee DIR.console`.
 set -uo pipefail
 
 die() { printf 'run-arm: %s\n' "$*" >&2; exit 2; }
+HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || die "cannot find the script's own folder"
 
 ARM= AGENT= ARTIFACT= OUT= WIRES= APPLY=0
-DEPLOY=/opt/weaver/deploy
+DEPLOY=$(cd -- "$HERE/../../deploy" 2>/dev/null && pwd) || DEPLOY="$HERE/../../deploy"
 ADMIN=/opt/weaver/bin/weaver-admin
 CAPACITY=8192
 while [ $# -gt 0 ]; do
@@ -64,9 +68,16 @@ while [ $# -gt 0 ]; do
     shift
 done
 case $ARM in compiled|wires|negative) ;; *) die "--arm is compiled, wires or negative: '$ARM'" ;; esac
-[[ "$AGENT" =~ ^[a-z][a-z0-9-]*$ ]] || die "--agent is an agent's name: '$AGENT'"
+[[ "$AGENT" =~ ^[a-z][a-z0-9]{1,15}$ ]] || die "--agent is an agent's name, a lowercase letter then 1 to 15 lowercase letters or digits: '$AGENT'"
 [ -n "$ARTIFACT" ] || die "--artifact is required"
 [ -n "$OUT" ] || die "--out is required"
+# **The arm's folder is absolute from here**: take-down.sh refuses a relative archive,
+# and the take-down is the arm's last step, so a relative --out would fail only after
+# every load and turn had run, with the agent left standing.
+case $OUT in
+    /*) ;;
+    *) OUT=$PWD/$OUT ;;
+esac
 [[ "$CAPACITY" =~ ^[0-9]+$ ]] || die "--context-capacity is a count: '$CAPACITY'"
 WIRES_SHA=
 if [ "$ARM" = compiled ]; then
@@ -80,6 +91,7 @@ BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 LOAD_BOUND=900
 TURN_BOUND=900
 PRESSURE_MOST=40
+FULLNESS_BOUND=30
 
 # The asks, sent in this order in every arm, one each turn but the seeding one.
 ASKS=(
@@ -97,7 +109,7 @@ ASKS=(
     "Describe how a seed becomes a plant."
 )
 
-STEP=0 LOADS=0 TURN_IN_LOAD=0 TURNS_TO_LOOP=0 ASKED=0 LOADED=0 TERRITORY= TRACE=
+STEP=0 LOADS=0 TURN_IN_LOAD=0 TURNS_TO_LOOP=0 ASKED=0 LOADED=0 TERRITORY= TRACE= TAKING_DOWN=0
 step() { STEP=$((STEP + 1)); printf '\n== step %d: %s\n' "$STEP" "$*"; }
 shown() { printf '+'; printf ' %q' "$@"; printf '\n'; }
 act() { shown "$@"; [ "$APPLY" = 1 ] || return 0; "$@"; }
@@ -105,6 +117,12 @@ act() { shown "$@"; [ "$APPLY" = 1 ] || return 0; "$@"; }
 fail() {
     printf '\nFAILED at step %d: %s\n' "$STEP" "$*"
     [ "$APPLY" = 1 ] || exit 1
+    # The take-down removes piece by piece and stops at the first step that fails:
+    # what it removed stays removed, and its STOPPED line names that step.
+    if [ "$TAKING_DOWN" = 1 ]; then
+        printf 'the take-down stopped partway: its STOPPED line above names the step, the arm is copied to %s and the archive is %s/archive. Finish by hand by deploy/HowToDeployANewAgent.md section 7\n' "$OUT" "$OUT"
+        exit 1
+    fi
     if [ "$LOADED" = 1 ]; then
         timeout "$LOAD_BOUND" "$ADMIN" unload "$AGENT" || true
     fi
@@ -112,7 +130,7 @@ fail() {
         mkdir -p "$OUT/failed" && cp -a -- "$TERRITORY/worker.log" "$OUT/failed/" 2>/dev/null
         [ -z "$TRACE" ] || cp -a -- "$TRACE" "$OUT/failed/" 2>/dev/null
     fi
-    printf 'nothing is decommissioned: read %s/failed, then take the agent down\n' "$OUT"
+    printf 'nothing is taken down: read %s/failed, then take the agent down with take-down.sh\n' "$OUT"
     exit 1
 }
 
@@ -210,30 +228,25 @@ os.replace(part, path)
 DECLARATION
 }
 
-# full_enough: the last answer's resident tokens reach four-fifths of capacity, read from
-# the record's last model.output, so the next turn is under pressure.
-full_enough() {
-    python3 -I - "$TRACE" <<'FULLNESS'
-import json, sys
-last = None
-for line in open(sys.argv[1], encoding="utf-8"):
-    e = json.loads(line)
-    if e.get("kind") == "model.output":
-        last = e.get("payload") or {}
-r, c = (last or {}).get("resident", 0), (last or {}).get("capacity", 0)
-print("   fullness %s of %s" % (r, c))
-sys.exit(0 if c > 0 and r * 5 >= c * 4 else 1)
-FULLNESS
-}
-
+# The fullness reading after the turn just answered (fullness.py beside this script): it
+# waits, up to FULLNESS_BOUND seconds, until the record holds that turn's close, since the
+# record lags the answer, and reads only ended lines. 0 full enough, 1 not yet; anything
+# else fails the arm, which then names why.
 until_pressure() {
     step "load $LOADS: turns until fullness passes four-fifths of capacity, then one under pressure (at most $PRESSURE_MOST)"
+    printf '   after each turn: python3 -I %s/fullness.py <trace> t-<n> %s, waiting for the turn'"'"'s close\n' "$HERE" "$FULLNESS_BOUND"
     if [ "$APPLY" != 1 ]; then
-        printf '   each a turn as above, then the record'"'"'s last model.output read; then one turn more\n'
+        printf '   each a turn as above, then the reading; then one turn more\n'
         return 0
     fi
-    local n=0
-    until full_enough; do
+    local n=0 said
+    while :; do
+        python3 -I "$HERE/fullness.py" "$TRACE" "t-$TURN_IN_LOAD" "$FULLNESS_BOUND"; said=$?
+        case $said in
+            0) break ;;
+            1) ;;
+            *) fail "the fullness reading after turn t-$TURN_IN_LOAD of load $LOADS (exit $said)" ;;
+        esac
         n=$((n + 1)); [ "$n" -le "$PRESSURE_MOST" ] || fail "no pressure within $PRESSURE_MOST turns"
         turn
     done
@@ -262,10 +275,15 @@ ARMJSON
 printf 'identity run, %s arm, agent %s%s: %s\n' "$ARM" "$AGENT" "${WIRES_SHA:+, wire file $WIRES_SHA}" \
     "$([ "$APPLY" = 1 ] && echo acting || echo 'plan only (--apply acts)')"
 if [ "$APPLY" = 1 ]; then
+    # create-agent.sh refuses --root-operator through sudo from another account, so the
+    # arm refuses it first, in its words, before anything is touched.
+    [ -z "${SUDO_USER:-}" ] || [ "$SUDO_USER" = root ] \
+        || die "--root-operator is for root's own login on a single-purpose appliance, not sudo from $SUDO_USER: run the identity run from root's own login"
     [ "$(id -u)" = 0 ] || die "--apply is root's, the operator on an agent appliance"
     [ ! -e "$OUT" ] || die "$OUT stands: each arm writes a folder of its own"
-    [ -z "$(ls -A -- "$BASE" 2>/dev/null)" ] || die "an agent stands under $BASE: the run needs an appliance holding none (decommission.sh first)"
-    for f in create-agent.sh decommission.sh turn.py; do [ -r "$DEPLOY/$f" ] || die "$DEPLOY/$f is not there"; done
+    [ -z "$(ls -A -- "$BASE" 2>/dev/null)" ] || die "an agent stands under $BASE: the run needs an appliance holding none (take-down.sh first)"
+    for f in create-agent.sh turn.py; do [ -r "$DEPLOY/$f" ] || die "$DEPLOY/$f is not there"; done
+    for f in take-down.sh fullness.py; do [ -r "$HERE/$f" ] || die "$HERE/$f is not there"; done
     [ -x "$ADMIN" ] || die "$ADMIN is not there"
     mkdir -p "$OUT/steps" || die "cannot make $OUT"
 fi
@@ -323,8 +341,8 @@ turn
 unload
 
 copy_out
-step "take every agent off the appliance"
-act "$DEPLOY/decommission.sh" --archive "$OUT/archive" || fail "the archive"
-act "$DEPLOY/decommission.sh" --purge "$OUT/archive" || fail "the purge"
+step "take the arm's agent off the appliance, the stack left standing"
+TAKING_DOWN=1
+act "$HERE/take-down.sh" --agent "$AGENT" --archive "$OUT/archive" --admin "$ADMIN" --apply || fail "the take-down"
 printf '\nidentity run, %s arm: done, %d loads, %s turns to the loop\n' "$ARM" "$LOADS" \
     "$([ "$APPLY" = 1 ] && echo "$TURNS_TO_LOOP" || echo "$TURNS_TO_LOOP (plan: before the pressure turns)")"

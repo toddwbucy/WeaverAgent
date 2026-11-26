@@ -198,8 +198,27 @@ pub fn judge(grant: &Grant, launch: &Launch, owner: u32) -> Result<Vec<Rule>, St
     let directory = |stat: &libc::stat| {
         (stat.st_mode & libc::S_IFMT != libc::S_IFDIR).then(|| "is not a directory".to_string())
     };
+    // **The interpreter and each `execute` file are written by no one the
+    // launch answers to**: not by the uid the launch runs as (unless that is
+    // the owner), not by a group, not by others. The digest pins the
+    // interpreter's bytes at the judgment, and this keeps the agent's uid from
+    // rewriting the same inode between the digest and the exec.
+    let running = nix::unistd::geteuid().as_raw();
+    let unwritable = |stat: &libc::stat| {
+        regular(stat).or_else(|| {
+            if stat.st_uid == running && running != owner {
+                Some(format!(
+                    "is owned by uid {running}, the uid the launch runs as"
+                ))
+            } else if stat.st_mode & 0o022 != 0 {
+                Some("is writable by its group or others".to_string())
+            } else {
+                None
+            }
+        })
+    };
     let mut rules = Vec::new();
-    let interpreter = open_judged(&grant.interpreter, regular)?;
+    let interpreter = open_judged(&grant.interpreter, unwritable)?;
     digest_matches(&grant.interpreter, &interpreter, &grant.interpreter_sha256)?;
     rules.push(rule(
         interpreter,
@@ -208,7 +227,7 @@ pub fn judge(grant: &Grant, launch: &Launch, owner: u32) -> Result<Vec<Rule>, St
     ));
     for path in &grant.execute {
         rules.push(rule(
-            open_judged(path, regular)?,
+            open_judged(path, unwritable)?,
             FS_EXECUTE | FS_READ_FILE,
             path,
         ));
@@ -242,17 +261,28 @@ pub fn judge(grant: &Grant, launch: &Launch, owner: u32) -> Result<Vec<Rule>, St
         FS_READ_FILE | FS_READ_DIR,
         launch.runner_dir,
     ));
-    let runner = launch.runner_dir.join("runner.py");
+    // **Every file in the runner's folder is judged as the grant file is**:
+    // `runner.py`, which must stand, the board beside it and whatever else
+    // stands there, each a regular file of `owner`'s, written by no group and
+    // no other. The folder is listed through its own judged descriptor.
     let owned_file = |stat: &libc::stat| {
         regular(stat).or_else(|| {
-            (stat.st_uid != owner).then(|| format!("is owned by uid {}, not {owner}", stat.st_uid))
+            if stat.st_uid != owner {
+                Some(format!("is owned by uid {}, not {owner}", stat.st_uid))
+            } else if stat.st_mode & 0o022 != 0 {
+                Some("is writable by its group or others".to_string())
+            } else {
+                None
+            }
         })
     };
-    open_judged(&runner, owned_file)?;
-    open_judged(&grant.pycache, owned_dir)?;
-    let mut entries = std::fs::read_dir(&grant.pycache)
-        .map_err(|e| format!("{} does not list: {e}", grant.pycache.display()))?;
-    if entries.next().is_some() {
+    open_judged(&launch.runner_dir.join("runner.py"), owned_file)?;
+    for name in list_judged(launch.runner_dir, owned_dir)? {
+        open_judged(&launch.runner_dir.join(name), owned_file)?;
+    }
+    // The pycache folder's emptiness is read through the descriptor judged,
+    // so a folder swapped for a link after its judgment is not the one read.
+    if !list_judged(&grant.pycache, owned_dir)?.is_empty() {
         return Err(format!("{} is not empty", grant.pycache.display()));
     }
     // The loop folder's owner and mode are admin's checks (section 2). The
@@ -263,6 +293,67 @@ pub fn judge(grant: &Grant, launch: &Launch, owner: u32) -> Result<Vec<Rule>, St
         launch.loop_dir,
     ));
     Ok(rules)
+}
+
+/// **The names in a directory, read through a descriptor opened for reading
+/// without following a link** and judged by `fault` on that descriptor before
+/// any name is read, so the listing is of the directory judged. `.` and `..`
+/// are left out.
+fn list_judged(
+    path: &Path,
+    fault: impl Fn(&libc::stat) -> Option<String>,
+) -> Result<Vec<std::ffi::OsString>, String> {
+    use std::os::fd::IntoRawFd as _;
+    use std::os::unix::ffi::OsStrExt as _;
+    let fd = nix::fcntl::open(
+        path,
+        nix::fcntl::OFlag::O_RDONLY
+            | nix::fcntl::OFlag::O_DIRECTORY
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    )
+    .map_err(|errno| format!("{} does not open to list: {errno}", path.display()))?;
+    let stat = nix::sys::stat::fstat(&fd)
+        .map_err(|errno| format!("{}: fstat: {errno}", path.display()))?;
+    if let Some(why) = fault(&stat) {
+        return Err(format!("{} {why}", path.display()));
+    }
+    let raw = fd.into_raw_fd();
+    // SAFETY: `raw` is an open directory descriptor this function owns; the
+    // stream takes it, and `closedir` below closes both.
+    let stream = unsafe { libc::fdopendir(raw) };
+    if stream.is_null() {
+        let errno = nix::errno::Errno::last();
+        // SAFETY: the stream did not take `raw`, which is still ours to close.
+        unsafe { libc::close(raw) };
+        return Err(format!("{} does not list: {errno}", path.display()));
+    }
+    let mut names = Vec::new();
+    let read = loop {
+        nix::errno::Errno::clear();
+        // SAFETY: a live stream from `fdopendir`, read on this thread alone.
+        let entry = unsafe { libc::readdir(stream) };
+        if entry.is_null() {
+            let errno = nix::errno::Errno::last_raw();
+            break if errno == 0 {
+                Ok(())
+            } else {
+                Err(nix::errno::Errno::from_raw(errno))
+            };
+        }
+        // SAFETY: `readdir` answers an entry whose name is a NUL-ended string,
+        // valid until the next call on this stream.
+        let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
+        let bytes = name.to_bytes();
+        if bytes != b"." && bytes != b".." {
+            names.push(std::ffi::OsStr::from_bytes(bytes).to_owned());
+        }
+    };
+    // SAFETY: the stream from `fdopendir`, closed once.
+    unsafe { libc::closedir(stream) };
+    read.map_err(|errno| format!("{} does not list: {errno}", path.display()))?;
+    Ok(names)
 }
 
 fn rule(fd: OwnedFd, access: u64, path: &Path) -> Rule {

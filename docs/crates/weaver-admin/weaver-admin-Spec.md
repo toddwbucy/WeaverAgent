@@ -1581,7 +1581,10 @@ the bytes read (`weaver-types-Spec` section 4). A `loop/` without a wire file re
 never read as no loop. Nothing is cached between verbs, so a laid change takes effect at
 the next load alone. The grant file and the interpreter are not admin's: the launcher
 judges them (`weaver-harness-Spec` section 2.5). A diagnostic binding looks at nothing
-and carries no loop.
+and carries no loop. The replacement serving load, which no command dispatches until the
+foundation's cutover, composes no loop yet: where `loop/` stands it refuses
+`ConfigInvalid` naming `loop` before any lock or fork, so it never serves an agent with
+a loop laid by the compiled loop, and the refusal stands until it carries the election.
 
 ```graph
 node: admin-identity-from-validated-name
@@ -4346,15 +4349,17 @@ perturbation-verified:
 - **The loop folder is judged before it is carried**, watched by `src/loop_folder/tests.rs`:
   no folder is no loop, a row per piece out of its shape, another owner or group, the wire
   file grouped to another of the test uid's groups (skipped, naming why, where it holds
-  one), the bound pinned at 256 KiB, the election naming the file with the digest of
+  one), an access-control entry on each of the three pieces (skipped, naming why, where
+  setfacl cannot set one), the bound pinned at 256 KiB, the election naming the file with the digest of
   `abc` the standard gives, and a change read at the next judgment alone. Neither
   `loop/`'s owner nor the wire file's has a row of its own: each needs a second uid, and
   the row for another owner ends at the agent's folder, so neither check is reached
   there. Both are unmeasured on the build machine and are root's steps on an agent
   appliance (`tools/identity-run/PROCEDURE.md` section 2).
   `only_a_serving_binding_looks_for_the_loop` in `src/tests.rs` watches the binding's
-  guard. The perturbation drops any one check, and
-  its row is admitted.
+  guard, and `an_agents_folder_under_an_ancestor_others_can_write_refuses` the folder's
+  ancestors, beside a control that answers no loop. The perturbation drops any one check,
+  and its row is admitted.
 - **The lock stands where the agent cannot replace it**, watched by the agent's uid
   trying to unlink and recreate `run.lock`: refused by the root-owned run directory.
   The perturbation places it in the runtime directory, and a second worker starts.

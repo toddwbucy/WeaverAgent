@@ -47,6 +47,10 @@ IMPORTS = ("weaver_board", "json", "re")
 BANNED = frozenset(("open", "exec", "eval", "compile", "__import__", "input", "globals",
                     "locals", "vars", "getattr", "setattr", "delattr", "hash", "id"))
 FD = 3
+# The longest reason a line carries, in characters; past it the reason is cut and says so.
+# A wire file's exception text is the reason of its refused or raised line, and the
+# worker holds and logs every line, so the runner bounds what it says.
+REASON_MOST = 1024
 
 
 def board_module():
@@ -95,6 +99,8 @@ def say(err, word, reason=None, number=None, **counts):
     if number is not None:
         line["pass"] = number
     if reason is not None:
+        if len(reason) > REASON_MOST:
+            reason = "%s ... (cut at %d of %d characters)" % (reason[:REASON_MOST], REASON_MOST, len(reason))
         line["reason"] = reason
     line.update(counts)
     try:
@@ -235,7 +241,11 @@ def serve(sock, digest, on_turn, err=sys.stderr):
     """Send the hello, then run one pass per pass frame until the harness closes its
     end. Returns the exit status."""
     wb = board_module()
-    wb.send_frame(sock, wb.encode({"kind": "hello", "version": wb.VERSION, "wires_sha256": digest}))
+    try:
+        wb.send_frame(sock, wb.encode({"kind": "hello", "version": wb.VERSION, "wires_sha256": digest}))
+    except wb.Closed as e:
+        say(err, "start", "the hello could not be sent: %s" % _said(e))
+        return 1
     board = wb.Board(sock)
     expected = 1
     turns = refused = 0
@@ -302,10 +312,14 @@ def main(argv):
     except (OSError, Grammar) as e:
         say(sys.stderr, "start", str(e))
         return 1
-    sock = socket.socket(fileno=FD)
-    # O_NONBLOCK lives on the open file description, which the descriptor shares with
-    # whoever made the pair: the runner sets the mode it reads in, never inherits it.
-    sock.setblocking(True)
+    try:
+        sock = socket.socket(fileno=FD)
+        # O_NONBLOCK lives on the open file description, which the descriptor shares with
+        # whoever made the pair: the runner sets the mode it reads in, never inherits it.
+        sock.setblocking(True)
+    except OSError as e:
+        say(sys.stderr, "start", "descriptor %d is not the loop's end of a socket pair: %s" % (FD, _said(e)))
+        return 1
     try:
         return serve(sock, digest, on_turn)
     finally:

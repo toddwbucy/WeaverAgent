@@ -6121,6 +6121,7 @@ esac
                   "member.worker", "member.weaver-admin", "member.weaver-trace-relay", "member.weaver-gate",
                   "member.weaver-spu", "member.weaver-state", "member.weaver-loop-launch", "member.busybox", "member.busybox.applets",
                   "library.libggml.so.0.9.1", "library.libllama.so.0.0.1",
+                  "loop.runner.py", "loop.weaver_board.py", "loop.grant",
                   "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand", "cccl"]
 
     def test_a_verified_install_prints_and_records_the_install_tuple(self):
@@ -6159,6 +6160,10 @@ esac
             self.assertEqual(facts[f"member.{member}"], hashlib.sha256((installed / member).read_bytes()).hexdigest())
         self.assertEqual(facts["library.libllama.so.0.0.1"],
                          hashlib.sha256(b"fixture libllama b").hexdigest())
+        # The loop runner's three files as laid, each by its sha256.
+        laid = self.lib_dir / "weaver-loop"
+        for name in ("runner.py", "weaver_board.py", "grant"):
+            self.assertEqual(facts[f"loop.{name}"], hashlib.sha256((laid / name).read_bytes()).hexdigest(), name)
         self.assertEqual(facts["commit"], "abcdef0")
         self.assertEqual(facts["features"], "weaver-spu/cuda,weaver-state/sqlite")
         self.assertEqual(facts["engine"], "llama-cpp-sys-2 0.1.0")
@@ -6176,6 +6181,7 @@ esac
         install = _agent_tuple().read_install_tuple(str(self.stack / "install-tuple"))
         self.assertEqual(install["earlier"], [])
         self.assertEqual(sorted(install["runtime"]), ["cublas", "cublaslt", "cudart", "curand"])
+        self.assertEqual(sorted(install["loop"]), ["grant", "runner.py", "weaver_board.py"])
         # The lock read filtered to the host, so an offline cache a build
         # filled answers it.
         metadata = [c for c in self.calls() if c[:2] == ["cargo", "metadata"] and "--no-deps" not in c]
@@ -6214,10 +6220,11 @@ esac
         self.assertEqual(ran.returncode, 0, ran.stderr)
         facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
         self.assertEqual(list(facts), ["commit", "toolchain", "features", "engine", "engine-source", "engine-vendored",
-                                       "nvcc", "member.worker", "library.libllama.so.0.0.1", "runtime.cudart",
+                                       "nvcc", "member.worker", "library.libllama.so.0.0.1", "loop.runner.py",
+                                       "loop.weaver_board.py", "loop.grant", "runtime.cudart",
                                        "runtime.cublas", "runtime.cublaslt", "runtime.curand", "cccl"])
         for key in ("toolchain", "engine-source", "engine-vendored", "member.worker", "library.libllama.so.0.0.1",
-                    "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand"):
+                    "loop.runner.py", "loop.weaver_board.py", "loop.grant", "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand"):
             self.assertEqual(facts[key], "unknown", key)
         self.assertEqual(facts["engine"], "llama-cpp-sys-2 unknown")
         self.assertEqual(facts["commit"], "fixture-commit", "the commit is the caller's, never read again")
@@ -16188,6 +16195,21 @@ class AgentTupleInstallTests(unittest.TestCase):
                          (hashlib.sha256(cudart.read_bytes()).hexdigest(), str(cudart)))
         self.assertEqual(sorted(install["runtime"]), ["cublas", "cublaslt", "cudart", "curand"])
         self.assertNotIn("gpus", install)
+        # A tuple written before the loop's group reads, holding none.
+        self.assertEqual(install["loop"], {})
+
+    def test_the_loop_runners_group_is_read_as_its_own(self):
+        """**The loop runner's files are a group of their own**, as the
+        members are: read by name, each digest 64 hex digits or `unknown`.
+        Perturbations: read them as scalars and they land among the facts;
+        drop their digest check and the malformed one reads."""
+        lines = INSTALL_TUPLE_LINES + ["loop.runner.py = " + "a" * 64, "loop.weaver_board.py = unknown",
+                                       "loop.grant = " + "b" * 64]
+        install = self.tuple.read_install_tuple(self.write(lines))
+        self.assertEqual(install["loop"], {"runner.py": "a" * 64, "weaver_board.py": "unknown", "grant": "b" * 64})
+        self.assertFalse([key for key in install["facts"] if key.startswith("loop")])
+        with self.assertRaisesRegex(self.tuple.InstallTupleRefused, "grant's digest is not 64 hex digits"):
+            self.tuple.read_install_tuple(self.write(INSTALL_TUPLE_LINES + ["loop.grant = zz"]))
 
     def test_an_earlier_tuple_is_read_with_its_hardware_lines_unread(self):
         """**A tuple of the earlier form is read, not refused**, so a box
@@ -16377,6 +16399,8 @@ class AgentTupleInstallTests(unittest.TestCase):
         facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
         self.assertEqual(facts["member.worker"], hashlib.sha256(b"worker").hexdigest())
         self.assertEqual(facts["library.libllama.so.0.0.8783"], hashlib.sha256(b"llama").hexdigest())
+        self.assertEqual([facts[f"loop.{n}"] for n in ("runner.py", "weaver_board.py", "grant")], ["unknown"] * 3,
+                         "no loop folder named, so each reads unknown")
         cudart = (odd / "cuda" / "libcudart.so.13.0.1").resolve()
         self.assertEqual(facts["runtime.cudart"], f"{hashlib.sha256(b'cudart').hexdigest()} {cudart}")
         install = self.tuple.read_install_tuple(self.write([ran.stdout.rstrip("\n")]))
@@ -16572,6 +16596,98 @@ class AgentTupleInstallTests(unittest.TestCase):
                               "--declaration", str(declaration)], capture_output=True, text=True, timeout=30)
         box, = [line for line in ran.stdout.splitlines() if line.lstrip().startswith("box ")]
         self.assertIn("[absent: no install tuple was named; the box side is unstated]", box)
+
+
+class LoopGrantTests(unittest.TestCase):
+    """deploy/loop-grant.sh's loop_grant through doubles: an interpreter that
+    answers the two questions the script asks it, and an ldd on PATH that
+    prints a written answer, so each refusal and each line's role is read
+    without the machine's own interpreter (weaver-harness-Spec section 2.5)."""
+
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-loop-grant-")
+        self.addCleanup(scratch.cleanup)
+        self.root = Path(scratch.name)
+        self.lib = self.root / "lib"
+        self.stdlib = self.root / "stdlib"
+        self.bin = self.root / "bin"
+        for d in (self.lib, self.stdlib, self.bin):
+            d.mkdir()
+        for name in ("ld-real.so", "libpython3.so", "libc.so.6"):
+            (self.lib / name).write_bytes(b"")
+        (self.lib / "ld.so").symlink_to("ld-real.so")
+        self.interp = self.root / "python3"
+
+    def interpreter(self, recent=True):
+        self.interp.write_text(
+            "#!/bin/sh\n"
+            'case "$4" in\n'
+            "  *version_info*) exit %d ;;\n"
+            "  *os.__file__*) printf '%%s\\n' %s ;;\n"
+            "esac\n" % (0 if recent else 1, shlex.quote(str(self.stdlib))))
+        self.interp.chmod(0o755)
+
+    def ldd(self, answer):
+        (self.bin / "answer").write_text(answer)
+        double = self.bin / "ldd"
+        double.write_text('#!/bin/sh\ncat "%s"\n' % (self.bin / "answer"))
+        double.chmod(0o755)
+
+    def grant(self):
+        env = dict(os.environ, PATH="%s%s%s" % (self.bin, os.pathsep, os.environ["PATH"]))
+        return subprocess.run(
+            ["bash", "-c", 'set -euo pipefail; source "$1"; loop_grant "$2" /pyc', "x",
+             str(DEPLOY / "loop-grant.sh"), str(self.interp)],
+            text=True, capture_output=True, timeout=20, env=env)
+
+    def test_a_written_ldd_answer_gives_the_written_grant(self):
+        # The loader named with an arrow to its file is executed, the vdso
+        # written with an arrow and no path is passed over, and the libraries
+        # are read. Perturbation: class every arrow line as a read, and the
+        # loader is read and the grant names no execute line.
+        # Older ldd writes the vdso's arrow with two spaces before its address.
+        self.interpreter()
+        lib = self.lib
+        for vdso in ("\tlinux-vdso.so.1 => (0x00007ffd1)\n", "\tlinux-vdso.so.1 =>  (0x00007ffd1)\n"):
+            with self.subTest(vdso=vdso):
+                self.ldd(vdso +
+                         "\tlibpython3.so => %s/libpython3.so (0x00007f2)\n"
+                         "\tlibc.so.6 => %s/libc.so.6 (0x00007f3)\n"
+                         "\t%s/ld.so => %s/ld.so (0x00007f4)\n" % (lib, lib, lib, lib))
+                ran = self.grant()
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                sha = hashlib.sha256(self.interp.read_bytes()).hexdigest()
+                self.assertEqual(ran.stdout, "".join(line + "\n" for line in [
+                    "weaver-loop-grant 1",
+                    "interpreter %s %s" % (sha, self.interp),
+                    "execute %s/ld-real.so" % lib,
+                    "read %s/libpython3.so" % lib,
+                    "read %s/libc.so.6" % lib,
+                    "beneath %s" % self.stdlib,
+                    "pycache /pyc",
+                ]))
+
+    def test_an_interpreter_older_than_python_3_12_refuses(self):
+        # Perturbation: drop the version question, and the grant is laid.
+        self.interpreter(recent=False)
+        self.ldd("\t%s/ld.so (0x1)\n" % self.lib)
+        ran = self.grant()
+        self.assertEqual(ran.returncode, 1, ran.stdout)
+        self.assertEqual(ran.stdout, "")
+        self.assertEqual(ran.stderr, "the loop interpreter %s is older than Python 3.12, which the runner "
+                         "needs\n" % self.interp)
+
+    def test_a_library_the_loader_does_not_find_refuses(self):
+        # Perturbation: drop the "not found" look, and the line refuses as a
+        # path that does not resolve, or not at all.
+        self.interpreter()
+        answer = "\tlibgone.so.1 => not found\n\t%s/ld.so (0x1)\n" % self.lib
+        self.ldd(answer)
+        ran = self.grant()
+        self.assertEqual(ran.returncode, 1, ran.stdout)
+        self.assertEqual(ran.stdout, "")
+        self.assertEqual(ran.stderr, "the loop interpreter %s has a library the loader does not find:\n%s"
+                         % (self.interp, answer))
 
 
 class _NamingResult(unittest.TextTestResult):

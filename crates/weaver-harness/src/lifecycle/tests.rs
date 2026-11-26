@@ -917,6 +917,24 @@ fn the_start_stands_the_loop_or_refuses_naming_it() {
             arm.stop(None);
         }
     }
+    // A grant file named in bytes that are not UTF-8 is the launch's own
+    // configuration, refused `ConfigInvalid` naming `loop` before any fork,
+    // not the fork's `BindFailed`.
+    let (mut run, _spare, _sink) = entered_run(None);
+    let launch = crate::loop_arm::LoopLaunch {
+        launcher: launch.launcher.clone(),
+        grant: std::path::PathBuf::from(
+            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"/grant-\xff"),
+        ),
+    };
+    let election = weaver_types::WiresElection {
+        file: wires.into(),
+        sha256,
+    };
+    // SAFETY: on this test's thread; no fork is reached.
+    let started = unsafe { start_loop(&mut run, &launch, &election) };
+    assert_eq!(started, Err(loop_refused), "a grant path not in UTF-8");
+    assert!(run.loop_arm.is_none());
 }
 
 /// A seat recording each turn's text, answering a refusal no relay makes.
@@ -1000,8 +1018,13 @@ fn a_run_holding_a_loop_arm_answers_by_its_relay_and_calls_no_entry() {
 /// section 2.5: a rollback leave dispatched as admin sends it, which takes no
 /// drain, and the leave the unwind after a fault calls, each take the arm from
 /// the run, shut its end down and reap the runner, which has exited at its end
-/// of file long before the shared deadline of 150 s. Perturbation: drop either
-/// leave's stop, and its row finds the runner standing.
+/// of file long before the shared deadline of 150 s. **The order shows**: a
+/// gate stand-in reads the runner's state in `/proc` when the lower reaches
+/// it, and the runner still stands there. Perturbation: drop either leave's
+/// stop, and its row finds the runner standing after the leave; move either
+/// stop ahead of the lower, and its row finds the runner gone at the lower.
+/// That the stop comes before the save point is held by reading alone: the
+/// unwind's leave and the rollback take none.
 #[test]
 fn every_leave_stops_the_loop_after_the_lower() {
     use nix::sys::wait::{WaitPidFlag, waitpid};
@@ -1010,8 +1033,14 @@ fn every_leave_stops_the_loop_after_the_lower() {
     let (arm, _dir) = unwalled_arm();
     let pid = arm.pid();
     run.loop_arm = Some(arm);
+    let at_lower = gate_reading_the_runner(&mut run, pid);
     let started = std::time::Instant::now();
     let _ = leave(&mut run, None, true);
+    let at_lower = at_lower.join().expect("the gate stand-in");
+    assert!(
+        matches!(at_lower, Some(state) if state != 'Z'),
+        "the runner stands when the unwind's lower reaches the gate: {at_lower:?}"
+    );
     assert!(run.loop_arm.is_none(), "the unwind's leave takes the arm");
     assert_eq!(
         waitpid(pid, Some(WaitPidFlag::WNOHANG)),
@@ -1037,6 +1066,7 @@ fn every_leave_stops_the_loop_after_the_lower() {
     let (arm, _dir) = unwalled_arm();
     let pid = arm.pid();
     run.loop_arm = Some(arm);
+    let at_lower = gate_reading_the_runner(&mut run, pid);
     let (mut harness, _harness_dir) = harness_entered(run);
     let (verb_end, admin_end) = OrganChannel::pair().expect("admin pair");
     let _admin = admin_end.into_channel();
@@ -1058,12 +1088,54 @@ fn every_leave_stops_the_loop_after_the_lower() {
         )
         .expect("the leave dispatches");
     assert!(matches!(outcome, Some(Outcome::Left)), "{outcome:?}");
+    let at_lower = at_lower.join().expect("the gate stand-in");
+    assert!(
+        matches!(at_lower, Some(state) if state != 'Z'),
+        "the runner stands when the rollback's lower reaches the gate: {at_lower:?}"
+    );
     assert_eq!(
         waitpid(pid, Some(WaitPidFlag::WNOHANG)),
         Err(nix::errno::Errno::ECHILD),
         "the rollback leave reaped the runner"
     );
     assert!(started.elapsed() < std::time::Duration::from_secs(10));
+}
+
+/// **A gate stand-in that reads the runner when the lower reaches it**: set
+/// on `run`, it takes the `Lower`, reads the state letter of `pid` in
+/// `/proc` (none where the runner is reaped), and answers `GateStopped`. The
+/// handle answers what it read.
+fn gate_reading_the_runner(
+    run: &mut Run,
+    pid: nix::unistd::Pid,
+) -> std::thread::JoinHandle<Option<char>> {
+    let (channel, gate_peer) = OrganChannel::pair().expect("pair");
+    run.gate = Some(GateChannel {
+        channel,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
+    });
+    let gate_peer = gate_peer.into_channel();
+    std::thread::spawn(move || {
+        let asked = gate_peer.recv().expect("the lower");
+        assert!(matches!(
+            asked.payload,
+            weaver_types::Payload::Directive(LifecycleDirective::Lower)
+        ));
+        let state = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|stat| {
+                stat.rsplit_once(") ")
+                    .and_then(|(_, rest)| rest.chars().next())
+            });
+        let _ = gate_peer.send(&OrganEnvelope {
+            exchange: asked.exchange,
+            position: Position::Close,
+            payload: weaver_types::Payload::Answer(LifecycleAnswer::GateStopped),
+        });
+        state
+    })
 }
 
 /// **A refused enter leaves its reason in the run's record.** Before

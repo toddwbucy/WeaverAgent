@@ -41,6 +41,7 @@ after exactly the contract's three steps and no others:
 
 import hashlib
 import json
+import math
 import os
 import sys
 
@@ -52,8 +53,13 @@ USAGE = """usage:
 VERDICTS = {IDENTICAL: "identical", FAILS: "fails", CONTROL_DIFFERS: "control-differs",
             UNCLEAN: "unclean", UNREADABLE: "unreadable"}
 
-# Step 1: the clocks, which differ between any two runs.
+# Step 1: the clocks, which differ between any two runs, and the two elapsed times the
+# SPU renders into every `model.measurement` (`weaver-spu` `main.rs`, taken in
+# `decoder/session.rs`), elapsed times as the clocks are. These and no others: a timing
+# added later fails the comparison until the contract names it.
 CLOCKS = ("wall_ms", "monotonic_ns")
+TIMINGS = {"model.measurement": (("payload", "timings", "prefill_ns"),
+                                 ("payload", "timings", "decode_ns"))}
 
 # Step 3: the minted identifiers, by kind, as paths from the event's top. `*` is any
 # element of a list. The envelope's are every event's. These and no others
@@ -78,6 +84,8 @@ WIRE_FILE = "/etc/weaver/{agent}/loop/wires.py"
 
 PRESSURE_FAULT = "recorder_commit_pressure"
 SHOWN = 240  # the most characters of a value an answer prints
+# Characters each side of the first that differs, where two strings differ.
+WINDOW = 40
 
 
 class Unreadable(Exception):
@@ -202,9 +210,11 @@ def normalize(events, composer):
     out = []
     for index, event in enumerate(events):
         event = {k: v for k, v in event.items() if k not in CLOCKS}
+        for timing in TIMINGS.get(event["kind"], ()):
+            event = _set_aside(event, timing)
         if event["kind"] == "load":
             payload = event.get("payload")
-            if not isinstance(payload, dict) or payload.get("composer") != composer:
+            if not isinstance(payload, dict) or not same(payload.get("composer"), composer):
                 held = payload.get("composer") if isinstance(payload, dict) else None
                 raise Mismatch("event %d, a load, names the composer %s where its arm must name %s"
                                % (index, shown(held), shown(composer)))
@@ -212,6 +222,15 @@ def normalize(events, composer):
         paths = ENVELOPE_RENAMED | RENAMED.get(event["kind"], frozenset())
         out.append(_rename(event, (), paths, name))
     return out
+
+
+def _set_aside(node, path):
+    """`node` less the member at `path`, where it stands; `node` itself is not changed."""
+    if not isinstance(node, dict) or path[0] not in node:
+        return node
+    if len(path) == 1:
+        return {k: v for k, v in node.items() if k != path[0]}
+    return {k: (_set_aside(v, path[1:]) if k == path[0] else v) for k, v in node.items()}
 
 
 def _rename(node, path, paths, name):
@@ -230,14 +249,38 @@ class Mismatch(Exception):
     """A check of the comparison does not hold."""
 
 
+def same(x, y):
+    """Two parsed JSON values are the same value of the same JSON type: a boolean never
+    equals a number, an integer never equals a float, and 0.0 is not -0.0. Members in
+    another order are the same object (the contract's parsed values)."""
+    if isinstance(x, dict) or isinstance(y, dict):
+        return (isinstance(x, dict) and isinstance(y, dict) and x.keys() == y.keys()
+                and all(same(x[k], y[k]) for k in x))
+    if isinstance(x, list) or isinstance(y, list):
+        return (isinstance(x, list) and isinstance(y, list) and len(x) == len(y)
+                and all(same(u, v) for u, v in zip(x, y)))
+    if type(x) is not type(y):
+        return False
+    if isinstance(x, float):
+        return x == y and math.copysign(1.0, x) == math.copysign(1.0, y)
+    return x == y
+
+
 def first_difference(a, b):
     """The first event at which two normalized arms differ, and where in it, or None."""
     for index, (x, y) in enumerate(zip(a, b)):
-        if x != y:
+        if not same(x, y):
             path, xv, yv = _where(x, y, ())
-            return {"event": index, "kind": [x.get("kind"), y.get("kind")],
-                    "at": ".".join(map(str, path)) or "(the event)",
-                    "values": [shown(xv), shown(yv)]}
+            found = {"event": index, "kind": [x.get("kind"), y.get("kind")],
+                     "at": ".".join(map(str, path)) or "(the event)",
+                     "values": [shown(xv), shown(yv)]}
+            if isinstance(xv, str) and isinstance(yv, str):
+                # `values` cuts each at SHOWN characters, which can print two equal
+                # beginnings: the first character that differs, and a window around it.
+                at = next((i for i, (p, q) in enumerate(zip(xv, yv)) if p != q), min(len(xv), len(yv)))
+                found["offset"] = at
+                found["window"] = [xv[max(0, at - WINDOW):at + WINDOW], yv[max(0, at - WINDOW):at + WINDOW]]
+            return found
     if len(a) != len(b):
         return {"event": min(len(a), len(b)), "kind": None, "at": "(the record's length)",
                 "values": ["%d events" % len(a), "%d events" % len(b)]}
@@ -249,11 +292,11 @@ def _where(x, y, path):
         for key in list(x) + [k for k in y if k not in x]:
             if key not in x or key not in y:
                 return path + (key,), x.get(key, "(absent)"), y.get(key, "(absent)")
-            if x[key] != y[key]:
+            if not same(x[key], y[key]):
                 return _where(x[key], y[key], path + (key,))
     if isinstance(x, list) and isinstance(y, list):
         for i, (u, v) in enumerate(zip(x, y)):
-            if u != v:
+            if not same(u, v):
                 return _where(u, v, path + (i,))
         return path, "%d elements" % len(x), "%d elements" % len(y)
     return path, x, y
@@ -340,11 +383,19 @@ def run(folders):
         return answer(FAILS, reason="the four arms do not run under one agent name")
     if len({a["meta"]["loads"] for a in arms}) != 1:
         return answer(FAILS, reason="the four arms do not declare one script of loads")
+    sent = [a["meta"]["turns_to_loop"] for a in arms[:3]]
+    if len(set(sent)) != 1:
+        return answer(FAILS, reason="the compiled arms and the wires arm sent %s turns to the loop, so they did "
+                      "not run one script: the pressure reading counted the turns before pressure "
+                      "differently in each" % sent)
     dirty = {a["folder"]: unclean(a) for a in arms if unclean(a)}
     if dirty:
         return answer(UNCLEAN, arms=dirty,
                       reason="an arm holds a timing path outside the comparison: run it again, at most three times")
     for arm in arms:
+        if not loads(arm) or not any(e["kind"] == "save_point" for e in arm["events"]):
+            return answer(FAILS, reason="%s holds no load or no save point, so the run would compare nothing"
+                          % arm["folder"])
         if len(loads(arm)) != arm["meta"]["loads"]:
             return answer(FAILS, reason="%s holds %d loads where the script makes %d"
                           % (arm["folder"], len(loads(arm)), arm["meta"]["loads"]))
@@ -376,14 +427,20 @@ def run(folders):
         saved = [images(a) for a in arms[:3]]
     except Unreadable as why:
         return answer(UNREADABLE, reason=str(why), **result)
-    if saved[0] == saved[1]:
-        if saved[2] != saved[0]:
-            at = next((i for i, (x, y) in enumerate(zip(saved[0], saved[2])) if x != y), min(len(saved[0]), len(saved[2])))
-            return answer(FAILS, reason="the control arms' saved images are equal and the wires arm's differ, at save point %d" % at, **result)
-        result["images"] = "compared: equal in all three arms (%d save points)" % len(saved[0])
-    else:
-        at = next((i for i, (x, y) in enumerate(zip(saved[0], saved[1])) if x != y), min(len(saved[0]), len(saved[1])))
-        result["images"] = "not compared: the control arms' images differ at save point %d" % at
+    # One read per save point (the brief, section 8): where the two compiled arms' images
+    # of a save point are equal, the wires arm's must be; where they differ, that save
+    # point is not compared and the result names it. The records being equal, the three
+    # arms hold the same save points in the same order.
+    compared, not_compared = [], []
+    for index, (one, two, wired) in enumerate(zip(*saved)):
+        if one != two:
+            not_compared.append(index)
+        elif wired != one:
+            return answer(FAILS, reason="save point %d: the control arms' images are equal and the wires arm's "
+                          "differs" % index, **result)
+        else:
+            compared.append(index)
+    result["images"] = {"compared": compared, "not compared": not_compared}
 
     if arms[3]["meta"]["wires_sha256"] == arms[2]["meta"]["wires_sha256"]:
         return answer(FAILS, reason="the negative control's wire file is the wires arm's: no byte was changed", **result)

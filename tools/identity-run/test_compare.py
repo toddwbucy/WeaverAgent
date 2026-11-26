@@ -54,7 +54,7 @@ def fixture():
 
 def remint(events, tag):
     """Every minted identifier given a fresh value for this arm, the same value always to
-    the same new one, and every clock moved."""
+    the same new one, and every clock and both of a measurement's timings moved."""
     fresh = {}
 
     def mint(value):
@@ -72,6 +72,10 @@ def remint(events, tag):
         event = walk(event, (), compare.ENVELOPE_RENAMED | compare.RENAMED.get(event["kind"], frozenset()))
         event["wall_ms"] = 1 + i + len(tag) * 1000
         event["monotonic_ns"] = str(7 * i + len(tag))
+        timings = event.get("payload", {}).get("timings") if isinstance(event.get("payload"), dict) else None
+        if event["kind"] == "model.measurement" and isinstance(timings, dict):
+            timings["prefill_ns"] = str(1000 + 3 * i + len(tag))
+            timings["decode_ns"] = str(2000 + 5 * i + len(tag))
         out.append(event)
     return out
 
@@ -186,9 +190,22 @@ class TheRun(unittest.TestCase):
         code, body = self.run_on(self.arms())
         self.assertEqual(code, compare.IDENTICAL, body)
         self.assertEqual(body["passes"], {"served": 2, "script": 2, "end_lines": 3})
-        self.assertTrue(body["images"].startswith("compared: equal in all three arms (2 save points)"), body)
+        self.assertEqual(body["images"], {"compared": [0, 1], "not compared": []}, body)
         self.assertEqual(body["negative"]["kind"], ["message.system", "message.system"])
         self.assertEqual(body["negative"]["at"], "payload.content.0.text")
+        prompt = next(e for e in fixture() if e["kind"] == "message.system")["payload"]["content"][0]["text"]
+        self.assertEqual(body["negative"]["offset"], len(prompt) - 1)
+        self.assertEqual(body["negative"]["window"][0][-1], prompt[-1])
+        self.assertEqual(body["negative"]["window"][1][-1], "X" if prompt[-1] != "X" else "Y")
+
+    def test_a_string_differing_past_what_values_prints_names_its_offset_and_a_window(self):
+        left = "a" * 700 + "careful" + "b" * 300
+        right = "a" * 700 + "cAreful" + "b" * 300
+        difference = compare.first_difference([{"kind": "x", "v": left}], [{"kind": "x", "v": right}])
+        self.assertEqual(difference["values"][0], difference["values"][1], "two equal beginnings")
+        self.assertEqual(difference["offset"], 701)
+        self.assertEqual(difference["window"], [left[661:741], right[661:741]])
+        self.assertIn("cAreful", difference["window"][1])
 
     def test_the_command_line_answers_its_verdict_as_its_status(self):
         folders = self.arms()
@@ -237,6 +254,14 @@ class TheRun(unittest.TestCase):
         self.assertEqual(code, compare.FAILS, body)
         self.assertEqual(body["difference"]["at"], "sequence")
 
+    def test_a_timing_beside_the_two_named_is_compared(self):
+        wires = set_composer(remint(fixture(), "w"), wires_composer(WIRES_SHA))
+        at = next(i for i, e in enumerate(wires) if e["kind"] == "model.measurement")
+        wires[at]["payload"]["timings"]["sample_ns"] = "5"
+        code, body = self.run_on(self.arms(wires=wires))
+        self.assertEqual(code, compare.FAILS, body)
+        self.assertEqual(body["difference"]["at"], "payload.timings.sample_ns")
+
     def test_an_event_more_or_fewer_fails_at_the_records_length(self):
         wires = set_composer(remint(fixture(), "w"), wires_composer(WIRES_SHA))
         code, body = self.run_on(self.arms(wires=wires[:-1]))
@@ -276,12 +301,23 @@ class TheRun(unittest.TestCase):
     def test_images_equal_in_the_control_must_be_equal_in_the_wires(self):
         code, body = self.run_on(self.arms(write={"w": {"image": lambda i: b"!" if i == 1 else b""}}))
         self.assertEqual(code, compare.FAILS, body)
-        self.assertIn("at save point 1", body["reason"])
+        self.assertIn("save point 1:", body["reason"])
+
+    def test_images_are_read_one_save_point_at_a_time(self):
+        # The control differs at save point 0 alone: save point 1 is still compared, and a
+        # wires arm that differs there fails; one that differs at 0 alone does not.
+        c2 = {"image": lambda i: b"?" if i == 0 else b""}
+        code, body = self.run_on(self.arms(write={"c2": c2, "w": {"image": lambda i: b"!" if i == 1 else b""}}))
+        self.assertEqual(code, compare.FAILS, body)
+        self.assertIn("save point 1:", body["reason"])
+        code, body = self.run_on(self.arms(write={"c2": c2, "w": {"image": lambda i: b"!" if i == 0 else b""}}))
+        self.assertEqual(code, compare.IDENTICAL, body)
+        self.assertEqual(body["images"], {"compared": [1], "not compared": [0]})
 
     def test_images_the_control_holds_unequal_are_not_compared_and_the_result_says_so(self):
         code, body = self.run_on(self.arms(write={"c2": {"image": lambda i: b"?"}, "w": {"image": lambda i: b"!"}}))
         self.assertEqual(code, compare.IDENTICAL, body)
-        self.assertEqual(body["images"], "not compared: the control arms' images differ at save point 0")
+        self.assertEqual(body["images"], {"compared": [], "not compared": [0, 1]})
 
     def test_a_save_point_file_that_is_not_the_events_is_unreadable(self):
         folders = self.arms()
@@ -376,6 +412,38 @@ class TheRun(unittest.TestCase):
         self.assertEqual(code, compare.FAILS, body)
         self.assertIn("holds 3 loads where the script makes 6", body["reason"])
 
+    def test_a_run_over_nothing_fails(self):
+        for row, keep in (("no load and no save point", lambda e: e["kind"] not in ("load", "save_point")),
+                          ("no save point", lambda e: e["kind"] != "save_point")):
+            with self.subTest(row=row):
+                events = {}
+                for arm, tag in (("c1", "a"), ("c2", "b"), ("w", "w"), ("n", "n")):
+                    made = remint(fixture(), tag)
+                    if arm in ("w", "n"):
+                        made = set_composer(made, wires_composer(WIRES_SHA if arm == "w" else NEGATIVE_SHA))
+                    if arm == "n":
+                        made = change_system_prompt(made)
+                    events[arm] = [e for e in made if keep(e)]
+                loads = sum(1 for e in events["c1"] if e["kind"] == "load")
+                code, body = self.run_on(self.arms(c1=events["c1"], c2=events["c2"], wires=events["w"],
+                                                   negative=events["n"],
+                                                   write={a: {"loads": loads} for a in ("c1", "c2", "w", "n")}))
+                self.assertEqual(code, compare.FAILS, body)
+                self.assertIn("holds no load or no save point", body["reason"])
+        # A record with no event at all is no record.
+        code, body = self.run_on(self.arms(c1=[], c2=[], wires=[], negative=[]))
+        self.assertEqual(code, compare.UNREADABLE, body)
+
+    def test_the_compiled_arms_and_the_wires_arm_must_send_one_count_of_turns(self):
+        for arm in ("c1", "c2", "w"):
+            with self.subTest(arm=arm):
+                code, body = self.run_on(self.arms(write={arm: {"turns": 9}}))
+                self.assertEqual(code, compare.FAILS, body)
+                self.assertIn("did not run one script", body["reason"])
+        # The negative's prompt differs, so pressure may come a turn sooner or later there.
+        code, body = self.run_on(self.arms(write={"n": {"turns": 9}}))
+        self.assertEqual(code, compare.IDENTICAL, body)
+
     @staticmethod
     def append(folder, line):
         with open(os.path.join(folder, "trace.ndjson"), "a", encoding="utf-8") as f:
@@ -416,13 +484,47 @@ class TheSteps(unittest.TestCase):
         ids = {v for e in normal for v in json.dumps(e).split('"') if v.startswith("id-")}
         self.assertEqual(ids, {"id-%d" % n for n in range(1, 9)})
 
-    def test_the_clocks_and_the_composer_alone_are_set_aside(self):
+    def test_the_clocks_the_timings_and_the_composer_alone_are_set_aside(self):
         events = fixture()
         normal = compare.normalize(events, compare.COMPILED_COMPOSER)
+        measured = 0
         for before, after in zip(events, normal):
             self.assertEqual(set(before) - set(after), {"wall_ms", "monotonic_ns"})
+            if before["kind"] == "model.measurement":
+                measured += 1
+                self.assertEqual(set(before["payload"]["timings"]) - set(after["payload"]["timings"]),
+                                 {"prefill_ns", "decode_ns"})
+                self.assertEqual(set(before["payload"]) - set(after["payload"]), set())
+        self.assertEqual(measured, 2, "the real record's two measurements")
         self.assertEqual(set(events[0]["payload"]) - set(normal[0]["payload"]), {"composer"})
         self.assertEqual(events[0]["payload"]["composer"], {"binary": "worker"}, "the real record's composer")
+
+    def test_the_real_records_two_measurements_differ_by_their_timings_alone(self):
+        # Graded against the live shape: two loads of one agent, each one turn, whose
+        # measurements differ in the two elapsed times and are equal once step 1 holds.
+        events = fixture()
+        first, second = (i for i, e in enumerate(events) if e["kind"] == "model.measurement")
+        self.assertNotEqual(events[first]["payload"]["timings"], events[second]["payload"]["timings"])
+        normal = compare.normalize(events, compare.COMPILED_COMPOSER)
+        self.assertEqual(normal[first]["payload"], normal[second]["payload"])
+
+    def test_values_compare_by_json_type_as_well_as_value(self):
+        rows = (("true against 1", True, 1), ("false against 0", False, 0),
+                ("1 against 1.0", 1, 1.0), ("0.0 against -0.0", 0.0, -0.0),
+                ("1 in a list against 1.0", [1], [1.0]), ("null against false", None, False))
+        for row, left, right in rows:
+            with self.subTest(row=row):
+                a = [{"kind": "x", "payload": {"a": left}}]
+                b = [{"kind": "x", "payload": {"a": right}}]
+                difference = compare.first_difference(a, b)
+                self.assertIsNotNone(difference, row)
+                self.assertTrue(difference["at"].startswith("payload.a"), difference)
+                self.assertIsNotNone(compare.first_difference(b, a), row)
+        for row, value in (("members in another order", ({"a": 1, "b": [2.5, True]}, {"b": [2.5, True], "a": 1})),
+                           ("equal floats", (0.1, 0.1)), ("equal strings", ("t-1", "t-1"))):
+            with self.subTest(row=row):
+                self.assertIsNone(compare.first_difference([{"kind": "x", "v": value[0]}],
+                                                           [{"kind": "x", "v": value[1]}]))
 
     def test_pair_answers_equal_or_the_first_difference(self):
         made = Arms(self)

@@ -645,9 +645,12 @@ negative control.
   changed, as the end-to-end negative control (below)
 - each run is an agent made fresh by `create-agent.sh` with the same name and
   declarations, runs the script, has its record and save points copied out, and is taken
-  down by `decommission.sh` before the next is made
-- `decommission.sh` takes every agent off a machine (:2), so no two runs stand at once,
-  and the machine holds no other agent during the run.
+  down before the next is made
+- corrected 2026-11-26: the take-down is of that one agent, by the runbook's section 7
+  (`tools/identity-run/take-down.sh`), and leaves the stack, its record and the
+  machine's own accounts standing. `decommission.sh` would remove the stack and every
+  `weaver-` account, so the next arm could not run on the same install. No two runs
+  stand at once, and the machine holds no other agent during the run.
 
 The compiled arms have no loop folder. The wires arm has today's wire file laid, and the
 fourth run that file with its one byte changed.
@@ -715,8 +718,8 @@ section 8 names.
 
 **On what kind of machine, with which model.**
 
-- **The run needs two root acts and accounts:** `create-agent.sh` and `decommission.sh`
-  as root, and each arm's accounts. By the Planner's ruling 9 the build machine holds no
+- **The run needs two root acts and accounts:** `create-agent.sh` and the take-down of
+  one agent as root, and each arm's accounts. By the Planner's ruling 9 the build machine holds no
   agent. **So the identity run runs on an agent appliance, not here.**
 - **With its cards and the declared model,** that is one seeded session each way. Where
   the control arms differ, the run reports it and does not compare the wires.

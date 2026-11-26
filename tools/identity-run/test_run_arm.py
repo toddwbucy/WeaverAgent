@@ -18,7 +18,8 @@ SCRIPT = os.path.join(HERE, "run-arm.sh")
 
 
 def plan(*args):
-    return subprocess.run(["bash", SCRIPT, *args], capture_output=True, text=True)
+    env = {k: v for k, v in os.environ.items() if k != "SUDO_USER"}
+    return subprocess.run(["bash", SCRIPT, *args], capture_output=True, text=True, env=env)
 
 
 def steps(out):
@@ -64,9 +65,12 @@ class ThePlan(unittest.TestCase):
         self.assertEqual(steps(ran.stdout), ["create the agent",
                                              "admit the operator's uid at the gate, for the seeding turn"]
                          + THE_SCRIPT + ["the record, worker.log and the save points copied to %s, with arm.json"
-                                         % self.common[-1], "take every agent off the appliance"])
+                                         % self.common[-1], "take the arm's agent off the appliance, the stack left standing"])
         self.assertIn("plan only", ran.stdout)
         self.assertNotIn("/loop", ran.stdout)
+        self.assertNotIn("decommission", ran.stdout)
+        self.assertRegex(ran.stdout, r"(?m)^\+ \S*/take-down\.sh --agent a1 --archive %s/archive --admin \S+ --apply$"
+                         % re.escape(self.common[-1]))
 
     def test_a_wires_arm_lays_the_loop_and_has_it_judged_before_the_first_load(self):
         ran = plan("--arm", "wires", "--wires", self.wires, *self.common)
@@ -90,6 +94,24 @@ class ThePlan(unittest.TestCase):
                          ["operator-admitted", "turn-context=independent", "turn-context=continuous",
                           "turn-context=independent"])
 
+    def test_a_relative_out_is_made_absolute_so_the_take_down_takes_its_archive(self):
+        common = [a if a != self.common[-1] else "arm1" for a in self.common]
+        env = {k: v for k, v in os.environ.items() if k != "SUDO_USER"}
+        ran = subprocess.run(["bash", SCRIPT, "--arm", "compiled", *common], capture_output=True,
+                             text=True, env=env, cwd=self.scratch.name)
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+        here = os.path.realpath(self.scratch.name)
+        self.assertRegex(ran.stdout, r"(?m)^\+ \S*/take-down\.sh --agent a1 --archive %s/archive --admin \S+ --apply$"
+                         % re.escape(os.path.join(here, "arm1")))
+
+    def test_the_deploy_scripts_default_to_the_trees_own(self):
+        ran = plan("--arm", "compiled", *self.common)
+        deploy = os.path.realpath(os.path.join(HERE, "..", "..", "deploy"))
+        self.assertIn("+ %s/create-agent.sh a1 " % deploy, ran.stdout)
+        self.assertIn("reads %s/turn.py on its standard input" % deploy, ran.stdout)
+        ran = plan("--arm", "compiled", *self.common, "--deploy", "/elsewhere/deploy")
+        self.assertIn("+ /elsewhere/deploy/create-agent.sh a1 ", ran.stdout)
+
     def test_the_create_step_names_the_shared_declarations(self):
         ran = plan("--arm", "compiled", *self.common, "--context-capacity", "4096")
         self.assertRegex(ran.stdout, r"create-agent\.sh a1 --engine sqlite --artifact /models/model\.gguf "
@@ -108,6 +130,15 @@ class ThePlan(unittest.TestCase):
                 ran = plan(*args)
                 self.assertEqual(ran.returncode, 2, ran.stdout + ran.stderr)
                 self.assertNotIn("== step", ran.stdout)
+
+    def test_apply_through_sudo_from_another_account_is_refused_before_anything(self):
+        env = dict(os.environ, SUDO_USER="someone")
+        ran = subprocess.run(["bash", SCRIPT, "--arm", "compiled", *self.common, "--apply"],
+                             capture_output=True, text=True, env=env)
+        self.assertEqual(ran.returncode, 2, ran.stdout + ran.stderr)
+        self.assertIn("not sudo from someone: run the identity run from root's own login", ran.stderr)
+        self.assertNotIn("== step", ran.stdout)
+        self.assertFalse(os.path.exists(self.common[-1]))
 
     def test_apply_is_roots_and_refused_to_anyone_else_before_it_touches_anything(self):
         if os.geteuid() == 0:

@@ -329,11 +329,18 @@ later load with earlier runs (the continuity line), a first turn with a prompt s
 and `independent`, both with nothing seated and with a prompt seated.
 
 **The comparison** is over parsed values, each event's canonical line parsed as JSON,
-event by event. The two records are identical when they hold the same events, in the
-same order, with the same values, after exactly these three steps and no others:
+event by event. Two values are the same where they are of one JSON type and equal: a
+boolean never equals a number, an integer never equals a float, and `0.0` is not `-0.0`,
+while an object's members in another order are the same object. The two records are
+identical when they hold the same events, in the same order, with the same values, after
+exactly these three steps and no others:
 
-1. Every envelope's `wall_ms` and `monotonic_ns` are set aside. They differ between any
-   two runs.
+1. Every envelope's `wall_ms` and `monotonic_ns` are set aside, and so are each
+   `model.measurement`'s `payload.timings.prefill_ns` and `payload.timings.decode_ns`.
+   The clocks differ between any two runs, and the two timings are elapsed times as the
+   clocks are, taken by the SPU (`weaver-spu` `decoder/session.rs`) and rendered into
+   every measurement (`main.rs`). These four and no others: a timing added to the record
+   later fails the comparison until this step names it.
 2. Each arm's load events' `composer` is checked against what that arm must hold, then
    set aside: the compiled loop's `{binary: "worker"}` in the compiled arm, and the
    wires' form with the wire file's digest in the wires arm.
@@ -362,17 +369,21 @@ repeats bit for bit. So the test runs the compiled loop twice under this compari
 before it runs the wires. Where the two compiled arms differ, the test reports that and
 does not compare the wires.
 
-**Two timing paths are outside the comparison.**
+**Two timing paths are outside the comparison, read by three marks.**
 
 - The `RecorderCommitPressure` fault reads the recorder's queue depth at the turn's end
   (`engine.rs`:162-188), which depends on the writer's timing. The script keeps each
   session short of the high-water mark (`weaver-trace` `writer.rs`:50, 768 queued
-  records).
+  records). The worker's log reads the same mark a second way: its queue line names the
+  peak the trace queue reached and the mark, and a peak at or past the mark is the
+  third mark of an unclean arm.
 - The state seam's answer bound of 2 seconds (`state.rs`:27). A late `recall` or `shape`
   answers `null` and changes the delta.
 
-Every arm, the control arms included, must hold neither: no pressure fault, and no
-answer the state seam timed out. An arm that holds one is run again, at most three
+Every arm, the control arms included, must hold none of the three: no pressure fault, no
+queue peak at its mark in the worker's log, and no answer the state seam timed out. A
+timed-out answer retires the state seam, and the unload records the member as
+`unconfirmed`. An arm that holds one is run again, at most three
 times, and then the test fails.
 
 A difference outside the three steps is a failure of the test, never a field to add
@@ -413,7 +424,9 @@ after the fact. Adding a step or a field is a change of this contract.
 
 **What the runner says.** Every line the runner writes on its standard error is one JSON
 object in ASCII, `{"loop": <word>, "pass": <n>, "reason": <text>}`, `pass` present where
-a pass is open. The words:
+a pass is open. A reason past 1024 characters is cut there and ends
+` ... (cut at 1024 of <n> characters)`: a refused or raised line's reason is the wire
+file's own exception text, and the worker holds and logs every line. The words:
 
 - `start`: the runner ends before its `hello`, exit 1 (exit 2 for a wrong count of
   arguments). The reasons:
@@ -422,6 +435,8 @@ a pass is open. The words:
   - the grammar below, naming the line
   - a file `compile` refuses after the parse took it (a `break` outside a loop), naming
     the line
+  - descriptor 3 not the loop's end of a socket pair (closed, or not a socket)
+  - the hello that cannot be sent, the harness's end gone
   - a file nested past the interpreter's limits: "the wire file nests past the
     interpreter's limits".
 - `refused`: a pass the runner refused, with what `on_turn` raised.
@@ -592,3 +607,8 @@ Nothing, when it lands. Each standing sentence that says the loop is compiled al
 changes in the act that makes the new sentence true, and each pull request's body lists
 those it changes (the Planner's ruling of 2026-11-25, point 11). The list of candidates
 is the brief's.
+
+Section 6 changed on 2026-11-26, before any run: step 1 names the measurement's two
+timings, which every real arm differs in, the unclean arm's marks name the worker's
+queue line, and two values are the same only where their JSON types are (the Planner's
+ruling of 2026-11-26).

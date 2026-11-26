@@ -175,6 +175,18 @@ impl Layout {
         std::fs::write(root.join("runner/runner.py"), b"").unwrap();
         std::fs::write(root.join("lib/interp"), b"interpreter bytes").unwrap();
         std::fs::write(root.join("lib/libc"), b"").unwrap();
+        // Modes set, not left to the umask: the judgment reads group and
+        // other write.
+        use std::os::unix::fs::PermissionsExt as _;
+        for (path, mode) in [
+            ("runner", 0o755),
+            ("pycache", 0o755),
+            ("runner/runner.py", 0o644),
+            ("lib/interp", 0o755),
+        ] {
+            std::fs::set_permissions(root.join(path), std::fs::Permissions::from_mode(mode))
+                .unwrap();
+        }
         Layout(root)
     }
 
@@ -245,7 +257,7 @@ fn a_stale_digest_is_refused() {
 #[test]
 fn each_stale_or_wrong_path_is_refused_naming_it() {
     type Change = fn(&Layout, &mut Grant) -> PathBuf;
-    let rows: [(&str, Change, &str); 9] = [
+    let rows: [(&str, Change, &str); 10] = [
         (
             "a library gone",
             |l, g| {
@@ -303,6 +315,17 @@ fn each_stale_or_wrong_path_is_refused_naming_it() {
             "is not empty",
         ),
         (
+            "the pycache folder a link to an empty folder",
+            |l, _| {
+                let p = l.0.join("pycache");
+                std::fs::remove_dir(&p).unwrap();
+                std::fs::create_dir(l.0.join("empty")).unwrap();
+                std::os::unix::fs::symlink(l.0.join("empty"), &p).unwrap();
+                p
+            },
+            "does not open to list",
+        ),
+        (
             "the pycache folder writable by others",
             |l, g| {
                 std::fs::set_permissions(
@@ -350,11 +373,133 @@ fn each_stale_or_wrong_path_is_refused_naming_it() {
     }
 }
 
+/// **Every file in the runner's folder is judged as the grant file is**: a
+/// row per refusal, each naming the path, and the board laid as the stack
+/// lays it judges. Perturbation: drop the mode check, or the listing, and a
+/// row is admitted.
+#[test]
+fn each_file_of_the_runners_folder_is_judged_as_the_grant_file_is() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let set_mode = |path: &Path, mode: u32| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+    };
+    type Change = fn(&Layout, &dyn Fn(&Path, u32)) -> PathBuf;
+    let rows: [(&str, Change, &str); 3] = [
+        (
+            "runner.py written by its group",
+            |l, mode| {
+                let p = l.0.join("runner/runner.py");
+                mode(&p, 0o664);
+                p
+            },
+            "is writable by its group or others",
+        ),
+        (
+            "the board written by others",
+            |l, mode| {
+                let p = l.0.join("runner/weaver_board.py");
+                std::fs::write(&p, b"").unwrap();
+                mode(&p, 0o646);
+                p
+            },
+            "is writable by its group or others",
+        ),
+        (
+            "a folder standing in the runner's folder",
+            |l, _| {
+                let p = l.0.join("runner/__pycache__");
+                std::fs::create_dir(&p).unwrap();
+                p
+            },
+            "is not a regular file",
+        ),
+    ];
+    for (name, change, want) in rows {
+        let layout = Layout::new("runner-files");
+        let path = change(&layout, &set_mode);
+        let got = layout
+            .judge(&layout.grant())
+            .err()
+            .unwrap_or_else(|| panic!("{name} judged"));
+        assert!(got.contains(want), "{name}: {got:?} lacks {want:?}");
+        assert!(
+            got.contains(&path.display().to_string()),
+            "{name}: {got:?} names no path"
+        );
+    }
+    // The control: the board laid beside the runner, 0644, judges.
+    let layout = Layout::new("runner-board");
+    let board = layout.0.join("runner/weaver_board.py");
+    std::fs::write(&board, b"").unwrap();
+    set_mode(&board, 0o644);
+    set_mode(&layout.0.join("runner/runner.py"), 0o644);
+    layout.judge(&layout.grant()).unwrap();
+}
+
+/// **The interpreter and each `execute` file are written by no one the launch
+/// answers to**, a row each: the interpreter owned by the uid the launch runs
+/// as where that is not the owner, the interpreter written by others, an
+/// `execute` file written by its group. Perturbation: judge either as a
+/// regular file alone and its rows are admitted.
+#[test]
+fn an_interpreter_or_execute_file_the_launch_could_write_is_refused() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mode = |path: &Path, mode: u32| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap()
+    };
+    // The suite's uid as the running uid, judged for another owner: the
+    // interpreter, judged first, is the running uid's.
+    let layout = Layout::new("interp-owner");
+    mode(&layout.0.join("lib/interp"), 0o755);
+    let got = judge(
+        &layout.grant(),
+        &Launch {
+            runner_dir: &layout.0.join("runner"),
+            loop_dir: &layout.0.join("loop"),
+        },
+        own().wrapping_add(1),
+    )
+    .err()
+    .unwrap();
+    assert_eq!(
+        got,
+        format!(
+            "{} is owned by uid {}, the uid the launch runs as",
+            layout.0.join("lib/interp").display(),
+            own()
+        )
+    );
+    let layout = Layout::new("interp-mode");
+    mode(&layout.0.join("lib/interp"), 0o757);
+    let got = layout.judge(&layout.grant()).err().unwrap();
+    assert!(
+        got.ends_with("lib/interp is writable by its group or others"),
+        "{got}"
+    );
+    let layout = Layout::new("execute-mode");
+    let loader = layout.0.join("lib/loader");
+    std::fs::write(&loader, b"").unwrap();
+    mode(&loader, 0o775);
+    let mut grant = layout.grant();
+    grant.execute.push(loader.clone());
+    let got = layout.judge(&grant).err().unwrap();
+    assert_eq!(
+        got,
+        format!("{} is writable by its group or others", loader.display())
+    );
+    // The control: the loader 0755 judges.
+    mode(&loader, 0o755);
+    layout.judge(&grant).unwrap();
+}
+
 /// **The runner's folder must be the owner's**: here the suite's uid stands
 /// for root, and another owner (root's own `/`) is refused.
 #[test]
 fn a_runner_folder_of_another_owner_is_refused() {
     if own() == 0 {
+        eprintln!(
+            "SKIP a_runner_folder_of_another_owner_is_refused: run as root, where /usr is the owner's"
+        );
         return;
     }
     let layout = Layout::new("owner");
