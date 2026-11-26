@@ -4489,6 +4489,26 @@ esac
         self.assertIn("lets another principal make names in it", result.stderr)
         self.assertFalse((self.config / ".m1.partial").exists())
 
+    def test_the_agents_folder_is_made_only_where_no_other_principal_can_claim_it(self):
+        # Review of #655: the agent's folder beside the admin base is a new
+        # name in the base's parent, which root's `install -d` would follow
+        # where another principal made it first. The parent is judged by
+        # creatable_in as the base is, and a sticky open parent refuses before
+        # anything is made. Perturbation: drop the parent's judgment, and the
+        # run goes on.
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        mode = self.root.stat().st_mode & 0o7777
+        self.root.chmod(0o1777)
+        try:
+            result = self.create("--apply")
+        finally:
+            self.root.chmod(mode)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("the admin base's parent", result.stderr)
+        self.assertIn("could be claimed first", result.stderr)
+        self.assertFalse((self.config / ".m1.partial").exists())
+        self.assertFalse((self.root / "m1").exists())
+
     def test_bootstrap_makes_every_record_entry_readable_whatever_the_umask(self):
         # Codex on #45, round 14: under a 0077 umask `sudo tee` made the record's
         # keys 0600, and the scripts that read the record without privilege
