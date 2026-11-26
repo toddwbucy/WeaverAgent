@@ -612,9 +612,14 @@ fn a_case_silent_while_during_reads_is_killed_at_its_bound() {
     let layout = Layout::new("silent", None, &wires);
     let begun = Instant::now();
     let ran = std::panic::catch_unwind(|| {
+        // `during` waits on a line the case never says, past the lines the
+        // test harness itself prints, until the standard output ends.
         run_case_within("silent", &layout, Duration::from_secs(3), |_, stdout| {
             let mut line = String::new();
-            let _ = stdout.read_line(&mut line);
+            while stdout.read_line(&mut line).is_ok_and(|n| n > 0) {
+                assert!(!line.contains("never said"), "the case said nothing");
+                line.clear();
+            }
         })
     });
     let panicked = match ran {
