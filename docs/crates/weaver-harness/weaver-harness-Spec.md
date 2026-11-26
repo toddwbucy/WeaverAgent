@@ -995,8 +995,10 @@ keeps. No runner starts with a wall missing.
    <interpreter> -I -B -S -X pycache_prefix=<pycache folder> <runner.py> <wire file>
    ```
 
-**The grant file.** The stack's install computes it on the machine that runs the loop,
-from the resolved interpreter, its loader and the libraries the loader resolves for it,
+**The grant file.** The stack's install computes it on the machine that runs the loop
+(`deploy/loop-grant.sh`, sourced by `bootstrap-stack.sh` and `update-stack.sh`, which
+lay it with the runner and the board and compute it again at every run), from the
+resolved interpreter, its loader and the libraries the loader resolves for it,
 every link resolved to its file, and the interpreter's standard library. The enter
 carries none of it, and admin does not read it. It is ASCII, one fact per line, each line
 ended by a newline:
@@ -1064,6 +1066,8 @@ gate's copy and this one one module waits on the layout of the repository.
   - a stale digest, a path gone, a grant file not root's, no end at 3, a relative wire
     file and an absent grant file each end the launch with its one line.
   - the runner dies by `SIGKILL` with the thread that forked it, through both execs.
+  - the grant `deploy/loop-grant.sh` computes is the suite's, and a launch under it
+    serves.
 
 ## 3. The lifecycle interior
 

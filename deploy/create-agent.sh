@@ -1368,13 +1368,6 @@ printf '%s\n' "$OPERATOR_UID" | root tee "$STAGE/operator" >/dev/null
 printf 'trace-reader = "%s"\n' "$ADMINCON_USER" | root tee "$STAGE/roles.toml" >/dev/null
 root chmod 0644 "$STAGE"/*
 printf '   staged at %s\n' "$STAGE"
-# **The agent's own folder, empty** (weaver-admin-Spec section 4). A five-digit
-# mode, so no setgid bit of /etc/weaver's survives. Laid before the admission,
-# so an admitted agent always has it.
-laying "the folder $ETC_FOLDER"
-root install -d -o root -g root -m 00755 "$ETC_FOLDER"
-laid
-printf '   %s laid, root:root 0755\n' "$ETC_FOLDER"
 
 say "the wall, verified rather than assumed"
 # A refusal here leaves the root staged and not admitted.
@@ -1470,6 +1463,14 @@ for i in "${!STANDING[@]}"; do
 done
 LAYING=''
 printf '   %s admitted at %s\n' "$NAME" "$AGENT_ROOT"
+# **The agent's own folder, empty** (weaver-admin-Spec section 4), laid once
+# the agent is admitted, so a run refused before the admission leaves none.
+# Where it does not stand, admin's load runs the compiled loop. A five-digit
+# mode, so no setgid bit of /etc/weaver's survives.
+laying "the folder $ETC_FOLDER"
+root install -d -o root -g root -m 00755 "$ETC_FOLDER"
+laid
+printf '   %s laid, root:root 0755\n' "$ETC_FOLDER"
 
 say "made"
 # **The group add applies to a login taken after it.** `usermod -aG` changes

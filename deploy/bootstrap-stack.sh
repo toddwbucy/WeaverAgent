@@ -55,6 +55,7 @@ cd "$REPO"
 source "$REPO/deploy/retired-python.sh"
 source "$REPO/deploy/engine-libraries.sh"
 source "$REPO/deploy/install-tuple.sh"
+source "$REPO/deploy/loop-grant.sh"
 
 # The operator's cargo, rustup and PATH do the building; root has none of
 # them. Measured 2026-09-30: under sudo the toolchain read empty and nvcc
@@ -76,7 +77,12 @@ AGENT_DIR=${WEAVER_AGENT_DIR:-/var/lib/weaver-agent}
 
 refuse_python_install "$PREFIX" "$PREFIX/bin"
 
-MEMBERS="worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
+MEMBERS="worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state weaver-loop-launch"
+# **The loop runner's folder and its grant** (weaver-harness-Spec section 2.5,
+# deploy/loop-grant.sh): the runner and the board from loop-runner/, and the
+# grant computed here, as the operator, from the interpreter that stands.
+LOOP_PYTHON=${WEAVER_LOOP_PYTHON:-/usr/bin/python3}
+loop_paths "$PREFIX"
 # The agent's shell (#29): the static busybox and its applet list, installed
 # beside the members, as update-stack.sh names them.
 SHELL_FILES="busybox busybox.applets"
@@ -111,7 +117,7 @@ plan "cccl          ${CCCL:-unknown}"
 plan "will build    $FEATURES"
 # The line names all three things this script installs: the members, the
 # shell and the engine libraries. It named the members alone.
-plan "will install  $MEMBERS, the shell ($SHELL_FILES), and the engine libraries ($LIB_GLOBS) built by $ENGINE_CRATE"
+plan "will install  $MEMBERS, the shell ($SHELL_FILES), the loop runner ($LOOP_FILES grant, in $LOOP_DIR, and its pycache folder), and the engine libraries ($LIB_GLOBS) built by $ENGINE_CRATE"
 
 cccl_in_window() {
   local v=${1%%-*} lo=3.1.4 hi=3.3.4
@@ -394,6 +400,11 @@ for b in $MEMBERS; do plan "install $b -> $PREFIX/bin/$b  $(sha256sum < "$BUILT/
 plan "cp -a ${#LIBS[@]} library files and links -> $PREFIX/lib"
 plan "write $LDSO_CONF = $PREFIX/lib and $CUDA_LIB_DIR, then ldconfig"
 plan "install busybox -> $PREFIX/bin/busybox (root, 0755) and busybox.applets beside it (root, 0644)"
+LOOP_REFUSAL=$(loop_standing_refusal)
+[ -z "$LOOP_REFUSAL" ] || die "$LOOP_REFUSAL"
+LOOP_GRANT=$(loop_grant "$LOOP_PYTHON" "$LOOP_PYCACHE") || die "the loop runner's grant could not be computed from $LOOP_PYTHON"
+plan "install -d $LOOP_DIR (root:root 0755): $LOOP_FILES and grant (root:root 0644), the grant computed from $(sed -n 's/^interpreter [0-9a-f]* //p' <<<"$LOOP_GRANT")"
+plan "install -d $LOOP_PYCACHE (root:root 0755), empty"
 plan "write $STACK/{worker-binary,spu-binary,gate-binary,shell-binary,coordination-root,library-path,prefix,agent-directory,install-tuple}  (root, 0755 / 0644)"
 plan "install -d $ADMIN_BASE (root:root 0755): empty; create-agent.sh adds one root per agent"
 plan "install -d $AGENT_DIR (root:root 0755): each agent's folder <name>/, root:root 0755, holding its territory weaver-<name>/ (root:weaver-<name>-state 0710, not setgid, its trace root:weaver-<name>-trace 0640) and its home home/"
@@ -411,6 +422,8 @@ done
 sudo install -o root -g root -m 0755 "$BUILT/busybox" "$PREFIX/bin/busybox"
 sudo install -o root -g root -m 0644 "$BUILT/busybox.applets" "$PREFIX/bin/busybox.applets"
 plan "installed busybox and busybox.applets"
+lay_loop "$REPO/loop-runner" "$LOOP_GRANT"
+plan "laid $LOOP_DIR ($LOOP_FILES grant) and $LOOP_PYCACHE"
 # Each placed by `install_library` (deploy/engine-libraries.sh), root's from
 # the moment it has a name.
 for f in "${LIBS[@]}"; do install_library "$f" "$PREFIX/lib/${f##*/}"; done
