@@ -1085,8 +1085,10 @@ them, is root's regular file written by no group and no other. The pycache folde
 root's directory, written by no group and no other, and empty. The interpreter and each
 `execute` file are written by no group and no other, and are not the running uid's
 unless that uid is root: the digest pins the interpreter's bytes when it is judged, and
-this keeps the agent's uid from rewriting the same file before the exec. So the agent's
-uid cannot widen its own walls. The loop folder's owner and mode are admin's checks, and
+this keeps the agent's uid from rewriting the same file before the exec. Each `read`
+file and each `beneath` folder takes the same judgment, the files under a `beneath`
+folder not walked: what is judged is the folder itself, so the agent's uid can neither
+add nor rename an entry in it. So the agent's uid cannot widen its own walls. The loop folder's owner and mode are admin's checks, and
 the launcher takes it as a directory that is not a link.
 
 **The walls.**
@@ -1120,8 +1122,8 @@ gate's copy and this one one module waits on the layout of the repository.
 - `src/bin/weaver-loop-launch/grant/tests.rs`: a row per malformed grant file, a row per
   stale or wrong path (a pycache folder that is a link among them), a stale digest, the
   grant file's own judgment, every file of the runner's folder judged as the grant file
-  is, and the interpreter or an `execute` file the launch's uid, a group or others could
-  write. The runner's folder of another owner prints a SKIP where the suite runs as
+  is, the interpreter or an `execute` file the launch's uid, a group or others could
+  write, and a `read` file or a `beneath` folder a group or others could write. The runner's folder of another owner prints a SKIP where the suite runs as
   root.
 - `tests/loop_launch.rs`, the launcher run on a real interpreter inside a user namespace
   where the suite's files are root's, beside the same probe run with no wall:
