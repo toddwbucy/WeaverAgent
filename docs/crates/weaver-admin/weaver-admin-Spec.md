@@ -304,8 +304,9 @@ WeaverWeb's audit names the operator as the person who asked, and the box's reco
 carries the service uid sudo reports as the account that ran it. The same account is
 the boundary file's `trace-reader`, per section 9, so the connector's one other contact
 with the agent is that same account. The box's gate-con account, `weaver-gatecon`, is
-the one caller every gate rule names, per `weaver-gate-world-contract` section 1, and
-holds no line here, and `weaver-admincon` is in no gate rule, so neither account reaches
+the one caller every gate rule names, per `weaver-gate-world-contract` section 1, holds
+each agent's gate group `weaver-<agent>-gate` and never an agent's own group (the gate's
+door, section 6), and holds no line here, and `weaver-admincon` is in no gate rule, so neither account reaches
 the other's door. An agent whose rule names its own per-agent account
 `weaver-<agent>-admincon` of #50 keeps it and is not refused for it.
 
@@ -1746,35 +1747,51 @@ Landlock ruleset, which grants execute on `shell-binary` alone.
 **The runtime directory is made by the start step, with its owner and mode stated**:
 `<coordination-root>/weaver-<agent>/`, `/run/weaver-<agent>/` by default, owned by the
 agent's account and the agent's own group, `weaver-<agent>`, mode `0750`, so the agent
-binds its coordination socket and its gate socket there, the operator reaches it through
-membership in the agent's group, and no one else reaches it. Systemd made it at `0755`
+binds its coordination socket there, the operator reaches it through membership in the
+agent's group, and no one else reaches it. The gate's socket stands in the gate's door
+below, never here. Systemd made it at `0755`
 absent an instruction, which is why the mode was always stated rather than inherited, a
 boundary whose permissions come from an ambient default being a boundary nobody elected,
 per `weaver-gate-Spec` section 3. **The directory outlives the worker now**, where the
 unit's cleanup removed it at every stop, so the start step finds one standing and
 repairs it rather than trusting it: it is opened without following a link, judged for
-its owner, group and mode, and set right, and a socket name left in it by a dead worker
-is removed, which is safe only because this happens holding the invocation lock and
-the run lock this load took, per section 3's order, so no constituent of an earlier run
-stands and no other invocation can start one.
+its owner, group and mode, and set right, and a coordination socket left in it by a dead
+worker is removed, which is safe only because this happens holding the invocation lock
+and the run lock this load took, per section 3's order, so no constituent of an earlier
+run stands and no other invocation can start one.
+
+**The gate's door is laid by the start step, beside the trace door**:
+`<coordination-root>/weaver.run/<agent>/gate/`, in the root-owned run directory of
+section 3, owned by the agent's account and the gate group `weaver-<agent>-gate`, mode
+`2750`. It is made where absent, opened without following a link, and set to that owner,
+group and mode where it stands, the owner and group before the mode, and a `gate.sock`
+a dead gate left in it is removed, under both locks as above. The gate binds `gate.sock`
+there under its own umask, per `weaver-gate-Spec` section 3: the setgid bit gives the
+socket the door's group and not the binder's, so it comes out `0770` grouped to the
+gate group. **The gate connector holds the gate group and never the agent's own
+group**, so it reaches neither the agent's home nor its runtime directory, and the
+agent's own uid, which owns the door, is denied at `accept` by the gate's construction.
+The operator does not dial the gate and holds no gate group. **Admin hands the worker
+the socket's path** as `--gate-socket` in the argument vector below, and neither the
+worker nor the harness derives it from the coordination socket. The gate group is
+resolved by name at the load, with the agent's account: a box carrying the agent user
+and not the gate group refuses the load `BoundaryUnverified`, naming the group, since an
+agent made under an earlier layout is taken down and made again (the operator's ruling
+of 2026-10-08).
 
 **The group is named rather than inherited, and the mode rests on that.** The worker is
 dropped to the agent's uid and to `weaver-<agent>` as its group by name, never to
 whatever primary group the agent user was provisioned with, so where that is shared,
 `users` or `nogroup`, `0750` would grant traversal to every member of it and the
-sentence above would be false. Naming it also fixes the group the access rule is
-checked against at section 4's inventory, so the two locks narrow one set rather than
-two. **It carries a provisioning requirement**: an agent user created without a group of
-its own cannot be started, and validate catches that at the reachability check below. A
-box carrying the agent user and not its group is refused there by name, the missing
-group being a fact about a provisioned agent. **A box carrying neither is not refused**,
-on the ground that unresolvable is not unreachable: a declaration may not be refused on
-a fact never established, and a bare checkout carries no agent group at all.
+sentence above would be false. **It carries a provisioning requirement**: an agent user
+created without a group of its own cannot be started, and the load refuses it
+`BoundaryUnverified`. The access rule is checked against the gate group, not this one,
+below.
 
 **The access rule is checked against the mode that will carry it**, and the
-check is this section's. The gate binds its socket `0770` owned by the agent's
-group, per `weaver-gate-Spec` section 3, so a peer reaches `accept` only
-through that group. A rule admitting a uid outside it names a peer the
+check is this section's. The gate binds its socket in the gate's door, `2750` and
+grouped to the gate group `weaver-<agent>-gate`, per `weaver-gate-Spec` section 3,
+so a peer reaches `accept` only through that group. A rule admitting a uid outside it names a peer the
 filesystem turns away at
 `connect(2)`, before the credential check runs: the dialer sees a permission
 refusal, the driver reports the socket never stood, and the gate records
@@ -1784,36 +1801,37 @@ designed behaviour unless the two are made to agree.
 
 **Two locks on one door may narrow the same set and may not contradict.** So
 the inventory refuses a declaration whose `allowed-uids` name a uid outside
-the agent's group, before the start step runs.
+the gate group, before the start step runs.
 
 **It refuses as `BoundaryUnverified` and not as `ConfigInvalid`.** The declaration is
 well formed and the fault is the box's: the operator wrote a uid that ought to reach the
-socket and the provisioning has not put it in the agent's group. `ConfigInvalid` names
+socket and the provisioning has not put it in the gate group. `ConfigInvalid` names
 the declaration's TOML, the format `weaver-types-Spec` section 2 elects, and a deployer
 reading it that way deletes the uid - which makes validate pass and breaks the connector
 for good, the credential check then denying it at `accept` with nothing saying why. This
 is the same fault an unprovisioned home or sink is, and it answers as they do, naming
 the group on the way out. 
 
-**A user without its group is named too.** Starting the worker under its
-group is a hard requirement, so a box that provisioned the agent user and not its group
-is checked and refused by name rather than failing the start opaquely. A box carrying
+**An agent user without its gate group is named too.** Every load lays the gate's
+door grouped to it, so a box that provisioned the agent user and not the gate group is
+checked and refused by name, the remedy being to take the agent down and make it again
+with `create-agent.sh`, rather than failing the load at the door. A box carrying
 neither has provisioned no agent and is not refused on a fact about an agent it does not
 have, which is what lets a bare checkout and CI run this at all.
 
 **`allowed-gids` is not judged and uid 0 is skipped.** A gid names no
 particular peer, and whether one holding it reaches the socket turns on that
-peer's own memberships rather than on the gid - a rule admitting an operator's
-primary gid works where that operator is a supplementary member of the agent's
-group, and an arm refusing every gid but the agent's own refused it. Root is
-skipped for a different reason: `CAP_DAC_OVERRIDE` reaches a `0770` socket
-whatever group it holds. Both halves rest on the credential check, which is
+peer's own memberships rather than on the gid - a rule admitting a peer's
+primary gid works where that peer is a supplementary member of the gate group,
+and an arm refusing every gid but the group's own refused it. Root is skipped
+for a different reason: `CAP_DAC_OVERRIDE` reaches the door whatever group it
+holds. Both halves rest on the credential check, which is
 where they were always decided.
 
 **The check runs last of the inventory's walks**, so it preempts none of them:
 an unverified boundary is the older and narrower fact, and a check running
 ahead of it made three inventory tests depend on whether the box carried the
-agent's group. **Unresolvable is not unreachable**:
+agent's gate group. **Unresolvable is not unreachable**:
 where the group cannot be read this asserts nothing and the load fails later
 and loudly, rather than refusing on a fact it never established.
 
@@ -1953,7 +1971,8 @@ only value the start step interpolates is the validated agent name of section 4,
 authority stays bounded by the agent's root exactly as charter section 7 requires. Its
 values are the coordination socket path of section 7, which this crate already derives
 from that same validated name, the two organ binary paths section 9 holds among the
-operator's installed values, the SPU's being the agent's own, and the named headroom and
+operator's installed values, the SPU's being the agent's own, the gate's socket in the
+gate's door as `--gate-socket`, derived from the same name, and the named headroom and
 classify arguments where their installed values stand. The declaration's `loop-file` and
 its worker argument retire on the operator's ruling of 2026-10-20 (#180). The parser
 refuses that declaration key by name before the start step. A builder who let any of
@@ -4533,7 +4552,7 @@ Each names what settles it, and none is this Spec's to settle alone.
   `AgentSummary` left with `list` on the operator's ruling of 2026-10-02. -
   **The two values the argument vector does not carry.** Section 6's vector carries the
   socket path, the two placed organ binaries, the SPU's the agent's own, the
-  headroom where the root names it, the derived classify binary where one
+  gate's socket in its door, the headroom where the root names it, the derived classify binary where one
   stands, and the derived launcher and grant file where the enter carries a loop, and
   the worker's remaining two
   inputs are named here rather than routed, because routing either now would carry a

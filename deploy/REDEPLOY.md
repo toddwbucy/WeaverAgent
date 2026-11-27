@@ -457,11 +457,12 @@ every key copied from the stack record, `territory`, `operator` and `roles.toml`
 territory is the state group's and passes it; the access group reads the files** (the
 operator's ruling of 2026-10-08 on #1). The member holds the state group alone, the
 box's admin-con account holds the state group for passage and the access group for
-reading, the box's gate-con account holds the agent's group for the gate's socket, and
+reading, the box's gate-con account holds the agent's gate group for the gate's door, and
 the agent's own uid holds neither the state nor the access group. It then proves the
 boundary (the member cannot read the trace, the relay holds the trace group alone,
 admin-con's account the state and access groups and no group of the agent's or the
-trace's, and gate-con's the agent's group and nothing of the territory or the trace, the
+trace's, and gate-con's the gate group and no agent's own group and nothing of the
+territory or the trace, the
 member can write its state room and the agent's own uid can pass neither it nor the
 territory, and admin-con's account reads the declaration and writes nothing of the
 territory), installs the sudo rule once `visudo` passes it, and only then moves the root

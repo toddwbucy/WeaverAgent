@@ -75,8 +75,8 @@ construction and no document owes a placement clause to put it there.
 
 ## 1. The channel
 
-The named endpoint the raise directive carries, supplied by the harness and bound by
-the gate, per `weaver-gate-PRD` section 2. **What kind of endpoint it is and where it
+The named endpoint the raise directive carries, named by admin's start step, supplied
+by the harness and bound by the gate, per `weaver-gate-PRD` section 2. **What kind of endpoint it is and where it
 lives are the Spec's**, and a consumer needs neither: it is given the name and finds a
 listener there. The access rule beside it is the operator's, so what the world meets is
 a door the program placed and a predicate the operator wrote. It exists from the raise
@@ -94,8 +94,11 @@ nothing else.
 
 **The world at this door is one declared caller per box**, on the operator's rulings of
 2026-11-10: `weaver-gatecon`, the box's system account that runs WeaverWeb's gate-con,
-which an agent's access rule names alone. Neither the operator's uid nor root is in such
-a rule. An agent whose rule names the operator instead keeps it and is not refused for
+which an agent's access rule names alone. **It reaches the endpoint by the agent's gate
+group**, `weaver-<agent>-gate`, the group of the door the endpoint stands in, and never
+by the agent's own group, per `weaver-gate-Spec` section 3 and `weaver-admin-Spec`
+section 6. Neither the operator's uid nor root is in such a rule, and the operator holds
+no gate group. An agent whose rule names the operator instead keeps it and is not refused for
 it, and section 2 states what such an agent alone can receive. The box's admin-con
 account, `weaver-admincon`, is in no gate rule either, per
 `weaver-admin-operator-contract` section 0, so neither connector account reaches the

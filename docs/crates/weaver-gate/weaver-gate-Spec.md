@@ -549,33 +549,33 @@ Connecting needs the write bit, so at `0022` the group could not connect and
 now can, and at `0077` the socket was the owner's alone. **That is the
 intent and it is conditional.** The caller the agent's access rule declares, per
 `weaver-gate-world-contract` section 1, reaches the socket by membership in the
-agent's group, which is what `0770` is for, and the whole boundary therefore
-rests on `Group={identity}` making that group one agent's own, its members the
-agent and its declared caller, per `weaver-admin-Spec` section 6, whose start
-step drops the worker to that group by name. Where the worker's group were a
-shared one, `users` or `nogroup`, this mode would hand connect rights to
-everyone in it. **The box's gate-con account is a member of the group of every
-agent whose rule names it**, so each group stays one agent's while one account
-outside every agent holds them all. The membership gives it more than the
-socket: the group also reads the agent's tool home and lists its runtime
-directory, the access the operator held one agent at a time before the
-operator's rulings of 2026-11-10. That reach is the design, for the reason
-`weaver-admin-Spec` section 2 gives for the box's admin-con account. A dev run
-outside the start step has no such guarantee and no such boundary.
+agent's gate group `weaver-<agent>-gate`, which is what `0770` is for. **The
+socket is bound in the gate's door**, `<coordination-root>/weaver.run/<agent>/gate/`,
+which admin's start step lays owned by the agent's account and grouped to the gate
+group, `2750`, per `weaver-admin-Spec` section 6, so the setgid bit gives the socket
+the door's group and not the binder's. The binder runs as the agent's uid and holds
+neither the gate group nor root, and its own uid is denied at `accept` by
+construction, below. The whole boundary therefore rests on the gate group being one
+agent's own, its one member the agent's declared caller. **The box's gate-con account
+is a member of the gate group of every agent whose rule names it, and of no agent's
+own group**, so each gate group stays one agent's while one account outside every
+agent holds them all, and the membership gives it the door and nothing else: neither
+the agent's tool home nor its runtime directory. A dev run outside the start step has
+no such guarantee and no such boundary.
 
 **The election is made in the creating call and not on the path
 afterwards.** A `chmod` after the bind would answer the same question and
 open three others. `bind` also listens, so between the two calls the socket
 is live at the inherited mode and connections queued there are served. The
 `chmod` would go by path, and the adversary this crate's reference walk
-names is a tool running as the agent uid, which owns the runtime directory:
+names is a tool running as the agent uid, which owns the gate's door:
 in that window it can unlink the socket and point the name elsewhere, so
 the `chmod` lands on a decoy while the real socket keeps the umask's mode
 and the raise reports an election it did not make. And a `chmod` that
 failed would return after the pathname exists, leaving a file this crate
 unlinks nowhere - so `gate-refused-raise-holds-nothing` would stop holding
 and every later raise on that path would answer `Address already in use`
-for the life of the runtime directory.
+until the next load cleared the door.
 
 **The umask is process-global, so the guard serializes on it.** Two raises
 on one process would otherwise interleave their save and restore and the
@@ -617,7 +617,7 @@ neither figure was anyone's election.
 Connecting to a Unix socket requires write permission, so denying the write
 bit outside owner and group is what excludes a uid. The read and execute
 bits others would hold under a laxer mode buy them nothing on a socket. The
-declared caller reaches the socket through membership in the agent's group,
+declared caller reaches the socket through membership in the gate group,
 which is the provisioning already owed, and no one else reaches it at all.
 
 **Two locks, answering different adversaries.** The mode stops a stranger
