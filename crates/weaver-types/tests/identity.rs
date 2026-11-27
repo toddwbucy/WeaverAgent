@@ -181,12 +181,11 @@ fn the_trace_request_admits_its_two_members_only() {
 #[test]
 fn the_boundary_file_holds_one_reader_and_no_other_key() {
     use weaver_types::BoundaryFile;
-    let file: BoundaryFile =
-        serde_json::from_str(r#"{"trace-reader":"weaver-a-admincon"}"#).unwrap();
-    assert_eq!(file.trace_reader, "weaver-a-admincon");
+    let file: BoundaryFile = serde_json::from_str(r#"{"trace-reader":"weaver-admin"}"#).unwrap();
+    assert_eq!(file.trace_reader, "weaver-admin");
     assert!(
         serde_json::from_str::<BoundaryFile>(
-            r#"{"trace-reader":"weaver-a-admincon","roles":{"operator":["load"]}}"#
+            r#"{"trace-reader":"weaver-admin","roles":{"operator":["load"]}}"#
         )
         .is_err(),
         "the retired lifecycle half refuses"

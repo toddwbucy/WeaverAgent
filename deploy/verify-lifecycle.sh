@@ -295,10 +295,13 @@ else
   OPERATOR_UID=$(id -u)
   ROOT_FLAG=""
 fi
-# The box's two connector accounts (weaver-admin-Spec section 2): step 1's
-# create-agent.sh lays each where absent, and step 9 leaves both standing.
+# The box's three accounts (weaver-admin-Spec section 2): step 1's
+# create-agent.sh lays each where absent, and step 9 leaves all three
+# standing. The weaver-admin account holds the rule and reads the trace, and
+# the admin-con account holds no group of the agent's.
 GATECON=weaver-gatecon
 ADMINCON=weaver-admincon
+ADMIN_ACCOUNT=weaver-admin
 ACCOUNTS="$AU $AU-state $AU-relay"
 GROUPS_MADE="$AU $AU-state $AU-trace $AU-admin $AU-gate"
 
@@ -543,17 +546,18 @@ holds_group() {
 }
 # box_groups_outside ACCOUNT: the groups the box's account ACCOUNT holds
 # outside what it may hold, space-separated, or `none`, by create-agent.sh's
-# allow-list (weaver-admin-Spec section 2): weaver-admincon its own group and
+# allow-list (weaver-admin-Spec section 2): weaver-admin its own group and
 # agents' -state and -admin groups, weaver-gatecon its own group and agents'
-# -gate groups, where an agent's name is one admin's name check admits.
+# -gate groups, weaver-admincon its own group alone, where an agent's name is
+# one admin's name check admits.
 box_groups_outside() {
   local g n outside=""
   for g in $(id -Gn "$1" 2>/dev/null || echo "(unreadable)"); do
     n=""
     case "$1:$g" in
       "$1:$1") continue ;;
-      "$ADMINCON:"weaver-*-state) n=${g#weaver-}; n=${n%-state} ;;
-      "$ADMINCON:"weaver-*-admin) n=${g#weaver-}; n=${n%-admin} ;;
+      "$ADMIN_ACCOUNT:"weaver-*-state) n=${g#weaver-}; n=${n%-state} ;;
+      "$ADMIN_ACCOUNT:"weaver-*-admin) n=${g#weaver-}; n=${n%-admin} ;;
       "$GATECON:"weaver-*-gate) n=${g#weaver-}; n=${n%-gate} ;;
     esac
     if [ -n "$n" ] && [[ "$n" =~ ^[A-Za-z0-9_-]+$ ]]; then
@@ -940,11 +944,11 @@ step_1() {
   else
     want "$OPERATOR holds $AU-trace, $AU-state and $AU-admin and neither $AU nor $AU-gate; $AU-relay holds $AU-trace alone; $AU-state holds itself alone"
   fi
-  want "$GATECON and $ADMINCON stand, the box's; $GATECON holds $AU-gate and none of $AU, $AU-state, $AU-admin or $AU-trace; $ADMINCON holds $AU-state and $AU-admin and none of $AU, $AU-trace or $AU-gate"
+  want "$GATECON, $ADMINCON and $ADMIN_ACCOUNT stand, the box's; $GATECON holds $AU-gate and none of $AU, $AU-state, $AU-admin or $AU-trace; $ADMIN_ACCOUNT holds $AU-state and $AU-admin and none of $AU, $AU-trace or $AU-gate; $ADMINCON holds none of $AU, $AU-state, $AU-admin, $AU-trace or $AU-gate"
   want "$T root:$AU-state 710 directory; state/ $AU-state:$AU-state 700; save-points/ root:$AU-admin 750; trace.ndjson root:$AU-trace 640 empty; agent.toml and system-prompt.md root:$AU-admin 640"
   want "$F root:root 755 holding the territory and the home; $H $AU:$AU 2750; $R root:root 755 with every key root:root 644; $RULE root:root 440"
   want "no access entry on the territory, save-points/, the trace or the declaration"
-  want "territory names $T, operator is $OPERATOR_UID, roles.toml is trace-reader = \"$ADMINCON\"; the rule grants $ADMINCON the eight verbs"
+  want "territory names $T, operator is $OPERATOR_UID, roles.toml is trace-reader = \"$ADMIN_ACCOUNT\"; the rule grants $ADMIN_ACCOUNT the eight verbs"
   want "the declaration's allowed-uids names $GATECON's uid alone"
   want "$AU cannot pass the territory; $AU-state reads neither the trace nor the declaration"
   [ "$APPLY" -eq 1 ] || return 0
@@ -966,19 +970,20 @@ step_1() {
     "the member cannot read the trace" "the agent's own uid cannot pass the territory"
     "reads the declaration and writes nothing of the territory"
     "== sudo rule" "== admission" "== made")
-  [ "$ADMIN_BASE" != /etc/weaver/admin ] || needles+=("$ADMINCON ran validate through its rule: {\"kind\":\"validated\"}")
+  [ "$ADMIN_BASE" != /etc/weaver/admin ] || needles+=("$ADMIN_ACCOUNT ran validate through its rule: {\"kind\":\"validated\"}")
   expect_in_order "create-agent.sh's apply prints its sections in order" "$out.apply" "${needles[@]}"
 
   expect_operator_groups
   local u
-  for u in $ACCOUNTS "$GATECON" "$ADMINCON"; do expect_eq "the account $u stands" yes "$(id "$u" >/dev/null 2>&1 && echo yes || echo no)"; done
+  for u in $ACCOUNTS "$GATECON" "$ADMINCON" "$ADMIN_ACCOUNT"; do expect_eq "the account $u stands" yes "$(id "$u" >/dev/null 2>&1 && echo yes || echo no)"; done
   expect_eq "$AU-relay holds its trace group alone" "$AU-trace" "$(id -Gn "$AU-relay")"
   expect_eq "$AU-state holds its own group alone" "$AU-state" "$(id -Gn "$AU-state")"
   expect_eq "$GATECON holds $AU-gate" yes "$(holds_group "$GATECON" "$AU-gate")"
   for g in "$AU" "$AU-state" "$AU-admin" "$AU-trace"; do expect_eq "$GATECON does not hold $g" no "$(holds_group "$GATECON" "$g")"; done
-  for g in "$AU-state" "$AU-admin"; do expect_eq "$ADMINCON holds $g" yes "$(holds_group "$ADMINCON" "$g")"; done
-  for g in "$AU" "$AU-trace" "$AU-gate"; do expect_eq "$ADMINCON does not hold $g" no "$(holds_group "$ADMINCON" "$g")"; done
-  for u in "$GATECON" "$ADMINCON"; do expect_eq "$u holds no group outside what the box's account may hold" none "$(box_groups_outside "$u")"; done
+  for g in "$AU-state" "$AU-admin"; do expect_eq "$ADMIN_ACCOUNT holds $g" yes "$(holds_group "$ADMIN_ACCOUNT" "$g")"; done
+  for g in "$AU" "$AU-trace" "$AU-gate"; do expect_eq "$ADMIN_ACCOUNT does not hold $g" no "$(holds_group "$ADMIN_ACCOUNT" "$g")"; done
+  for g in $GROUPS_MADE; do expect_eq "$ADMINCON does not hold $g" no "$(holds_group "$ADMINCON" "$g")"; done
+  for u in "$GATECON" "$ADMINCON" "$ADMIN_ACCOUNT"; do expect_eq "$u holds no group outside what the box's account may hold" none "$(box_groups_outside "$u")"; done
   expect_eq "no per-agent connector account $AU-admincon stands" no "$(lookup passwd "$AU-admincon" && echo yes || echo no)"
 
   expect_lay "$T" "root:$AU-state 710 directory"
@@ -996,13 +1001,13 @@ step_1() {
   expect_lay "$RULE" "root:root 440 regular file"
   expect_eq "the territory key names the canonical territory" "$T" "$(trim "$(cat -- "$R/territory")")"
   expect_eq "the operator key names $OPERATOR's uid" "$OPERATOR_UID" "$(trim "$(cat -- "$R/operator")")"
-  expect_eq "roles.toml names $ADMINCON the trace reader" "trace-reader = \"$ADMINCON\"" "$(trim "$(cat -- "$R/roles.toml")")"
+  expect_eq "roles.toml names $ADMIN_ACCOUNT the trace reader" "trace-reader = \"$ADMIN_ACCOUNT\"" "$(trim "$(cat -- "$R/roles.toml")")"
   expect_eq "the declaration's allowed-uids names $GATECON's uid alone" "allowed-uids = [$(id -u "$GATECON")]" \
     "$(root grep -E '^allowed-uids = ' -- "$DECL" || true)"
   local listing verb
-  listing=$(sudo -n -l -U "$ADMINCON" 2>&1 || true)
+  listing=$(sudo -n -l -U "$ADMIN_ACCOUNT" 2>&1 || true)
   for verb in show validate load unload stop save-point restore force-unload; do
-    expect_eq "the rule grants $ADMINCON $verb $A" yes \
+    expect_eq "the rule grants $ADMIN_ACCOUNT $verb $A" yes \
       "$(grep -qF "$ADMIN $verb $A" <<<"$listing" && echo yes || echo no)"
   done
   expect_eq "$AU cannot pass the territory" no "$(as_look "$AU" -x "$T")"
@@ -1636,7 +1641,7 @@ step_9() {
   run_line "tar --acls --xattrs -C $F -cpf ${ARCHIVE:-<--archive>}/$AU-territory-<stamp>.tar $AU"
   run_line "tar -C $ADMIN_BASE -cpf ${ARCHIVE:-<--archive>}/$AU-root-<stamp>.tar $A"
   run_line "rm -rf $R $STAGE $RUN_DIR $RUNTIME_DIR"
-  run_line "userdel -r $AU; userdel $AU-state; userdel $AU-relay   ($GATECON and $ADMINCON are the box's and stay)"
+  run_line "userdel -r $AU; userdel $AU-state; userdel $AU-relay   ($GATECON, $ADMINCON and $ADMIN_ACCOUNT are the box's and stay)"
   run_line "groupdel $GROUPS_MADE (each that stands)"
   run_line "rm -rf $T; rm -rf $F (the folder, which userdel -r and the line before have emptied)"
   run_line "rm -f $MARKER"
@@ -1648,7 +1653,7 @@ step_9() {
     want "show unloaded with no constituent before; afterwards show answers unauthorized as the operator and no_such_agent under sudo"
   fi
   want "the accounts, the groups, $R, $RULE and $T are absent; each archive reads back"
-  want "$GATECON and $ADMINCON still stand, holding no group of $A, the groups having gone with it"
+  want "$GATECON, $ADMINCON and $ADMIN_ACCOUNT still stand, holding no group of $A, the groups having gone with it"
   want "never decommission.sh, which takes every agent off the box; no other agent is touched"
   [ "$APPLY" -eq 1 ] || return 0
   if [ "$STAGED_KEY" -eq 1 ]; then
@@ -1692,10 +1697,10 @@ step_9() {
   expect_show_closed
   for u in $ACCOUNTS; do expect_eq "the account $u is gone" no "$(lookup passwd "$u" && echo yes || echo no)"; done
   for g in $GROUPS_MADE; do expect_eq "the group $g is gone" no "$(lookup group "$g" && echo yes || echo no)"; done
-  # **The box's connector accounts are not this agent's** (weaver-admin-Spec
-  # section 2): a single agent's take-down leaves both, its memberships going
+  # **The box's three accounts are not this agent's** (weaver-admin-Spec
+  # section 2): a single agent's take-down leaves them, its memberships going
   # with its groups.
-  for u in "$GATECON" "$ADMINCON"; do
+  for u in "$GATECON" "$ADMINCON" "$ADMIN_ACCOUNT"; do
     if lookup passwd "$u"; then
       pass "the box's account $u still stands"
       for g in $GROUPS_MADE; do expect_eq "$u holds no group of $A" no "$(holds_group "$u" "$g")"; done
@@ -1756,7 +1761,7 @@ if [ "$APPLY" -eq 1 ]; then
     # which asks no rule of root's own (#590), so its presence alone is
     # checked here.
     command -v sudo >/dev/null \
-      || die "sudo is not on PATH, and step 1 lists the admin-con account's rule through root's sudo:" \
+      || die "sudo is not on PATH, and step 1 lists the weaver-admin account's rule through root's sudo:" \
              "the box's sudo is the one that rule is written for"
   else
     sudo -v || die "--apply needs sudo"
