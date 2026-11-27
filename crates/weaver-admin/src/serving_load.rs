@@ -276,7 +276,7 @@ fn start_load(
         account.gid,
     )?;
     window.check()?;
-    start::prepare_gate_door(&config.run_directory(), account.uid, account.gate_gid)?;
+    start::prepare_gate_door(&config.run_directory(), &account)?;
     window.check()?;
     let worker_log = start::open_log(&config.worker_log(), Some(config.file_owner()))
         .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;

@@ -60,9 +60,12 @@ fn the_coordination_door_denies_every_uid_but_its_owner() {
 
 /// **The gate's socket is the one the composition root handed**, per
 /// `weaver-harness-Spec` section 3: a listener given the gate's door answers
-/// that path, not a name beside the coordination socket, and the raise the
-/// harness builds carries it. Perturbation: have `gate_socket` ignore the
-/// handed path, and the first assertion reads the sibling.
+/// that path, not a name beside the coordination socket. This checks the
+/// accessor alone. The raise is built from what it answers, and the raise's
+/// own test, `the_enters_grant_reaches_the_raise_and_sets_the_flag`, checks
+/// that the raise carries the socket it is given. Perturbation: have
+/// `gate_socket` ignore the handed path, and the first assertion reads the
+/// sibling.
 #[test]
 fn the_gate_socket_handed_is_the_one_answered() {
     let dir = crate::scratch::dir(format!(

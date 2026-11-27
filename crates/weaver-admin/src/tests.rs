@@ -2939,7 +2939,18 @@ fn the_gates_door_is_laid_setgid_to_the_gate_group() {
     let _removed = Removed(base.clone());
     let run = base.join("weaver.run").join("a");
     std::fs::create_dir_all(&run).unwrap();
-    let door = start::prepare_gate_door(&run, me, my_group).unwrap();
+    // **The account's own group and its gate group differ**, so the door
+    // shows which one it was given. The agent's own gid is one no group on a
+    // box carries and this caller cannot take. Perturbation: lay the door
+    // with `account.gid`, and the chown is refused or the gid read below is
+    // not the gate group's.
+    let account = crate::AgentAccount {
+        uid: me,
+        gid: u32::MAX - 1,
+        gate_gid: my_group,
+        home: base.clone(),
+    };
+    let door = start::prepare_gate_door(&run, &account).unwrap();
     assert_eq!(door, run.join("gate"));
     assert_eq!(start::gate_socket(&run), run.join("gate").join("gate.sock"));
     let laid = std::fs::symlink_metadata(&door).unwrap();
@@ -2955,7 +2966,7 @@ fn the_gates_door_is_laid_setgid_to_the_gate_group() {
     let stale = door.join("gate.sock");
     drop(std::os::unix::net::UnixListener::bind(&stale).unwrap());
     assert!(std::fs::symlink_metadata(&stale).is_ok());
-    start::prepare_gate_door(&run, me, my_group).unwrap();
+    start::prepare_gate_door(&run, &account).unwrap();
     assert_eq!(
         std::fs::symlink_metadata(&door).unwrap().mode() & 0o7777,
         0o2750,
@@ -2972,7 +2983,7 @@ fn the_gates_door_is_laid_setgid_to_the_gate_group() {
     std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::os::unix::fs::symlink(&elsewhere, &door).unwrap();
     assert_eq!(
-        start::prepare_gate_door(&run, me, my_group).err(),
+        start::prepare_gate_door(&run, &account).err(),
         Some(LifecycleRefusal::BoundaryUnverified),
         "a link at the door's name"
     );
