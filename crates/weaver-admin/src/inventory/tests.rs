@@ -199,6 +199,19 @@ fn a_rule_the_mode_would_defeat_is_named_rather_than_left_to_connect() {
 /// carrying neither is not refused on a fact about an agent it does not
 /// have. Both remedies and the field name the gate group, `weaver-x-gate`,
 /// and never the agent's own group.
+/// **The reach check reads the gate group, not the agent's own**, per
+/// `weaver-admin-Spec` section 6. Every box carries a `root` user and a
+/// `root` group and no `root-gate` group, so asked about the identity `root`
+/// the lookup finds the user without its gate group. Perturbation: look up
+/// the identity's own group, and this reads the `root` group as present.
+#[test]
+fn the_reach_check_reads_the_gate_group() {
+    assert!(
+        matches!(resolved_group("root"), ResolvedGroup::UserWithoutGroup),
+        "the root user stands and no root-gate group does"
+    );
+}
+
 #[test]
 fn a_user_without_its_group_is_named_and_a_bare_box_is_not() {
     let rule = weaver_types::AccessRule {

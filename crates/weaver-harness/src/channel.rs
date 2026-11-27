@@ -215,32 +215,15 @@ impl CoordinationListener {
     /// ([`Self::with_gate_socket`]), or where it handed none, a name beside the
     /// coordination socket this listener bound.
     ///
-    /// **The worker always hands one.** The sibling stands only for a
-    /// composition that names none, which is the in-process tests. What
-    /// follows is the reasoning that composition still rests on.
-    ///
-    /// **A sibling, so the manager's lifecycle covers both.** The runtime
-    /// directory is created at start and destroyed with the unit, per
-    /// `weaver-admin-systemd-contract` section 2, so a pathname inside it
-    /// cannot outlive the worker and the next bind meets no stale name. A
-    /// derivation reaching anywhere else would need the cleanup this program
-    /// refuses to write, an unlink racing a live successor.
-    ///
-    /// **The leaf is fixed, so a coordination socket named `gate.sock` would
-    /// collide with what this returns.** Unguarded on purpose. The collision
-    /// is not reachable by configuring anything: admin fixes the coordination
-    /// leaf in code and what an operator places is the directory above it, so
-    /// producing one takes a composition root that names the coordination
-    /// socket `gate.sock` by hand. What it produces then is the gate refusing
-    /// its raise with `bind_failed` and the path carried, which is the
-    /// documented answer for an occupied path rather than a silence.
-    ///
-    /// A derivation that cannot collide is available and was declined: it
-    /// would have to carry the coordination socket's own name into the gate's,
-    /// giving every operator who dials the door a name like
-    /// `coordination-gate.sock` to explain, which is a permanent cost against
-    /// a failure nobody reaches. Named here rather than fixed so the next
-    /// composition root's author meets it before choosing a name.
+    /// **The worker always hands one, and requires it** (`--gate-socket`, which
+    /// admin names in the gate's door). The sibling stands only for a
+    /// composition that names none, which is the in-process tests, each in a
+    /// scratch directory of its own. A deployed gate's socket beside the
+    /// coordination socket would stand in the agent's own directory, grouped
+    /// to the agent's group, which no connector holds, so no deployed
+    /// composition root may rest on it. A coordination socket the test named
+    /// `gate.sock` would collide with the sibling, and the gate would refuse
+    /// its raise with `bind_failed` and the path carried.
     pub fn gate_socket(&self) -> std::path::PathBuf {
         if let Some(gate) = &self.gate {
             return gate.clone();
@@ -356,15 +339,14 @@ impl Drop for CoordinationUmask {
 /// its creating call, so no window exists between creation and flag.
 ///
 /// **The bind never unlinks.** A Unix socket's pathname outlives the process
-/// that bound it, and the directory this socket lives in is created by the init
-/// system at the unit's start and removed with the unit, per
-/// `weaver-admin-systemd-contract` sections 2 and 5, so the name cannot be
-/// inherited from a previous run and there is nothing to clear. **A bind that
-/// finds its name occupied is a fault and never a thing to remove**, because
-/// the only ways a name is occupied are that a live worker holds it, where
-/// unlinking would strand the running agent's supervisor, or that the manager
-/// did not honor the directory, where this crate's assumption is wrong and it
-/// should say so rather than repair.
+/// that bound it, and admin's start step clears a stale coordination socket
+/// from the directory this socket lives in before it starts the worker, per
+/// `weaver-admin-Spec` section 6, so there is nothing here to clear. **A bind
+/// that finds its name occupied is a fault and never a thing to remove**,
+/// because the only ways a name is occupied are that a live worker holds it,
+/// where unlinking would strand the running agent, or that the start step did
+/// not clear it, where this crate's assumption is wrong and it should say so
+/// rather than repair.
 pub fn bind_coordination(
     socket_path: &std::path::Path,
 ) -> Result<CoordinationListener, ChannelFault> {

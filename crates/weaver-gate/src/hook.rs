@@ -209,13 +209,14 @@ impl Hook {
     ///
     /// **This crate unlinks nothing.** A path already occupied refuses with the
     /// reason carried, and a gate that deleted filesystem entries to make room
-    /// for itself would hold an authority its charter never grants. Since the
-    /// ruling of 2026-08-15 the case is close to unreachable rather than
-    /// merely refused: the path sits in the unit's runtime directory, which
-    /// the manager destroys with the unit, so no pathname outlives the worker
-    /// that bound it. The refusal stays because unreachable by construction is
-    /// a property of the deployment and this crate resolves what it is
-    /// handed.
+    /// for itself would hold an authority its charter never grants. A
+    /// deployed gate meets the case rarely: the path sits in the gate's door,
+    /// which admin's load lays and clears of a stale `gate.sock` before the
+    /// worker starts (`weaver-admin-Spec` section 6), so the path stands
+    /// occupied only where a gate of the same agent still holds it or a
+    /// stale name outlived a stop until the next load. The refusal stays
+    /// because the clearing is a property of the deployment and this crate
+    /// resolves what it is handed.
     ///
     /// **A refusal leaves nothing held.** A failed bind holds no listener and
     /// no half-bound socket, so the aggregate's rollback has nothing of this

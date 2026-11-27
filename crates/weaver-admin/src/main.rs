@@ -2378,11 +2378,20 @@ impl AgentAccount {
         // refuses here naming it, so it is taken down and made again rather
         // than served by its old door (the operator's ruling of 2026-10-08).
         let gate_name = inventory::gate_group_of(identity);
+        // A lookup that fails is told apart from a group that is absent, so
+        // the remedy for an absent one is never given for an unreadable
+        // group database.
         let gate = match nix::unistd::Group::from_name(&gate_name) {
             Ok(Some(gate)) => gate,
-            _ => {
+            Ok(None) => {
                 diag!(
                     "weaver-admin: the group {gate_name} is not provisioned, so the gate's door cannot be laid"
+                );
+                return Err(LifecycleRefusal::BoundaryUnverified);
+            }
+            Err(error) => {
+                diag!(
+                    "weaver-admin: the group {gate_name} could not be looked up ({error}), so the gate's door cannot be laid"
                 );
                 return Err(LifecycleRefusal::BoundaryUnverified);
             }

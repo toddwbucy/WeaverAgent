@@ -63,6 +63,25 @@ fn drop_to(command: &mut Command, uid: u32, gid: u32, groups: &'static [u32]) {
     }
 }
 
+/// **What the instrument made goes however it ends**: the scratch folder is
+/// removed and a gate still running is killed and reaped, on a pass and on a
+/// panic alike. The instrument runs in a user namespace with no pid namespace
+/// of its own, so a gate left running would outlive the test.
+struct Made {
+    base: std::path::PathBuf,
+    gate: Option<Child>,
+}
+
+impl Drop for Made {
+    fn drop(&mut self) {
+        if let Some(gate) = self.gate.as_mut() {
+            let _ = gate.kill();
+            let _ = gate.wait();
+        }
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
 fn spawn_gate(child_end: std::os::fd::RawFd, log: &std::path::Path) -> Child {
     let log = std::fs::File::create(log).expect("a child log file");
     let mut command = Command::new(env!("CARGO_BIN_EXE_weaver-gate"));
@@ -161,6 +180,10 @@ fn the_door_admits_the_gate_group_and_not_the_agents() {
     );
     let base = std::env::temp_dir().join(format!("weaver-gate-door-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
+    let mut made = Made {
+        base: base.clone(),
+        gate: None,
+    };
     let run = base.join("weaver.run").join("a");
     std::fs::create_dir_all(&run).expect("the run directory");
     for directory in [&base, &base.join("weaver.run"), &run] {
@@ -180,7 +203,7 @@ fn the_door_admits_the_gate_group_and_not_the_agents() {
 
     let (harness, child_end) = seqpacket_pair();
     bound_receives(&harness, 10);
-    let mut gate = spawn_gate(child_end.as_raw_fd(), &log);
+    let gate = made.gate.insert(spawn_gate(child_end.as_raw_fd(), &log));
     let (uid, gid, groups) = credentials(gate.id());
     assert_eq!(
         (uid, gid),
@@ -261,6 +284,15 @@ fn the_door_admits_the_gate_group_and_not_the_agents() {
         "closed",
         "the agent's own uid stays denied"
     );
+    // **Neither refused dial reached the harness**: no frame waits on the
+    // channel, so the close above was the gate's denial and not a line it
+    // took and left unanswered.
+    let mut probe = [0u8; 1];
+    assert_eq!(
+        recv(harness.as_raw_fd(), &mut probe, MsgFlags::MSG_DONTWAIT).err(),
+        Some(nix::errno::Errno::EAGAIN),
+        "no refused dial's line reached the harness"
+    );
 
     let stopped = ask(&harness, 2, LifecycleDirective::Lower);
     assert_eq!(
@@ -268,8 +300,8 @@ fn the_door_admits_the_gate_group_and_not_the_agents() {
         Payload::Answer(LifecycleAnswer::GateStopped)
     );
     drop(harness);
-    assert!(wait_bounded(&mut gate, 30, "the lower").success());
-    let _ = std::fs::remove_dir_all(&base);
+    let gate = made.gate.as_mut().expect("the gate was spawned");
+    assert!(wait_bounded(gate, 30, "the lower").success());
 }
 
 /// The dialer the instrument runs as each caller: it connects, sends one
@@ -302,6 +334,20 @@ fn door_client_dials_as_its_caller() {
             Ok(0) => break,
             Ok(_) if byte[0] == b'\n' => break,
             Ok(_) => line.push(byte[0]),
+            // **A read that times out is not a close.** A gate that admitted
+            // the line and is waiting on the harness leaves the dialer here,
+            // and reading that as `closed` would pass a denial that never
+            // happened. A reset is a close: the gate drops a denied
+            // connection with the dialer's line unread.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                println!("DIAL unanswered");
+                return;
+            }
             Err(_) => break,
         }
     }
@@ -335,14 +381,19 @@ fn the_door_is_watched_inside_a_user_namespace() {
             "--test-threads=1",
         ])
         .stdin(Stdio::null())
-        .output();
-    let output = match ran {
-        Ok(output) => output,
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let child = match ran {
+        Ok(child) => child,
         Err(e) => {
             eprintln!("SKIP door watch: unshare could not run: {e}");
             return;
         }
     };
+    // unshare executes the instrument in place, so its pid names its folder.
+    let folder = std::env::temp_dir().join(format!("weaver-gate-door-{}", child.id()));
+    let output = child.wait_with_output().expect("the instrument's output");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     if stderr.starts_with("unshare:") {
@@ -352,5 +403,12 @@ fn the_door_is_watched_inside_a_user_namespace() {
     assert!(
         output.status.success() && stdout.contains("test result: ok. 1 passed"),
         "the door instrument failed inside the namespace\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    // **What the instrument made is gone.** Perturbation: drop `Made`'s
+    // removal, and the folder stands.
+    assert!(
+        !folder.exists(),
+        "the instrument left {} behind",
+        folder.display()
     );
 }

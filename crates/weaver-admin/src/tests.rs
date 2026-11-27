@@ -2901,6 +2901,20 @@ fn the_coordination_root_is_judged_before_any_lock() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// **The load's account carries the gate group, and refuses without it**, per
+/// Spec section 6: every box carries a `root` user and a `root` group and no
+/// `root-gate` group, so the account `root` resolves its user and its own
+/// group and refuses on the gate group. Perturbation: take the gate's gid
+/// from the agent's own group, and the account resolves.
+#[test]
+fn an_account_without_its_gate_group_refuses() {
+    assert_eq!(
+        AgentAccount::resolve("root").err(),
+        Some(LifecycleRefusal::BoundaryUnverified),
+        "no root-gate group stands"
+    );
+}
+
 /// **The gate's door is laid `2750`, owned by the agent's account and grouped
 /// to the gate group**, per Spec section 6: made where absent, repaired where
 /// it stands at another mode, a `gate.sock` a dead gate left cleared, and a
@@ -2915,6 +2929,14 @@ fn the_gates_door_is_laid_setgid_to_the_gate_group() {
     let my_group = nix::unistd::getgid().as_raw();
     let base = std::env::temp_dir().join(format!("weaver-admin-door-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
+    // The folder goes on a pass and on a panic alike.
+    struct Removed(std::path::PathBuf);
+    impl Drop for Removed {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _removed = Removed(base.clone());
     let run = base.join("weaver.run").join("a");
     std::fs::create_dir_all(&run).unwrap();
     let door = start::prepare_gate_door(&run, me, my_group).unwrap();
@@ -2959,7 +2981,6 @@ fn the_gates_door_is_laid_setgid_to_the_gate_group() {
         0o700,
         "and the link's target is not repaired"
     );
-    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// **The trace reader is judged at `validate` and `load`**, per Spec

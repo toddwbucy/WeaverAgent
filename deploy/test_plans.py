@@ -4423,10 +4423,17 @@ esac
                 gate = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 gate.bind(str(path))
                 gate.listen(1)
+                # The wait for the dial is bounded and the thread is a daemon, so
+                # a turn.py that dials elsewhere fails the test and never holds
+                # the run open.
+                gate.settimeout(20)
                 received = {}
 
                 def serve():
-                    conn, _ = gate.accept()
+                    try:
+                        conn, _ = gate.accept()
+                    except OSError:
+                        return
                     with conn:
                         line = b""
                         while not line.endswith(b"\n"):
@@ -4436,7 +4443,7 @@ esac
                             line += chunk
                         received["line"] = line
                         conn.sendall(b'{"kind":"answered","run":"r-1","text":"ok","turn":"t-1"}\n')
-                server = threading.Thread(target=serve)
+                server = threading.Thread(target=serve, daemon=True)
                 server.start()
                 try:
                     result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
