@@ -308,7 +308,8 @@ the one caller every gate rule names, per `weaver-gate-world-contract` section 1
 each agent's gate group `weaver-<agent>-gate` and never an agent's own group (the gate's
 door, section 6), and holds no line here, and `weaver-admincon` is in no gate rule, so neither account reaches
 the other's door. An agent whose rule names its own per-agent account
-`weaver-<agent>-admincon` of #50 keeps it and is not refused for it.
+`weaver-<agent>-admincon` of #50 is not refused for that rule, and as laid before the
+gate's door it has no gate group, so its load refuses naming the group (section 6).
 
 **The account reaches every agent whose rule names it, and the reach is the design**, on
 the operator's ruling of 2026-11-10. It is the trace reader of each such agent, it

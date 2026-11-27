@@ -49,7 +49,7 @@ table.
 | Relay account, the trace relay's uid | `weaver-<name>-relay`, no home | system user, nologin, its one group the trace group |
 | Access group, the territory files' and the trace door's | `weaver-<name>-admin` | system group, held by the box's admin-con account and the operator, never the member or the agent's uid; it reads and never writes |
 | Gate group, the gate's door's | `weaver-<name>-gate` | system group, held by the box's gate-con account alone; admin's load lays `<coordination-root>/weaver.run/<name>/gate/` as `weaver-<name>:weaver-<name>-gate 2750`, and the gate binds `gate.sock` there |
-| The box's gate-con account, gate-con's service user, one per box | `weaver-gatecon`, no home | system user below `UID_MIN`, nologin, its own primary group shared with no other account; laid by the first create-agent run that finds it absent and judged by its shape by every later one; holds each agent's group `weaver-<name>` for the gate's socket and no state, access or trace group; the one uid each new agent's access rule names |
+| The box's gate-con account, gate-con's service user, one per box | `weaver-gatecon`, no home | system user below `UID_MIN`, nologin, its own primary group shared with no other account; laid by the first create-agent run that finds it absent and judged by its shape by every later one; holds each agent's gate group `weaver-<name>-gate` for the gate's door, and no agent's own group and no state, access or trace group; the one uid each new agent's access rule names |
 | The box's admin-con account, admin-con's service user, one per box | `weaver-admincon`, no home | system user below `UID_MIN`, nologin, its own primary group shared with no other account; laid and judged as gate-con's is; holds each agent's state group for passage and access group for reading, and no agent's own group or trace group; the account each agent's sudo rule and `roles.toml` name |
 | Territory | `<agent-directory>/<name>/weaver-<name>/`, in the agent's folder | root:weaver-<name>-state 0710, not setgid: the state group passes to what stands in it by name, which the member holds as its own and the operator and the box's admin-con account join; the agent's own uid passes not; none lists; the files' own modes are the wall beneath, and no access entry is set |
 | State room (agents with a store) | `<territory>/state/`, where the member writes its save points | member 0700, unreachable by the agent's uid |
@@ -70,8 +70,9 @@ root where it is the operator, which reads everything already and joins none:
 territory, and `weaver-<name>-admin` to read the declaration, the draft, the logs and
 the save points without sudo. The operator joins neither `weaver-<name>` nor
 `weaver-<name>-gate`: the gate's caller is the box's gate-con account alone (`weaver-gate-world-contract` section 1, the
-operator's rulings of 2026-11-10), and an agent laid by an earlier create-agent.sh,
-whose rule names the operator and whose groups the operator holds, keeps that layout.
+operator's rulings of 2026-11-10). An agent laid by an earlier create-agent.sh has no
+gate group, so its load refuses naming `weaver-<name>-gate`: take it down and make it
+again (no old layout is carried forward, the operator's ruling of 2026-10-08).
 The member holds the state group alone and reaches its room by the territory's passage
 at 0710, which only that group has; it is in neither the access group nor the trace
 group, so it reads neither the logs nor the save points nor the trace, whose content it
@@ -620,8 +621,10 @@ the operator's uid alone, and the gate refuses every uid its rule does not name 
 byte is read, so with the rule naming gate-con alone no seeding line reaches the harness
 from anyone. How such an agent's prompt enters is deferred to its own act. It serves
 under the compiled loop's prompt until then, and its draft is a draft. What follows
-holds for an agent whose rule names the operator, as an earlier `create-agent.sh` laid
-it: such an agent keeps that layout and is not refused for it.
+holds for an agent whose rule names the operator as well, which admin's validate admits
+only where the operator joins `weaver-<name>-gate`, as `deploy/verify-lifecycle.sh`
+joins it to measure the seeding line. An agent laid by an earlier `create-agent.sh` has
+no gate group, and is made again.
 
 **Then seed the prompt**, the last step, as yourself and with the agent loaded (so
 `verify-load.sh <name> --keep`, or a plain `load`, as above):

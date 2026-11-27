@@ -98,8 +98,10 @@ which an agent's access rule names alone. **It reaches the endpoint by the agent
 group**, `weaver-<agent>-gate`, the group of the door the endpoint stands in, and never
 by the agent's own group, per `weaver-gate-Spec` section 3 and `weaver-admin-Spec`
 section 6. Neither the operator's uid nor root is in such a rule, and the operator holds
-no gate group. An agent whose rule names the operator instead keeps it and is not refused for
-it, and section 2 states what such an agent alone can receive. The box's admin-con
+no gate group. A rule may name the operator's uid as well only where the operator joins
+the agent's gate group, which admin's validate checks, and section 2 states what such an
+agent alone can receive. An agent laid before the gate's door has no gate group, and its
+load refuses naming it. The box's admin-con
 account, `weaver-admincon`, is in no gate rule either, per
 `weaver-admin-operator-contract` section 0, so neither connector account reaches the
 other's door. Many people and many turns are WeaverWeb's to carry over gate-con's one
