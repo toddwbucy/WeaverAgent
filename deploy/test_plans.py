@@ -1245,16 +1245,21 @@ elif name == 'sudo':
         else:
             # A file installed from a source is a new file holding its bytes,
             # as `install` unlinks the name first, a link standing there among
-            # them. The grant's text is the operator's own file under TMPDIR
-            # (deploy/loop-grant.sh), carried as any source under the root is.
+            # them. **Without `-T`, a target that resolves to a folder takes
+            # the file inside it**, under the source's name, a link to a
+            # folder among them, as GNU install does. The grant's text is the
+            # operator's own file under TMPDIR (deploy/loop-grant.sh),
+            # carried as any source under the root is.
             source = pathlib.Path(mapped(rest[-2]))
+            placed = target / source.name if '-T' not in rest and target.is_dir() else target
+            assert placed.is_relative_to(root), placed
             def place():
-                if target.exists() or target.is_symlink(): target.unlink()
+                if placed.exists() or placed.is_symlink(): placed.unlink()
                 if source.is_file() and (source.is_relative_to(root)
                                          or source.name.startswith('weaver-loop-grant.')):
-                    shutil.copyfile(source, target)
-                else: target.touch()
-            privileged([target], place)
+                    shutil.copyfile(source, placed)
+                else: placed.touch()
+            privileged([placed], place)
     elif op == 'mv':
         source, destination = (pathlib.Path(mapped(a)) for a in rest[-2:])
         assert source.is_relative_to(root) and destination.is_relative_to(root)
@@ -6084,7 +6089,7 @@ esac
         self.assertFalse([c for c in calls if c[:2] == ["sudo", "tee"] and c[-1].endswith("/.grant.new")], calls)
         staged = [c for c in calls if c[:2] == ["sudo", "install"] and c[-1] == f"{folder}/.grant.new"]
         self.assertEqual(len(staged), 1, calls)
-        self.assertEqual(staged[0][2:8], ["-o", "root", "-g", "root", "-m", "0644"])
+        self.assertEqual(staged[0][2:9], ["-T", "-o", "root", "-g", "root", "-m", "0644"])
         self.assertFalse(Path(staged[0][-2]).exists(), "the operator's own file is removed")
 
     def test_the_loop_folder_is_made_only_where_no_other_principal_can_claim_it(self):
@@ -6177,6 +6182,39 @@ esac
         result = self.library_install()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((folder / "grant").read_text(), self.loop_grant(prefix))
+
+    def test_a_link_to_a_folder_at_a_stage_name_is_replaced_and_never_written_into(self):
+        """**Every stage is made by `install -T`** (review of #655, finding
+        5): without `-T`, a link at `.grant.new` or `.runner.py.new` that
+        names a folder has `install` write the file inside that folder, and
+        the rename then puts the link at the real name. With it, the link is
+        replaced by the file, the folder it named stays empty, and the grant
+        and the runner land at their names. Perturbations: drop `-T` from the
+        grant's install or the runner files', and its folder takes a file."""
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        prefix = self.root / "installed"
+        folder = prefix / "lib" / "weaver-loop"
+        aimed = {}
+        for stage in (".grant.new", ".runner.py.new"):
+            aimed[stage] = self.root / f"aimed{stage}"
+            aimed[stage].mkdir()
+            (folder / stage).symlink_to(aimed[stage])
+        (folder / "grant").write_text("old grant\n")
+        (folder / "runner.py").write_text("old runner\n")
+        shutil.rmtree(self.root / 'target with "quotes"')
+        self.log.unlink(missing_ok=True)
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for stage, where in aimed.items():
+            with self.subTest(stage=stage):
+                self.assertEqual(list(where.iterdir()), [])
+                self.assertFalse((folder / stage).exists() or (folder / stage).is_symlink())
+        self.assertFalse((folder / "grant").is_symlink())
+        self.assertEqual((folder / "grant").read_text(), self.loop_grant(prefix))
+        self.assertFalse((folder / "runner.py").is_symlink())
+        self.assertEqual((folder / "runner.py").read_bytes(), (DEPLOY.parent / "loop-runner" / "runner.py").read_bytes())
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ["grant", "runner.py", "weaver_board.py"])
 
     def test_a_rollback_puts_the_loop_runner_back(self):
         """**The loop runner's files go back as the binaries do**: a runner

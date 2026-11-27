@@ -96,7 +96,11 @@ loop_grant() {
 
 # loop_standing_refusal: a refusal on standard output where LOOP_DIR or
 # LOOP_PYCACHE stands out of its shape, nothing otherwise. Read without
-# privilege: both are 0755 where they stand.
+# privilege: both are 0755 where they stand. **Its refusal of a link at
+# either name is what keeps lay_loop's `install -d` from following one**:
+# `install -d` keeps a link that names a folder and sets that folder's mode,
+# wherever it lies. The owner and mode of one that stands are
+# loop_placing_refusal's.
 loop_standing_refusal() {
   if [ -e "$LOOP_DIR/__pycache__" ] || [ -L "$LOOP_DIR/__pycache__" ]; then
     printf '%s stands, and no bytecode ships beside the runner: remove it by hand, then rerun' "$LOOP_DIR/__pycache__"
@@ -171,21 +175,23 @@ loop_placing_refusal() {
 # GRANT, which loop_grant computed. **Each file is staged beside its name
 # and renamed over it**, root's from the moment it has a name, so the launcher
 # reads the old file or the new one and never a part. **Every stage is made by
-# `install`**, which replaces whatever stands at the stage's name, a link
-# among them, and never writes through it: the grant is written first to a
-# file of the operator's own and installed from there.
+# `install -T`**, which replaces whatever stands at the stage's name, a link
+# among them, and never writes through it. Without `-T`, a link at the stage's
+# name that names a folder has `install` write the file inside that folder.
+# The grant is written first to a file of the operator's own and installed
+# from there.
 lay_loop() {
   local source=$1 grant=$2 f
   sudo install -d -o root -g root -m 0755 "$LOOP_DIR"
   sudo install -d -o root -g root -m 0755 "$LOOP_PYCACHE"
   for f in $LOOP_FILES; do
-    sudo install -o root -g root -m 0644 "$source/$f" "$LOOP_DIR/.$f.new"
+    sudo install -T -o root -g root -m 0644 "$source/$f" "$LOOP_DIR/.$f.new"
     sudo mv -T -- "$LOOP_DIR/.$f.new" "$LOOP_DIR/$f"
   done
   local staged
   staged=$(mktemp "${TMPDIR:-/tmp}/weaver-loop-grant.XXXXXX") || return 1
   if ! printf '%s\n' "$grant" >"$staged" \
-    || ! sudo install -o root -g root -m 0644 "$staged" "$LOOP_DIR/.grant.new"; then
+    || ! sudo install -T -o root -g root -m 0644 "$staged" "$LOOP_DIR/.grant.new"; then
     rm -f -- "$staged"
     return 1
   fi
