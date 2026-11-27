@@ -158,6 +158,18 @@ if [ -d "$BASE" ]; then
         done
     done
 fi
+# **The archive lies inside no folder this take-down removes** (review of #655), judged
+# by canonical path as the territories above are, so an archive named through a link or
+# a `..` is judged where it lands, and step 3 to 7's removals never take the archive
+# step 2 wrote.
+archive=$(realpath -m -- "$ARCHIVE")
+for removed in "$FOLDER" "$BASE/$NAME" "$OWN" "$RUN_DIR" "$RUNTIME_DIR" "$TERRITORY" "$SUDO_RULE"; do
+    case $removed in /*) ;; *) continue ;; esac
+    removed=$(realpath -m -- "$removed")
+    case $archive in
+        "$removed"|"$removed"/*) die "the archive $ARCHIVE lies at $archive, inside $removed, which this take-down removes: name a folder outside the agent's paths" ;;
+    esac
+done
 if [ "$APPLY" = 1 ]; then
     for p in "$STACK" "$STACK/agent-directory" "$STACK/coordination-root" "$BASE" "$BASE/$NAME" "$BASE/$NAME/territory"; do
         held_root "$p" || die "$p is not held by root alone, and this step acts on the paths it names"

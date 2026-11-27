@@ -96,7 +96,11 @@ loop_grant() {
 
 # loop_standing_refusal: a refusal on standard output where LOOP_DIR or
 # LOOP_PYCACHE stands out of its shape, nothing otherwise. Read without
-# privilege: both are 0755 where they stand.
+# privilege: both are 0755 where they stand. **Its refusal of a link at
+# either name is what keeps lay_loop's `install -d` from following one**:
+# `install -d` keeps a link that names a folder and sets that folder's mode,
+# wherever it lies. The owner and mode of one that stands are
+# loop_placing_refusal's.
 loop_standing_refusal() {
   if [ -e "$LOOP_DIR/__pycache__" ] || [ -L "$LOOP_DIR/__pycache__" ]; then
     printf '%s stands, and no bytecode ships beside the runner: remove it by hand, then rerun' "$LOOP_DIR/__pycache__"
@@ -116,21 +120,81 @@ loop_standing_refusal() {
   fi
 }
 
+# loop_placing_refusal: a refusal on standard output where LOOP_DIR or
+# LOOP_PYCACHE is not placed where only root could have placed it, nothing
+# otherwise. Both cases are judged. **One that stands** must be root's,
+# writable by no group or other, and held closed above it by admin's rule: one
+# another principal made first, its own, holds whatever that principal put in
+# it, and root's `install -d` would only take it over, so it refuses before
+# anything is computed or moved. **One that does not stand is a new name in
+# the prefix's lib folder**, judged at the nearest directory that stands as
+# the scripts judge every other folder they make: held closed by admin's rule,
+# and writable by no group or other even where sticky, since the sticky bit
+# keeps another principal from renaming an entry it does not own but not from
+# claiming a name that does not exist yet, which root's `install -d` would
+# then follow. A link or a file at either name is loop_standing_refusal's,
+# which the scripts ask first. Needs the caller's held_closed. Read without
+# privilege.
+loop_placing_refusal() {
+  local placed at bad mode owner
+  for placed in "$LOOP_DIR" "$LOOP_PYCACHE"; do
+    if [ -e "$placed" ] || [ -L "$placed" ]; then
+      read -r owner mode < <(stat -c '%u %a' -- "$placed" 2>/dev/null) \
+        || { printf 'the owner and mode of %s cannot be read' "$placed"; return 0; }
+      if [ "$owner" != 0 ]; then
+        printf '%s stands as uid %s, not root, so another principal made it and what it holds is not the install'"'"'s: remove it by hand, then rerun' "$placed" "$owner"
+        return 0
+      fi
+      if (( 8#$mode & 8#022 )); then
+        printf '%s stands with mode %s, which its group or others can write in: remove it by hand, then rerun' "$placed" "$mode"
+        return 0
+      fi
+      if ! bad=$(held_closed "$(dirname -- "$placed")"); then
+        printf '%s stands under %s, which is not held closed by root' "$placed" "$bad"
+        return 0
+      fi
+      continue
+    fi
+    at=$(dirname -- "$placed")
+    while [ ! -e "$at" ]; do at=$(dirname -- "$at"); done
+    if ! bad=$(held_closed "$at"); then
+      printf '%s would be made under %s, which is not held closed by root' "$placed" "$bad"
+      return 0
+    fi
+    mode=$(stat -c '%a' -- "$(realpath -e -- "$at")" 2>/dev/null) \
+      || { printf 'the mode of %s, where %s would be made, cannot be read' "$at" "$placed"; return 0; }
+    if (( 8#$mode & 8#022 )); then
+      printf '%s would be made under %s, where another principal could claim the missing name first' "$placed" "$at"
+      return 0
+    fi
+  done
+}
+
 # lay_loop SOURCE GRANT: lays LOOP_DIR and LOOP_PYCACHE, the runner's files
 # from SOURCE (the repository's loop-runner/) and the grant from the text
 # GRANT, which loop_grant computed. **Each file is staged beside its name
 # and renamed over it**, root's from the moment it has a name, so the launcher
-# reads the old file or the new one and never a part.
+# reads the old file or the new one and never a part. **Every stage is made by
+# `install -T`**, which replaces whatever stands at the stage's name, a link
+# among them, and never writes through it. Without `-T`, a link at the stage's
+# name that names a folder has `install` write the file inside that folder.
+# The grant is written first to a file of the operator's own and installed
+# from there.
 lay_loop() {
   local source=$1 grant=$2 f
   sudo install -d -o root -g root -m 0755 "$LOOP_DIR"
   sudo install -d -o root -g root -m 0755 "$LOOP_PYCACHE"
   for f in $LOOP_FILES; do
-    sudo install -o root -g root -m 0644 "$source/$f" "$LOOP_DIR/.$f.new"
+    sudo install -T -o root -g root -m 0644 "$source/$f" "$LOOP_DIR/.$f.new"
     sudo mv -T -- "$LOOP_DIR/.$f.new" "$LOOP_DIR/$f"
   done
-  printf '%s\n' "$grant" | sudo tee "$LOOP_DIR/.grant.new" >/dev/null
-  sudo chown root:root "$LOOP_DIR/.grant.new"
-  sudo chmod 0644 "$LOOP_DIR/.grant.new"
+  local staged
+  staged=$(mktemp "${TMPDIR:-/tmp}/weaver-loop-grant.XXXXXX") || return 1
+  if ! printf '%s\n' "$grant" >"$staged" \
+    || ! sudo install -T -o root -g root -m 0644 "$staged" "$LOOP_DIR/.grant.new"; then
+    rm -f -- "$staged"
+    return 1
+  fi
+  rm -f -- "$staged"
   sudo mv -T -- "$LOOP_DIR/.grant.new" "$LOOP_DIR/grant"
 }

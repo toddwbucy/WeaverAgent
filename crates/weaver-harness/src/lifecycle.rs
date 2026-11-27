@@ -460,6 +460,12 @@ struct Run {
     /// standing, and `None` where the compiled loop runs. Taken by the stop
     /// after the gate is lowered, so a leave tried again finds none.
     loop_arm: Option<crate::loop_arm::LoopArm>,
+    /// **A run whose enter was refused after the load serves no dialer.** It
+    /// is retained for admin's rollback alone, its gate standing where the
+    /// refusal came after the raise (a loop that did not start, section
+    /// 2.5), and a frame that reaches it before the rollback's leave is
+    /// refused, never turned by the compiled loop in the elected one's place.
+    enter_refused: bool,
 }
 
 impl Run {
@@ -999,6 +1005,12 @@ impl Harness {
             crate::lifecycle_table::Event::DialerRequest,
         ) == crate::lifecycle_table::Response::RefuseNoResidency;
         let response = match parse_request(&frame) {
+            _ if run.enter_refused => render_close(
+                "refused",
+                "reason",
+                "the load was refused and is being rolled back",
+                None,
+            ),
             _ if no_model => render_close("refused", "reason", "no model is resident", None),
             Err(reason) => render_close("refused", "reason", &reason, None),
             // **A `system` line is the operator's alone**, per Spec 6.1's
@@ -2447,6 +2459,7 @@ impl Harness {
             leave: None,
             carried: None,
             loop_arm: None,
+            enter_refused: false,
             diagnostic: diagnostic.then(|| DiagnosticSeat {
                 reader_elected: payload.spu_instruction.decoder.residual_readout_election,
                 artifact: payload
@@ -2462,9 +2475,11 @@ impl Harness {
         };
 
         macro_rules! after_load {
-            ($run:expr, $refusal:expr) => {
-                return Err(EnterFailure::AfterLoad(Box::new($run), $refusal))
-            };
+            ($run:expr, $refusal:expr) => {{
+                let mut refused = $run;
+                refused.enter_refused = true;
+                return Err(EnterFailure::AfterLoad(Box::new(refused), $refusal));
+            }};
         }
 
         if let Some(setup) = setup.as_deref_mut() {
@@ -3099,51 +3114,64 @@ unsafe fn start_loop(
     wires: &weaver_types::WiresElection,
 ) -> Result<(), LifecycleRefusal> {
     // SAFETY: the caller's contract above.
+    unsafe { start_loop_saying(run, launch, wires, &mut std::io::stderr()) }
+}
+
+/// [`start_loop`], its one line written to `diagnostic`. **A failed write is
+/// no fault of the start's**, as at the leave's queue peak: `eprintln!` panics
+/// where standard error cannot take the line (a full disk under worker.log),
+/// which would end the worker before it answers the enter, so the write's
+/// error is dropped.
+///
+/// # Safety
+///
+/// As [`start_loop`].
+unsafe fn start_loop_saying(
+    run: &mut Run,
+    launch: &crate::loop_arm::LoopLaunch,
+    wires: &weaver_types::WiresElection,
+    diagnostic: &mut impl std::io::Write,
+) -> Result<(), LifecycleRefusal> {
+    let mut say = |line: serde_json::Value| {
+        let _ = writeln!(diagnostic, "{line}");
+    };
+    // SAFETY: the caller's contract above.
     match unsafe { crate::loop_arm::LoopArm::start(launch, wires) } {
         Ok(arm) => {
             run.loop_arm = Some(arm);
             Ok(())
         }
         Err(crate::loop_arm::StartRefused::Fork(why)) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "organ": "harness",
-                    "loop": "not-started",
-                    "reason": why,
-                    "launcher": launch.launcher.display().to_string(),
-                    "grant": launch.grant.display().to_string(),
-                })
-            );
+            say(serde_json::json!({
+                "organ": "harness",
+                "loop": "not-started",
+                "reason": why,
+                "launcher": launch.launcher.display().to_string(),
+                "grant": launch.grant.display().to_string(),
+            }));
             Err(LifecycleRefusal::BindFailed)
         }
         Err(crate::loop_arm::StartRefused::Config(reason)) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "organ": "harness",
-                    "loop": "refused",
-                    "reason": reason,
-                    "launcher": launch.launcher.display().to_string(),
-                    "grant": launch.grant.display().to_string(),
-                })
-            );
+            say(serde_json::json!({
+                "organ": "harness",
+                "loop": "refused",
+                "reason": reason,
+                "launcher": launch.launcher.display().to_string(),
+                "grant": launch.grant.display().to_string(),
+            }));
             Err(LifecycleRefusal::ConfigInvalid {
                 field: Some(weaver_types::FieldName("loop".into())),
             })
         }
         Err(crate::loop_arm::StartRefused::Hello { reason, last_word }) => {
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "organ": "harness",
-                    "loop": "refused",
-                    "reason": reason,
-                    "last_word": last_word,
-                    "launcher": launch.launcher.display().to_string(),
-                    "grant": launch.grant.display().to_string(),
-                })
-            );
+            say(serde_json::json!({
+                "organ": "harness",
+                "loop": "refused",
+                "reason": reason,
+                "last_word": last_word,
+                "launcher": launch.launcher.display().to_string(),
+                "grant": launch.grant.display().to_string(),
+            }));
             Err(LifecycleRefusal::ConfigInvalid {
                 field: Some(weaver_types::FieldName("loop".into())),
             })

@@ -903,6 +903,10 @@ bad=$(held_closed "$ADMIN_BASE") || die "the admin base $ADMIN_BASE is not held 
 # new name in the record's log-directory, so neither may let another principal
 # claim the name first.
 bad=$(creatable_in "$ADMIN_BASE") || die "the admin base $ADMIN_BASE lets another principal make names in it ($bad), so the stage could be claimed first"
+# **The agent's own folder is a new name in the base's parent** (weaver-admin-Spec
+# section 4), so the parent is judged as the base is: a principal that could
+# make the name first would have root's `install -d` take its folder.
+bad=$(creatable_in "$(dirname -- "$ADMIN_BASE")") || die "the admin base's parent $(dirname -- "$ADMIN_BASE") lets another principal make names in it ($bad), so the agent's folder $ETC_FOLDER could be claimed first"
 [ "$ADMIN_BASE" = /etc/weaver/admin ] || printf '   WARNING: the admin base is %s, and a delegated invocation reads only /etc/weaver/admin, so the connector'"'"'s sudo rule cannot drive this agent\n' "$ADMIN_BASE"
 
 # **Whose identity the store admits is settled and derived.** The charter has

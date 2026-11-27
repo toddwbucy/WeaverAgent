@@ -370,6 +370,7 @@ fn entered_run(turn: Option<&str>) -> (Run, OrganChannel, crate::scratch::Scratc
             carried: Some(crate::engine::test_carried()),
             turn_context: weaver_types::TurnContext::Continuous,
             loop_arm: None,
+            enter_refused: false,
         },
         near,
         path,
@@ -587,6 +588,9 @@ fn the_declared_election_reaches_the_tee() {
             panic!("failed before the load: {refusal:?}")
         }
     };
+    // **A run refused after the load is marked**, so the frame path serves
+    // it no dialer before admin's rollback.
+    assert!(run.enter_refused, "a run refused after the load is marked");
     let _ = leave(&mut run, None, false);
     drop(run);
     // The leave closed the bracket and the drop closed the tee's
@@ -935,6 +939,172 @@ fn the_start_stands_the_loop_or_refuses_naming_it() {
     let started = unsafe { start_loop(&mut run, &launch, &election) };
     assert_eq!(started, Err(loop_refused), "a grant path not in UTF-8");
     assert!(run.loop_arm.is_none());
+}
+
+/// A writer that takes no byte, as standard error does under a full disk.
+struct WriteFails;
+
+impl std::io::Write for WriteFails {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("no space left"))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::Error::other("no space left"))
+    }
+}
+
+/// **A refused start's line is written best effort** (review of #655), as
+/// the leave's queue peak is: the line names the loop's refusal where
+/// standard error takes it, and where it cannot, the start still answers its
+/// refusal and the worker does not panic. Both refusals that can be reached
+/// here are driven: the grant path not in UTF-8, before any fork, and a
+/// `hello` refused on another digest. Perturbation: write the line with
+/// `eprintln!`, and the recorded line is missing; unwrap the write, and the
+/// failing writer panics the start.
+#[test]
+fn a_refused_starts_line_is_written_best_effort() {
+    let loop_refused = LifecycleRefusal::ConfigInvalid {
+        field: Some(weaver_types::FieldName("loop".into())),
+    };
+    let wires = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/loop-wires-cross.py"
+    );
+    let (arm, dir) = unwalled_arm();
+    arm.stop(None);
+    let not_utf8 = crate::loop_arm::LoopLaunch {
+        launcher: dir.join("launch"),
+        grant: std::path::PathBuf::from(
+            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"/grant-\xff"),
+        ),
+    };
+    let unwalled = crate::loop_arm::LoopLaunch {
+        launcher: dir.join("launch"),
+        grant: dir.join("grant"),
+    };
+    let other_digest = weaver_types::WiresElection {
+        file: wires.into(),
+        sha256: "ab".repeat(32),
+    };
+    for (row, launch) in [
+        ("a grant path not in UTF-8", &not_utf8),
+        ("a hello on another digest", &unwalled),
+    ] {
+        let mut said = Vec::new();
+        let (mut run, _spare, _sink) = entered_run(None);
+        // SAFETY: on this test's thread, which outlives any child.
+        let started = unsafe { start_loop_saying(&mut run, launch, &other_digest, &mut said) };
+        assert_eq!(started, Err(loop_refused.clone()), "{row}");
+        let line: serde_json::Value = serde_json::from_slice(&said)
+            .unwrap_or_else(|_| panic!("{row}: one JSON line said, not {said:?}"));
+        assert_eq!(line["organ"], "harness", "{row}");
+        assert_eq!(line["loop"], "refused", "{row}");
+        let (mut run, _spare, _sink) = entered_run(None);
+        // SAFETY: as above.
+        let started =
+            unsafe { start_loop_saying(&mut run, launch, &other_digest, &mut WriteFails) };
+        assert_eq!(
+            started,
+            Err(loop_refused.clone()),
+            "{row}: a write that fails"
+        );
+        assert!(run.loop_arm.is_none(), "{row}");
+    }
+}
+
+/// **A fork that fails takes the same best-effort write** (review of #655,
+/// finding 2): the start's `Fork` refusal, reached in a child process of this
+/// test binary, since a limit on descriptors is the whole process's. There
+/// the soft limit is set to the lowest descriptor free, so the loop's pair
+/// refuses with EMFILE before any fork. The line names `not-started` where the
+/// writer takes it, and where the writer fails the start still answers
+/// `BindFailed`, with no panic. Perturbation: write the fork's line with
+/// `eprintln!`, and the recorded line is missing. Unwrap the write, and the
+/// failing writer panics the start.
+#[test]
+fn a_failed_forks_line_is_written_best_effort() {
+    const CASE: &str = "WEAVER_HARNESS_FORK_FAILS";
+    const NAME: &str = "lifecycle::tests::a_failed_forks_line_is_written_best_effort";
+    if std::env::var_os(CASE).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+            .env(CASE, "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "the child: {stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let wires = weaver_types::WiresElection {
+        file: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/loop-wires-cross.py"
+        )
+        .into(),
+        sha256: "ab".repeat(32),
+    };
+    let launch = crate::loop_arm::LoopLaunch {
+        launcher: "/no-launcher-here".into(),
+        grant: "/no-grant-here".into(),
+    };
+    let (mut recorded, _spare, _sink) = entered_run(None);
+    let (mut failing, _spare_too, _sink_too) = entered_run(None);
+    let mut said = Vec::new();
+    let mut limit = nix::libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit fills the struct this frame owns.
+    assert_eq!(
+        unsafe { nix::libc::getrlimit(nix::libc::RLIMIT_NOFILE, &mut limit) },
+        0
+    );
+    // SAFETY: F_DUPFD answers a fresh descriptor, closed at once.
+    let lowest = unsafe { nix::libc::fcntl(0, nix::libc::F_DUPFD, 0) };
+    assert!(lowest >= 0);
+    // SAFETY: the descriptor F_DUPFD just answered, this frame's own.
+    unsafe { nix::libc::close(lowest) };
+    let lowered = nix::libc::rlimit {
+        rlim_cur: lowest as nix::libc::rlim_t,
+        rlim_max: limit.rlim_max,
+    };
+    // SAFETY: setrlimit reads the struct this frame owns. This process is the
+    // child, running this one test on one thread.
+    assert_eq!(
+        unsafe { nix::libc::setrlimit(nix::libc::RLIMIT_NOFILE, &lowered) },
+        0
+    );
+    // SAFETY: on this test's thread. The pair refuses before any fork.
+    let started = unsafe { start_loop_saying(&mut recorded, &launch, &wires, &mut said) };
+    // SAFETY: as above.
+    let failed = unsafe { start_loop_saying(&mut failing, &launch, &wires, &mut WriteFails) };
+    // SAFETY: setrlimit reads the struct this frame owns.
+    assert_eq!(
+        unsafe { nix::libc::setrlimit(nix::libc::RLIMIT_NOFILE, &limit) },
+        0
+    );
+    assert_eq!(started, Err(LifecycleRefusal::BindFailed));
+    let line: serde_json::Value = serde_json::from_slice(&said)
+        .unwrap_or_else(|_| panic!("one JSON line said, not {said:?}"));
+    assert_eq!(line["organ"], "harness");
+    assert_eq!(line["loop"], "not-started");
+    assert!(
+        line["reason"]
+            .as_str()
+            .is_some_and(|r| r.starts_with("the loop's pair: ")),
+        "{line}"
+    );
+    assert_eq!(
+        failed,
+        Err(LifecycleRefusal::BindFailed),
+        "a write that fails"
+    );
+    assert!(recorded.loop_arm.is_none() && failing.loop_arm.is_none());
 }
 
 /// A seat recording each turn's text, answering a refusal no relay makes.
@@ -6914,6 +7084,62 @@ fn a_request_after_the_spu_died_is_refused_no_model_is_resident() {
     assert!(
         matches!(harness.state, ChannelState::Entered(_)),
         "the run stands"
+    );
+}
+
+/// **A request to a run whose enter was refused is refused** (review of
+/// #655): a loop that did not start leaves the run retained for admin's
+/// rollback with the gate raised, and a dialer's frame that reaches the
+/// worker before the rollback's leave is refused, the compiled loop never
+/// entered in the elected one's place, the run standing for the rollback.
+/// Perturbation: drop the guard, and the frame is turned at `S2(Resident)`.
+#[test]
+fn a_request_to_a_run_whose_enter_was_refused_is_refused() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    run.enter_refused = true;
+    let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+    run.gate = Some(GateChannel {
+        channel: gate_end,
+        pid: nix::unistd::Pid::from_raw(1),
+        last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
+    });
+    let gate_peer = gate_peer.into_channel();
+    let (mut harness, _dir) = harness_entered(run);
+    let mut entered = false;
+    let mut entry = |_: &mut crate::engine::Ports<'_>, _: &str| {
+        entered = true;
+        Err(crate::engine::TurnError::Unlicensed {
+            turn: TurnKey("t-0".into()),
+        })
+    };
+    gate_peer
+        .send(&OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal: 1,
+            },
+            position: Position::Open,
+            payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
+                br#"{"text":"hello"}"#,
+            )),
+        })
+        .expect("frame sends");
+    let mut verb_slot = None;
+    harness
+        .serve_gate_wake(&mut entry, &mut verb_slot)
+        .expect("the wake serves");
+    let answer = gate_peer.recv().expect("the refusal returns");
+    let weaver_types::Payload::Frame(frame) = answer.payload else {
+        panic!("a frame answers a frame");
+    };
+    let line = String::from_utf8(frame.octets().expect("decodes")).expect("utf8");
+    assert!(line.contains("refused"), "{line}");
+    assert!(line.contains("rolled back"), "{line}");
+    assert!(!entered, "the compiled loop is never entered");
+    assert!(
+        matches!(harness.state, ChannelState::Entered(_)),
+        "the run stands for the rollback"
     );
 }
 
