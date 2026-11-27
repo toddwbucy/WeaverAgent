@@ -85,6 +85,10 @@ struct Timing {
     grant: Duration,
     /// How often a log connection looks at its file, inside section 8.6's 1 second.
     log_tick: Duration,
+    /// How long a log connector may take no byte while 1 MiB stands unsent
+    /// before it is one that does not read: section 8.6's 1 second, the
+    /// most a line appended may wait to reach the connection.
+    log_stall: Duration,
 }
 
 const PRODUCTION: Timing = Timing {
@@ -93,6 +97,7 @@ const PRODUCTION: Timing = Timing {
     open_after_connect: Duration::from_secs(1),
     grant: Duration::from_secs(10),
     log_tick: Duration::from_millis(100),
+    log_stall: Duration::from_secs(1),
 };
 
 /// A run machine A holds (section 8.8).
@@ -887,7 +892,7 @@ fn control(service: &Arc<Service>, mut stream: UnixStream, agent: &str, mut pend
                 let (svc, name, flag) =
                     (Arc::clone(service), agent.to_string(), Arc::clone(&closed));
                 std::thread::spawn(move || {
-                    svc.verb(&name, verb, &principal, asked, (&flag, &watch), &tx)
+                    svc.verb(&name, verb, &principal, asked, (&flag, watch), &tx)
                 });
                 loop {
                     match outstanding(&mut stream, &pending, &rx) {
@@ -1226,7 +1231,7 @@ impl Service {
         verb: &'static str,
         principal: &str,
         asked: Instant,
-        (closed, watch): (&AtomicBool, &UnixStream),
+        (closed, watch): (&AtomicBool, UnixStream),
         tx: &mpsc::Sender<Event>,
     ) {
         let refused = |refusal: Refusal| {
@@ -1245,7 +1250,11 @@ impl Service {
         // **A close before the read answers starts nothing**: the flag the
         // control thread sets, and the connection's own state read now, so a
         // close the control thread has not yet seen starts nothing either.
-        if closed.load(Ordering::SeqCst) || !still_open(watch) {
+        // **The clone is dropped once read**, so it never holds the
+        // connection open past the control thread's own close.
+        let standing = !closed.load(Ordering::SeqCst) && still_open(&watch);
+        drop(watch);
+        if !standing {
             return;
         }
         let id = match self.take_run(agent, verb) {
@@ -1709,6 +1718,8 @@ fn tail(
     };
     let mut unsent: Vec<u8> = Vec::new();
     let mut mid_line = false;
+    // When the connector last took a byte, or last had none waiting.
+    let mut took = Instant::now();
     if stream.set_nonblocking(true).is_err() {
         return;
     }
@@ -1789,13 +1800,23 @@ fn tail(
                 Ok(n) => {
                     mid_line = unsent[n - 1] != b'\n';
                     unsent.drain(..n);
+                    took = Instant::now();
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(_) => return,
             }
         }
-        if unsent.len() >= LOG_UNSENT {
+        if unsent.is_empty() {
+            took = Instant::now();
+        }
+        // **The close measures the connector, not the read** (section 8.6):
+        // the service's own read fills the queue to 1 MiB after any backlog,
+        // so 1 MiB standing is not enough. The connector must also have taken
+        // no byte for 1 second, past which a line appended cannot reach it
+        // within section 8.6's 1 second. A connector that pauses and reads
+        // again is not closed.
+        if unsent.len() >= LOG_UNSENT && took.elapsed() >= service.timing.log_stall {
             // **Best effort**: the refusal goes only where the connection
             // takes it whole after the line it is in.
             let behind = format!(

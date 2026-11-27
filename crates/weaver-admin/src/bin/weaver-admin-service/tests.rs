@@ -51,6 +51,7 @@ impl Service {
                 open_after_connect: Duration::from_secs(1),
                 grant: Duration::from_millis(1500),
                 log_tick: Duration::from_millis(20),
+                log_stall: Duration::from_secs(1),
             },
             connections_bound: CONNECTIONS,
             ids: Box::new(move || Ok(format!("{:016x}", next.fetch_add(1, Ordering::SeqCst) + 1))),
@@ -546,7 +547,7 @@ fn a_close_the_flag_has_not_seen_starts_nothing() {
         "load",
         principal,
         Instant::now(),
-        (&closed, &watch),
+        (&closed, watch),
         &tx,
     );
     closer.join().unwrap();
@@ -560,7 +561,7 @@ fn a_close_the_flag_has_not_seen_starts_nothing() {
         "load",
         principal,
         Instant::now(),
-        (&closed, &watch),
+        (&closed, watch),
         &tx,
     );
     assert!(
@@ -1119,15 +1120,78 @@ fn a_key_is_trimmed_as_the_root_program_trims_it() {
     }
 }
 
+/// **A reading connector that pauses is not closed** (section 8.6): behind a
+/// backlog of 4 MiB the service's own read fills the queue to 1 MiB at once,
+/// and a connector that takes one line, pauses for many ticks well inside the
+/// 1 second stall, then reads on, receives every line and no `log_behind`.
+/// Perturbation: close at 1 MiB standing, with no stall, and the pausing
+/// connector is closed.
+#[test]
+fn a_reading_connector_that_pauses_is_not_closed() {
+    let fx = fixture("log-pause");
+    let mut client = fx.opened("log");
+    let lines = 1024;
+    let line = format!("{{\"pad\":\"{}\"}}\n", "b".repeat(4000));
+    fx.append(&line.repeat(lines));
+    let _ = client.line();
+    std::thread::sleep(Duration::from_millis(300));
+    let (mut got, mut text) = (1, String::new());
+    while got < lines {
+        text.clear();
+        match client.reader.read_line(&mut text) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                assert!(!text.contains("log_behind"), "no log_behind after a pause");
+                got += 1;
+            }
+        }
+    }
+    assert_eq!(got, lines, "every line arrives");
+}
+
+/// **A half-closed control connection reads its end while the run goes on**
+/// (section 8.4, S4): the verb's watch is dropped once the peek before the
+/// run has answered, so the service's close reaches the connector with the
+/// run still standing. Perturbation: keep the watch for the run and the
+/// connector reads no end until the run ends.
+#[test]
+fn a_half_close_after_started_reads_its_end_before_the_run_ends() {
+    let fx = fixture("half-close");
+    fx.put("granted", "load\n");
+    fx.put("run-load", WAIT_FOR_RELEASE);
+    let mut client = fx.opened("control");
+    client.send(&verb_ask("load"));
+    assert_eq!(client.line(), r#"{"started":{"run":"0000000000000001"}}"#);
+    client.stream.shutdown(std::net::Shutdown::Write).unwrap();
+    client
+        .stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    assert!(client.closed(), "the end arrives while the run stands");
+    let mut other = fx.opened("control");
+    other.send(RUN_ASK);
+    assert_eq!(
+        other.value()["run"]["standing"][0]["run"],
+        "0000000000000001",
+        "the run still stands"
+    );
+    fx.put("release", "");
+    eventually("the run ends", || {
+        other.send(RUN_ASK);
+        other.value()["run"]["ended"]["ran"]["answer"]["verb"] == "load"
+    });
+}
+
 /// **A connector that does not read is closed past 1 MiB unsent**, section
-/// 8.6. Perturbation: no bound and the connection stays open.
+/// 8.6: it takes no byte for past the 1 second stall. Perturbation: no bound
+/// and the connection stays open.
 #[test]
 fn a_log_connector_that_does_not_read_is_closed() {
     let fx = fixture("log-behind");
     let mut client = fx.opened("log");
     let line = format!("{{\"pad\":\"{}\"}}\n", "b".repeat(4000));
     fx.append(&line.repeat(1024));
-    std::thread::sleep(Duration::from_millis(800));
+    std::thread::sleep(Duration::from_millis(1800));
     let mut all = Vec::new();
     client.reader.read_to_end(&mut all).unwrap();
     assert!(
