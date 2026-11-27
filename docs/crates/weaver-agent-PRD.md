@@ -584,23 +584,28 @@ that makes the parts one program cannot itself be a part.
 
 **The loop is state management**, per the operator's rulings of 2026-10-02 on issue #1,
 and every agentic loop is: it decides what reaches the model and when, and reconciles
-what happened with what is supposed to happen, turn by turn. **There is one loop,
+what happened with what is supposed to happen, turn by turn. **The compiled loop is
 written in Rust and compiled into the worker**, which is the deployment path
 `weaver-harness-Spec` section 1 states. The Python iteration and SPU tracks retire on
-the operator's ruling of 2026-10-20 (#180). There is no loop election and no pluggable
-loop, and an operator bringing a loop of its own is parked by name at section 9. The
-loop calls on the state member's store and on the SPU's classifier through the harness,
-organs never linking, and both are primitives in the sense of section 2: mechanics
-without motive, the schema and the purpose being the loop's. **Its opinions are the
-operator's to set**: wherever an operator could reasonably want a different answer, the
-loop exposes the choice as a setting in a `[state-management]` table of the agent's
-declaration, each setting with a compiled default, and the `load` event records the
-values in effect, so a record says what its loop was told. Which settings exist is a
-later act's. Custody, the rebuild from the trace, and every state write passing through
-the tee are never settings. **Every judgment the loop makes is recorded on the trace**,
-the model-made ones included, a classification or a ranking as surely as a flush, so
-state stays rebuildable from the record without re-asking a model, per
-`weaver-trace-PRD` section 3.1.
+the operator's ruling of 2026-10-20 (#180). **A loop laid in the agent's loop folder
+runs, and the compiled loop runs where none is laid**, on the operator's rulings of
+2026-11-25: root lays the wire file in `/etc/weaver/<agent>/loop/`, admin finds it
+standing at each load, and the worker starts it as a process of its own under the
+launcher's walls, composing through the same seat over `weaver-harness-loop-contract`
+(`weaver-harness-Spec` section 2.5). The standing folder is the election, and the
+declaration carries no loop key. Installing a loop over the management plane is parked
+by name at section 9. The loop calls on the state member's store and on the SPU's
+classifier through the harness, organs never linking, and both are primitives in the
+sense of section 2: mechanics without motive, the schema and the purpose being the
+loop's. **Its opinions are the operator's to set**: wherever an operator could
+reasonably want a different answer, the loop exposes the choice as a setting in a
+`[state-management]` table of the agent's declaration, each setting with a compiled
+default, and the `load` event records the values in effect, so a record says what its
+loop was told. Which settings exist is a later act's. Custody, the rebuild from the
+trace, and every state write passing through the tee are never settings. **Every
+judgment the loop makes is recorded on the trace**, the model-made ones included, a
+classification or a ranking as surely as a flush, so state stays rebuildable from the
+record without re-asking a model, per `weaver-trace-PRD` section 3.1.
 
 **Each organ presents its contracts to the harness and presents nothing to any other
 organ.** A contract is what an organ offers the integrator, being the vocabulary it
@@ -1085,17 +1090,18 @@ hold, and answering a query over what it holds, are state management's and in sc
 What stays out is the layer below it, the lossy compression consolidation writes, which
 returns by the same door and reads from state's save points when it comes.
 
-**The operator bringing the loop is parked here by name**, on the same rulings. The loop
-of section 5.5 is one loop, compiled into the worker, and `loop-file`, a declaration
-naming code the worker runs, is retired with the Python worker on 2026-10-20 (#180). A
-declaration carrying it refuses by name. Its opinions are settings in the declaration's
-`[state-management]` table, recorded on the load event: the table's grammar is
-`weaver-types-Spec`'s, with the declaration's other keys, and its meaning is
-`weaver-harness-Spec`'s, with the loop, per the operator's ruling of 2026-10-02 on #58's
-sixth question. An operator supplying a loop of its own, by a declared file or any other
-path, is a possible future feature, not built here, and it returns by the mechanism
-below if it returns at all. Naming it is not a slot: no field, flag or seam is carried
-for it.
+**Installing the loop over the management plane is parked here by name**, on the
+operator's rulings of 2026-11-25. A loop root lays by hand in the agent's loop folder
+runs, and the compiled loop runs where none is laid (section 5.5). `loop-file`, a
+declaration naming code the worker runs, is retired with the Python worker on 2026-10-20
+(#180), and a declaration carrying it refuses by name. The compiled loop's opinions are
+settings in the declaration's `[state-management]` table, recorded on the load event:
+the table's grammar is `weaver-types-Spec`'s, with the declaration's other keys, and its
+meaning is `weaver-harness-Spec`'s, with the loop, per the operator's ruling of
+2026-10-02 on #58's sixth question. Laying, checking and removing a loop from Weaver
+Web, over the management plane, is a later act's, and it returns by the mechanism below.
+Until then root lays the folder by hand. Naming the install is not a slot: no admin
+verb, field or flag is carried for it.
 
 **Save points as task- or workflow-level presets are parked here by name**, on the
 operator's ruling of 2026-10-02 on #58: a known-good context returned to repeatedly for

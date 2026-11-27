@@ -279,12 +279,13 @@ fn the_stack_names_what_was_started_and_handed() {
 /// section 6: the socket, the SPU the root names and the gate, then each
 /// named flag only where its value stands. Perturbation: substitute a
 /// fixed SPU path in `worker_arguments` and the first assertion fails;
-/// emit `--classify-binary` unconditionally and the bare vector carries it.
+/// emit `--classify-binary` or the loop's two flags unconditionally and the
+/// bare vector carries them.
 #[test]
 fn the_roots_spu_reaches_the_vector() {
     let config = unread_config();
     let socket = config.coordination_socket();
-    let bare = start::worker_arguments(&socket, &config.spu, &config.gate, None, None);
+    let bare = start::worker_arguments(&socket, &config.spu, &config.gate, None, None, None);
     assert_eq!(
         bare,
         vec![
@@ -299,14 +300,63 @@ fn the_roots_spu_reaches_the_vector() {
         &config.gate,
         Some("4096"),
         Some(std::path::Path::new("/opt/weaver/bin/weaver-spu-classify")),
+        Some((
+            std::path::Path::new("/opt/weaver/bin/weaver-loop-launch"),
+            std::path::Path::new("/opt/weaver/lib/weaver-loop/grant"),
+        )),
     );
     for (flag, value) in [
         ("--headroom-bytes", "4096"),
         ("--classify-binary", "/opt/weaver/bin/weaver-spu-classify"),
+        ("--loop-launcher", "/opt/weaver/bin/weaver-loop-launch"),
+        ("--loop-grant", "/opt/weaver/lib/weaver-loop/grant"),
     ] {
         let at = full.iter().position(|a| a == flag).expect(flag);
         assert_eq!(full[at + 1], value);
     }
+}
+
+/// **The loop's launcher stands beside the worker and its grant file in the
+/// runner's folder the stack lays** (section 6): `<prefix>/bin/worker` gives
+/// `<prefix>/bin/weaver-loop-launch` and `<prefix>/lib/weaver-loop/grant`,
+/// as `deploy/loop-grant.sh` lays them. Perturbation: derive the grant from
+/// the worker's own folder, and the second path differs.
+#[test]
+fn the_loops_launcher_and_grant_stand_where_the_stack_lays_them() {
+    assert_eq!(
+        start::loop_launch_beside(std::path::Path::new("/opt/weaver/bin/worker")),
+        Some((
+            std::path::PathBuf::from("/opt/weaver/bin/weaver-loop-launch"),
+            std::path::PathBuf::from("/opt/weaver/lib/weaver-loop/grant"),
+        ))
+    );
+    assert_eq!(
+        start::loop_launch_beside(std::path::Path::new("/worker")),
+        None
+    );
+}
+
+/// **Admin hands the loop's paths only where the enter carries a loop**, per
+/// `weaver-admin-Spec` section 6: none where it does not, the pair where it
+/// does, and a refusal naming the binary where the worker has no prefix.
+/// Perturbation: hand the pair whatever the enter carries, or none, and its
+/// row fails.
+#[test]
+fn admin_hands_the_loops_paths_only_where_the_enter_carries_a_loop() {
+    let worker = std::path::Path::new("/opt/weaver/bin/worker");
+    assert_eq!(start::loop_launch_for(false, worker), Ok(None));
+    assert_eq!(
+        start::loop_launch_for(true, worker),
+        Ok(start::loop_launch_beside(worker))
+    );
+    assert!(start::loop_launch_for(true, worker).unwrap().is_some());
+    let refused =
+        start::loop_launch_for(true, std::path::Path::new("/worker")).expect_err("no prefix");
+    assert!(refused.contains("/worker"), "{refused}");
+    assert_eq!(
+        start::loop_launch_for(false, std::path::Path::new("/worker")),
+        Ok(None)
+    );
 }
 
 /// The configuration as `validate`, `load` and `restore` read it: the
@@ -1015,6 +1065,7 @@ fn a_load_with_save_points_waiting_in_the_room_refuses() {
             gid: nix::unistd::getgid().as_raw(),
         }),
         shell: None,
+        wires: None,
     };
     assert_eq!(
         publish_then_select(&config, &AgentName("alpha".into()), &inventory).err(),
@@ -4385,8 +4436,29 @@ fn a_box_account_name_refuses() {
             "{reserved}"
         );
     }
-    for admissible in ["gatecons", "xgatecon", "admincon1", "gate", "con"] {
+    for admissible in ["gatecons", "xgatecon", "xadmincon", "gate", "con"] {
         assert!(well_formed(admissible), "{admissible} is matched whole");
+    }
+}
+
+/// **A name beginning `admin`, and `stack`, refuse as a box account's name
+/// does**, per Spec section 4: the agent's own folder `/etc/weaver/<agent>/`
+/// stands beside the config bases, every `/etc/weaver/admin*`, and the stack's
+/// record, so `adminx` would lay a folder decommission reads as a config base.
+/// `stack` is matched whole, and `admin` only at the start. Perturbation: drop
+/// either check and its names pass.
+#[test]
+fn a_name_beside_the_config_bases_refuses() {
+    for reserved in ["admin", "adminx", "admin-1", "admin_x", "stack"] {
+        assert!(!well_formed(reserved), "{reserved}");
+        assert_eq!(
+            load_service_config(&AgentName(reserved.into()), false).err(),
+            Some(LifecycleRefusal::NoSuchAgent),
+            "{reserved}"
+        );
+    }
+    for admissible in ["xadmin", "badmin", "stacks", "astack", "stack1", "adm"] {
+        assert!(well_formed(admissible), "{admissible} is admissible");
     }
 }
 
@@ -4710,6 +4782,7 @@ fn the_member_spawn_lands_the_members_identity_as_root() {
         lineage: None,
         member_account: Some(member),
         shell: None,
+        wires: None,
     };
     let mut service = unread_config();
     // The territory's access group as judged, which no longer rides the
@@ -5693,4 +5766,153 @@ fn without_the_seam_productions_request_is_refused_in_the_suite() {
         Err(other) => panic!("the request's refusal is BoundaryUnverified, not {other:?}"),
         Ok(_) => panic!("the suite never stands the agent's scope"),
     }
+}
+
+/// **Only a serving binding looks for the loop**, per Spec section 4: a
+/// diagnostic binding carries no wire file and looks at nothing, so a root
+/// with no folder two levels above it, which a serving binding refuses,
+/// passes untouched. Perturbation: drop the binding's guard, and the
+/// diagnostic inventory refuses.
+#[test]
+fn only_a_serving_binding_looks_for_the_loop() {
+    let declaration = weaver_types::parse(concat!(
+        "session = \"s-1\"\n",
+        "tool-set = []\n",
+        "\n",
+        "[spu-instruction.decoder]\n",
+        "residual-readout-election = false\n",
+        "tunable-values = {}\n",
+        "\n",
+        "[spu-instruction.decoder.model-binding]\n",
+        "artifact = \"qwen3-4b-instruct\"\n",
+        "devices = [0]\n",
+        "\n",
+        "[gate-instruction.access-rule]\n",
+        "allowed-uids = [0]\n",
+        "allowed-gids = []\n",
+        "denied-uids = [1701]\n",
+        "\n",
+        "[trace-sink]\n",
+        "kind = \"file\"\n",
+        "path = \"/nonexistent/territory/trace.ndjson\"\n",
+        "create = true\n",
+    ))
+    .expect("the declaration parses");
+    let gate_instruction = declaration
+        .gate_instruction
+        .clone()
+        .expect("a serving declaration");
+    let mut config = unread_config();
+    config.root = PathBuf::from("alpha");
+    let inventory_with = |binding| inventory::Inventory {
+        config: declaration.clone(),
+        identity: "weaver-alpha".into(),
+        declaration: String::new(),
+        binding,
+        lineage: None,
+        member_account: None,
+        shell: None,
+        wires: None,
+    };
+    let mut diagnostic = inventory_with(weaver_types::EnterBinding::Diagnostic);
+    assert_eq!(
+        judge_loop(&config, &AgentName("alpha".into()), &mut diagnostic),
+        Ok(())
+    );
+    assert_eq!(diagnostic.wires, None);
+    let mut serving = inventory_with(weaver_types::EnterBinding::Serving {
+        gate_instruction,
+        shell: None,
+    });
+    assert_eq!(
+        judge_loop(&config, &AgentName("alpha".into()), &mut serving),
+        Err(LifecycleRefusal::BoundaryUnverified)
+    );
+}
+
+/// **The agent's folder is vouched for by its ancestors**, per Spec section
+/// 4, as the territory is: where the folder stands, an ancestor writable by
+/// others refuses `BoundaryUnverified`, and the same layout with that
+/// ancestor closed answers no loop. The inventory names this uid's own group,
+/// so the control passes the group's resolution and reaches the folder.
+/// Skipped, naming why, where the scratch's own ancestors cannot be vouched
+/// for. Perturbation: drop the ancestors' judgment, and the row answers no
+/// loop.
+#[test]
+fn an_agents_folder_under_an_ancestor_others_can_write_refuses() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let scratch = crate::scratch::Scratch(std::env::temp_dir().join(format!(
+        "weaver-admin-loop-ancestors-{}",
+        std::process::id()
+    )));
+    let base = scratch.0.join("etc");
+    std::fs::create_dir_all(base.join("admin/alpha")).unwrap();
+    std::fs::create_dir_all(base.join("alpha")).unwrap();
+    for dir in [&scratch.0, &base, &base.join("admin"), &base.join("alpha")] {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    if judge_ancestors(&base, &[nix::unistd::geteuid().as_raw(), 0]).is_err() {
+        eprintln!(
+            "SKIP an_agents_folder_under_an_ancestor_others_can_write_refuses: the scratch's own \
+             ancestors cannot be vouched for here"
+        );
+        return;
+    }
+    let group = nix::unistd::Group::from_gid(nix::unistd::getegid())
+        .ok()
+        .flatten()
+        .expect("this uid's group resolves");
+    let declaration = weaver_types::parse(concat!(
+        "session = \"s-1\"\n",
+        "tool-set = []\n",
+        "\n",
+        "[spu-instruction.decoder]\n",
+        "residual-readout-election = false\n",
+        "tunable-values = {}\n",
+        "\n",
+        "[spu-instruction.decoder.model-binding]\n",
+        "artifact = \"qwen3-4b-instruct\"\n",
+        "devices = [0]\n",
+        "\n",
+        "[gate-instruction.access-rule]\n",
+        "allowed-uids = [0]\n",
+        "allowed-gids = []\n",
+        "denied-uids = [1701]\n",
+        "\n",
+        "[trace-sink]\n",
+        "kind = \"file\"\n",
+        "path = \"/nonexistent/territory/trace.ndjson\"\n",
+        "create = true\n",
+    ))
+    .expect("the declaration parses");
+    let gate_instruction = declaration
+        .gate_instruction
+        .clone()
+        .expect("a serving declaration");
+    let mut config = unread_config();
+    config.root = base.join("admin/alpha");
+    let mut inventory = inventory::Inventory {
+        config: declaration,
+        identity: group.name,
+        declaration: String::new(),
+        binding: weaver_types::EnterBinding::Serving {
+            gate_instruction,
+            shell: None,
+        },
+        lineage: None,
+        member_account: None,
+        shell: None,
+        wires: None,
+    };
+    // The control: every ancestor closed, the folder holding no loop/.
+    assert_eq!(
+        judge_loop(&config, &AgentName("alpha".into()), &mut inventory),
+        Ok(())
+    );
+    assert_eq!(inventory.wires, None);
+    // The row: the folder's parent writable by others, with no sticky bit.
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let refused = judge_loop(&config, &AgentName("alpha".into()), &mut inventory);
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(refused, Err(LifecycleRefusal::BoundaryUnverified));
 }

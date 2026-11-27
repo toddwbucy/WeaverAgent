@@ -72,6 +72,7 @@ die() { printf '\nREFUSED: %s\n' "$*" >&2; exit 1; }
 source "$REPO/deploy/retired-python.sh"
 source "$REPO/deploy/engine-libraries.sh"
 source "$REPO/deploy/install-tuple.sh"
+source "$REPO/deploy/loop-grant.sh"
 # **Every drop to an agent's account is the operator's sudo** (#590): this
 # script has no root mode, and nothing of the operator's environment reaches
 # the account (account-drop.sh). Its one drop, member_said, follows the
@@ -724,11 +725,18 @@ BUILT="$BUILT/release"
 # repository on 2026-09-30. The build below is
 # the whole workspace, the frontend having left the repository on 2026-09-26.
 # A member joins the installed set by being written here.
-MEMBERS="worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state"
+MEMBERS="worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state weaver-loop-launch"
 # **The agent's shell** (#29): the static busybox build-busybox.sh writes
 # beside the members, and its applet list, installed into the members'
 # directory and rolled back with them.
 SHELL_FILES="busybox busybox.applets"
+# **The loop runner's folder and its grant** (weaver-harness-Spec section 2.5,
+# deploy/loop-grant.sh), under the stack record's prefix: the runner and the
+# board from loop-runner/, and the grant computed again at every run, as the
+# operator, from the interpreter that stands, laid and rolled back with the
+# binaries.
+LOOP_PYTHON=${WEAVER_LOOP_PYTHON:-/usr/bin/python3}
+loop_paths "$PREFIX"
 
 MEMBER_FEATURES=weaver-state/sqlite
 SPU_FEATURES=weaver-spu/cuda
@@ -783,8 +791,8 @@ printf '  will build    %s\n' "$FEATURES"
 # **The line names all three things the plan lists and the install moves**:
 # the members, the shell's two files and the engine libraries, as
 # deploy/REDEPLOY.md says. It named the members and the libraries alone.
-printf '  will install  %s, the shell (%s), and the engine libraries (%s) built by %s\n' \
-  "$MEMBERS" "$SHELL_FILES" "$LIB_GLOBS" "$ENGINE_CRATE"
+printf '  will install  %s, the shell (%s), the loop runner (%s grant, in %s, and its pycache folder), and the engine libraries (%s) built by %s\n' \
+  "$MEMBERS" "$SHELL_FILES" "$LOOP_FILES" "$LOOP_DIR" "$LIB_GLOBS" "$ENGINE_CRATE"
 # **One line, because the query answers once per device.** Three cards gave
 # three lines into one `%s`, so two of them printed with no label and no
 # indent. The driver is the box's, not the card's, so the first answer is the
@@ -1191,6 +1199,43 @@ else
   printf '  %-22s NEW      %s and %s, then ldconfig\n' "$LDSO_CONF" "$LIB_DIR" "$CUDA_LIB_DIR"
   LDSO_WRITE=1
 fi
+# **The loop runner's files, each compared with what stands**, the grant as
+# computed now: a file the box never held is NEW, and the pycache folder is
+# made where absent. A __pycache__ beside the runner, or a pycache folder that
+# holds anything, refuses before anything is moved.
+LOOP_REFUSAL=$(loop_standing_refusal)
+[ -z "$LOOP_REFUSAL" ] || die "$LOOP_REFUSAL"
+LOOP_REFUSAL=$(loop_placing_refusal)
+[ -z "$LOOP_REFUSAL" ] || die "$LOOP_REFUSAL"
+LOOP_GRANT=$(loop_grant "$LOOP_PYTHON" "$LOOP_PYCACHE") \
+  || die "the loop runner's grant could not be computed from $LOOP_PYTHON"
+LOOP_CHANGED=()
+LOOP_PYCACHE_NEW=0
+for f in $LOOP_FILES grant; do
+  if [ "$f" = grant ]; then
+    n=$(printf '%s\n' "$LOOP_GRANT" | sha256sum)
+  else
+    n=$(sha256sum < "$REPO/loop-runner/$f")
+  fi
+  n=${n%% *}
+  if [ ! -f "$LOOP_DIR/$f" ]; then
+    printf '  %-22s NEW      %s\n' "weaver-loop/$f" "${n:0:12}"
+    LOOP_CHANGED+=("$f")
+    continue
+  fi
+  d=$(sha256sum < "$LOOP_DIR/$f")
+  d=${d%% *}
+  if [ "$d" = "$n" ]; then
+    printf '  %-22s unchanged\n' "weaver-loop/$f"
+  else
+    printf '  %-22s CHANGED  %s -> %s\n' "weaver-loop/$f" "${d:0:12}" "${n:0:12}"
+    LOOP_CHANGED+=("$f")
+  fi
+done
+if [ ! -d "$LOOP_PYCACHE" ]; then
+  printf '  %-22s NEW      empty, root:root 0755\n' "weaver-loop-pycache"
+  LOOP_PYCACHE_NEW=1
+fi
 # **What --install does to the agents, said before it does it** (#99 area 2
 # review, R2): every agent's connector rule is held out of sudo's reading and
 # every agent unloaded before any binary is replaced, and the rules come back
@@ -1214,8 +1259,8 @@ printf '  --install ends, once verified, by writing the install tuple to %s\n' "
 # repair exactly the state a failed run leaves behind. Only a plan run stops
 # on this.
 if [ ${#CHANGED[@]} -eq 0 ] && [ ${#LIB_CHANGED[@]} -eq 0 ] && [ ${#LIB_LINKS[@]} -eq 0 ] && [ ${#LIB_STALE[@]} -eq 0 ] \
-  && [ "$LDSO_WRITE" -eq 0 ]; then
-  printf '  every deployed binary and engine library already matches the build\n'
+  && [ "$LDSO_WRITE" -eq 0 ] && [ ${#LOOP_CHANGED[@]} -eq 0 ] && [ "$LOOP_PYCACHE_NEW" -eq 0 ]; then
+  printf '  every deployed binary, engine library and loop runner file already matches the build\n'
   if [ "$INSTALL" -eq 0 ]; then
     say "the box is current at $AFTER"
     exit 0
@@ -1244,6 +1289,8 @@ refuse_legacy_units
 ADDED=()
 LIB_ADDED=()
 LDSO_WRITTEN=0
+LOOP_TOUCHED=0
+LOOP_DIR_NEW=0
 # The agent the verify step has loaded right now, empty whenever none is. Every
 # rollback from inside that step happens with a worker running, and a restore
 # that leaves it running puts the old binaries under a live agent that came up
@@ -1315,6 +1362,29 @@ restore() {
       sudo cp -a --remove-destination -- "$BACKUP/lib/$f" "$LIB_DIR/$f" \
         || { printf '  FAILED to restore %s\n' "$LIB_DIR/$f" >&2; failed=1; }
     done
+  fi
+  # **The loop runner's files go back as the binaries do**: a file the box
+  # held is put back from the backup, one it never held is removed, any stage
+  # this run left is removed, and a folder this run made goes once empty.
+  if [ "$LOOP_TOUCHED" -eq 1 ]; then
+    for f in "${LOOP_CHANGED[@]}"; do
+      if sudo test -f "$BACKUP/weaver-loop/$f"; then
+        sudo cp -a --remove-destination -- "$BACKUP/weaver-loop/$f" "$LOOP_DIR/$f" \
+          || { printf '  FAILED to restore %s\n' "$LOOP_DIR/$f" >&2; failed=1; }
+      else
+        printf '  removing %s, which the box did not hold before this run\n' "$LOOP_DIR/$f" >&2
+        sudo rm -f -- "$LOOP_DIR/$f" \
+          || { printf '  FAILED to remove %s\n' "$LOOP_DIR/$f" >&2; failed=1; }
+      fi
+    done
+    for f in $LOOP_FILES grant; do
+      sudo rm -f -- "$LOOP_DIR/.$f.new" \
+        || { printf '  FAILED to remove %s\n' "$LOOP_DIR/.$f.new" >&2; failed=1; }
+    done
+    [ "$LOOP_DIR_NEW" -eq 0 ] || sudo rmdir -- "$LOOP_DIR" \
+      || { printf '  FAILED to remove %s\n' "$LOOP_DIR" >&2; failed=1; }
+    [ "$LOOP_PYCACHE_NEW" -eq 0 ] || sudo rmdir -- "$LOOP_PYCACHE" \
+      || { printf '  FAILED to remove %s\n' "$LOOP_PYCACHE" >&2; failed=1; }
   fi
   # The loader's entry this run wrote goes, and the cache is rebuilt over
   # what now stands, whenever this run touched either.
@@ -1463,7 +1533,7 @@ for agent in $AGENTS; do
 done
 
 if [ ${#CHANGED[@]} -gt 0 ] || [ ${#LIB_CHANGED[@]} -gt 0 ] || [ ${#LIB_LINKS[@]} -gt 0 ] || [ ${#LIB_STALE[@]} -gt 0 ] \
-  || [ "$LDSO_WRITE" -eq 1 ]; then
+  || [ "$LDSO_WRITE" -eq 1 ] || [ ${#LOOP_CHANGED[@]} -gt 0 ] || [ "$LOOP_PYCACHE_NEW" -eq 1 ]; then
   say "install"
   # **Exclusive, not merely named.** A seconds-resolution name with
   # `mkdir -p` lets two runs in one second share a directory, and the
@@ -1521,6 +1591,23 @@ if [ ${#CHANGED[@]} -gt 0 ] || [ ${#LIB_CHANGED[@]} -gt 0 ] || [ ${#LIB_LINKS[@]
     printf '%s\n%s\n' "$LIB_DIR" "$CUDA_LIB_DIR" | sudo tee "$LDSO_CONF" >/dev/null
     sudo chmod 0644 "$LDSO_CONF"
     printf '  wrote %s (%s, %s)\n' "$LDSO_CONF" "$LIB_DIR" "$CUDA_LIB_DIR"
+  fi
+  # **The loop runner's files, under the same window and the same backup**:
+  # each file this run replaces is kept in the backup's weaver-loop/ first,
+  # and the folders this run makes are recorded, so a rollback puts back what
+  # stood and removes what did not.
+  if [ ${#LOOP_CHANGED[@]} -gt 0 ] || [ "$LOOP_PYCACHE_NEW" -eq 1 ]; then
+    sudo install -d -o root -g root -m 0700 "$BACKUP/weaver-loop"
+    [ -d "$LOOP_DIR" ] || LOOP_DIR_NEW=1
+    for f in "${LOOP_CHANGED[@]}"; do
+      if [ -f "$LOOP_DIR/$f" ]; then
+        sudo cp -a -- "$LOOP_DIR/$f" "$BACKUP/weaver-loop/$f"
+      fi
+    done
+    # Set before the laying, so one that ends the run part way is undone.
+    LOOP_TOUCHED=1
+    lay_loop "$REPO/loop-runner" "$LOOP_GRANT"
+    printf '  laid %s (%s grant) and %s\n' "$LOOP_DIR" "$LOOP_FILES" "$LOOP_PYCACHE"
   fi
   if [ "$LDSO_WRITE" -eq 1 ] || [ $(( ${#LIB_CHANGED[@]} + ${#LIB_LINKS[@]} + ${#LIB_STALE[@]} )) -gt 0 ]; then
     sudo ldconfig
@@ -1740,7 +1827,7 @@ restore_rules || die "the install stands verified, but a connector rule named ab
 # digest; no driver and no card. It replaces the previous run's record whole,
 # an earlier form's included.
 say "tuple"
-TUPLE=$(install_tuple "$REPO" "$COMMIT" "$BIN_DIR" "$LIB_DIR" "$FEATURES" "$MEMBERS $SHELL_FILES" "${LIB_NAMES[*]}")
+TUPLE=$(install_tuple "$REPO" "$COMMIT" "$BIN_DIR" "$LIB_DIR" "$FEATURES" "$MEMBERS $SHELL_FILES" "${LIB_NAMES[*]}" "$LOOP_DIR")
 printf '%s\n' "$TUPLE" | sed 's/^/  /'
 printf '%s\n' "$TUPLE" | sudo tee "$STACK/install-tuple" >/dev/null
 sudo chmod 0644 "$STACK/install-tuple"

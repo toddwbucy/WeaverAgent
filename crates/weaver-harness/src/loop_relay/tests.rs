@@ -574,12 +574,23 @@ fn the_turns_own_result_reaches_the_harness_unchanged() {
             far.frame().expect("the pass");
             far.turn(1, 0, "go");
         });
+        let fault: weaver_types::FaultReport =
+            serde_json::from_str(r#"{"case":"listener_lost","account":{}}"#).expect("a report");
         let same = match (answer, &result) {
-            (Answer::Done, Ok(_)) => true,
+            (Answer::Done, Ok(outcome)) => {
+                outcome.turn == key()
+                    && outcome.emission == "the answer"
+                    && !outcome.stopped
+                    && !outcome.aborted
+                    && !outcome.truncated
+                    && outcome.unrecovered.is_empty()
+            }
             (Answer::Refused, Err(TurnError::Refused { turn, refusal })) => {
                 *turn == key() && *refusal == TokenRefusal::NotOpen
             }
-            (Answer::Faulted, Err(TurnError::Faulted { turn, .. })) => *turn == key(),
+            (Answer::Faulted, Err(TurnError::Faulted { turn, report })) => {
+                *turn == key() && *report == fault
+            }
             (Answer::Unlicensed, Err(TurnError::Unlicensed { turn })) => *turn == key(),
             (Answer::Lost, Err(TurnError::ChannelLost)) => true,
             _ => false,
@@ -754,36 +765,56 @@ fn an_end_of_file_standing_when_a_pass_opens_is_a_break() {
 fn silence_past_the_bound_is_a_break_in_a_read() {
     let (mut relay, far, lines) = made(quick());
     let mut seat = stand();
-    let started = Instant::now();
-    let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
-        far.frame().expect("the pass");
-        far.close_after(1500);
+    // The time is read when the relay returns, before the loop's side is joined: that side
+    // sleeps 1500 ms, and a reading after the join could not fail.
+    let (result, waited) = thread::scope(|scope| {
+        let loop_side = scope.spawn(|| {
+            far.frame().expect("the pass");
+            far.close_after(1500);
+        });
+        let started = Instant::now();
+        let result = relay.pass(&mut seat, "x");
+        let waited = started.elapsed();
+        loop_side.join().expect("the loop's side");
+        (result, waited)
     });
     assert!(lost(&result));
     assert_eq!(
         lines.text(),
         format!("{PREFIX}the bound expired in a read\n")
     );
-    assert!(started.elapsed() >= Duration::from_millis(400));
+    assert!(
+        waited >= Duration::from_millis(400) && waited < Duration::from_millis(1500),
+        "the relay gave up at the bound, not before it and not at the loop's close: {waited:?}"
+    );
 }
 
 #[test]
 fn the_bound_is_summed_across_the_waits_of_one_pass() {
-    // Each wait is 150 ms, under the 400 ms bound, and three sum past it.
+    // Two waits, 150 ms and 350 ms, each under the 400 ms bound and summing past it: the
+    // first ask is answered, and the bound expires inside the second wait, so its ask
+    // is never answered.
     let (mut relay, far, lines) = made(quick());
     let mut seat = stand();
-    let (result, _) = drive(&mut relay, &far, &mut seat, "x", |far| {
+    let (result, answered) = drive(&mut relay, &far, &mut seat, "x", |far| {
         far.frame().expect("the pass");
-        for tag in 0..4 {
-            thread::sleep(Duration::from_millis(150));
-            far.ask(1, tag, "seated", "");
-            if far.frame().is_none() {
-                return;
-            }
-        }
-        far.turn(1, 9, "go");
+        thread::sleep(Duration::from_millis(150));
+        far.ask(1, 0, "seated", "");
+        let first = far.frame();
+        thread::sleep(Duration::from_millis(350));
+        far.ask(1, 1, "seated", "");
+        (first, far.frame())
     });
     assert!(lost(&result), "the waits sum past the bound: {result:?}");
+    assert_eq!(
+        answered.0.map(|frame| frame["tag"].clone()),
+        Some(json!(0)),
+        "the first wait, under the bound, is answered"
+    );
+    assert_eq!(
+        answered.1, None,
+        "the second wait passes the summed bound and is refused"
+    );
     assert_eq!(
         lines.text(),
         format!("{PREFIX}the bound expired in a read\n")

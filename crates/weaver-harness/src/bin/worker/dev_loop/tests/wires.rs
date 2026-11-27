@@ -79,10 +79,10 @@ fn wired(wires: &str) -> (LoopRelay<Lines>, Lines, Child) {
     (relay, lines, child)
 }
 
-/// The relay closed, the runner's exit and what it said.
+/// The relay closed, the runner's exit and what it said. Standard error is read to its
+/// end before the wait: a runner that fills the pipe would otherwise never exit.
 fn ended(relay: LoopRelay<Lines>, mut child: Child) -> (bool, String) {
     drop(relay);
-    let status = child.wait().expect("the runner's exit");
     let mut said = String::new();
     child
         .stderr
@@ -90,7 +90,15 @@ fn ended(relay: LoopRelay<Lines>, mut child: Child) -> (bool, String) {
         .expect("piped")
         .read_to_string(&mut said)
         .expect("the runner's standard error");
+    let status = child.wait().expect("the runner's exit");
     (status.success(), said)
+}
+
+/// The runner's one line at the harness's end of file, as `runner.py` writes it.
+fn end_line(passes: usize, turns: usize, refused: usize) -> String {
+    format!(
+        "{{\"loop\": \"end\", \"passes\": {passes}, \"turns\": {turns}, \"refused\": {refused}}}\n"
+    )
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -102,8 +110,9 @@ enum Asked {
     Flush(u64),
     Recall(Option<u64>),
     Shape,
-    /// Each message's role and its one text, as bytes.
-    Turn(Vec<(&'static str, String)>),
+    /// Each message's role and its blocks' texts, as a list: one block never compares
+    /// equal to two.
+    Turn(Vec<(&'static str, Vec<String>)>),
 }
 
 #[derive(Clone)]
@@ -200,7 +209,7 @@ impl Seat for Recording {
                         _ => "(another block)".to_string(),
                     })
                     .collect();
-                (role, texts.join("\u{0}(a second block)\u{0}"))
+                (role, texts)
             })
             .collect();
         self.asked.borrow_mut().push(Asked::Turn(messages));
@@ -423,6 +432,15 @@ fn cases() -> Vec<Case> {
                     r#"["a string",5,{"type":"text","text":7},{"type":"text","text":"kept"}]"#
                         .to_string(),
                     r#"[{"type":"text","text":"first","text":"second"}]"#.to_string(),
+                    // A member a later one of the same name replaces is still read: serde_json
+                    // refuses its lone surrogate, and its nesting, as it reads.
+                    r#"[{"type":"text","text":"\ud800","text":"twice surrogate"}]"#.to_string(),
+                    // The list, the block, and 126 levels in the first n: 128 in all.
+                    format!(
+                        r#"[{{"type":"text","text":"twice deep","n":{}{},"n":1}}]"#,
+                        "[".repeat(126),
+                        "]".repeat(126)
+                    ),
                     r#"[{"type":"text","text":"a pair \ud83d\ude00"}]"#.to_string(),
                 ]
                 .iter()
@@ -548,7 +566,16 @@ fn today_s_loop_as_wires_asks_what_compose_asks_and_sends_its_delta_byte_for_byt
     assert_eq!(String::from_utf8_lossy(&lines.0.borrow()), "", "no break");
     let (exited_clean, runner_said) = ended(relay, child);
     assert!(exited_clean, "the runner's exit: {runner_said}");
-    assert_eq!(runner_said, "", "the runner refused no pass");
+    // The wires refuse where compose turns nothing: the end line's counts, and no other line.
+    let turned = compiled_records
+        .iter()
+        .filter(|(_, asked)| matches!(asked.last(), Some(Asked::Turn(_))))
+        .count();
+    assert_eq!(
+        runner_said,
+        end_line(cases.len(), turned, cases.len() - turned),
+        "the runner refused no pass of its own and broke nothing"
+    );
 
     // What the comparison holds, read against compose itself (the contract's section 8).
     let record = |name: &str| {
@@ -559,7 +586,13 @@ fn today_s_loop_as_wires_asks_what_compose_asks_and_sends_its_delta_byte_for_byt
             .expect(name)
     };
     let turn_texts = |name: &str| match record(name).last() {
-        Some(Asked::Turn(messages)) => messages.clone(),
+        Some(Asked::Turn(messages)) => messages
+            .iter()
+            .map(|(role, blocks)| {
+                assert_eq!(blocks.len(), 1, "{name}: one block in each message");
+                (*role, blocks[0].clone())
+            })
+            .collect::<Vec<_>>(),
         other => panic!("{name}: no turn: {other:?}"),
     };
     assert_eq!(
@@ -583,13 +616,13 @@ fn today_s_loop_as_wires_asks_what_compose_asks_and_sends_its_delta_byte_for_byt
             Asked::Turn(vec![
                 (
                     "system",
-                    format!(
+                    vec![format!(
                         "{SYSTEM}\n\nThe working context was reset to stay within its limit. \
                          Recent conversation, restored from the session's record:\n\
                          (The record could not be reached: continue from the request alone.)"
-                    )
+                    )]
                 ),
-                ("user", "the request".to_string()),
+                ("user", vec!["the request".to_string()]),
             ]),
         ]
     );
@@ -608,6 +641,10 @@ fn today_s_loop_as_wires_asks_what_compose_asks_and_sends_its_delta_byte_for_byt
     assert!(
         quoted.contains("user: second"),
         "the last member of a name: {quoted}"
+    );
+    assert!(
+        !quoted.contains("twice surrogate") && !quoted.contains("twice deep"),
+        "a member replaced by a later one of its name is still judged: {quoted}"
     );
     let split = turn_texts("words split on White_Space alone")[0].1.clone();
     assert!(
@@ -663,10 +700,10 @@ fn a_continuity_line_reads_as_section_8_writes_it() {
     };
     assert_eq!(
         messages[0].1,
-        format!(
+        vec![format!(
             "{SYSTEM}\n\nContinuity: this session held 1 earlier run with 1 completed turn \
              before this one. The conversation content of those runs is not in your context."
-        )
+        )]
     );
 }
 
@@ -705,7 +742,8 @@ fn serde_json_s_private_raw_value_member_is_the_one_known_difference() {
         let quoted = |asked: Vec<Asked>| match asked.last() {
             Some(Asked::Turn(messages)) => messages[0]
                 .1
-                .lines()
+                .iter()
+                .flat_map(|text| text.lines())
                 .filter(|line| line.starts_with("user: "))
                 .map(str::to_string)
                 .collect::<Vec<_>>(),
@@ -719,7 +757,8 @@ fn serde_json_s_private_raw_value_member_is_the_one_known_difference() {
     }
     assert_eq!(String::from_utf8_lossy(&lines.0.borrow()), "", "no break");
     let (exited_clean, runner_said) = ended(relay, child);
-    assert!(exited_clean && runner_said.is_empty(), "{runner_said}");
+    assert!(exited_clean, "{runner_said}");
+    assert_eq!(runner_said, end_line(shapes.len(), shapes.len(), 0));
     let user = |text: &str| vec![format!("user: {text}")];
     assert_eq!(
         seen,

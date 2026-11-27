@@ -888,7 +888,13 @@ recoverable from the record.
 **The `load` event names its loop and its member**, as of 2026-09-03, per the charter's
 section 3.1. `composer` is the loop that assembles the run's prompts: `binary` names the
 worker that ran it, the harness's own name for itself, and the compiled Rust loop emits
-neither `file` nor `sha256`. Those optional fields remain in the vocabulary for the
+neither `file` nor `sha256`, its composer unchanged by a byte. A run composed by a loop
+admin found standing (`weaver-harness-Spec` section 2.5) writes the same `binary`, `file`
+as the wire file's path as admin read it, `/etc/weaver/<agent>/loop/wires.py`, and
+`sha256` as the digest admin read and the loop's `hello` named, and no further member.
+The load is authored before the loop starts, so the digest written is the election's,
+and a `hello` naming another refuses the load, which rolls back: a run that serves past
+its enter carries the digest its `hello` named. The optional fields first carried the
 historical file-loaded loop: its resolved path and the digest read at load. Retirement
 of the Python worker on 2026-10-20 (#180) removes its execution path and preserves this
 recorded shape. `state_member` is whether the state member's end arrived on the enter,

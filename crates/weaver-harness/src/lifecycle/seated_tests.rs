@@ -291,6 +291,7 @@ fn enter_seated(identity: Option<&'static str>) -> Entered {
     let mut harness = Harness {
         coordination: listener,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu,
             gate: "/nonexistent/weaver-gate".into(),
@@ -344,6 +345,7 @@ fn enter_seated(identity: Option<&'static str>) -> Entered {
             keys: Vec::new(),
         },
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
     let state_end = match identity {
         None => None,
@@ -382,6 +384,10 @@ fn enter_seated(identity: Option<&'static str>) -> Entered {
         Err(EnterFailure::AfterLoad(run, _)) => *run,
         Err(EnterFailure::BeforeLoad(refusal)) => panic!("refused before the load: {refusal:?}"),
     };
+    // **The fixture stands in the gate the enter could not fork**, below, so
+    // the run is served as an enter that succeeded: the refusal's mark, which
+    // keeps a refused run from serving any dialer, is cleared with it.
+    run.enter_refused = false;
     let spu_pid = run
         .spu
         .as_ref()

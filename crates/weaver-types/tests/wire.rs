@@ -871,6 +871,7 @@ fn sample_enter_payload() -> weaver_types::EnterPayload {
             keys: Vec::new(),
         },
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     }
 }
 
@@ -907,6 +908,36 @@ fn the_turn_context_crosses_on_the_enter_and_is_required() {
     assert_ne!(silent, json, "the key was present to remove");
     serde_json::from_str::<weaver_types::EnterPayload>(&silent)
         .expect_err("an enter without the election refuses");
+}
+
+/// **The loop admin found crosses on the enter, and is absent rather than
+/// null where none stands** (`weaver-types-Spec` section 4,
+/// `weaver-admin-harness-contract` section 5): the wire file's path and the
+/// digest round-trip by their spelling, an enter without the key reads as
+/// none, and an unknown member of the election refuses. Perturbation: drop
+/// `skip_serializing_if`, and the absent case carries `"wires":null`; drop
+/// `deny_unknown_fields`, and the extra member is admitted.
+#[test]
+fn the_loop_crosses_on_the_enter_and_is_absent_when_none_stands() {
+    let json = serde_json::to_string(&sample_enter_payload()).expect("serializes");
+    assert!(!json.contains("wires"), "{json}");
+    let mut payload = sample_enter_payload();
+    payload.wires = Some(weaver_types::WiresElection {
+        file: "/etc/weaver/a1/loop/wires.py".into(),
+        sha256: "ab".repeat(32),
+    });
+    let json = serde_json::to_string(&payload).expect("serializes");
+    let spelled = format!(
+        "\"wires\":{{\"file\":\"/etc/weaver/a1/loop/wires.py\",\"sha256\":\"{}\"}}",
+        "ab".repeat(32)
+    );
+    assert!(json.contains(&spelled), "{json}");
+    let back: weaver_types::EnterPayload = serde_json::from_str(&json).expect("reads");
+    assert_eq!(back, payload);
+    let extra = json.replace("\"sha256\":", "\"interpreter\":\"x\",\"sha256\":");
+    assert_ne!(extra, json, "the member was present to precede");
+    serde_json::from_str::<weaver_types::EnterPayload>(&extra)
+        .expect_err("an unknown member of the election refuses");
 }
 
 /// **The bounds cross to the harness on the enter**, per `weaver-types-Spec`

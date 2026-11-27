@@ -109,15 +109,25 @@ check("a lone surrogate is refused, in a value and in a key",
 check("a surrogate pair is taken", wb.read_frame(b'{"kind":"x","t":"\\ud83d\\ude00"}')["t"] == "\U0001F600")
 check("bytes that are not UTF-8 are refused", refused(b'{"kind":"\xff"}'))
 check("a list is refused", refused(b'[1]'))
-check("nesting past the interpreter's depth is refused, not raised", refused(b"[" * 100000))
+check("nesting past the interpreter's depth raises its limit, and is no Refused: the runner's own reading"
+      " decides whether the frame or the caller's depth met it (act 2, section 9, item 1)",
+      raises(RecursionError, wb.read_frame, b"[" * 100000))
 
 
 def judged(raw):
-    """True where read_frame returns or refuses, and raises nothing else."""
+    """True where read_frame returns, refuses, or meets the interpreter's limit in json's
+    own scanner, and the surrogate walk raises nothing."""
     try:
         wb.read_frame(raw)
     except wb.Refused:
         pass
+    except RecursionError as e:
+        tb = e.__traceback__
+        while tb.tb_next is not None:
+            tb = tb.tb_next
+        if tb.tb_frame.f_code.co_name == "_no_surrogates":
+            print("     the surrogate walk raised RecursionError")
+            return False
     except BaseException as e:
         print("     raised %s" % type(e).__name__)
         return False
@@ -162,9 +172,9 @@ worker.join()
 
 
 def series_refused(messages, reason=None):
-    """True where recv_frame refuses the messages, or closes on them. Given a reason, only
-    a refusal whose text holds it counts: a reader that waits on and meets the sender's
-    close has not refused."""
+    """True where recv_frame refuses the messages, Refused alone: a reader that waits on
+    and meets the sender's close has not refused. Given a reason, only a refusal whose
+    text holds it counts."""
     a, b = pair()
 
     def send():
@@ -178,7 +188,7 @@ def series_refused(messages, reason=None):
     worker = threading.Thread(target=send)
     worker.start()
     if reason is None:
-        result = raises((wb.Refused, wb.Closed), wb.recv_frame, b)
+        result = raises(wb.Refused, wb.recv_frame, b)
     else:
         try:
             wb.recv_frame(b)
@@ -204,6 +214,8 @@ check("a series longer than its preamble is refused: the slices sum past its byt
 check("a series shorter than its preamble is refused: the right count, the slices sum under",
       series_refused([b'{"segments":2,"bytes":100000}', b"y" * wb.ENVELOPE, b"y" * 1000],
                      "a series shorter than its preamble"))
+check("a close inside a segment series is Refused, a breach, not the clean end Closed is",
+      series_refused([b'{"segments":2,"bytes":131072}', b"y" * wb.ENVELOPE], "closed inside a segment series"))
 check("a preamble naming more than 8 MiB is refused",
       series_refused([b'{"segments":129,"bytes":8388609}', b"y" * wb.ENVELOPE],
                      "a segment preamble that breaks its rules"))
@@ -324,8 +336,58 @@ check("after a breach the board sends nothing: an ask and a refuse are each a Li
       raises(wb.Limit, torn.ask, "fullness") and raises(wb.Limit, torn.refuse)
       and frames(torn_harness) == [] and not torn.ended)
 calm, calm_harness = opened()
-check("Refused raised by a caller is no breach the board met", raises(wb.Refused, wb.check_delta, [])
-      and calm.broken is None)
+check("a Refused raised by a check inside a board method, before any frame is read, is a Mistake and"
+      " no breach: the board stays unbroken and serves on",
+      raises(wb.Mistake, calm.turn, []) and calm.broken is None and frames(calm_harness) == []
+      and not raises(wb.Limit, calm.ask, "seated") and len(frames(calm_harness)) == 1)
+
+# A limit of the interpreter's met while a return parses loses no frame (act 2, section 9, item 1).
+real_read = wb.read_frame
+kept, kept_harness = opened()
+tag = kept.ask("seated")
+frames(kept_harness)
+answer(kept_harness, tag, True)
+calls = []
+
+
+def limited_once(raw):
+    # The first call is recv_frame's look for a preamble. The second is the wait's parse.
+    calls.append(raw)
+    if len(calls) == 2:
+        raise MemoryError()
+    return real_read(raw)
+
+
+wb.read_frame = limited_once
+try:
+    first_raised = raises(MemoryError, kept.wait, tag)
+    again = kept.wait(tag)
+finally:
+    wb.read_frame = real_read
+check("a MemoryError while a return parses is raised as it is, the board unbroken, and the frame kept:"
+      " the next wait reads the same bytes and takes the value",
+      first_raised and again is True and kept.broken is None and len(calls) == 3 and calls[1] == calls[2])
+
+deep, deep_harness = opened()
+tag = deep.ask("seated")
+frames(deep_harness)
+answer(deep_harness, tag, True)
+
+
+def always_limited(raw):
+    raise RecursionError()
+
+
+wb.read_frame = always_limited
+try:
+    in_wires = raises(RecursionError, deep.wait, tag) and deep.broken is None
+    at_rest = raises(wb.Refused, deep._settle, tag)
+finally:
+    wb.read_frame = real_read
+check("a limit met in a wire file's wait is raised as a limit, and the same limit met by the runner's"
+      " own reading at its depth is the frame's, a breach",
+      in_wires and at_rest and isinstance(deep.broken, wb.Refused)
+      and "at the runner's own depth" in str(deep.broken))
 
 
 def _store_argument():

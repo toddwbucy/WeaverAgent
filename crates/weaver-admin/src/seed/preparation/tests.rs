@@ -56,7 +56,16 @@ pub(crate) fn fixture_with_member(member: inventory::MemberAccount) -> Fixture {
     // fixture root. Each sibling retains its own narrower custody.
     fs::set_permissions(&base, fs::Permissions::from_mode(0o711)).unwrap();
     let scratch = crate::scratch::Scratch(base.clone());
-    let root = base.join("root");
+    // **The root stands as an installed one does, `<base>/admin/<agent>`**,
+    // two levels under the scratch, so the agent's own folder admin derives
+    // from it (`loop_folder::agent_folder`) is `<scratch>/etc/seed-fixture`,
+    // the fixture's own, never a path under the shared temporary directory.
+    let config_base = base.join("etc").join("admin");
+    fs::create_dir_all(&config_base).unwrap();
+    for directory in [base.join("etc"), config_base.clone()] {
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let root = config_base.join("seed-fixture");
     let territory = base.join("territory");
     let binaries = base.join("bin");
     for directory in [&root, &territory, &binaries] {

@@ -779,9 +779,11 @@ if 'FIXTURE_ROOT' not in os.environ:
     if settings.exists(): os.environ.update(json.loads(settings.read_text()))
 root = pathlib.Path(os.environ['FIXTURE_ROOT'])
 def owner(path, st):
-    """uid 0 under the fixture, STRANGER_UID for any other path the tests
+    """uid 0 under the fixture but the paths STRANGERS names (a list joined
+    by colons), STRANGER_UID for those and for any other path the tests
     made, and the file's own owner elsewhere, so a stranger's file is never
     read as root's when the suite runs as root (Codex on #599)."""
+    if str(path) in os.environ.get('STRANGERS', '').split(':'): return @STRANGER_UID@
     if path.is_relative_to(root): return 0
     if path != pathlib.Path('@TEST_ROOT@') and path.is_relative_to('@TEST_ROOT@'): return @STRANGER_UID@
     return st.st_uid
@@ -827,6 +829,10 @@ if name == 'findmnt':
     sys.exit(0)
 if name == 'mktemp' and args and '/weaver-deploy-messages-' in args[-1]:
     # The build's messages file, made as the scripts make it; not logged.
+    os.execv('/usr/bin/mktemp', ['mktemp', *args])
+if name == 'mktemp' and args and '/weaver-loop-grant.' in args[-1]:
+    # The grant's text, the operator's own file that lay_loop installs from
+    # and removes (review of #655), made as the helper makes it; not logged.
     os.execv('/usr/bin/mktemp', ['mktemp', *args])
 if (name == 'mktemp' and args or name == 'as-root' and args[:1] == ['mktemp']) and '/weaver-drop.' in args[-1]:
     # **A drop's relays' directory** (#590), which account-drop.sh makes
@@ -1125,7 +1131,8 @@ elif name == 'cargo':
             print('fixture build refusal', file=sys.stderr)
             sys.exit(42)
         target.joinpath('release').mkdir(parents=True)
-        for member in ('worker', 'weaver-admin', 'weaver-trace-relay', 'weaver-gate', 'weaver-spu', 'weaver-state'):
+        for member in ('worker', 'weaver-admin', 'weaver-trace-relay', 'weaver-gate', 'weaver-spu', 'weaver-state',
+                       'weaver-loop-launch'):
             target.joinpath('release', member).write_text('fixture artifact ' + member)
         # The engine's out/lib as llama-cpp-sys-2 lays it out: each versioned
         # file beside its SONAME link and its bare link, and what the globs
@@ -1237,19 +1244,31 @@ elif name == 'sudo':
         if '-d' in rest: privileged([target], lambda: target.mkdir(parents=True, exist_ok=True))
         else:
             # A file installed from a source is a new file holding its bytes,
-            # as `install` unlinks the name first.
+            # as `install` unlinks the name first, a link standing there among
+            # them. **Without `-T`, a target that resolves to a folder takes
+            # the file inside it**, under the source's name, a link to a
+            # folder among them, as GNU install does. The grant's text is the
+            # operator's own file under TMPDIR (deploy/loop-grant.sh),
+            # carried as any source under the root is.
             source = pathlib.Path(mapped(rest[-2]))
+            placed = target / source.name if '-T' not in rest and target.is_dir() else target
+            assert placed.is_relative_to(root), placed
             def place():
-                if source.is_relative_to(root) and source.is_file():
-                    if target.exists() or target.is_symlink(): target.unlink()
-                    shutil.copyfile(source, target)
-                else: target.touch()
-            privileged([target], place)
+                if placed.exists() or placed.is_symlink(): placed.unlink()
+                if source.is_file() and (source.is_relative_to(root)
+                                         or source.name.startswith('weaver-loop-grant.')):
+                    shutil.copyfile(source, placed)
+                else: placed.touch()
+            privileged([placed], place)
     elif op == 'mv':
         source, destination = (pathlib.Path(mapped(a)) for a in rest[-2:])
         assert source.is_relative_to(root) and destination.is_relative_to(root)
         def move():
-            assert not destination.exists(), destination
+            # **A staged file renamed over its name replaces it**, as
+            # rename(2) does (deploy/loop-grant.sh's `.<name>.new`); any other
+            # move onto a standing name is a script's error here.
+            staged = source.name.startswith('.') and source.name.endswith('.new') and source.is_file()
+            assert not destination.exists() or (staged and destination.is_file()), destination
             source.rename(destination)
         privileged([source, destination], move)
     elif op == 'mktemp':
@@ -1268,6 +1287,10 @@ elif name == 'sudo':
         # of admin fails the fixture.
         assert rest[0].endswith('/weaver-admin'), ('admin wrapped', rest)
         sys.exit(subprocess.run([os.environ['FIXTURE_ADMIN'], *rest[1:]]).returncode)
+    elif op == 'rmdir':
+        target = pathlib.Path(mapped(rest[-1]))
+        assert target.is_relative_to(root), target
+        privileged([target], target.rmdir)
     elif op == 'rm':
         target = pathlib.Path(mapped(rest[-1]))
         assert target.is_relative_to(root), target
@@ -1372,6 +1395,11 @@ elif name == 'ldd':
     if not os.path.exists(args[-1]):
         print(f'ldd: {args[-1]}: No such file or directory', file=sys.stderr)
         sys.exit(1)
+    # **The loop runner's interpreter is read by the real ldd** (deploy/loop-
+    # grant.sh): the grant is computed from the box's own interpreter, which
+    # is read and never run as root.
+    if os.path.basename(os.path.realpath(args[-1])).startswith('python'):
+        os.execv('/usr/bin/ldd', ['ldd', *args])
     if os.environ.get('LDD_STATIC'):
         print('\tnot a dynamic executable')
         sys.exit(1)
@@ -1408,6 +1436,11 @@ class PlanTests(unittest.TestCase):
         self.root = Path(self.scratch.name)
         self.repo = self.root / "repo"
         shutil.copytree(DEPLOY, self.repo / "deploy")
+        # The loop runner's two files, which the stack's scripts lay
+        # (deploy/loop-grant.sh), as the repository holds them.
+        (self.repo / "loop-runner").mkdir()
+        for name in ("runner.py", "weaver_board.py"):
+            shutil.copyfile(DEPLOY.parent / "loop-runner" / name, self.repo / "loop-runner" / name)
         # **The shell's build is stood in for** (#29): the real one fetches and
         # compiles busybox, which BusyboxBuildTests judges apart. The stand-in
         # logs its call and writes the two files beside the members.
@@ -1548,6 +1581,26 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
 """)
         self.env["BASH_ENV"] = str(preamble)
 
+    def loop_grant(self, prefix):
+        """The grant deploy/loop-grant.sh computes for PREFIX's pycache
+        folder, from the box's own interpreter."""
+        run = subprocess.run(
+            ["bash", "-c", 'set -euo pipefail; source "$1"; loop_grant /usr/bin/python3 "$2"', "x",
+             str(DEPLOY / "loop-grant.sh"), str(prefix / "lib" / "weaver-loop-pycache")],
+            text=True, capture_output=True, timeout=20)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        return run.stdout
+
+    def install_loop(self, prefix):
+        """Lay PREFIX's loop runner folder as the stack's scripts leave it:
+        the runner, the board and the grant, and the empty pycache folder."""
+        folder = prefix / "lib" / "weaver-loop"
+        folder.mkdir(parents=True, exist_ok=True)
+        for name in ("runner.py", "weaver_board.py"):
+            shutil.copyfile(DEPLOY.parent / "loop-runner" / name, folder / name)
+        (folder / "grant").write_text(self.loop_grant(prefix))
+        (prefix / "lib" / "weaver-loop-pycache").mkdir(exist_ok=True)
+
     def install_libraries(self, build):
         """Lay the library directory out as an install of the cargo double's
         engine build BUILD leaves it: the versioned files and their links."""
@@ -1654,18 +1707,20 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
 
     def test_agent_plan_refuses_visible_collisions(self):
         for collision in ("account", "relay account", "access group",
-                          "agent root", "staged root", "sudo rule", "territory"):
+                          "agent root", "staged root", "agent's folder", "sudo rule", "territory"):
             with self.subTest(collision=collision):
                 self.env.pop("COLLISION", None)
-                for path in (self.config / "m1", self.config / ".m1.partial"):
+                for path in (self.config / "m1", self.config / ".m1.partial", self.root / "m1"):
                     if path.exists(): path.rmdir()
                 self.rule.unlink(missing_ok=True)
                 shutil.rmtree(self.folder, ignore_errors=True)
+                shutil.rmtree(self.root / "m1", ignore_errors=True)
                 if collision == "account": self.env["COLLISION"] = "weaver-m1-state"
                 elif collision == "relay account": self.env["COLLISION"] = "weaver-m1-relay"
                 elif collision == "access group": self.env["COLLISION"] = "weaver-m1-admin"
                 elif collision == "agent root": (self.config / "m1").mkdir()
                 elif collision == "staged root": (self.config / ".m1.partial").mkdir()
+                elif collision == "agent's folder": (self.root / "m1").mkdir()
                 elif collision == "sudo rule": self.rule.write_text("")
                 else:
                     self.decl.mkdir(parents=True)
@@ -2536,7 +2591,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         """Take away what an apply run made, so the next run starts clean."""
         self.log.unlink(missing_ok=True)
         (self.root / "attrs.json").unlink(missing_ok=True)
-        for made in (self.config / "m1", self.config / ".m1.partial", self.folder):
+        for made in (self.config / "m1", self.config / ".m1.partial", self.folder, self.root / "m1"):
             shutil.rmtree(made, ignore_errors=True)
         self.rule.unlink(missing_ok=True)
 
@@ -2863,6 +2918,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
             with self.subTest(env=env):
                 shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
                 shutil.rmtree(self.folder, ignore_errors=True)
+                shutil.rmtree(self.root / "m1", ignore_errors=True)
                 for name in ("RELAY_GROUPS", "ADMINCON_GROUPS", "GATECON_GROUPS", "ADMINCON_JOINED", "GATECON_JOINED"):
                     self.env.pop(name, None)
                 (self.root / "laid-box-accounts").unlink(missing_ok=True)
@@ -3010,6 +3066,29 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 self.assertIn(f"'{reserved}' is reserved", result.stderr)
         self.assertEqual(self.calls(), [])
 
+    def test_a_name_beginning_admin_or_stack_is_not_an_agents(self):
+        # weaver-admin-Spec section 4: the agent's folder /etc/weaver/<name>/
+        # stands beside admin's config bases, every /etc/weaver/admin*, which
+        # decommission.sh discovers, and the stack's record /etc/weaver/stack,
+        # so create-agent refuses a name beginning admin, and stack, before
+        # any call, as admin does. adminx is the brief's case. Perturbation:
+        # drop the refusal and the plan runs.
+        for reserved in ("admin", "adminx", "admin1", "stack"):
+            with self.subTest(reserved=reserved):
+                self.install_stack()
+                result = self.run_script("create-agent.sh", reserved, "--artifact", str(self.artifact))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"'{reserved}' is reserved", result.stderr)
+                self.assertIn("/etc/weaver/admin*", result.stderr)
+        self.assertEqual(self.calls(), [])
+        script = (DEPLOY / "create-agent.sh").read_text()
+        fn = script[script.index("agent_name_ok() {"):]
+        fn = fn[:fn.index("\n}\n") + 3]
+        for name, admitted in (("adminx", False), ("stack", False), ("admin", False), ("xadmin", True), ("stacks", True)):
+            with self.subTest(agent_name_ok=name):
+                run = subprocess.run(["bash", "-c", fn + 'agent_name_ok "$1"', "x", name], capture_output=True)
+                self.assertEqual(run.returncode == 0, admitted, name)
+
     def test_the_declaration_directory_flag_is_retired(self):
         # The operator's ruling of 2026-10-07 on #1: the declaration lives in
         # the territory and nothing is written into the operator's home, so
@@ -3042,6 +3121,16 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         self.assertIn(["sudo", "tee", territory + "/agent.toml"], calls)
         self.assertIn(["sudo", "tee", territory + "/system-prompt.md"], calls)
         self.assertNotIn(["sudo", "usermod", "-aG", "weaver-m1-admin", "weaver-m1-state"], calls)
+        # **The agent's own folder beside the admin base**, root:root 0755,
+        # laid once the agent is admitted (weaver-admin-Spec section 4), so a
+        # run refused before the admission leaves none: admin's load looks in
+        # it for the loop folder, and an admitted agent without it runs the
+        # compiled loop. Perturbation: drop the laying, or lay it before the
+        # admission, and this fails.
+        etc_folder = ["sudo", "install", "-d", "-o", "root", "-g", "root", "-m", "00755", str(self.root / "m1")]
+        self.assertIn(etc_folder, calls)
+        admitted = calls.index(["sudo", "mv", "-T", "--", str(self.config / ".m1.partial"), str(self.config / "m1")])
+        self.assertGreater(calls.index(etc_folder), admitted)
         # The operator joins the trace, state and access groups and never the
         # agent's own (it does not dial the gate); the gate-con account joins
         # the agent's own group alone, and the admin-con account the state and
@@ -3079,6 +3168,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         shutil.rmtree(self.config / "m1", ignore_errors=True)
         shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
         shutil.rmtree(self.folder, ignore_errors=True)
+        shutil.rmtree(self.root / "m1", ignore_errors=True)
         self.rule.unlink(missing_ok=True)
         self.env["GROUP_WRITES"] = "1"
         result = self.create("--apply")
@@ -3507,6 +3597,7 @@ esac
             with self.subTest(adapter=adapter, evidence=evidence):
                 shutil.rmtree(self.config / "m1", ignore_errors=True)
                 shutil.rmtree(self.folder, ignore_errors=True)
+                shutil.rmtree(self.root / "m1", ignore_errors=True)
                 shutil.rmtree(self.root / "installed", ignore_errors=True)
                 shutil.rmtree(self.root / "stub-state", ignore_errors=True)
                 state = self.verify_fixture()
@@ -3571,6 +3662,7 @@ esac
             with self.subTest(case):
                 shutil.rmtree(self.config / "m1", ignore_errors=True)
                 shutil.rmtree(self.folder, ignore_errors=True)
+                shutil.rmtree(self.root / "m1", ignore_errors=True)
                 shutil.rmtree(self.root / "stub-state", ignore_errors=True)
                 shutil.rmtree(self.root / "installed", ignore_errors=True)
                 shutil.rmtree(self.root / "cgroup-fs", ignore_errors=True)
@@ -3646,6 +3738,7 @@ esac
             with self.subTest(case):
                 shutil.rmtree(self.config / "m1", ignore_errors=True)
                 shutil.rmtree(self.folder, ignore_errors=True)
+                shutil.rmtree(self.root / "m1", ignore_errors=True)
                 shutil.rmtree(self.root / "stub-state", ignore_errors=True)
                 shutil.rmtree(self.root / "installed", ignore_errors=True)
                 state = self.verify_fixture()
@@ -4099,6 +4192,7 @@ esac
                 self.log.unlink(missing_ok=True)
                 shutil.rmtree(self.config / ".m1.partial", ignore_errors=True)
                 shutil.rmtree(self.folder, ignore_errors=True)
+                shutil.rmtree(self.root / "m1", ignore_errors=True)
                 self.env.update(ALLOW_APPLY_CHECKS="1", TRACE_OPEN="1")
                 result = self.create("--engine", engine, "--apply")
                 self.assertNotEqual(result.returncode, 0)
@@ -4409,6 +4503,26 @@ esac
         self.assertIn("lets another principal make names in it", result.stderr)
         self.assertFalse((self.config / ".m1.partial").exists())
 
+    def test_the_agents_folder_is_made_only_where_no_other_principal_can_claim_it(self):
+        # Review of #655: the agent's folder beside the admin base is a new
+        # name in the base's parent, which root's `install -d` would follow
+        # where another principal made it first. The parent is judged by
+        # creatable_in as the base is, and a sticky open parent refuses before
+        # anything is made. Perturbation: drop the parent's judgment, and the
+        # run goes on.
+        self.env["ALLOW_APPLY_CHECKS"] = "1"
+        mode = self.root.stat().st_mode & 0o7777
+        self.root.chmod(0o1777)
+        try:
+            result = self.create("--apply")
+        finally:
+            self.root.chmod(mode)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("the admin base's parent", result.stderr)
+        self.assertIn("could be claimed first", result.stderr)
+        self.assertFalse((self.config / ".m1.partial").exists())
+        self.assertFalse((self.root / "m1").exists())
+
     def test_bootstrap_makes_every_record_entry_readable_whatever_the_umask(self):
         # Codex on #45, round 14: under a 0077 umask `sudo tee` made the record's
         # keys 0600, and the scripts that read the record without privilege
@@ -4436,7 +4550,9 @@ esac
         self.assertNotIn("--exclude", build)
         self.assertIn("weaver-spu/cuda", build[-1])
         # The six Rust members, and the shell's busybox and applet list (#29).
-        self.assertEqual(result.stdout.count("NEW"), 8)
+        # Seven members and the shell's two files, the loop runner's three
+        # files and its pycache folder.
+        self.assertEqual(result.stdout.count("NEW"), 13)
         for shell_file in ("busybox ", "busybox.applets "):
             self.assertIn("  " + shell_file, result.stdout)
         self.assertIn("plan only. rerun with --install", result.stdout)
@@ -4824,16 +4940,20 @@ esac
         for name in listed:
             if name.startswith("lib"):
                 self.assertTrue(any(fnmatch.fnmatch(name, g) for g in globs), name)
+            elif name.startswith("weaver-loop/") or name == "weaver-loop-pycache":
+                self.assertIn("the loop runner", line)
+                self.assertIn("pycache" if name == "weaver-loop-pycache" else name.removeprefix("weaver-loop/"), line)
             else:
                 self.assertIn(name, named)
         bootstrap = (self.repo / "deploy" / "bootstrap-stack.sh").read_text()
         planned, = [l for l in bootstrap.splitlines() if l.lstrip().startswith('plan "will install')]
-        for variable in ("$MEMBERS", "$SHELL_FILES", "$LIB_GLOBS"):
+        for variable in ("$MEMBERS", "$SHELL_FILES", "$LOOP_FILES", "$LIB_GLOBS"):
             self.assertIn(variable, planned)
         self.assertIn('SHELL_FILES="busybox busybox.applets"', bootstrap)
         redeploy = re.sub(r"\s+", " ", (DEPLOY / "REDEPLOY.md").read_text())
         installs, = [s for s in redeploy.split(". ") if "plans and installs the members" in s]
         self.assertIn("the shell", installs)
+        self.assertIn("the loop runner", installs)
 
     def test_the_install_window_prints_once_under_install(self):
         """**The install window is said once**: --install runs the plan
@@ -5583,17 +5703,19 @@ esac
         # An unchanged engine plans unchanged and the box is current.
         self.install_libraries("a")
         installed = self.root / "installed"
-        for member in ("worker", "weaver-admin", "weaver-trace-relay", "weaver-gate", "weaver-spu", "weaver-state"):
+        for member in ("worker", "weaver-admin", "weaver-trace-relay", "weaver-gate", "weaver-spu", "weaver-state",
+                       "weaver-loop-launch"):
             installed.joinpath(member).write_text("fixture artifact " + member)
         installed.joinpath("busybox").write_text("fixture busybox")
         installed.joinpath("busybox.applets").write_text("ls\ncat\n")
+        self.install_loop(installed)
         shutil.rmtree(self.root / 'target with "quotes"')
         self.env["ENGINE_BUILD"] = "a"
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f"  {'libllama.so.0.0.1':<22} unchanged\n", result.stdout)
         self.assertNotIn("(library links)", result.stdout)
-        self.assertIn("every deployed binary and engine library already matches the build", result.stdout)
+        self.assertIn("every deployed binary, engine library and loop runner file already matches the build", result.stdout)
         self.assertIn("the box is current at", result.stdout)
 
     def test_a_build_path_holding_a_backslash_plans_by_the_bare_digest(self):
@@ -5606,7 +5728,8 @@ esac
         and the box is not current."""
         self.install_libraries("a")
         installed = self.root / "installed"
-        for member in ("worker", "weaver-admin", "weaver-trace-relay", "weaver-gate", "weaver-spu", "weaver-state"):
+        for member in ("worker", "weaver-admin", "weaver-trace-relay", "weaver-gate", "weaver-spu", "weaver-state",
+                       "weaver-loop-launch"):
             installed.joinpath(member).write_text("fixture artifact " + member)
         installed.joinpath("busybox").write_text("fixture busybox")
         installed.joinpath("busybox.applets").write_text("ls\ncat\n")
@@ -5616,13 +5739,14 @@ esac
         installed.rename(odd)
         for key in ("worker-binary", "spu-binary", "gate-binary", "library-path", "prefix"):
             (self.stack / key).write_text(self.stack_keys[key].replace(str(installed), str(odd)) + "\n")
+        self.install_loop(odd)
         (self.config / "existing" / "worker-binary").write_text(str(odd / "worker"))
         self.env.update(ENGINE_BUILD="a", CARGO_TARGET_DIR=str(self.root / "target with \\ backslash"))
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(f"  {'worker':<22} unchanged\n", result.stdout)
         self.assertIn(f"  {'libllama.so.0.0.1':<22} unchanged\n", result.stdout)
-        self.assertIn("every deployed binary and engine library already matches the build", result.stdout)
+        self.assertIn("every deployed binary, engine library and loop runner file already matches the build", result.stdout)
 
     def test_the_plan_refuses_where_the_library_step_cannot_be_named(self):
         """**What cannot be named refuses before anything is planned**: a
@@ -5869,7 +5993,10 @@ esac
         self.assertLess(max(order.index(n) for n in ("libllama.so.0.0.1", "libggml.so.0.9.1")),
                         min(order.index(n) for n in ("libggml.so.0", "libllama.so")), order)
         self.assertIn(["sudo", "ldconfig"], calls)
-        self.assertLess(calls.index(["sudo", "ldconfig"]), next(i for i, c in enumerate(calls) if c[0] == "ldd"))
+        # The SPU's ldd, not the loop interpreter's, which the plan reads.
+        self.assertLess(calls.index(["sudo", "ldconfig"]),
+                        next(i for i, c in enumerate(calls) if c[0] == "ldd"
+                             and not Path(os.path.realpath(c[-1])).name.startswith("python")))
         self.assertIn(f"weaver-spu resolves every library it names, 2 of them the engine's from {self.lib_dir}",
                       result.stdout)
         self.assertIn("the box is at", result.stdout)
@@ -5894,10 +6021,295 @@ esac
         self.assertEqual(self.calls().count(["sudo", "ldconfig"]), 2, self.calls())
         self.assertNotIn("RESTORE INCOMPLETE", result.stderr)
 
+    def test_the_install_lays_the_loop_runner_and_its_grant(self):
+        """**The loop runner's folder is laid with the binaries**
+        (weaver-harness-Spec section 2.5, deploy/loop-grant.sh): on a box
+        that holds none, the plan lists the runner, the board, the grant and
+        the pycache folder NEW, and the install lays the repository's two
+        files and the grant computed from the box's interpreter, each staged
+        beside its name and renamed over it, and the empty pycache folder.
+        Perturbations: lay the files in place, compute the grant from another
+        interpreter, or leave the pycache folder unmade, and this fails."""
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        prefix = self.root / "installed"
+        folder = prefix / "lib" / "weaver-loop"
+        for name in ("runner.py", "weaver_board.py", "grant"):
+            self.assertIn(f"  {'weaver-loop/' + name:<22} NEW", result.stdout)
+        self.assertIn(f"  {'weaver-loop-pycache':<22} NEW", result.stdout)
+        for name in ("runner.py", "weaver_board.py"):
+            self.assertEqual((folder / name).read_bytes(), (DEPLOY.parent / "loop-runner" / name).read_bytes())
+        self.assertEqual((folder / "grant").read_text(), self.loop_grant(prefix))
+        self.assertTrue((folder / "grant").read_text().startswith("weaver-loop-grant 1\ninterpreter "))
+        self.assertEqual(list((prefix / "lib" / "weaver-loop-pycache").iterdir()), [])
+        calls = self.calls()
+        for name in ("runner.py", "weaver_board.py", "grant"):
+            self.assertIn(["sudo", "mv", "-T", "--", f"{folder}/.{name}.new", f"{folder}/{name}"], calls)
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ["grant", "runner.py", "weaver_board.py"])
+        # Laid again from what stands, every file is unchanged.
+        shutil.rmtree(self.root / 'target with "quotes"')
+        result = self.run_script("update-stack.sh")
+        for name in ("runner.py", "weaver_board.py", "grant"):
+            self.assertIn(f"  {'weaver-loop/' + name:<22} unchanged", result.stdout)
+        # Laid over a runner and a grant that differ, each is replaced by its
+        # stage's rename and nothing else is left in the folder.
+        (folder / "runner.py").write_text("old runner\n")
+        (folder / "grant").write_text("old grant\n")
+        shutil.rmtree(self.root / 'target with "quotes"')
+        self.log.unlink(missing_ok=True)
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"  {'weaver-loop/runner.py':<22} CHANGED", result.stdout)
+        self.assertEqual((folder / "runner.py").read_bytes(), (DEPLOY.parent / "loop-runner" / "runner.py").read_bytes())
+        self.assertEqual((folder / "grant").read_text(), self.loop_grant(prefix))
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ["grant", "runner.py", "weaver_board.py"])
+
+    def test_the_grant_is_never_written_through_a_name_that_stands(self):
+        """**The grant's stage is made by `install`, as every other file's
+        is** (review of #655): a link standing at `.grant.new` is replaced,
+        never written through, and the grant is installed from a file of the
+        operator's own. Perturbation: write the stage through `tee`, and the
+        link's target takes the grant."""
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        prefix = self.root / "installed"
+        folder = prefix / "lib" / "weaver-loop"
+        victim = self.root / "victim"
+        victim.write_text("not the grant\n")
+        (folder / ".grant.new").symlink_to(victim)
+        (folder / "grant").write_text("old grant\n")
+        shutil.rmtree(self.root / 'target with "quotes"')
+        self.log.unlink(missing_ok=True)
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(victim.read_text(), "not the grant\n")
+        self.assertEqual((folder / "grant").read_text(), self.loop_grant(prefix))
+        self.assertFalse((folder / ".grant.new").exists() or (folder / ".grant.new").is_symlink())
+        calls = self.calls()
+        self.assertFalse([c for c in calls if c[:2] == ["sudo", "tee"] and c[-1].endswith("/.grant.new")], calls)
+        staged = [c for c in calls if c[:2] == ["sudo", "install"] and c[-1] == f"{folder}/.grant.new"]
+        self.assertEqual(len(staged), 1, calls)
+        self.assertEqual(staged[0][2:9], ["-T", "-o", "root", "-g", "root", "-m", "0644"])
+        self.assertFalse(Path(staged[0][-2]).exists(), "the operator's own file is removed")
+
+    def test_the_loop_folder_is_made_only_where_no_other_principal_can_claim_it(self):
+        """**The loop folder and its pycache folder are new names in the
+        prefix's lib folder** (review of #655): where either does not stand,
+        that folder is judged as the scripts judge every folder they make, and
+        a sticky open one refuses before anything is built or moved.
+        Perturbation: drop loop_placing_refusal, and the plan goes on."""
+        mode = self.lib_dir.stat().st_mode & 0o7777
+        self.lib_dir.chmod(0o1777)
+        try:
+            result = self.run_script("update-stack.sh")
+        finally:
+            self.lib_dir.chmod(mode)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("could claim the missing name first", result.stderr)
+        self.assertFalse((self.lib_dir / "weaver-loop").exists())
+
+    def test_a_loop_folder_that_stands_is_judged_by_its_owner_its_mode_and_what_holds_it(self):
+        """**A loop folder that stands is judged too** (review of #655,
+        finding 5): one another principal made first, its own, holds what
+        that principal planted, and root's `install -d` would only take it
+        over. So a loop folder or pycache folder that stands must be root's,
+        writable by no group or other, and held closed above it, or the plan
+        refuses before anything is computed or moved. A stranger's folder is
+        modelled by the stand-in's `stat`, which answers STRANGER_UID for
+        each path STRANGERS names. Perturbations: drop the owner's look, the
+        mode's, or the held-closed look above, and its row goes on."""
+        prefix = self.root / "installed"
+        folder = prefix / "lib" / "weaver-loop"
+        pycache = prefix / "lib" / "weaver-loop-pycache"
+        rows = (
+            ("the folder a stranger's", folder, {"STRANGERS": str(folder)}, None,
+             f"{folder} stands as uid {STRANGER_UID}, not root"),
+            ("the pycache folder a stranger's", pycache, {"STRANGERS": str(pycache)}, None,
+             f"{pycache} stands as uid {STRANGER_UID}, not root"),
+            ("the folder group-writable", folder, {}, 0o775,
+             f"{folder} stands with mode 775, which its group or others can write in"),
+            ("the folder writable by others", folder, {}, 0o757,
+             f"{folder} stands with mode 757, which its group or others can write in"),
+            ("the pycache folder group-writable", pycache, {}, 0o775,
+             f"{pycache} stands with mode 775, which its group or others can write in"),
+        )
+        for label, spoiled, env, mode, said in rows:
+            with self.subTest(row=label):
+                shutil.rmtree(folder, ignore_errors=True)
+                shutil.rmtree(pycache, ignore_errors=True)
+                shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+                folder.mkdir(parents=True, mode=0o755)
+                pycache.mkdir(mode=0o755)
+                folder.chmod(0o755)
+                pycache.chmod(0o755)
+                planted = folder / "planted.py"
+                planted.write_text("planted\n")
+                if mode is not None:
+                    spoiled.chmod(mode)
+                self.log.unlink(missing_ok=True)
+                saved = dict(self.env)
+                self.env.update(env)
+                try:
+                    result = self.run_script("update-stack.sh", "--install")
+                finally:
+                    self.env.clear()
+                    self.env.update(saved)
+                    spoiled.chmod(0o755)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(said, result.stderr)
+                self.assertFalse([c for c in self.calls() if c[0] == "sudo"], self.calls())
+                self.assertEqual(sorted(p.name for p in folder.iterdir()), ["planted.py"])
+        # **Held closed above it.** Both stack scripts refuse a lib folder that
+        # is not held closed before this look (the record's library-path), so
+        # the helper is driven alone: root's folders of mode 755, a held_closed
+        # that refuses the folder above, and then one that admits it.
+        with tempfile.TemporaryDirectory() as d:
+            for held, said in (("printf %s \"$1\"; return 1", f"{d}/weaver-loop stands under {d}, which is not held closed by root"),
+                               ("return 0", "")):
+                program = (f"source {shlex.quote(str(self.repo / 'deploy' / 'loop-grant.sh'))}\n"
+                           "stat() { echo '0 755'; }\n"
+                           f"held_closed() {{ {held}; }}\n"
+                           f"LOOP_DIR={shlex.quote(d)}/weaver-loop LOOP_PYCACHE={shlex.quote(d)}/weaver-loop-pycache\n"
+                           'mkdir -p "$LOOP_DIR" "$LOOP_PYCACHE"\n'
+                           "loop_placing_refusal\n")
+                run = subprocess.run(["bash", "-c", program], text=True, capture_output=True, timeout=20)
+                self.assertEqual((run.returncode, run.stderr), (0, ""))
+                self.assertEqual(run.stdout, said)
+        # The control: the same folders, root's and closed, go on to the install.
+        shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+        (folder / "planted.py").unlink()
+        self.log.unlink(missing_ok=True)
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((folder / "grant").read_text(), self.loop_grant(prefix))
+
+    def test_a_link_to_a_folder_at_a_stage_name_is_replaced_and_never_written_into(self):
+        """**Every stage is made by `install -T`** (review of #655, finding
+        5): without `-T`, a link at `.grant.new` or `.runner.py.new` that
+        names a folder has `install` write the file inside that folder, and
+        the rename then puts the link at the real name. With it, the link is
+        replaced by the file, the folder it named stays empty, and the grant
+        and the runner land at their names. Perturbations: drop `-T` from the
+        grant's install or the runner files', and its folder takes a file."""
+        result = self.library_install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        prefix = self.root / "installed"
+        folder = prefix / "lib" / "weaver-loop"
+        aimed = {}
+        for stage in (".grant.new", ".runner.py.new"):
+            aimed[stage] = self.root / f"aimed{stage}"
+            aimed[stage].mkdir()
+            (folder / stage).symlink_to(aimed[stage])
+        (folder / "grant").write_text("old grant\n")
+        (folder / "runner.py").write_text("old runner\n")
+        shutil.rmtree(self.root / 'target with "quotes"')
+        self.log.unlink(missing_ok=True)
+        result = self.run_script("update-stack.sh", "--install")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for stage, where in aimed.items():
+            with self.subTest(stage=stage):
+                self.assertEqual(list(where.iterdir()), [])
+                self.assertFalse((folder / stage).exists() or (folder / stage).is_symlink())
+        self.assertFalse((folder / "grant").is_symlink())
+        self.assertEqual((folder / "grant").read_text(), self.loop_grant(prefix))
+        self.assertFalse((folder / "runner.py").is_symlink())
+        self.assertEqual((folder / "runner.py").read_bytes(), (DEPLOY.parent / "loop-runner" / "runner.py").read_bytes())
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ["grant", "runner.py", "weaver_board.py"])
+
+    def test_a_rollback_puts_the_loop_runner_back(self):
+        """**The loop runner's files go back as the binaries do**: a runner
+        and a grant the box held come back from the backup, and the board it
+        never held is removed, with no stage left. On a box that held no
+        folder, the folder and the pycache folder this run made go.
+        Perturbations: drop the restore, the removal or the folders'
+        removal, and its row stands."""
+        prefix = self.root / "installed"
+        folder = prefix / "lib" / "weaver-loop"
+        folder.mkdir(parents=True)
+        (folder / "runner.py").write_text("old runner\n")
+        (folder / "grant").write_text("old grant\n")
+        (prefix / "lib" / "weaver-loop-pycache").mkdir()
+        result = self.library_install(LDD_MISSING="libllama.so.0")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"  {'weaver-loop/runner.py':<22} CHANGED", result.stdout)
+        # The folder was laid before the rollback, so the restore is what
+        # put the old files back (a run that dies before laying passes the
+        # rows below untested).
+        self.assertIn(f"  laid {folder} (runner.py weaver_board.py grant)", result.stdout)
+        self.assertEqual((folder / "runner.py").read_text(), "old runner\n")
+        self.assertEqual((folder / "grant").read_text(), "old grant\n")
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ["grant", "runner.py"])
+        self.assertTrue((prefix / "lib" / "weaver-loop-pycache").is_dir())
+        self.assertNotIn("RESTORE INCOMPLETE", result.stderr)
+        self.assertNotIn("FAILED to", result.stderr)
+
+    def test_a_rollback_removes_a_loop_folder_it_made(self):
+        """The other half of the rollback: on a box that held no loop runner,
+        the folder and the pycache folder this run made are removed.
+        Perturbation: drop either rmdir and its folder stays."""
+        result = self.library_install(LDD_MISSING="libllama.so.0")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("  laid " + str(self.root / "installed" / "lib" / "weaver-loop"), result.stdout)
+        self.assertFalse((self.root / "installed" / "lib" / "weaver-loop").exists())
+        self.assertFalse((self.root / "installed" / "lib" / "weaver-loop-pycache").exists())
+        self.assertNotIn("FAILED to", result.stderr)
+
+    def test_bytecode_beside_the_runner_or_in_its_pycache_refuses_the_plan(self):
+        """**No bytecode ships beside the runner**, and the launcher refuses a
+        pycache folder that holds anything (weaver-harness-Spec section 2.5):
+        a __pycache__ in the runner's folder, or a file in the pycache
+        folder, refuses the plan before anything is moved, naming it.
+        Perturbation: drop either look, and the plan goes on."""
+        prefix = self.root / "installed"
+        folder = prefix / "lib" / "weaver-loop"
+        for spoil, said in ((folder / "__pycache__", "no bytecode ships beside the runner"),
+                            (prefix / "lib" / "weaver-loop-pycache" / "x.pyc", "is not empty")):
+            with self.subTest(spoil=spoil.name):
+                shutil.rmtree(folder, ignore_errors=True)
+                shutil.rmtree(prefix / "lib" / "weaver-loop-pycache", ignore_errors=True)
+                shutil.rmtree(self.root / 'target with "quotes"', ignore_errors=True)
+                folder.mkdir(parents=True)
+                (prefix / "lib" / "weaver-loop-pycache").mkdir()
+                if spoil.name == "__pycache__":
+                    spoil.mkdir()
+                else:
+                    spoil.write_text("")
+                self.log.unlink(missing_ok=True)
+                result = self.run_script("update-stack.sh")
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(said, result.stderr)
+                self.assertIn(str(spoil.parent if spoil.name == "x.pyc" else spoil), result.stderr)
+                self.assertFalse([c for c in self.calls() if c[0] == "sudo"])
+
+    def test_bootstrap_lays_the_loop_runner_from_the_same_helper(self):
+        """**Both stack scripts lay the loop runner from one helper**:
+        bootstrap sources deploy/loop-grant.sh as update-stack does, computes
+        the grant and judges what stands before its install, and lays the
+        folder after its members; neither script defines the helpers.
+        Perturbation: inline a copy, or lay before the grant is computed, and
+        this fails."""
+        for name in ("bootstrap-stack.sh", "update-stack.sh"):
+            text = (self.repo / "deploy" / name).read_text()
+            with self.subTest(script=name):
+                self.assertIn('source "$REPO/deploy/loop-grant.sh"', text)
+                self.assertIn("weaver-loop-launch", text.split("MEMBERS=", 1)[1].splitlines()[0])
+                for helper in ("loop_grant() {", "lay_loop() {", "loop_standing_refusal() {",
+                               "loop_placing_refusal() {"):
+                    self.assertNotIn(helper, text)
+                self.assertEqual(text.count('lay_loop "$REPO/loop-runner" "$LOOP_GRANT"'), 1)
+                self.assertLess(text.index("LOOP_GRANT=$(loop_grant "), text.index('lay_loop "$REPO/loop-runner"'))
+                self.assertLess(text.index("LOOP_REFUSAL=$(loop_standing_refusal)"), text.index("LOOP_GRANT=$(loop_grant "))
+                self.assertLess(text.index("LOOP_REFUSAL=$(loop_placing_refusal)"), text.index("LOOP_GRANT=$(loop_grant "))
+        text = (self.repo / "deploy" / "bootstrap-stack.sh").read_text()
+        self.assertLess(text.index("LOOP_GRANT=$(loop_grant "), text.index('[ "$INSTALL" -eq 1 ] || { say "plan only'))
+        self.assertLess(text.index('sudo install -o root -g root -m 0755 "$BUILT/$b" "$PREFIX/bin/$b"'),
+                        text.index('lay_loop "$REPO/loop-runner"'))
+
     TUPLE_KEYS = ["commit", "toolchain", "features", "engine", "engine-source", "engine-vendored", "nvcc",
                   "member.worker", "member.weaver-admin", "member.weaver-trace-relay", "member.weaver-gate",
-                  "member.weaver-spu", "member.weaver-state", "member.busybox", "member.busybox.applets",
+                  "member.weaver-spu", "member.weaver-state", "member.weaver-loop-launch", "member.busybox", "member.busybox.applets",
                   "library.libggml.so.0.9.1", "library.libllama.so.0.0.1",
+                  "loop.runner.py", "loop.weaver_board.py", "loop.grant",
                   "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand", "cccl"]
 
     def test_a_verified_install_prints_and_records_the_install_tuple(self):
@@ -5936,6 +6348,10 @@ esac
             self.assertEqual(facts[f"member.{member}"], hashlib.sha256((installed / member).read_bytes()).hexdigest())
         self.assertEqual(facts["library.libllama.so.0.0.1"],
                          hashlib.sha256(b"fixture libllama b").hexdigest())
+        # The loop runner's three files as laid, each by its sha256.
+        laid = self.lib_dir / "weaver-loop"
+        for name in ("runner.py", "weaver_board.py", "grant"):
+            self.assertEqual(facts[f"loop.{name}"], hashlib.sha256((laid / name).read_bytes()).hexdigest(), name)
         self.assertEqual(facts["commit"], "abcdef0")
         self.assertEqual(facts["features"], "weaver-spu/cuda,weaver-state/sqlite")
         self.assertEqual(facts["engine"], "llama-cpp-sys-2 0.1.0")
@@ -5953,6 +6369,7 @@ esac
         install = _agent_tuple().read_install_tuple(str(self.stack / "install-tuple"))
         self.assertEqual(install["earlier"], [])
         self.assertEqual(sorted(install["runtime"]), ["cublas", "cublaslt", "cudart", "curand"])
+        self.assertEqual(sorted(install["loop"]), ["grant", "runner.py", "weaver_board.py"])
         # The lock read filtered to the host, so an offline cache a build
         # filled answers it.
         metadata = [c for c in self.calls() if c[:2] == ["cargo", "metadata"] and "--no-deps" not in c]
@@ -5991,10 +6408,11 @@ esac
         self.assertEqual(ran.returncode, 0, ran.stderr)
         facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
         self.assertEqual(list(facts), ["commit", "toolchain", "features", "engine", "engine-source", "engine-vendored",
-                                       "nvcc", "member.worker", "library.libllama.so.0.0.1", "runtime.cudart",
+                                       "nvcc", "member.worker", "library.libllama.so.0.0.1", "loop.runner.py",
+                                       "loop.weaver_board.py", "loop.grant", "runtime.cudart",
                                        "runtime.cublas", "runtime.cublaslt", "runtime.curand", "cccl"])
         for key in ("toolchain", "engine-source", "engine-vendored", "member.worker", "library.libllama.so.0.0.1",
-                    "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand"):
+                    "loop.runner.py", "loop.weaver_board.py", "loop.grant", "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand"):
             self.assertEqual(facts[key], "unknown", key)
         self.assertEqual(facts["engine"], "llama-cpp-sys-2 unknown")
         self.assertEqual(facts["commit"], "fixture-commit", "the commit is the caller's, never read again")
@@ -6405,10 +6823,11 @@ esac
             "kill -TERM -- -$(ps -o pgid= -p $$ | tr -d ' '); sleep 5; fi\n")
         installed = self.root / "installed"
         for member in ("worker", "weaver-admin", "weaver-trace-relay", "weaver-gate",
-                       "weaver-spu", "weaver-state"):
+                       "weaver-spu", "weaver-state", "weaver-loop-launch"):
             installed.joinpath(member).write_text("fixture artifact " + member)
         installed.joinpath("busybox").write_text("fixture busybox")
         installed.joinpath("busybox.applets").write_text("ls\ncat\n")
+        self.install_loop(installed)
         key = self.stack / "shell-binary"
         self.assertFalse(key.exists())
         run = subprocess.run(["bash", str(self.repo / "deploy" / "update-stack.sh"), "--install"],
@@ -15964,6 +16383,21 @@ class AgentTupleInstallTests(unittest.TestCase):
                          (hashlib.sha256(cudart.read_bytes()).hexdigest(), str(cudart)))
         self.assertEqual(sorted(install["runtime"]), ["cublas", "cublaslt", "cudart", "curand"])
         self.assertNotIn("gpus", install)
+        # A tuple written before the loop's group reads, holding none.
+        self.assertEqual(install["loop"], {})
+
+    def test_the_loop_runners_group_is_read_as_its_own(self):
+        """**The loop runner's files are a group of their own**, as the
+        members are: read by name, each digest 64 hex digits or `unknown`.
+        Perturbations: read them as scalars and they land among the facts;
+        drop their digest check and the malformed one reads."""
+        lines = INSTALL_TUPLE_LINES + ["loop.runner.py = " + "a" * 64, "loop.weaver_board.py = unknown",
+                                       "loop.grant = " + "b" * 64]
+        install = self.tuple.read_install_tuple(self.write(lines))
+        self.assertEqual(install["loop"], {"runner.py": "a" * 64, "weaver_board.py": "unknown", "grant": "b" * 64})
+        self.assertFalse([key for key in install["facts"] if key.startswith("loop")])
+        with self.assertRaisesRegex(self.tuple.InstallTupleRefused, "grant's digest is not 64 hex digits"):
+            self.tuple.read_install_tuple(self.write(INSTALL_TUPLE_LINES + ["loop.grant = zz"]))
 
     def test_an_earlier_tuple_is_read_with_its_hardware_lines_unread(self):
         """**A tuple of the earlier form is read, not refused**, so a box
@@ -16153,6 +16587,8 @@ class AgentTupleInstallTests(unittest.TestCase):
         facts = dict(line.split(" = ", 1) for line in ran.stdout.splitlines())
         self.assertEqual(facts["member.worker"], hashlib.sha256(b"worker").hexdigest())
         self.assertEqual(facts["library.libllama.so.0.0.8783"], hashlib.sha256(b"llama").hexdigest())
+        self.assertEqual([facts[f"loop.{n}"] for n in ("runner.py", "weaver_board.py", "grant")], ["unknown"] * 3,
+                         "no loop folder named, so each reads unknown")
         cudart = (odd / "cuda" / "libcudart.so.13.0.1").resolve()
         self.assertEqual(facts["runtime.cudart"], f"{hashlib.sha256(b'cudart').hexdigest()} {cudart}")
         install = self.tuple.read_install_tuple(self.write([ran.stdout.rstrip("\n")]))
@@ -16348,6 +16784,98 @@ class AgentTupleInstallTests(unittest.TestCase):
                               "--declaration", str(declaration)], capture_output=True, text=True, timeout=30)
         box, = [line for line in ran.stdout.splitlines() if line.lstrip().startswith("box ")]
         self.assertIn("[absent: no install tuple was named; the box side is unstated]", box)
+
+
+class LoopGrantTests(unittest.TestCase):
+    """deploy/loop-grant.sh's loop_grant through doubles: an interpreter that
+    answers the two questions the script asks it, and an ldd on PATH that
+    prints a written answer, so each refusal and each line's role is read
+    without the machine's own interpreter (weaver-harness-Spec section 2.5)."""
+
+    def setUp(self):
+        scratch = tempfile.TemporaryDirectory(prefix="weaver-loop-grant-")
+        self.addCleanup(scratch.cleanup)
+        self.root = Path(scratch.name)
+        self.lib = self.root / "lib"
+        self.stdlib = self.root / "stdlib"
+        self.bin = self.root / "bin"
+        for d in (self.lib, self.stdlib, self.bin):
+            d.mkdir()
+        for name in ("ld-real.so", "libpython3.so", "libc.so.6"):
+            (self.lib / name).write_bytes(b"")
+        (self.lib / "ld.so").symlink_to("ld-real.so")
+        self.interp = self.root / "python3"
+
+    def interpreter(self, recent=True):
+        self.interp.write_text(
+            "#!/bin/sh\n"
+            'case "$4" in\n'
+            "  *version_info*) exit %d ;;\n"
+            "  *os.__file__*) printf '%%s\\n' %s ;;\n"
+            "esac\n" % (0 if recent else 1, shlex.quote(str(self.stdlib))))
+        self.interp.chmod(0o755)
+
+    def ldd(self, answer):
+        (self.bin / "answer").write_text(answer)
+        double = self.bin / "ldd"
+        double.write_text('#!/bin/sh\ncat "%s"\n' % (self.bin / "answer"))
+        double.chmod(0o755)
+
+    def grant(self):
+        env = dict(os.environ, PATH="%s%s%s" % (self.bin, os.pathsep, os.environ["PATH"]))
+        return subprocess.run(
+            ["bash", "-c", 'set -euo pipefail; source "$1"; loop_grant "$2" /pyc', "x",
+             str(DEPLOY / "loop-grant.sh"), str(self.interp)],
+            text=True, capture_output=True, timeout=20, env=env)
+
+    def test_a_written_ldd_answer_gives_the_written_grant(self):
+        # The loader named with an arrow to its file is executed, the vdso
+        # written with an arrow and no path is passed over, and the libraries
+        # are read. Perturbation: class every arrow line as a read, and the
+        # loader is read and the grant names no execute line.
+        # Older ldd writes the vdso's arrow with two spaces before its address.
+        self.interpreter()
+        lib = self.lib
+        for vdso in ("\tlinux-vdso.so.1 => (0x00007ffd1)\n", "\tlinux-vdso.so.1 =>  (0x00007ffd1)\n"):
+            with self.subTest(vdso=vdso):
+                self.ldd(vdso +
+                         "\tlibpython3.so => %s/libpython3.so (0x00007f2)\n"
+                         "\tlibc.so.6 => %s/libc.so.6 (0x00007f3)\n"
+                         "\t%s/ld.so => %s/ld.so (0x00007f4)\n" % (lib, lib, lib, lib))
+                ran = self.grant()
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                sha = hashlib.sha256(self.interp.read_bytes()).hexdigest()
+                self.assertEqual(ran.stdout, "".join(line + "\n" for line in [
+                    "weaver-loop-grant 1",
+                    "interpreter %s %s" % (sha, self.interp),
+                    "execute %s/ld-real.so" % lib,
+                    "read %s/libpython3.so" % lib,
+                    "read %s/libc.so.6" % lib,
+                    "beneath %s" % self.stdlib,
+                    "pycache /pyc",
+                ]))
+
+    def test_an_interpreter_older_than_python_3_12_refuses(self):
+        # Perturbation: drop the version question, and the grant is laid.
+        self.interpreter(recent=False)
+        self.ldd("\t%s/ld.so (0x1)\n" % self.lib)
+        ran = self.grant()
+        self.assertEqual(ran.returncode, 1, ran.stdout)
+        self.assertEqual(ran.stdout, "")
+        self.assertEqual(ran.stderr, "the loop interpreter %s is older than Python 3.12, which the runner "
+                         "needs\n" % self.interp)
+
+    def test_a_library_the_loader_does_not_find_refuses(self):
+        # Perturbation: drop the "not found" look, and the line refuses as a
+        # path that does not resolve, or not at all.
+        self.interpreter()
+        answer = "\tlibgone.so.1 => not found\n\t%s/ld.so (0x1)\n" % self.lib
+        self.ldd(answer)
+        ran = self.grant()
+        self.assertEqual(ran.returncode, 1, ran.stdout)
+        self.assertEqual(ran.stdout, "")
+        self.assertEqual(ran.stderr, "the loop interpreter %s has a library the loader does not find:\n%s"
+                         % (self.interp, answer))
 
 
 class _NamingResult(unittest.TextTestResult):

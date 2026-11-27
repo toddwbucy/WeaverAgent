@@ -1562,6 +1562,46 @@ absent, and where an account of the name stands it judges the account's shape an
 only its name, a system account with no login shell, no home and no group that reaches
 the other account's door, so a standing account is never adopted unjudged.
 
+**A name beginning `admin`, and the name `stack`, refuse as well.** Each agent has a
+folder of its own beside the config base, the base's parent joined with the name
+(`/etc/weaver/<name>/` where the base is `/etc/weaver/admin`), `root:root 0755`, laid
+by `deploy/create-agent.sh`, in which the inventory looks for the loop folder (below).
+The config bases are every `/etc/weaver/admin*`, as `deploy/decommission.sh` discovers
+them, and the stack's record is `/etc/weaver/stack`, so an agent named `adminx` would
+lay a folder decommission reads as a config base. The operator's list of 2026-11-26
+names `admin`, `admincon`, `gatecon` and any name ending in `-state`, and each is
+refused by the rules above. The other suffixes stay refused while an account or a group
+of that name stands:
+
+- `-trace`: the trace group, `weaver-<name>-trace`.
+- `-relay`: the relay's account, `weaver-<name>-relay`.
+- `-admin`: the access group, `weaver-<name>-admin`.
+- `-admincon`: the per-agent connector account of an agent laid before 2026-11-10,
+  which `deploy/decommission.sh` still finds and removes.
+
+**The loop folder.** `validate` and `load` look in the agent's own folder for `loop/`,
+under a serving binding alone. Where the agent's folder or `loop/` does not stand, the
+enter carries no loop and the compiled loop runs. Where it stands, every piece is judged
+on its descriptor, each opened without following a link, and a piece out of its shape
+refuses `BoundaryUnverified`, naming the piece and the check on standard error:
+
+| Piece | Shape |
+| --- | --- |
+| The agent's folder | a directory, root's, written by no group and no other, no access entry, and its ancestors judged as the territory's are |
+| `loop/` | a directory, `root:weaver-<name> 0750`, no access entry |
+| `loop/wires.py` | a regular file, `root:weaver-<name> 0640`, no access entry, at most 256 KiB |
+
+The wire file is opened through the judged `loop/` descriptor and read once through its
+own, at most one byte past the bound, and the enter carries its path and the sha256 of
+the bytes read (`weaver-types-Spec` section 4). A `loop/` without a wire file refuses,
+never read as no loop. Nothing is cached between verbs, so a laid change takes effect at
+the next load alone. The grant file and the interpreter are not admin's: the launcher
+judges them (`weaver-harness-Spec` section 2.5). A diagnostic binding looks at nothing
+and carries no loop. The replacement serving load, which no command dispatches until the
+foundation's cutover, composes no loop yet: where `loop/` stands it refuses
+`ConfigInvalid` naming `loop` before any lock or fork, so it never serves an agent with
+a loop laid by the compiled loop, and the refusal stands until it carries the election.
+
 ```graph
 node: admin-identity-from-validated-name
 kind: assertion
@@ -1944,6 +1984,19 @@ admin provisions what it holds and the organ judges what it can stand, per
 the custody rule of issue #456. Admin passing a flag for a file that is
 there, and staying silent about a file that is not, is the whole of its
 part.
+
+**The loop's launcher and its grant file ride the vector where the enter will carry a
+loop**, as `--loop-launcher` and `--loop-grant`, together or not at all
+(`weaver-harness-Spec` section 2.5). Both are derived, as the classify binary is: the
+launcher is `weaver-loop-launch` beside the worker binary the operator placed, and the
+grant file is `lib/weaver-loop/grant` under that binary's prefix, where the stack lays
+it. Admin reads neither. The launcher judges the grant file, and the worker forks the
+launcher. Where no loop folder stands, the vector carries neither flag, so a worker
+serving the compiled loop starts with the arguments it started with before. A worker
+binary with no prefix above it refuses a load that carries a loop,
+`BoundaryUnverified`. Enforced by
+`admin_hands_the_loops_paths_only_where_the_enter_carries_a_loop` and
+`the_loops_launcher_and_grant_stand_where_the_stack_lays_them` in `src/tests.rs`.
 
 **The state member is started here too, as it always was, a direct child of this
 crate.** The custodian runs under its own account over a territory this crate prepares,
@@ -4305,6 +4358,24 @@ perturbation-verified:
 - **A reserved suffix refuses**, watched by an agent named `x-relay`: refused at the
   name check. The perturbation drops the suffix check, and the agent's accounts collide
   with agent `x`'s.
+- **A name beside the config bases refuses**, watched by `adminx` and `stack`, refused
+  at the name check and by `deploy/create-agent.sh` before any call. The perturbation
+  drops either check, and `adminx` would lay a folder decommission reads as a config
+  base.
+- **The loop folder is judged before it is carried**, watched by `src/loop_folder/tests.rs`:
+  no folder is no loop, a row per piece out of its shape, another owner or group, the wire
+  file grouped to another of the test uid's groups (skipped, naming why, where it holds
+  one), an access-control entry on each of the three pieces (skipped, naming why, where
+  setfacl cannot set one), the bound pinned at 256 KiB, the election naming the file with the digest of
+  `abc` the standard gives, and a change read at the next judgment alone. Neither
+  `loop/`'s owner nor the wire file's has a row of its own: each needs a second uid, and
+  the row for another owner ends at the agent's folder, so neither check is reached
+  there. Both are unmeasured on the build machine and are root's steps on an agent
+  appliance (`tools/identity-run/PROCEDURE.md` section 2).
+  `only_a_serving_binding_looks_for_the_loop` in `src/tests.rs` watches the binding's
+  guard, and `an_agents_folder_under_an_ancestor_others_can_write_refuses` the folder's
+  ancestors, beside a control that answers no loop. The perturbation drops any one check,
+  and its row is admitted.
 - **The lock stands where the agent cannot replace it**, watched by the agent's uid
   trying to unlink and recreate `run.lock`: refused by the root-owned run directory.
   The perturbation places it in the runtime directory, and a second worker starts.
@@ -4468,8 +4539,9 @@ Each names what settles it, and none is this Spec's to settle alone.
   `AgentSummary` left with `list` on the operator's ruling of 2026-10-02. -
   **The two values the argument vector does not carry.** Section 6's vector carries the
   socket path, the two placed organ binaries, the SPU's the agent's own, the
-  headroom where the root names it, and the derived classify binary where one
-  stands, and the worker's remaining two
+  headroom where the root names it, the derived classify binary where one
+  stands, and the derived launcher and grant file where the enter carries a loop, and
+  the worker's remaining two
   inputs are named here rather than routed, because routing either now would carry a
   value nothing reads. The assembled prompt's identity is one: the agent's declaration
   holds an identity the SPU makes resident as the session's prefix, the assembled prompt

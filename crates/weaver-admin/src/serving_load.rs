@@ -93,6 +93,7 @@ fn run_authorized(
     account: impl FnOnce(&str) -> Result<AgentAccount, LifecycleRefusal>,
 ) -> Result<Loaded, Failure> {
     crate::admissible(config, agent)?;
+    refuse_a_standing_loop(config, agent)?;
     let window = LoadWindow::begin(config.load_bound)?;
     let directory = crate::prepare_run_directory(config, nix::unistd::geteuid().as_raw())?;
     window.check()?;
@@ -131,6 +132,47 @@ fn run_authorized(
                     refusal,
                 }),
             }
+        }
+    }
+}
+
+/// **This composition carries no loop yet, so a loop folder standing refuses
+/// it**, `ConfigInvalid` naming `loop`, before any lock or fork. The enter it
+/// builds has no `wires` member and the worker it starts is handed no
+/// launcher, so at the foundation's cutover an agent with `loop/` laid would
+/// otherwise be served by the compiled loop, which `weaver-harness-Spec`
+/// section 2.5 says never happens. The refusal holds until this composition
+/// judges the folder as `run_load` does and carries the election. A folder
+/// whose standing cannot be read refuses `BoundaryUnverified`.
+fn refuse_a_standing_loop(
+    config: &ServiceConfig,
+    agent: &AgentName,
+) -> Result<(), LifecycleRefusal> {
+    let Some(folder) = crate::loop_folder::agent_folder(&config.root, &agent.0) else {
+        diag!(
+            "weaver-admin: the agent's root {} has no folder two levels above it",
+            config.root.display()
+        );
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    };
+    let laid = folder.join("loop");
+    match std::fs::symlink_metadata(&laid) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => {
+            diag!(
+                "weaver-admin: config invalid: {} stands, and this load composes no loop yet",
+                laid.display()
+            );
+            Err(LifecycleRefusal::ConfigInvalid {
+                field: Some(weaver_types::FieldName("loop".into())),
+            })
+        }
+        Err(e) => {
+            diag!(
+                "weaver-admin: whether {} stands cannot be read: {e}",
+                laid.display()
+            );
+            Err(LifecycleRefusal::BoundaryUnverified)
         }
     }
 }
@@ -282,6 +324,7 @@ fn start_load(
             &config.gate,
             config.headroom_bytes.as_deref(),
             Some(prepared.checker_binary()),
+            None,
         ),
         uid: account.uid,
         gid: account.gid,

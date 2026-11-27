@@ -19,7 +19,7 @@ mod dev_loop;
 
 use std::process::ExitCode;
 
-use weaver_harness::{Harness, OrganBinaries, OrganParameters, bind_coordination};
+use weaver_harness::{Harness, LoopLaunch, OrganBinaries, OrganParameters, bind_coordination};
 
 fn main() -> ExitCode {
     // **The first act, before any thread or fork**, per `weaver-harness-Spec`
@@ -33,7 +33,8 @@ fn main() -> ExitCode {
     let (Some(socket), Some(spu), Some(gate)) = (args.next(), args.next(), args.next()) else {
         eprintln!(
             "worker <coordination-socket> <spu-binary> <gate-binary> \
-             [--headroom-bytes N] [--classify-binary PATH]"
+             [--headroom-bytes N] [--classify-binary PATH] \
+             [--loop-launcher PATH --loop-grant PATH]"
         );
         return ExitCode::FAILURE;
     };
@@ -43,6 +44,8 @@ fn main() -> ExitCode {
     // deployment did before this vector existed.
     let mut parameters = OrganParameters::default();
     let mut classify: Option<std::path::PathBuf> = None;
+    let mut loop_launcher: Option<std::path::PathBuf> = None;
+    let mut loop_grant: Option<std::path::PathBuf> = None;
     while let Some(argument) = args.next() {
         match argument.as_str() {
             "--headroom-bytes" => match args.next() {
@@ -59,6 +62,17 @@ fn main() -> ExitCode {
                 Some(value) => classify = Some(value.into()),
                 None => {
                     eprintln!("worker: --classify-binary takes a value");
+                    return ExitCode::FAILURE;
+                }
+            },
+            // **The loop's launcher and its grant file**, per
+            // `weaver-harness-Spec` section 2.5: handed together by admin
+            // where the enter will carry a loop it found standing.
+            flag @ ("--loop-launcher" | "--loop-grant") => match args.next() {
+                Some(value) if flag == "--loop-launcher" => loop_launcher = Some(value.into()),
+                Some(value) => loop_grant = Some(value.into()),
+                None => {
+                    eprintln!("worker: {flag} takes a value");
                     return ExitCode::FAILURE;
                 }
             },
@@ -80,6 +94,14 @@ fn main() -> ExitCode {
         }
     }
 
+    let loop_launch = match (loop_launcher, loop_grant) {
+        (Some(launcher), Some(grant)) => Some(LoopLaunch { launcher, grant }),
+        (None, None) => None,
+        _ => {
+            eprintln!("worker: --loop-launcher and --loop-grant are handed together or not at all");
+            return ExitCode::FAILURE;
+        }
+    };
     let listener = match bind_coordination(std::path::Path::new(&socket)) {
         Ok(listener) => listener,
         Err(fault) => {
@@ -90,6 +112,7 @@ fn main() -> ExitCode {
     let harness = match Harness::listen(
         listener,
         OrganBinaries {
+            loop_launch,
             classify,
             spu: spu.into(),
             gate: gate.into(),

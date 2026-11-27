@@ -111,6 +111,7 @@ impl Peer {
             let harness = Harness::listen(
                 listener,
                 OrganBinaries {
+                    loop_launch: None,
                     classify: None,
                     spu: "/nonexistent/spu".into(),
                     gate: "/nonexistent/gate".into(),
@@ -381,6 +382,7 @@ fn refused_enter_leaves_the_state_at_before_enter() {
                 wind_down_bound: None,
                 state_election: weaver_types::StateElection::default(),
                 turn_context: weaver_types::TurnContext::Continuous,
+                wires: None,
             }),
         },
     );
@@ -503,6 +505,7 @@ fn dropping_the_harness_closes_the_listener() {
         let harness = Harness::listen(
             listener,
             OrganBinaries {
+                loop_launch: None,
                 classify: None,
                 spu: "/nonexistent/spu".into(),
                 gate: "/nonexistent/gate".into(),
@@ -658,6 +661,7 @@ fn serving_enter(session: &str, bounds: (Option<u64>, Option<u64>)) -> Lifecycle
                 keys: Vec::new(),
             },
             turn_context: weaver_types::TurnContext::Continuous,
+            wires: None,
         }),
     }
 }

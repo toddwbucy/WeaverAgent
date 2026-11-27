@@ -98,12 +98,16 @@ leftovers.
 
     src/bin/worker/main.rs    the composition root, framework, section 6
     src/bin/worker/dev_loop/  the loop body, the developer's, section 6
+    src/bin/weaver-loop-launch/  the loop's launcher, section 2.5
 
 The library holds the framework and the `worker` bin target holds the composition root
-and its Rust loop. The Python worker, its loop scripts, the `pyworker` feature and the
+and its Rust loop. The `weaver-loop-launch` bin target is the loop's launcher, which lays
+the loop runner's walls and executes the interpreter (section 2.5). It links nothing of
+the library. The Python worker, its loop scripts, the `pyworker` feature and the
 pyo3 dependency retire on the operator's ruling of 2026-10-20 (#180). The manifest
-instrument checks declared dependencies, including optional ones, and the bin inventory.
-No pyo3 dependency or second worker target is carried.
+instrument checks declared dependencies, including optional ones, and the bin inventory,
+which is exactly `weaver-loop-launch` and `worker`. No pyo3 dependency or second worker
+target is carried.
 
 **`src/classify.rs` leaves the listing, and the disagreement that leaves behind
 is named rather than settled here.** No such file exists and the label seam's
@@ -134,10 +138,13 @@ crossing's whole option space: an alternative realization of `dev_loop`
 composes against the same crossing without the framework moving, which is
 the general form and the only form this document states.
 
-**The loop is developed and deployed in Rust**, on the operator's ruling of 2026-10-20
-(#180). The worker's `dev_loop` is the builder-facing surface, compiled against the
-granted seat. There is no file-loaded Python loop, interpreter, `WEAVER_PY_LOOP`
-override or `--loop-file` argument. The declaration parser refuses `loop-file` by name.
+**The compiled loop is developed and deployed in Rust**, on the operator's ruling of
+2026-10-20 (#180). The worker's `dev_loop` is the builder-facing surface, compiled against
+the granted seat. There is no `WEAVER_PY_LOOP` override or `--loop-file` argument, and the
+declaration parser refuses `loop-file` by name. The one other loop is a wire file admin
+finds standing in the agent's loop folder, run by the loop runner on the interpreter the
+grant names, under the launcher's walls, and answered by the relay through the same seat
+(section 2.5).
 The compiled worker's argument parser continues to refuse unknown flags. Which worker
 binary admin starts stays a provisioning fact.
 
@@ -651,6 +658,14 @@ The race at the very tail is narrowed and named: the author's read
 settles on the reader's end-of-stream, bounded so an arm that never died
 cannot hold the death hostage, and a read that hits the bound may miss
 the final line, which costs the member and never the death.
+**A line is held to 16 KiB** (`LAST_WORD_LINE_BOUND`), newline included,
+for every organ's last word: one reader serves them all, every organ's
+typed line is far shorter, and since 2026-11-26 the loop runner, behind
+its walls, writes on it a reason the wire file chose. Past the bound the
+reader tees the first 16 KiB, ends them with a newline, drops the rest of
+the line without holding it, and keeps no word of it, the word staying the
+last line that was whole. The reader reads bytes, so a line that is not
+UTF-8 is teed and read past and never ends the reader.
 
 **The write end travels clear of descriptor 2, and the parent is where it
 is made to.** The placement is a `dup2` onto 2, and a `dup2` whose two
@@ -950,6 +965,214 @@ edge: asserts
 from: weaver-harness
 to: harness-descriptors-owned-types
 ```
+
+### 2.5 The loop's launcher
+
+**What it is.** `weaver-loop-launch` is the second bin target of this crate. The worker
+forks it by the organ fork as it stands (section 2.2), with the loop's end at descriptor
+3 and the last word's pipe at 2, and it lays the loop runner's walls on itself before it
+executes the interpreter. It holds one thread. No process stays resident for it, and the
+gate does not change for it.
+
+**The worker starts it, once per load, where the enter carries a loop.** Admin carries the
+loop it found standing on the enter (`weaver-types-Spec` section 4), and hands the worker
+the launcher's path and the grant file's as `--loop-launcher` and `--loop-grant`
+(`weaver-admin-Spec` section 6), held as `OrganBinaries::loop_launch`.
+
+- **Refused before the load:** an enter naming a wire file to a worker handed no
+  launcher, and one under a diagnostic binding, which starts no runner, each refuse
+  `ConfigInvalid` naming `loop` before the sink is taken. A loop the operator laid is
+  never replaced by the compiled loop silently.
+- **The composer.** The load names the loop the run composes with (`weaver-trace-Spec`
+  section 3): the compiled one exactly as before, or the binary with the wire file's path
+  and the digest admin read. The load is authored before the loop starts, so the digest
+  is the election's, and the relay refuses a `hello` naming another. The load's `stack`
+  map names the organ binaries admin started and not the launcher or the runner's files.
+  Their record is the install tuple's: `member.weaver-loop-launch` and the three `loop.`
+  lines, the runner, the board and the grant as laid (`deploy/install-tuple.sh`).
+- **The start comes last.** Once the gate stands, the worker makes the loop's pair with
+  `SOCK_CLOEXEC`, forks the launcher by the organ fork with the far end at 3 and the last
+  word's pipe at 2, drops its copies of the far end and the pipe's write end in the same
+  step, and makes the relay, which reads the `hello` under its own 10 s. The run then
+  holds the loop arm: the runner's pid, the relay, and the last word.
+- **The failed start.** A launcher that refuses, a runner that does not start, and a
+  `hello` that is wrong or absent each kill the child (`SIGKILL`) and reap it at once,
+  close the near end, and refuse the load after it, `ConfigInvalid` naming `loop`. A
+  grant file's path that is not UTF-8 refuses the same before any fork. Where the pair,
+  the pipe or the fork itself fails, the load is refused `BindFailed`. The rollback
+  lowers the gate and the SPU. Until it does, the gate stands, and a dialer's request
+  that reaches the worker is refused, never turned by the compiled loop: a run whose
+  enter was refused after the load serves no dialer. The worker's standard error carries
+  one line, `{"organ": "harness", "loop": "refused", ...}` for `ConfigInvalid` and
+  `"loop": "not-started"` for `BindFailed`, with the reason, the launcher's and the
+  grant file's paths, and, where one was said, the launcher's or the runner's last line,
+  so a launcher or a grant that does not stand is named. Two tests read the line
+  (`a_refused_starts_line_is_written_best_effort` for `ConfigInvalid`,
+  `a_failed_forks_line_is_written_best_effort` for `BindFailed`, through a failed pair).
+  Where the writer takes it, they pin its `organ` and its `loop`, and for the pair its
+  reason. Where the writer fails, they pin the same refusal.
+- **The turn.** A run holding the loop arm answers each turn by the relay's pass,
+  through the same seat, and calls no compiled entry. A run holding none calls the entry.
+  The choice is the run's own.
+- **The stop.** Every leave takes the arm after the gate is lowered and before the save
+  point: the graceful one after its drain, the forced, the rollback and the unwind with
+  none. The relay shuts its end down both ways (`LoopRelay::shut_down`), the end closes,
+  the runner reads its end of file and exits, and the worker reaps it by the leave's
+  shared deadline, killing it there if it has not gone. A leave tried again from S9
+  finds no arm. The stop leans on no signal before the deadline.
+- **The last word.** The runner's standard error is the last word's pipe. Every line
+  reaches the worker's standard error, `worker.log`, the runner's end-of-file line naming
+  its passes among them, and the stop waits for the pipe's end of file, within the last
+  word's bound, before it returns. The worker holds a line to 16 KiB (section 2.2, the
+  last word), and the runner cuts a reason at 1024 characters
+  (`weaver-harness-loop-contract` section 7), so a wire file's exception text decides
+  neither what the worker holds nor what its log takes.
+- **The worker's death.** The organ fork arms `PR_SET_PDEATHSIG` to `SIGKILL` before
+  the launcher's exec, and it survives the launcher's exec and the interpreter's, so the
+  runner dies with the worker.
+
+**Its arguments** are two absolute paths: the grant file, and the wire file. The runner is
+`runner.py` in the grant file's folder, `<prefix>/lib/weaver-loop/`, and the loop folder
+granted is the wire file's, `/etc/weaver/<agent>/loop/`.
+
+**Its steps, in order.** Any step that fails ends it before its exec, with exit 1 and one
+JSON line on standard error, `{"loop": "launch", "reason": "<why>"}`, which the last word
+keeps. No runner starts with a wall missing.
+
+1. **Descriptor 3 is judged a socket**, the loop's end. A launch without it refuses.
+2. **The null device is opened and placed at 0 and 1**, before Landlock, so the grant does
+   not name it and the runner holds no log of the worker's open.
+3. **The grant file is read and judged** (below). Every granted path is opened `O_PATH`
+   without following a link at its last component and judged by `fstat` on that
+   descriptor, as the gate's shell grant is (`weaver-gate-Spec` section 8.1). The
+   interpreter's sha256 is read from the same file, its device and inode compared with
+   the judged descriptor's, and compared with the grant's. A path that fails, or a digest
+   that differs, refuses naming the path.
+4. **Every descriptor above 3 is marked close-on-exec**, so exactly 0 to 3 cross the exec.
+5. **The walls, in the shell's order:** no-new-privs, the limits, the filter, Landlock.
+6. **The interpreter is executed** with exactly one variable, `LANG=C.UTF-8`:
+
+   ```text
+   <interpreter> -I -B -S -X pycache_prefix=<pycache folder> <runner.py> <wire file>
+   ```
+
+**The grant file.** The stack's install computes it on the machine that runs the loop
+(`deploy/loop-grant.sh`, sourced by `bootstrap-stack.sh` and `update-stack.sh`, which
+lay it with the runner and the board and compute it again at every run), from the
+resolved interpreter, its loader and the libraries the loader resolves for it,
+every link resolved to its file, and the interpreter's standard library. The loader is
+the line `ldd` starts with a path, with or without an arrow to its file, and the vdso,
+with no path, is passed over. An interpreter older than Python 3.12, or a library the
+loader does not find, refuses the install. `LoopGrantTests` in `deploy/test_plans.py`
+reads each through doubles. The enter carries none of it, and admin does not read it. It is ASCII, one fact per line, each line
+ended by a newline:
+
+```text
+weaver-loop-grant 1
+interpreter <sha256, 64 lowercase hex> <path>
+execute <path>
+read <path>
+beneath <path>
+pycache <path>
+```
+
+- The first line is the version. `interpreter` and `pycache` stand once each.
+- `execute` names a file executed and read beside the interpreter (its loader), `read` a
+  file read (a library), and `beneath` a folder read and listed beneath (the standard
+  library).
+- Each path is absolute and is the rest of its line. No path stands twice.
+- Any other line refuses the file, naming the line.
+
+**What the launcher judges as root's.** The grant file is root's regular file, not a
+link, written by no group and no other, and at most 64 KiB. The runner's folder is
+root's directory, written by no group and no other, listed through its judged
+descriptor, and every file in it, `runner.py` (which must stand) and the board among
+them, is root's regular file written by no group and no other. The pycache folder is
+root's directory, written by no group and no other, and empty. The interpreter and each
+`execute` file are written by no group and no other, and are not the running uid's
+unless that uid is root: the digest pins the interpreter's bytes when it is judged, and
+this keeps the agent's uid from rewriting the same file before the exec. Each `read`
+file and each `beneath` folder takes the same judgment, the files under a `beneath`
+folder not walked: what is judged is the folder itself, so the agent's uid can neither
+add nor rename an entry in it. So the agent's uid cannot widen its own walls. The loop folder's owner and mode are admin's checks, and
+the launcher takes it as a directory that is not a link.
+
+**The walls.**
+
+| Wall | What it holds |
+| --- | --- |
+| No-new-privs | set again, as the gate's shell sets it, since the filter needs it |
+| Limits | soft and hard alike: address space 512 MiB, 64 descriptors, 64 MiB of file size, no core. The shell's values. A hard limit below one refuses |
+| Filter | x86-64 alone, no x32 call, then `io_uring_setup`, `socket`, `socketpair`, `clone`, `fork`, `vfork` and `clone3`, each refused with `EACCES`. So the loop makes no socket, no process and no thread |
+| Landlock | ABI 6 at the floor. Every filesystem right through ABI 5 handled, with `RESOLVE_UNIX` where offered, TCP bind and connect handled, signal and abstract-socket scoping. Granted: execute and read on the interpreter and each `execute` file, read on each `read` file, read and list beneath each `beneath` folder, the runner's folder and the loop folder. No write, no `/dev` file, no TCP port |
+
+**A file replaced after its rule is refused.** A rule grants an inode, so an interpreter
+replaced between the judgment and the exec is a file the domain does not grant, and its
+exec fails, refused.
+
+**The plumbing is a copy.** The Landlock and seccomp structures, the ABI query and its
+floor, and the path rules are copied from `weaver-gate`'s confinement module, and the
+ruleset, the limits and the filter are written for the loop. The bin target takes no edge
+to the gate, and this crate links no organ. The three Landlock calls, the filter's
+`prctl`, `setrlimit`, `close_range`, and the `fstat` and `dup2` on standard descriptor
+numbers go through `nix`'s re-exported `libc`, a second stated exception to "no raw
+`libc`" (section 2.4), confined to this bin target. It adds no dependency. Making the
+gate's copy and this one one module waits on the layout of the repository.
+
+**Enforced by:**
+
+- `src/bin/weaver-loop-launch/confine/tests.rs`: the filter's own instructions, run over
+  each call, refuse the seven named calls with `EACCES`, another architecture and every
+  x32 call, and allow every other call. The limits are the shell's values, and the ABI
+  floor fails closed.
+- `src/bin/weaver-loop-launch/grant/tests.rs`: a row per malformed grant file, a row per
+  stale or wrong path (a pycache folder that is a link among them), a stale digest, the
+  grant file's own judgment, every file of the runner's folder judged as the grant file
+  is, the interpreter or an `execute` file the launch's uid, a group or others could
+  write, and a `read` file or a `beneath` folder a group or others could write. The runner's folder of another owner prints a SKIP where the suite runs as
+  root.
+- `tests/loop_launch.rs`, the launcher run on a real interpreter inside a user namespace
+  where the suite's files are root's, beside the same probe run with no wall:
+  - each wall refuses its probe: a socket, a read outside the grant, a write, a process,
+    a thread, an allocation past the limit, a raised limit. The bare probe makes each.
+  - the kernel's view of the runner: the limits, `NoNewPrivs` and `Seccomp`.
+  - the cleared environment, the null device at 0 and 1, exactly descriptors 0 to 3,
+    and no bytecode written.
+  - a stale digest, a path gone, a grant file not root's, no end at 3, a relative wire
+    file and an absent grant file each end the launch with its one line.
+  - `runner.py`, the board and the pycache folder of another owner, each a root-owned
+    path bound over it in a mount namespace of the launch's own, end the launch naming
+    the owner.
+  - the runner dies by `SIGKILL` with the thread that forked it, through both execs.
+  - the grant `deploy/loop-grant.sh` computes is the suite's, and a launch under it
+    serves.
+- `tests/loop_arm.rs`, the loop arm forked by the organ fork through the real launcher
+  on the real interpreter, each case in a child process inside a user namespace, where
+  the fork arms its own parent-death signal:
+  - a started loop leaves the worker two new descriptors, serves its pass, the seat's
+    answer comes back unchanged, and the stop ends the runner at its end of file, exit 0,
+    with a child forked since holding a copy of the near end, its end-of-file line on the
+    worker's standard error
+  - under the worker's fork the runner holds descriptors 0 to 3 and `LANG=C.UTF-8`
+    alone, with a descriptor born without close-on-exec in the worker
+  - a `hello` naming another digest, from a runner that never reads its end again, is
+    killed and reaped before the start returns
+  - a launch the launcher refuses refuses the start, its line the last word
+  - the stop returns only once the runner's end line is through the tee, the worker's
+    standard error held on a full pipe for 100 ms
+  - the runner dies with the worker, through the launcher, a runner that never reads its
+    end again, so only the signal ends it.
+- `src/lifecycle/tests.rs`: a wire file refused before the load with no launcher and
+  under a diagnostic binding, the load's composer for each loop (the compiled one to the
+  byte), the start standing the loop or refusing `ConfigInvalid` naming `loop` (a grant
+  path not in UTF-8 among them), a run holding the arm answering by its relay and calling
+  no entry, and the unwind's leave and a dispatched rollback each stopping the loop and
+  reaping it, the runner still standing when the lower reaches the gate. That the stop
+  comes before the save point is held by reading alone: neither leave takes one.
+- `tests/worker_arguments.rs`: either loop flag alone refused by name, both together
+  passing the parse. No test drives the start's
+  call at the enter's end: a serving enter reaches it only once the gate stands, which
+  needs the agent's `tools/` cgroup.
 
 ## 3. The lifecycle interior
 
@@ -2222,9 +2445,11 @@ fails it: push the compiled prompt unconditionally, read the assembled identity,
 `prefix_tokens`.
 
 **The loop these ports serve is state management**, per the operator's rulings of
-2026-10-02 on issue #1 and `weaver-agent-PRD` section 5.5. **One loop is deployed, the
-Rust loop compiled into the worker under `dev_loop`**, developed and tested through
-the same Rust surface as section 1 states. No declaration elects another loop.
+2026-10-02 on issue #1 and `weaver-agent-PRD` section 5.5. **The compiled loop is the
+Rust loop compiled into the worker under `dev_loop`**, developed and tested through the
+same Rust surface as section 1 states, and it runs where no loop is laid. A loop laid in
+the agent's loop folder runs in its place and reaches these ports through the same seat,
+by the relay of section 2.5. No declaration elects a loop.
 The ports above are the loop's whole reach into the store and the classifier, so state
 management composes against the same granted surface as every loop and mints nothing.
 **Its opinions are settings in the declaration's `[state-management]` table**, each with

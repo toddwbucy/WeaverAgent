@@ -227,6 +227,7 @@ impl Files {
     fn program(&self, mode: &str) -> FoundationProgram {
         FoundationProgram {
             organs: OrganBinaries {
+                loop_launch: None,
                 classify: Some(self.child(
                     "checker",
                     "WEAVER_STARTUP_COMPOSITION_CHILD",

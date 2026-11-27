@@ -43,6 +43,7 @@ mod conclusion;
 mod containment;
 mod inventory;
 mod log;
+mod loop_folder;
 // Complete replacement operations, inactive until FOUNDATION-TRANSITION cutover.
 #[allow(dead_code)]
 mod offline_state;
@@ -465,16 +466,22 @@ fn admissible(config: &ServiceConfig, agent: &AgentName) -> Result<(), Lifecycle
 /// **The names `gatecon` and `admincon` are refused whole**, on the operator's
 /// ruling of 2026-11-10: `weaver-gatecon` and `weaver-admincon` are the box's
 /// two connector accounts, so an agent of either name would own one of them as
-/// its own identity.
+/// its own identity. **Nor is a name beginning `admin`, or `stack`**: the
+/// agent's own folder `/etc/weaver/<agent>/`, where the load looks for the
+/// loop folder, stands beside the config bases, every `/etc/weaver/admin*`,
+/// and the stack's record, `/etc/weaver/stack`.
 fn well_formed(agent: &str) -> bool {
     const RESERVED: &[&str] = &["-state", "-trace", "-relay", "-admin", "-admincon"];
     const BOX_ACCOUNTS: &[&str] = &["gatecon", "admincon"];
+    const BESIDE: &[&str] = &["stack"];
     !agent.is_empty()
         && agent
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         && !RESERVED.iter().any(|suffix| agent.ends_with(suffix))
         && !BOX_ACCOUNTS.contains(&agent)
+        && !agent.starts_with("admin")
+        && !BESIDE.contains(&agent)
 }
 
 /// The one inventory, called by both `validate` and `load`, so the two cannot
@@ -908,7 +915,58 @@ fn take_inventory(
     agent: &AgentName,
 ) -> Result<inventory::Inventory, LifecycleRefusal> {
     judge_reader(&config.require_boundary()?.reader, agent)?;
-    room_inventory(config, agent)
+    let mut inventory = room_inventory(config, agent)?;
+    judge_loop(config, agent, &mut inventory)?;
+    Ok(inventory)
+}
+
+/// **The loop admin finds standing, judged by `validate` and `load`**, per
+/// Spec section 4: under a serving binding the agent's own folder beside the
+/// config base is looked in for `loop/`, and where it stands in its shape
+/// the enter carries the wire file's path and digest. Absent, the compiled
+/// loop runs. A piece out of its shape refuses `BoundaryUnverified`, said on
+/// standard error. A diagnostic binding looks at nothing and carries none.
+fn judge_loop(
+    config: &ServiceConfig,
+    agent: &AgentName,
+    inventory: &mut inventory::Inventory,
+) -> Result<(), LifecycleRefusal> {
+    if !matches!(
+        inventory.binding,
+        weaver_types::EnterBinding::Serving { .. }
+    ) {
+        return Ok(());
+    }
+    let Some(folder) = loop_folder::agent_folder(&config.root, &agent.0) else {
+        diag!(
+            "weaver-admin: the agent's root {} has no folder two levels above it",
+            config.root.display()
+        );
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    };
+    // The folder's own ancestors are judged as the territory's are, where
+    // the folder stands: none held or writable by another principal.
+    if std::fs::symlink_metadata(&folder).is_ok() {
+        judge_ancestors(&folder, &[nix::unistd::geteuid().as_raw(), 0])?;
+    }
+    let group = nix::unistd::Group::from_name(&inventory.identity)
+        .ok()
+        .flatten()
+        .ok_or_else(|| {
+            diag!(
+                "weaver-admin: the agent's group {} does not resolve",
+                inventory.identity
+            );
+            LifecycleRefusal::BoundaryUnverified
+        })?;
+    inventory.wires =
+        loop_folder::judge(&folder, nix::unistd::geteuid().as_raw(), group.gid.as_raw()).map_err(
+            |why| {
+                diag!("weaver-admin: {why}");
+                LifecycleRefusal::BoundaryUnverified
+            },
+        )?;
+    Ok(())
 }
 
 /// **The shell's grant, built at the inventory where the declaration elects
@@ -1506,6 +1564,16 @@ fn run_load(
         .map(|directory| directory.join("weaver-spu-classify"))
         .filter(|binary| binary.is_file());
     let stack = stack_digests(config, state_end.is_some(), classify.as_deref());
+    // **The loop's launcher and grant file are handed where the enter will
+    // carry a loop** (section 6), so a worker serving the compiled loop is
+    // started with the arguments it was started with before.
+    let loop_launch = match start::loop_launch_for(inventory.wires.is_some(), &config.worker) {
+        Ok(found) => found,
+        Err(why) => {
+            diag!("weaver-admin: {why}");
+            return Err(LifecycleRefusal::BoundaryUnverified);
+        }
+    };
     let socket_path = config.coordination_socket();
     let mut worker = start::spawn_worker(start::WorkerStart {
         binary: &config.worker,
@@ -1515,6 +1583,9 @@ fn run_load(
             &config.gate,
             config.headroom_bytes.as_deref(),
             classify.as_deref(),
+            loop_launch
+                .as_ref()
+                .map(|(launcher, grant)| (launcher.as_path(), grant.as_path())),
         ),
         uid: account.uid,
         gid: account.gid,
@@ -1614,6 +1685,9 @@ fn run_load(
                 // declaration is silent, so the harness, which holds no
                 // declaration, never re-derives an absence.
                 turn_context: inventory.config.turn_context.unwrap_or_default(),
+                // **The loop admin found standing** (Spec section 4), judged
+                // by the inventory above under a serving binding alone.
+                wires: inventory.wires.clone(),
             }),
         }),
     };

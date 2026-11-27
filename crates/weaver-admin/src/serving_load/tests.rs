@@ -790,3 +790,62 @@ fn admin_original_enter_window_bounds_courtesy_lock_wait_before_inventory() {
         "courtesy wait extended Enter"
     );
 }
+
+#[test]
+fn a_standing_loop_folder_refuses_the_replacement_load_before_any_lock_or_fork() {
+    if crate::test_isolation::isolated!(
+        a_standing_loop_folder_refuses_the_replacement_load_before_any_lock_or_fork
+    ) {
+        return;
+    }
+    let f = fixture();
+    setup(&f);
+    // The agent's folder is the fixture's own, inside its scratch, so no
+    // other test meets this loop folder and the scratch removes it.
+    let folder = crate::loop_folder::agent_folder(&f.config.root, &agent(&f).0).unwrap();
+    assert!(
+        folder.starts_with(f.config.root.parent().unwrap().parent().unwrap())
+            && !folder.starts_with(std::env::temp_dir().join(&agent(&f).0)),
+        "{}",
+        folder.display()
+    );
+    fs::create_dir_all(folder.join("loop")).unwrap();
+    let result = run_authorized(
+        &f.config,
+        &agent(&f),
+        Cause { uid: 0 },
+        |_, _, _, _, _| panic!("a standing loop reached preparation"),
+        |_| panic!("a standing loop reached the account"),
+    );
+    assert!(
+        matches!(
+            result,
+            Err(Failure::Admission(ref refusal))
+                if **refusal == LifecycleRefusal::ConfigInvalid {
+                    field: Some(weaver_types::FieldName("loop".into())),
+                }
+        ),
+        "{result:?}"
+    );
+    assert!(
+        !f.config.run_directory().exists(),
+        "refused before the run directory, so before any lock"
+    );
+    assert!(!f.config.territory.join("state").exists());
+
+    // With the folder gone the load goes on past the refusal, to preparation.
+    fs::remove_dir(folder.join("loop")).unwrap();
+    let result = run_authorized(
+        &f.config,
+        &agent(&f),
+        Cause { uid: 0 },
+        |_, _, _, _, _| {
+            Err(crate::seed::preparation::invalid(
+                "test",
+                "past the loop's refusal",
+            ))
+        },
+        |_| panic!("must not resolve the account"),
+    );
+    assert!(matches!(result, Err(Failure::Preparation(_))), "{result:?}");
+}

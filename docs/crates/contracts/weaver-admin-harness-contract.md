@@ -246,7 +246,10 @@ point stands, the graceful leave's drain bound and wind-down bound as the declar
 the harness's only source for timing S4 and S5 (`weaver-admin-Spec` section 3, the
 bounds), the turn-context election, resolved to `continuous` where the declaration is
 silent and always present, the harness's only source for whether each turn stands alone
-(`weaver-types-Spec` section 2, #423), beside it and apart from it the reset, where the
+(`weaver-types-Spec` section 2, #423), the loop admin found standing in the agent's own
+folder where one stands under a serving binding, the wire file's path and the sha256 of
+the bytes admin read, and none otherwise (`weaver-admin-Spec` section 4,
+`weaver-types-Spec` section 4), beside it and apart from it the reset, where the
 agent's last run did not
 end in a clean unload or was forced to end and its leave save point could not be taken,
 that run and the reason, per `weaver-admin-Spec` section 3, I4, whether or not a save point stands, the digests of the organ binaries admin
@@ -533,7 +536,9 @@ fan-out admits, the gate instruction the fan-out starts where the kind declares 
 the state election the tee applies, resolved to the ruled default where the declaration
 is silent, the store election the member stands on, resolved to the embedded engine
 where the declaration is silent, the turn-context election, resolved to `continuous`
-where the declaration is silent (#423), the
+where the declaration is silent (#423), the loop it found standing, the wire file's path
+and the digest of the bytes it read, judged on their descriptors, and none where no loop
+folder stands or the binding is diagnostic, the
 lineage of the save point the load restores, its digest, the run, sequence and last turn
 it covers, whether it was named at a restore, where the offline builder made it from a
 record that record's session and the run and turn of its cut, resolved by admin from the
@@ -598,7 +603,13 @@ the record holds the abort before the channel does. It guarantees that `Left`'s
 `forced`, the `unload` event's `forced` and its `forced_by` agree (`weaver-admin-Spec`
 section 3, I2, the rollback's leave excepted by name), that every wait of a pending leave hears a join (I3), and that every
 frame the gate admitted is answered, recorded refused, or recorded as a turn the unload
-stopped, before the leave's save point is taken (I5).
+stopped, before the leave's save point is taken (I5). It guarantees that an enter naming
+a wire file runs that loop or refuses, and is never served by the compiled loop in its
+place: a worker handed no launcher, or an enter under a diagnostic binding, refuses before
+the load, `ConfigInvalid` naming `loop`, and a loop that does not start, whose launcher
+refuses or whose `hello` is not the one expected, refuses after the load, `ConfigInvalid`
+naming `loop` (`BindFailed` where the fork itself fails), and the load rolls back
+(`weaver-harness-Spec` section 2.5).
 
 **Non-inheritance is the receiver's, and only the receiver can supply it.** The flag
 rides the handle rather than the open file description, so it does not cross with

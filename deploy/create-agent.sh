@@ -212,8 +212,13 @@ done
 # **The box's connector accounts' names are not agents'** (weaver-admin-Spec
 # section 4): an agent named gatecon would own weaver-gatecon, the caller of
 # every gate on the box, as its own identity. Admin refuses both names too.
+# **Nor is a name beginning admin, or stack** (weaver-admin-Spec section 4):
+# the agent's own folder /etc/weaver/<name>/ stands beside admin's config
+# bases, which decommission.sh discovers as every /etc/weaver/admin*, and the
+# stack's record /etc/weaver/stack.
 case "$NAME" in
   gatecon|admincon) die "'$NAME' is reserved: weaver-$NAME is the box's $NAME account (weaver-admin-Spec section 4), so no agent takes the name" ;;
+  admin*|stack) die "'$NAME' is reserved: /etc/weaver/$NAME would stand among admin's config bases (every /etc/weaver/admin*) or as the stack's record (/etc/weaver/stack) (weaver-admin-Spec section 4), so no agent takes the name" ;;
 esac
 [ -n "$ARTIFACT" ] || die "name the artifact the decoder binds: --artifact <path>"
 SESSION=${SESSION:-$NAME-001}
@@ -382,6 +387,10 @@ ADMIN_BASE=${WEAVER_ADMIN_CONFIG:-/etc/weaver/admin}
 STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 AGENT_ROOT="$ADMIN_BASE/$NAME"
 STAGE="$ADMIN_BASE/.$NAME.partial"
+# **The agent's own folder beside the admin base** (weaver-admin-Spec section
+# 4): /etc/weaver/<name>/ where the base is /etc/weaver/admin, root:root 0755.
+# Admin's load looks in it for the loop folder loop/, which root lays by hand.
+ETC_FOLDER="$(dirname -- "$ADMIN_BASE")/$NAME"
 
 # **held_closed PATH: admin's rule for what a root process may trust**, per
 # weaver-admin-Spec section 9 (`judge_ancestors`). PATH, resolved to its
@@ -812,12 +821,12 @@ allows() {
 UID_MIN=$(awk '$1 == "UID_MIN" { v = $2 } END { print v }' /etc/login.defs 2>/dev/null || true)
 [[ "$UID_MIN" =~ ^[0-9]+$ ]] || UID_MIN=1000
 # agent_name_ok N: N is a name admin's name check admits (weaver-admin-Spec
-# section 4): ASCII letters, digits, `-` and `_`, no reserved suffix, and not
-# a box account's name.
+# section 4): ASCII letters, digits, `-` and `_`, no reserved suffix, not a
+# box account's name, not beginning admin, and not stack.
 agent_name_ok() {
   [[ "$1" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
   case "$1" in
-    *-state|*-trace|*-relay|*-admin|*-admincon|gatecon|admincon) return 1 ;;
+    *-state|*-trace|*-relay|*-admin|*-admincon|gatecon|admincon|admin*|stack) return 1 ;;
   esac
   return 0
 }
@@ -893,6 +902,10 @@ bad=$(held_closed "$ADMIN_BASE") || die "the admin base $ADMIN_BASE is not held 
 # new name in the record's log-directory, so neither may let another principal
 # claim the name first.
 bad=$(creatable_in "$ADMIN_BASE") || die "the admin base $ADMIN_BASE lets another principal make names in it ($bad), so the stage could be claimed first"
+# **The agent's own folder is a new name in the base's parent** (weaver-admin-Spec
+# section 4), so the parent is judged as the base is: a principal that could
+# make the name first would have root's `install -d` take its folder.
+bad=$(creatable_in "$(dirname -- "$ADMIN_BASE")") || die "the admin base's parent $(dirname -- "$ADMIN_BASE") lets another principal make names in it ($bad), so the agent's folder $ETC_FOLDER could be claimed first"
 [ "$ADMIN_BASE" = /etc/weaver/admin ] || printf '   WARNING: the admin base is %s, and a delegated invocation reads only /etc/weaver/admin, so the connector'"'"'s sudo rule cannot drive this agent\n' "$ADMIN_BASE"
 
 # **Whose identity the store admits is settled and derived.** The charter has
@@ -938,6 +951,7 @@ plan "state room      $STATE_DIR       $MEMBER_USER 0700, which the agent's uid 
 plan "store           sqlite in memory, its save points in the state room"
 plan "save points     $SAVE_POINTS     root:$ACCESS_GROUP 0750, the published copies and their manifest"
 plan "agent root      $AGENT_ROOT      root 0755, keys 0644, copied from $STACK"
+plan "agent's folder  $ETC_FOLDER      root:root 0755, empty: admin's load looks in it for the loop folder loop/"
 plan "spu-binary      $SPU_BINARY$( [ -n "$SPU_OVERRIDE" ] && printf '  (--spu, in place of the stack record'"'"'s)' )"
 plan "operator key    $OPERATOR_UID ($OPERATOR)"
 plan "roles.toml      trace-reader = $ADMINCON_USER"
@@ -1003,6 +1017,7 @@ refuse_existing "$AGENT_FOLDER" "agent folder (one a run left part way is remove
 refuse_existing "$AGENT_DIR/$AGENT_USER" "territory of the layout before #578 (take that agent down by deploy/HowToDeployANewAgent.md section 7)"
 refuse_existing "/home/$AGENT_USER" "home of the layout before #578 (take that agent down by deploy/HowToDeployANewAgent.md section 7)"
 refuse_existing "$AGENT_ROOT" "agent root"
+refuse_existing "$ETC_FOLDER" "agent's folder beside the admin base (one an earlier agent of the name left is removed by hand)"
 refuse_existing "$STAGE" "a partial agent root from an earlier run (remove it by hand)"
 refuse_existing "$SUDO_RULE" "sudo rule"
 [ -r "$ARTIFACT" ] || printf '   WARNING: the artifact is not readable from this shell: %s\n' "$ARTIFACT"
@@ -1452,6 +1467,14 @@ for i in "${!STANDING[@]}"; do
 done
 LAYING=''
 printf '   %s admitted at %s\n' "$NAME" "$AGENT_ROOT"
+# **The agent's own folder, empty** (weaver-admin-Spec section 4), laid once
+# the agent is admitted, so a run refused before the admission leaves none.
+# Where it does not stand, admin's load runs the compiled loop. A five-digit
+# mode, so no setgid bit of /etc/weaver's survives.
+laying "the folder $ETC_FOLDER"
+root install -d -o root -g root -m 00755 "$ETC_FOLDER"
+laid
+printf '   %s laid, root:root 0755\n' "$ETC_FOLDER"
 
 say "made"
 # **The group add applies to a login taken after it.** `usermod -aG` changes

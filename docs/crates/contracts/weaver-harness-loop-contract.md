@@ -210,9 +210,9 @@ of the open pass, and the 65th is a break. Today's loop asks seven at most.
 
 **The `hello` is read when the relay is made, before any pass.** Making the relay reads
 the `hello` under its own bound of section 5, and gives either a relay that is `Idle` or
-an error. The harness is never handed a relay that is `Unannounced`. What a failed
-`hello` does to a load is act 2's, and the lean is that it refuses the load, as a loop
-folder that fails its check does.
+an error. The harness is never handed a relay that is `Unannounced`. **A failed `hello`
+refuses the load**, as a loop folder that fails its check does: the worker kills and
+reaps the loop at once and the load rolls back (`weaver-harness-Spec` section 2.5).
 
 ### 3.2 Events, by state
 
@@ -243,8 +243,9 @@ the record tells it apart. The loop cannot know the new pass's text before it re
 2. Every `return` answers one `ask` of the open pass, once, in the order the asks
    arrived.
 3. A pass holds at most 64 asks, and no tag twice.
-4. A pass ends at exactly one of `turn` and `refuse`. The relay reads nothing more of
-   that pass, and any frame of it that follows is found by the next pass's look or read.
+4. A pass ends at exactly one of `turn`, `refuse` and a break of section 4, which leaves
+   the relay `Broken`. After `turn` or `refuse` the relay reads nothing more of that
+   pass, and any frame of it that follows is found by the next pass's look or read.
 5. The relay calls no `Ports` method outside section 2.2, and calls each listed method
    with the arguments the ask carried.
 6. Every event in the record is the harness's. A relayed ask authors exactly what the
@@ -328,11 +329,19 @@ later load with earlier runs (the continuity line), a first turn with a prompt s
 and `independent`, both with nothing seated and with a prompt seated.
 
 **The comparison** is over parsed values, each event's canonical line parsed as JSON,
-event by event. The two records are identical when they hold the same events, in the
-same order, with the same values, after exactly these three steps and no others:
+event by event. Two values are the same where they are of one JSON type and equal: a
+boolean never equals a number, an integer never equals a float, and `0.0` is not `-0.0`,
+while an object's members in another order are the same object. The two records are
+identical when they hold the same events, in the same order, with the same values, after
+exactly these three steps and no others:
 
-1. Every envelope's `wall_ms` and `monotonic_ns` are set aside. They differ between any
-   two runs.
+1. Every envelope's `wall_ms` and `monotonic_ns` are set aside, and so are the values
+   of each `model.measurement`'s `payload.timings.prefill_ns` and
+   `payload.timings.decode_ns`, whose presence is still compared.
+   The clocks differ between any two runs, and the two timings are elapsed times as the
+   clocks are, taken by the SPU (`weaver-spu` `decoder/session.rs`) and rendered into
+   every measurement (`main.rs`). These four and no others: a timing added to the record
+   later fails the comparison until this step names it.
 2. Each arm's load events' `composer` is checked against what that arm must hold, then
    set aside: the compiled loop's `{binary: "worker"}` in the compiled arm, and the
    wires' form with the wire file's digest in the wires arm.
@@ -361,17 +370,21 @@ repeats bit for bit. So the test runs the compiled loop twice under this compari
 before it runs the wires. Where the two compiled arms differ, the test reports that and
 does not compare the wires.
 
-**Two timing paths are outside the comparison.**
+**Two timing paths are outside the comparison, read by three marks.**
 
 - The `RecorderCommitPressure` fault reads the recorder's queue depth at the turn's end
   (`engine.rs`:162-188), which depends on the writer's timing. The script keeps each
   session short of the high-water mark (`weaver-trace` `writer.rs`:50, 768 queued
-  records).
+  records). The worker's log reads the same mark a second way: its queue line names the
+  peak the trace queue reached and the mark, and a peak at or past the mark is the
+  third mark of an unclean arm.
 - The state seam's answer bound of 2 seconds (`state.rs`:27). A late `recall` or `shape`
   answers `null` and changes the delta.
 
-Every arm, the control arms included, must hold neither: no pressure fault, and no
-answer the state seam timed out. An arm that holds one is run again, at most three
+Every arm, the control arms included, must hold none of the three: no pressure fault, no
+queue peak at its mark in the worker's log, and no answer the state seam timed out. A
+timed-out answer retires the state seam, and the unload records the member as
+`unconfirmed`. An arm that holds one is run again, at most three
 times, and then the test fails.
 
 A difference outside the three steps is a failure of the test, never a field to add
@@ -393,11 +406,51 @@ after the fact. Adding a step or a field is a change of this contract.
   them.
 - **The runner** reads the wire file once, hashes those bytes, compiles from them and
   not from the path, checks the grammar below, sends the `hello`, and calls
-  `on_turn(board, text)` once per pass. Where `on_turn` fails (it raises anything, it
-  exits, it returns with its pass open, or the board refuses a frame of its), the runner
-  refuses that pass, and the next pass runs. The harness's breach is told by what the
-  board met, a frame the harness sent that breaks the contract or the end gone, and never
-  by what `on_turn` raised. Then the runner exits 1, whatever the wires did after.
+  `on_turn(board, text)` once per pass. Where `on_turn` fails before its pass ends (it
+  raises anything, it exits, it returns with its pass open, or the board refuses a frame
+  of its), the runner reads the returns of any asks outstanding and refuses that pass.
+  Where `on_turn` raises after its `turn` or `refuse` is sent, the pass stands as it
+  ended, and nothing more is sent. The runner and the relay stand ready if the harness
+  opens another pass. On an agent the harness opens none: a refused pass is
+  `ChannelLost`, and service ends. The harness's breach is told by what the board met (a
+  frame the harness sent that breaks the contract, its end closed inside a segment
+  series, or the end gone inside a pass), and never by what `on_turn` raised. Then the
+  runner exits 1, whatever the wires did after. At the harness's end of file between
+  passes it exits 0.
+- **A limit of the interpreter's** (`RecursionError`, `MemoryError`) met while the board
+  parses a return loses no frame. The board keeps the frame's bytes before it parses
+  them. A limit met in a wire file's wait is raised to the wires as it is, and the
+  runner's refusal reads the kept bytes again at its own depth, where a limit is the
+  frame's own and a breach.
+
+**What the runner says.** Every line the runner writes on its standard error is one JSON
+object in ASCII, `{"loop": <word>, "pass": <n>, "reason": <text>}`, `pass` present where
+a pass is open. A reason past 1024 characters is cut there and ends
+` ... (cut at 1024 of <n> characters)`: a refused or raised line's reason is the wire
+file's own exception text, and the worker holds and logs every line. The words:
+
+- `start`: the runner ends before its `hello`, exit 1 (exit 2 for a wrong count of
+  arguments). The reasons:
+  - an interpreter older than Python 3.12, named with its version
+  - the file unreadable, or not UTF-8
+  - the grammar below, naming the line
+  - a file `compile` refuses after the parse took it (a `break` outside a loop), naming
+    the line
+  - descriptor 3 not the loop's end of a socket pair (closed, or not a socket)
+  - the hello that cannot be sent, the harness's end gone
+  - a file nested past the interpreter's limits: "the wire file nests past the
+    interpreter's limits".
+- `refused`: a pass the runner refused, with what `on_turn` raised.
+- `raised`: `on_turn` raised after its pass ended.
+- `unrefused`: a pass the runner could not refuse, exit 1.
+- `broken`: the harness broke the contract, exit 1.
+- `end`: the harness's end of file, exit 0, carrying `passes`, `turns` and `refused`:
+  the passes served, those ended by `turn`, and those ended by `refuse`, the wires' own
+  refusals among them.
+
+A line that cannot be written is let go: the pass is refused whether or not its line
+was written. The launcher's refusal takes the same form with the word `launch`
+(`weaver-harness-Spec` section 2.5).
 
 **The wire file's grammar, as what is allowed.** One Python 3 module, UTF-8 whatever a
 coding line names, a leading byte-order mark dropped. At the top level it holds only:
@@ -555,3 +608,8 @@ Nothing, when it lands. Each standing sentence that says the loop is compiled al
 changes in the act that makes the new sentence true, and each pull request's body lists
 those it changes (the Planner's ruling of 2026-11-25, point 11). The list of candidates
 is the brief's.
+
+Section 6 changed on 2026-11-26, before any run: step 1 names the measurement's two
+timings, which every real arm differs in, the unclean arm's marks name the worker's
+queue line, and two values are the same only where their JSON types are (the Planner's
+ruling of 2026-11-26).

@@ -8,7 +8,10 @@
 #                                                    refuses unless DIR verifies
 #
 # Box-agnostic, and discovered rather than written: the config bases are every
-# `/etc/weaver/admin*`, each agent's root is a directory under one, the install
+# `/etc/weaver/admin*`, each agent's root is a directory under one (each
+# agent's own folder `/etc/weaver/<agent>/`, with its loop folder, goes with
+# /etc/weaver, archived and removed whole, and no agent's name begins admin),
+# the install
 # and territory paths are read out of them, the agents are the union of every
 # root, every allow-list of the box-wide layout before 2026-10-01, and every
 # `weaver-*` account and group. A box fact this script

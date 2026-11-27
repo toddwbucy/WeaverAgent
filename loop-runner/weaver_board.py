@@ -107,7 +107,9 @@ def _no_surrogates(value):
 
 
 def read_frame(raw):
-    """One frame's bytes as a dict, or Refused."""
+    """One frame's bytes as a dict, or Refused. A limit of the interpreter's met while
+    parsing (RecursionError, MemoryError) is no breach of the frame's, so it is raised as
+    it is: read at a caller's depth, a frame the relay sent whole can meet the limit."""
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -116,7 +118,7 @@ def read_frame(raw):
         value = json.loads(text, object_pairs_hook=_no_twice, parse_int=_integer,
                            parse_float=Number, parse_constant=_constant)
         _no_surrogates(value)
-    except (ValueError, RecursionError) as e:
+    except ValueError as e:
         raise Refused("a frame that does not parse as JSON: %s" % e)
     if not isinstance(value, dict):
         raise Refused("a frame that is not one JSON object")
@@ -169,7 +171,7 @@ def check_hello(frame, wires_sha256):
     if not isinstance(frame.get("kind"), str):
         raise Refused("a frame with no kind, or a kind that is no string")
     if frame["kind"] != "hello":
-        raise Refused("the %s frame came before the hello" % frame["kind"])
+        raise Refused("the %s frame came before the hello" % json.dumps(frame["kind"]))
     _exactly(frame, ("kind", "version", "wires_sha256"))
     if frame["version"] != VERSION:
         raise Refused("a hello whose version is not %r" % VERSION)
@@ -256,7 +258,9 @@ def recv_frame(sock):
     first = recv_message(sock)
     try:
         head = read_frame(first)
-    except Refused:
+    except (Refused, RecursionError, MemoryError):
+        # A preamble is two flat integers: a frame that meets a limit is no preamble, and
+        # its bytes go back whole to be kept and read again.
         return first
     if "kind" in head:
         return first
@@ -265,14 +269,21 @@ def recv_frame(sock):
     total, count = head["bytes"], head["segments"]
     if not (ENVELOPE < total <= TOTAL) or count != -(-total // ENVELOPE):
         raise Refused("a segment preamble that breaks its rules: %r" % head)
-    whole = b""
+    slices = []
+    length = 0
     for _ in range(count):
-        whole += recv_message(sock)
-        if len(whole) > total:
+        try:
+            piece = recv_message(sock)
+        except Closed as e:
+            # A close inside a series is no clean end: the frame was begun and not sent.
+            raise Refused("the harness's end closed inside a segment series: %s" % e)
+        slices.append(piece)
+        length += len(piece)
+        if length > total:
             raise Refused("a series longer than its preamble")
-    if len(whole) != total:
+    if length != total:
         raise Refused("a series shorter than its preamble")
-    return whole
+    return b"".join(slices)
 
 
 def encode(frame):
@@ -294,14 +305,24 @@ class Board:
         self._returned = {}
         self._asked = 0
         self._broken = None
+        self._ended_by = None
+        # The bytes of a return read and not yet taken: kept before the parse, so a
+        # limit of the interpreter's met while parsing loses no frame (act 2, section 9).
+        self._kept = None
 
     def _open(self, number):
         self._pass, self._ended, self._next_tag = number, False, 0
         self._outstanding, self._returned, self._asked = [], {}, 0
+        self._ended_by, self._kept = None, None
 
     @property
     def ended(self):
         return self._ended
+
+    @property
+    def ended_by(self):
+        """What ended the open pass, "turn" or "refuse", or None while it is open."""
+        return self._ended_by
 
     @property
     def broken(self):
@@ -357,12 +378,30 @@ class Board:
     def wait(self, tag):
         """The value of an outstanding ask. The harness answers in arrival order, so the
         returns of the asks sent before it are read and kept on the way."""
+        return self._wait(tag, False)
+
+    def _settle(self, tag):
+        """The runner's wait, at its own depth, as it refuses a pass: a limit of the
+        interpreter's met on the kept frame here is the frame's own, and a breach."""
+        return self._wait(tag, True)
+
+    def _wait(self, tag, at_rest):
         self._whole()
         while tag not in self._returned:
             if tag not in self._outstanding:
                 raise Limit("the tag %r is not outstanding" % (tag,))
             try:
-                frame = read_frame(recv_frame(self._sock))
+                if self._kept is None:
+                    self._kept = recv_frame(self._sock)
+                # A MemoryError or RecursionError here leaves the frame kept: the
+                # runner's refusal waits again, and reads it whole.
+                try:
+                    frame = read_frame(self._kept)
+                except (RecursionError, MemoryError) as e:
+                    if not at_rest:
+                        raise
+                    raise Refused("a frame that meets the interpreter's limits at the runner's own depth: %s"
+                                  % type(e).__name__)
                 if frame.get("kind") != "return":
                     raise Refused("a frame of the kind %r inside a pass" % (frame.get("kind"),))
                 _exactly(frame, ("kind", "pass", "tag", "value"))
@@ -371,6 +410,7 @@ class Board:
             except (Refused, Closed) as e:
                 self._broken = e
                 raise
+            self._kept = None
             self._returned[self._outstanding.pop(0)] = frame["value"]
         return self._returned.pop(tag)
 
@@ -382,6 +422,7 @@ class Board:
             raise Limit("%s sent with %d asks outstanding" % (ended_by, len(self._outstanding)))
         self._send(frame)
         self._ended = True
+        self._ended_by = "refuse" if frame["kind"] == "refuse" else "turn"
 
     def seated(self):
         return self.wait(self.ask("seated"))

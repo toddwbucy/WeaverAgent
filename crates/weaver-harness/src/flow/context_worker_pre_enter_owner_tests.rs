@@ -703,6 +703,7 @@ fn diagnostic_keeps_original_descriptors_and_cannot_be_adopted_by_serving() {
 fn diagnostic_program() -> super::super::FoundationProgram {
     super::super::FoundationProgram {
         organs: crate::OrganBinaries {
+            loop_launch: None,
             spu: "/not-used-before-load".into(),
             gate: "/not-used-before-load".into(),
             classify: None,
@@ -1160,6 +1161,7 @@ fn legacy_enter_cannot_fall_back_to_an_ordinary_before_enter_directive() {
                 drain_bound: source.drain_bound,
                 wind_down_bound: source.wind_down_bound,
                 turn_context: weaver_types::TurnContext::Continuous,
+                wires: None,
             }),
         },
     );

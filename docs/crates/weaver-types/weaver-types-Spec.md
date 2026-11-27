@@ -1636,6 +1636,12 @@ pub struct EnterPayload {
     pub drain_bound: Option<u64>,
     pub wind_down_bound: Option<u64>,
     pub turn_context: TurnContext,
+    pub wires: Option<WiresElection>,
+}
+
+pub struct WiresElection {
+    pub file: String,
+    pub sha256: String,
 }
 
 pub struct Lineage {
@@ -1742,7 +1748,14 @@ other dialer, per `weaver-gate-world-contract` section 2 and `weaver-harness-Spe
 section 6.1; it is admin's fact, copied from the root and read from no deployment by
 the harness. **`turn_context` rides the enter as of 2026-11-10** (#423), the
 declaration's election resolved by admin, `continuous` where the declaration is silent,
-and required on the wire, per section 2's `turn-context`.
+and required on the wire, per section 2's `turn-context`. **`wires` rides the enter as
+of 2026-11-26**, the loop admin found standing in the agent's own folder
+(`weaver-admin-Spec` section 4): the wire file's path as admin read it, and `sha256`,
+the lowercase hex sha256 of the bytes it read, which the relay compares with the
+runner's `hello` (`weaver-harness-loop-contract`). It is absent where no loop folder
+stands and under a diagnostic binding, never null, and the compiled loop runs. An
+unknown member of it refuses. The interpreter and the grant are not in it: the launcher
+reads them from the grant file the stack laid (`weaver-harness-Spec` section 2.5).
 
 **`EnterBinding` is the kind resolved, and a directive disagreeing with its
 kind is unrepresentable rather than refused.** The config holds the kind as

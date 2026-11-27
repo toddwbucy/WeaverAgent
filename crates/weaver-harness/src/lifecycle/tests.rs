@@ -369,6 +369,8 @@ fn entered_run(turn: Option<&str>) -> (Run, OrganChannel, crate::scratch::Scratc
             leave: None,
             carried: Some(crate::engine::test_carried()),
             turn_context: weaver_types::TurnContext::Continuous,
+            loop_arm: None,
+            enter_refused: false,
         },
         near,
         path,
@@ -510,6 +512,7 @@ fn the_declared_election_reaches_the_tee() {
     let mut harness = Harness {
         coordination: listener,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/weaver-spu".into(),
             gate: "/nonexistent/weaver-gate".into(),
@@ -566,6 +569,7 @@ fn the_declared_election_reaches_the_tee() {
             }],
         },
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
 
     // The fan-out fails after-load at the SPU exec, which is the point:
@@ -584,6 +588,9 @@ fn the_declared_election_reaches_the_tee() {
             panic!("failed before the load: {refusal:?}")
         }
     };
+    // **A run refused after the load is marked**, so the frame path serves
+    // it no dialer before admin's rollback.
+    assert!(run.enter_refused, "a run refused after the load is marked");
     let _ = leave(&mut run, None, false);
     drop(run);
     // The leave closed the bracket and the drop closed the tee's
@@ -606,6 +613,699 @@ fn the_declared_election_reaches_the_tee() {
     assert_eq!(frame["envelope"]["kind"], "load");
     assert_eq!(frame["envelope"]["session"], "s-election");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An enter for the loop's tests: a serving or diagnostic `binding`, the
+/// election `wires` as admin would carry it, and an SPU that is not there,
+/// so a load that gets past its record refuses at the SPU's fork.
+fn loop_enter(
+    binding: weaver_types::EnterBinding,
+    wires: Option<weaver_types::WiresElection>,
+) -> weaver_types::EnterPayload {
+    weaver_types::EnterPayload {
+        session: SessionId("s-loop".into()),
+        run: weaver_types::RunId("r-1".into()),
+        spu_instruction: weaver_types::SpuInstruction {
+            classify: None,
+            decoder: weaver_types::DecoderInstruction {
+                model_binding: weaver_types::ModelBinding {
+                    artifact: weaver_types::ArtifactRef("unreachable".into()),
+                    devices: vec![weaver_types::DeviceOrdinal(0)],
+                    adapter: None,
+                },
+                residual_readout_election: false,
+                field_election: None,
+                surprisal_election: false,
+                refeed_permission: false,
+                column_permission: false,
+                tunable_values: crate::lifecycle::test_tunable_values(),
+            },
+        },
+        binding,
+        state_store: weaver_types::StateStore::default(),
+        declaration: String::new(),
+        restore: None,
+        reset: None,
+        stack: Default::default(),
+        boundary: String::new(),
+        cause: weaver_types::Cause { uid: 0 },
+        operator: 1000,
+        library_path: None,
+        drain_bound: None,
+        wind_down_bound: None,
+        state_election: weaver_types::StateElection {
+            all_kinds: false,
+            keys: vec![weaver_types::ElectedKindConfig {
+                kind: "load".into(),
+                paths: vec!["origin".into()],
+            }],
+        },
+        turn_context: weaver_types::TurnContext::Continuous,
+        wires,
+    }
+}
+
+fn serving_binding() -> weaver_types::EnterBinding {
+    weaver_types::EnterBinding::Serving {
+        gate_instruction: weaver_types::GateInstruction {
+            access_rule: weaver_types::AccessRule {
+                allowed_uids: Default::default(),
+                allowed_gids: Default::default(),
+                denied_uids: Default::default(),
+            },
+        },
+        shell: None,
+    }
+}
+
+fn election() -> weaver_types::WiresElection {
+    weaver_types::WiresElection {
+        file: "/etc/weaver/a1/loop/wires.py".into(),
+        sha256: "ab".repeat(32),
+    }
+}
+
+/// A harness whose organs are not there, handed `loop_launch`, its record at
+/// `sink_path` in `dir`.
+fn loop_harness(
+    dir: &std::path::Path,
+    loop_launch: Option<crate::loop_arm::LoopLaunch>,
+) -> Harness {
+    Harness {
+        coordination: crate::channel::bind_coordination(&dir.join("coordination.sock"))
+            .expect("bind"),
+        organs: OrganBinaries {
+            loop_launch,
+            classify: None,
+            spu: "/nonexistent/weaver-spu".into(),
+            gate: "/nonexistent/weaver-gate".into(),
+        },
+        parameters: OrganParameters::default(),
+        state: ChannelState::BeforeEnter,
+        composer: Some(weaver_trace::LoopIdentity::compiled("test")),
+    }
+}
+
+fn some_launch() -> Option<crate::loop_arm::LoopLaunch> {
+    Some(crate::loop_arm::LoopLaunch {
+        launcher: "/nonexistent/weaver-loop-launch".into(),
+        grant: "/nonexistent/lib/weaver-loop/grant".into(),
+    })
+}
+
+/// **A loop the worker cannot start is refused before the load**, per
+/// `weaver-harness-Spec` section 2.5: an enter naming a wire file to a worker
+/// handed no launcher, and one under a diagnostic binding, which starts no
+/// runner, each refuse `ConfigInvalid` on `loop` before the sink is taken, so
+/// the record holds nothing and the compiled loop never runs in its place.
+/// Perturbation: drop either half of the refusal, and its row goes on to the
+/// load.
+#[test]
+fn an_enter_naming_a_wire_file_is_refused_before_the_load() {
+    for (row, launch, binding) in [
+        ("no launcher handed", None, serving_binding()),
+        (
+            "a diagnostic binding",
+            some_launch(),
+            weaver_types::EnterBinding::Diagnostic,
+        ),
+    ] {
+        let dir = crate::scratch::dir(format!(
+            "weaver-wires-refused-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let sink_path = dir.join("trace.ndjson");
+        let sink = OwnedFd::from(File::create(&sink_path).expect("sink"));
+        let mut harness = loop_harness(&dir, launch);
+        match harness.enter(loop_enter(binding, Some(election())), Some(sink), None) {
+            Err(EnterFailure::BeforeLoad(refusal)) => assert_eq!(
+                refusal,
+                LifecycleRefusal::ConfigInvalid {
+                    field: Some(weaver_types::FieldName("loop".into())),
+                },
+                "{row}"
+            ),
+            Err(EnterFailure::AfterLoad(..)) => panic!("{row}: refused after the load"),
+            Ok(_) => panic!("{row}: an enter naming a wire file was served"),
+        }
+        assert_eq!(
+            std::fs::read(&sink_path).expect("the sink"),
+            Vec::<u8>::new(),
+            "{row}"
+        );
+    }
+}
+
+/// **The load names the loop it composes with**, per `weaver-trace-Spec`
+/// section 3 and `weaver-harness-Spec` section 2.5: an enter carrying no loop
+/// writes the compiled composer exactly as before, `{"binary":"test"}` to the
+/// byte, and one carrying a loop to a worker handed a launcher writes the
+/// binary, the wire file's path and the digest admin read, and nothing more.
+/// Both loads then refuse at the missing SPU, after the load. Perturbation:
+/// take the composer from `serve` alone, and the wires row names no file;
+/// add a member to the compiled one, and its bytes differ.
+#[test]
+fn the_load_names_the_loop_it_composes_with_and_the_compiled_composer_is_unchanged() {
+    for (row, wires, want) in [
+        (
+            "compiled",
+            None,
+            r#""composer":{"binary":"test"}"#.to_string(),
+        ),
+        (
+            "wires",
+            Some(election()),
+            format!(
+                r#""composer":{{"binary":"test","file":"/etc/weaver/a1/loop/wires.py","sha256":"{}"}}"#,
+                "ab".repeat(32)
+            ),
+        ),
+    ] {
+        let dir = crate::scratch::dir(format!(
+            "weaver-loop-composer-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let sink_path = dir.join("trace.ndjson");
+        let sink = OwnedFd::from(File::create(&sink_path).expect("sink"));
+        let mut harness = loop_harness(&dir, some_launch());
+        match harness.enter(loop_enter(serving_binding(), wires), Some(sink), None) {
+            Err(EnterFailure::AfterLoad(..)) => {}
+            Err(EnterFailure::BeforeLoad(refusal)) => {
+                panic!("{row}: refused before the load: {refusal:?}")
+            }
+            Ok(_) => panic!("{row}: served with no SPU"),
+        }
+        let held = std::fs::read_to_string(&sink_path).expect("the sink");
+        let load = held.lines().next().expect("a load");
+        assert!(load.contains(r#""kind":"load""#), "{row}: {load}");
+        assert!(load.contains(&want), "{row}: {load}");
+    }
+}
+
+/// **A loop arm over the real runner, started by a launcher that lays no
+/// walls**: a shell script standing as the launcher that executes the
+/// interpreter on `loop-runner/runner.py` and the wire file it is handed,
+/// with the cross test's wires. The arm's fork, relay and stop are the
+/// worker's own. The scratch folder holds the script.
+fn unwalled_arm() -> (crate::loop_arm::LoopArm, crate::scratch::Scratch) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = crate::scratch::dir(format!(
+        "weaver-loop-unwalled-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let runner = concat!(env!("CARGO_MANIFEST_DIR"), "/../../loop-runner/runner.py");
+    let wires = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/loop-wires-cross.py"
+    );
+    let script = dir.join("launch");
+    std::fs::write(
+        &script,
+        format!("#!/bin/sh\nexec /usr/bin/python3 -I -B -S {runner} \"$2\"\n"),
+    )
+    .expect("the script");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    let sha256 = {
+        use sha2::Digest as _;
+        sha2::Sha256::digest(std::fs::read(wires).expect("the wires"))
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    let launch = crate::loop_arm::LoopLaunch {
+        launcher: script,
+        grant: dir.join("grant"),
+    };
+    let election = weaver_types::WiresElection {
+        file: wires.into(),
+        sha256,
+    };
+    // SAFETY: the arm is started and stopped on this test's thread.
+    let arm = unsafe {
+        crate::loop_arm::LoopArm::start_bounded(
+            &launch,
+            &election,
+            crate::loop_relay::Bounds::contract(),
+        )
+    }
+    .expect("the unwalled loop starts");
+    (arm, dir)
+}
+
+/// **The start's three outcomes**, per `weaver-harness-Spec` section 2.5: a
+/// loop that sends its `hello` stands in the run; a wire file whose digest is
+/// not the election's refuses `ConfigInvalid` naming `loop`; and a launcher
+/// that does not execute refuses the same, the run holding no arm. That a
+/// refused child is reaped is `tests/loop_arm.rs`'s, in a process of its
+/// own. Perturbation: answer a refused `hello` with any other refusal, or
+/// keep a refused arm, and its row fails.
+#[test]
+fn the_start_stands_the_loop_or_refuses_naming_it() {
+    let loop_refused = LifecycleRefusal::ConfigInvalid {
+        field: Some(weaver_types::FieldName("loop".into())),
+    };
+    let wires = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/loop-wires-cross.py"
+    );
+    let (arm, dir) = unwalled_arm();
+    let launch = crate::loop_arm::LoopLaunch {
+        launcher: dir.join("launch"),
+        grant: dir.join("grant"),
+    };
+    arm.stop(None);
+    let sha256: String = {
+        use sha2::Digest as _;
+        sha2::Sha256::digest(std::fs::read(wires).expect("the wires"))
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    };
+    for (row, launcher, digest, want) in [
+        (
+            "the hello accepted",
+            launch.launcher.clone(),
+            sha256.clone(),
+            Ok(()),
+        ),
+        (
+            "another digest",
+            launch.launcher.clone(),
+            "ab".repeat(32),
+            Err(loop_refused.clone()),
+        ),
+        (
+            "no launcher to execute",
+            dir.join("absent"),
+            sha256.clone(),
+            Err(loop_refused.clone()),
+        ),
+    ] {
+        let (mut run, _spare, _sink) = entered_run(None);
+        let launch = crate::loop_arm::LoopLaunch {
+            launcher,
+            grant: launch.grant.clone(),
+        };
+        let election = weaver_types::WiresElection {
+            file: wires.into(),
+            sha256: digest,
+        };
+        // SAFETY: on this test's thread, which outlives the arm.
+        let started = unsafe { start_loop(&mut run, &launch, &election) };
+        assert_eq!(started, want, "{row}");
+        assert_eq!(run.loop_arm.is_some(), want.is_ok(), "{row}");
+        if let Some(arm) = run.loop_arm.take() {
+            arm.stop(None);
+        }
+    }
+    // A grant file named in bytes that are not UTF-8 is the launch's own
+    // configuration, refused `ConfigInvalid` naming `loop` before any fork,
+    // not the fork's `BindFailed`.
+    let (mut run, _spare, _sink) = entered_run(None);
+    let launch = crate::loop_arm::LoopLaunch {
+        launcher: launch.launcher.clone(),
+        grant: std::path::PathBuf::from(
+            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"/grant-\xff"),
+        ),
+    };
+    let election = weaver_types::WiresElection {
+        file: wires.into(),
+        sha256,
+    };
+    // SAFETY: on this test's thread; no fork is reached.
+    let started = unsafe { start_loop(&mut run, &launch, &election) };
+    assert_eq!(started, Err(loop_refused), "a grant path not in UTF-8");
+    assert!(run.loop_arm.is_none());
+}
+
+/// A writer that takes no byte, as standard error does under a full disk.
+struct WriteFails;
+
+impl std::io::Write for WriteFails {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("no space left"))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(std::io::Error::other("no space left"))
+    }
+}
+
+/// **A refused start's line is written best effort** (review of #655), as
+/// the leave's queue peak is: the line names the loop's refusal where
+/// standard error takes it, and where it cannot, the start still answers its
+/// refusal and the worker does not panic. Both refusals that can be reached
+/// here are driven: the grant path not in UTF-8, before any fork, and a
+/// `hello` refused on another digest. Perturbation: write the line with
+/// `eprintln!`, and the recorded line is missing; unwrap the write, and the
+/// failing writer panics the start.
+#[test]
+fn a_refused_starts_line_is_written_best_effort() {
+    let loop_refused = LifecycleRefusal::ConfigInvalid {
+        field: Some(weaver_types::FieldName("loop".into())),
+    };
+    let wires = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/loop-wires-cross.py"
+    );
+    let (arm, dir) = unwalled_arm();
+    arm.stop(None);
+    let not_utf8 = crate::loop_arm::LoopLaunch {
+        launcher: dir.join("launch"),
+        grant: std::path::PathBuf::from(
+            <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"/grant-\xff"),
+        ),
+    };
+    let unwalled = crate::loop_arm::LoopLaunch {
+        launcher: dir.join("launch"),
+        grant: dir.join("grant"),
+    };
+    let other_digest = weaver_types::WiresElection {
+        file: wires.into(),
+        sha256: "ab".repeat(32),
+    };
+    for (row, launch) in [
+        ("a grant path not in UTF-8", &not_utf8),
+        ("a hello on another digest", &unwalled),
+    ] {
+        let mut said = Vec::new();
+        let (mut run, _spare, _sink) = entered_run(None);
+        // SAFETY: on this test's thread, which outlives any child.
+        let started = unsafe { start_loop_saying(&mut run, launch, &other_digest, &mut said) };
+        assert_eq!(started, Err(loop_refused.clone()), "{row}");
+        let line: serde_json::Value = serde_json::from_slice(&said)
+            .unwrap_or_else(|_| panic!("{row}: one JSON line said, not {said:?}"));
+        assert_eq!(line["organ"], "harness", "{row}");
+        assert_eq!(line["loop"], "refused", "{row}");
+        let (mut run, _spare, _sink) = entered_run(None);
+        // SAFETY: as above.
+        let started =
+            unsafe { start_loop_saying(&mut run, launch, &other_digest, &mut WriteFails) };
+        assert_eq!(
+            started,
+            Err(loop_refused.clone()),
+            "{row}: a write that fails"
+        );
+        assert!(run.loop_arm.is_none(), "{row}");
+    }
+}
+
+/// **A fork that fails takes the same best-effort write** (review of #655,
+/// finding 2): the start's `Fork` refusal, reached in a child process of this
+/// test binary, since a limit on descriptors is the whole process's. There
+/// the soft limit is set to the lowest descriptor free, so the loop's pair
+/// refuses with EMFILE before any fork. The line names `not-started` where the
+/// writer takes it, and where the writer fails the start still answers
+/// `BindFailed`, with no panic. Perturbation: write the fork's line with
+/// `eprintln!`, and the recorded line is missing. Unwrap the write, and the
+/// failing writer panics the start.
+#[test]
+fn a_failed_forks_line_is_written_best_effort() {
+    const CASE: &str = "WEAVER_HARNESS_FORK_FAILS";
+    const NAME: &str = "lifecycle::tests::a_failed_forks_line_is_written_best_effort";
+    if std::env::var_os(CASE).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+            .env(CASE, "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "the child: {stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let wires = weaver_types::WiresElection {
+        file: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/loop-wires-cross.py"
+        )
+        .into(),
+        sha256: "ab".repeat(32),
+    };
+    let launch = crate::loop_arm::LoopLaunch {
+        launcher: "/no-launcher-here".into(),
+        grant: "/no-grant-here".into(),
+    };
+    let (mut recorded, _spare, _sink) = entered_run(None);
+    let (mut failing, _spare_too, _sink_too) = entered_run(None);
+    let mut said = Vec::new();
+    let mut limit = nix::libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit fills the struct this frame owns.
+    assert_eq!(
+        unsafe { nix::libc::getrlimit(nix::libc::RLIMIT_NOFILE, &mut limit) },
+        0
+    );
+    // SAFETY: F_DUPFD answers a fresh descriptor, closed at once.
+    let lowest = unsafe { nix::libc::fcntl(0, nix::libc::F_DUPFD, 0) };
+    assert!(lowest >= 0);
+    // SAFETY: the descriptor F_DUPFD just answered, this frame's own.
+    unsafe { nix::libc::close(lowest) };
+    let lowered = nix::libc::rlimit {
+        rlim_cur: lowest as nix::libc::rlim_t,
+        rlim_max: limit.rlim_max,
+    };
+    // SAFETY: setrlimit reads the struct this frame owns. This process is the
+    // child, running this one test on one thread.
+    assert_eq!(
+        unsafe { nix::libc::setrlimit(nix::libc::RLIMIT_NOFILE, &lowered) },
+        0
+    );
+    // SAFETY: on this test's thread. The pair refuses before any fork.
+    let started = unsafe { start_loop_saying(&mut recorded, &launch, &wires, &mut said) };
+    // SAFETY: as above.
+    let failed = unsafe { start_loop_saying(&mut failing, &launch, &wires, &mut WriteFails) };
+    // SAFETY: setrlimit reads the struct this frame owns.
+    assert_eq!(
+        unsafe { nix::libc::setrlimit(nix::libc::RLIMIT_NOFILE, &limit) },
+        0
+    );
+    assert_eq!(started, Err(LifecycleRefusal::BindFailed));
+    let line: serde_json::Value = serde_json::from_slice(&said)
+        .unwrap_or_else(|_| panic!("one JSON line said, not {said:?}"));
+    assert_eq!(line["organ"], "harness");
+    assert_eq!(line["loop"], "not-started");
+    assert!(
+        line["reason"]
+            .as_str()
+            .is_some_and(|r| r.starts_with("the loop's pair: ")),
+        "{line}"
+    );
+    assert_eq!(
+        failed,
+        Err(LifecycleRefusal::BindFailed),
+        "a write that fails"
+    );
+    assert!(recorded.loop_arm.is_none() && failing.loop_arm.is_none());
+}
+
+/// A seat recording each turn's text, answering a refusal no relay makes.
+#[derive(Default)]
+struct TurnRecording {
+    turned: Vec<String>,
+}
+
+impl crate::seat::Seat for TurnRecording {
+    fn first_turn(&self) -> bool {
+        true
+    }
+    fn seated(&self) -> bool {
+        false
+    }
+    fn turn_context(&self) -> weaver_types::TurnContext {
+        weaver_types::TurnContext::Continuous
+    }
+    fn fullness(&self) -> Option<(u64, u64)> {
+        None
+    }
+    fn flush(&mut self, _keep: u64) -> Option<(u64, u64)> {
+        None
+    }
+    fn recall(&mut self, _last_turns: Option<u64>) -> Option<Vec<crate::state::Recalled>> {
+        None
+    }
+    fn session_shape(&mut self) -> Option<crate::state::SessionShape> {
+        None
+    }
+    fn turn(
+        &mut self,
+        delta: Vec<weaver_traits::Message>,
+    ) -> Result<crate::engine::TurnOutcome, crate::engine::TurnError> {
+        for message in delta {
+            for block in message.content {
+                if let weaver_traits::ContentBlock::Text { text } = block {
+                    self.turned.push(text);
+                }
+            }
+        }
+        Err(crate::engine::TurnError::Unlicensed {
+            turn: TurnKey("t-loop".into()),
+        })
+    }
+}
+
+/// **A run holding a loop arm answers by its relay and calls no entry**, per
+/// `weaver-harness-Spec` section 2.5, and a run holding none calls the entry:
+/// the loop's `turn` reaches the seat and its answer comes back unchanged.
+/// Perturbation: call the entry whatever the run holds, and the loop's row
+/// calls it.
+#[test]
+fn a_run_holding_a_loop_arm_answers_by_its_relay_and_calls_no_entry() {
+    let (mut arm, _dir) = unwalled_arm();
+    let mut entered = 0;
+    let mut entry = |_: &mut TurnRecording, _: &str| {
+        entered += 1;
+        Err(crate::engine::TurnError::ChannelLost)
+    };
+    let mut seat = TurnRecording::default();
+    let answered = compose_turn(Some(&mut arm), &mut seat, "hello", &mut entry);
+    assert!(
+        matches!(&answered, Err(crate::engine::TurnError::Unlicensed { turn }) if turn.0 == "t-loop"),
+        "{answered:?}"
+    );
+    assert_eq!(seat.turned, ["hello, seated False"]);
+    let answered = compose_turn(None, &mut seat, "hello", &mut entry);
+    assert!(matches!(
+        answered,
+        Err(crate::engine::TurnError::ChannelLost)
+    ));
+    assert_eq!(
+        entered, 1,
+        "the entry is called for the run holding no loop alone"
+    );
+    arm.stop(None);
+}
+
+/// **Every leave stops the loop after the lower**, per `weaver-harness-Spec`
+/// section 2.5: a rollback leave dispatched as admin sends it, which takes no
+/// drain, and the leave the unwind after a fault calls, each take the arm from
+/// the run, shut its end down and reap the runner, which has exited at its end
+/// of file long before the shared deadline of 150 s. **The order shows**: a
+/// gate stand-in reads the runner's state in `/proc` when the lower reaches
+/// it, and the runner still stands there. Perturbation: drop either leave's
+/// stop, and its row finds the runner standing after the leave; move either
+/// stop ahead of the lower, and its row finds the runner gone at the lower.
+/// That the stop comes before the save point is held by reading alone: the
+/// unwind's leave and the rollback take none.
+#[test]
+fn every_leave_stops_the_loop_after_the_lower() {
+    use nix::sys::wait::{WaitPidFlag, waitpid};
+    // The unwind's leave, on the run itself.
+    let (mut run, _spare, _sink) = entered_run(None);
+    let (arm, _dir) = unwalled_arm();
+    let pid = arm.pid();
+    run.loop_arm = Some(arm);
+    let at_lower = gate_reading_the_runner(&mut run, pid);
+    let started = std::time::Instant::now();
+    let _ = leave(&mut run, None, true);
+    let at_lower = at_lower.join().expect("the gate stand-in");
+    assert!(
+        matches!(at_lower, Some(state) if state != 'Z'),
+        "the runner stands when the unwind's lower reaches the gate: {at_lower:?}"
+    );
+    assert!(run.loop_arm.is_none(), "the unwind's leave takes the arm");
+    assert_eq!(
+        waitpid(pid, Some(WaitPidFlag::WNOHANG)),
+        Err(nix::errno::Errno::ECHILD),
+        "the unwind's leave reaped the runner"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+
+    // A rollback leave, dispatched.
+    let (mut run, _spare, _sink) = entered_run(None);
+    let (spu_lifecycle, spu_far) = OrganChannel::pair().expect("pair");
+    run.spu.as_mut().expect("the arm").lifecycle = spu_lifecycle;
+    let spu_far = spu_far.into_channel();
+    std::thread::spawn(move || {
+        while let Ok(asked) = spu_far.recv() {
+            let _ = spu_far.send(&OrganEnvelope {
+                exchange: asked.exchange,
+                position: Position::Close,
+                payload: weaver_types::Payload::Answer(LifecycleAnswer::Released),
+            });
+        }
+    });
+    let (arm, _dir) = unwalled_arm();
+    let pid = arm.pid();
+    run.loop_arm = Some(arm);
+    let at_lower = gate_reading_the_runner(&mut run, pid);
+    let (mut harness, _harness_dir) = harness_entered(run);
+    let (verb_end, admin_end) = OrganChannel::pair().expect("admin pair");
+    let _admin = admin_end.into_channel();
+    let started = std::time::Instant::now();
+    let outcome = harness
+        .dispatch_on(
+            &verb_end,
+            ExchangeId {
+                opener: Opener::Admin,
+                ordinal: 3,
+            },
+            LifecycleDirective::Leave {
+                cause: weaver_types::Cause { uid: 0 },
+                forced: true,
+                rollback: true,
+            },
+            None,
+            None,
+        )
+        .expect("the leave dispatches");
+    assert!(matches!(outcome, Some(Outcome::Left)), "{outcome:?}");
+    let at_lower = at_lower.join().expect("the gate stand-in");
+    assert!(
+        matches!(at_lower, Some(state) if state != 'Z'),
+        "the runner stands when the rollback's lower reaches the gate: {at_lower:?}"
+    );
+    assert_eq!(
+        waitpid(pid, Some(WaitPidFlag::WNOHANG)),
+        Err(nix::errno::Errno::ECHILD),
+        "the rollback leave reaped the runner"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(10));
+}
+
+/// **A gate stand-in that reads the runner when the lower reaches it**: set
+/// on `run`, it takes the `Lower`, reads the state letter of `pid` in
+/// `/proc` (none where the runner is reaped), and answers `GateStopped`. The
+/// handle answers what it read.
+fn gate_reading_the_runner(
+    run: &mut Run,
+    pid: nix::unistd::Pid,
+) -> std::thread::JoinHandle<Option<char>> {
+    let (channel, gate_peer) = OrganChannel::pair().expect("pair");
+    run.gate = Some(GateChannel {
+        channel,
+        pid: nix::unistd::Pid::from_raw(i32::MAX),
+        last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
+    });
+    let gate_peer = gate_peer.into_channel();
+    std::thread::spawn(move || {
+        let asked = gate_peer.recv().expect("the lower");
+        assert!(matches!(
+            asked.payload,
+            weaver_types::Payload::Directive(LifecycleDirective::Lower)
+        ));
+        let state = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|stat| {
+                stat.rsplit_once(") ")
+                    .and_then(|(_, rest)| rest.chars().next())
+            });
+        let _ = gate_peer.send(&OrganEnvelope {
+            exchange: asked.exchange,
+            position: Position::Close,
+            payload: weaver_types::Payload::Answer(LifecycleAnswer::GateStopped),
+        });
+        state
+    })
 }
 
 /// **A refused enter leaves its reason in the run's record.** Before
@@ -636,6 +1336,7 @@ fn a_refused_enter_leaves_its_reason_in_the_record() {
     let mut harness = Harness {
         coordination: listener,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/weaver-spu".into(),
             gate: "/nonexistent/weaver-gate".into(),
@@ -689,6 +1390,7 @@ fn a_refused_enter_leaves_its_reason_in_the_record() {
             keys: Vec::new(),
         },
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
     // The fan-out fails after-load at the SPU exec, which is the arm
     // this test exists for: the bracket stands and the refusal is the
@@ -800,6 +1502,7 @@ fn the_load_names_the_member_it_was_handed_and_the_composer_serve_set() {
         let mut harness = Harness {
             coordination: listener,
             organs: OrganBinaries {
+                loop_launch: None,
                 classify: None,
                 spu: "/nonexistent/weaver-spu".into(),
                 gate: "/nonexistent/weaver-gate".into(),
@@ -861,6 +1564,7 @@ fn the_load_names_the_member_it_was_handed_and_the_composer_serve_set() {
             } else {
                 weaver_types::TurnContext::Continuous
             },
+            wires: None,
         };
         // The member's end, where it stands: one half of a pair the test
         // holds, the way admin's spawn hands the harness its half, its
@@ -930,6 +1634,7 @@ fn an_enter_naming_a_lineage_with_no_member_refuses_before_the_load() {
     let mut harness = Harness {
         coordination: listener,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/weaver-spu".into(),
             gate: "/nonexistent/weaver-gate".into(),
@@ -987,6 +1692,7 @@ fn an_enter_naming_a_lineage_with_no_member_refuses_before_the_load() {
             keys: Vec::new(),
         },
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
     let refusal = match harness.enter(payload, Some(sink), None) {
         Err(EnterFailure::BeforeLoad(refusal)) => refusal,
@@ -1165,6 +1871,7 @@ fn a_serving_enter_lacking_a_sampling_default_refuses_before_the_load() {
     let mut harness = Harness {
         coordination: listener,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/weaver-spu".into(),
             gate: "/nonexistent/weaver-gate".into(),
@@ -1205,6 +1912,7 @@ fn a_serving_enter_lacking_a_sampling_default_refuses_before_the_load() {
         wind_down_bound: None,
         state_election: weaver_types::StateElection::default(),
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
     let refusal = match harness.enter(payload, Some(sink), None) {
         Err(EnterFailure::BeforeLoad(refusal)) => refusal,
@@ -1383,6 +2091,7 @@ fn enter_against_a_member_seating(
     let mut harness = Harness {
         coordination: listener,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/weaver-spu".into(),
             gate: "/nonexistent/weaver-gate".into(),
@@ -1442,6 +2151,7 @@ fn enter_against_a_member_seating(
             keys: Vec::new(),
         },
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
     let (near, far) = std::os::unix::net::UnixStream::pair().expect("pair");
     // Every line the member reads and every directive the gate stand-in
@@ -2705,6 +3415,7 @@ fn an_enter_with_no_member_seats_no_prefix() {
     let mut harness = Harness {
         coordination: listener,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/weaver-spu".into(),
             gate: "/nonexistent/weaver-gate".into(),
@@ -2758,6 +3469,7 @@ fn an_enter_with_no_member_seats_no_prefix() {
             keys: Vec::new(),
         },
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
     let mut run = match harness.enter(payload, Some(sink), None) {
         Err(EnterFailure::AfterLoad(run, _)) => run,
@@ -2810,6 +3522,7 @@ fn the_declared_elections_reach_the_load_record() {
         let mut harness = Harness {
             coordination: listener,
             organs: OrganBinaries {
+                loop_launch: None,
                 classify: None,
                 spu: "/nonexistent/weaver-spu".into(),
                 gate: "/nonexistent/weaver-gate".into(),
@@ -2866,6 +3579,7 @@ fn the_declared_elections_reach_the_load_record() {
                 }],
             },
             turn_context: weaver_types::TurnContext::Continuous,
+            wires: None,
         };
         let mut run = match harness.enter(payload, Some(sink), None) {
             Err(EnterFailure::AfterLoad(run, _)) => run,
@@ -2972,6 +3686,7 @@ fn the_diagnostic_enter_forks_no_gate() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: spu.clone(),
             // The discriminator: a gate step that runs cannot fork this.
@@ -3020,6 +3735,7 @@ fn the_diagnostic_enter_forks_no_gate() {
         wind_down_bound: None,
         state_election: weaver_types::StateElection::default(),
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
 
     let mut run = match harness.enter(payload, Some(sink), None) {
@@ -3100,6 +3816,7 @@ fn the_turn_rehearses_on_the_device() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: spu.clone(),
             gate: gate.clone(),
@@ -3158,6 +3875,7 @@ fn the_turn_rehearses_on_the_device() {
         wind_down_bound: None,
         state_election: weaver_types::StateElection::default(),
         turn_context: weaver_types::TurnContext::Continuous,
+        wires: None,
     };
 
     // The real fan-out: real forks, real admit against real weights,
@@ -3302,6 +4020,7 @@ fn harness_at(state: ChannelState) -> (Harness, crate::scratch::Scratch) {
     let harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/spu".into(),
             gate: "/nonexistent/gate".into(),
@@ -3470,6 +4189,7 @@ fn stop_records_the_close_and_answers_turn_aborted() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/spu".into(),
             gate: "/nonexistent/gate".into(),
@@ -6367,6 +7087,62 @@ fn a_request_after_the_spu_died_is_refused_no_model_is_resident() {
     );
 }
 
+/// **A request to a run whose enter was refused is refused** (review of
+/// #655): a loop that did not start leaves the run retained for admin's
+/// rollback with the gate raised, and a dialer's frame that reaches the
+/// worker before the rollback's leave is refused, the compiled loop never
+/// entered in the elected one's place, the run standing for the rollback.
+/// Perturbation: drop the guard, and the frame is turned at `S2(Resident)`.
+#[test]
+fn a_request_to_a_run_whose_enter_was_refused_is_refused() {
+    let (mut run, _spare, _sink) = entered_run(None);
+    run.enter_refused = true;
+    let (gate_end, gate_peer) = OrganChannel::pair().expect("gate pair");
+    run.gate = Some(GateChannel {
+        channel: gate_end,
+        pid: nix::unistd::Pid::from_raw(1),
+        last_word: crate::spawn::LastWord::quiet(),
+        shell_granted: true,
+    });
+    let gate_peer = gate_peer.into_channel();
+    let (mut harness, _dir) = harness_entered(run);
+    let mut entered = false;
+    let mut entry = |_: &mut crate::engine::Ports<'_>, _: &str| {
+        entered = true;
+        Err(crate::engine::TurnError::Unlicensed {
+            turn: TurnKey("t-0".into()),
+        })
+    };
+    gate_peer
+        .send(&OrganEnvelope {
+            exchange: ExchangeId {
+                opener: Opener::Gate,
+                ordinal: 1,
+            },
+            position: Position::Open,
+            payload: weaver_types::Payload::Frame(weaver_types::TurnFrame::carry(
+                br#"{"text":"hello"}"#,
+            )),
+        })
+        .expect("frame sends");
+    let mut verb_slot = None;
+    harness
+        .serve_gate_wake(&mut entry, &mut verb_slot)
+        .expect("the wake serves");
+    let answer = gate_peer.recv().expect("the refusal returns");
+    let weaver_types::Payload::Frame(frame) = answer.payload else {
+        panic!("a frame answers a frame");
+    };
+    let line = String::from_utf8(frame.octets().expect("decodes")).expect("utf8");
+    assert!(line.contains("refused"), "{line}");
+    assert!(line.contains("rolled back"), "{line}");
+    assert!(!entered, "the compiled loop is never entered");
+    assert!(
+        matches!(harness.state, ChannelState::Entered(_)),
+        "the run stands for the rollback"
+    );
+}
+
 /// **A closure observed from the entered position unwinds before it
 /// returns.** The recorder is drained and the bracket closed with an
 /// `unload`, rather than the run being dropped with events still queued
@@ -6381,6 +7157,7 @@ fn closure_from_entered_unwinds_the_run() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/spu".into(),
             gate: "/nonexistent/gate".into(),
@@ -6453,6 +7230,7 @@ fn the_death_account_carries_the_last_word() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/spu".into(),
             gate: "/nonexistent/gate".into(),
@@ -6490,6 +7268,7 @@ fn no_seat_is_granted_while_a_turn_is_in_flight() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/spu".into(),
             gate: "/nonexistent/gate".into(),
@@ -6510,6 +7289,7 @@ fn no_seat_is_granted_while_a_turn_is_in_flight() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/spu".into(),
             gate: "/nonexistent/gate".into(),
@@ -6588,6 +7368,7 @@ fn the_seat_offers_the_shell_schema_only_where_granted() {
         let mut harness = Harness {
             coordination,
             organs: OrganBinaries {
+                loop_launch: None,
                 classify: None,
                 spu: "/nonexistent/spu".into(),
                 gate: "/nonexistent/gate".into(),
@@ -6681,6 +7462,7 @@ fn a_diagnostic_run_grants_no_frame_seat() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/spu".into(),
             gate: "/nonexistent/gate".into(),
@@ -6706,6 +7488,7 @@ fn stop_at_rest_answers_at_rest() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent/spu".into(),
             gate: "/nonexistent/gate".into(),
@@ -6787,6 +7570,7 @@ fn an_idle_gate_report_authors_without_a_turn_or_answer() {
         let mut harness = Harness {
             coordination,
             organs: OrganBinaries {
+                loop_launch: None,
                 classify: None,
                 spu: "/nonexistent".into(),
                 gate: "/nonexistent".into(),
@@ -7730,6 +8514,7 @@ fn a_frame_grants_the_seat_and_is_answered() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent".into(),
             gate: "/nonexistent".into(),
@@ -7831,6 +8616,7 @@ fn an_unparseable_line_refuses_and_the_channel_stands() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent".into(),
             gate: "/nonexistent".into(),
@@ -7976,6 +8762,7 @@ fn a_system_line_from_any_other_dialer_refuses_and_the_channel_stands() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent".into(),
             gate: "/nonexistent".into(),
@@ -8130,6 +8917,7 @@ fn a_seeding_past_the_answer_bound_refuses_and_one_that_fits_seats() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent".into(),
             gate: "/nonexistent".into(),
@@ -8293,6 +9081,7 @@ fn the_operators_system_line_seats_the_prompt_and_turns() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent".into(),
             gate: "/nonexistent".into(),
@@ -8470,6 +9259,7 @@ fn the_turn_key_stands_while_a_turn_runs() {
     let mut harness = Harness {
         coordination,
         organs: OrganBinaries {
+            loop_launch: None,
             classify: None,
             spu: "/nonexistent".into(),
             gate: "/nonexistent".into(),

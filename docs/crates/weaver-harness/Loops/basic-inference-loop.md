@@ -294,18 +294,20 @@ Everything after the sink is the consumer's.
 The harness is the holder of loops, which is why this document files under it. This is
 the basic loop, the bare turn path every loop runs on. **The loop an agent deploys is
 state management**, per the operator's rulings of 2026-10-02 on issue #1 and
-`weaver-agent-PRD` section 5.5: one loop, written in Rust and compiled into the worker,
-which composes this path with the state member's store and the SPU's classifier through
-the harness, its opinions exposed as settings in the declaration's `[state-management]`
-table and every judgment it makes recorded on the trace. It takes its own workflow
-document in this directory with the act that writes it, and no declaration elects
-another loop. Development and deployment use the Rust implementation, per
-`weaver-harness-Spec` section 1 and the retirement ruling of 2026-10-20 (#180). Memory,
-when it comes, is held by the harness the same way and takes its own document. The loop
-is never held by the model. The SPU decoder is a token function the harness calls, one
-interior step of a turn, and the loop runs until the model returns a final answer or the
-operator interrupts it, per `weaver-harness-PRD` section 2, the interrupt arriving as
-the stop exchange.
+`weaver-agent-PRD` section 5.5: the compiled loop, written in Rust and compiled into the
+worker, which composes this path with the state member's store and the SPU's classifier
+through the harness, its opinions exposed as settings in the declaration's
+`[state-management]` table and every judgment it makes recorded on the trace. It takes
+its own workflow document in this directory with the act that writes it, and no
+declaration elects a loop. A loop root lays in the agent's loop folder,
+`/etc/weaver/<agent>/loop/wires.py`, runs in its place and composes the same path
+through the same seat (`weaver-harness-Spec` section 2.5). Development and deployment
+use the Rust implementation, per `weaver-harness-Spec` section 1 and the retirement
+ruling of 2026-10-20 (#180). Memory, when it comes, is held by the harness the same way
+and takes its own document. The loop is never held by the model. The SPU decoder is a
+token function the harness calls, one interior step of a turn, and the loop runs until
+the model returns a final answer or the operator interrupts it, per `weaver-harness-PRD`
+section 2, the interrupt arriving as the stop exchange.
 
 **The loop's prompt rule, as `dev_loop` holds it today, is ADP-4's**
 (`weaver-spu-adapter-binding-Spec-amendment` section 4). The system prompt is state, so
