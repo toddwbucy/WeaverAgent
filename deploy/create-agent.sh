@@ -83,14 +83,15 @@
 # **Two accounts and two groups beyond the agent's own**, per
 # weaver-admin-Spec sections 4, 6 and 9: the state member
 # `weaver-<name>-state`, the trace relay `weaver-<name>-relay` whose one group
-# is the trace group `weaver-<name>-trace`, and the access group
-# `weaver-<name>-admin` the trace door is grouped to.
+# is the trace group `weaver-<name>-trace`, the access group
+# `weaver-<name>-admin` the trace door is grouped to, and the gate group
+# `weaver-<name>-gate` the gate's door is grouped to.
 #
 # **The box's two connector accounts, one per plane** (weaver-admin-Spec
 # section 2 and weaver-gate-world-contract section 1, the operator's rulings
 # of 2026-11-10): `weaver-gatecon`, which runs WeaverWeb's gate-con and is the
-# one uid the access rule names, joins the agent's own group, through which
-# the gate's socket admits it. `weaver-admincon`, which runs admin-con, joins
+# one uid the access rule names, joins the agent's gate group, through which
+# the gate's door admits it, and never the agent's own group. `weaver-admincon`, which runs admin-con, joins
 # the state and access groups, is the boundary file's `trace-reader`, and is
 # the one user the sudo rule names. Each is laid where it is absent and, where
 # an account of the name stands, judged before it is used: a system account
@@ -380,6 +381,7 @@ STATE_GROUP="$MEMBER_USER"         # the member's primary group: the territory's
 TRACE_GROUP="weaver-$NAME-trace"   # the trace's readers: the operator and the relay, never the member
 RELAY_USER="weaver-$NAME-relay"    # the trace relay's uid, its one group the trace group
 ACCESS_GROUP="weaver-$NAME-admin"  # the territory's files' group and the trace door's: reads, never writes
+GATE_GROUP="weaver-$NAME-gate"     # the gate's door's group: gate-con holds it, never the agent
 GATECON_USER=weaver-gatecon        # the box's gate-con account: the one uid the access rule names
 ADMINCON_USER=weaver-admincon      # the box's admin-con account: the reader, and the sudo rule's one user
 SUDO_RULE="/etc/sudoers.d/weaver-$NAME"
@@ -837,10 +839,12 @@ agent_name_ok() {
 # such as wheel, sudo, disk or docker refuses as a weaver- group would:
 # - weaver-admincon may hold its own group and agents' state and access
 #   groups, weaver-<n>-state and weaver-<n>-admin, and nothing else;
-# - weaver-gatecon may hold its own group and agents' own groups, weaver-<n>,
-#   and nothing else.
-# <n> is a name agent_name_ok admits, so a trace, relay, state, access or
-# per-agent connector group is never read as an agent's own group.
+# - weaver-gatecon may hold its own group and agents' gate groups,
+#   weaver-<n>-gate, and nothing else: an agent's own group, weaver-<n>,
+#   refuses.
+# <n> is a name agent_name_ok admits, which refuses every suffix, so a
+# trace, relay, state, access, gate or per-agent connector group is never
+# read as another.
 door_crossings() {
   local held g n crossed=""
   held=$(id -Gn "$1") || die "cannot read the groups of $1"
@@ -850,7 +854,7 @@ door_crossings() {
       "$1:$1") continue ;;
       "$ADMINCON_USER:"weaver-*-state) n=${g#weaver-}; n=${n%-state} ;;
       "$ADMINCON_USER:"weaver-*-admin) n=${g#weaver-}; n=${n%-admin} ;;
-      "$GATECON_USER:"weaver-*) n=${g#weaver-} ;;
+      "$GATECON_USER:"weaver-*-gate) n=${g#weaver-}; n=${n%-gate} ;;
     esac
     [ -n "$n" ] && agent_name_ok "$n" && continue
     crossed="$crossed $g"
@@ -930,8 +934,9 @@ plan "member account  $MEMBER_USER     (system, nologin, owns the state room, pa
 plan "trace group     $TRACE_GROUP     (system group: the trace's readers, never the member)"
 plan "relay account   $RELAY_USER      (system, nologin, no home, its one group $TRACE_GROUP)"
 plan "access group    $ACCESS_GROUP    (system group: the territory's files' and the trace door's, reads and never writes)"
+plan "gate group      $GATE_GROUP     (system group: the gate's door's, which gate-con holds and the agent does not)"
 plan "gate-con        $GATECON_USER  the box's, $(box_account_plan "$GATECON_LINE")"
-plan "                joins $AGENT_USER, the gate socket's group: the one caller the access rule names"
+plan "                joins $GATE_GROUP, the gate's door's group: the one caller the access rule names, never $AGENT_USER"
 plan "admin-con       $ADMINCON_USER  the box's, $(box_account_plan "$ADMINCON_LINE")"
 plan "                joins $STATE_GROUP and $ACCESS_GROUP: the trace reader and the sudo rule's user"
 if [ "$ROOT_OPERATOR" -eq 1 ]; then
@@ -976,10 +981,10 @@ for u in "$AGENT_USER" "$MEMBER_USER" "$RELAY_USER"; do
     [ "$account_status" -eq 2 ] || die "cannot read account $u"
   fi
 done
-# The groups this run makes, the trace and access groups and the same-named
-# group `useradd --user-group` makes for the agent and the member, each
-# checked before anything is provisioned (Codex on #79).
-for g in "$TRACE_GROUP" "$ACCESS_GROUP" "$AGENT_USER" "$MEMBER_USER"; do
+# The groups this run makes, the trace, access and gate groups and the
+# same-named group `useradd --user-group` makes for the agent and the member,
+# each checked before anything is provisioned (Codex on #79).
+for g in "$TRACE_GROUP" "$ACCESS_GROUP" "$GATE_GROUP" "$AGENT_USER" "$MEMBER_USER"; do
   if getent group "$g" >/dev/null; then
     die "the group $g already exists"
   else
@@ -1212,6 +1217,9 @@ laid
 laying "the group $ACCESS_GROUP"
 root groupadd --system "$ACCESS_GROUP"
 laid
+laying "the group $GATE_GROUP"
+root groupadd --system "$GATE_GROUP"
+laid
 # **The relay's one group is the trace group**, primary and alone, which is
 # what admin's start step sets at its spawn (weaver-admin-Spec section 6).
 laying "the account $RELAY_USER"
@@ -1224,13 +1232,13 @@ GATECON_UID=$(uid_in "$GATECON_LINE") || exit 1
 ADMINCON_LINE=$(account_line "$ADMINCON_USER") || exit 1
 [ -n "$ADMINCON_LINE" ] || die "$ADMINCON_USER does not stand after it was laid"
 ADMINCON_UID=$(uid_in "$ADMINCON_LINE") || exit 1
-# **The gate-con account joins the agent's own group**, which the gate's
-# socket admits by (weaver-gate-Spec section 3). The group also reads the
-# agent's tool home and lists its runtime directory, a reach that Spec states
-# as the design, and gate-con joins no other group of the agent's. **The admin-con account joins the state group for passage and the
-# access group for reading**, never the agent's own group or the trace group:
-# it reaches the trace through the relay's door alone.
-root usermod -aG "$AGENT_USER" "$GATECON_USER"
+# **The gate-con account joins the gate group**, which the gate's door admits
+# by (weaver-gate-Spec section 3, weaver-admin-Spec section 6), and never the
+# agent's own group, so it reaches neither the agent's home nor its runtime
+# directory. **The admin-con account joins the state group for passage and
+# the access group for reading**, never the agent's own group or the trace
+# group: it reaches the trace through the relay's door alone.
+root usermod -aG "$GATE_GROUP" "$GATECON_USER"
 root usermod -aG "$STATE_GROUP,$ACCESS_GROUP" "$ADMINCON_USER"
 # **The member holds its own group alone** (the operator's ruling of
 # 2026-10-08 on #1): the territory is 0710 under that group, so the member
@@ -1428,8 +1436,8 @@ printf '   %s reads the declaration and writes nothing of the territory\n' "$ADM
 # **The relay and the two box accounts hold exactly their groups of this
 # agent**: the relay the trace group alone; the admin-con account the state
 # group for passage and the access group for reading, never the agent's own
-# group or the trace group; the gate-con account the agent's own group, for
-# the gate's socket. **Neither box account holds a group outside what it may
+# group or the trace group; the gate-con account the gate group, for the
+# gate's door. **Neither box account holds a group outside what it may
 # hold**, of this agent, of any other or outside the weaver- namespace
 # (weaver-admin-Spec section 2), by the same allow-list as the judge above.
 relay_groups=$(id -Gn "$RELAY_USER")
@@ -1438,7 +1446,7 @@ admincon_groups=" $(id -Gn "$ADMINCON_USER") "
 [[ "$admincon_groups" == *" $ACCESS_GROUP "* ]] || die "the admin-con account $ADMINCON_USER does not hold $ACCESS_GROUP, so the trace door would turn it away"
 [[ "$admincon_groups" == *" $STATE_GROUP "* ]] || die "the admin-con account $ADMINCON_USER does not hold $STATE_GROUP, so it cannot pass the territory"
 gatecon_groups=" $(id -Gn "$GATECON_USER") "
-[[ "$gatecon_groups" == *" $AGENT_USER "* ]] || die "the gate-con account $GATECON_USER does not hold $AGENT_USER, so the gate's socket would turn it away"
+[[ "$gatecon_groups" == *" $GATE_GROUP "* ]] || die "the gate-con account $GATECON_USER does not hold $GATE_GROUP, so the gate's door would turn it away"
 for box_account in "$GATECON_USER" "$ADMINCON_USER"; do
   crossed=$(door_crossings "$box_account") || exit 1
   [ -z "$crossed" ] || die "the account $box_account holds $crossed, outside what the box's account may hold (weaver-admin-Spec section 2)"
@@ -1484,7 +1492,7 @@ say "made"
 # cannot reach this agent's socket, nor an admin-con this agent's trace door,
 # until it starts again, and an operator's shell takes its groups at a new
 # login.
-printf '   %s joined %s, and %s joined %s and %s: a gate-con or admin-con already running\n' "$GATECON_USER" "$AGENT_USER" "$ADMINCON_USER" "$STATE_GROUP" "$ACCESS_GROUP"
+printf '   %s joined %s, and %s joined %s and %s: a gate-con or admin-con already running\n' "$GATECON_USER" "$GATE_GROUP" "$ADMINCON_USER" "$STATE_GROUP" "$ACCESS_GROUP"
 printf '   under either account takes the groups only when it starts again\n'
 if [ "$ROOT_OPERATOR" -eq 0 ]; then
   printf '   %s joined groups %s, %s and %s: a session that predates this run needs a new\n' "$OPERATOR" "$TRACE_GROUP" "$STATE_GROUP" "$ACCESS_GROUP"

@@ -394,7 +394,7 @@ would be whatever umask the worker inherited - `0777` on one box and `0775` on
 another from one build, on 2026-08-28. The bind happens under a umask denying
 every bit outside the owner, so the name lands at `0700`.
 
-**`0700` here where the gate's door is `0770`**, per `weaver-gate-Spec` section
+**`0700` here where the gate's socket is `0770`**, per `weaver-gate-Spec` section
 3. `accept_root` admits `uid() == 0` and no other, so no group reaches this
 door and a mode granting one would describe access it does not offer. The
 runtime directory's `0750` narrows who may traverse to the name, and this
@@ -1474,20 +1474,24 @@ from: weaver-harness
 to: harness-diagnostic-enter-forks-no-gate
 ```
 
-**The gate's socket is a sibling of the coordination socket, and the derivation is the
-whole of this crate's part in it.** Per `weaver-gate-PRD` section 2 the pathname is the
-program's rather than the operator's, and this crate is the party positioned to know it:
-the coordination socket it bound as its first act sits in the agent's runtime directory,
-so the gate's name is that directory and a fixed leaf. **What that buys is admin's start
-step rather than a rule this crate enforces.** The start step clears a dead worker's
-names holding its invocation lock and the run lock it took, before the next worker
-starts, per `weaver-admin-Spec` section 6, so the next bind meets no stale name. A
-derivation reaching anywhere else would need a cleanup this program has already refused
-to write, an unlink racing a live successor.
+**The gate's socket is the path admin hands the worker, and passing it on is the whole
+of this crate's part in it.** Per `weaver-gate-PRD` section 2 the pathname is the
+program's rather than the operator's: admin's start step lays the gate's door,
+`<coordination-root>/weaver.run/<agent>/gate/`, grouped to the gate group, and hands the
+worker `gate.sock` in it as `--gate-socket`, per `weaver-admin-Spec` section 6. The
+worker refuses to start without it, and neither the worker nor this crate derives the
+gate's name from the coordination socket. **What that buys is admin's start step rather
+than a rule this crate enforces.** The start step clears a dead gate's socket in the
+door holding its invocation lock and the run lock it took, before the next worker
+starts, so the next bind meets no stale name. A name reaching anywhere else would need a
+cleanup this program has already refused to write, an unlink racing a live successor. A
+composition root that hands no path, the in-process tests among them, takes a name
+beside the coordination socket, and the worker never does (`worker_arguments.rs`,
+`the_gate_socket_is_required_by_name`).
 
-The listener therefore retains the path it bound, which is the one thing this
-crate holds a path for beyond the organ binaries, and the exception is argued
-the same way: it is a deployment fact supplied at construction rather than a
+The listener therefore retains the gate path it was handed and the path it bound, the
+two things this crate holds a path for beyond the organ binaries, and the exception is
+argued the same way: each is a deployment fact supplied at construction rather than a
 name resolved at use. The wait is what the run state's
 invariant rests on: `gate` is set only ever after a confirmed `spu`, so the
 unwind's reverse order is a property of construction order rather than of

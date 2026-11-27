@@ -180,17 +180,17 @@ Where a Unix socket sits is not a choice of that kind: it is a deployment
 detail with exactly one correct answer, and the program is the party that knows
 it.
 
-**The correct answer is inside the agent's runtime directory, and that is the
-whole of the ruling's ground.** A Unix socket's pathname outlives the process
-that bound it, so a name chosen anywhere else survives its worker and refuses
-the next bind, and the program has no cleanup it can perform without racing a
-live successor. The runtime directory is the answer already taken for the
-coordination socket: admin's start step clears a dead worker's names there under the
-run lock before the next worker starts, per `weaver-admin-Spec` section 6, where the
-init system once destroyed the directory with the unit, so a pathname inside it cannot
-reach the next worker. The gate's socket carries the identical hazard and
-takes the identical answer, which makes the hazard unreachable rather than
-checked for. **A path an operator could write is a path an operator could write
+**The correct answer is inside the gate's door, a folder admin's start step lays and
+clears, and that is the whole of the ruling's ground.** A Unix socket's pathname
+outlives the process that bound it, so a name chosen anywhere else survives its worker
+and refuses the next bind, and the program has no cleanup it can perform without racing
+a live successor. A folder the start step clears under the run lock is the answer
+already taken for the coordination socket in the agent's runtime directory, per
+`weaver-admin-Spec` section 6. The gate's socket carries the identical hazard and takes
+the same answer in a folder of its own, the gate's door
+`<coordination-root>/weaver.run/<agent>/gate/`, which admin lays grouped to the gate
+group and whose path admin hands the worker, so the hazard is unreachable rather than
+checked for and the socket takes the gate group and not the agent's. **A path an operator could write is a path an operator could write
 wrongly**, and the failure it produces is a second load refusing on a name the
 first left behind, which reads as a bind failure and is a stale file.
 

@@ -276,6 +276,8 @@ fn start_load(
         account.gid,
     )?;
     window.check()?;
+    start::prepare_gate_door(&config.run_directory(), &account)?;
+    window.check()?;
     let worker_log = start::open_log(&config.worker_log(), Some(config.file_owner()))
         .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
     window.check()?;
@@ -322,6 +324,7 @@ fn start_load(
             &config.coordination_socket(),
             &config.spu,
             &config.gate,
+            &config.gate_socket(),
             config.headroom_bytes.as_deref(),
             Some(prepared.checker_binary()),
             None,

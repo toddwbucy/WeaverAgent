@@ -33,7 +33,7 @@ fn main() -> ExitCode {
     let (Some(socket), Some(spu), Some(gate)) = (args.next(), args.next(), args.next()) else {
         eprintln!(
             "worker <coordination-socket> <spu-binary> <gate-binary> \
-             [--headroom-bytes N] [--classify-binary PATH] \
+             --gate-socket PATH [--headroom-bytes N] [--classify-binary PATH] \
              [--loop-launcher PATH --loop-grant PATH]"
         );
         return ExitCode::FAILURE;
@@ -44,10 +44,21 @@ fn main() -> ExitCode {
     // deployment did before this vector existed.
     let mut parameters = OrganParameters::default();
     let mut classify: Option<std::path::PathBuf> = None;
+    let mut gate_socket: Option<std::path::PathBuf> = None;
     let mut loop_launcher: Option<std::path::PathBuf> = None;
     let mut loop_grant: Option<std::path::PathBuf> = None;
     while let Some(argument) = args.next() {
         match argument.as_str() {
+            // **The gate's socket in its door**, per `weaver-harness-Spec`
+            // section 3: admin lays the door and names the path, and the
+            // worker never derives it from the coordination socket.
+            "--gate-socket" => match args.next() {
+                Some(value) => gate_socket = Some(value.into()),
+                None => {
+                    eprintln!("worker: --gate-socket takes a value");
+                    return ExitCode::FAILURE;
+                }
+            },
             "--headroom-bytes" => match args.next() {
                 Some(value) => parameters.headroom_bytes = Some(value),
                 None => {
@@ -102,8 +113,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let Some(gate_socket) = gate_socket else {
+        eprintln!("worker: --gate-socket is required: admin names the gate's socket in its door");
+        return ExitCode::FAILURE;
+    };
     let listener = match bind_coordination(std::path::Path::new(&socket)) {
-        Ok(listener) => listener,
+        Ok(listener) => listener.with_gate_socket(gate_socket),
         Err(fault) => {
             eprintln!("worker: the coordination socket did not bind: {fault:?}");
             return ExitCode::FAILURE;

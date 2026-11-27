@@ -128,13 +128,13 @@ fn the_real_turn_client_sends_one_user_block_and_keeps_raw_evidence() {
     let admin = root.join("admin");
     let coordination = root.join("coord");
     std::fs::create_dir_all(admin.join(agent)).unwrap();
-    std::fs::create_dir_all(coordination.join(format!("weaver-{agent}"))).unwrap();
+    std::fs::create_dir_all(coordination.join(format!("weaver.run/{agent}/gate"))).unwrap();
     std::fs::write(
         admin.join(agent).join("coordination-root"),
         coordination.to_str().unwrap(),
     )
     .unwrap();
-    let socket = coordination.join(format!("weaver-{agent}/gate.sock"));
+    let socket = coordination.join(format!("weaver.run/{agent}/gate/gate.sock"));
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
     let request = "<<<TEXT\nRead `data` and $(literal).\nTEXT>>>";

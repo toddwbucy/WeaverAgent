@@ -1031,7 +1031,7 @@ elif name == 'id':
         joined = (root / 'joined-box-accounts').read_text().split() if (root / 'joined-box-accounts').exists() else []
         if who == 'weaver-gatecon':
             print(os.environ.get('GATECON_JOINED') if who in joined and os.environ.get('GATECON_JOINED')
-                  else os.environ.get('GATECON_GROUPS', 'weaver-gatecon weaver-m1'))
+                  else os.environ.get('GATECON_GROUPS', 'weaver-gatecon weaver-m1-gate'))
         elif who == 'weaver-admincon':
             print(os.environ.get('ADMINCON_JOINED') if who in joined and os.environ.get('ADMINCON_JOINED')
                   else os.environ.get('ADMINCON_GROUPS', 'weaver-admincon weaver-m1-state weaver-m1-admin'))
@@ -1706,7 +1706,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 self.assertFalse(any(c[0] == "sudo" for c in self.calls()))
 
     def test_agent_plan_refuses_visible_collisions(self):
-        for collision in ("account", "relay account", "access group",
+        for collision in ("account", "relay account", "access group", "gate group",
                           "agent root", "staged root", "agent's folder", "sudo rule", "territory"):
             with self.subTest(collision=collision):
                 self.env.pop("COLLISION", None)
@@ -1718,6 +1718,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 if collision == "account": self.env["COLLISION"] = "weaver-m1-state"
                 elif collision == "relay account": self.env["COLLISION"] = "weaver-m1-relay"
                 elif collision == "access group": self.env["COLLISION"] = "weaver-m1-admin"
+                elif collision == "gate group": self.env["COLLISION"] = "weaver-m1-gate"
                 elif collision == "agent root": (self.config / "m1").mkdir()
                 elif collision == "staged root": (self.config / ".m1.partial").mkdir()
                 elif collision == "agent's folder": (self.root / "m1").mkdir()
@@ -2111,7 +2112,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         folder = str(self.root / "agents" / "m1")
         home = f"the account weaver-m1 with its home {folder}/home"
         accounts = [f"the folder {folder}", home, "the account weaver-m1-state", "the group weaver-m1-trace",
-                    "the group weaver-m1-admin", "the account weaver-m1-relay"]
+                    "the group weaver-m1-admin", "the group weaver-m1-gate", "the account weaver-m1-relay"]
         take_down = "Take m1 down by deploy/HowToDeployANewAgent.md section 7 before creating it again."
         limits = "project 12345's limits on /state"
         cases = {
@@ -2182,7 +2183,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         folder = str(self.root / "agents" / "m1")
         laid = [f"the folder {folder}", f"the account weaver-m1 with its home {folder}/home",
                 "the account weaver-m1-state", "the group weaver-m1-trace", "the group weaver-m1-admin",
-                "the account weaver-m1-relay", f"project 12345 on {folder}"]
+                "the group weaver-m1-gate", "the account weaver-m1-relay", f"project 12345 on {folder}"]
         for name, to_group in (("TERM", False), ("HUP", True)):
             with self.subTest(signal=name):
                 self.reset_made()
@@ -2883,10 +2884,10 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
     def test_the_relay_and_connector_groups_are_checked_before_admission(self):
         # The relay holds the trace group alone; the admin-con account the
         # state and access groups and never the agent's own group or a trace
-        # group; the gate-con account the agent's own group and no -state,
-        # -admin or -trace group of any agent; neither the other's group
-        # (weaver-admin-Spec section 2). Perturbations: drop any check, and a
-        # mis-grouped account is admitted.
+        # group; the gate-con account the agent's gate group and no agent's
+        # own group and no -state, -admin or -trace group of any agent; neither
+        # the other's group (weaver-admin-Spec section 2). Perturbations: drop
+        # any check, and a mis-grouped account is admitted.
         for env, said in ((dict(RELAY_GROUPS="weaver-m1-trace weaver-m1-state"), "not the trace group alone"),
                           (dict(ADMINCON_GROUPS="weaver-admincon weaver-m1-state"), "does not hold weaver-m1-admin"),
                           (dict(ADMINCON_GROUPS="weaver-admincon weaver-m1-admin"), "does not hold weaver-m1-state"),
@@ -2896,22 +2897,34 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                            "holds weaver-m1, outside what the box's account may hold"),
                           (dict(ADMINCON_GROUPS="weaver-admincon weaver-m1-state weaver-m1-admin weaver-gatecon"),
                            "holds weaver-gatecon, outside what the box's account may hold"),
-                          (dict(GATECON_GROUPS="weaver-gatecon"), "does not hold weaver-m1"),
-                          (dict(GATECON_GROUPS="weaver-gatecon weaver-m1 weaver-other-admin"),
+                          (dict(GATECON_GROUPS="weaver-gatecon"), "does not hold weaver-m1-gate"),
+                          # The earlier layout's join, the agent's own group
+                          # alone, refuses at the judge, before the join.
+                          (dict(GATECON_GROUPS="weaver-gatecon weaver-m1"),
+                           "holds weaver-m1, outside what the box's account may hold"),
+                          # The agent's own group, this agent's or another's,
+                          # is never gate-con's (the gate's door, child 3).
+                          (dict(GATECON_GROUPS="weaver-gatecon weaver-m1-gate weaver-m1"),
+                           "holds weaver-m1, outside what the box's account may hold"),
+                          (dict(GATECON_GROUPS="weaver-gatecon weaver-m1-gate weaver-other"),
+                           "holds weaver-other, outside what the box's account may hold"),
+                          (dict(GATECON_GROUPS="weaver-gatecon weaver-m1-gate weaver-other-admin"),
                            "holds weaver-other-admin, outside what the box's account may hold"),
-                          (dict(GATECON_GROUPS="weaver-gatecon weaver-m1 weaver-other-state"),
+                          (dict(GATECON_GROUPS="weaver-gatecon weaver-m1-gate weaver-other-state"),
                            "holds weaver-other-state, outside what the box's account may hold"),
-                          (dict(GATECON_GROUPS="weaver-gatecon weaver-m1 weaver-other-trace"),
+                          (dict(GATECON_GROUPS="weaver-gatecon weaver-m1-gate weaver-other-trace"),
                            "holds weaver-other-trace, outside what the box's account may hold"),
                           # Clean when judged after laying, crossed once joined:
                           # the wall's own check after the join refuses.
                           (dict(ADMINCON_JOINED="weaver-admincon weaver-m1-state weaver-m1-admin weaver-m1-trace"),
                            "holds weaver-m1-trace, outside what the box's account may hold"),
-                          (dict(GATECON_JOINED="weaver-gatecon weaver-m1 weaver-m1-state"),
+                          (dict(GATECON_JOINED="weaver-gatecon weaver-m1-gate weaver-m1-state"),
                            "holds weaver-m1-state, outside what the box's account may hold"),
+                          (dict(GATECON_JOINED="weaver-gatecon weaver-m1-gate weaver-m1"),
+                           "holds weaver-m1, outside what the box's account may hold"),
                           # The wall uses the same allow-list: a foreign group
                           # joined after the judge refuses there too.
-                          (dict(GATECON_JOINED="weaver-gatecon weaver-m1 sudo"),
+                          (dict(GATECON_JOINED="weaver-gatecon weaver-m1-gate sudo"),
                            "holds sudo, outside what the box's account may hold"),
                           (dict(ADMINCON_JOINED="weaver-admincon weaver-m1-state weaver-m1-admin disk"),
                            "holds disk, outside what the box's account may hold")):
@@ -2957,6 +2970,9 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
             (dict(BOX_PASSWD={"weaver-admincon": "weaver-admincon:x:991:991::/home/weaver-admincon:/usr/sbin/nologin"},
                   ADMINCON_GROUPS="weaver-admincon weaver-my-bot-state weaver-my-bot"),
              None, "holds weaver-my-bot, outside what the box's account may hold"),
+            # An agent's own group on gate-con, which the earlier layout gave it.
+            (dict(BOX_PASSWD={"weaver-gatecon": well}, GATECON_GROUPS="weaver-gatecon weaver-existing-gate weaver-existing"),
+             None, "holds weaver-existing, outside what the box's account may hold"),
             # The earlier layout's per-agent connector group, on gate-con.
             (dict(BOX_PASSWD={"weaver-gatecon": well}, GATECON_GROUPS="weaver-gatecon weaver-old-admincon"),
              None, "holds weaver-old-admincon, outside what the box's account may hold"),
@@ -2966,7 +2982,7 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
             (dict(BOX_PASSWD={"weaver-admincon": "weaver-admincon:x:991:991::/home/weaver-admincon:/usr/sbin/nologin"},
                   ADMINCON_GROUPS="weaver-admincon weaver-existing-state wheel"),
              None, "holds wheel, outside what the box's account may hold"),
-            (dict(BOX_PASSWD={"weaver-gatecon": well}, GATECON_GROUPS="weaver-gatecon weaver-existing docker"),
+            (dict(BOX_PASSWD={"weaver-gatecon": well}, GATECON_GROUPS="weaver-gatecon weaver-existing-gate docker"),
              None, "holds docker, outside what the box's account may hold"),
             (dict(BOX_PASSWD={"weaver-gatecon": well}, GATECON_GROUPS="weaver-gatecon weaver-existing-relay"),
              None, "holds weaver-existing-relay, outside what the box's account may hold"),
@@ -3154,11 +3170,14 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         admitted = calls.index(["sudo", "mv", "-T", "--", str(self.config / ".m1.partial"), str(self.config / "m1")])
         self.assertGreater(calls.index(etc_folder), admitted)
         # The operator joins the trace, state and access groups and never the
-        # agent's own (it does not dial the gate); the gate-con account joins
-        # the agent's own group alone, and the admin-con account the state and
-        # access groups (weaver-admin-Spec section 2).
+        # agent's own or the gate group (it does not dial the gate); the
+        # gate-con account joins the gate group alone, and the admin-con
+        # account the state and access groups (weaver-admin-Spec section 2).
         self.assertIn(["sudo", "usermod", "-aG", "weaver-m1-trace,weaver-m1-state,weaver-m1-admin", "fixture-no-home"], calls)
-        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1", "weaver-gatecon"], calls)
+        self.assertIn(["sudo", "usermod", "-aG", "weaver-m1-gate", "weaver-gatecon"], calls)
+        self.assertFalse(any(c[:3] == ["sudo", "usermod", "-aG"] and c[-1] == "weaver-gatecon"
+                             and "weaver-m1" in c[3].split(",") for c in calls),
+                         "gate-con never joins the agent's own group")
         self.assertIn(["sudo", "usermod", "-aG", "weaver-m1-state,weaver-m1-admin", "weaver-admincon"], calls)
         self.assertFalse([c for c in calls if c[:3] == ["sudo", "usermod", "-aG"] and c[-1] == "fixture-no-home"
                           and "weaver-m1" in c[3].split(",")], calls)
@@ -4191,6 +4210,7 @@ esac
                        territory + "/state"], calls)
         self.assertIn(["sudo", "groupadd", "--system", "weaver-m1-trace"], calls)
         self.assertIn(["sudo", "groupadd", "--system", "weaver-m1-admin"], calls)
+        self.assertIn(["sudo", "groupadd", "--system", "weaver-m1-gate"], calls)
         self.assertIn(["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", "--no-create-home",
                        "--no-user-group", "--gid", "weaver-m1-trace", "weaver-m1-relay"], calls)
         for box_account in ("weaver-gatecon", "weaver-admincon"):
@@ -4390,7 +4410,7 @@ esac
         root.mkdir()
         (root / "territory").write_text(str(self.decl) + "\n")
         coordination = self.root / "coordination"
-        (coordination / "weaver-m1").mkdir(parents=True)
+        (coordination / "weaver.run" / "m1" / "gate").mkdir(parents=True)
         (root / "coordination-root").write_text(str(coordination) + "\n")
         self.decl.mkdir(parents=True)
         draft = self.decl / "system-prompt.md"
@@ -4398,15 +4418,22 @@ esac
         for text in ("one\r\ntwo\r\n", "one\rtwo", "one\ntwo\n"):
             with self.subTest(text=text):
                 draft.write_bytes(text.encode())
-                path = coordination / "weaver-m1" / "gate.sock"
+                path = coordination / "weaver.run" / "m1" / "gate" / "gate.sock"
                 path.unlink(missing_ok=True)
                 gate = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 gate.bind(str(path))
                 gate.listen(1)
+                # The wait for the dial is bounded and the thread is a daemon, so
+                # a turn.py that dials elsewhere fails the test and never holds
+                # the run open.
+                gate.settimeout(20)
                 received = {}
 
                 def serve():
-                    conn, _ = gate.accept()
+                    try:
+                        conn, _ = gate.accept()
+                    except OSError:
+                        return
                     with conn:
                         line = b""
                         while not line.endswith(b"\n"):
@@ -4416,7 +4443,7 @@ esac
                             line += chunk
                         received["line"] = line
                         conn.sendall(b'{"kind":"answered","run":"r-1","text":"ok","turn":"t-1"}\n')
-                server = threading.Thread(target=serve)
+                server = threading.Thread(target=serve, daemon=True)
                 server.start()
                 try:
                     result = subprocess.run(turn, env=self.env, text=True, capture_output=True, timeout=20)
@@ -7148,7 +7175,7 @@ esac
         # Both create-agent.sh lines, the plan's and the apply's, carry it.
         self.assertEqual(out.count("$ deploy/create-agent.sh m1 --root-operator --artifact"), 2, out)
         for said in ("operator        root, by --root-operator (#576)",
-                     "root holds none of weaver-m1, weaver-m1-trace, weaver-m1-state and weaver-m1-admin",
+                     "root holds none of weaver-m1, weaver-m1-trace, weaver-m1-state, weaver-m1-admin and weaver-m1-gate",
                      "allowed-uids = [0] in", "root joins no group (#576)",
                      "deploy/turn.py m1 --system --raw as root: the seeding line, from uid 0 (#576)",
                      "allowed-uids = [<weaver-admincon's uid>] (the perturbation",
@@ -7662,7 +7689,7 @@ else:
     def test_the_operator_s_mode_is_as_before(self):
         calls = self.run_step(root_mode=False)
         self.assertEqual([c for c in calls if c[0] == "gpasswd"],
-                         [["gpasswd", "-a", "op", "weaver-m1"], ["gpasswd", "-d", "op", "weaver-m1"]])
+                         [["gpasswd", "-a", "op", "weaver-m1-gate"], ["gpasswd", "-d", "op", "weaver-m1-gate"]])
         self.assertEqual([c[1] for c in calls if c[0] == "tee"],
                          ["allowed-uids = [12345]", "allowed-uids = [12345] +restore", "allowed-uids = [12345]",
                           "allowed-uids = [111]"])
@@ -7672,7 +7699,7 @@ else:
 
 class LifecycleRootModeGroupsAndShowTests(unittest.TestCase):
     """**#576, B2: step 1's groups and step 9's show in both modes.** In
-    root mode root holds none of the agent's four groups, each read alone, and
+    root mode root holds none of the agent's five groups, each read alone, and
     step 9 asks `show` as the box's gate-con account through runuser, answered
     unauthorized, and as root, answered no_such_agent. In the operator's mode
     the operator holds the three groups and not the agent's, and step 9 asks as
@@ -7722,12 +7749,12 @@ class LifecycleRootModeGroupsAndShowTests(unittest.TestCase):
 
     def test_root_holds_none_of_the_agent_s_groups(self):
         # Perturbations: read the operator's three groups in root mode, or
-        # leave one of the four unread, and a case below fails.
+        # leave one of the five unread, and a case below fails.
         run, _ = self.run_fn(True, "expect_operator_groups", root="root")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        for g in ("weaver-m1", "weaver-m1-trace", "weaver-m1-state", "weaver-m1-admin"):
+        for g in ("weaver-m1", "weaver-m1-trace", "weaver-m1-state", "weaver-m1-admin", "weaver-m1-gate"):
             self.assertIn(f"PASS test: root does not hold {g}", run.stdout)
-        for held in ("weaver-m1", "weaver-m1-trace", "weaver-m1-state", "weaver-m1-admin"):
+        for held in ("weaver-m1", "weaver-m1-trace", "weaver-m1-state", "weaver-m1-admin", "weaver-m1-gate"):
             with self.subTest(held=held):
                 run, _ = self.run_fn(True, "expect_operator_groups", root=f"root {held}")
                 self.assertEqual(run.returncode, 1, run.stdout)
@@ -7743,6 +7770,12 @@ class LifecycleRootModeGroupsAndShowTests(unittest.TestCase):
                              op="op weaver-m1 weaver-m1-trace weaver-m1-state weaver-m1-admin")
         self.assertEqual(run.returncode, 1, run.stdout)
         self.assertIn("op does not hold weaver-m1", run.stderr)
+        # The operator does not dial the gate, so it holds no gate group.
+        # Perturbation: drop the gate group's check, and this passes.
+        run, _ = self.run_fn(False, "expect_operator_groups",
+                             op="op weaver-m1-trace weaver-m1-state weaver-m1-admin weaver-m1-gate")
+        self.assertEqual(run.returncode, 1, run.stdout)
+        self.assertIn("op does not hold weaver-m1-gate", run.stderr)
 
     def test_root_asks_show_as_gate_con_and_as_itself(self):
         # Perturbation: ask the refused show as root, and it answers
@@ -10848,7 +10881,9 @@ class LifecycleGroupLookupTests(unittest.TestCase):
 
     def test_the_restore_removes_unless_the_answer_is_no(self):
         original = base64.b64encode(b"original\n").decode()
-        for groups, gpasswd_rc, rc, removed in (("op weaver-m1", "0", 0, True),
+        # The measurement's group is the gate group, which the door admits by.
+        for groups, gpasswd_rc, rc, removed in (("op weaver-m1-gate", "0", 0, True),
+                                                ("op weaver-m1", "0", 0, False),
                                                 ("op", "0", 0, False),
                                                 ("", "0", 0, True),
                                                 ("", "3", 1, True)):
@@ -10861,7 +10896,7 @@ class LifecycleGroupLookupTests(unittest.TestCase):
                 self.assertEqual(self.decl.read_text(), "original\n")
                 self.assertEqual(self.calls.exists(), removed)
                 if removed:
-                    self.assertEqual(self.calls.read_text(), "-d op weaver-m1\n")
+                    self.assertEqual(self.calls.read_text(), "-d op weaver-m1-gate\n")
 
 
 class LifecycleArchiveReadBackTests(unittest.TestCase):
@@ -11318,12 +11353,14 @@ class LifecycleBoxGroupsTests(unittest.TestCase):
         env = {**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]}
         env.pop("BASH_ENV", None)
         for account, held, said in (
-                ("weaver-gatecon", "weaver-gatecon weaver-m1 weaver-my-bot", "none"),
-                ("weaver-gatecon", "weaver-gatecon weaver-m1 wheel", "wheel"),
+                ("weaver-gatecon", "weaver-gatecon weaver-m1-gate weaver-my-bot-gate", "none"),
+                ("weaver-gatecon", "weaver-gatecon weaver-m1-gate wheel", "wheel"),
+                # An agent's own group, which the gate's door made no longer gate-con's.
+                ("weaver-gatecon", "weaver-gatecon weaver-m1-gate weaver-m1 weaver-my-bot", "weaver-m1 weaver-my-bot"),
                 ("weaver-gatecon", "weaver-gatecon weaver-m1-relay weaver-m1-state", "weaver-m1-relay weaver-m1-state"),
                 ("weaver-gatecon", "weaver-gatecon weaver-admincon weaver-old-admincon", "weaver-admincon weaver-old-admincon"),
-                ("weaver-gatecon", "weaver-gatecon weaver-m1 weaver-m1-gate weaver-stack weaver-adminx",
-                 "weaver-m1-gate weaver-stack weaver-adminx"),
+                ("weaver-gatecon", "weaver-gatecon weaver-m1-gate weaver-m1-gate-gate weaver-stack-gate weaver-adminx-gate",
+                 "weaver-m1-gate-gate weaver-stack-gate weaver-adminx-gate"),
                 ("weaver-admincon", "weaver-admincon weaver-m1-state weaver-m1-admin", "none"),
                 ("weaver-admincon", "weaver-admincon weaver-m1-state docker", "docker"),
                 ("weaver-admincon", "weaver-admincon weaver-m1 weaver-m1-trace weaver-gatecon",
@@ -11469,7 +11506,7 @@ class LifecycleUnseededTurnTests(unittest.TestCase):
 class LifecycleStep5bRestoreTests(unittest.TestCase):
     """**Step 5b's measurement is put back on every exit, the trap
     included** (the Planner's condition on the code act of #533): the
-    declaration byte for byte and the operator out of the agent's own group,
+    declaration byte for byte and the operator out of the agent's gate group,
     each attempted whatever the other answers. Run alone on a scratch
     declaration, with sudo, id and gpasswd as stand-ins. Perturbations: drop
     `restore_now` from `on_exit` and the interrupted case leaves the moved
@@ -11493,7 +11530,7 @@ class LifecycleStep5bRestoreTests(unittest.TestCase):
             "gpasswd": (f'#!/bin/sh\nprintf "%s\\n" "$*" >> {shlex.quote(str(self.calls))}\n'
                         '[ -z "$GPASSWD_FAILS" ] || exit 1\n'
                         f'[ "$1" = "-d" ] && printf "op\\n" > {shlex.quote(str(self.groups))}\n'
-                        f'[ "$1" = "-a" ] && printf "op weaver-m1\\n" > {shlex.quote(str(self.groups))}\n'
+                        f'[ "$1" = "-a" ] && printf "op weaver-m1-gate\\n" > {shlex.quote(str(self.groups))}\n'
                         'exit 0\n'),
         }
         for name, body in stand_ins.items():
@@ -11509,7 +11546,7 @@ class LifecycleStep5bRestoreTests(unittest.TestCase):
                          + "\n".join(traps) + "\n"
                          + 'orig=$(base64 -w0 -- "$DECL")\n'
                          + 'RESTORE=(restore_rule "$orig")\n'
-                         + 'sudo -n gpasswd -a "$OPERATOR" "$AU" >/dev/null\n'
+                         + 'sudo -n gpasswd -a "$OPERATOR" "$AU-gate" >/dev/null\n'
                          + "printf 'allowed-uids = [1000]\\n' | sudo -n tee -- \"$DECL\" >/dev/null\n")
 
     def run_program(self, tail, **env_extra):
@@ -11538,7 +11575,7 @@ class LifecycleStep5bRestoreTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout.count("restored: restore_rule"), 1, result.stdout)
         self.assertEqual(self.decl.read_bytes(), self.original)
-        self.assertEqual(self.calls.read_text().splitlines(), ["-a op weaver-m1", "-d op weaver-m1"])
+        self.assertEqual(self.calls.read_text().splitlines(), ["-a op weaver-m1-gate", "-d op weaver-m1-gate"])
 
     def test_a_failed_write_still_takes_the_operator_out(self):
         # The declaration's write fails (the file made unwritable after the
@@ -11547,7 +11584,7 @@ class LifecycleStep5bRestoreTests(unittest.TestCase):
         result = self.run_program(f'chmod 0444 {shlex.quote(str(self.decl))}\nexit 1\n')
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertEqual(self.groups.read_text(), "op\n")
-        self.assertIn("-d op weaver-m1", self.calls.read_text())
+        self.assertIn("-d op weaver-m1-gate", self.calls.read_text())
         self.assertIn("RESTORE FAILED: restore_rule", result.stderr)
 
     def test_an_operator_already_out_is_not_removed_again(self):

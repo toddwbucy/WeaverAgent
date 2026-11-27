@@ -52,7 +52,7 @@
 # nothing, the check is made another way or the run says so: step 1 checks
 # that root holds none of the agent's groups, step 5b measures the socket's
 # admission on the box's admin-con account, whose uid does not hold the
-# agent's own group, in place of root leaving that group, and sends root's
+# agent's gate group, in place of root leaving that group, and sends root's
 # seeding line while the rule names 0, step 9 asks `show` as the box's
 # gate-con account, step 0 says that update-stack.sh's reads through the
 # operator's groups cannot refuse as root, and step 3 says its cause no longer
@@ -284,6 +284,7 @@ SAVE_POINTS="$T/save-points"
 MANIFEST="$SAVE_POINTS/save-points.manifest"
 RUN_DIR="$COORD/weaver.run/$A"
 RUNTIME_DIR="$COORD/$AU"
+GATE_DOOR="$RUN_DIR/gate"
 MARKER="$STACK/verify-lifecycle-$A"
 if [ "$ROOT_OPERATOR" -eq 1 ]; then
   OPERATOR=root
@@ -299,7 +300,7 @@ fi
 GATECON=weaver-gatecon
 ADMINCON=weaver-admincon
 ACCOUNTS="$AU $AU-state $AU-relay"
-GROUPS_MADE="$AU $AU-state $AU-trace $AU-admin"
+GROUPS_MADE="$AU $AU-state $AU-trace $AU-admin $AU-gate"
 
 marker_names_agent() { [ -f "$MARKER" ] && grep -qxF "agent = \"$A\"" "$MARKER"; }
 
@@ -544,7 +545,7 @@ holds_group() {
 # outside what it may hold, space-separated, or `none`, by create-agent.sh's
 # allow-list (weaver-admin-Spec section 2): weaver-admincon its own group and
 # agents' -state and -admin groups, weaver-gatecon its own group and agents'
-# own groups, where an agent's name is one admin's name check admits.
+# -gate groups, where an agent's name is one admin's name check admits.
 box_groups_outside() {
   local g n outside=""
   for g in $(id -Gn "$1" 2>/dev/null || echo "(unreadable)"); do
@@ -553,7 +554,7 @@ box_groups_outside() {
       "$1:$1") continue ;;
       "$ADMINCON:"weaver-*-state) n=${g#weaver-}; n=${n%-state} ;;
       "$ADMINCON:"weaver-*-admin) n=${g#weaver-}; n=${n%-admin} ;;
-      "$GATECON:"weaver-*) n=${g#weaver-} ;;
+      "$GATECON:"weaver-*-gate) n=${g#weaver-}; n=${n%-gate} ;;
     esac
     if [ -n "$n" ] && [[ "$n" =~ ^[A-Za-z0-9_-]+$ ]]; then
       case "$n" in
@@ -792,15 +793,15 @@ restore_absent() { root rm -f -- "$1"; }
 # FOLDER and KEY written through it.
 key_through_link() { root ln -s -- "$1" "$2" && printf '%s\n' "$2/$3" | root tee -- "$4" >/dev/null; }
 # restore_rule B64: step 5b's measurement put back, the declaration byte for
-# byte and the operator out of the agent's own group, each attempted whatever
+# byte and the operator out of the agent's gate group, each attempted whatever
 # the other answers. **The removal is attempted unless the group database
 # says `no`**, so an unreadable answer tries it and gpasswd's own refusal
 # fails the restore rather than a skipped removal passing it.
 restore_rule() {
   local rc=0
   printf '%s' "$1" | base64 -d | root tee -- "$DECL" >/dev/null || rc=1
-  if [ "$(holds_group "$OPERATOR" "$AU")" != no ]; then
-    root gpasswd -d "$OPERATOR" "$AU" >/dev/null || rc=1
+  if [ "$(holds_group "$OPERATOR" "$AU-gate")" != no ]; then
+    root gpasswd -d "$OPERATOR" "$AU-gate" >/dev/null || rc=1
   fi
   return "$rc"
 }
@@ -853,21 +854,22 @@ script_env() { WEAVER_ADMIN_CONFIG="$ADMIN_BASE" WEAVER_STACK_RECORD="$STACK" "$
 
 # **expect_operator_groups: the operator's groups as create-agent.sh leaves
 # them** (step 1): the trace, state and access groups and never the agent's
-# own. **In root mode root holds none of the four** (#576): create-agent.sh's
-# root mode joins root to none, and root reaches every file and the gate's
+# own or its gate group. **In root mode root holds none of the five** (#576):
+# create-agent.sh's root mode joins root to none, and root reaches every file and the gate's
 # socket by capability whatever it holds, so this shows the join was not made
 # and measures no custody. Each is read alone, so a lookup that fails answers
 # `unreadable` and fails here.
 expect_operator_groups() {
   local g
   if [ "$ROOT_OPERATOR" -eq 1 ]; then
-    for g in "$AU" "$AU-trace" "$AU-state" "$AU-admin"; do
+    for g in "$AU" "$AU-trace" "$AU-state" "$AU-admin" "$AU-gate"; do
       expect_eq "root does not hold $g" no "$(holds_group root "$g")"
     done
   else
     expect_eq "$OPERATOR holds the trace, state and access groups" 3 \
       "$(id -Gn "$OPERATOR" | tr ' ' '\n' | grep -cE "^$AU-(trace|state|admin)$" || true)"
     expect_eq "$OPERATOR does not hold $AU" no "$(holds_group "$OPERATOR" "$AU")"
+    expect_eq "$OPERATOR does not hold $AU-gate" no "$(holds_group "$OPERATOR" "$AU-gate")"
   fi
 }
 
@@ -934,11 +936,11 @@ step_1() {
   want "the plan ends PENDING --apply and == plan only"
   want "the apply prints == accounts, == territory, == declaration, the wall lines, == sudo rule, == admission, == made, in order"
   if [ "$ROOT_OPERATOR" -eq 1 ]; then
-    want "root holds none of $AU, $AU-trace, $AU-state and $AU-admin: root mode joins no group, and root reaches the files and the socket by capability, so this shows the join was not made, not custody; $AU-relay holds $AU-trace alone; $AU-state holds itself alone"
+    want "root holds none of $AU, $AU-trace, $AU-state, $AU-admin and $AU-gate: root mode joins no group, and root reaches the files and the socket by capability, so this shows the join was not made, not custody; $AU-relay holds $AU-trace alone; $AU-state holds itself alone"
   else
-    want "$OPERATOR holds $AU-trace, $AU-state and $AU-admin and not $AU; $AU-relay holds $AU-trace alone; $AU-state holds itself alone"
+    want "$OPERATOR holds $AU-trace, $AU-state and $AU-admin and neither $AU nor $AU-gate; $AU-relay holds $AU-trace alone; $AU-state holds itself alone"
   fi
-  want "$GATECON and $ADMINCON stand, the box's; $GATECON holds $AU and none of $AU-state, $AU-admin or $AU-trace; $ADMINCON holds $AU-state and $AU-admin and neither $AU nor $AU-trace"
+  want "$GATECON and $ADMINCON stand, the box's; $GATECON holds $AU-gate and none of $AU, $AU-state, $AU-admin or $AU-trace; $ADMINCON holds $AU-state and $AU-admin and none of $AU, $AU-trace or $AU-gate"
   want "$T root:$AU-state 710 directory; state/ $AU-state:$AU-state 700; save-points/ root:$AU-admin 750; trace.ndjson root:$AU-trace 640 empty; agent.toml and system-prompt.md root:$AU-admin 640"
   want "$F root:root 755 holding the territory and the home; $H $AU:$AU 2750; $R root:root 755 with every key root:root 644; $RULE root:root 440"
   want "no access entry on the territory, save-points/, the trace or the declaration"
@@ -972,10 +974,10 @@ step_1() {
   for u in $ACCOUNTS "$GATECON" "$ADMINCON"; do expect_eq "the account $u stands" yes "$(id "$u" >/dev/null 2>&1 && echo yes || echo no)"; done
   expect_eq "$AU-relay holds its trace group alone" "$AU-trace" "$(id -Gn "$AU-relay")"
   expect_eq "$AU-state holds its own group alone" "$AU-state" "$(id -Gn "$AU-state")"
-  expect_eq "$GATECON holds $AU" yes "$(holds_group "$GATECON" "$AU")"
-  for g in "$AU-state" "$AU-admin" "$AU-trace"; do expect_eq "$GATECON does not hold $g" no "$(holds_group "$GATECON" "$g")"; done
+  expect_eq "$GATECON holds $AU-gate" yes "$(holds_group "$GATECON" "$AU-gate")"
+  for g in "$AU" "$AU-state" "$AU-admin" "$AU-trace"; do expect_eq "$GATECON does not hold $g" no "$(holds_group "$GATECON" "$g")"; done
   for g in "$AU-state" "$AU-admin"; do expect_eq "$ADMINCON holds $g" yes "$(holds_group "$ADMINCON" "$g")"; done
-  for g in "$AU" "$AU-trace"; do expect_eq "$ADMINCON does not hold $g" no "$(holds_group "$ADMINCON" "$g")"; done
+  for g in "$AU" "$AU-trace" "$AU-gate"; do expect_eq "$ADMINCON does not hold $g" no "$(holds_group "$ADMINCON" "$g")"; done
   for u in "$GATECON" "$ADMINCON"; do expect_eq "$u holds no group outside what the box's account may hold" none "$(box_groups_outside "$u")"; done
   expect_eq "no per-agent connector account $AU-admincon stands" no "$(lookup passwd "$AU-admincon" && echo yes || echo no)"
 
@@ -1058,7 +1060,8 @@ step_2() {
   want "one bracket, led by the loop's compiled prompt as a message.system of the turn (nothing seated, ADP-4), with message.user and message.assistant"
   want "the run marker names the load's run, open"
   want "admin.log and worker.log root:$AU-admin 640; $COORD/weaver.run and $RUN_DIR root:root 755; run.lock and admin.lock root:root 600; trace.sock root:$AU-admin 660 socket"
-  want "$RUNTIME_DIR $AU:$AU 750; gate.sock $AU:$AU 770 socket; coordination.sock $AU:$AU 700 socket"
+  want "$GATE_DOOR $AU:$AU-gate 2750; gate.sock $AU:$AU-gate 770 socket in it"
+  want "$RUNTIME_DIR $AU:$AU 750; coordination.sock $AU:$AU 700 socket"
   want "state/state.log root:$AU-state 640 and readable by $AU-state (K12); $AU-state still cannot read the trace"
   [ "$APPLY" -eq 1 ] || return 0
   ask validate; expect_kind validate validated
@@ -1100,8 +1103,9 @@ step_2() {
   expect_lay "$RUN_DIR/run.lock" "root:root 600 regular file"
   expect_lay "$RUN_DIR/admin.lock" "root:root 600 regular file"
   expect_lay "$RUN_DIR/trace.sock" "root:$AU-admin 660 socket"
+  expect_lay "$GATE_DOOR" "$AU:$AU-gate 2750 directory"
+  expect_lay "$GATE_DOOR/gate.sock" "$AU:$AU-gate 770 socket"
   expect_lay "$RUNTIME_DIR" "$AU:$AU 750 directory"
-  expect_lay "$RUNTIME_DIR/gate.sock" "$AU:$AU 770 socket"
   expect_lay "$RUNTIME_DIR/coordination.sock" "$AU:$AU 700 socket"
   expect_lay "$T/state/state.log" "root:$AU-state 640 regular file"
   expect_eq "$AU-state reads its state.log (K12)" yes "$(as_can "$AU-state" tail -n 1 "$T/state/state.log")"
@@ -1227,8 +1231,8 @@ step_5b() {
     run_line "allowed-uids = [0] in $DECL (owner and mode kept); root joins no group (#576)"
     run_line "   put back by the step and by the exit trap: the declaration byte for byte"
   else
-    run_line "gpasswd -a $OPERATOR $AU; allowed-uids = [$OPERATOR_UID] in $DECL (owner and mode kept)"
-    run_line "   both put back by the step and by the exit trap: the declaration byte for byte, $OPERATOR out of $AU"
+    run_line "gpasswd -a $OPERATOR $AU-gate; allowed-uids = [$OPERATOR_UID] in $DECL (owner and mode kept)"
+    run_line "   both put back by the step and by the exit trap: the declaration byte for byte, $OPERATOR out of $AU-gate"
   fi
   run_line "weaver-admin validate $A; weaver-admin load $A"
   run_line "agent_tuple.py rows --declaration $DECL --sink $TRACE --from-line <the load's first line>   (as root)"
@@ -1236,9 +1240,9 @@ step_5b() {
   [ "$ROOT_OPERATOR" -eq 0 ] || run_line "deploy/turn.py $A --system --raw as root: the seeding line, from uid 0 (#576)"
   run_line "weaver-admin unload $A; [restore] save-point = \"<SP_A name>\" appended; weaver-admin restore $A; weaver-admin load $A; weaver-admin unload $A"
   if [ "$ROOT_OPERATOR" -eq 1 ]; then
-    run_line "allowed-uids = [<$ADMINCON's uid>] (the perturbation, in place of root leaving $AU, which root never joins); weaver-admin validate $A"
+    run_line "allowed-uids = [<$ADMINCON's uid>] (the perturbation, in place of root leaving $AU-gate, which root never joins); weaver-admin validate $A"
   else
-    run_line "$OPERATOR out of $AU with allowed-uids = [$OPERATOR_UID] (the perturbation); weaver-admin validate $A"
+    run_line "$OPERATOR out of $AU-gate with allowed-uids = [$OPERATOR_UID] (the perturbation); weaver-admin validate $A"
   fi
   run_line "the measurement put back; weaver-admin validate $A; weaver-admin load $A"
   if [ "$ROOT_OPERATOR" -eq 1 ]; then
@@ -1256,21 +1260,21 @@ step_5b() {
   fi
   want "SP_A, an older save point, restores and loads under the moved rule (N6 does not read the declaration)"
   if [ "$ROOT_OPERATOR" -eq 1 ]; then
-    want "the perturbation, $ADMINCON's uid, which does not hold $AU, the group the gate's socket admits (step 1), refuses boundary_unverified, admin's cause (gate-instruction.access-rule.allowed-uids.<that uid>) recorded as measured"
-    want "put back: the declaration byte for byte with allowed-uids naming $GATECON alone; root does not hold $AU; validated; load idle"
+    want "the perturbation, $ADMINCON's uid, which does not hold $AU-gate, the group the gate's door admits (step 1), refuses boundary_unverified, admin's cause (gate-instruction.access-rule.allowed-uids.<that uid>) recorded as measured"
+    want "put back: the declaration byte for byte with allowed-uids naming $GATECON alone; root does not hold $AU-gate; validated; load idle"
   else
-    want "the perturbation, a uid outside $AU, refuses boundary_unverified, admin's cause (gate-instruction.access-rule.allowed-uids.$OPERATOR_UID) recorded as measured"
-    want "put back: $OPERATOR out of $AU, the declaration byte for byte with allowed-uids naming $GATECON alone; validated; load idle"
+    want "the perturbation, a uid outside $AU-gate, refuses boundary_unverified, admin's cause (gate-instruction.access-rule.allowed-uids.$OPERATOR_UID) recorded as measured"
+    want "put back: $OPERATOR out of $AU-gate, the declaration byte for byte with allowed-uids naming $GATECON alone; validated; load idle"
   fi
   [ "$APPLY" -eq 1 ] || return 0
   printf '   THIS IS A MEASUREMENT ON THE THROWAWAY AGENT %s, NOT THE LAYOUT create-agent.sh LAYS\n' "$A"
   local gatecon_uid orig moved perturbed probe_uid=$OPERATOR_UID before load start rows bind
   gatecon_uid=$(id -u "$GATECON") || fail "$GATECON's uid is read" "a uid" "id -u failed"
   # **The socket half in root mode** (#576): admin exempts uid 0 from the
-  # reach judgment (root reaches a 0770 socket by capability), so root leaving
-  # the agent's group could not refuse. The perturbation moves the rule to the
-  # box's admin-con account instead, a uid other than 0 that step 1 found
-  # outside $AU, the group the socket admits.
+  # reach judgment (root reaches the door by capability), so root leaving the
+  # gate group could not refuse. The perturbation moves the rule to the box's
+  # admin-con account instead, a uid other than 0 that step 1 found outside
+  # $AU-gate, the group the door admits.
   if [ "$ROOT_OPERATOR" -eq 1 ]; then
     probe_uid=$(id -u "$ADMINCON") || fail "$ADMINCON's uid is read" "a uid" "id -u failed"
   fi
@@ -1283,8 +1287,8 @@ step_5b() {
   perturbed=$(printf '%s' "$orig" | base64 -d | sed "s/^allowed-uids = \[$gatecon_uid\]\$/allowed-uids = [$probe_uid]/" | base64 -w0)
   RESTORE=(restore_rule "$orig")
   if [ "$ROOT_OPERATOR" -eq 0 ]; then
-    root gpasswd -a "$OPERATOR" "$AU" >/dev/null \
-      || { restore_now || true; fail "$OPERATOR joins $AU for the measurement" "gpasswd -a succeeds" "it failed"; }
+    root gpasswd -a "$OPERATOR" "$AU-gate" >/dev/null \
+      || { restore_now || true; fail "$OPERATOR joins $AU-gate for the measurement" "gpasswd -a succeeds" "it failed"; }
   fi
   printf '%s' "$moved" | base64 -d | root tee -- "$DECL" >/dev/null \
     || { restore_now || true; fail "the rule moves to $OPERATOR_UID" "the declaration is written" "it failed"; }
@@ -1346,18 +1350,18 @@ print(sum(1 for l in sys.stdin if l.strip() and "turn" not in json.loads(l)))')"
   expect_eq "SP_A was named at restore" true "$(json_at "$load" payload.lineage.named_at_restore)"
   ask unload; expect_state unload unloaded
   # The perturbation: the same moved rule with the operator out of the
-  # agent's group, which the socket's mode would turn away before the
-  # credential check (inventory's UidOutsideGroup). In root mode, the rule
-  # moved to the admin-con account's uid, outside the agent's group.
+  # gate group, which the door would turn away before the credential check
+  # (inventory's UidOutsideGroup). In root mode, the rule moved to the
+  # admin-con account's uid, outside the gate group.
   if [ "$ROOT_OPERATOR" -eq 0 ]; then
-    root gpasswd -d "$OPERATOR" "$AU" >/dev/null || fail "$OPERATOR leaves $AU for the perturbation" "gpasswd -d succeeds" "it failed"
+    root gpasswd -d "$OPERATOR" "$AU-gate" >/dev/null || fail "$OPERATOR leaves $AU-gate for the perturbation" "gpasswd -d succeeds" "it failed"
   fi
   printf '%s' "$perturbed" | base64 -d | root tee -- "$DECL" >/dev/null \
     || fail "the moved rule is written without [restore]" "the declaration is written" "it failed"
   [ "$ROOT_OPERATOR" -eq 0 ] || expect_eq "the rule names $ADMINCON's uid alone for the perturbation" \
     "allowed-uids = [$probe_uid]" "$(root grep -E '^allowed-uids = ' -- "$DECL" || true)"
   ask validate
-  expect_kind "validate with the rule's uid outside $AU" boundary_unverified
+  expect_kind "validate with the rule's uid outside $AU-gate" boundary_unverified
   # **Admin's cause is evidence, not a check** (as step 8b's): it names the
   # field on stderr, outside admin's interface, and the put-back validate
   # below is the control that pins the refusal to the moved uid.
@@ -1366,7 +1370,7 @@ print(sum(1 for l in sys.stdin if l.strip() and "turn" not in json.loads(l)))')"
   expect_eq "the declaration is back byte for byte" "$orig" "$(root base64 -w0 -- "$DECL")"
   expect_eq "the rule names $GATECON's uid alone again" "allowed-uids = [$gatecon_uid]" \
     "$(root grep -E '^allowed-uids = ' -- "$DECL" || true)"
-  expect_eq "$OPERATOR is out of $AU" no "$(holds_group "$OPERATOR" "$AU")"
+  expect_eq "$OPERATOR is out of $AU-gate" no "$(holds_group "$OPERATOR" "$AU-gate")"
   expect_lay "$DECL" "root:$AU-admin 640 regular file"
   ask validate; expect_kind validate validated
   ask load; expect_state load idle

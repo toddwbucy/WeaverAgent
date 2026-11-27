@@ -194,10 +194,24 @@ fn a_rule_the_mode_would_defeat_is_named_rather_than_left_to_connect() {
     assert_eq!(unreachable_peer_against("weaver-x", &mine, &includes), None);
 }
 
-/// **A half-provisioned box is named**, the user existing without its
-/// group being the state that fails the unit start with an opaque
-/// credential error. A box carrying neither is not refused on a fact
-/// about an agent it does not have.
+/// **A half-provisioned box is named**, the agent user existing without its
+/// gate group being the state that fails the load at the gate's door. A box
+/// carrying neither is not refused on a fact about an agent it does not
+/// have. Both remedies and the field name the gate group, `weaver-x-gate`,
+/// and never the agent's own group.
+/// **The reach check reads the gate group, not the agent's own**, per
+/// `weaver-admin-Spec` section 6. Every box carries a `root` user and a
+/// `root` group and no `root-gate` group, so asked about the identity `root`
+/// the lookup finds the user without its gate group. Perturbation: look up
+/// the identity's own group, and this reads the `root` group as present.
+#[test]
+fn the_reach_check_reads_the_gate_group() {
+    assert!(
+        matches!(resolved_group("root"), ResolvedGroup::UserWithoutGroup),
+        "the root user stands and no root-gate group does"
+    );
+}
+
 #[test]
 fn a_user_without_its_group_is_named_and_a_bare_box_is_not() {
     let rule = weaver_types::AccessRule {
@@ -213,16 +227,25 @@ fn a_user_without_its_group_is_named_and_a_bare_box_is_not() {
     // **The remedy is the one that works on that box.** A single sentence
     // covering both cases told this operator to run `gpasswd`, which is
     // what fails when the group is what is absent.
+    // An agent without its gate group was made under an earlier layout, and
+    // is made again rather than patched (the operator's ruling of
+    // 2026-10-08).
     let remedy = Unreachable::GroupMissing.remedy("weaver-x");
     assert!(
-        remedy.contains("groupadd") && !remedy.contains("gpasswd"),
-        "the missing-group remedy creates the group: {remedy}"
+        remedy.contains("weaver-x-gate")
+            && remedy.contains("create-agent.sh")
+            && !remedy.contains("gpasswd"),
+        "the missing-group remedy makes the agent again: {remedy}"
+    );
+    assert_eq!(
+        Unreachable::GroupMissing.field("weaver-x"),
+        "the weaver-x-gate group"
     );
     assert!(
         Unreachable::UidOutsideGroup(7)
             .remedy("weaver-x")
-            .contains("gpasswd"),
-        "the outside-uid remedy adds the member"
+            .contains("gpasswd -a <user> weaver-x-gate"),
+        "the outside-uid remedy adds the member to the gate group"
     );
     // And the field slot carries a field rather than a sentence.
     assert_eq!(
@@ -420,6 +443,82 @@ fn a_rule_the_mode_would_defeat_refuses_at_the_inventory() {
         "a uid inside the group passes the same walk"
     );
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// **A gate group that defeats the door is refused, each of the three by
+/// name** (`weaver-admin-Spec` section 6): root's gid, a group holding the
+/// agent's account, and a gid the agent runs under. The judgment names
+/// which, and the inventory refuses on it before the reach check.
+///
+/// Perturbation, one row each: drop the gid 0 arm, the member arm or the
+/// agent's gid arm of `door_defeated`, and that case's assertions fail.
+/// Drop the call in `judge_config`, and the inventory admits all three.
+#[test]
+fn a_gate_group_that_defeats_the_door_refuses_at_the_inventory() {
+    let identity = "weaver-karl";
+    let agent_gids = [65533_u32, 65532];
+    let group = |gid: u32, members: &[&str]| ResolvedGroup::Present {
+        gid,
+        members: members.iter().map(|m| m.to_string()).collect(),
+    };
+    let roots = group(0, &["weaver-gatecon"]);
+    let holds = group(u32::MAX - 1, &["weaver-gatecon", identity]);
+    let own = group(65533, &["weaver-gatecon"]);
+    let held = group(65532, &["weaver-gatecon"]);
+    let clean = group(u32::MAX - 1, &["weaver-gatecon"]);
+    assert_eq!(
+        door_defeated(identity, &roots, &agent_gids),
+        Some(DoorDefeat::RootsGroup)
+    );
+    assert_eq!(
+        door_defeated(identity, &holds, &agent_gids),
+        Some(DoorDefeat::HoldsTheAgent)
+    );
+    assert_eq!(
+        door_defeated(identity, &own, &agent_gids),
+        Some(DoorDefeat::TheAgentsGid(65533))
+    );
+    assert_eq!(
+        door_defeated(identity, &held, &agent_gids),
+        Some(DoorDefeat::TheAgentsGid(65532))
+    );
+    assert_eq!(door_defeated(identity, &clean, &agent_gids), None);
+    for absent in [
+        ResolvedGroup::NoAgent,
+        ResolvedGroup::UserWithoutGroup,
+        ResolvedGroup::Unresolvable,
+    ] {
+        assert_eq!(door_defeated(identity, &absent, &agent_gids), None);
+    }
+
+    // The wiring: the same groups through the whole walk.
+    let root = scratch("door-defeat");
+    let sink_dir = root.join("sink");
+    std::fs::create_dir_all(&sink_dir).expect("sink dir");
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).expect("home");
+    std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o700)).expect("mode");
+    let name = AgentName("karl".into());
+    let mut bound = boundary(&home, 65533);
+    bound.agent_gids = agent_gids.to_vec();
+    let source = config_source(&sink_dir);
+    for (case, defeating) in [
+        ("root's gid", &roots),
+        ("the agent a member", &holds),
+        ("the agent's own gid", &own),
+        ("a gid the agent holds", &held),
+    ] {
+        let refused = take_inventory_against(&name, &source, &bound, Some(defeating));
+        assert!(
+            matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)),
+            "{case}: {refused:?}"
+        );
+    }
+    let admitted = take_inventory_against(&name, &source, &bound, Some(&clean));
+    assert!(
+        admitted.is_ok(),
+        "a gate group the agent does not hold: {admitted:?}"
+    );
 }
 
 use std::os::unix::fs::PermissionsExt;

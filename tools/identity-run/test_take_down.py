@@ -92,7 +92,7 @@ class ThePlan(unittest.TestCase):
         self.lay()
         ran = self.plan("--agent", "a1", "--archive", self.archive)
         acting = [l for l in ran.stdout.splitlines() if re.match(r"\+ (rm|rmdir|userdel|groupdel|find) ", l)]
-        self.assertEqual(len(acting), 16, acting)
+        self.assertEqual(len(acting), 17, acting)
         for line in acting:
             with self.subTest(line=line):
                 self.assertRegex(line, r"weaver-a1\b|/a1\b")
@@ -100,7 +100,7 @@ class ThePlan(unittest.TestCase):
         self.assertEqual(re.findall(r"^\+ userdel (?:-r )?(\S+)$", ran.stdout, re.M),
                          ["weaver-a1", "weaver-a1-state", "weaver-a1-relay"])
         self.assertEqual(re.findall(r"^\+ groupdel (\S+)$", ran.stdout, re.M),
-                         ["weaver-a1", "weaver-a1-state", "weaver-a1-trace", "weaver-a1-admin"])
+                         ["weaver-a1", "weaver-a1-state", "weaver-a1-trace", "weaver-a1-admin", "weaver-a1-gate"])
 
     def test_a_territory_that_is_not_the_agents_own_refuses_before_any_step_past_the_reads(self):
         for row, territory in (("another agent's", "/var/lib/weaver-agent/b1/weaver-b1"),

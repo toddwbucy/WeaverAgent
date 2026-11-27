@@ -485,6 +485,7 @@ fn root_case(case: &str) {
             Ok(AgentAccount {
                 uid: 65534,
                 gid: 65534,
+                gate_gid: 65534,
                 home: f.boundary.home.clone(),
             })
         },
