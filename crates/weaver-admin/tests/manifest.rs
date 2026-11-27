@@ -101,13 +101,13 @@ fn no_runtime_no_bus_no_logging() {
     }
 }
 
-/// One binary with integration tests and no library surface, per the Spec's
-/// crate shape. Cargo's inventory covers every explicit and implicit route,
+/// Three binaries with integration tests and no library surface, per the
+/// Spec's crate shape. Cargo's inventory covers every explicit and implicit route,
 /// including a library outside src/lib.rs and a spaced TOML target header.
 /// Perturb with an extra binary, lib, build script, example or bench. A
 /// manifest comment spelling [[bin]] changes no target and must pass.
 #[test]
-fn two_binaries_and_no_library_surface() {
+fn three_binaries_and_no_library_surface() {
     let out = Command::new(env!("CARGO"))
         .args([
             "metadata",
@@ -140,13 +140,17 @@ fn two_binaries_and_no_library_surface() {
             target["name"].as_str(),
             target["kind"].as_array().unwrap().as_slice(),
         ) {
-            (Some("weaver-admin" | "weaver-trace-relay"), [kind]) if kind == "bin" => bins += 1,
+            (Some("weaver-admin" | "weaver-trace-relay" | "weaver-admin-service"), [kind])
+                if kind == "bin" =>
+            {
+                bins += 1
+            }
             (_, [kind]) if kind == "test" => {}
             _ => panic!("unexpected admin target: {target}"),
         }
     }
     assert_eq!(
-        bins, 2,
-        "exactly the two binaries, weaver-admin and weaver-trace-relay: {targets:?}"
+        bins, 3,
+        "exactly the three binaries, weaver-admin, weaver-trace-relay and weaver-admin-service: {targets:?}"
     );
 }
