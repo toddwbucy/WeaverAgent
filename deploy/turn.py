@@ -15,7 +15,8 @@ admin requires it), send one JSON line `{"text": ...}`, read one line back. The 
 this runs as the uid the declaration's `allowed-uids` names. For an agent
 `deploy/create-agent.sh` lays that is the box's gate-con account,
 `weaver-gatecon`, alone (weaver-gate-world-contract section 1), which reaches
-the socket through the agent's own group and reads the agent's root, root's
+the socket in the gate's door through the agent's gate group, never the agent's
+own group, and reads the agent's root, root's
 and readable by every uid. That account cannot traverse a checkout in the
 operator's home, so the source goes on standard input:
 
@@ -173,10 +174,13 @@ def main() -> int:
     root = read_key(base, agent, "coordination-root")
     if root is None:
         return 1
-    path = os.path.join(root, f"weaver-{agent}", "gate.sock")
-    # No existence check first: the socket's directory is the agent group's,
-    # and a shell that joined that group after it started cannot see the path
-    # it can still be told about. Connect, and read the error.
+    # **The gate's door** (weaver-admin-Spec section 6): admin lays
+    # weaver.run/<agent>/gate/ in the root-owned run directory, grouped to
+    # weaver-<agent>-gate, and the gate binds gate.sock there.
+    path = os.path.join(root, "weaver.run", agent, "gate", "gate.sock")
+    # No existence check first: the door is the gate group's, and a shell that
+    # joined that group after it started cannot see the path it can still be
+    # told about. Connect, and read the error.
     started = time.monotonic()
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         try:
@@ -185,11 +189,11 @@ def main() -> int:
             print(f"no gate at {path}: is {agent} loaded?", file=sys.stderr)
             return 1
         except PermissionError:
-            # **The socket's mode turns away a uid outside the agent's group**
-            # at the connect; the access rule turns away a uid in the group
-            # but not in the rule after the accept, as a close (below).
-            print(f"refused at {path}: this process does not hold group weaver-{agent}, which the gate's "
-                  f"socket admits by; the caller of an agent create-agent.sh lays is the box's gate-con "
+            # **The door turns away a uid outside the gate group** at the
+            # connect; the access rule turns away a uid in the group but not
+            # in the rule after the accept, as a close (below).
+            print(f"refused at {path}: this process does not hold group weaver-{agent}-gate, which the gate's "
+                  f"door admits by; the caller of an agent create-agent.sh lays is the box's gate-con "
                   f"account: sudo -n -u weaver-gatecon python3 -I - {agent} \"<text>\" < deploy/turn.py",
                   file=sys.stderr)
             return 1

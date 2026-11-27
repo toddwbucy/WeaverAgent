@@ -424,12 +424,12 @@ fn a_batch_evaluation_records_its_place_in_the_chain_before_its_first_call() {
         config[field] = json!(std::env::var(variable).expect(variable));
     }
     let coord = directory.0.join("coord");
-    std::fs::create_dir_all(coord.join("weaver-ste-fixture")).unwrap();
+    std::fs::create_dir_all(coord.join("weaver.run/ste-fixture/gate")).unwrap();
     let admin = directory.0.join("admin/ste-fixture");
     std::fs::create_dir_all(&admin).unwrap();
     std::fs::write(admin.join("coordination-root"), coord.to_str().unwrap()).unwrap();
     std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
-    let listener = UnixListener::bind(coord.join("weaver-ste-fixture/gate.sock")).unwrap();
+    let listener = UnixListener::bind(coord.join("weaver.run/ste-fixture/gate/gate.sock")).unwrap();
     listener.set_nonblocking(true).unwrap();
     let output = directory.0.join("batch-1");
     let run = output.clone();
