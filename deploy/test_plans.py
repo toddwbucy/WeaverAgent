@@ -4612,6 +4612,21 @@ esac
         self.assertIn("absolute path", result.stderr)
         self.assertEqual(self.calls(), [])
 
+    def test_both_stack_scripts_install_the_admin_service(self):
+        """**The service is installed with the other members** (act one,
+        child 5): the admin crate's third binary is a word of both scripts'
+        MEMBERS, so each builds, installs and records it, and update's plan
+        compares it. Perturbation: drop it from either script's MEMBERS and
+        that script's case fails, and update's plan shows no row for it."""
+        for name in ("bootstrap-stack.sh", "update-stack.sh"):
+            text = (self.repo / "deploy" / name).read_text()
+            with self.subTest(script=name):
+                members = text.split("MEMBERS=", 1)[1].splitlines()[0].strip('"').split()
+                self.assertIn("weaver-admin-service", members)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("  weaver-admin-service ", result.stdout)
+
     def test_stack_plan_builds_the_whole_workspace_and_compares_all_members(self):
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -4620,10 +4635,9 @@ esac
         self.assertIn("--workspace", build)
         self.assertNotIn("--exclude", build)
         self.assertIn("weaver-spu/cuda", build[-1])
-        # The six Rust members, and the shell's busybox and applet list (#29).
-        # Seven members and the shell's two files, the loop runner's three
-        # files and its pycache folder.
-        self.assertEqual(result.stdout.count("NEW"), 13)
+        # The eight members, the shell's busybox and applet list (#29), the
+        # loop runner's three files and its pycache folder.
+        self.assertEqual(result.stdout.count("NEW"), 14)
         for shell_file in ("busybox ", "busybox.applets "):
             self.assertIn("  " + shell_file, result.stdout)
         self.assertIn("plan only. rerun with --install", result.stdout)
@@ -6364,9 +6378,6 @@ esac
             with self.subTest(script=name):
                 self.assertIn('source "$REPO/deploy/loop-grant.sh"', text)
                 self.assertIn("weaver-loop-launch", text.split("MEMBERS=", 1)[1].splitlines()[0])
-                # The service is the admin crate's third binary, laid as the
-                # other members are (act one, child 5).
-                self.assertIn("weaver-admin-service", text.split("MEMBERS=", 1)[1].splitlines()[0].split())
                 for helper in ("loop_grant() {", "lay_loop() {", "loop_standing_refusal() {",
                                "loop_placing_refusal() {"):
                     self.assertNotIn(helper, text)
