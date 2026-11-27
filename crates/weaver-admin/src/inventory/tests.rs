@@ -194,10 +194,11 @@ fn a_rule_the_mode_would_defeat_is_named_rather_than_left_to_connect() {
     assert_eq!(unreachable_peer_against("weaver-x", &mine, &includes), None);
 }
 
-/// **A half-provisioned box is named**, the user existing without its
-/// group being the state that fails the unit start with an opaque
-/// credential error. A box carrying neither is not refused on a fact
-/// about an agent it does not have.
+/// **A half-provisioned box is named**, the agent user existing without its
+/// gate group being the state that fails the load at the gate's door. A box
+/// carrying neither is not refused on a fact about an agent it does not
+/// have. Both remedies and the field name the gate group, `weaver-x-gate`,
+/// and never the agent's own group.
 #[test]
 fn a_user_without_its_group_is_named_and_a_bare_box_is_not() {
     let rule = weaver_types::AccessRule {
@@ -213,16 +214,25 @@ fn a_user_without_its_group_is_named_and_a_bare_box_is_not() {
     // **The remedy is the one that works on that box.** A single sentence
     // covering both cases told this operator to run `gpasswd`, which is
     // what fails when the group is what is absent.
+    // An agent without its gate group was made under an earlier layout, and
+    // is made again rather than patched (the operator's ruling of
+    // 2026-10-08).
     let remedy = Unreachable::GroupMissing.remedy("weaver-x");
     assert!(
-        remedy.contains("groupadd") && !remedy.contains("gpasswd"),
-        "the missing-group remedy creates the group: {remedy}"
+        remedy.contains("weaver-x-gate")
+            && remedy.contains("create-agent.sh")
+            && !remedy.contains("gpasswd"),
+        "the missing-group remedy makes the agent again: {remedy}"
+    );
+    assert_eq!(
+        Unreachable::GroupMissing.field("weaver-x"),
+        "the weaver-x-gate group"
     );
     assert!(
         Unreachable::UidOutsideGroup(7)
             .remedy("weaver-x")
-            .contains("gpasswd"),
-        "the outside-uid remedy adds the member"
+            .contains("gpasswd -a <user> weaver-x-gate"),
+        "the outside-uid remedy adds the member to the gate group"
     );
     // And the field slot carries a field rather than a sentence.
     assert_eq!(

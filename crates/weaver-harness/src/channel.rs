@@ -185,19 +185,39 @@ pub struct ChildEnd {
 pub struct CoordinationListener {
     fd: OwnedFd,
     canonical_diagnostic: bool,
-    /// The path this listener bound, retained so the gate's socket can be
-    /// named beside it, per `weaver-harness-Spec` section 3.
+    /// The path this listener bound, retained so a composition that hands no
+    /// gate socket gets one named beside it, and so the listener can unlink
+    /// its own name.
     ///
-    /// **The one path this crate holds beyond the organ binaries**, and the
+    /// **A path this crate holds beyond the organ binaries**, and the
     /// exception is argued the same way: a deployment fact supplied at
     /// construction rather than a name resolved at use. Nothing here opens it
     /// again, the listener already being bound when this is stored.
     path: std::path::PathBuf,
+    /// The gate's socket as the composition root handed it, per
+    /// `weaver-harness-Spec` section 3: the worker takes it from admin, which
+    /// lays the gate's door (`weaver-admin-Spec` section 6), and never derives
+    /// it from the coordination socket.
+    gate: Option<std::path::PathBuf>,
 }
 
 impl CoordinationListener {
-    /// The gate's socket, named beside the coordination socket this listener
-    /// bound.
+    /// **The gate's socket as the composition root names it**, per
+    /// `weaver-harness-Spec` section 3. The worker hands the path admin gave
+    /// it, the gate's door under the root-owned run directory, so the socket
+    /// takes the gate group and not the agent's.
+    pub fn with_gate_socket(mut self, gate: std::path::PathBuf) -> Self {
+        self.gate = Some(gate);
+        self
+    }
+
+    /// The gate's socket: the one the composition root handed
+    /// ([`Self::with_gate_socket`]), or where it handed none, a name beside the
+    /// coordination socket this listener bound.
+    ///
+    /// **The worker always hands one.** The sibling stands only for a
+    /// composition that names none, which is the in-process tests. What
+    /// follows is the reasoning that composition still rests on.
     ///
     /// **A sibling, so the manager's lifecycle covers both.** The runtime
     /// directory is created at start and destroyed with the unit, per
@@ -222,6 +242,9 @@ impl CoordinationListener {
     /// a failure nobody reaches. Named here rather than fixed so the next
     /// composition root's author meets it before choosing a name.
     pub fn gate_socket(&self) -> std::path::PathBuf {
+        if let Some(gate) = &self.gate {
+            return gate.clone();
+        }
         self.path
             .parent()
             .unwrap_or(std::path::Path::new("/"))
@@ -382,6 +405,7 @@ pub fn bind_coordination(
         fd,
         canonical_diagnostic: false,
         path: socket_path.to_path_buf(),
+        gate: None,
     })
 }
 

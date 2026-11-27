@@ -276,28 +276,46 @@ fn the_stack_names_what_was_started_and_handed() {
 
 /// **The vector carries the root's values and nothing composed from the
 /// invocation's input**, per Spec
-/// section 6: the socket, the SPU the root names and the gate, then each
-/// named flag only where its value stands. Perturbation: substitute a
-/// fixed SPU path in `worker_arguments` and the first assertion fails;
-/// emit `--classify-binary` or the loop's two flags unconditionally and the
-/// bare vector carries them.
+/// section 6: the socket, the SPU the root names and the gate, the gate's
+/// socket in its door, then each named flag only where its value stands.
+/// Perturbation: substitute a fixed SPU path in `worker_arguments` and the
+/// first assertion fails; emit `--classify-binary` or the loop's two flags
+/// unconditionally and the bare vector carries them; name the gate's socket
+/// beside the coordination socket and the bare vector differs.
 #[test]
 fn the_roots_spu_reaches_the_vector() {
     let config = unread_config();
     let socket = config.coordination_socket();
-    let bare = start::worker_arguments(&socket, &config.spu, &config.gate, None, None, None);
+    let gate_socket = config.gate_socket();
+    assert_eq!(
+        gate_socket,
+        std::path::PathBuf::from("/nonexistent/weaver.run/alpha/gate/gate.sock"),
+        "the gate's socket stands in its door under the run directory"
+    );
+    let bare = start::worker_arguments(
+        &socket,
+        &config.spu,
+        &config.gate,
+        &gate_socket,
+        None,
+        None,
+        None,
+    );
     assert_eq!(
         bare,
         vec![
             socket.display().to_string(),
             "/nonexistent/alternate/custom-spu".to_string(),
             "/nonexistent/bin/weaver-gate".to_string(),
+            "--gate-socket".to_string(),
+            "/nonexistent/weaver.run/alpha/gate/gate.sock".to_string(),
         ]
     );
     let full = start::worker_arguments(
         &socket,
         &config.spu,
         &config.gate,
+        &gate_socket,
         Some("4096"),
         Some(std::path::Path::new("/opt/weaver/bin/weaver-spu-classify")),
         Some((
@@ -2880,6 +2898,67 @@ fn the_coordination_root_is_judged_before_any_lock() {
         "an open directory above the root"
     );
     mode(&base, 0o755);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// **The gate's door is laid `2750`, owned by the agent's account and grouped
+/// to the gate group**, per Spec section 6: made where absent, repaired where
+/// it stands at another mode, a `gate.sock` a dead gate left cleared, and a
+/// link at its name refused. Judged with this test's uid and primary group,
+/// production's being the agent's and the gate group's. Perturbation: lay the
+/// door at `0750`, or leave the stale socket, or follow the link, and the
+/// matching assertion fails.
+#[test]
+fn the_gates_door_is_laid_setgid_to_the_gate_group() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let me = nix::unistd::getuid().as_raw();
+    let my_group = nix::unistd::getgid().as_raw();
+    let base = std::env::temp_dir().join(format!("weaver-admin-door-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let run = base.join("weaver.run").join("a");
+    std::fs::create_dir_all(&run).unwrap();
+    let door = start::prepare_gate_door(&run, me, my_group).unwrap();
+    assert_eq!(door, run.join("gate"));
+    assert_eq!(start::gate_socket(&run), run.join("gate").join("gate.sock"));
+    let laid = std::fs::symlink_metadata(&door).unwrap();
+    assert!(laid.is_dir());
+    assert_eq!(
+        laid.mode() & 0o7777,
+        0o2750,
+        "the door is setgid and closed to others"
+    );
+    assert_eq!((laid.uid(), laid.gid()), (me, my_group));
+    // A door another act left wider is repaired.
+    std::fs::set_permissions(&door, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let stale = door.join("gate.sock");
+    drop(std::os::unix::net::UnixListener::bind(&stale).unwrap());
+    assert!(std::fs::symlink_metadata(&stale).is_ok());
+    start::prepare_gate_door(&run, me, my_group).unwrap();
+    assert_eq!(
+        std::fs::symlink_metadata(&door).unwrap().mode() & 0o7777,
+        0o2750,
+        "a wider door is set back"
+    );
+    assert!(
+        std::fs::symlink_metadata(&stale).is_err(),
+        "a stale gate.sock is cleared"
+    );
+    // A link at the door's name is refused, and its target left as it was.
+    std::fs::remove_dir(&door).unwrap();
+    let elsewhere = base.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &door).unwrap();
+    assert_eq!(
+        start::prepare_gate_door(&run, me, my_group).err(),
+        Some(LifecycleRefusal::BoundaryUnverified),
+        "a link at the door's name"
+    );
+    assert_eq!(
+        std::fs::metadata(&elsewhere).unwrap().mode() & 0o7777,
+        0o700,
+        "and the link's target is not repaired"
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
 
