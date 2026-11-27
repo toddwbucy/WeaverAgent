@@ -361,7 +361,8 @@ fn door_client_dials_as_its_caller() {
 /// The watch: re-runs the instrument inside `unshare --map-auto
 /// --map-root-user`, where the test is root and the gate and the dialers run
 /// as mapped uids; run as root already, it runs it in place. A box with no
-/// user namespace says so and skips.
+/// user namespace says so and skips, and a run that passed prints a line
+/// beginning `RAN door watch:`, which a gate reads with `--nocapture`.
 #[test]
 fn the_door_is_watched_inside_a_user_namespace() {
     let exe = std::env::current_exe().expect("the test binary names itself");
@@ -410,5 +411,16 @@ fn the_door_is_watched_inside_a_user_namespace() {
         !folder.exists(),
         "the instrument left {} behind",
         folder.display()
+    );
+    // **A run says so**, as a skip does, so a gate that shows this test's
+    // output can tell a watch that ran from one that skipped: a passing
+    // test's output is otherwise captured and both read `ok`.
+    println!(
+        "RAN door watch: the instrument passed {}",
+        if nix::unistd::geteuid().is_root() {
+            "in place, as root"
+        } else {
+            "inside a user namespace"
+        }
     );
 }

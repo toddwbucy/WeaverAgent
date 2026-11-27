@@ -83,13 +83,16 @@ pub fn gate_socket(run_directory: &Path) -> PathBuf {
 /// gate group, `2750`, so a socket the gate binds there takes the gate group
 /// and not the agent's. A `gate.sock` a dead gate left is removed, which is
 /// safe only under both locks. Called as root, before the worker forks.
+///
+/// **It takes the account whole and picks the gate group here**, so no
+/// caller chooses which of the account's two groups the door gets, and the
+/// one choice is the test's (`the_gates_door_is_laid_setgid_to_the_gate_group`).
 pub fn prepare_gate_door(
     run_directory: &Path,
-    uid: u32,
-    gate_gid: u32,
+    account: &crate::AgentAccount,
 ) -> Result<PathBuf, LifecycleRefusal> {
     let door = gate_door(run_directory);
-    hold_directory(&door, uid, gate_gid, 0o2750)?;
+    hold_directory(&door, account.uid, account.gate_gid, 0o2750)?;
     let stale = door.join("gate.sock");
     if std::fs::symlink_metadata(&stale).is_ok() && std::fs::remove_file(&stale).is_err() {
         return Err(refuse_path("cannot be cleared", &stale));

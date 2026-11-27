@@ -498,10 +498,29 @@ fn judge_config(
         } => &gate_instruction.access_rule,
         _ => &empty_rule,
     };
-    if let Some(unreachable) = match group {
-        Some(known) => unreachable_peer_against(&identity, rule, known),
-        None => unreachable_peer(&identity, rule),
-    } {
+    // `None` reads the host, which is every caller outside the tests.
+    let host;
+    let known = match group {
+        Some(known) => known,
+        None => {
+            host = resolved_group(&identity);
+            &host
+        }
+    };
+    // **A gate group that defeats the door refuses first**, named, per
+    // `weaver-admin-Spec` section 6: the door admits by the gate group alone
+    // because the agent never holds it, so a group that is root's, that is
+    // the agent's own or that holds the agent leaves the door no wall.
+    if let Some(defeat) = door_defeated(&identity, known, &boundary.agent_gids) {
+        diag!(
+            "boundary unverified: the {} group {}, so the gate's door would admit the agent. \
+             Take the agent down and make it again with create-agent.sh.",
+            gate_group_of(&identity),
+            defeat.reason(&identity)
+        );
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    }
+    if let Some(unreachable) = unreachable_peer_against(&identity, rule, known) {
         // **`BoundaryUnverified` and not `ConfigInvalid`.** The declaration is
         // well formed and the fault is the box's: the operator wrote a uid
         // that ought to reach the socket and the provisioning has not put it
@@ -657,11 +676,61 @@ pub fn declaration_digest(source: &str) -> String {
 /// a fact it could not establish, the load then failing later and loudly
 /// rather than here and wrongly.
 ///
+/// The gate group is the one judged: the door is grouped to it, and the
+/// agent's own group reaches nothing there. `take_inventory_against`
+/// resolves it once and hands it to this check and to `door_defeated`, so
+/// this host-reading form is the tests' alone.
+///
 /// conforms: admin-access-rule-reaches-the-socket
+#[cfg(test)]
 fn unreachable_peer(identity: &str, rule: &weaver_types::AccessRule) -> Option<Unreachable> {
-    // The gate group is the one judged: the door is grouped to it, and the
-    // agent's own group reaches nothing there.
     unreachable_peer_against(identity, rule, &resolved_group(identity))
+}
+
+/// Why a gate group gives the door no wall: each of the three lets the
+/// agent's own processes hold the group the door admits by, and the kernel
+/// keeps the setgid bit and the gate admits the dialer by that group.
+#[derive(Debug, PartialEq, Eq)]
+enum DoorDefeat {
+    /// The gate group is gid 0, root's group.
+    RootsGroup,
+    /// The agent's account is a member of the gate group by name.
+    HoldsTheAgent,
+    /// The gate group's gid is one the agent runs under: its own group,
+    /// its primary or a group it holds.
+    TheAgentsGid(u32),
+}
+
+impl DoorDefeat {
+    fn reason(&self, identity: &str) -> String {
+        match self {
+            DoorDefeat::RootsGroup => "is gid 0, root's group".to_string(),
+            DoorDefeat::HoldsTheAgent => format!("holds the {identity} account as a member"),
+            DoorDefeat::TheAgentsGid(gid) => {
+                format!("has gid {gid}, which the {identity} account runs under")
+            }
+        }
+    }
+}
+
+/// The judgment, against a group already resolved and the gids the agent
+/// runs under (`Boundary::agent_gids`). An absent or unreadable group judges
+/// nothing here: the reach check names an absent group where the agent user
+/// stands.
+fn door_defeated(identity: &str, group: &ResolvedGroup, agent_gids: &[u32]) -> Option<DoorDefeat> {
+    let ResolvedGroup::Present { gid, members } = group else {
+        return None;
+    };
+    if *gid == 0 {
+        return Some(DoorDefeat::RootsGroup);
+    }
+    if members.iter().any(|member| member == identity) {
+        return Some(DoorDefeat::HoldsTheAgent);
+    }
+    if agent_gids.contains(gid) {
+        return Some(DoorDefeat::TheAgentsGid(*gid));
+    }
+    None
 }
 
 /// Why a declaration's rule cannot be met by the socket it will meet.

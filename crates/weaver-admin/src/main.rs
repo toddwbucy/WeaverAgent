@@ -1472,7 +1472,7 @@ fn run_load(
     // **The gate's door is laid before any fork** (Spec section 6), as root,
     // grouped to the gate group the gate connector holds in place of the
     // agent's own group.
-    start::prepare_gate_door(&config.run_directory(), account.uid, account.gate_gid)?;
+    start::prepare_gate_door(&config.run_directory(), &account)?;
     let worker_log = start::open_log(&config.worker_log(), Some(config.file_owner()))
         .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
     // **The run is minted before the agent's cgroup is made**, per Spec
