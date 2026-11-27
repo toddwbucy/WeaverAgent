@@ -1196,7 +1196,7 @@ It reaches no agent and no privileged program.
   Section 8 here, and the pointer in `weaver-admin-Spec` section 2, land first, in a
   stack of documents alone, with the four exchanges of WeaverAgent issue 645. Act one's
   code stack builds the service and its socket, and moves sections 0 to 3 here,
-  `weaver-admin-Spec` sections 1 (the third binary, with the manifest test
-  `two_binaries_and_no_library_surface`), 2, 4 (the name `admin` refused), 8 and 9, and
+  `weaver-admin-Spec` sections 1 (the third binary, with the manifest test that pins
+  the binaries), 2, 4 (the name `admin` refused), 8 and 9, and
   `weaver-types-Spec` section 3.1's `trace-reader` to it. WeaverWeb's half, the connector asking the socket in place of
   sudo and the relay, is the other seat's, against section 8.
