@@ -130,6 +130,32 @@ class ThePlan(unittest.TestCase):
         ran = self.plan("--agent", "a1", "--archive", self.archive)
         self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
 
+    def test_an_archive_inside_a_folder_the_take_down_removes_refuses_before_anything(self):
+        # Review of #655: the archive is written at step 2 and the folders removed at
+        # steps 3 to 7, so an archive inside one would be taken with it. Judged by
+        # canonical path, a link or a `..` reaching inside refuses as a plain path does.
+        # Perturbation: drop the judgment, and every row plans on.
+        self.lay()
+        link = os.path.join(self.scratch.name, "to-root")
+        os.symlink(os.path.join(self.base, "a1"), link)
+        for row, archive in (("the agent's folder", "/var/lib/weaver-agent/a1"),
+                             ("inside the agent's folder", "/var/lib/weaver-agent/a1/kept"),
+                             ("inside the territory", "/var/lib/weaver-agent/a1/weaver-a1/kept"),
+                             ("inside the root", os.path.join(self.base, "a1", "kept")),
+                             ("inside its own folder", "/etc/weaver/a1/kept"),
+                             ("inside the run directory", "/run/weaver.run/a1/kept"),
+                             ("inside the runtime directory", "/run/weaver-a1/kept"),
+                             ("through a link", os.path.join(link, "kept")),
+                             ("through a ..", "/var/lib/weaver-agent/b1/../a1/kept")):
+            with self.subTest(row=row):
+                ran = self.plan("--agent", "a1", "--archive", archive)
+                self.assertEqual(ran.returncode, 2, ran.stdout + ran.stderr)
+                self.assertIn("which this take-down removes", ran.stderr)
+                self.assertNotIn("== step 2", ran.stdout)
+        # The control: an archive beside the agent's folder plans.
+        ran = self.plan("--agent", "a1", "--archive", "/var/lib/weaver-agent/a1-kept")
+        self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+
     def test_every_folder_is_removed_on_its_own_file_system(self):
         self.lay()
         ran = self.plan("--agent", "a1", "--archive", self.archive)

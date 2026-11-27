@@ -1205,6 +1205,8 @@ fi
 # holds anything, refuses before anything is moved.
 LOOP_REFUSAL=$(loop_standing_refusal)
 [ -z "$LOOP_REFUSAL" ] || die "$LOOP_REFUSAL"
+LOOP_REFUSAL=$(loop_placing_refusal)
+[ -z "$LOOP_REFUSAL" ] || die "$LOOP_REFUSAL"
 LOOP_GRANT=$(loop_grant "$LOOP_PYTHON" "$LOOP_PYCACHE") \
   || die "the loop runner's grant could not be computed from $LOOP_PYTHON"
 LOOP_CHANGED=()

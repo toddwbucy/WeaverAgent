@@ -1000,11 +1000,17 @@ the launcher's path and the grant file's as `--loop-launcher` and `--loop-grant`
   close the near end, and refuse the load after it, `ConfigInvalid` naming `loop`. A
   grant file's path that is not UTF-8 refuses the same before any fork. Where the pair,
   the pipe or the fork itself fails, the load is refused `BindFailed`. The rollback
-  lowers the gate and the SPU. The worker's standard error carries one line, `{"organ":
-  "harness", "loop": "refused", ...}` for `ConfigInvalid` and `"loop": "not-started"`
-  for `BindFailed`, with the reason, the launcher's and the grant file's paths, and,
-  where one was said, the launcher's or the runner's last line, so a launcher or a grant
-  that does not stand is named. No test reads the line.
+  lowers the gate and the SPU. Until it does, the gate stands, and a dialer's request
+  that reaches the worker is refused, never turned by the compiled loop: a run whose
+  enter was refused after the load serves no dialer. The worker's standard error carries
+  one line, `{"organ": "harness", "loop": "refused", ...}` for `ConfigInvalid` and
+  `"loop": "not-started"` for `BindFailed`, with the reason, the launcher's and the
+  grant file's paths, and, where one was said, the launcher's or the runner's last line,
+  so a launcher or a grant that does not stand is named. Two tests read the line
+  (`a_refused_starts_line_is_written_best_effort` for `ConfigInvalid`,
+  `a_failed_forks_line_is_written_best_effort` for `BindFailed`, through a failed pair).
+  Where the writer takes it, they pin its `organ` and its `loop`, and for the pair its
+  reason. Where the writer fails, they pin the same refusal.
 - **The turn.** A run holding the loop arm answers each turn by the relay's pass,
   through the same seat, and calls no compiled entry. A run holding none calls the entry.
   The choice is the run's own.
