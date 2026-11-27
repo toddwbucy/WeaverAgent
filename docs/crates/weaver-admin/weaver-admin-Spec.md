@@ -1542,9 +1542,11 @@ section 7 landing at the one site that constructs. It is the one site because
 the same validated name is what section 6's start step interpolates,
 so a name reaching a path or a process has one origin and review reads that origin
 rather than every use. **A name ending in a reserved suffix refuses**: `-state`,
-`-trace`, `-relay`, `-admin` and `-admincon`, the last being the per-agent connector
-account of the operator's ruling of 2026-10-03 on #50, which an agent whose gate rule
-names the operator still carries. The accounts and groups the box provisions for an
+`-trace`, `-relay`, `-admin`, `-admincon` and `-gate`. `-admincon` is the per-agent
+connector account of the operator's ruling of 2026-10-03 on #50, which an agent whose
+gate rule names the operator still carries. `-gate` is the gate's door group,
+`weaver-<name>-gate`, which the gate connector holds in place of the agent's own
+group. The accounts and groups the box provisions for an
 agent append those suffixes to its name, `weaver-<name>-state`, `weaver-<name>-relay`
 and the rest, so an agent named `x-relay` would own `weaver-x-relay`, which is agent
 `x`'s relay account, and the collision would hand one agent another's identity. The
@@ -1578,6 +1580,14 @@ of that name stands:
 - `-admin`: the access group, `weaver-<name>-admin`.
 - `-admincon`: the per-agent connector account of an agent laid before 2026-11-10,
   which `deploy/decommission.sh` still finds and removes.
+- `-gate`: the gate's door group, `weaver-<name>-gate`, the one group the gate
+  connector holds for the agent.
+
+**The account `weaver-admin` is the box's third account**, beside the two connectors'.
+The administrative service runs as it, on the operator's ruling of 2026-11-26. No agent
+can take the name `admin`, since it begins `admin`, and `deploy/decommission.sh` lists
+the account with the connectors' as the box's, never as an agent's, and removes it after
+every agent's accounts.
 
 **The loop folder.** `validate` and `load` look in the agent's own folder for `loop/`,
 under a serving binding alone. Where the agent's folder or `loop/` does not stand, the

@@ -4409,7 +4409,14 @@ fn a_failed_dial_reads_the_worker_exit() {
 /// Perturbation: drop the suffix check and each name passes.
 #[test]
 fn a_reserved_suffix_refuses() {
-    for reserved in ["x-state", "x-trace", "x-relay", "x-admin", "x-admincon"] {
+    for reserved in [
+        "x-state",
+        "x-trace",
+        "x-relay",
+        "x-admin",
+        "x-admincon",
+        "x-gate",
+    ] {
         assert!(!well_formed(reserved), "{reserved}");
         assert_eq!(
             load_service_config(&AgentName(reserved.into()), false).err(),
@@ -4418,6 +4425,7 @@ fn a_reserved_suffix_refuses() {
         );
     }
     assert!(well_formed("x-relays"), "a suffix is matched whole");
+    assert!(well_formed("x-gates"), "the gate's suffix is matched whole");
 }
 
 /// **The names `gatecon` and `admincon` refuse as a reserved suffix does**,

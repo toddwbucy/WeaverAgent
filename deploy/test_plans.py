@@ -3066,6 +3066,27 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
                 self.assertIn(f"'{reserved}' is reserved", result.stderr)
         self.assertEqual(self.calls(), [])
 
+    def test_the_name_is_lowercase_letters_and_digits_two_to_sixteen(self):
+        # create-agent.sh's first name check, ^[a-z][a-z0-9]{1,15}$: the name is
+        # a unix user, a group and a directory, so it is bounded to what all
+        # three take without quoting, and no hyphen reaches a reserved suffix.
+        # No test drove the pattern before. Perturbation: widen it to admit a
+        # hyphen, an upper-case letter or a seventeenth character, and its row
+        # plans.
+        said = "the name is lowercase letters and digits, 2 to 16 characters"
+        for name in ("a", "M1", "1m", "m-1", "m_1", "m1-gate", "m1.x", "a" * 17, "m1 "):
+            with self.subTest(refused=name):
+                self.install_stack()
+                result = self.run_script("create-agent.sh", name, "--artifact", str(self.artifact))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(said, result.stderr)
+        self.assertEqual(self.calls(), [])
+        for name in ("m1", "ab", "a" * 16):
+            with self.subTest(admitted=name):
+                self.install_stack()
+                result = self.run_script("create-agent.sh", name, "--artifact", str(self.artifact))
+                self.assertNotIn(said, result.stderr)
+
     def test_a_name_beginning_admin_or_stack_is_not_an_agents(self):
         # weaver-admin-Spec section 4: the agent's folder /etc/weaver/<name>/
         # stands beside admin's config bases, every /etc/weaver/admin*, which
@@ -3084,7 +3105,8 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
         script = (DEPLOY / "create-agent.sh").read_text()
         fn = script[script.index("agent_name_ok() {"):]
         fn = fn[:fn.index("\n}\n") + 3]
-        for name, admitted in (("adminx", False), ("stack", False), ("admin", False), ("xadmin", True), ("stacks", True)):
+        for name, admitted in (("adminx", False), ("stack", False), ("admin", False), ("xadmin", True), ("stacks", True),
+                               ("m1-gate", False), ("m1-gates", True), ("gate", True)):
             with self.subTest(agent_name_ok=name):
                 run = subprocess.run(["bash", "-c", fn + 'agent_name_ok "$1"', "x", name], capture_output=True)
                 self.assertEqual(run.returncode == 0, admitted, name)
@@ -7049,6 +7071,10 @@ esac
         marker = self.stack / "verify-lifecycle-m1"
         cases = (
             ("bad name", {}, None, ["--agent", "M1"], "lowercase letters and digits"),
+            ("reserved name admin", {}, None, ["--agent", "admin"], "'admin' is reserved"),
+            ("reserved name adminx", {}, None, ["--agent", "adminx"], "'adminx' is reserved"),
+            ("reserved name gatecon", {}, None, ["--agent", "gatecon"], "'gatecon' is reserved"),
+            ("reserved name stack", {}, None, ["--agent", "stack"], "'stack' is reserved"),
             ("existing root", {}, "root", [], "already exists"),
             ("existing account", {"COLLISION": "weaver-m1-relay"}, None, [], "the account weaver-m1-relay already exists"),
             ("existing group", {"COLLISION_GROUP": "weaver-m1-admin"}, None, [], "the group weaver-m1-admin already exists"),
@@ -11296,6 +11322,8 @@ class LifecycleBoxGroupsTests(unittest.TestCase):
                 ("weaver-gatecon", "weaver-gatecon weaver-m1 wheel", "wheel"),
                 ("weaver-gatecon", "weaver-gatecon weaver-m1-relay weaver-m1-state", "weaver-m1-relay weaver-m1-state"),
                 ("weaver-gatecon", "weaver-gatecon weaver-admincon weaver-old-admincon", "weaver-admincon weaver-old-admincon"),
+                ("weaver-gatecon", "weaver-gatecon weaver-m1 weaver-m1-gate weaver-stack weaver-adminx",
+                 "weaver-m1-gate weaver-stack weaver-adminx"),
                 ("weaver-admincon", "weaver-admincon weaver-m1-state weaver-m1-admin", "none"),
                 ("weaver-admincon", "weaver-admincon weaver-m1-state docker", "docker"),
                 ("weaver-admincon", "weaver-admincon weaver-m1 weaver-m1-trace weaver-gatecon",
@@ -11794,34 +11822,36 @@ class DecommissionTests(unittest.TestCase):
         # so each names its agent. Perturbation: drop a suffix, and its account
         # is taken for an agent of its own.
         for name in ("weaver-m1", "weaver-m1-state", "weaver-m1-relay", "weaver-m1-admincon",
-                     "weaver-m1-trace", "weaver-m1-admin"):
+                     "weaver-m1-trace", "weaver-m1-admin", "weaver-m1-gate"):
             with self.subTest(name=name):
                 self.assertEqual(self.run_fn("strip_suffix", name), "m1")
 
     def test_the_box_accounts_are_not_agents_and_go_last(self):
-        # **The box's two connector accounts are listed apart** (weaver-admin-
-        # Spec section 2, the operator's rulings of 2026-11-10): never read as
-        # agents `gatecon` and `admincon`, ordered after every agent's names so
-        # the purge removes them last, and a process under one is said as
-        # WeaverWeb's connector and not counted a run. Perturbations: drop the
-        # box test from the discovery loop and `gatecon` is an agent; list the
-        # names in getent's order and the box's go first.
+        # **The box's three accounts are listed apart** (weaver-admin-Spec
+        # sections 2 and 4, the operator's rulings of 2026-11-10 and
+        # 2026-11-26): never read as agents `gatecon`, `admincon` and `admin`,
+        # ordered after every agent's names so the purge removes them last, and
+        # a process under one is said as the box's and not counted a run.
+        # Perturbations: drop the box test from the discovery loop and
+        # `gatecon` is an agent; drop weaver-admin from the box accounts and
+        # `admin` is; list the names in getent's order and the box's go first.
         getent = Path(self.bin.name) / "getent"
         getent.write_text('#!/bin/sh\n'
                           'case "$1" in\n'
                           '  passwd) printf "%s\\n" "weaver-gatecon:x:990:990::/:/usr/sbin/nologin" '
                           '"root:x:0:0::/root:/bin/sh" "weaver-a:x:980:980::/home/weaver-a:/usr/sbin/nologin" '
-                          '"weaver-admincon:x:991:991::/:/usr/sbin/nologin" "weaver-a-state:x:981:981::/:/usr/sbin/nologin" ;;\n'
+                          '"weaver-admincon:x:991:991::/:/usr/sbin/nologin" "weaver-a-state:x:981:981::/:/usr/sbin/nologin" '
+                          '"weaver-admin:x:992:992::/:/usr/sbin/nologin" ;;\n'
                           '  group) printf "%s\\n" "weaver-admincon:x:991:" "weaver-a:x:980:weaver-gatecon" '
-                          '"weaver-gatecon:x:990:" "weaver-a-admin:x:982:weaver-admincon" ;;\n'
+                          '"weaver-gatecon:x:990:" "weaver-admin:x:992:" "weaver-a-admin:x:982:weaver-admincon" ;;\n'
                           'esac\n')
         getent.chmod(0o755)
         env = {**os.environ, "PATH": self.bin.name + os.pathsep + os.environ["PATH"]}
         env.pop("BASH_ENV", None)
         program = (shell_function(self.script, "is_box_account") + shell_function(self.script, "weaver_names")
                    + 'weaver_names "$1"')
-        for db, want in (("passwd", ["weaver-a", "weaver-a-state", "weaver-gatecon", "weaver-admincon"]),
-                         ("group", ["weaver-a", "weaver-a-admin", "weaver-admincon", "weaver-gatecon"])):
+        for db, want in (("passwd", ["weaver-a", "weaver-a-state", "weaver-gatecon", "weaver-admincon", "weaver-admin"]),
+                         ("group", ["weaver-a", "weaver-a-admin", "weaver-admincon", "weaver-gatecon", "weaver-admin"])):
             with self.subTest(db=db):
                 run = subprocess.run(["bash", "-c", program, "x", db], env=env, text=True,
                                      capture_output=True, timeout=20)

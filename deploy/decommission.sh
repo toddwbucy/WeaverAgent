@@ -168,18 +168,21 @@ for b in "${!BIN_DIRS[@]}"; do PREFIXES["$(dirname "$b")"]=1; done
 # Agents: roots, allow-lists, and accounts.
 declare -A AGENTS=()
 for a in $ALLOWED; do AGENTS["$a"]=1; done
-# **The box's two connector accounts are not agents** (weaver-admin-Spec
-# section 2, the operator's rulings of 2026-11-10): `weaver-gatecon` runs
-# WeaverWeb's gate-con and `weaver-admincon` its admin-con, one of each per
-# box, laid by create-agent.sh. They are listed apart, never read as agents,
-# and removed after every agent's accounts.
+# **The box's three accounts are not agents** (weaver-admin-Spec sections 2
+# and 4, the operator's rulings of 2026-11-10 and 2026-11-26): `weaver-gatecon`
+# runs WeaverWeb's gate-con and `weaver-admincon` its admin-con, one of each per
+# box, laid by create-agent.sh, and `weaver-admin` is the account the
+# administrative service runs as. They are listed apart, never read as agents,
+# and removed after every agent's accounts. `weaver-admin` would otherwise strip
+# to an agent named `admin`, a name no agent takes.
 is_box_account() {
-  [ "$1" = weaver-gatecon ] || [ "$1" = weaver-admincon ]
+  [ "$1" = weaver-gatecon ] || [ "$1" = weaver-admincon ] || [ "$1" = weaver-admin ]
 }
 box_account_role() {
   case "$1" in
     weaver-gatecon) printf "the box's gate-con account, which WeaverWeb's gate-con runs under" ;;
     weaver-admincon) printf "the box's admin-con account, which WeaverWeb's admin-con runs under" ;;
+    weaver-admin) printf "the box's weaver-admin account, which the administrative service runs under" ;;
   esac
 }
 # **Every agent's accounts first and the box's accounts last**, so the purge,
@@ -202,7 +205,7 @@ mapfile -t WEAVER_GROUPS < <(weaver_names group)
 # The per-agent `-admincon` stays among them for an agent laid with one.
 strip_suffix() {
   local n=${1#weaver-}
-  for suffix in -admincon -state -relay -trace -admin; do
+  for suffix in -admincon -state -relay -trace -admin -gate; do
     [ "${n%"$suffix"}" != "$n" ] && { printf '%s' "${n%"$suffix"}"; return; }
   done
   printf '%s' "$n"
@@ -250,7 +253,7 @@ for a in "${!AGENTS[@]}"; do
 done
 plan "accounts: ${WEAVER_USERS[*]:-none}"
 plan "groups:   ${WEAVER_GROUPS[*]:-none}"
-for u in weaver-gatecon weaver-admincon; do
+for u in weaver-gatecon weaver-admincon weaver-admin; do
   getent passwd "$u" >/dev/null 2>&1 && plan "$u: $(box_account_role "$u"), not an agent; the purge removes it after every agent's accounts"
 done
 
@@ -1728,7 +1731,7 @@ while IFS= read -r line; do
   case $kind in
     # **A group userdel already removed is done** (#140): userdel removes a
     # user's private group with the user (USERGROUPS_ENAB), so the box's
-    # weaver-gatecon and weaver-admincon, the list's last groups, and an older
+    # weaver-gatecon, weaver-admincon and weaver-admin, the list's last groups, and an older
     # agent's weaver-<agent>-admincon are gone by now. Each is
     # said, never taken for a failure, and every arm ends in a status this
     # loop's last line can stand on, so no caller under `set -e` stops here.
