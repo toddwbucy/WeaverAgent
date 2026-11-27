@@ -31,7 +31,7 @@ the Spec's. What shape a message takes on the wire is this document's.
 **The filename carries the `-contract` suffix like every contract, on the human's
 correction of 2026-08-01.** A contract is named as one whatever its parties, per
 Document Format section 2, and the external category is carried by the party prose
-below and by the party-edge category the Format is owed per section 8, never by a
+below and by the party-edge category the Format is owed per section 9, never by a
 withheld suffix. An earlier form of this document withheld it as an
 exclusion-by-naming mark and was corrected the same day.
 
@@ -79,7 +79,9 @@ something of the operator's stands behind it, and neither side sees the other's
 interior. **The trace door** is the relay's door, standing only for a file sink,
 reachable by the agent's own access group alone and admitting exactly one declared
 reader, whose identity the box verifies and the caller never asserts. Where it stands
-and how it is reached are `weaver-admin-Spec` section 6's. None is network ingress, and
+and how it is reached are `weaver-admin-Spec` section 6's. **Section 8 states a fourth, the
+service's socket**, on the operator's rulings of 2026-11-26: act one's code stack builds
+it, and moves the command lines and the trace door behind it. None is network ingress, and
 none breaches anything Gate holds, on the grounds `weaver-admin-PRD` section 3 states.
 
 ## 2. What crosses in
@@ -561,7 +563,582 @@ binds a party to. An edge would assert a coupling the contract spends a paragrap
 denying. Whether G4 wants a form for a published-format draw is a question for that
 gate rather than a defect in this clause.
 
-## 8. What this document changes elsewhere
+## 8. The service's socket
+
+**On the operator's rulings of 2026-11-26**, the sudo rule moves from the admin
+connector to the weaver-admin account, under which a standing service runs, and the
+connector asks that service four things on one local socket: which verbs are granted,
+run this verb, the trace from this position, and the admin log's lines (his answer 77
+(f), the second shape, with two conditions this section carries). The four exchanges
+are those the WeaverWeb seat filed as WeaverAgent issue 645, and this section takes or
+answers each of them. **Act one's code stack builds it**: until that stack lands,
+sections 0 to 3 stand as written, the connector holding the rule and dialling the trace
+door, and that stack changes them to this section.
+
+**Three things carry the name, and this section says which one at each site.** The
+**weaver-admin account** is the system account `weaver-admin`. The **service** is
+`weaver-admin-service`, a binary of the admin crate that systemd keeps standing from
+boot under the weaver-admin account. The **root program** is `weaver-admin`, run as root
+at a root shell or through the sudo rule, one fixed line per verb, which sections 1 to
+6 call admin. The service is the root program's invoker: it runs the fixed lines through
+sudo, so section 2's obligations on the invoker's execution context are the service's.
+**The service runs without no-new-privs**, because sudo gains root by its set-user-id
+bit and under no-new-privs every verb would fail. `weaver-admin-Spec` section 2 gives
+the reason.
+
+### 8.1 Admission
+
+- **The socket** is one path, `/run/weaver-admin.sock`, made by systemd before the
+  service starts. It is owned by the weaver-admin account, grouped to the admin
+  connector's own group, `weaver-admincon`, which holds no member but the connector's
+  account, and is mode `0660`. A process outside the group cannot connect.
+- **The peer is judged at accept**, by its uid from `SO_PEERCRED`. The one uid admitted
+  is the connector account's, `weaver-admincon`. Every other uid is refused, root's
+  included, since the operator at a root shell runs the root program directly. A refused
+  peer reads no byte, its connection is closed, and the service's own log names the uid.
+- **Connections are bounded per agent and in all.** For each agent, at most one log
+  connection stands: the newest replaces the older when it opens, and the service closes
+  the older. The relay reads for one trace connection of the agent at a time, and the
+  relay's rule ends the older (section 8.5): it replaces its reader once it admits a
+  newer request, and the service then closes the older splice. A newer trace
+  connection's opening closes nothing, and it stands beside the older until the relay
+  admits or refuses its request, within the relay's 5 seconds. At most 8 control
+  connections stand for each agent. The service holds at most 1024 connections in all,
+  those still awaiting their opening line included. A control connection past 8 for its
+  agent, or any connection past 1024, is answered `refused` `full` and closed.
+
+### 8.2 The opening line, and the framing
+
+**Every message is one JSON object on one line, ending in a newline,** externally
+tagged: its one member names the message, and that member's object is the message's
+body. This framing holds for the opening line and its answer, and for every line on a
+control or log connection. **On a trace connection, after `open`, the framing is the
+relay's alone** (section 8.5), so a line there is never read by this paragraph.
+**One form is reserved** for the message of section 8.9: an ask line whose body names
+`length` and `sha256`, followed by exactly `length` raw bytes. It belongs to the purpose
+or version the amendment of section 8.9 adds, which a version 1 service refuses at the
+opening line. On a version 1 connection no ask carries it, and an ask whose body names
+`length` is refused `ask_malformed`.
+
+**Each connection opens with one line from the connector**, at most 4096 bytes with its
+newline, within 10 seconds of the connect:
+
+```json
+{"weaver_admin":{"version":1,"purpose":"control","agent":"a1"}}
+```
+
+- `version` is the contract version the connector speaks, a positive integer. This
+  section is version 1.
+- `purpose` is one of a closed list, `control`, `trace` and `log`, which only an
+  amendment of this contract extends.
+- `agent` is the agent's name, judged by the root program's own name rule
+  (`weaver-admin-Spec` section 4): non-empty ASCII letters, digits, `-` and `_`, with
+  the reserved suffixes and names refused. The name `admin` joins the names refused in
+  act one's code stack, on the operator's ruling of 2026-11-26, since an agent of that
+  name would own `weaver-admin`, the service's account.
+
+**The service answers it with one line**, before any purpose's exchange begins, at
+most 4096 bytes with its newline and within 10 seconds of the opening line's arrival.
+That time holds the log's judging of section 8.6 and the relay's dial of section 8.5.
+Each is cut off 8 seconds after the opening line, and one not done by then is refused
+`log_unread` or `relay_unreachable`, so the refusal itself arrives within the 10
+seconds. A trace's `open` follows its dial's connect within 1 second (section 8.5), so a
+dial that connects by the 8 seconds is answered, `open` or `relay_unreachable`, within 9
+seconds of the opening line. Either
+`{"open":{"version":1,"instance":"<16 hex>"}}`, and the purpose's exchange follows, or
+one `refused` line and the close. `instance` is drawn by the service at each start of
+its own and names that start (section 8.4):
+
+```json
+{"refused":{"word":"purpose_unknown","detail":"...","purposes":["control","trace","log"]}}
+```
+
+Every refusal of the service's, on every purpose, is one of the words below. A
+refusal of the opening line closes the connection. On a control connection a refusal
+leaves it standing, except `ask_malformed` and `ask_outstanding`, which close it. On a
+log connection `log_behind` and `ask_malformed` close it.
+
+| Word | Where | Cause |
+| --- | --- | --- |
+| `opening_malformed` | opening | the line is past 4096 bytes, ends without a newline, does not parse, lacks a member, or names a version that is not a positive integer |
+| `opening_late` | opening | no complete line within 10 seconds of the connect |
+| `version_unknown` | opening | the version is above the service's own. The answer names `versions`, every version it speaks |
+| `purpose_unknown` | opening | the purpose is not on the list of the version named. The answer names `purposes` |
+| `name_refused` | opening | the name fails the root program's rule |
+| `log_unread` | opening | the purpose is `log`, and the agent's `admin.log` cannot be opened or judged (section 8.6) |
+| `relay_unreachable` | opening | the purpose is `trace`, and no relay of the agent stands to dial, or the service's dial of it fails (section 8.5) |
+| `full` | opening | the connection is past a bound of section 8.1. Sent before the opening line is read |
+| `ask_unknown` | control | the ask's member is not an ask of the version opened. The connection stands, so a newer connector reads it as "not here yet" |
+| `ask_malformed` | control, log | a line past 4096 bytes, one that does not parse, an ask whose body names `length`, a principal of another shape, or any byte sent on a log connection |
+| `ask_outstanding` | control | a line sent while an ask is outstanding |
+| `grants_unread` | control | the eight grants are not all read within 10 seconds (section 8.3) |
+| `verb_unknown` | control | the verb is not one of the eight. The connection stands |
+| `not_granted` | control | the verb's grant read answers not granted (section 8.4) |
+| `grant_unread` | control | the verb's grant cannot be read within 10 seconds |
+| `busy` | control | another run of the agent stands, a `show` excepted. The answer names it as `run` |
+| `not_started` | control | the root program could not be started, so nothing ran |
+| `log_behind` | log | 1 MiB stands unsent (section 8.6). Best effort: a connector that does not read may never receive it |
+
+**A service answers every version at or below its own as that version was written**,
+so a newer connector reads `version_unknown` or `purpose_unknown` as "not here yet",
+and the exchanges of an older version never change. The `refused` line, its `word` and
+its `detail` are one shape on every connection: a refusal of the service's own is
+always this line, and never an exit code or a part of the root program's object.
+
+### 8.3 The grants
+
+On a control connection, the ask `{"grants":{}}`, which names nothing beyond the agent
+the opening named.
+
+- **The service reads the grant of each of the eight verbs** (section 8.4 states the
+  read) and answers `{"grants":{"verbs":[...]}}`, naming the granted verbs in the list's
+  order: `show`, `validate`, `load`, `unload`, `stop`, `save-point`, `restore`,
+  `force-unload`.
+- **A read that does not answer is not a guess.** Where any of the eight reads does not
+  answer (an exit other than 0 or 1, a read that does not start), or the eight are not
+  read within 10 seconds of the ask, the answer is `refused` `grants_unread`, never a
+  shorter list.
+- **A verb left out is one whose read exited 1**: not granted, or a rule sudo could not
+  read (section 8.4). An empty list therefore says that no verb's read answered granted,
+  and the cause, a rule that grants nothing or one sudo could not read, is in sudo's
+  standard error, which the service's own log keeps for each such read.
+- **The answer is the connector's ceiling for Weaver Web and never the service's
+  authorization.** Nothing in it is read again at a verb.
+
+### 8.4 A verb
+
+On a control connection, one ask names the verb and the principal:
+
+```json
+{"verb":{"verb":"load","principal":{"kind":"person","person_id":"pe-0123456789abcdef"}}}
+```
+
+- `verb` is one of the eight. Any other name is refused `verb_unknown`, and the
+  connection stands.
+- `principal` is `{"kind":"server"}` or `{"kind":"person","person_id":"pe-<16 lowercase
+  hex>"}`, and any other shape is refused `ask_malformed`. **It is a claim for the
+  record and never an authorization input**: it reaches no decision of the service's,
+  and never the root program's arguments.
+
+**The grant is read in the request.** On every verb ask, after the ask has arrived, the
+service reads whether the machine grants that verb on that agent, and runs nothing
+until that read answers granted. Nothing sent earlier counts, on this connection or
+another, a grants answer included, so a grant removed after a grants answer is refused
+at the verb. **In act one the read is `sudo -n -l` run by the weaver-admin account on
+the exact fixed line** (the root program's path as the rule names it, the verb, the
+agent), the read the connector makes today:
+
+| The read | The answer |
+| --- | --- |
+| exit 0 | granted |
+| exit 1 | `refused` `not_granted`, nothing run. Exit 1 means not granted, or a rule sudo could not read |
+| any other exit, a read that does not start, or none within 10 seconds of the ask | `refused` `grant_unread`, nothing run |
+
+A rule that asks a password is not a grant, since sudo runs with `-n`. **sudo exits 1
+both where the rule does not grant the line and where it could not read a rule**, and
+the service makes no decision from sudo's standard error, so the two read alike.
+**The service's own log keeps sudo's standard error** for every read that did not
+answer granted, here and in section 8.3, so the operator finds the cause where Weaver
+Web shows a verb not granted. Both refusals are the service's own, and the root program
+never runs to produce them.
+
+**Then one run at a time per agent.** A granted verb starts unless a run of the same
+agent stands, in which case it is refused `busy`, the answer naming that run's id as
+`run`. Two overlaps are admitted, the two the root program admits (section 4.1). **A
+`show` starts beside any run**, since the root program's `show` alone reads beside a
+holder, and it holds the agent for no other ask. **A `force-unload` asked while an
+`unload` of the same agent stands is started beside it.** The grant is read before this
+rule, so a verb not granted is `not_granted` whatever stands. The refusal:
+
+```json
+{"refused":{"word":"busy","detail":"...","run":"0123456789abcdef"}}
+```
+
+`run` is the id the service drew for the run that holds the agent, as a `run` answer
+lists it, whether or not its root program has started yet and whether or not its
+`started` line reached any connector. Where an `unload` and a `force-unload` stand, it
+is the `unload`'s.
+
+**A run stands from its grant, is named once started, then answered.** The service
+draws the run's id when machine A takes the run (section 8.8), once the grant's read has
+answered granted and before the root program starts. From that moment the run stands:
+a `run` answer lists it, and a `busy` names it. Once the root program is running, the
+service sends `{"started":{"run":"<16 hex>"}}` with that id. A root program that cannot
+be started is refused `not_started`, and nothing ran. The run then leaves `standing`,
+and nothing is kept as `ended` in its place. When it ends, one final line:
+
+```json
+{"ran":{"run":"...","verb":"load","exit_code":0,"answer":{...},"stderr":"...","stderr_cut":false}}
+```
+
+- **`ran`** where it exited 0 or 1 with one JSON object on standard output, at most 64
+  KiB, in UTF-8. `answer` is that object, carried untouched: a `lifecycle-answer` at 0
+  or a `lifecycle-refusal` at 1, so a refusal of the root program's travels inside the
+  object at exit 1, never as a `refused` line. `stderr` is its standard error, at most
+  the first 16 KiB with any byte that is not UTF-8 replaced, `stderr_cut` true where it
+  was longer. Neither is parsed by the service.
+- **`{"fault":{"run":"...","verb":"...","detail":"..."}}`** where it ended any other
+  way: another exit, a signal, no object, more than one value, past 64 KiB, or not
+  UTF-8. Whether it acted is read with the next `show`.
+
+**A run goes on when its connection closes.** A close before the grant's read answers
+starts nothing. Once the read answers granted, machine A takes the run, and the service
+goes on to start the root program whether or not the connection still stands. A `run`
+ask on a new connection names the run from that moment. From the moment the root
+program is started, the run goes on to its end and is kept, whether or not `started`
+reached the connector. **The service's own end ends no run it started**, as an
+invocation finishes when its caller disappears (section 3). That
+is a requirement on the service's install, which act one's code stack meets: a stop or
+restart of the service ends the service's own process and signals no root program it
+started, whose sudo and root program stand in the service's containment until a load
+moves into the agent's scope (section 2). An install that does not meet it leaves a verb
+killed mid-command, outside the envelope (section 4.1). A new control connection asks
+`{"run":{}}` and is answered:
+
+```json
+{"run":{"instance":"<16 hex>","standing":[{"run":"...","verb":"unload","started_ms":1795651200000}],"ended":{"ran":{...}}}}
+```
+
+`standing` lists the agent's runs standing, a `show` excepted, each with its `run`, its
+`verb` and `started_ms`. **`started_ms` is when its root program started**, in
+milliseconds since the Unix epoch by the machine's clock, and `null` for a run machine A
+holds whose root program has not started yet. `ended` is the final
+line, `ran` or `fault`, of the last run that ended, a `show` excepted, or `null` where
+none has ended since the service started. **A `show` is never listed in `standing` and
+never kept as `ended`**, so a `show` that ends later never hides the outcome of the
+verb a connector asked before a drop. A `show` whose connection closed is not named,
+and the next `show` reads the state.
+
+A service that restarted knows no run of before: the root program's own invocation lock
+then refuses a second verb inside its object, and the outcome is in `admin.log` and the
+next `show`. **`instance` names the service's own start**, as its `open` lines do, and
+bounds what a connector reads from a `run` answer after a drop:
+
+- **Another `instance`:** the service no longer knows that ask. Its run may never have
+  started, a restart while the grant was read, or may have started and been forgotten.
+  The connector reads it as unknown, and `admin.log` and the next `show` settle it.
+- **The same `instance`, the run's id held, the run neither standing nor `ended`:** it
+  did not run, where the connector asked no other verb of the agent meanwhile. Only the
+  last run that ended is kept, so a later verb's end replaces it, and a connector that
+  asks one verb at a time keeps that reading true. Otherwise it reads as unknown, and
+  `show` settles it.
+- **The same `instance`, no run id held**, after a drop before `started`: the connector
+  reads its run as standing where a standing run names its verb, and as ended where
+  `ended` names its verb and a `run` that is not the id of the last run it learned had
+  ended. Otherwise it did not run. An `ended` naming that last id is the outcome of an
+  earlier ask, never told as new. This rests on every final line naming `run` and
+  `verb`, and on a connector that asks one verb at a time and keeps the id of the last
+  run it learned had ended.
+
+**The cause is the service's account.** The root program reads sudo's `SUDO_UID`, so
+the cause `admin.log` and the trace record is the weaver-admin account's uid (section
+2). **The principal is recorded in the service's own log**, one line per run naming the
+run's id, the agent, the verb, the principal and the outcome, and in Weaver Web's own
+audit. It is never in `admin.log` or the trace.
+
+**One ask at a time on a connection.** The connector sends its next ask once the
+previous one's final line has arrived. A line sent while an ask is outstanding is
+refused `ask_outstanding` and the connection is closed, a run machine A already admitted
+going on. An unknown ask is refused `ask_unknown` and the connection stands. A line past
+4096 bytes, or one that does not parse, is refused `ask_malformed` and closes it. A
+connection with no ask outstanding may stand idle without limit.
+
+### 8.5 The trace
+
+On a trace connection, after `open`, the bytes each way are the relay's wire of
+`weaver-types-Spec` section 3.1, unchanged: the connector's one `TraceRequest`, then the
+relay's header, the trace's own lines byte for byte, its heartbeats while idle, and
+`truncated` before the end. **The service is the relay's one declared reader in act
+one**: the boundary file's `trace-reader` names the weaver-admin account, and the relay
+judges the service's uid as it judges any reader's.
+
+- **The service dials the agent's relay before it answers the opening line**, and sends
+  `open` only once that dial has connected, **within 1 second of the connect**. A
+  service that cannot send it in that second closes the dialed connection and refuses
+  the opening `relay_unreachable`. **After `open` the service holds no byte**: it
+  forwards each way as the bytes arrive, until either side closes, and closes the
+  other.
+- **Where no relay stands to dial** (a pipe or socket sink, or a relay that has died), or
+  the dial fails, the opening is refused `relay_unreachable` in place of `open`. The
+  connector reads it as a closed door, as it reads a failed dial of the relay today.
+- **After `open`, a clean close before any header byte has three causes**: the relay's
+  refusal of the position the request named, a relay that died after the service's
+  dial connected, or a request that reached the relay after its window, from a
+  connector that read `open` late or was slow to send. The three close alike.
+- **The connector may confirm.** Before it acts on such a close, it may open the trace
+  once more with the same position. The relay judges each request on its own. A second
+  close before any header byte at that position is read as the relay's refusal of it.
+  The reading is stronger than the first, since a cause other than the refusal would
+  have to fall at both openings, but it is not proof. Where it is wrong it costs one
+  mark or one alert, as the first reading does, and the next request in time is judged
+  on its own. `relay_unreachable` at that opening is the closed door. This is permitted,
+  not required. A connector that does not confirm reads the close as the relay's refusal
+  of the position, as it does today. Where the cause was one of the other two, the wrong
+  reading costs the same, and no more: a relay that died refuses the next opening
+  `relay_unreachable`, and the next request in time is judged on its own. That is a
+  known limit.
+- The newest connection replaces the old at the relay, as section 2 states, so the
+  service closes the older splice when the relay ends it, and not at the newer
+  connection's opening. The relay replaces its reader
+  only once a newer request is admitted, so the service's dial alone ends no splice that
+  stands, and a connector that closes during the dial ends only the dialed connection.
+- The request's bound is the relay's: 4096 bytes with its newline, within 5 seconds of
+  the relay's accept. The relay accepts no earlier than the service's dial connects, and
+  `open` leaves within 1 second of that connect, so at least 4 seconds of the relay's
+  window remain once `open` is sent. **The connector sends its whole request within 1
+  second of reading `open`.** Nothing bounds the time from the service's send of `open`
+  to the connector's read of it, so a connector that reads `open` late, or sends
+  slowly, can reach the relay after its window. The relay then closes before any
+  header byte, the third cause above.
+
+### 8.6 The log
+
+On a log connection, the service sends each line appended to the agent's `admin.log`
+from the moment it answered `open`, with no history before it:
+
+```json
+{"log":{"line":{...},"through_service":true}}
+```
+
+- **`line`** is the appended line's object. A line that is not one JSON object is sent
+  as `{"log":{"text":"...","through_service":false}}`, any byte that is not UTF-8
+  replaced. A line past 8 KiB is sent as `{"log":{"oversized":<its length>}}` and not
+  carried.
+- **`through_service` is judged from the line alone**: true where an invocation's line
+  names the weaver-admin account's uid as its caller, or the relay's line names it as
+  its peer, and false otherwise. In act one the service runs the root program only on a
+  control connection's ask and is the relay's one declared reader, so that uid names
+  exactly the acts that came through this socket. An operator's own act carries the uid sudo
+  reported, the operator's, or 0 where no sudo set one, and never the weaver-admin
+  account's, so it is false. An act that gives the service a run of its own amends this rule.
+- **A truncation or a replacement of the file** is sent as
+  `{"log":{"discontinuity":"truncated"}}` or `"replaced"`, and the service then reads
+  the file from its start.
+- **A line appended reaches the connection within 1 second.** Where 1 MiB stands unsent
+  to a connector that does not read, the service closes the connection, sending
+  `refused` `log_behind` first where the connection takes it. That line is best effort,
+  and a connector that does not read may never receive it.
+- **Any close of a log connection is a discontinuity for the connector**, with or
+  without `log_behind` before it, which it marks as it marks a replacement today.
+  Resending toward Weaver Web stays the connector's.
+- **The newest log connection of the agent replaces the older when it opens**, and the
+  service closes the older. The log has no relay, so this rule is the service's own.
+- **The log is judged before `open`**: it is opened and judged by every check
+  `weaver-admin-Spec` section 8 makes of a log, a non-blocking open of a regular file
+  among them. Which groups let the weaver-admin account pass the territory and read the
+  log is act one's code stack's. One that does not open or judge is refused `log_unread`
+  in place of `open`.
+- **While a log cannot be opened, every opening is refused `log_unread`**, so the lines
+  appended meanwhile are never sent. A log connection carries lines from its own `open`
+  alone, never a history from before it, and the connector marks a discontinuity when
+  an opening is answered `open` again.
+
+### 8.7 Limits
+
+| What | Number | At the limit |
+| --- | --- | --- |
+| Control connections standing for one agent | 8 | `refused` `full`, closed |
+| Log connections standing for one agent | 1 | the newest replaces the older when it opens, which is closed |
+| Trace connections the relay reads for, for one agent | 1 | the relay replaces its reader once it admits a newer request, and the service closes the older splice. A newer opening alone closes nothing |
+| Connections standing at the service | 1024 | `refused` `full`, closed |
+| The opening line | 4096 bytes with its newline | `refused` `opening_malformed`, closed |
+| The opening's arrival | 10 seconds from the connect | `refused` `opening_late`, closed |
+| The service's answer to the opening | 4096 bytes with its newline, within 10 seconds of the opening line, the log's judging and the relay's dial included | a judging or dial not done 8 seconds after the opening line is `refused` `log_unread` or `relay_unreachable`. A connector bounding its read here reads past it as a fault |
+| A trace's `open` | 1 second from the service's dial's connect | the dialed connection closed, `refused` `relay_unreachable` |
+| A connector's line on a control connection | 4096 bytes with its newline | `refused` `ask_malformed`, closed |
+| Asks outstanding on a connection | 1 | `refused` `ask_outstanding`, closed |
+| The eight grants read | 10 seconds from the ask | `refused` `grants_unread` |
+| One verb's grant read | 10 seconds from the ask | `refused` `grant_unread` |
+| Runs standing of one agent | 1, with any `show` beside it, or an `unload` and a `force-unload` beside it | `refused` `busy`, naming the run |
+| The root program's object | 64 KiB | `fault` |
+| The root program's standard error kept | 16 KiB | cut, `stderr_cut` true |
+| A line the service sends on a control connection | 256 KiB: a 64 KiB object, 16 KiB of standard error at most 96 KiB escaped, and the members | a connector bounding its read here reads past it as a fault |
+| A run's length | none at the service. The root program's own bounds hold: 900 seconds on a load's start by default (section 3) | the connector's own bound, then `run` |
+| Runs remembered per agent | those standing, and the last ended, until the service restarts | `ended` is `null`, under a new `instance` |
+| The trace request | 4096 bytes within 5 seconds of the relay's accept, the relay's (`weaver-types-Spec` section 3.1), at least 4 seconds of them after `open`. The connector sends it within 1 second of reading `open`, and the service holds no byte of it, forwarding each way as the bytes arrive | the relay's close before the header, one of section 8.5's three causes |
+| A log line carried | 8 KiB | the `oversized` marker |
+| A log line's delay | 1 second from its append | none: the service's promise |
+| A log connection's unsent bytes | 1 MiB | closed, `refused` `log_behind` sent first where the connection takes it |
+| The reserved text of section 8.9 | 256 KiB, with its sha256 | reserved. A version 1 service refuses its opening `version_unknown` or `purpose_unknown`, and an ask naming `length` on a version 1 connection `ask_malformed` |
+
+The connector's own bounds (its 960 seconds on a verb, its 1,080 seconds of grace at a
+stop, its 16 asks queued, its record bound of 2 MiB on the trace) are the connector's and
+bind nothing here.
+
+### 8.8 The state table
+
+Two machines: machine K, one per connection, and machine A, one per agent at the
+service. The connector causes the C events, the service the V events, and the machine
+the M events.
+
+| State | What holds |
+| --- | --- |
+| K0 | Accepted. The peer's uid is read |
+| K1 | Admitted, waiting for the opening line |
+| K2 | Control, no ask outstanding |
+| K3 | Control, a grants ask outstanding |
+| K4 | Control, a verb ask outstanding, its grant being read, or its run admitted and its root program starting |
+| K5 | Control, a verb ask outstanding, its run started |
+| K6 | Control, a run ask outstanding |
+| K7 | Trace, after `open`: the relay's wire |
+| K8 | Log, after `open`: lines as appended |
+| K9 | Closed |
+
+| State | Event | Next, and what is sent |
+| --- | --- | --- |
+| K0 | V: the peer's uid is the connector's | K1 |
+| K0 | V: any other uid | K9, nothing sent, the service's log names the uid |
+| K0 | V: a bound of section 8.1 is met | K9, `refused` `full` |
+| K1 | C: a control or log opening line that judges | K2 or K8 by its purpose, `open` sent |
+| K1 | C: a trace opening line that judges, and the service's dial of the agent's relay connects | K7, `open` sent within 1 second of the connect |
+| K1 | C: a trace opening line that judges, where no relay stands, the service's dial of it fails, or `open` cannot be sent within 1 second of the connect | K9, `refused` `relay_unreachable`, a dialed connection closed |
+| K1 | C: close, while the service dials the relay | K9. The dialed connection is closed, before it sends the relay any byte |
+| K1 | C: an unknown version or purpose, a refused name, or an unread log | K9, `refused` with its word |
+| K1 | C: a line past 4096 bytes, one that does not parse, or a version that is not a positive integer | K9, `refused` `opening_malformed` |
+| K1 | V: a newer trace or log connection of the agent opens | no change. Neither rule of section 8.1 reaches a connection whose opening line is not yet judged |
+| K1 | V: 10 seconds pass with no line | K9, `refused` `opening_late` |
+| K2 | C: `grants` | K3 |
+| K2 | C: `verb` naming one of the eight, with a principal of its shape | K4. The grant is read now |
+| K2 | C: `verb` naming another verb | K2, `refused` `verb_unknown` |
+| K2 | C: `run` | K6 |
+| K2 | C: an unknown ask | K2, `refused` `ask_unknown` |
+| K2 | C: a line that does not parse, past 4096 bytes, naming `length`, or a principal of another shape | K9, `refused` `ask_malformed` |
+| K2 | C: close | K9 |
+| K3 | V: the eight grants read | K2, `grants` naming the granted verbs |
+| K3 | V: a read fails, or 10 seconds pass | K2, `refused` `grants_unread` |
+| K3 | C: close | K9 |
+| K4 | V: granted, machine A admits the run, and its root program starts | K5, `started` with the run's id |
+| K4 | V: not granted | K2, `refused` `not_granted` |
+| K4 | V: the grant cannot be read within 10 seconds | K2, `refused` `grant_unread` |
+| K4 | V: granted, and machine A refuses the run | K2, `refused` `busy` naming the run that holds the agent |
+| K4 | V: granted, machine A admits the run, and its root program does not start | K2, `refused` `not_started`. A run machine A holds leaves it, with nothing kept as the last ended |
+| K4 | C: close, before the read answers | K9. Nothing starts |
+| K4 | C: close, after the read answers granted | K9. The start goes on as if the connection stood. A run machine A admitted, a `show` excepted, stands there from the grant and is kept once it ends |
+| K5 | V: the root program ends with exit 0 or 1 and one object | K2, `ran` |
+| K5 | V: it ends any other way | K2, `fault` |
+| K5 | C: close | K9. The run goes on, kept in machine A unless it is a `show` |
+| K6 | V: machine A read | K2, `run` |
+| K6 | C: close | K9 |
+| K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run machine A admitted goes on |
+| K7 | the relay: a close before any header byte | K9, the connector's side closed. Its cause is the relay's refusal of the position, a relay that died, or a request that reached the relay after its window, which close alike. The connector reads it as the refusal, or may first open once more at the same position (section 8.5) |
+| K7 | C closes, or the relay closes after a header byte | K9, the other side closed |
+| K7 | the relay: it admits a newer trace request of the agent and ends this connection | K9, the connector's side closed. A newer trace connection's opening alone closes nothing |
+| K8 | V: a line appended | K8, `log` with `line` or `text`, or the `oversized` marker past 8 KiB |
+| K8 | V: the file truncated or replaced | K8, the `discontinuity` marker, the file read from its start |
+| K8 | C: any byte | K9, `refused` `ask_malformed` |
+| K8 | V: a newer log connection of the agent is opened | K9, closed |
+| K8 | V: 1 MiB stands unsent | K9, `refused` `log_behind` where the connection takes it |
+| K8 | C: close | K9 |
+| any | M: the sudo rule is edited | no change. The next verb ask reads the rule as it stands then |
+
+| State | What holds |
+| --- | --- |
+| A0 | No run of the agent stands. The last run that ended, a `show` excepted, is kept, or none since the service started |
+| A1 | One run stands, from its grant |
+| A2 | An `unload` and a `force-unload` beside it stand |
+
+| State | Event | Next |
+| --- | --- | --- |
+| any | a `show` ask, granted | no change. The `show` starts beside whatever stands, and is not a run this machine holds |
+| any | a `show` ends | no change. Its final line goes to its own connection alone, never kept as the last ended |
+| A0 | a verb ask other than `show`, granted | A1, holding that run, its id drawn now, before its root program starts |
+| A1 | a `force-unload` ask, granted, while the run A1 holds is an `unload` | A2, holding both |
+| A1 | any other verb ask but `show`, granted | A1, that ask refused `busy` |
+| A1 | the run A1 holds ends | A0, its final line kept as the last ended |
+| A1 | the root program of the run A1 holds cannot be started | A0, nothing kept in its place. The last ended stays as it was |
+| A2 | another verb ask but `show`, granted | A2, that ask refused `busy` |
+| A2 | the `unload` or the `force-unload` ends | A1, holding the one still standing, the ended one's final line kept as the last ended |
+| A2 | the root program of the `unload` or the `force-unload` cannot be started | A1, holding the other. The last ended stays as it was |
+| any | the asking connection closes | no change |
+| any | the service restarts | A0 with no run kept, under a new `instance`. A root program it started runs on, under the root program's own lock, where the install meets section 8.4's requirement |
+
+**The invariants.**
+
+- **S1.** A root program starts only from K4, after a read of that verb's grant on that
+  agent, made in that request after its ask arrived, answering granted. No path from K2
+  reaches K5 without it.
+- **S2.** Nothing enters S1's read from a grants answer, an earlier ask, or another
+  connection.
+- **S3.** The principal enters no decision: not S1's read, not machine A, and not the
+  root program's arguments.
+- **S4.** A run's end does not depend on its connection. A close before the grant's
+  read answers starts nothing. A run stands from its grant, when machine A takes it, and
+  a `run` answer lists it from then. From the moment the root program is started, the
+  run goes on to its end, whether or not `started` reached the connector, and is kept
+  unless it is a `show`. A run whose root program cannot be started leaves `standing`
+  with nothing kept as `ended`.
+- **S5.** At most one run of an agent stands, except a `show`, which starts beside any
+  run, and the `force-unload` beside an `unload` of A2.
+- **S6.** Every ask gets exactly one final line, or the connection closes. A verb's
+  `started` comes before its final line.
+- **S7.** After `open` on a trace connection, the bytes each way are the relay's,
+  unchanged, and the service holds none of them. `open` is sent only once the relay's
+  dial has connected, and within 1 second of the connect. A close there before any
+  header byte is the relay's refusal of the position, a relay that died after the dial
+  connected, or a request that reached the relay after its window. The three close
+  alike. The connector reads the close as the refusal, or may first open once more at
+  the same position, where a second such close is read as the refusal and
+  `relay_unreachable` is the closed door. A reading that is wrong costs one mark or one
+  alert, after a confirmation as before one, and the next request is judged on its own.
+- **S8.** A refusal of the service's own is a `refused` line, never inside the root
+  program's object and never an exit code. A refusal of the root program's is inside its
+  object, at exit 1, carried untouched.
+
+### 8.9 Reserved: the loop's text, for loop install
+
+**Reserved by the operator's answer of 2026-11-26 (77 (f)), and brought by the loop's
+third act, not by act one.** A fifth message will carry the text of an agent's loop
+wire file, for loop install: up to 256 KiB, the bound the root program's judge of the
+loop folder holds for that file today, with its sha256, framed by the reserved form of
+section 8.2, a header line naming `length` and the sha256, then exactly that many bytes.
+It arrives by an amendment of this section that raises the version and names its
+purpose or ask, so the four exchanges above do not change and a version 1 service
+refuses it `version_unknown` or `purpose_unknown`. **The text goes through the service
+to a fixed root program under sudo, which checks the input and puts the file's digest
+in the trace**, on the operator's ruling of 2026-11-26. This section says that much and
+no more.
+
+### 8.10 What the socket does not carry, and the fake
+
+**Not carried in act one:** the pairing, the gate, and an edit of an agent's
+configuration. A new verb or a new message arrives only by an amendment of this
+contract.
+
+**A fake service can be written from this section alone**, for the connector's tests
+(issue 645, section 7). It listens at a temporary path, admits its test's uid in place
+of the connector account's, and can:
+
+- refuse an opening with a given word of section 8.2 (`log_unread`, `full`,
+  `version_unknown`, `relay_unreachable` among them), and delay its answer to an
+  opening.
+- answer the grants with a configured list, refuse them `grants_unread`, or send nothing
+  past 10 seconds.
+- answer a verb with `started` and a configured exit code and object, `show` from a
+  state it holds (`InTransition` for a set count), refuse it with any word of section
+  8.4, end it as a `fault`, or delay its final line.
+- refuse a verb `busy` naming a run, and refuse `not_granted` a verb that a grants answer
+  before it listed.
+- drop a control connection between the grant's read and `started`, or while a verb
+  runs, and answer a later `run` with that run standing, with `started_ms` `null` before
+  its start, or ended, or, where its scripted start failed, neither.
+- forget its runs as a restart does, drawing a new `instance`, while a run it scripted
+  goes on.
+- append lines to a trace file before and after it takes its state, and record each
+  verb it ran with its principal.
+- on a trace connection, refuse the opening `relay_unreachable` as where no relay
+  stands, and after `open` do what a relay does: verify the position by its digest,
+  refuse by closing before the header, name `length`, send heartbeats while idle, send
+  `truncated` then end, and end the older connection only once it admits a newer
+  request, as the relay does. It can also close before the header as a relay that died
+  after the dial does, and then refuse the next opening `relay_unreachable`, or close
+  before the header as a relay whose window passed, and then admit the same position at
+  the next opening.
+- on a log connection, send scripted lines with their flag, markers, and `log_behind`,
+  let the newest log connection replace the older when it opens, and close.
+
+It reaches no agent and no privileged program.
+
+## 9. What this document changes elsewhere
 
 - `WeaverTools-Document-Format.md`: a party-edge category for an external principal,
   this document and `weaver-gate-world-contract` being the two instances. Owed to the
@@ -608,3 +1185,11 @@ gate rather than a defect in this clause.
   per-agent connector account with `weaver-admincon` and `weaver-gatecon`, one of each
   per box, landing in one act. WeaverWeb's half is filed on toddwbucy/WeaverWeb, one
   issue per interface question, once this act merges.
+- The service's socket, on the operator's rulings of 2026-11-26 and his answer 77 (f).
+  Section 8 here, and the pointer in `weaver-admin-Spec` section 2, land first, in a
+  stack of documents alone, with the four exchanges of WeaverAgent issue 645. Act one's
+  code stack builds the service and its socket, and moves sections 0 to 3 here,
+  `weaver-admin-Spec` sections 1 (the third binary, with the manifest test
+  `two_binaries_and_no_library_surface`), 2, 4 (the name `admin` refused), 8 and 9, and
+  `weaver-types-Spec` section 3.1's `trace-reader` to it. WeaverWeb's half, the connector asking the socket in place of
+  sudo and the relay, is the other seat's, against section 8.
