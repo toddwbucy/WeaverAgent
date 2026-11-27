@@ -924,7 +924,9 @@ from the moment it answered `open`, with no history before it:
 - **A line appended reaches the connection within 1 second.** Where 1 MiB stands unsent
   to a connector that does not read, the service closes the connection, sending
   `refused` `log_behind` first where the connection takes it. That line is best effort,
-  and a connector that does not read may never receive it.
+  and a connector that does not read may never receive it. A connector that does not
+  read is one that takes no byte for 1 second while 1 MiB stands unsent, the 1 second
+  being this section's promise that a line appended reaches the connection within it.
 - **Any close of a log connection is a discontinuity for the connector**, with or
   without `log_behind` before it, which it marks as it marks a replacement today.
   Resending toward Weaver Web stays the connector's.
