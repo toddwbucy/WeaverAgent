@@ -854,8 +854,8 @@ script_env() { WEAVER_ADMIN_CONFIG="$ADMIN_BASE" WEAVER_STACK_RECORD="$STACK" "$
 
 # **expect_operator_groups: the operator's groups as create-agent.sh leaves
 # them** (step 1): the trace, state and access groups and never the agent's
-# own. **In root mode root holds none of the four** (#576): create-agent.sh's
-# root mode joins root to none, and root reaches every file and the gate's
+# own or its gate group. **In root mode root holds none of the five** (#576):
+# create-agent.sh's root mode joins root to none, and root reaches every file and the gate's
 # socket by capability whatever it holds, so this shows the join was not made
 # and measures no custody. Each is read alone, so a lookup that fails answers
 # `unreadable` and fails here.

@@ -7175,7 +7175,7 @@ esac
         # Both create-agent.sh lines, the plan's and the apply's, carry it.
         self.assertEqual(out.count("$ deploy/create-agent.sh m1 --root-operator --artifact"), 2, out)
         for said in ("operator        root, by --root-operator (#576)",
-                     "root holds none of weaver-m1, weaver-m1-trace, weaver-m1-state and weaver-m1-admin",
+                     "root holds none of weaver-m1, weaver-m1-trace, weaver-m1-state, weaver-m1-admin and weaver-m1-gate",
                      "allowed-uids = [0] in", "root joins no group (#576)",
                      "deploy/turn.py m1 --system --raw as root: the seeding line, from uid 0 (#576)",
                      "allowed-uids = [<weaver-admincon's uid>] (the perturbation",
@@ -7699,7 +7699,7 @@ else:
 
 class LifecycleRootModeGroupsAndShowTests(unittest.TestCase):
     """**#576, B2: step 1's groups and step 9's show in both modes.** In
-    root mode root holds none of the agent's four groups, each read alone, and
+    root mode root holds none of the agent's five groups, each read alone, and
     step 9 asks `show` as the box's gate-con account through runuser, answered
     unauthorized, and as root, answered no_such_agent. In the operator's mode
     the operator holds the three groups and not the agent's, and step 9 asks as
@@ -7749,7 +7749,7 @@ class LifecycleRootModeGroupsAndShowTests(unittest.TestCase):
 
     def test_root_holds_none_of_the_agent_s_groups(self):
         # Perturbations: read the operator's three groups in root mode, or
-        # leave one of the four unread, and a case below fails.
+        # leave one of the five unread, and a case below fails.
         run, _ = self.run_fn(True, "expect_operator_groups", root="root")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         for g in ("weaver-m1", "weaver-m1-trace", "weaver-m1-state", "weaver-m1-admin", "weaver-m1-gate"):
