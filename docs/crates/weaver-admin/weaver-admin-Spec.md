@@ -328,6 +328,22 @@ every connection that either door admits is a connection to that agent. What Wea
 own logs carry per connection is WeaverWeb's to state, and this repository claims
 nothing for a log it does not write.
 
+**The rule moves to the weaver-admin account, behind the service's socket**, on the
+operator's rulings of 2026-11-26. The weaver-admin account is a system account,
+`weaver-admin`. The service, `weaver-admin-service`, is a third binary of this crate,
+which systemd keeps standing from boot under that account. The root program is this
+crate's `weaver-admin`, which this Spec calls admin and which keeps the name until act
+two splits it. In act one the sudo rule names the weaver-admin account, one fixed line
+per verb as it stands, and the connector loses the rule and asks the service on one
+local socket, whose contract is `weaver-admin-operator-contract` section 8: the grants,
+a verb whose grant the service reads itself in that request, the trace, and
+`admin.log`'s lines. **The service runs without no-new-privs**, because every verb it
+runs is the root program through sudo, which gains root by its set-user-id bit, and
+under no-new-privs that exec gains nothing and every verb fails. It is the root
+program's invoker, so the execution context the operator contract's section 2 asks of
+an invoker is the service's to keep. Until act one's code stack lands, the paragraphs
+above stand as written, and that stack changes them to this one.
+
 ```graph
 node: admin-runs-as-root-or-performs-nothing
 kind: assertion
