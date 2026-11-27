@@ -517,17 +517,29 @@ fn a_name_of_no_agent_leaves_nothing_behind() {
 // ---------------------------------------------------------------------------
 
 /// **The connection's own state is read before a run is taken** (section
-/// 8.4, S4): with the control thread's flag still unset, a connection the
-/// connector has closed starts nothing, and one that stands starts its run.
-/// Perturbation: read the flag alone and the closed connection's run starts.
+/// 8.4, S4): the connector closes while the grant is being read, and with
+/// the control thread's flag still unset, the root program is not started.
+/// A connection that stands starts its run. Perturbation: read the flag
+/// alone and the closed connection's run starts.
 #[test]
 fn a_close_the_flag_has_not_seen_starts_nothing() {
     let fx = fixture("close-unseen");
     fx.put("granted", "load\n");
+    fx.put("grant-sleep", "0.4");
     let principal = r#"{"kind":"person","person_id":"pe-0123456789abcdef"}"#;
     let closed = AtomicBool::new(false);
     let (watch, connector) = UnixStream::pair().unwrap();
-    drop(connector);
+    let read_line = fx.read_line("load");
+    let argv = fx.dir.join("argv");
+    let closer = std::thread::spawn(move || {
+        // The close comes once the read is made and before it answers.
+        let until = Instant::now() + Duration::from_secs(10);
+        while !std::fs::read_to_string(&argv).is_ok_and(|t| t.contains(&read_line)) {
+            assert!(Instant::now() < until, "the read was made");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        drop(connector);
+    });
     let (tx, rx) = mpsc::channel();
     fx.service.verb(
         "a1",
@@ -537,12 +549,10 @@ fn a_close_the_flag_has_not_seen_starts_nothing() {
         (&closed, &watch),
         &tx,
     );
-    assert!(
-        fx.argv().contains(&fx.read_line("load")),
-        "the grant was read"
-    );
+    closer.join().unwrap();
     assert!(!fx.argv().contains(&fx.run_line("load")), "nothing started");
     assert!(rx.try_recv().is_err(), "no line for a closed connection");
+    std::fs::remove_file(fx.dir.join("grant-sleep")).unwrap();
     let (watch, _connector) = UnixStream::pair().unwrap();
     let (tx, _rx) = mpsc::channel();
     fx.service.verb(
