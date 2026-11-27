@@ -866,14 +866,17 @@ judges the service's uid as it judges any reader's.
   dial connected, or a request that reached the relay after its window, from a
   connector that read `open` late or was slow to send. The three close alike.
 - **The connector may confirm.** Before it acts on such a close, it may open the trace
-  once more with the same position. The relay judges each request on its own, so a
-  second close before any header byte at that position is the relay's refusal of it,
-  and `relay_unreachable` at that opening is the closed door. This is permitted, not
-  required. A connector that does not confirm reads the close as the relay's refusal of
-  the position, as it does today. Where the cause was one of the other two, the wrong
-  reading costs one mark or one alert and does not repeat: a relay that died refuses
-  the next opening `relay_unreachable`, and the next request in time is judged on its
-  own. That is a known limit.
+  once more with the same position. The relay judges each request on its own. A second
+  close before any header byte at that position is read as the relay's refusal of it.
+  The reading is stronger than the first, since a cause other than the refusal would
+  have to fall at both openings, but it is not proof. Where it is wrong it costs one
+  mark or one alert, as the first reading does, and the next request in time is judged
+  on its own. `relay_unreachable` at that opening is the closed door. This is permitted,
+  not required. A connector that does not confirm reads the close as the relay's refusal
+  of the position, as it does today. Where the cause was one of the other two, the wrong
+  reading costs the same, and no more: a relay that died refuses the next opening
+  `relay_unreachable`, and the next request in time is judged on its own. That is a
+  known limit.
 - The newest connection replaces the old at the relay, as section 2 states, so the
   service closes the older splice when the relay ends it, and not at the newer
   connection's opening. The relay replaces its reader
@@ -1074,8 +1077,9 @@ the M events.
   header byte is the relay's refusal of the position, a relay that died after the dial
   connected, or a request that reached the relay after its window. The three close
   alike. The connector reads the close as the refusal, or may first open once more at
-  the same position, where a second such close is the refusal and `relay_unreachable`
-  the closed door. A wrong reading does not repeat.
+  the same position, where a second such close is read as the refusal and
+  `relay_unreachable` is the closed door. A reading that is wrong costs one mark or one
+  alert, after a confirmation as before one, and the next request is judged on its own.
 - **S8.** A refusal of the service's own is a `refused` line, never inside the root
   program's object and never an exit code. A refusal of the root program's is inside its
   object, at exit 1, carried untouched.
