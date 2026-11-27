@@ -960,11 +960,13 @@ def account_answer(identity, flag):
     """What the kernel would answer for `identity` under the fixture: the
     agent's own uid enters neither its state room nor its territory unless
     WALL_OPEN, the member reads neither the trace nor the declaration unless
-    TRACE_OPEN, and the weaver-admin account writes nothing of the territory
-    unless GROUP_WRITES. Every other look passes."""
+    TRACE_OPEN, the weaver-admin account writes nothing of the territory
+    unless GROUP_WRITES, and the admin connector's account, which holds no
+    group of the agent's, reads nothing of it. Every other look passes."""
     if identity == 'weaver-m1': return bool(os.environ.get('WALL_OPEN'))
     if identity == 'weaver-m1-state' and flag == '-r': return bool(os.environ.get('TRACE_OPEN'))
     if identity == 'weaver-admin' and flag == '-w': return bool(os.environ.get('GROUP_WRITES'))
+    if identity == 'weaver-admincon': return False
     return True
 
 def shell_read(arguments):
@@ -2623,10 +2625,10 @@ grep() { fixture_args "$@"; command grep "${fixture_mapped[@]}"; }
 
     def test_a_group_blind_test_changes_no_answer_of_the_wall(self):
         # **#577**: a group-blind external `test` (UUTILS_TEST answers no to
-        # every look of the admin-con account, whose access is all through
+        # every look of the weaver-admin account, whose access is all through
         # groups) changes nothing, because no look calls it. Perturbation:
         # make `allows` call `sudo -n -u "$1" test "$2" "$3"`, and the run
-        # stops at the admin-con account's read of the declaration, as the
+        # stops at the weaver-admin account's read of the declaration, as the
         # walk's did. The script of 6b91747e stops there under this fixture.
         self.env.update(ALLOW_APPLY_CHECKS="1", UUTILS_TEST="1")
         result = self.create("--apply")
