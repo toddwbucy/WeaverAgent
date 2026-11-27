@@ -445,6 +445,82 @@ fn a_rule_the_mode_would_defeat_refuses_at_the_inventory() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// **A gate group that defeats the door is refused, each of the three by
+/// name** (`weaver-admin-Spec` section 6): root's gid, a group holding the
+/// agent's account, and a gid the agent runs under. The judgment names
+/// which, and the inventory refuses on it before the reach check.
+///
+/// Perturbation, one row each: drop the gid 0 arm, the member arm or the
+/// agent's gid arm of `door_defeated`, and that case's assertions fail.
+/// Drop the call in `judge_config`, and the inventory admits all three.
+#[test]
+fn a_gate_group_that_defeats_the_door_refuses_at_the_inventory() {
+    let identity = "weaver-karl";
+    let agent_gids = [65533_u32, 65532];
+    let group = |gid: u32, members: &[&str]| ResolvedGroup::Present {
+        gid,
+        members: members.iter().map(|m| m.to_string()).collect(),
+    };
+    let roots = group(0, &["weaver-gatecon"]);
+    let holds = group(u32::MAX - 1, &["weaver-gatecon", identity]);
+    let own = group(65533, &["weaver-gatecon"]);
+    let held = group(65532, &["weaver-gatecon"]);
+    let clean = group(u32::MAX - 1, &["weaver-gatecon"]);
+    assert_eq!(
+        door_defeated(identity, &roots, &agent_gids),
+        Some(DoorDefeat::RootsGroup)
+    );
+    assert_eq!(
+        door_defeated(identity, &holds, &agent_gids),
+        Some(DoorDefeat::HoldsTheAgent)
+    );
+    assert_eq!(
+        door_defeated(identity, &own, &agent_gids),
+        Some(DoorDefeat::TheAgentsGid(65533))
+    );
+    assert_eq!(
+        door_defeated(identity, &held, &agent_gids),
+        Some(DoorDefeat::TheAgentsGid(65532))
+    );
+    assert_eq!(door_defeated(identity, &clean, &agent_gids), None);
+    for absent in [
+        ResolvedGroup::NoAgent,
+        ResolvedGroup::UserWithoutGroup,
+        ResolvedGroup::Unresolvable,
+    ] {
+        assert_eq!(door_defeated(identity, &absent, &agent_gids), None);
+    }
+
+    // The wiring: the same groups through the whole walk.
+    let root = scratch("door-defeat");
+    let sink_dir = root.join("sink");
+    std::fs::create_dir_all(&sink_dir).expect("sink dir");
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).expect("home");
+    std::fs::set_permissions(&sink_dir, std::fs::Permissions::from_mode(0o700)).expect("mode");
+    let name = AgentName("karl".into());
+    let mut bound = boundary(&home, 65533);
+    bound.agent_gids = agent_gids.to_vec();
+    let source = config_source(&sink_dir);
+    for (case, defeating) in [
+        ("root's gid", &roots),
+        ("the agent a member", &holds),
+        ("the agent's own gid", &own),
+        ("a gid the agent holds", &held),
+    ] {
+        let refused = take_inventory_against(&name, &source, &bound, Some(defeating));
+        assert!(
+            matches!(refused, Err(LifecycleRefusal::BoundaryUnverified)),
+            "{case}: {refused:?}"
+        );
+    }
+    let admitted = take_inventory_against(&name, &source, &bound, Some(&clean));
+    assert!(
+        admitted.is_ok(),
+        "a gate group the agent does not hold: {admitted:?}"
+    );
+}
+
 use std::os::unix::fs::PermissionsExt;
 
 fn scratch(tag: &str) -> crate::scratch::Scratch {

@@ -1775,18 +1775,18 @@ Landlock ruleset, which grants execute on `shell-binary` alone.
 **The runtime directory is made by the start step, with its owner and mode stated**:
 `<coordination-root>/weaver-<agent>/`, `/run/weaver-<agent>/` by default, owned by the
 agent's account and the agent's own group, `weaver-<agent>`, mode `0750`, so the agent
-binds its coordination socket there, the operator reaches it through membership in the
-agent's group, and no one else reaches it. The gate's socket stands in the gate's door
-below, never here. Systemd made it at `0755`
-absent an instruction, which is why the mode was always stated rather than inherited, a
-boundary whose permissions come from an ambient default being a boundary nobody elected,
-per `weaver-gate-Spec` section 3. **The directory outlives the worker now**, where the
-unit's cleanup removed it at every stop, so the start step finds one standing and
-repairs it rather than trusting it: it is opened without following a link, judged for
-its owner, group and mode, and set right, and a coordination socket left in it by a dead
-worker is removed, which is safe only because this happens holding the invocation lock
-and the run lock this load took, per section 3's order, so no constituent of an earlier
-run stands and no other invocation can start one.
+binds its coordination socket there and admin reaches it as root. `create-agent.sh` joins
+no account to the agent's own group, the operator's joins being the trace, state and
+access groups, so no one else reaches it. The gate's socket stands in the gate's door
+below, never here. Systemd made it at `0755` absent an instruction, which is why the mode
+was always stated rather than inherited, a boundary whose permissions come from an ambient
+default being a boundary nobody elected, per `weaver-gate-Spec` section 3. **The directory
+outlives the worker now**, where the unit's cleanup removed it at every stop, so the start
+step finds one standing and repairs it rather than trusting it: it is opened without
+following a link, judged for its owner, group and mode, and set right, and a coordination
+socket left in it by a dead worker is removed, which is safe only because this happens
+holding the invocation lock and the run lock this load took, per section 3's order, so no
+constituent of an earlier run stands and no other invocation can start one.
 
 **The gate's door is laid by the start step, beside the trace door**:
 `<coordination-root>/weaver.run/<agent>/gate/`, in the root-owned run directory of
