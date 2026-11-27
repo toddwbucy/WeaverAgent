@@ -135,11 +135,15 @@ change.
    it answers and sends `open` within 1 second of the dial's connect. Where no relay
    stands, the dial fails or that second passes, it refuses the opening
    `relay_unreachable`. The connector sends its request within 1 second of reading
-   `open`, inside the relay's 5 seconds from its accept. The trace's own refusal, a
-   close before the header, stays the relay's, after `open`. A relay that dies after the
-   dial connected closes the same way, and the connector reads that close as a refusal.
-   The next opening then answers `relay_unreachable`, so the wrong reading does not
-   repeat. That is a known limit.
+   `open`, inside the relay's 5 seconds from its accept. After `open` the service holds
+   no byte: it forwards each way as the bytes arrive. The trace's own refusal, a close
+   before the header, stays the relay's, after `open`. A relay that dies after the dial
+   connected closes the same way, and so does a request that reaches the relay after its
+   window, from a connector that read `open` late or was slow to send. The connector may
+   confirm by opening once more at the same position: a second close before the header
+   there is the refusal, and `relay_unreachable` the closed door. A connector that does
+   not confirm reads the close as a refusal, and the wrong reading costs one mark or one
+   alert and does not repeat. That is a known limit.
 3. **The peer admitted is the admin connector's account alone,** by its uid from
    `SO_PEERCRED`, checked at accept. Root is refused too. The operator at a root shell
    runs the root program directly and never needs the socket. A refused peer reads
@@ -245,7 +249,7 @@ events.
 | K6 | V: machine A read | K2, `run` |
 | K6 | C: close | K9 |
 | K2 to K6 | C: a line while an ask is outstanding | K9, `refused` `ask_outstanding`. A run machine A admitted goes on |
-| K7 | the relay: a close before any header byte | K9, the connector's side closed. Its cause is the relay's refusal of the position or a relay that died, which close alike, and the connector reads it as the refusal (section 8.5) |
+| K7 | the relay: a close before any header byte | K9, the connector's side closed. Its cause is the relay's refusal of the position, a relay that died, or a request that reached the relay after its window, which close alike. The connector reads it as the refusal, or may first open once more at the same position (section 8.5) |
 | K7 | C closes, or the relay closes after a header byte | K9, the other side closed |
 | K7 | the relay: it admits a newer trace request of the agent and ends this connection | K9, the connector's side closed. A newer trace connection's opening alone closes nothing |
 | K8 | V: a line appended | K8, `log` with `line` or `text`, or the `oversized` marker past 8 KiB |
@@ -299,11 +303,13 @@ events.
 - **S6.** Every ask gets exactly one final line, or the connection closes. A verb's
   `started` comes before its final line.
 - **S7.** After `open` on a trace connection, the bytes each way are the relay's,
-  unchanged. `open` is sent only once the relay's dial has connected, and within 1
-  second of the connect. A close there before any header byte is the relay's refusal of
-  the position or a relay that died after the dial connected. The two close alike, and
-  the connector reads the close as the refusal. Where the relay died, the next opening
-  is refused `relay_unreachable`, so the wrong reading does not repeat.
+  unchanged, and the service holds none of them. `open` is sent only once the relay's
+  dial has connected, and within 1 second of the connect. A close there before any
+  header byte is the relay's refusal of the position, a relay that died after the dial
+  connected, or a request that reached the relay after its window. The three close
+  alike. The connector reads the close as the refusal, or may first open once more at
+  the same position, where a second such close is the refusal and `relay_unreachable`
+  the closed door. A wrong reading does not repeat.
 - **S8.** A refusal of the service's own is a `refused` line, never inside the root
   program's object and never an exit code. A refusal of the root program's is inside its
   object, at exit 1, carried untouched.
