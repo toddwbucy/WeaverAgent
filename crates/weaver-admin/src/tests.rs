@@ -444,7 +444,7 @@ fn write_root(root: &std::path::Path) -> std::path::PathBuf {
         ("gate-binary", "/opt/weaver/bin/weaver-gate"),
         ("territory", territory_path.as_str()),
         ("operator", operator.as_str()),
-        ("roles.toml", "trace-reader = \"weaver-alpha-admincon\"\n"),
+        ("roles.toml", "trace-reader = \"weaver-admin\"\n"),
     ] {
         std::fs::write(root.join(name), text).unwrap();
     }
@@ -1408,7 +1408,7 @@ fn unread_config() -> ServiceConfig {
         access_gid: 1000,
         boundary: Ok(BoundaryRead {
             digest: "0".repeat(64),
-            reader: "weaver-alpha-admincon".into(),
+            reader: "weaver-admin".into(),
         }),
         root: PathBuf::from("/nonexistent/root"),
     }
@@ -3007,7 +3007,7 @@ fn the_trace_reader_is_judged() {
     let named = Err(LifecycleRefusal::ConfigInvalid {
         field: Some(weaver_types::FieldName("roles.toml".into())),
     });
-    let group = || Some((5000, vec!["weaver-alpha-admincon".to_string()]));
+    let group = || Some((5000, vec!["weaver-admin".to_string()]));
     assert_eq!(
         reader_verdict("weaver-alpha", &agent, Some(5000), group()),
         named
@@ -3027,12 +3027,12 @@ fn the_trace_reader_is_judged() {
         "not in the group"
     );
     assert_eq!(
-        reader_verdict("weaver-alpha-admincon", &agent, Some(100), None),
+        reader_verdict("weaver-admin", &agent, Some(100), None),
         Err(LifecycleRefusal::BoundaryUnverified),
         "the box carries no access group"
     );
     assert_eq!(
-        reader_verdict("weaver-alpha-admincon", &agent, Some(100), group()),
+        reader_verdict("weaver-admin", &agent, Some(100), group()),
         Ok(())
     );
     assert_eq!(
