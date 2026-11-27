@@ -287,9 +287,23 @@ impl Service {
         )
     }
 
+    /// **An agent's entry is made only for an agent that exists**: one whose
+    /// root stands as a folder under the base. A well-formed name of no agent
+    /// is answered from an empty entry that is not kept, so it leaves nothing
+    /// behind in the map.
     fn with_agent<T>(&self, agent: &str, f: impl FnOnce(&mut Agent) -> T) -> T {
         let mut agents = self.agents.lock().unwrap_or_else(|p| p.into_inner());
-        f(agents.entry(agent.to_string()).or_default())
+        if let Some(entry) = agents.get_mut(agent) {
+            return f(entry);
+        }
+        if self.agent_exists(agent) {
+            return f(agents.entry(agent.to_string()).or_default());
+        }
+        f(&mut Agent::default())
+    }
+
+    fn agent_exists(&self, agent: &str) -> bool {
+        std::fs::symlink_metadata(self.base.join(agent)).is_ok_and(|m| m.is_dir())
     }
 }
 
@@ -689,7 +703,9 @@ impl Service {
             .take(LINE_BOUND as u64)
             .read_to_string(&mut text)
             .map_err(|e| format!("{} is unread: {e}", path.display()))?;
-        let value = PathBuf::from(text.trim_end_matches('\n'));
+        // **Trimmed as the root program trims its keys** (`main.rs`,
+        // `load_service_config_from`), so the two name one path.
+        let value = PathBuf::from(text.trim());
         if value.is_absolute() {
             Ok(value)
         } else {
@@ -777,30 +793,42 @@ fn judge_ask(line: &[u8]) -> Result<Ask, Judged> {
 }
 
 /// The control connection's place in its agent's bound of 8.
+/// A name of no agent holds no place: its connections are bounded by the
+/// service's 1024 alone, and its slot counts nothing.
 struct ControlSlot<'a> {
     service: &'a Service,
     agent: &'a str,
+    counted: bool,
 }
 
 impl Drop for ControlSlot<'_> {
     fn drop(&mut self) {
-        self.service.with_agent(self.agent, |a| a.control -= 1);
+        if self.counted {
+            self.service
+                .with_agent(self.agent, |a| a.control = a.control.saturating_sub(1));
+        }
     }
 }
 
 fn control(service: &Arc<Service>, mut stream: UnixStream, agent: &str, mut pending: Vec<u8>) {
-    let admitted = service.with_agent(agent, |a| {
-        (a.control < CONTROL_PER_AGENT)
-            .then(|| a.control += 1)
-            .is_some()
-    });
+    let counted = service.agent_exists(agent);
+    let admitted = !counted
+        || service.with_agent(agent, |a| {
+            (a.control < CONTROL_PER_AGENT)
+                .then(|| a.control += 1)
+                .is_some()
+        });
     if !admitted {
         return refuse(
             stream,
             Refusal::new("full", "8 control connections stand for this agent"),
         );
     }
-    let _slot = ControlSlot { service, agent };
+    let _slot = ControlSlot {
+        service,
+        agent,
+        counted,
+    };
     if send(&mut stream, &service.open_line()).is_err() {
         return;
     }
@@ -841,11 +869,26 @@ fn control(service: &Arc<Service>, mut stream: UnixStream, agent: &str, mut pend
                 }
             }
             Ask::Verb { verb, principal } => {
+                let watch = match stream.try_clone() {
+                    Ok(watch) => watch,
+                    Err(e) => {
+                        let refusal = Refusal::new(
+                            "not_started",
+                            format!("the connection could not be watched, so nothing ran: {e}"),
+                        );
+                        if send(&mut stream, &refusal.line()).is_err() {
+                            return;
+                        }
+                        continue;
+                    }
+                };
                 let closed = Arc::new(AtomicBool::new(false));
                 let (tx, rx) = mpsc::channel();
                 let (svc, name, flag) =
                     (Arc::clone(service), agent.to_string(), Arc::clone(&closed));
-                std::thread::spawn(move || svc.verb(&name, verb, &principal, asked, &flag, &tx));
+                std::thread::spawn(move || {
+                    svc.verb(&name, verb, &principal, asked, (&flag, &watch), &tx)
+                });
                 loop {
                     match outstanding(&mut stream, &pending, &rx) {
                         Waited::Got(Event::Started(line)) => {
@@ -938,6 +981,34 @@ enum Event {
     Final(String),
 }
 
+/// **The connection's state now**, read before a run is taken (section 8.4,
+/// S4). Only a peek that would block is a standing connection: one that
+/// finds the connector's close, a byte sent while the ask is outstanding, or
+/// an error is not.
+fn still_open(stream: &UnixStream) -> bool {
+    let mut byte = [0_u8; 1];
+    loop {
+        // SAFETY: a peek of at most one byte into a buffer this frame owns, on
+        // a descriptor it borrows.
+        let n = unsafe {
+            nix::libc::recv(
+                stream.as_raw_fd(),
+                byte.as_mut_ptr().cast(),
+                1,
+                nix::libc::MSG_PEEK | nix::libc::MSG_DONTWAIT,
+            )
+        };
+        if n != -1 {
+            return false;
+        }
+        match nix::errno::Errno::last() {
+            nix::errno::Errno::EINTR => continue,
+            nix::errno::Errno::EAGAIN => return true,
+            _ => return false,
+        }
+    }
+}
+
 enum Grant {
     Granted,
     NotGranted,
@@ -947,7 +1018,7 @@ enum Grant {
 enum Bounded {
     Exited(ExitStatus, String),
     NotStarted(String),
-    Late,
+    Late(String),
 }
 
 /// The kept head of a stream and its whole length.
@@ -1022,7 +1093,11 @@ impl Service {
                         Ok(None) if Instant::now() >= deadline => {
                             let _ = child.kill();
                             let _ = child.wait();
-                            break Bounded::Late;
+                            // **What sudo said before the deadline is kept**:
+                            // the bytes drained so far, without waiting for a
+                            // descendant that may hold the pipe.
+                            let kept = kept.lock().unwrap_or_else(|p| p.into_inner());
+                            break Bounded::Late(String::from_utf8_lossy(&kept.bytes).into_owned());
                         }
                         Ok(None) => std::thread::sleep(Duration::from_millis(5)),
                         Err(e) => break Bounded::NotStarted(e.to_string()),
@@ -1050,10 +1125,10 @@ impl Service {
                 js("not started"),
                 e,
             ),
-            Bounded::Late => (
+            Bounded::Late(stderr) => (
                 Grant::Unread("the read did not answer within 10 seconds of the ask".into()),
                 js("late"),
-                String::new(),
+                stderr,
             ),
         };
         self.record(
@@ -1151,7 +1226,7 @@ impl Service {
         verb: &'static str,
         principal: &str,
         asked: Instant,
-        closed: &AtomicBool,
+        (closed, watch): (&AtomicBool, &UnixStream),
         tx: &mpsc::Sender<Event>,
     ) {
         let refused = |refusal: Refusal| {
@@ -1167,8 +1242,10 @@ impl Service {
             }
             Grant::Unread(detail) => return refused(Refusal::new("grant_unread", detail)),
         }
-        // **A close before the read answers starts nothing.**
-        if closed.load(Ordering::SeqCst) {
+        // **A close before the read answers starts nothing**: the flag the
+        // control thread sets, and the connection's own state read now, so a
+        // close the control thread has not yet seen starts nothing either.
+        if closed.load(Ordering::SeqCst) || !still_open(watch) {
             return;
         }
         let id = match self.take_run(agent, verb) {
@@ -1501,20 +1578,35 @@ fn log_message(own_uid: u32, bytes: &[u8]) -> String {
 }
 
 /// The lines of a file read as it grows: complete lines become messages, a
-/// line past 8 KiB is counted and never kept.
+/// line past 8 KiB is counted and never kept, and where the reading starts
+/// inside a line, its rest is skipped.
 #[derive(Default)]
 struct Lines {
     partial: Vec<u8>,
     oversized: Option<usize>,
+    skipping: bool,
 }
 
 impl Lines {
-    fn take(&mut self, own_uid: u32, bytes: &[u8], out: &mut Vec<u8>) {
+    /// **Takes lines while the messages queued stand below `limit`**, so what
+    /// is read is bounded by the messages it makes and not by its raw bytes:
+    /// a line whose message is six times its length is read no further ahead
+    /// than a JSON line. Answers the bytes taken, each piece whole.
+    fn take(&mut self, own_uid: u32, bytes: &[u8], out: &mut Vec<u8>, limit: usize) -> usize {
+        let mut taken = 0;
         for piece in bytes.split_inclusive(|b| *b == b'\n') {
+            if out.len() >= limit {
+                break;
+            }
+            taken += piece.len();
             let (body, complete) = match piece.strip_suffix(b"\n") {
                 Some(body) => (body, true),
                 None => (piece, false),
             };
+            if self.skipping {
+                self.skipping = !complete;
+                continue;
+            }
             if let Some(length) = self.oversized.as_mut() {
                 *length += body.len();
             } else if self.partial.len() + body.len() > LOG_LINE_BOUND {
@@ -1533,6 +1625,7 @@ impl Lines {
                 self.partial.clear();
             }
         }
+        taken
     }
 }
 
@@ -1558,6 +1651,19 @@ fn log(
             unread("the log was not judged within 8 seconds".into()),
         );
     }
+    // **Lines appended from the moment `open` is answered** (section 8.6):
+    // the length is read before `open` is sent, so a line appended after it
+    // is carried, and a length that ends inside a line marks that line's rest
+    // to be skipped.
+    let start = match file.metadata() {
+        Ok(meta) => meta.len(),
+        Err(e) => return refuse(stream, unread(format!("{} is unread: {e}", path.display()))),
+    };
+    let mut last = [0_u8; 1];
+    let inside_a_line = start > 0
+        && file
+            .read_at(&mut last, start - 1)
+            .is_ok_and(|n| n == 1 && last[0] != b'\n');
     let generation = service.with_agent(agent, |a| {
         a.log_generation += 1;
         a.log_generation
@@ -1571,7 +1677,14 @@ fn log(
             Refusal::new("ask_malformed", "a byte arrived on a log connection"),
         );
     }
-    tail(service, stream, agent, generation, &path, file);
+    tail(
+        service,
+        stream,
+        (agent, generation),
+        &path,
+        file,
+        (start, inside_a_line),
+    );
 }
 
 /// **The log's lines as appended**, from `open`, with no history: the file
@@ -1581,16 +1694,19 @@ fn log(
 fn tail(
     service: &Arc<Service>,
     mut stream: UnixStream,
-    agent: &str,
-    generation: u64,
+    (agent, generation): (&str, u64),
     path: &Path,
     mut file: std::fs::File,
+    (start, inside_a_line): (u64, bool),
 ) {
     let identity = |m: &std::fs::Metadata| (m.dev(), m.ino());
     let Ok(meta) = file.metadata() else { return };
-    let mut offset = meta.len();
+    let mut offset = start;
     let mut ident = identity(&meta);
-    let mut lines = Lines::default();
+    let mut lines = Lines {
+        skipping: inside_a_line,
+        ..Lines::default()
+    };
     let mut unsent: Vec<u8> = Vec::new();
     let mut mid_line = false;
     if stream.set_nonblocking(true).is_err() {
@@ -1652,13 +1768,16 @@ fn tail(
             discontinuity("truncated", &mut unsent);
         }
         let mut chunk = vec![0_u8; 64 * 1024];
-        while offset < len && unsent.len() <= LOG_UNSENT {
+        while offset < len && unsent.len() < LOG_UNSENT {
             let want = ((len - offset) as usize).min(chunk.len());
             match file.read_at(&mut chunk[..want], offset) {
                 Ok(0) => break,
                 Ok(n) => {
-                    lines.take(service.own_uid, &chunk[..n], &mut unsent);
-                    offset += n as u64;
+                    let taken = lines.take(service.own_uid, &chunk[..n], &mut unsent, LOG_UNSENT);
+                    offset += taken as u64;
+                    if taken < n {
+                        break;
+                    }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(_) => return,
@@ -1676,7 +1795,7 @@ fn tail(
                 Err(_) => return,
             }
         }
-        if unsent.len() > LOG_UNSENT {
+        if unsent.len() >= LOG_UNSENT {
             // **Best effort**: the refusal goes only where the connection
             // takes it whole after the line it is in.
             let behind = format!(

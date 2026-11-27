@@ -64,7 +64,8 @@ impl Service {
 
 /// The stand-in for sudo. A grant read (`-n -l <admin> <verb> <agent>`)
 /// answers by the files `granted` (one verb a line, exit 0), `grant-<verb>`
-/// (an exit code) and `grant-sleep`, and exits 1 otherwise. A run (`-n
+/// (an exit code), `grant-early` (said on standard error before any sleep)
+/// and `grant-sleep`, and exits 1 otherwise. A run (`-n
 /// <admin> <verb> <agent>`) sources `run-<verb>` where it stands, and prints
 /// a small object otherwise. Every call appends its argv to `argv`, each
 /// argument followed by `|`.
@@ -74,6 +75,7 @@ for a in "$@"; do printf '%s|' "$a"; done >>"$d/argv"
 echo >>"$d/argv"
 if [ "$1" = -n ] && [ "$2" = -l ]; then
   if [ -e "$d/vanish" ]; then chmod 000 "$0"; fi
+  if [ -e "$d/grant-early" ]; then cat "$d/grant-early" >&2; fi
   if [ -e "$d/grant-sleep" ]; then sleep "$(cat "$d/grant-sleep")"; fi
   if [ -e "$d/grant-$4" ]; then echo "the grant read of $4" >&2; exit "$(cat "$d/grant-$4")"; fi
   if grep -qx -- "$4" "$d/granted" 2>/dev/null; then echo "    $3 $4 $5"; exit 0; fi
@@ -89,6 +91,7 @@ struct Fixture {
     socket: PathBuf,
     admin: PathBuf,
     log: SharedLog,
+    service: Arc<Service>,
 }
 
 impl Drop for Fixture {
@@ -159,12 +162,14 @@ fn fixture_with(tag: &str, adjust: impl FnOnce(&mut Service)) -> Fixture {
     let socket = dir.join("service.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     let service = Arc::new(service);
-    std::thread::spawn(move || serve(service, listener));
+    let serving = Arc::clone(&service);
+    std::thread::spawn(move || serve(serving, listener));
     Fixture {
         dir,
         socket,
         admin,
         log,
+        service,
     }
 }
 
@@ -457,9 +462,102 @@ fn a_grant_read_that_does_not_answer_refuses_grants_unread() {
     assert!(started.elapsed() < Duration::from_secs(4));
 }
 
+/// **A late read keeps what sudo said** (section 8.4: the service's own log
+/// keeps sudo's standard error for every read that did not answer granted).
+/// Perturbation: keep nothing on a late read and the log's line is empty.
+#[test]
+fn a_late_grant_read_keeps_what_sudo_said() {
+    let fx = fixture("late-stderr");
+    fx.put("grant-early", "sudo: a lookup is slow\n");
+    fx.put("grant-sleep", "5");
+    let mut client = fx.opened("control");
+    client.send(r#"{"grants":{}}"#);
+    assert_eq!(word(&client.value()), "grants_unread");
+    let log = fx.log.text();
+    let late = log
+        .lines()
+        .find(|l| l.contains(r#""event":"grant_read""#) && l.contains(r#""exit":"late""#))
+        .unwrap_or_else(|| panic!("a late read is logged: {log}"));
+    assert!(late.contains("a lookup is slow"), "{late}");
+}
+
+/// **A name of no agent leaves nothing in the map**: its control connection
+/// is answered, and no entry stands after it. An agent that exists keeps its
+/// entry. Perturbation: make an entry for every name and `a2` stands.
+#[test]
+fn a_name_of_no_agent_leaves_nothing_behind() {
+    let fx = fixture("no-agent");
+    let mut client = fx.client();
+    client.send(&opening("control", "a2"));
+    assert_eq!(client.line(), open_line());
+    client.send(RUN_ASK);
+    assert_eq!(
+        client.line(),
+        format!(r#"{{"run":{{"instance":"{INSTANCE}","standing":[],"ended":null}}}}"#)
+    );
+    client.send(r#"{"grants":{}}"#);
+    assert_eq!(client.line(), r#"{"grants":{"verbs":[]}}"#);
+    drop(client);
+    let mut known = fx.opened("control");
+    known.send(RUN_ASK);
+    let _ = known.line();
+    let agents = fx.service.agents.lock().unwrap();
+    assert!(
+        !agents.contains_key("a2"),
+        "no entry for a name of no agent"
+    );
+    assert!(
+        agents.contains_key("a1"),
+        "an agent that exists keeps its entry"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // A verb
 // ---------------------------------------------------------------------------
+
+/// **The connection's own state is read before a run is taken** (section
+/// 8.4, S4): with the control thread's flag still unset, a connection the
+/// connector has closed starts nothing, and one that stands starts its run.
+/// Perturbation: read the flag alone and the closed connection's run starts.
+#[test]
+fn a_close_the_flag_has_not_seen_starts_nothing() {
+    let fx = fixture("close-unseen");
+    fx.put("granted", "load\n");
+    let principal = r#"{"kind":"person","person_id":"pe-0123456789abcdef"}"#;
+    let closed = AtomicBool::new(false);
+    let (watch, connector) = UnixStream::pair().unwrap();
+    drop(connector);
+    let (tx, rx) = mpsc::channel();
+    fx.service.verb(
+        "a1",
+        "load",
+        principal,
+        Instant::now(),
+        (&closed, &watch),
+        &tx,
+    );
+    assert!(
+        fx.argv().contains(&fx.read_line("load")),
+        "the grant was read"
+    );
+    assert!(!fx.argv().contains(&fx.run_line("load")), "nothing started");
+    assert!(rx.try_recv().is_err(), "no line for a closed connection");
+    let (watch, _connector) = UnixStream::pair().unwrap();
+    let (tx, _rx) = mpsc::channel();
+    fx.service.verb(
+        "a1",
+        "load",
+        principal,
+        Instant::now(),
+        (&closed, &watch),
+        &tx,
+    );
+    assert!(
+        fx.argv().contains(&fx.run_line("load")),
+        "a standing connection's run starts"
+    );
+}
 
 /// **The service checks the grant itself on every run-this-verb request**,
 /// the operator's first condition and section 8.4: a grant removed after a
@@ -937,6 +1035,78 @@ fn an_unjudged_log_is_log_unread() {
     std::fs::hard_link(&aside, &path).unwrap();
     assert_eq!(refused("a1"), "log_unread", "a second link");
     assert_eq!(refused("a2"), "log_unread", "no root");
+}
+
+/// **A connector that reads is never closed as one that does not** (section
+/// 8.6): a burst past 1 MiB of lines whose messages are six times their raw
+/// length, each byte escaped, arrives whole with no `log_behind`, as a burst
+/// of JSON lines does. Perturbation: take each chunk read whole, past the
+/// bound, and the reading connector is closed.
+#[test]
+fn a_reading_connector_takes_a_burst_of_escaped_lines_whole() {
+    let fx = fixture("log-burst");
+    let mut client = fx.opened("log");
+    let lines = 300;
+    let reader = std::thread::spawn(move || {
+        let (mut got, mut behind) = (0, false);
+        let mut text = String::new();
+        while got < lines {
+            text.clear();
+            match client.reader.read_line(&mut text) {
+                Ok(0) | Err(_) => break,
+                Ok(_) if text.contains("log_behind") => {
+                    behind = true;
+                    break;
+                }
+                Ok(_) => got += 1,
+            }
+        }
+        (got, behind)
+    });
+    fx.append(&format!("{}\n", "\u{1}".repeat(4000)).repeat(lines));
+    let (got, behind) = reader.join().unwrap();
+    assert!(!behind, "a reading connector reads no log_behind");
+    assert_eq!(got, lines, "every line arrives");
+}
+
+/// **A length at opening that ends inside a line skips that line's rest**
+/// (section 8.6, no history before `open`): the first message is the next
+/// whole line. Perturbation: skip nothing and the fragment goes out first.
+#[test]
+fn an_opening_inside_a_line_skips_its_rest() {
+    let fx = fixture("log-fragment");
+    fx.append("{\"half\":");
+    let mut client = fx.opened("log");
+    fx.append("1}\n{\"whole\":1}\n");
+    assert_eq!(
+        client.value()["log"]["line"]["whole"],
+        1,
+        "the first message is the next whole line"
+    );
+}
+
+/// **A key is trimmed as the root program trims it** (`main.rs`,
+/// `load_service_config_from`): a trailing space or a trailing CR names the
+/// same territory. Perturbation: strip the newline alone and each opening is
+/// `log_unread`.
+#[test]
+fn a_key_is_trimmed_as_the_root_program_trims_it() {
+    let fx = fixture("key-trim");
+    let key = fx.dir.join("roots").join("a1").join("territory");
+    let territory = fx.dir.join("territory");
+    for written in [
+        format!("{} \n", territory.display()),
+        format!("{}\r\n", territory.display()),
+    ] {
+        std::fs::write(&key, &written).unwrap();
+        let mut client = fx.client();
+        client.send(&opening("log", "a1"));
+        assert_eq!(
+            client.line(),
+            open_line(),
+            "{written:?} names the territory"
+        );
+    }
 }
 
 /// **A connector that does not read is closed past 1 MiB unsent**, section
