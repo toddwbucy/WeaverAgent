@@ -1012,6 +1012,101 @@ fn a_refused_starts_line_is_written_best_effort() {
     }
 }
 
+/// **A fork that fails takes the same best-effort write** (review of #655,
+/// finding 2): the start's `Fork` refusal, reached in a child process of this
+/// test binary, since a limit on descriptors is the whole process's. There
+/// the soft limit is set to the lowest descriptor free, so the loop's pair
+/// refuses with EMFILE before any fork. The line names `not-started` where the
+/// writer takes it, and where the writer fails the start still answers
+/// `BindFailed`, with no panic. Perturbation: write the fork's line with
+/// `eprintln!`, and the recorded line is missing. Unwrap the write, and the
+/// failing writer panics the start.
+#[test]
+fn a_failed_forks_line_is_written_best_effort() {
+    const CASE: &str = "WEAVER_HARNESS_FORK_FAILS";
+    const NAME: &str = "lifecycle::tests::a_failed_forks_line_is_written_best_effort";
+    if std::env::var_os(CASE).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture", "--test-threads=1"])
+            .env(CASE, "1")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("1 passed"),
+            "the child: {stdout}{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let wires = weaver_types::WiresElection {
+        file: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/loop-wires-cross.py"
+        )
+        .into(),
+        sha256: "ab".repeat(32),
+    };
+    let launch = crate::loop_arm::LoopLaunch {
+        launcher: "/no-launcher-here".into(),
+        grant: "/no-grant-here".into(),
+    };
+    let (mut recorded, _spare, _sink) = entered_run(None);
+    let (mut failing, _spare_too, _sink_too) = entered_run(None);
+    let mut said = Vec::new();
+    let mut limit = nix::libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit fills the struct this frame owns.
+    assert_eq!(
+        unsafe { nix::libc::getrlimit(nix::libc::RLIMIT_NOFILE, &mut limit) },
+        0
+    );
+    // SAFETY: F_DUPFD answers a fresh descriptor, closed at once.
+    let lowest = unsafe { nix::libc::fcntl(0, nix::libc::F_DUPFD, 0) };
+    assert!(lowest >= 0);
+    // SAFETY: the descriptor F_DUPFD just answered, this frame's own.
+    unsafe { nix::libc::close(lowest) };
+    let lowered = nix::libc::rlimit {
+        rlim_cur: lowest as nix::libc::rlim_t,
+        rlim_max: limit.rlim_max,
+    };
+    // SAFETY: setrlimit reads the struct this frame owns. This process is the
+    // child, running this one test on one thread.
+    assert_eq!(
+        unsafe { nix::libc::setrlimit(nix::libc::RLIMIT_NOFILE, &lowered) },
+        0
+    );
+    // SAFETY: on this test's thread. The pair refuses before any fork.
+    let started = unsafe { start_loop_saying(&mut recorded, &launch, &wires, &mut said) };
+    // SAFETY: as above.
+    let failed = unsafe { start_loop_saying(&mut failing, &launch, &wires, &mut WriteFails) };
+    // SAFETY: setrlimit reads the struct this frame owns.
+    assert_eq!(
+        unsafe { nix::libc::setrlimit(nix::libc::RLIMIT_NOFILE, &limit) },
+        0
+    );
+    assert_eq!(started, Err(LifecycleRefusal::BindFailed));
+    let line: serde_json::Value = serde_json::from_slice(&said)
+        .unwrap_or_else(|_| panic!("one JSON line said, not {said:?}"));
+    assert_eq!(line["organ"], "harness");
+    assert_eq!(line["loop"], "not-started");
+    assert!(
+        line["reason"]
+            .as_str()
+            .is_some_and(|r| r.starts_with("the loop's pair: ")),
+        "{line}"
+    );
+    assert_eq!(
+        failed,
+        Err(LifecycleRefusal::BindFailed),
+        "a write that fails"
+    );
+    assert!(recorded.loop_arm.is_none() && failing.loop_arm.is_none());
+}
+
 /// A seat recording each turn's text, answering a refusal no relay makes.
 #[derive(Default)]
 struct TurnRecording {
