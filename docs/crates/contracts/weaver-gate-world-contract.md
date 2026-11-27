@@ -101,13 +101,12 @@ section 6. Neither the operator's uid nor root is in such a rule, and the operat
 no gate group. A rule may name the operator's uid as well only where the operator joins
 the agent's gate group, which admin's validate checks, and section 2 states what such an
 agent alone can receive. An agent laid before the gate's door has no gate group, and its
-load refuses naming it. The box's admin-con
-account, `weaver-admincon`, is in no gate rule either, per
-`weaver-admin-operator-contract` section 0, so neither connector account reaches the
-other's door. Many people and many turns are WeaverWeb's to carry over gate-con's one
-admission, per #70 item 1. **The rule names one caller by `deploy/create-agent.sh`'s
-convention, and nothing refuses a rule naming more**: enforcing it in code is later work
-under #70.
+load refuses naming it. The box's admin-con account, `weaver-admincon`, and the
+weaver-admin account, `weaver-admin`, are in no gate rule either, per
+`weaver-admin-operator-contract` section 0, so no account reaches another's door. Many
+people and many turns are WeaverWeb's to carry over gate-con's one admission, per #70
+item 1. **The rule names one caller by `deploy/create-agent.sh`'s convention, and
+nothing refuses a rule naming more**: enforcing it in code is later work under #70.
 
 **The mechanism is the Spec's.** What this page requires is that the identity be
 verified by the channel rather than claimed in the message, and that a peer failing

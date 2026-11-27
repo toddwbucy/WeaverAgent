@@ -207,7 +207,7 @@ every verb takes. **The verbs are the application layer's primitives,
 and their orchestration is interior**, on the operator's ruling of 2026-10-03 on #72:
 each verb keeps one promise and does inside the agent only what that promise needs, and
 a choice between outcomes that its caller should make is left to the caller, admin-con,
-which reads `show` and issues the next verb. **Three verbs joined with A3.2**, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items): `save-point`, asking the running
+which reads `show` and asks the next verb through the service. **Three verbs joined with A3.2**, on the operator's rulings of 2026-10-06 on #1 (the A3.0 items): `save-point`, asking the running
 worker for a save point on demand over section 7's channel and publishing it at once,
 per section 6; `restore`, naming the save point the next load restores, which is the one
 the declaration's `[restore]` names, judged loadable now and, where no line names it,
@@ -251,10 +251,11 @@ refuses, watched to fail when the check is removed.
 rule, and the rule is strict**, on the operator's rulings of 2026-10-03 on #50, which
 revise the ruling of 2026-10-02 that WeaverWeb carries no sudo. The operator is assumed
 to hold sudo and starts the agent as root so that its permissions can be established:
-its user, its runtime directory, its sink. Where WeaverWeb's admin-con issues the
-lifecycle for the operator, it does so through a rule the operator installs as the box's
-own boundary, which names the box's admin-con account, names the exact `weaver-admin
-<verb> <agent>` command lines for this agent, and allows no caller-chosen argument.
+its user, its runtime directory, its sink. Where WeaverWeb's admin-con asks the
+lifecycle for the operator, the service runs it through a rule the operator installs as
+the box's own boundary, which names the weaver-admin account, names the exact
+`weaver-admin <verb> <agent>` command lines for this agent, and allows no caller-chosen
+argument.
 **The role split of #50 is which command lines a role's rule grants**: an observer's
 grants `show`, and an operator's adds `validate`, `load`, `unload`, `stop`,
 `save-point`, `restore` and `force-unload`. **Nothing
@@ -269,64 +270,73 @@ WeaverWeb's record and never the agent's. **The rule carries no `SETENV` and no
 `env_keep`**, so sudo's environment reset leaves the invocation only what sudo itself
 sets, and the worker's environment is the start step's own, per section 6, never a
 caller's. **The command never crosses a wire**: WeaverWeb sends admin-con an abstract
-verb, and admin-con maps it locally to one of the fixed command lines, so the wire
-between WeaverWeb and admin-con is WeaverWeb's, and this crate's interface is the
-granted command lines and the one answer object each prints. **The ceiling is the rule's
-lines**: the `grants` verb #50 once drafted does not return, admin holding no view of
-what a sudo rule grants, so admin-con reads its ceiling from the rule itself on the box,
-with `sudo -n -l` on each exact command line. This supersedes toddwbucy/WeaverTools#6
+verb, admin-con asks the service for it on the service's socket, and the service runs
+the one fixed command line it names, so the wire between WeaverWeb and admin-con is
+WeaverWeb's, and the interface of the root program is the granted command lines and the
+one answer object each prints. **The ceiling is the rule's lines**: the `grants` verb
+#50 once drafted does not return to the root program, admin holding no view of what a
+sudo rule grants, so the service reads the ceiling from the rule itself on the box, with
+`sudo -n -l` on each exact command line, and answers it to admin-con as the grants
+(`weaver-admin-operator-contract` section 8.3). This supersedes toddwbucy/WeaverTools#6
 point 5, on WeaverWeb's own proposal on toddwbucy/WeaverWeb#14. **What a compromised
-admin-con can do is start and stop every agent on its box and read each one's record**,
+admin-con or weaver-admin account can do is start and stop every agent on its box and
+read each one's record**,
 the reach stated below, and the threat that matters, a model,
 binary, configuration or state swapped and then loaded, is
 #71's to answer, independently of this mechanism, the declaration pin being required
 wherever the lifecycle is delegated. **Every verb is a command line, `show` included,
-and the running-agent verbs A3.2 granted**, so a connector never speaks on
-the coordination channel: that channel sits in a directory only root enters and checks
-its peer at accept, per section 7, so only a root-run `weaver-admin` dials it, and the
-connector's one direct contact with the agent is the trace door. **The only lines
-granted without a password are the agent's fixed command lines**: the connector runs
-`sudo -n`, so it can run those and nothing else, any wider sudo the operator holds still
-asks for a password, and no cached credential is within the connector's reach.
+and the running-agent verbs A3.2 granted**, so neither the service nor a connector
+speaks on the coordination channel: that channel sits in a directory only root enters
+and checks its peer at accept, per section 7, so only a root-run `weaver-admin` dials
+it. The service's one direct contact with the agent is the trace door, and the
+connector's is the service's socket. **The only lines granted without a password are
+the agent's fixed command lines**: the service runs `sudo -n`, so it can run those and
+nothing else, any wider sudo the operator holds still asks for a password, and no cached
+credential is within the service's reach.
 
-**The rule names the box's admin-con account, never the operator's account**, on the
+**The rule names the weaver-admin account, never the operator's account**, on the
 operator's ruling of 2026-10-03 on #50, the toddwbucy/WeaverTools#6 addendum standing,
-and on the operator's rulings of 2026-11-10, which make it one system account per box,
-`weaver-admincon`. The rule grants that account exactly the agent's fixed command lines,
-as root, without a password, used with `sudo -n`. The operator's human account is never
-used by the machine, and the operator's own sudo keeps asking for a password. The
-reasoning is three rules at once. **Human and machine accounts stay separate**, so
-nothing the machine does runs as the person. **Least privilege**: the connector holds
-the fixed lines and nothing else, and since root owns the declaration, the prompt draft
-and the published save points and the access group only reads them, a compromised
-connector can write none of them. **Two audit records each answer their own question**:
-WeaverWeb's audit names the operator as the person who asked, and the box's record
-carries the service uid sudo reports as the account that ran it. The same account is
-the boundary file's `trace-reader`, per section 9, so the connector's one other contact
-with the agent is that same account. The box's gate-con account, `weaver-gatecon`, is
-the one caller every gate rule names, per `weaver-gate-world-contract` section 1, holds
-each agent's gate group `weaver-<agent>-gate` and never an agent's own group (the gate's
-door, section 6), and holds no line here, and `weaver-admincon` is in no gate rule, so neither account reaches
-the other's door. An agent whose rule names its own per-agent account
-`weaver-<agent>-admincon` of #50 is not refused for that rule, and as laid before the
-gate's door it has no gate group, so its load refuses naming the group (section 6).
+on the operator's rulings of 2026-11-10, which make it one system account per box, and
+on his rulings of 2026-11-26, which move it from the box's admin-con account,
+`weaver-admincon`, to the weaver-admin account, `weaver-admin`, under which the service
+runs. The rule grants that account exactly the agent's fixed command lines, as root,
+without a password, used with `sudo -n`. The operator's human account is never used by
+the machine, and the operator's own sudo keeps asking for a password. The reasoning is
+three rules at once. **Human and machine accounts stay separate**, so nothing the
+machine does runs as the person. **Least privilege**: the weaver-admin account holds the
+fixed lines and nothing else, and since root owns the declaration, the prompt draft and
+the published save points and the access group only reads them, a compromised service
+can write none of them. The admin-con account holds no line, no group of an agent's and
+no reader role. **Two audit records each answer their own question**: WeaverWeb's audit
+names the operator as the person who asked, and the box's record carries the service uid
+sudo reports as the account that ran it. The same account is the boundary file's
+`trace-reader`, per section 9, so the service's one other contact with the agent is that
+same account. The box's gate-con account, `weaver-gatecon`, is the one caller every gate
+rule names, per `weaver-gate-world-contract` section 1, holds each agent's gate group
+`weaver-<agent>-gate` and never an agent's own group (the gate's door, section 6), and
+holds no line here, and neither `weaver-admin` nor `weaver-admincon` is in any gate
+rule, so no account reaches another's door. An agent whose rule names its own per-agent
+account `weaver-<agent>-admincon` of #50, or the admin-con account, is not refused for
+that rule, and as laid before the gate's door it has no gate group, so its load refuses
+naming the group (section 6).
 
-**The account reaches every agent whose rule names it, and the reach is the design**, on
-the operator's ruling of 2026-11-10. It is the trace reader of each such agent, it
-passes each one's territory by its state group, and through its access group it reads
-its declaration, prompt draft, `admin.log`, `worker.log` and published save points,
-which are the agent's held state as bytes. It holds the fixed lines of each such agent.
-A per-agent account was proposed and overruled, for the operator's reason: WeaverWeb is
-the operator's console, at the level of abstraction of a hypervisor's management
-console, a Proxmox console being the operator's comparison, and it never faces the
-public. Full administrative reach over every agent on the box is the console's job, and
-per-agent accounts bound nothing, since the console holds every key. **Attribution
-survives the shared uid**, because each boundary record is the agent's own. `admin.log`
-stands in the agent's own territory and names the agent and the uid sudo reported on
-every line, per section 8. The gate and the trace relay each belong to one agent, so
-every connection that either door admits is a connection to that agent. What WeaverWeb's
-own logs carry per connection is WeaverWeb's to state, and this repository claims
-nothing for a log it does not write.
+**The weaver-admin account reaches every agent whose rule names it, and the reach is the
+design**, on the operator's ruling of 2026-11-10, which made it of the admin-con
+account, and his rulings of 2026-11-26, which moved it. It is the trace reader of each
+such agent, it passes each one's territory by its state group, and through its access
+group it reads its declaration, prompt draft, `admin.log`, `worker.log` and published
+save points, which are the agent's held state as bytes. It holds the fixed lines of each
+such agent. A per-agent account was proposed and overruled, for the operator's reason:
+WeaverWeb is the operator's console, at the level of abstraction of a hypervisor's
+management console, a Proxmox console being the operator's comparison, and it never
+faces the public. Full administrative reach over every agent on the box is the console's
+job, and per-agent accounts bound nothing, since the console holds every key.
+**Attribution survives the shared uid**, because each boundary record is the agent's
+own. `admin.log` stands in the agent's own territory and names the agent and the uid
+sudo reported on every line, per section 8. The gate and the trace relay each belong to
+one agent, so every connection that either door admits is a connection to that agent.
+What WeaverWeb's own logs carry per connection is WeaverWeb's to state, and this
+repository claims nothing for a log it does not write.
 
 **The rule moves to the weaver-admin account, behind the service's socket**, on the
 operator's rulings of 2026-11-26. The weaver-admin account is a system account,
@@ -334,15 +344,14 @@ operator's rulings of 2026-11-26. The weaver-admin account is a system account,
 which systemd keeps standing from boot under that account. The root program is this
 crate's `weaver-admin`, which this Spec calls admin and which keeps the name until act
 two splits it. In act one the sudo rule names the weaver-admin account, one fixed line
-per verb as it stands, and the connector loses the rule and asks the service on one
+per verb as it stands, and the connector holds no rule and asks the service on one
 local socket, whose contract is `weaver-admin-operator-contract` section 8: the grants,
 a verb whose grant the service reads itself in that request, the trace, and
 `admin.log`'s lines. **The service runs without no-new-privs**, because every verb it
 runs is the root program through sudo, which gains root by its set-user-id bit, and
 under no-new-privs that exec gains nothing and every verb fails. It is the root
 program's invoker, so the execution context the operator contract's section 2 asks of
-an invoker is the service's to keep. Until act one's code stack lands, the paragraphs
-above stand as written, and that stack changes them to this one.
+an invoker is the service's to keep.
 
 ```graph
 node: admin-runs-as-root-or-performs-nothing
@@ -1560,11 +1569,13 @@ by its own namespace, per section 3.
 operator's ruling of 2026-11-10. The box's two connector accounts are `weaver-gatecon`
 and `weaver-admincon`, one per box, per section 2 and `weaver-gate-world-contract`
 section 1, so an agent of either name would own one of them as its own identity, the
-caller of every agent's gate whose rule names it, or the reader and lifecycle holder of
-every agent whose rule names it. `deploy/create-agent.sh` lays each account where it is
+caller of every agent's gate whose rule names it, or the one peer the service admits on
+its socket (`weaver-admin-operator-contract` section 8.1). `deploy/create-agent.sh` lays each account where it is
 absent, and where an account of the name stands it judges the account's shape and not
 only its name, a system account with no login shell, no home and no group that reaches
-the other account's door, so a standing account is never adopted unjudged.
+another account's door, so a standing account is never adopted unjudged. The third box
+account, `weaver-admin`, the reader and the rule's user of every agent, is laid and
+judged the same way, and its name is refused below, since it begins `admin`.
 
 **A name beginning `admin`, and the name `stack`, refuse as well.** Each agent has a
 folder of its own beside the config base, the base's parent joined with the name
@@ -1920,7 +1931,7 @@ the operator's ruling of 2026-11-07 on #166, which replaced the binding to the
 invoker's containment (the ruling of 2026-10-03 on #72). The new session leaves the
 terminal, and the start step moves itself into the agent's own scope before it makes
 the agent's cgroup (section 6.1), so every process it starts lives there. The invoker's
-end, admin-con's restart included, ends neither the agent nor a start step already
+end, the service's restart included, ends neither the agent nor a start step already
 moved, and root stopping the scope stops the agent, an unclean stop. This crate asks
 PID1 for one transient scope per operation that stands the start step's containment,
 the load and, at the foundation cutover, the seed and install-governing (section 6.1),
@@ -2590,7 +2601,7 @@ rulings of 2026-11-07 and 2026-11-09 on #166).
   reading, never the call's answer. It then makes the agent's cgroup as the scope's
   child, `/weaver.slice/weaver-<agent>.scope/weaver-<agent>/`, named for the agent's
   account, by the floor below, which does not change.
-- **One path:** every load takes the step, from an operator's shell or from admin-con's
+- **One path:** every load takes the step, from an operator's shell or from the service's
   unit alike, so the deterministic path is the same for every load of the agent. A load
   the operator wraps in a scope of another name moves out of it, and that scope empties
   and ends. One wrapped in a scope of the agent's own name stands populated at the read
@@ -2636,7 +2647,7 @@ rulings of 2026-11-07 and 2026-11-09 on #166).
   standing is the next operation's to read, as a load reads one (the scope already
   standing).
 - **The record:** because every later verb runs outside the agent's scope (from an
-  operator's shell or from admin-con's unit), the start step records the agent's
+  operator's shell or from the service's unit), the start step records the agent's
   cgroup's path in `cgroup` in the run directory, root's and `0600`, beside `run.lock`,
   before its first constituent fork (a helper that carries the scope's request forks
   before it, D2). **It is written atomically** (Codex on #161): to a temporary in the
@@ -3044,7 +3055,7 @@ scope.
 | D2 | **No process of the agent runs outside `weaver-<agent>/`**, so C4 does not change. The start step forks nothing of the agent before the agent's cgroup exists. A helper that carries the request, where the election of section 11 elects one, is admin's own and root's, forked before the move and so left in the invoker's containment, and the start step reaps it before it reads for the move. The request carries the scope bound as its own call timeout, so one deadline covers the request, the reap and the confirm, and the wall clock holds the helper to it, its start inside the same wait, a helper still running the helper's grace past it killed and reaped (the scope bound, #522). | the order within a load (section 3), and the scope bound |
 | D3 | **On every path, the agent's cgroup and every cgroup above it to the mount's root are root's**, and the floor checks it. | PID1's scope, and #166's guard |
 | D4 | **The scope's end is its emptiness.** No verb removes a scope, and no refused or killed start step leaves one standing past its own exit. | PID1's collection (`CollectMode=inactive-or-failed`) |
-| D5 | **One path.** A load from an operator's shell and one from admin-con's unit take the same step to the same deterministic path, and a scope of another name the operator wraps a load in changes nothing. | the scope step |
+| D5 | **One path.** A load from an operator's shell and one from the service's unit take the same step to the same deterministic path, and a scope of another name the operator wraps a load in changes nothing. | the scope step |
 | D6 | **The agent ends only by `unload`, `force-unload`, root stopping its scope, or its own processes ending.** The invoker's end ends neither the agent nor a start step already moved. Sudo relays `SIGTERM` to its child when the invoker's unit stops, and the start step ignores it from its first instruction (section 2). | the scope, outside every invoker's containment, and section 2's ignored signals |
 | D7 | **At most one scope per agent.** The name is the agent's, PID1 refuses a second unit of that name, and the agent's locks order the start steps. | PID1, and section 3's locks |
 
@@ -3908,7 +3919,7 @@ lines then carry no digest, per section 8. Its shape is `BoundaryFile` of
 `weaver-types-Spec` section 3.1, the one `trace-reader` and nothing else: **the
 lifecycle half #63 drafted, groups mapped to verbs, does not return**, who may issue
 which verb being the sudo rule's of section 2, which this crate does not read. The
-reader is a user, the box's admin-con account of section 2, and a reader that is the
+reader is a user, the weaver-admin account of section 2, and a reader that is the
 agent's account or its state member's, or that does not hold the agent's access group
 `weaver-<agent>-admin`, refuses at the same judgment, so the agent never reaches its own
 record through the boundary and the declared reader can always reach the door. **It is
@@ -3921,8 +3932,9 @@ another agent. It is declared all the same: its digest is written on every line 
 harness for the `load` event's member marked boundary. **It is one file per agent**
 because the root is one agent's and this crate reads nothing shared, and a shared file
 would be a roster of every agent's readers, the fleet view #45 removed from admin. The
-reader it names is `weaver-admincon`, or, for an agent laid by an earlier
-`create-agent.sh`, the per-agent account it was laid with.
+reader it names is `weaver-admin`. An agent laid by an earlier `create-agent.sh` names
+the admin-con account or its own per-agent account, and as laid before the gate's door
+it is made again (section 6).
 
 **The gate's access rule is constitution, and no kept agent depends on it**, on the
 operator's ruling of 2026-11-10. The rule sits in the declaration, so a changed rule is

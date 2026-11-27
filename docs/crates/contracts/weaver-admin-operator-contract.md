@@ -46,20 +46,24 @@ to: weaver-admin
 
 The second party is the operator, one person in the operator role, per
 `weaver-admin-PRD` section 7: at a root shell a human holding sudo, and through a sudo
-rule the operator installs, the box's admin-con acting for that person under its own
-system account, never the operator's account. Human and machine accounts stay separate,
-on the operator's ruling of 2026-10-03 on #50: the connector holds only fixed lines, so
-it can write none of the operator's files, and WeaverWeb's audit names the person while
-the box's record names the service uid sudo reports. **One admin-con account serves
-every agent on the box**, `weaver-admincon`, on the operator's rulings of 2026-11-10,
-which supersede #50's per-agent account. It holds the fixed lines of each agent whose
-sudo rule names it and is that agent's trace reader, and it is in no gate rule, the
-box's gate-con account being the one caller `weaver-gate-world-contract` section 1
-names, so neither account reaches the other's door. Least privilege holds of what the
-account can do and not of how many agents it reaches: it holds the agents' fixed lines
-and their read-only doors and nothing else, for the reason `weaver-admin-Spec` section 2
-states. An agent whose reader is its own per-agent account and whose gate rule names the
-operator keeps both and is not refused for them. The graph carries no node for a
+rule the operator installs, the service `weaver-admin-service` acting for that person
+under the weaver-admin account, a system account and never the operator's, at the ask
+of the box's admin-con (section 8). Human and machine accounts stay separate, on the
+operator's ruling of 2026-10-03 on #50: the service holds only fixed lines, so it can
+write none of the operator's files, and WeaverWeb's audit names the person while the
+box's record names the service uid sudo reports. **One weaver-admin account serves
+every agent on the box**, `weaver-admin`, on the operator's rulings of 2026-11-26, which
+move the rule and the reader off the box's admin-con account, `weaver-admincon`, of the
+rulings of 2026-11-10. It holds the fixed lines of each agent whose sudo rule names it
+and is that agent's trace reader. The admin-con account holds no rule, no group of an
+agent's and no reader role, and reaches the agent through the service's socket alone.
+Neither is in any gate rule, the box's gate-con account being the one caller
+`weaver-gate-world-contract` section 1 names, so no account reaches another's door.
+Least privilege holds of what the weaver-admin account can do and not of how many
+agents it reaches: it holds the agents' fixed lines and their read-only doors and
+nothing else, for the reason `weaver-admin-Spec` section 2 states. An agent laid before
+the gate's door, whatever its rule names, has no gate group and is made again
+(`weaver-admin-Spec` section 6). The graph carries no node for a
 principal outside the program, so the party is named in prose and the missing category
 is registered rather than improvised.
 
@@ -68,20 +72,22 @@ is registered rather than improvised.
 **This contract binds three crossings: the command lines, the sink, and the trace
 door.** **The command lines** are `weaver-admin <verb> <agent>` run as root, at a root
 shell or through a sudo rule the operator installs as the box's own boundary, which
-names the box's admin-con account and the exact command lines for this agent and allows
+names the weaver-admin account and the exact command lines for this agent and allows
 no caller-chosen argument, per `weaver-admin-Spec` section 2. An executed program is no
 seam by the Working Process test, and what this contract fixes is which lines exist and
 what each prints. **The wire between WeaverWeb and its connector is WeaverWeb's**:
-WeaverWeb sends admin-con an abstract verb, admin-con maps it locally to one of the
-fixed command lines, and no command crosses a network. **The sink** is a real crossing:
+WeaverWeb sends admin-con an abstract verb, admin-con asks the service for it on the
+service's socket (section 8), the service runs the one fixed command line it names, and
+no command crosses a network. **The sink** is a real crossing:
 admin passes the sink handle across the boundary and the program writes through it,
 something of the operator's stands behind it, and neither side sees the other's
 interior. **The trace door** is the relay's door, standing only for a file sink,
 reachable by the agent's own access group alone and admitting exactly one declared
 reader, whose identity the box verifies and the caller never asserts. Where it stands
 and how it is reached are `weaver-admin-Spec` section 6's. **Section 8 states a fourth, the
-service's socket**, on the operator's rulings of 2026-11-26: act one's code stack builds
-it, and moves the command lines and the trace door behind it. None is network ingress, and
+service's socket**, on the operator's rulings of 2026-11-26: the command lines and the
+trace door stand behind it, the service being the caller of the one and the reader of
+the other. None is network ingress, and
 none breaches anything Gate holds, on the grounds `weaver-admin-PRD` section 3 states.
 
 ## 2. What crosses in
@@ -103,8 +109,8 @@ else crosses in: no argument the caller chooses, no standard input, which the pr
 never reads, and no claim of who asked. **The cause the record carries is the uid sudo reports**, and which
 person asked is WeaverWeb's record and never the agent's. **The rule opens no login
 session for these lines**, on the operator's confirmation of 2026-10-03 on
-toddwbucy/WeaverWeb#15: sudo's `pam_session` is off for the connector's user
-(`Defaults:<admin-con user> !pam_session`). Since the operator's ruling of 2026-11-07 on
+toddwbucy/WeaverWeb#15: sudo's `pam_session` is off for the rule's user
+(`Defaults:weaver-admin !pam_session`). Since the operator's ruling of 2026-11-07 on
 #166 the placement is admin's own step, which leaves any session's containment, so a
 session would no longer break the agent's lifetime. It stays off because none is
 needed and the granted rule does not change. A requirement on the boundary is declared
@@ -116,7 +122,7 @@ child containment that root makes**, or the load refuses `BoundaryUnverified`. R
 means owned by root, the scope and every containment above it, so no account but root
 can move the agent's processes out of the agent's containment (#166's guard, the
 operator's ruling of 2026-10-15). Admin makes the scope the same way whoever invoked
-the load, so a load from admin-con's unit stands as an operator's does. Where the scope
+the load, so a load from the service's unit stands as an operator's does. Where the scope
 stands, its slice, and the request that makes it are `weaver-admin-Spec` section 6.1's.
 No prompt, turn, task, or run crosses,
 per apex section 6.
@@ -135,10 +141,11 @@ provide (the operator's ruling of 2026-11-09 on #166).
 
 **At the trace door, one request line**: a byte offset on a record boundary and the
 digest of the record before it, the shape `TraceRequest` of `weaver-types-Spec` section
-3.1, from the one `trace-reader` the agent's boundary file declares, the box's admin-con
-account. Every other caller is refused: one outside the agent's access group by the
-box before the relay sees it, and one inside the group but not the reader by the relay,
-which logs it. The newest connection from the reader replaces the old.
+3.1, from the one `trace-reader` the agent's boundary file declares, the weaver-admin
+account, under which the service dials it for the connector (section 8.5). Every other
+caller is refused: one outside the agent's access group by the box before the relay sees
+it, and one inside the group but not the reader by the relay, which logs it. The newest
+connection from the reader replaces the old.
 
 The record is one-way by construction, so what an operator decides after reading it
 re-enters by a command line rather than by answering on this boundary.
@@ -174,7 +181,7 @@ alike: it writes the stream and holds no opinion about what stands behind the
 handle. Whatever its kind, the sink stands in the agent's territory, and only a file
 sink is served through the trace door. The mechanism is the Spec's. **The declaration itself lives in the agent's
 territory**, root's, on the operator's ruling of 2026-10-07 on #1: the operator writes
-it, the connector reads it and never writes it, and admin reads it only as part of the
+it, the weaver-admin account reads it and never writes it, and admin reads it only as part of the
 territory it has judged. Its path, how the operator edits it and how each party reaches
 it are `weaver-admin-Spec` section 9's.
 
@@ -220,7 +227,7 @@ gives up reads the outcome from the next `show`.
 makes for the load (section 2, its making `weaver-admin-Spec` section 6.1's). It is
 enforced by that scope, and the program depends on no supervisor for it. The agent
 lives until `unload`, `force-unload`, root stopping its scope, or its own processes
-ending. The invoker's end, admin-con's restart included, ends neither the agent nor a
+ending. The invoker's end, the service's restart included, ends neither the agent nor a
 start step already in its scope, so the binding under which stopping an agent's
 admin-con stopped that agent (toddwbucy/WeaverWeb#15) is reversed. A unit per agent
 stays later fleet work. A dropped invocation still runs to completion, per the bound
@@ -229,8 +236,8 @@ consequences are the invoker's to build against: a stop of the scope is an uncle
 whose next load resets to the latest save point, the invoker's execution context
 reaches the agent (section 2), and the invoker's cgroup limits do not. Admin sets no
 resource limit on the scope, so the host's defaults apply, and a limit across the
-agents' scopes is later fleet work. admin-con's unit shape is held on
-toddwbucy/WeaverWeb#46.
+agents' scopes is later fleet work. The service's units are act one's code stack's
+(section 8.4 states what they must meet).
 
 **At the trace door, the record as a read-only stream**: the relay writes a header line
 naming the file's identity (device, inode, and birth time where the filesystem reports
@@ -474,8 +481,9 @@ section 4.1. A `stop`
 or a `show` whose answer does not arrive within its bound refuses
 `Unanswered`, and so does a `load` meeting a run whose worker is silent, each leaving
 the run as it stands for `unload`. **Recovery from a killed invocation is the
-caller's**: admin-con reads `show`'s facts and issues `unload`, which ends whatever
-holds the agent's run, then `load`, per `weaver-admin-Spec` section 3. A line a caller's
+caller's**: admin-con asks `show` through the service, reads its facts and asks
+`unload`, which ends whatever holds the agent's run, then `load`, per
+`weaver-admin-Spec` section 3. A line a caller's
 rule does not grant never reaches the program, sudo refusing it, so it has no refusal
 here. **At the trace door, refusals before a byte is sent**: a caller outside the
 agent's access group, refused by the box before the relay sees it and so logged by no
@@ -504,10 +512,10 @@ record but read it.
 
 **On the operator's tooling.** Nothing behind the sink reaches back. The stream is
 one-way, and tooling that wants to act on what it reads comes back by running a granted
-command line. **On a connector.** It maps WeaverWeb's verbs to the fixed lines locally,
-asserts no identity the kernel did not supply, and reads the record through the trace
-door rather than through any grant into the territory, fanning it out, if at all, on
-WeaverWeb's side and never the box's.
+command line. **On a connector.** It maps WeaverWeb's verbs to the service's asks
+locally, asserts no identity the kernel did not supply, and reads the record through the
+service's trace connection rather than through any grant into the territory, fanning it
+out, if at all, on WeaverWeb's side and never the box's.
 The monitoring is the outside's job and the verb is admin's, per the basic loop's
 section 2.
 
@@ -571,9 +579,8 @@ connector asks that service four things on one local socket: which verbs are gra
 run this verb, the trace from this position, and the admin log's lines (his answer 77
 (f), the second shape, with two conditions this section carries). The four exchanges
 are those the WeaverWeb seat filed as WeaverAgent issue 645, and this section takes or
-answers each of them. **Act one's code stack builds it**: until that stack lands,
-sections 0 to 3 stand as written, the connector holding the rule and dialling the trace
-door, and that stack changes them to this section.
+answers each of them. **Act one's code stack builds it**, and sections 0 to 3 name the
+service, under the weaver-admin account, as the rule's caller and the trace's reader.
 
 **Three things carry the name, and this section says which one at each site.** The
 **weaver-admin account** is the system account `weaver-admin`. The **service** is

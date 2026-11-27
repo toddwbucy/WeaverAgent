@@ -862,9 +862,10 @@ rulings of 2026-10-03 on #50, which settle the line this paragraph held, that sc
 management is a new role with its own ruling. The operator holds sudo and starts the
 agent as root so that its permissions can be established, its user, its runtime
 directory and its sink, and everything else is downhill from that. Where WeaverWeb's
-admin-con issues the lifecycle for the operator, it does so through a rule the operator
-installs, which grants the box's admin-con account fixed `weaver-admin` command lines
-for this agent and reads nothing else from the caller, per the Spec's section 2. That is
+admin-con asks the lifecycle for the operator, the service `weaver-admin-service` runs
+it through a rule the operator installs, which grants the weaver-admin account fixed
+`weaver-admin` command lines for this agent and reads nothing else from the caller, per
+the Spec's section 2 and `weaver-admin-operator-contract` section 8. That is
 a statement about what this program is designed for and **not a guarantee about
 conduct** - holding the seat does not make its holder careful. An agent driving its own
 admin stays excluded: its uid is named by no rule and no boundary file, and a boundary
@@ -896,7 +897,7 @@ lifetime (the Spec's sections 6 and 6.1): the start step asks PID1 for a root-ow
 delegated scope of the agent's own and moves into it before it makes the agent's
 cgroup beneath it (the operator's rulings of 2026-11-07 and 2026-11-09 on #166). So
 the invoker's end ends neither the agent nor a start step already moved, and a load
-from admin-con's unit stands as an operator's does.
+from the service's unit stands as an operator's does.
 
 **Reading and analysis stay outside the program, and the recut does not move
 them.** A trace carries whatever the agent handled, so the code that parses

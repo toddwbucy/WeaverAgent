@@ -53,9 +53,10 @@ against this agent - settled before anything is touched, the agent named as a
 name rather than a path and admitted by its own root-owned configuration root
 existing, and a refusal leaving the system exactly as it found it. The kernel
 admits the invocation as root, and a delegated caller, WeaverWeb's admin-con,
-reaches it only through a strict sudo rule the operator installs: the agent's
-fixed command lines for the connector's own user, nothing taken from the
-caller, the cause recorded being the uid sudo reports (#50).
+reaches it only through the service `weaver-admin-service` and a strict sudo
+rule the operator installs: the agent's fixed command lines for the weaver-admin
+account, nothing taken from the caller, the cause recorded being the uid sudo
+reports (#50, and the operator's rulings of 2026-11-26).
 
 **Verification of the boundary.** The identity resolves, the home directory
 exists with the ownership and modes a load requires, and the record's
