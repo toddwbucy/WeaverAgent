@@ -141,9 +141,11 @@ change.
    connected closes the same way, and so does a request that reaches the relay after its
    window, from a connector that read `open` late or was slow to send. The connector may
    confirm by opening once more at the same position: a second close before the header
-   there is the refusal, and `relay_unreachable` the closed door. A connector that does
-   not confirm reads the close as a refusal, and the wrong reading costs one mark or one
-   alert and does not repeat. That is a known limit.
+   there is read as the refusal, a stronger reading than the first but not proof, and
+   `relay_unreachable` is the closed door. A connector that does not confirm reads the
+   close as a refusal. A reading that is wrong, after a confirmation or without one,
+   costs one mark or one alert, and the next request in time is judged on its own. That
+   is a known limit.
 3. **The peer admitted is the admin connector's account alone,** by its uid from
    `SO_PEERCRED`, checked at accept. Root is refused too. The operator at a root shell
    runs the root program directly and never needs the socket. A refused peer reads
@@ -308,8 +310,9 @@ events.
   header byte is the relay's refusal of the position, a relay that died after the dial
   connected, or a request that reached the relay after its window. The three close
   alike. The connector reads the close as the refusal, or may first open once more at
-  the same position, where a second such close is the refusal and `relay_unreachable`
-  the closed door. A wrong reading does not repeat.
+  the same position, where a second such close is read as the refusal and
+  `relay_unreachable` is the closed door. A reading that is wrong costs one mark or one
+  alert, after a confirmation as before one, and the next request is judged on its own.
 - **S8.** A refusal of the service's own is a `refused` line, never inside the root
   program's object and never an exit code. A refusal of the root program's is inside its
   object, at exit 1, carried untouched.
