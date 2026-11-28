@@ -45,7 +45,7 @@ pub fn run_directory(coordination_root: &Path, agent: &str) -> PathBuf {
 }
 
 /// The agent's runtime directory, `<coordination-root>/weaver-<agent>/`,
-/// where the worker binds its coordination and gate sockets.
+/// where the worker binds its coordination socket.
 pub fn runtime_directory(coordination_root: &Path, agent: &str) -> PathBuf {
     coordination_root.join(format!("weaver-{agent}"))
 }
@@ -64,6 +64,40 @@ pub fn prepare_run_directory(
     let directory = parent.join(agent);
     hold_directory(&directory, owner, owner, 0o755)?;
     Ok(directory)
+}
+
+/// **The gate's door**, `<coordination-root>/weaver.run/<agent>/gate/`, per
+/// section 6: the folder the gate binds `gate.sock` in, beside the trace door
+/// in the root-owned run directory.
+pub fn gate_door(run_directory: &Path) -> PathBuf {
+    run_directory.join("gate")
+}
+
+/// The gate's socket in its door, the path admin hands the worker.
+pub fn gate_socket(run_directory: &Path) -> PathBuf {
+    gate_door(run_directory).join("gate.sock")
+}
+
+/// **Lays the gate's door**, per section 6: made where absent, a link or
+/// anything not a directory refused, and set to the agent's account and the
+/// gate group, `2750`, so a socket the gate binds there takes the gate group
+/// and not the agent's. A `gate.sock` a dead gate left is removed, which is
+/// safe only under both locks. Called as root, before the worker forks.
+///
+/// **It takes the account whole and picks the gate group here**, so no
+/// caller chooses which of the account's two groups the door gets, and the
+/// one choice is the test's (`the_gates_door_is_laid_setgid_to_the_gate_group`).
+pub fn prepare_gate_door(
+    run_directory: &Path,
+    account: &crate::AgentAccount,
+) -> Result<PathBuf, LifecycleRefusal> {
+    let door = gate_door(run_directory);
+    hold_directory(&door, account.uid, account.gate_gid, 0o2750)?;
+    let stale = door.join("gate.sock");
+    if std::fs::symlink_metadata(&stale).is_ok() && std::fs::remove_file(&stale).is_err() {
+        return Err(refuse_path("cannot be cleared", &stale));
+    }
+    Ok(door)
 }
 
 /// Makes `path` if absent and sets its owner, group and mode, refusing a
@@ -923,8 +957,9 @@ pub fn high(fd: RawFd) -> std::io::Result<OwnedFd> {
 
 /// **The agent's runtime directory, made and repaired**, per section 6:
 /// owned by the agent's account and its own group, `0750`, a link at its
-/// name refused, and a socket name a dead worker left removed, which is
-/// safe only under both locks.
+/// name refused, and a coordination socket a dead worker left removed, which
+/// is safe only under both locks. The gate's socket stands in its own door
+/// ([`prepare_gate_door`]).
 pub fn prepare_runtime_directory(
     coordination_root: &Path,
     agent: &str,
@@ -933,11 +968,9 @@ pub fn prepare_runtime_directory(
 ) -> Result<PathBuf, LifecycleRefusal> {
     let directory = runtime_directory(coordination_root, agent);
     hold_directory(&directory, uid, gid, 0o750)?;
-    for name in ["coordination.sock", "gate.sock"] {
-        let stale = directory.join(name);
-        if std::fs::symlink_metadata(&stale).is_ok() && std::fs::remove_file(&stale).is_err() {
-            return Err(refuse_path("cannot be cleared", &stale));
-        }
+    let stale = directory.join("coordination.sock");
+    if std::fs::symlink_metadata(&stale).is_ok() && std::fs::remove_file(&stale).is_err() {
+        return Err(refuse_path("cannot be cleared", &stale));
     }
     Ok(directory)
 }
@@ -1173,14 +1206,15 @@ pub fn spawn_relay(start: RelayStart<'_>) -> std::io::Result<std::process::Child
 }
 
 /// The worker's argument vector, per section 6: the coordination socket,
-/// the SPU and gate binaries, and the named flags for the headroom, the
-/// classify binary and the loop's launcher and grant file where each stands.
-/// Only the validated name, the root's installed values and the validated
-/// declaration reach it.
+/// the SPU and gate binaries, the gate's socket in its door, and the named
+/// flags for the headroom, the classify binary and the loop's launcher and
+/// grant file where each stands. Only the validated name, the root's
+/// installed values and the validated declaration reach it.
 pub fn worker_arguments(
     coordination_socket: &Path,
     spu: &Path,
     gate: &Path,
+    gate_socket: &Path,
     headroom_bytes: Option<&str>,
     classify: Option<&Path>,
     loop_launch: Option<(&Path, &Path)>,
@@ -1189,6 +1223,8 @@ pub fn worker_arguments(
         coordination_socket.display().to_string(),
         spu.display().to_string(),
         gate.display().to_string(),
+        "--gate-socket".to_string(),
+        gate_socket.display().to_string(),
     ];
     if let Some(headroom) = headroom_bytes {
         args.push("--headroom-bytes".to_string());

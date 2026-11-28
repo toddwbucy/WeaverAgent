@@ -862,9 +862,10 @@ rulings of 2026-10-03 on #50, which settle the line this paragraph held, that sc
 management is a new role with its own ruling. The operator holds sudo and starts the
 agent as root so that its permissions can be established, its user, its runtime
 directory and its sink, and everything else is downhill from that. Where WeaverWeb's
-admin-con issues the lifecycle for the operator, it does so through a rule the operator
-installs, which grants the box's admin-con account fixed `weaver-admin` command lines
-for this agent and reads nothing else from the caller, per the Spec's section 2. That is
+admin-con asks the lifecycle for the operator, the service `weaver-admin-service` runs
+it through a rule the operator installs, which grants the weaver-admin account fixed
+`weaver-admin` command lines for this agent and reads nothing else from the caller, per
+the Spec's section 2 and `weaver-admin-operator-contract` section 8. That is
 a statement about what this program is designed for and **not a guarantee about
 conduct** - holding the seat does not make its holder careful. An agent driving its own
 admin stays excluded: its uid is named by no rule and no boundary file, and a boundary
@@ -896,7 +897,7 @@ lifetime (the Spec's sections 6 and 6.1): the start step asks PID1 for a root-ow
 delegated scope of the agent's own and moves into it before it makes the agent's
 cgroup beneath it (the operator's rulings of 2026-11-07 and 2026-11-09 on #166). So
 the invoker's end ends neither the agent nor a start step already moved, and a load
-from admin-con's unit stands as an operator's does.
+from the service's unit stands as an operator's does.
 
 **Reading and analysis stay outside the program, and the recut does not move
 them.** A trace carries whatever the agent handled, so the code that parses
@@ -1351,6 +1352,9 @@ is delegated, so a split buys nothing and the layout is one root binary. A stage
 whose entry condition resolves to no work is closed rather than carried. The trace relay
 of 2026-10-03 (#50) is a second binary of this crate for a different reason, a process
 under another account holding the trace door, and separates no authority of admin's.
+The service of 2026-11-26 is a third, a standing process under the weaver-admin account
+that runs this binary through the sudo rule, and separates none either: every verb it
+starts is this binary's, granted line by line by the rule the operator installs.
 
 **The load additions of the VM environment are staged, as of 2026-11-15**: the table of
 section 2, the data-mount check of section 4.1 with its report, and the refusal of state

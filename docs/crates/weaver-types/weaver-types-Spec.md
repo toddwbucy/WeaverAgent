@@ -1037,7 +1037,7 @@ test this crate can pretend to run.
 
 **Admin's lifecycle has no wire of its own**, on the operator's rulings of 2026-10-03 on
 #50: a caller that is not the operator at the shell reaches the verbs through a sudo
-rule the operator installs, which grants the box's admin-con account the agent's fixed
+rule the operator installs, which grants the weaver-admin account the agent's fixed
 `weaver-admin` command lines and reads nothing else from the caller, per
 `weaver-admin-Spec` section 2.
 What crosses is the command line the rule names and the one `lifecycle-answer` or
@@ -1087,10 +1087,10 @@ by `parse_boundary`**, behind the `config` feature beside `parse`, a total parse
 the declaration's, `fn parse_boundary(source: &str) -> Result<BoundaryFile,
 ConfigError>`, kept apart from it because the file is boundary and never constitution,
 per `weaver-admin-Spec` section 9. **The trace reader is a user, and only a user**, on
-the operator's ruling of 2026-10-03 on #50: the box's admin-con account
-`weaver-admincon` on the operator's rulings of 2026-11-10, or, for an agent laid by an
-earlier `create-agent.sh`, the per-agent account it was laid with, per
-`weaver-admin-Spec` section 2. A
+the operator's ruling of 2026-10-03 on #50: the weaver-admin account `weaver-admin`,
+under which `weaver-admin-service` dials the door for the box's admin-con account, on the
+operator's rulings of 2026-11-26, per `weaver-admin-Spec` section 2 and
+`weaver-admin-operator-contract` section 8.5. A
 group would admit every member of it to the agent's whole record, and a
 bare name that could resolve to a user and a group of the same name is what an explicit
 kind once guarded against, so the kind is fixed instead. The relay admits that uid
@@ -1103,7 +1103,7 @@ grouped to, refuses too, a reader the filesystem would turn away before the rela
 credential check runs being a door that cannot open.
 
 ```toml
-trace-reader = "weaver-admincon"
+trace-reader = "weaver-admin"
 ```
 
 **The door's framing is lines on a stream socket.** The reader sends exactly one

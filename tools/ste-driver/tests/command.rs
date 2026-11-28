@@ -260,14 +260,14 @@ fn command_runs_the_pinned_checker_through_a_synthetic_gate() {
         config[field] = json!(std::env::var(variable).expect(variable));
     }
     let coord = directory.0.join("coord");
-    std::fs::create_dir_all(coord.join("weaver-ste-fixture")).unwrap();
+    std::fs::create_dir_all(coord.join("weaver.run/ste-fixture/gate")).unwrap();
     let admin = directory.0.join("admin/ste-fixture");
     std::fs::create_dir_all(&admin).unwrap();
     std::fs::write(admin.join("coordination-root"), coord.to_str().unwrap()).unwrap();
     let config_bytes = serde_json::to_vec(&config).unwrap();
     let config_sha256 = format!("{:x}", Sha256::digest(&config_bytes));
     std::fs::write(&path, config_bytes).unwrap();
-    let listener = UnixListener::bind(coord.join("weaver-ste-fixture/gate.sock")).unwrap();
+    let listener = UnixListener::bind(coord.join("weaver.run/ste-fixture/gate/gate.sock")).unwrap();
     listener.set_nonblocking(true).unwrap();
     let output = directory.0.join("pass-1");
     let run = output.clone();

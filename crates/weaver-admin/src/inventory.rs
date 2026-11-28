@@ -70,6 +70,13 @@ pub fn identity_for(name: &AgentName) -> String {
     format!("weaver-{}", name.0)
 }
 
+/// The gate group's name, `weaver-<name>-gate`, for an agent identity
+/// `weaver-<name>`, per `weaver-admin-Spec` section 6: the group of the gate's
+/// door, which the gate connector holds in place of the agent's own group.
+pub fn gate_group_of(identity: &str) -> String {
+    format!("{identity}-gate")
+}
+
 /// The state member's own account name, `weaver-<name>-state`, constructed
 /// from the same validated name and at the same one site, per
 /// `weaver-admin-Spec` section 6.
@@ -456,10 +463,11 @@ fn judge_config(
     // **Last of the walks**, so it preempts none of them: an artifact or a
     // boundary that refuses is the older and narrower fact, and a check
     // running ahead of them made three inventory tests depend on whether the
-    // box happened to carry the agent's group.
+    // box happened to carry the agent's gate group.
     //
-    // The gate's socket is `0770` owned by the agent's group, per
-    // `weaver-gate-Spec` section 3, so reaching it takes membership in that
+    // The gate's socket stands in its door, `2750` and owned by the gate
+    // group `{identity}-gate`, per `weaver-gate-Spec` section 3 and
+    // `weaver-admin-Spec` section 6, so reaching it takes membership in that
     // group. A rule admitting a uid outside it names a peer the filesystem
     // turns away at `connect(2)` before the credential check ever runs: the
     // dialer sees `Permission denied`, the driver reports the socket never
@@ -473,10 +481,11 @@ fn judge_config(
     // worker starts, rather than at a `connect` no layer reports.
     //
     // **The rule half is the serving binding's and the group half is every
-    // binding's.** The start step drops every worker to the group named
-    // `{identity}`, so a box carrying the agent user and not its group fails
-    // the start whatever the binding is, and gating the whole check on `Serving` let a diagnostic declaration
-    // pass validate clean and fail at load. A diagnostic binding is asked
+    // binding's.** Every load lays the gate's door grouped to
+    // `{identity}-gate`, so a box carrying the agent user and not that group
+    // fails the load whatever the binding is, and gating the whole check on
+    // `Serving` let a diagnostic declaration pass validate clean and fail at
+    // load. A diagnostic binding is asked
     // with an empty rule, which reaches the group arm and names no peer.
     let empty_rule = weaver_types::AccessRule {
         allowed_uids: Default::default(),
@@ -489,14 +498,33 @@ fn judge_config(
         } => &gate_instruction.access_rule,
         _ => &empty_rule,
     };
-    if let Some(unreachable) = match group {
-        Some(known) => unreachable_peer_against(&identity, rule, known),
-        None => unreachable_peer(&identity, rule),
-    } {
+    // `None` reads the host, which is every caller outside the tests.
+    let host;
+    let known = match group {
+        Some(known) => known,
+        None => {
+            host = resolved_group(&identity);
+            &host
+        }
+    };
+    // **A gate group that defeats the door refuses first**, named, per
+    // `weaver-admin-Spec` section 6: the door admits by the gate group alone
+    // because the agent never holds it, so a group that is root's, that is
+    // the agent's own or that holds the agent leaves the door no wall.
+    if let Some(defeat) = door_defeated(&identity, known, &boundary.agent_gids) {
+        diag!(
+            "boundary unverified: the {} group {}, so the gate's door would admit the agent. \
+             Take the agent down and make it again with create-agent.sh.",
+            gate_group_of(&identity),
+            defeat.reason(&identity)
+        );
+        return Err(LifecycleRefusal::BoundaryUnverified);
+    }
+    if let Some(unreachable) = unreachable_peer_against(&identity, rule, known) {
         // **`BoundaryUnverified` and not `ConfigInvalid`.** The declaration is
         // well formed and the fault is the box's: the operator wrote a uid
         // that ought to reach the socket and the provisioning has not put it
-        // in the agent's group. `ConfigInvalid` names the TOML, and a
+        // in the gate group. `ConfigInvalid` names the TOML, and a
         // deployer following that reading deletes the uid from
         // `allowed-uids` - which makes validate pass and breaks the connector
         // for good, the credential check then denying it at `accept` with
@@ -631,8 +659,8 @@ pub fn declaration_digest(source: &str) -> String {
 /// away, named by its field, or `None` where the two agree.
 ///
 /// **The mode and the rule are two locks on one door and may not
-/// contradict.** The gate binds at `0770` owned by the agent's group, so a
-/// peer reaches `accept` only through that group. A rule admitting a uid
+/// contradict.** The gate binds in its door, `2750` and owned by the gate
+/// group, so a peer reaches `accept` only through that group. A rule admitting a uid
 /// outside it is a rule that does nothing, and does nothing invisibly: the
 /// refusal lands at `connect(2)` where the gate cannot see it and no layer
 /// above reports it as what it is.
@@ -641,16 +669,68 @@ pub fn declaration_digest(source: &str) -> String {
 /// whether one holding it reaches the socket turns on that peer's own
 /// memberships rather than on the gid, so a rule admitting a gid is left to
 /// the credential check. Uid 0 is skipped for a different reason: root
-/// reaches a `0770` socket whatever group it holds.
+/// reaches the door whatever group it holds.
 ///
 /// **Unresolvable is not the same as unreachable.** Where this cannot read
 /// the group at all it answers `None` rather than refusing a declaration on
 /// a fact it could not establish, the load then failing later and loudly
 /// rather than here and wrongly.
 ///
+/// The gate group is the one judged: the door is grouped to it, and the
+/// agent's own group reaches nothing there. `take_inventory_against`
+/// resolves it once and hands it to this check and to `door_defeated`, so
+/// this host-reading form is the tests' alone.
+///
 /// conforms: admin-access-rule-reaches-the-socket
+#[cfg(test)]
 fn unreachable_peer(identity: &str, rule: &weaver_types::AccessRule) -> Option<Unreachable> {
     unreachable_peer_against(identity, rule, &resolved_group(identity))
+}
+
+/// Why a gate group gives the door no wall: each of the three lets the
+/// agent's own processes hold the group the door admits by, and the kernel
+/// keeps the setgid bit and the gate admits the dialer by that group.
+#[derive(Debug, PartialEq, Eq)]
+enum DoorDefeat {
+    /// The gate group is gid 0, root's group.
+    RootsGroup,
+    /// The agent's account is a member of the gate group by name.
+    HoldsTheAgent,
+    /// The gate group's gid is one the agent runs under: its own group,
+    /// its primary or a group it holds.
+    TheAgentsGid(u32),
+}
+
+impl DoorDefeat {
+    fn reason(&self, identity: &str) -> String {
+        match self {
+            DoorDefeat::RootsGroup => "is gid 0, root's group".to_string(),
+            DoorDefeat::HoldsTheAgent => format!("holds the {identity} account as a member"),
+            DoorDefeat::TheAgentsGid(gid) => {
+                format!("has gid {gid}, which the {identity} account runs under")
+            }
+        }
+    }
+}
+
+/// The judgment, against a group already resolved and the gids the agent
+/// runs under (`Boundary::agent_gids`). An absent or unreadable group judges
+/// nothing here: the reach check names an absent group where the agent user
+/// stands.
+fn door_defeated(identity: &str, group: &ResolvedGroup, agent_gids: &[u32]) -> Option<DoorDefeat> {
+    let ResolvedGroup::Present { gid, members } = group else {
+        return None;
+    };
+    if *gid == 0 {
+        return Some(DoorDefeat::RootsGroup);
+    }
+    if members.iter().any(|member| member == identity) {
+        return Some(DoorDefeat::HoldsTheAgent);
+    }
+    if agent_gids.contains(gid) {
+        return Some(DoorDefeat::TheAgentsGid(*gid));
+    }
+    None
 }
 
 /// Why a declaration's rule cannot be met by the socket it will meet.
@@ -662,11 +742,11 @@ fn unreachable_peer(identity: &str, rule: &weaver_types::AccessRule) -> Option<U
 /// group, where `gpasswd` is what fails when the group is what is absent.
 #[derive(Debug, PartialEq, Eq)]
 enum Unreachable {
-    /// The rule admits a uid outside the agent's group, so it is turned away
+    /// The rule admits a uid outside the gate group, so it is turned away
     /// at `connect` before the credential check.
     UidOutsideGroup(u32),
-    /// The agent user exists and its group does not, so the unit's `Group=`
-    /// cannot resolve and the start fails opaquely.
+    /// The agent user exists and its gate group does not, so the load cannot
+    /// lay the gate's door.
     GroupMissing,
 }
 
@@ -677,7 +757,7 @@ impl Unreachable {
             Unreachable::UidOutsideGroup(uid) => {
                 format!("gate-instruction.access-rule.allowed-uids.{uid}")
             }
-            Unreachable::GroupMissing => format!("the {identity} group"),
+            Unreachable::GroupMissing => format!("the {} group", gate_group_of(identity)),
         }
     }
 
@@ -686,36 +766,39 @@ impl Unreachable {
     fn remedy(&self, identity: &str) -> String {
         match self {
             Unreachable::UidOutsideGroup(uid) => format!(
-                "uid {uid} is outside the {identity} group, which the gate's \
-                 socket mode admits by. Run `gpasswd -a <user> {identity}` \
-                 rather than deleting the uid from the rule, which would make \
-                 validate pass and leave the credential check denying it."
+                "uid {uid} is outside the {gate} group, which the gate's \
+                 door admits by. Run `gpasswd -a <user> {gate}` rather than \
+                 deleting the uid from the rule, which would make validate \
+                 pass and leave the credential check denying it.",
+                gate = gate_group_of(identity)
             ),
             Unreachable::GroupMissing => format!(
-                "the {identity} user exists and the {identity} group does \
-                 not, so the unit's Group= cannot resolve and the start \
-                 fails. Run `groupadd {identity} && usermod -g {identity} \
-                 {identity}`."
+                "the {identity} user exists and the {gate} group does not, \
+                 so the load cannot lay the gate's door. The agent was made \
+                 under an earlier layout: take it down and make it again \
+                 with create-agent.sh.",
+                gate = gate_group_of(identity)
             ),
         }
     }
 }
 
-/// What the host says about an agent's group: its gid and members, or which
-/// of the two absences it is.
+/// What the host says about an agent's gate group: its gid and members, or
+/// which of the two absences it is.
 enum ResolvedGroup {
     /// The group exists, with this gid and these member names.
     Present { gid: u32, members: Vec<String> },
-    /// Neither the group nor the user: no agent is provisioned here.
+    /// Neither the group nor the agent user: no agent is provisioned here.
     NoAgent,
-    /// The user exists and the group does not, which fails the unit start.
+    /// The agent user exists and the gate group does not, which fails the
+    /// load at the door.
     UserWithoutGroup,
     /// The lookup itself failed, so nothing about the group is known.
     Unresolvable,
 }
 
 fn resolved_group(identity: &str) -> ResolvedGroup {
-    match nix::unistd::Group::from_name(identity) {
+    match nix::unistd::Group::from_name(&gate_group_of(identity)) {
         Ok(Some(group)) => ResolvedGroup::Present {
             gid: group.gid.as_raw(),
             members: group.mem,
@@ -726,11 +809,10 @@ fn resolved_group(identity: &str) -> ResolvedGroup {
         // established - which is the rule the rest of this function follows.
         Err(_) => ResolvedGroup::Unresolvable,
         Ok(None) => {
-            // **A missing group is a fault only where the agent user
-            // exists.** `Group={identity}` is a hard start-time requirement,
-            // so a box that provisioned the user and not the group fails the
-            // unit start with an opaque credential error. That state is
-            // nameable and is named. A box carrying neither - a bare
+            // **A missing gate group is a fault only where the agent user
+            // exists.** Every load lays the gate's door grouped to it, so a
+            // box that provisioned the user and not the group fails the load
+            // at the door. That state is nameable and is named. A box carrying neither - a bare
             // checkout, or CI - has provisioned no agent at all and is not
             // refused on a fact about an agent it does not have.
             match nix::unistd::User::from_name(identity) {
@@ -793,7 +875,7 @@ fn unreachable_peer_against(
             // the group resolution follows too.
             Err(_) => continue,
         };
-        // The agent's own group reached either as a primary or a secondary.
+        // The gate group reached either as a primary or a secondary.
         if user.gid.as_raw() == gid || members.contains(&user.name) {
             continue;
         }
@@ -803,7 +885,7 @@ fn unreachable_peer_against(
     // A gid names no particular peer, and whether a peer holding it reaches
     // the socket turns on that peer's own memberships: a rule admitting gid
     // 1000 works where the operator holding it is a supplementary member of
-    // the agent's group, which is the shape one of these boxes has. An arm
+    // the gate group, which is the shape one of these boxes has. An arm
     // refusing every gid but the agent's own refused that working
     // declaration. Deciding it properly means enumerating who holds the gid,
     // which this crate has no reason to do, so the rule's gid half rests on

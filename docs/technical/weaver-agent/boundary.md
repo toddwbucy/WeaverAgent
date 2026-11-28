@@ -25,19 +25,21 @@ prompt, the state-management settings, the elections and the save point it came 
 - **The gate's allow-list:** today it sits in the declaration, where admitting a
   connector moves the digest. It is proposed to move to the root as boundary (#61).
 - **The two doors admin offers a connector** (#50). The agent's fixed `weaver-admin`
-  command lines, run through a strict sudo rule that names the box's admin-con account
-  and takes nothing from the caller, the cause recorded being the uid sudo reports. And
-  the trace relay's door for a file sink, admitting the one reader `roles.toml`
-  declares.
+  command lines, run through a strict sudo rule that names the weaver-admin account,
+  under which the service `weaver-admin-service` runs them for admin-con, taking nothing
+  from the caller, the cause recorded being the uid sudo reports. And the trace relay's
+  door for a file sink, admitting the one reader `roles.toml` declares, the weaver-admin
+  account (weaver-admin-operator-contract section 8).
   Admin listens on no socket of its own. The one socket its start step binds is the
   relay's door, for a file sink. A load moves the agent into its own scope, so the
-  connector's containment ending does not end the agent (weaver-admin-Spec sections 2
-  and 6.1).
+  service's containment ending does not end the agent (weaver-admin-Spec sections 2 and
+  6.1).
 - **Trace custody:** the trace group, the relay's door, and opening the trace through a
   judged directory without following links (#56, #62).
-- **The connectors:** two system accounts per box, `weaver-gatecon` for gate-con and
-  `weaver-admincon` for admin-con, on the operator's rulings of 2026-11-10. Neither
-  reaches the other's door (weaver-gate-world-contract section 1, weaver-admin-Spec
+- **The box's accounts:** three system accounts per box, `weaver-gatecon` for gate-con,
+  `weaver-admincon` for admin-con and `weaver-admin` for the service, on the operator's
+  rulings of 2026-11-10 and 2026-11-26. None reaches another's door, and admin-con holds
+  no group of an agent's (weaver-gate-world-contract section 1, weaver-admin-Spec
   section 2).
 - **The operator's directory and the `operator` uid** (#57).
 - **Host tools and OS-level grants** made by the operator (#22).

@@ -79,9 +79,9 @@ being first is what turned the sufficiency claim into a checkable one. **It foun
 reach these two did not cover**, the lifecycle verbs, which the operator contract left
 to running the admin binary as root. The answer is not a deployment fact: WeaverWeb
 invokes admin nowhere, its earlier sudo path having been deleted, and only its admin-con
-connector will reach the verbs, running the agent's fixed `weaver-admin` command lines
-through a strict sudo rule the operator installs, on the operator's rulings of
-2026-10-03 on WeaverAgent#50. The operator contract carries those lines, as the #50 Spec
+connector will reach the verbs, asking the service `weaver-admin-service`, which runs the
+agent's fixed `weaver-admin` command lines through a strict sudo rule the operator
+installs, on the operator's rulings of 2026-10-03 on WeaverAgent#50 and of 2026-11-26. The operator contract carries those lines, as the #50 Spec
 act (WeaverAgent#72) wrote them.
 
 ### weaver-gate-world-contract

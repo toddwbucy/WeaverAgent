@@ -75,8 +75,8 @@ construction and no document owes a placement clause to put it there.
 
 ## 1. The channel
 
-The named endpoint the raise directive carries, supplied by the harness and bound by
-the gate, per `weaver-gate-PRD` section 2. **What kind of endpoint it is and where it
+The named endpoint the raise directive carries, named by admin's start step, supplied
+by the harness and bound by the gate, per `weaver-gate-PRD` section 2. **What kind of endpoint it is and where it
 lives are the Spec's**, and a consumer needs neither: it is given the name and finds a
 listener there. The access rule beside it is the operator's, so what the world meets is
 a door the program placed and a predicate the operator wrote. It exists from the raise
@@ -94,15 +94,19 @@ nothing else.
 
 **The world at this door is one declared caller per box**, on the operator's rulings of
 2026-11-10: `weaver-gatecon`, the box's system account that runs WeaverWeb's gate-con,
-which an agent's access rule names alone. Neither the operator's uid nor root is in such
-a rule. An agent whose rule names the operator instead keeps it and is not refused for
-it, and section 2 states what such an agent alone can receive. The box's admin-con
-account, `weaver-admincon`, is in no gate rule either, per
-`weaver-admin-operator-contract` section 0, so neither connector account reaches the
-other's door. Many people and many turns are WeaverWeb's to carry over gate-con's one
-admission, per #70 item 1. **The rule names one caller by `deploy/create-agent.sh`'s
-convention, and nothing refuses a rule naming more**: enforcing it in code is later work
-under #70.
+which an agent's access rule names alone. **It reaches the endpoint by the agent's gate
+group**, `weaver-<agent>-gate`, the group of the door the endpoint stands in, and never
+by the agent's own group, per `weaver-gate-Spec` section 3 and `weaver-admin-Spec`
+section 6. Neither the operator's uid nor root is in such a rule, and the operator holds
+no gate group. A rule may name the operator's uid as well only where the operator joins
+the agent's gate group, which admin's validate checks, and section 2 states what such an
+agent alone can receive. An agent laid before the gate's door has no gate group, and its
+load refuses naming it. The box's admin-con account, `weaver-admincon`, and the
+weaver-admin account, `weaver-admin`, are in no gate rule either, per
+`weaver-admin-operator-contract` section 0, so no account reaches another's door. Many
+people and many turns are WeaverWeb's to carry over gate-con's one admission, per #70
+item 1. **The rule names one caller by `deploy/create-agent.sh`'s convention, and
+nothing refuses a rule naming more**: enforcing it in code is later work under #70.
 
 **The mechanism is the Spec's.** What this page requires is that the identity be
 verified by the channel rather than claimed in the message, and that a peer failing

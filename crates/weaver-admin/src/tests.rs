@@ -276,28 +276,46 @@ fn the_stack_names_what_was_started_and_handed() {
 
 /// **The vector carries the root's values and nothing composed from the
 /// invocation's input**, per Spec
-/// section 6: the socket, the SPU the root names and the gate, then each
-/// named flag only where its value stands. Perturbation: substitute a
-/// fixed SPU path in `worker_arguments` and the first assertion fails;
-/// emit `--classify-binary` or the loop's two flags unconditionally and the
-/// bare vector carries them.
+/// section 6: the socket, the SPU the root names and the gate, the gate's
+/// socket in its door, then each named flag only where its value stands.
+/// Perturbation: substitute a fixed SPU path in `worker_arguments` and the
+/// first assertion fails; emit `--classify-binary` or the loop's two flags
+/// unconditionally and the bare vector carries them; name the gate's socket
+/// beside the coordination socket and the bare vector differs.
 #[test]
 fn the_roots_spu_reaches_the_vector() {
     let config = unread_config();
     let socket = config.coordination_socket();
-    let bare = start::worker_arguments(&socket, &config.spu, &config.gate, None, None, None);
+    let gate_socket = config.gate_socket();
+    assert_eq!(
+        gate_socket,
+        std::path::PathBuf::from("/nonexistent/weaver.run/alpha/gate/gate.sock"),
+        "the gate's socket stands in its door under the run directory"
+    );
+    let bare = start::worker_arguments(
+        &socket,
+        &config.spu,
+        &config.gate,
+        &gate_socket,
+        None,
+        None,
+        None,
+    );
     assert_eq!(
         bare,
         vec![
             socket.display().to_string(),
             "/nonexistent/alternate/custom-spu".to_string(),
             "/nonexistent/bin/weaver-gate".to_string(),
+            "--gate-socket".to_string(),
+            "/nonexistent/weaver.run/alpha/gate/gate.sock".to_string(),
         ]
     );
     let full = start::worker_arguments(
         &socket,
         &config.spu,
         &config.gate,
+        &gate_socket,
         Some("4096"),
         Some(std::path::Path::new("/opt/weaver/bin/weaver-spu-classify")),
         Some((
@@ -426,7 +444,7 @@ fn write_root(root: &std::path::Path) -> std::path::PathBuf {
         ("gate-binary", "/opt/weaver/bin/weaver-gate"),
         ("territory", territory_path.as_str()),
         ("operator", operator.as_str()),
-        ("roles.toml", "trace-reader = \"weaver-alpha-admincon\"\n"),
+        ("roles.toml", "trace-reader = \"weaver-admin\"\n"),
     ] {
         std::fs::write(root.join(name), text).unwrap();
     }
@@ -1390,7 +1408,7 @@ fn unread_config() -> ServiceConfig {
         access_gid: 1000,
         boundary: Ok(BoundaryRead {
             digest: "0".repeat(64),
-            reader: "weaver-alpha-admincon".into(),
+            reader: "weaver-admin".into(),
         }),
         root: PathBuf::from("/nonexistent/root"),
     }
@@ -2883,6 +2901,99 @@ fn the_coordination_root_is_judged_before_any_lock() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// **The load's account carries the gate group, and refuses without it**, per
+/// Spec section 6: every box carries a `root` user and a `root` group and no
+/// `root-gate` group, so the account `root` resolves its user and its own
+/// group and refuses on the gate group. Perturbation: take the gate's gid
+/// from the agent's own group, and the account resolves.
+#[test]
+fn an_account_without_its_gate_group_refuses() {
+    assert_eq!(
+        AgentAccount::resolve("root").err(),
+        Some(LifecycleRefusal::BoundaryUnverified),
+        "no root-gate group stands"
+    );
+}
+
+/// **The gate's door is laid `2750`, owned by the agent's account and grouped
+/// to the gate group**, per Spec section 6: made where absent, repaired where
+/// it stands at another mode, a `gate.sock` a dead gate left cleared, and a
+/// link at its name refused. Judged with this test's uid and primary group,
+/// production's being the agent's and the gate group's. Perturbation: lay the
+/// door at `0750`, or leave the stale socket, or follow the link, and the
+/// matching assertion fails.
+#[test]
+fn the_gates_door_is_laid_setgid_to_the_gate_group() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let me = nix::unistd::getuid().as_raw();
+    let my_group = nix::unistd::getgid().as_raw();
+    let base = std::env::temp_dir().join(format!("weaver-admin-door-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    // The folder goes on a pass and on a panic alike.
+    struct Removed(std::path::PathBuf);
+    impl Drop for Removed {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _removed = Removed(base.clone());
+    let run = base.join("weaver.run").join("a");
+    std::fs::create_dir_all(&run).unwrap();
+    // **The account's own group and its gate group differ**, so the door
+    // shows which one it was given. The agent's own gid is one no group on a
+    // box carries and this caller cannot take. Perturbation: lay the door
+    // with `account.gid`, and the chown is refused or the gid read below is
+    // not the gate group's.
+    let account = crate::AgentAccount {
+        uid: me,
+        gid: u32::MAX - 1,
+        gate_gid: my_group,
+        home: base.clone(),
+    };
+    let door = start::prepare_gate_door(&run, &account).unwrap();
+    assert_eq!(door, run.join("gate"));
+    assert_eq!(start::gate_socket(&run), run.join("gate").join("gate.sock"));
+    let laid = std::fs::symlink_metadata(&door).unwrap();
+    assert!(laid.is_dir());
+    assert_eq!(
+        laid.mode() & 0o7777,
+        0o2750,
+        "the door is setgid and closed to others"
+    );
+    assert_eq!((laid.uid(), laid.gid()), (me, my_group));
+    // A door another act left wider is repaired.
+    std::fs::set_permissions(&door, std::fs::Permissions::from_mode(0o777)).unwrap();
+    let stale = door.join("gate.sock");
+    drop(std::os::unix::net::UnixListener::bind(&stale).unwrap());
+    assert!(std::fs::symlink_metadata(&stale).is_ok());
+    start::prepare_gate_door(&run, &account).unwrap();
+    assert_eq!(
+        std::fs::symlink_metadata(&door).unwrap().mode() & 0o7777,
+        0o2750,
+        "a wider door is set back"
+    );
+    assert!(
+        std::fs::symlink_metadata(&stale).is_err(),
+        "a stale gate.sock is cleared"
+    );
+    // A link at the door's name is refused, and its target left as it was.
+    std::fs::remove_dir(&door).unwrap();
+    let elsewhere = base.join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::fs::set_permissions(&elsewhere, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &door).unwrap();
+    assert_eq!(
+        start::prepare_gate_door(&run, &account).err(),
+        Some(LifecycleRefusal::BoundaryUnverified),
+        "a link at the door's name"
+    );
+    assert_eq!(
+        std::fs::metadata(&elsewhere).unwrap().mode() & 0o7777,
+        0o700,
+        "and the link's target is not repaired"
+    );
+}
+
 /// **The trace reader is judged at `validate` and `load`**, per Spec
 /// section 9: the agent's own account or its member's refuses naming
 /// `roles.toml`, a reader the box does not carry refuses the same way, a
@@ -2896,7 +3007,7 @@ fn the_trace_reader_is_judged() {
     let named = Err(LifecycleRefusal::ConfigInvalid {
         field: Some(weaver_types::FieldName("roles.toml".into())),
     });
-    let group = || Some((5000, vec!["weaver-alpha-admincon".to_string()]));
+    let group = || Some((5000, vec!["weaver-admin".to_string()]));
     assert_eq!(
         reader_verdict("weaver-alpha", &agent, Some(5000), group()),
         named
@@ -2916,12 +3027,12 @@ fn the_trace_reader_is_judged() {
         "not in the group"
     );
     assert_eq!(
-        reader_verdict("weaver-alpha-admincon", &agent, Some(100), None),
+        reader_verdict("weaver-admin", &agent, Some(100), None),
         Err(LifecycleRefusal::BoundaryUnverified),
         "the box carries no access group"
     );
     assert_eq!(
-        reader_verdict("weaver-alpha-admincon", &agent, Some(100), group()),
+        reader_verdict("weaver-admin", &agent, Some(100), group()),
         Ok(())
     );
     assert_eq!(
@@ -4409,7 +4520,14 @@ fn a_failed_dial_reads_the_worker_exit() {
 /// Perturbation: drop the suffix check and each name passes.
 #[test]
 fn a_reserved_suffix_refuses() {
-    for reserved in ["x-state", "x-trace", "x-relay", "x-admin", "x-admincon"] {
+    for reserved in [
+        "x-state",
+        "x-trace",
+        "x-relay",
+        "x-admin",
+        "x-admincon",
+        "x-gate",
+    ] {
         assert!(!well_formed(reserved), "{reserved}");
         assert_eq!(
             load_service_config(&AgentName(reserved.into()), false).err(),
@@ -4418,6 +4536,7 @@ fn a_reserved_suffix_refuses() {
         );
     }
     assert!(well_formed("x-relays"), "a suffix is matched whole");
+    assert!(well_formed("x-gates"), "the gate's suffix is matched whole");
 }
 
 /// **The names `gatecon` and `admincon` refuse as a reserved suffix does**,

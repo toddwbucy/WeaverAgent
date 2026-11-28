@@ -591,9 +591,9 @@ fn gate_raise(
             LifecycleDirective::Raise {
                 instruction: gate_instruction.clone(),
                 // The socket is this crate's rather than the declaration's,
-                // per `weaver-gate-PRD` section 2, named beside the
-                // coordination socket so the manager's runtime directory
-                // covers both and no pathname outlives its worker.
+                // per `weaver-gate-PRD` section 2: the path in the gate's
+                // door that the composition root handed the listener
+                // (`weaver-harness-Spec` section 3).
                 socket,
                 // The shell's grant, carried uninterpreted from the enter
                 // (#29, `weaver-harness-Spec` section 5): this crate reads

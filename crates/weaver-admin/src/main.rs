@@ -45,6 +45,7 @@ mod inventory;
 mod log;
 mod loop_folder;
 // Complete replacement operations, inactive until FOUNDATION-TRANSITION cutover.
+mod name_rule;
 #[allow(dead_code)]
 mod offline_state;
 mod random;
@@ -175,6 +176,11 @@ impl ServiceConfig {
     /// The agent's root-owned run directory of section 3.
     fn run_directory(&self) -> PathBuf {
         start::run_directory(&self.coordination_root, &self.agent)
+    }
+
+    /// The gate's socket in its door, section 6, which admin hands the worker.
+    fn gate_socket(&self) -> PathBuf {
+        start::gate_socket(&self.run_directory())
     }
 
     /// The boundary file's digest where it read, for the operations log.
@@ -457,32 +463,7 @@ fn admissible(config: &ServiceConfig, agent: &AgentName) -> Result<(), Lifecycle
     Ok(())
 }
 
-/// The name's shape, judged before any path is built from it: non-empty
-/// ASCII letters, digits, `-` and `_`, so `.`, `..` and anything carrying `/`
-/// are refused. **A name ending in a reserved suffix is refused too**, per
-/// Spec section 4, since the agent's derived accounts and groups append
-/// `-state`, `-trace`, `-relay`, `-admin` and `-admincon` to `weaver-<name>`,
-/// and an agent named `x-relay` would collide with agent `x`'s relay.
-/// **The names `gatecon` and `admincon` are refused whole**, on the operator's
-/// ruling of 2026-11-10: `weaver-gatecon` and `weaver-admincon` are the box's
-/// two connector accounts, so an agent of either name would own one of them as
-/// its own identity. **Nor is a name beginning `admin`, or `stack`**: the
-/// agent's own folder `/etc/weaver/<agent>/`, where the load looks for the
-/// loop folder, stands beside the config bases, every `/etc/weaver/admin*`,
-/// and the stack's record, `/etc/weaver/stack`.
-fn well_formed(agent: &str) -> bool {
-    const RESERVED: &[&str] = &["-state", "-trace", "-relay", "-admin", "-admincon"];
-    const BOX_ACCOUNTS: &[&str] = &["gatecon", "admincon"];
-    const BESIDE: &[&str] = &["stack"];
-    !agent.is_empty()
-        && agent
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        && !RESERVED.iter().any(|suffix| agent.ends_with(suffix))
-        && !BOX_ACCOUNTS.contains(&agent)
-        && !agent.starts_with("admin")
-        && !BESIDE.contains(&agent)
-}
+use name_rule::well_formed;
 
 /// The one inventory, called by both `validate` and `load`, so the two cannot
 /// drift.
@@ -1488,6 +1469,10 @@ fn run_load(
         account.uid,
         account.gid,
     )?;
+    // **The gate's door is laid before any fork** (Spec section 6), as root,
+    // grouped to the gate group the gate connector holds in place of the
+    // agent's own group.
+    start::prepare_gate_door(&config.run_directory(), &account)?;
     let worker_log = start::open_log(&config.worker_log(), Some(config.file_owner()))
         .map_err(|_| LifecycleRefusal::BoundaryUnverified)?;
     // **The run is minted before the agent's cgroup is made**, per Spec
@@ -1581,6 +1566,7 @@ fn run_load(
             &socket_path,
             &config.spu,
             &config.gate,
+            &config.gate_socket(),
             config.headroom_bytes.as_deref(),
             classify.as_deref(),
             loop_launch
@@ -2347,6 +2333,9 @@ fn name_pids(pids: &[i32]) -> String {
 struct AgentAccount {
     uid: u32,
     gid: u32,
+    /// The gate group `weaver-<name>-gate`, which the gate's door is grouped
+    /// to (Spec section 6).
+    gate_gid: u32,
     home: PathBuf,
 }
 
@@ -2360,9 +2349,32 @@ impl AgentAccount {
             .ok()
             .flatten()
             .ok_or(LifecycleRefusal::BoundaryUnverified)?;
+        // **An agent made before the gate group existed carries none**, and
+        // refuses here naming it, so it is taken down and made again rather
+        // than served by its old door (the operator's ruling of 2026-10-08).
+        let gate_name = inventory::gate_group_of(identity);
+        // A lookup that fails is told apart from a group that is absent, so
+        // the remedy for an absent one is never given for an unreadable
+        // group database.
+        let gate = match nix::unistd::Group::from_name(&gate_name) {
+            Ok(Some(gate)) => gate,
+            Ok(None) => {
+                diag!(
+                    "weaver-admin: the group {gate_name} is not provisioned, so the gate's door cannot be laid"
+                );
+                return Err(LifecycleRefusal::BoundaryUnverified);
+            }
+            Err(error) => {
+                diag!(
+                    "weaver-admin: the group {gate_name} could not be looked up ({error}), so the gate's door cannot be laid"
+                );
+                return Err(LifecycleRefusal::BoundaryUnverified);
+            }
+        };
         Ok(AgentAccount {
             uid: user.uid.as_raw(),
             gid: group.gid.as_raw(),
+            gate_gid: gate.gid.as_raw(),
             home: user.dir,
         })
     }

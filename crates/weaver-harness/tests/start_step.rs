@@ -144,6 +144,8 @@ fn keeps_both(binary: &str, tag: &str) {
         .arg(&socket)
         .arg("/bin/false")
         .arg("/bin/false")
+        .arg("--gate-socket")
+        .arg(scratch.0.join("gate").join("gate.sock"))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());

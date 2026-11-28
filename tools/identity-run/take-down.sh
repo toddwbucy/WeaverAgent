@@ -29,7 +29,8 @@
 #  9. The home's quota limit, where the drive keeps project quotas and the agent's
 #     folder carries the agent's uid as its project.
 # 10. The accounts: weaver-NAME with its home, weaver-NAME-state, weaver-NAME-relay.
-# 11. The groups: weaver-NAME, -state, -trace, -admin.
+# 11. The groups: weaver-NAME, -state, -trace, -admin and -gate, which the gate connector
+#     joins as a supplementary member, so groupdel takes it.
 # 12. The agent's folder <agent-directory>/NAME/, by rmdir, so it must stand empty.
 #
 # Each folder is removed with --one-file-system, so a mount inside it is left and the
@@ -67,7 +68,7 @@ STACK=${WEAVER_STACK_RECORD:-/etc/weaver/stack}
 OWN=/etc/weaver/$NAME
 SUDO_RULE=/etc/sudoers.d/weaver-$NAME
 ACCOUNTS=("weaver-$NAME" "weaver-$NAME-state" "weaver-$NAME-relay")
-GROUPS_OF=("weaver-$NAME" "weaver-$NAME-state" "weaver-$NAME-trace" "weaver-$NAME-admin")
+GROUPS_OF=("weaver-$NAME" "weaver-$NAME-state" "weaver-$NAME-trace" "weaver-$NAME-admin" "weaver-$NAME-gate")
 
 STEP=0
 step() { STEP=$((STEP + 1)); printf '\n== step %d: %s\n' "$STEP" "$*"; }

@@ -77,7 +77,7 @@ AGENT_DIR=${WEAVER_AGENT_DIR:-/var/lib/weaver-agent}
 
 refuse_python_install "$PREFIX" "$PREFIX/bin"
 
-MEMBERS="worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state weaver-loop-launch"
+MEMBERS="worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state weaver-loop-launch weaver-admin-service"
 # **The loop runner's folder and its grant** (weaver-harness-Spec section 2.5,
 # deploy/loop-grant.sh): the runner and the board from loop-runner/, and the
 # grant computed here, as the operator, from the interpreter that stands.
