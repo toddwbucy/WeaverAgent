@@ -57,7 +57,7 @@ its settler.
 
 ## 1. The crate
 
-**Two binaries, and still no library surface.** The crate builds `weaver-admin`, and
+**Three binaries, and still no library surface.** The crate builds `weaver-admin`,
 since 2026-10-03 (#50) `weaver-trace-relay`, the trace door's relay of section 6, which
 belongs here because admin holds the trace's custody and its start step is the relay's
 only starter, and no other crate's layout admits it: the harness builds its two worker
@@ -65,11 +65,33 @@ targets and `weaver-trace` is a library. The relay links nothing of admin's root
 being a separate `src/bin/weaver-trace-relay.rs` that shares only the floor's types, and
 it runs under the relay account and never as root. No library surface is published:
 nothing links admin, per the charter's section 7, and a `lib.rs` would be an API for a
-consumer the topology forbids. The instrument reads Cargo's target inventory, which
-includes both explicit declarations and targets found by convention.
-`two_binaries_and_no_library_surface` of `crates/weaver-admin/tests/manifest.rs` requires exactly the binaries
-`weaver-admin` and `weaver-trace-relay`, permits integration test targets, and refuses
-every other target, including a library, build script, example or bench.
+consumer the topology forbids. **The third is the service, `weaver-admin-service`**, on
+the operator's rulings of 2026-11-26, built to `weaver-admin-operator-contract` section
+8: a standing process under the weaver-admin account that answers the admin connector on
+one socket and runs the root program `weaver-admin` only through sudo. It belongs here
+because it is the root program's one invoker beside the operator, and it links nothing
+of the root program's: it compiles two of its files, `src/name_rule.rs`, so the two judge
+an agent's name alike, and `src/random.rs`. The instrument reads Cargo's target
+inventory, which includes both explicit declarations and targets found by convention.
+`three_binaries_and_no_library_surface` of `crates/weaver-admin/tests/manifest.rs`
+requires exactly the binaries `weaver-admin`, `weaver-trace-relay` and
+`weaver-admin-service`, permits integration test targets, and refuses every other
+target, including a library, build script, example or bench.
+
+**What the service takes from its install, beyond the contract.** It takes its socket
+from systemd at descriptor 3 (`LISTEN_FDS=1`, `LISTEN_PID` its own), judged a listening
+Unix stream socket and kept close-on-exec, and starts on nothing else. It refuses to run
+as root, where every grant read would answer granted. It resolves the connector account
+`weaver-admincon` by name at its start, runs `/usr/bin/sudo`, and names the root program
+by the resolved path of the `weaver-admin` beside its own binary, the path
+`create-agent.sh` writes into each rule. It reads only two keys of an agent's root,
+`coordination-root` for the relay's door and `territory` for `admin.log`, from a root and
+files that are root's and that no other principal can write, under the base
+`/etc/weaver/admin`. It runs sudo with an emptied environment but `PATH`, and no-new-privs
+unset, since sudo gains root by its set-user-id bit. Its own log is one JSON line per event
+on its standard error, which the unit hands the journal. After the root program exits,
+it waits at most one second for a process the root program left holding its output
+pipes, so such a process never holds the run's final line.
 A comment or alternate TOML spacing cannot change the inventory. The reverse
 relation, that nothing links admin, remains review's.
 
@@ -97,7 +119,9 @@ to: axiom-floor-is-vocabulary-behavior-is-socket
     src/start.rs      the start step, the run lock and the trace relay, section 6
     src/channel.rs    the coordination channel's dial, section 7
     src/log.rs        the operations log, section 8
+    src/name_rule.rs  the agent name rule, section 4, compiled by the service too
     src/bin/weaver-trace-relay.rs   the trace relay, section 6, its own binary
+    src/bin/weaver-admin-service.rs the service, section 2, its own binary
 
 **Edition and toolchain.** Edition 2024 on the pinned nightly, no nightly
 feature used.
@@ -4090,8 +4114,8 @@ charter claims.
 floor-link under gate H2, and no direct `weaver-traits` line exists, which
 is the charter's declared non-link as a checkable absence. No async runtime,
 no bus crate, and no logging crate in the resolved tree, by the build-time
-`cargo tree` assertion the floor Specs share. Two binaries and no library surface,
-read from Cargo's target inventory by `two_binaries_and_no_library_surface`. The watch requires the two named binaries and permits integration
+`cargo tree` assertion the floor Specs share. Three binaries and no library surface,
+read from Cargo's target inventory by `three_binaries_and_no_library_surface`. The watch requires the three named binaries and permits integration
 test targets alone beside them, as section 1 states. Explicit
 and convention-discovered targets pass through the same check.
 

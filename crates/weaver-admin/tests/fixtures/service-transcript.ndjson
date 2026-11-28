@@ -1,0 +1,40 @@
+{"case":"opening refused: version","from":"connector","line":"{\"weaver_admin\":{\"version\":2,\"purpose\":\"control\",\"agent\":\"a1\"}}"}
+{"case":"opening refused: version","from":"service","line":"{\"refused\":{\"word\":\"version_unknown\",\"detail\":\"this service speaks version 1\",\"versions\":[1]}}"}
+{"case":"opening refused: purpose","from":"connector","line":"{\"weaver_admin\":{\"version\":1,\"purpose\":\"pairing\",\"agent\":\"a1\"}}"}
+{"case":"opening refused: purpose","from":"service","line":"{\"refused\":{\"word\":\"purpose_unknown\",\"detail\":\"the purpose is not one of version 1's\",\"purposes\":[\"control\",\"trace\",\"log\"]}}"}
+{"case":"opening refused: name","from":"connector","line":"{\"weaver_admin\":{\"version\":1,\"purpose\":\"control\",\"agent\":\"admin\"}}"}
+{"case":"opening refused: name","from":"service","line":"{\"refused\":{\"word\":\"name_refused\",\"detail\":\"the name fails the root program's rule\"}}"}
+{"case":"opening refused: relay","from":"connector","line":"{\"weaver_admin\":{\"version\":1,\"purpose\":\"trace\",\"agent\":\"a1\"}}"}
+{"case":"opening refused: relay","from":"service","line":"{\"refused\":{\"word\":\"relay_unreachable\",\"detail\":\"no relay answers at the agent's door: No such file or directory (os error 2)\"}}"}
+{"case":"control","from":"connector","line":"{\"weaver_admin\":{\"version\":1,\"purpose\":\"control\",\"agent\":\"a1\"}}"}
+{"case":"control","from":"service","line":"{\"open\":{\"version\":1,\"instance\":\"0123456789abcdef\"}}"}
+{"case":"grants","from":"connector","line":"{\"grants\":{}}"}
+{"case":"grants","from":"service","line":"{\"grants\":{\"verbs\":[\"show\",\"load\",\"unload\"]}}"}
+{"case":"baseline","from":"connector","line":"{\"run\":{}}"}
+{"case":"baseline","from":"service","line":"{\"run\":{\"instance\":\"0123456789abcdef\",\"standing\":[],\"ended\":null}}"}
+{"case":"verb ran","from":"connector","line":"{\"verb\":{\"verb\":\"load\",\"principal\":{\"kind\":\"person\",\"person_id\":\"pe-0123456789abcdef\"}}}"}
+{"case":"verb ran","from":"service","line":"{\"started\":{\"run\":\"0000000000000001\"}}"}
+{"case":"verb ran","from":"service","line":"{\"ran\":{\"run\":\"0000000000000001\",\"verb\":\"load\",\"exit_code\":0,\"answer\":{\"lifecycle-answer\":{\"agent\":\"a1\",\"state\":\"Serving\"}},\"stderr\":\"\",\"stderr_cut\":false}}"}
+{"case":"verb not granted","from":"connector","line":"{\"verb\":{\"verb\":\"stop\",\"principal\":{\"kind\":\"person\",\"person_id\":\"pe-0123456789abcdef\"}}}"}
+{"case":"verb not granted","from":"service","line":"{\"refused\":{\"word\":\"not_granted\",\"detail\":\"the verb's grant read answers not granted\"}}"}
+{"case":"verb unknown","from":"connector","line":"{\"verb\":{\"verb\":\"reboot\",\"principal\":{\"kind\":\"person\",\"person_id\":\"pe-0123456789abcdef\"}}}"}
+{"case":"verb unknown","from":"service","line":"{\"refused\":{\"word\":\"verb_unknown\",\"detail\":\"the verb is not one of the eight\"}}"}
+{"case":"ask unknown","from":"connector","line":"{\"pairing\":{}}"}
+{"case":"ask unknown","from":"service","line":"{\"refused\":{\"word\":\"ask_unknown\",\"detail\":\"the ask is not one of version 1's\"}}"}
+{"case":"verb standing","from":"connector","line":"{\"verb\":{\"verb\":\"unload\",\"principal\":{\"kind\":\"server\"}}}"}
+{"case":"verb standing","from":"service","line":"{\"started\":{\"run\":\"0000000000000002\"}}"}
+{"case":"busy","from":"connector","line":"{\"weaver_admin\":{\"version\":1,\"purpose\":\"control\",\"agent\":\"a1\"}}"}
+{"case":"busy","from":"service","line":"{\"open\":{\"version\":1,\"instance\":\"0123456789abcdef\"}}"}
+{"case":"busy","from":"connector","line":"{\"verb\":{\"verb\":\"load\",\"principal\":{\"kind\":\"person\",\"person_id\":\"pe-0123456789abcdef\"}}}"}
+{"case":"busy","from":"service","line":"{\"refused\":{\"word\":\"busy\",\"detail\":\"another run of the agent stands\",\"run\":\"0000000000000002\"}}"}
+{"case":"run standing","from":"connector","line":"{\"run\":{}}"}
+{"case":"run standing","from":"service","line":"{\"run\":{\"instance\":\"0123456789abcdef\",\"standing\":[{\"run\":\"0000000000000002\",\"verb\":\"unload\",\"started_ms\":1795651200000}],\"ended\":{\"ran\":{\"run\":\"0000000000000001\",\"verb\":\"load\",\"exit_code\":0,\"answer\":{\"lifecycle-answer\":{\"agent\":\"a1\",\"state\":\"Serving\"}},\"stderr\":\"\",\"stderr_cut\":false}}}}"}
+{"case":"verb standing","from":"service","line":"{\"ran\":{\"run\":\"0000000000000002\",\"verb\":\"unload\",\"exit_code\":0,\"answer\":{\"verb\":\"unload\",\"agent\":\"a1\"},\"stderr\":\"\",\"stderr_cut\":false}}"}
+{"case":"run ended","from":"connector","line":"{\"run\":{}}"}
+{"case":"run ended","from":"service","line":"{\"run\":{\"instance\":\"0123456789abcdef\",\"standing\":[],\"ended\":{\"ran\":{\"run\":\"0000000000000002\",\"verb\":\"unload\",\"exit_code\":0,\"answer\":{\"verb\":\"unload\",\"agent\":\"a1\"},\"stderr\":\"\",\"stderr_cut\":false}}}}"}
+{"case":"log","from":"connector","line":"{\"weaver_admin\":{\"version\":1,\"purpose\":\"log\",\"agent\":\"a1\"}}"}
+{"case":"log","from":"service","line":"{\"open\":{\"version\":1,\"instance\":\"0123456789abcdef\"}}"}
+{"case":"log","from":"service","line":"{\"log\":{\"line\":{\"wall_ms\":1,\"command\":\"weaver-admin load a1\",\"uid\":992,\"verb\":\"load\",\"agent\":\"a1\",\"outcome\":\"ready\"},\"through_service\":true}}"}
+{"case":"log","from":"service","line":"{\"log\":{\"text\":\"a line that is no object\",\"through_service\":false}}"}
+{"case":"log","from":"service","line":"{\"log\":{\"oversized\":9000}}"}
+{"case":"log","from":"service","line":"{\"log\":{\"discontinuity\":\"truncated\"}}"}

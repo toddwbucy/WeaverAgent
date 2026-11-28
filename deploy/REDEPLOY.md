@@ -61,7 +61,7 @@ nothing else.
 | Agent root: the agent's admin configuration, one file per key, copied from the stack record, plus `territory`, `operator` and `roles.toml` | `/etc/weaver/admin/<name>/` (root 0755, files 0644) | create-agent |
 | Sudo rule: the agent's fixed command lines, granted to the box's weaver-admin account | `/etc/sudoers.d/weaver-<name>` (root 0440) | create-agent |
 | The agent's own folder, where root lays a loop folder `loop/` with its `wires.py` by hand (`weaver-admin-Spec` section 4) | `/etc/weaver/<name>/` (root:root 0755) | create-agent, once the agent is admitted |
-| Members: `worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state weaver-loop-launch` | `<prefix>/bin/` | bootstrap, update-stack |
+| Members: `worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state weaver-loop-launch weaver-admin-service` | `<prefix>/bin/` | bootstrap, update-stack |
 | The loop runner: `runner.py`, `weaver_board.py` and `grant`, the grant computed on the box from the interpreter that stands (`WEAVER_LOOP_PYTHON`, default `/usr/bin/python3`), and the empty pycache folder beside it (`weaver-harness-Spec` section 2.5) | `<prefix>/lib/weaver-loop/` and `<prefix>/lib/weaver-loop-pycache/` (root:root 0755, files 0644) | bootstrap, update-stack |
 | The agent's shell (#29): the static `busybox` and its applet list `busybox.applets` | `<prefix>/bin/` (root 0755 and 0644), named by the record's `shell-binary` | bootstrap, update-stack |
 | Engine libraries `libggml*`, `libllama*` | `<prefix>/lib/`, reached by `/etc/ld.so.conf.d/weaver.conf` and named by the record's `library-path`, which admin sets as the worker's `LD_LIBRARY_PATH` | bootstrap, update-stack |

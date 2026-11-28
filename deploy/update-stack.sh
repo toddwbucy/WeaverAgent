@@ -725,7 +725,7 @@ BUILT="$BUILT/release"
 # repository on 2026-09-30. The build below is
 # the whole workspace, the frontend having left the repository on 2026-09-26.
 # A member joins the installed set by being written here.
-MEMBERS="worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state weaver-loop-launch"
+MEMBERS="worker weaver-admin weaver-trace-relay weaver-gate weaver-spu weaver-state weaver-loop-launch weaver-admin-service"
 # **The agent's shell** (#29): the static busybox build-busybox.sh writes
 # beside the members, and its applet list, installed into the members'
 # directory and rolled back with them.

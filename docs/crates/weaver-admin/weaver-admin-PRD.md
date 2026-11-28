@@ -1352,6 +1352,9 @@ is delegated, so a split buys nothing and the layout is one root binary. A stage
 whose entry condition resolves to no work is closed rather than carried. The trace relay
 of 2026-10-03 (#50) is a second binary of this crate for a different reason, a process
 under another account holding the trace door, and separates no authority of admin's.
+The service of 2026-11-26 is a third, a standing process under the weaver-admin account
+that runs this binary through the sudo rule, and separates none either: every verb it
+starts is this binary's, granted line by line by the rule the operator installs.
 
 **The load additions of the VM environment are staged, as of 2026-11-15**: the table of
 section 2, the data-mount check of section 4.1 with its report, and the refusal of state

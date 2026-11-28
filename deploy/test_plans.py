@@ -1137,7 +1137,7 @@ elif name == 'cargo':
             sys.exit(42)
         target.joinpath('release').mkdir(parents=True)
         for member in ('worker', 'weaver-admin', 'weaver-trace-relay', 'weaver-gate', 'weaver-spu', 'weaver-state',
-                       'weaver-loop-launch'):
+                       'weaver-loop-launch', 'weaver-admin-service'):
             target.joinpath('release', member).write_text('fixture artifact ' + member)
         # The engine's out/lib as llama-cpp-sys-2 lays it out: each versioned
         # file beside its SONAME link and its bare link, and what the globs
@@ -4612,6 +4612,21 @@ esac
         self.assertIn("absolute path", result.stderr)
         self.assertEqual(self.calls(), [])
 
+    def test_both_stack_scripts_install_the_admin_service(self):
+        """**The service is installed with the other members** (act one,
+        child 5): the admin crate's third binary is a word of both scripts'
+        MEMBERS, so each builds, installs and records it, and update's plan
+        compares it. Perturbation: drop it from either script's MEMBERS and
+        that script's case fails, and update's plan shows no row for it."""
+        for name in ("bootstrap-stack.sh", "update-stack.sh"):
+            text = (self.repo / "deploy" / name).read_text()
+            with self.subTest(script=name):
+                members = text.split("MEMBERS=", 1)[1].splitlines()[0].strip('"').split()
+                self.assertIn("weaver-admin-service", members)
+        result = self.run_script("update-stack.sh")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("  weaver-admin-service ", result.stdout)
+
     def test_stack_plan_builds_the_whole_workspace_and_compares_all_members(self):
         result = self.run_script("update-stack.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -4620,10 +4635,9 @@ esac
         self.assertIn("--workspace", build)
         self.assertNotIn("--exclude", build)
         self.assertIn("weaver-spu/cuda", build[-1])
-        # The six Rust members, and the shell's busybox and applet list (#29).
-        # Seven members and the shell's two files, the loop runner's three
-        # files and its pycache folder.
-        self.assertEqual(result.stdout.count("NEW"), 13)
+        # The eight members, the shell's busybox and applet list (#29), the
+        # loop runner's three files and its pycache folder.
+        self.assertEqual(result.stdout.count("NEW"), 14)
         for shell_file in ("busybox ", "busybox.applets "):
             self.assertIn("  " + shell_file, result.stdout)
         self.assertIn("plan only. rerun with --install", result.stdout)
@@ -5775,7 +5789,7 @@ esac
         self.install_libraries("a")
         installed = self.root / "installed"
         for member in ("worker", "weaver-admin", "weaver-trace-relay", "weaver-gate", "weaver-spu", "weaver-state",
-                       "weaver-loop-launch"):
+                       "weaver-loop-launch", "weaver-admin-service"):
             installed.joinpath(member).write_text("fixture artifact " + member)
         installed.joinpath("busybox").write_text("fixture busybox")
         installed.joinpath("busybox.applets").write_text("ls\ncat\n")
@@ -5800,7 +5814,7 @@ esac
         self.install_libraries("a")
         installed = self.root / "installed"
         for member in ("worker", "weaver-admin", "weaver-trace-relay", "weaver-gate", "weaver-spu", "weaver-state",
-                       "weaver-loop-launch"):
+                       "weaver-loop-launch", "weaver-admin-service"):
             installed.joinpath(member).write_text("fixture artifact " + member)
         installed.joinpath("busybox").write_text("fixture busybox")
         installed.joinpath("busybox.applets").write_text("ls\ncat\n")
@@ -6378,7 +6392,8 @@ esac
 
     TUPLE_KEYS = ["commit", "toolchain", "features", "engine", "engine-source", "engine-vendored", "nvcc",
                   "member.worker", "member.weaver-admin", "member.weaver-trace-relay", "member.weaver-gate",
-                  "member.weaver-spu", "member.weaver-state", "member.weaver-loop-launch", "member.busybox", "member.busybox.applets",
+                  "member.weaver-spu", "member.weaver-state", "member.weaver-loop-launch", "member.weaver-admin-service",
+                  "member.busybox", "member.busybox.applets",
                   "library.libggml.so.0.9.1", "library.libllama.so.0.0.1",
                   "loop.runner.py", "loop.weaver_board.py", "loop.grant",
                   "runtime.cudart", "runtime.cublas", "runtime.cublaslt", "runtime.curand", "cccl"]
@@ -6894,7 +6909,7 @@ esac
             "kill -TERM -- -$(ps -o pgid= -p $$ | tr -d ' '); sleep 5; fi\n")
         installed = self.root / "installed"
         for member in ("worker", "weaver-admin", "weaver-trace-relay", "weaver-gate",
-                       "weaver-spu", "weaver-state", "weaver-loop-launch"):
+                       "weaver-spu", "weaver-state", "weaver-loop-launch", "weaver-admin-service"):
             installed.joinpath(member).write_text("fixture artifact " + member)
         installed.joinpath("busybox").write_text("fixture busybox")
         installed.joinpath("busybox.applets").write_text("ls\ncat\n")

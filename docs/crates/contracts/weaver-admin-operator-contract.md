@@ -924,7 +924,9 @@ from the moment it answered `open`, with no history before it:
 - **A line appended reaches the connection within 1 second.** Where 1 MiB stands unsent
   to a connector that does not read, the service closes the connection, sending
   `refused` `log_behind` first where the connection takes it. That line is best effort,
-  and a connector that does not read may never receive it.
+  and a connector that does not read may never receive it. A connector that does not
+  read is one that takes no byte for 1 second while 1 MiB stands unsent, the 1 second
+  being this section's promise that a line appended reaches the connection within it.
 - **Any close of a log connection is a discontinuity for the connector**, with or
   without `log_behind` before it, which it marks as it marks a replacement today.
   Resending toward Weaver Web stays the connector's.
@@ -1196,7 +1198,7 @@ It reaches no agent and no privileged program.
   Section 8 here, and the pointer in `weaver-admin-Spec` section 2, land first, in a
   stack of documents alone, with the four exchanges of WeaverAgent issue 645. Act one's
   code stack builds the service and its socket, and moves sections 0 to 3 here,
-  `weaver-admin-Spec` sections 1 (the third binary, with the manifest test
-  `two_binaries_and_no_library_surface`), 2, 4 (the name `admin` refused), 8 and 9, and
+  `weaver-admin-Spec` sections 1 (the third binary, with the manifest test that pins
+  the binaries), 2, 4 (the name `admin` refused), 8 and 9, and
   `weaver-types-Spec` section 3.1's `trace-reader` to it. WeaverWeb's half, the connector asking the socket in place of
   sudo and the relay, is the other seat's, against section 8.
